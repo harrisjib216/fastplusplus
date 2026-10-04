@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/komrad36/rgb2y",
+  "one_liner": "Header-only AVX2 BGR-to-grayscale for 8-bit images; README claims roughly 3x faster than OpenCV cv::cvtColor.",
+  "what_it_does": "RGB2Y<multithread, weighted>(image, width, height, stride, out) converts an interleaved 3-byte-per-pixel image to 8-bit gray, with OpenCV's 0.299/0.587/0.114 weights (weighted=true) or a plain average (weighted=false). Despite the name, the first byte of each pixel gets the blue weight, so it is BGR2GRAY on OpenCV's default layout (open issue #4). It takes raw pointers and an input stride counted in pixels, writes a packed width x height output, and so replaces cv::cvtColor(src, dst, COLOR_BGR2GRAY) only at the function level.",
+  "how_it_is_fast": "Each step converts 10 pixels (30 bytes): two overlapping 16-byte loads widened to 16 bits, one _mm256_mulhrs_epi16 against a repeating B,G,R Q15 weight vector, packus back to bytes, then three pshufb masks gather each pixel's three products and saturating byte adds sum them, so no 32-bit dot products are needed. Rows are split across up to min(height/16, hardware_concurrency()) std::async tasks. The unweighted path sums channels in 16 bits and divides by 3 with mulhrs by 10923, which equals round(sum/3) for every possible sum.",
+  "when_to_use": [
+    "BGR8 frames in OpenCV layout converted to gray on x86-64 with AVX2, where a 1-level difference from OpenCV on some colours is acceptable and an OpenCV dependency is not wanted.",
+    "Large frames processed multithreaded on machines with 16 or fewer hardware threads, where thread start-up is amortised and the row-split bug cannot trigger.",
+    "Equal-weight channel averaging (weighted=false), which is exact for all inputs.",
+    "As a compact example of pshufb-based deinterleaving of 3-channel pixels with AVX2."
+  ],
+  "when_not_to_use": [
+    "When you need OpenCV's exact output: an exhaustive check of all 16,777,216 BGR triples against OpenCV 4.x's 15-bit BGR2GRAY formula gives 33.2% differing by one grey level (16.4% lower, 16.8% higher), never by more.",
+    "RGB-ordered, 4-channel, 16-bit or float input: weights are global constants in the header (swap B_WEIGHT and R_WEIGHT for RGB), and only 3-byte pixels are handled.",
+    "CPUs without AVX2 or non-x86 targets: the SSE path the README advertises was removed on 30 Sep 2018 (commit 6a822b7, open issue #5), and NO_AVX_PLEASE now does nothing.",
+    "Unpadded input buffers: the final 10-pixel block of the last row loads 31 bytes and reads 1 to 28 bytes past the end, depending on width mod 10.",
+    "Multithreaded calls on machines with 24 or more hardware threads: the row split overruns the image for some heights (see gotchas)."
+  ],
+  "integration": {
+    "form": "header-only (RGB2Y.h, all functions are templates)",
+    "dependencies": "none for RGB2Y.h beyond the C++ standard library and <immintrin.h> (it uses std::vector and std::thread without including <vector> or <thread>); the main.cpp demo needs OpenCV 3.x for the CV_BGR2GRAY constant",
+    "min_toolchain": "Written for MSVC: it uses __forceinline, which g++ and clang++ on Linux do not predefine (checked with g++ 13.3 macro dump), and an unannotated switch fallthrough that -Wextra flags (-Wimplicit-fallthrough since GCC 7) under the Makefile's -Werror; Makefile otherwise asks for g++ -std=gnu++17 -mavx2 -march=native -Ofast",
+    "platforms": "x86-64 with AVX2 (also SSE4.1 _mm_extract_epi8); no SSE-only, NEON or scalar fast path",
+    "thread_safety": "Reentrant: no shared mutable state (per-call vector of futures; the weight vector is a per-translation-unit static const)",
+    "drop_in_for_baseline": "partial: raw-pointer API for 3-channel 8-bit BGR only, stride in pixels rather than bytes, packed output, and results differ from cv::cvtColor by one grey level on about a third of colours"
+  },
+  "gotchas": [
+    "Out-of-bounds rows in the multithreaded split: thread_stride = ceil(height / threads) and threads-1 full chunks are launched before the remainder, and the final call always processes at least one row, so whenever (threads-1)*thread_stride > height the tasks read past the input and write past the output. Because threads is capped at height/16 this needs 18 or more hardware threads: a simulation finds 49 affected heights up to 4096 on 24 threads (for example 385 rows, 7 rows out of bounds), 225 on 32 threads (520 rows) and 1713 on 64 threads (721 rows: 28 out of bounds; 1000 rows: 38).",
+    "The input stride is in pixels (row i starts at data + 3*i*stride) while the output is written packed at out + i*width; RGB2Y_ref instead writes out[i*stride + j], so with padded rows the fast path and the reference disagree on output layout. Divide cv::Mat::step by 3, and only if it is a multiple of 3.",
+    "main.cpp's 'N pixels disagree' line compares RGB2Y with its own RGB2Y_ref, which reproduces the per-term rounding exactly (0 mismatches over all colours), not with OpenCV's output.",
+    "Each multithreaded call starts new tasks with std::async(std::launch::async); libstdc++ and libc++ create a thread per task (MSVC pools them), so small images pay thread start-up on every call."
+  ],
+  "pick_this_over_siblings_when": "CompV (RGB24 to gray 449 ms vs OpenCV 3086 ms) and DeltaCV publish measured BGR/RGB-to-gray results against OpenCV, and H264Sharp measures cvtColor-style conversion by thread count; choose RGB2Y only when a single dependency-free AVX2 header for BGR8 to gray matters more than evidence, bit-exactness or maintenance.",
+  "verified_claims_summary": "The only claim is the README's 'roughly 3x faster than OpenCV with AVX2, or 2x with SSE only', with no CPU, timings or OpenCV version; that sentence was already in the README at commit e67dffa (Feb 2017), when the kernel used 6-bit weights with truncation (up to 3 grey levels off OpenCV, 57.4% of colours different), and it was not re-measured after the 30 Sep 2018 rewrite to the current Q15 kernel, which also dropped the SSE path. main.cpp times both sides (50 warm-ups, 100 runs, RGB2Y multithreaded, OpenCV with its own parallel_for_) on the repo's test.jpg, but publishes no output; the only posted run (issue #1, OpenCV 3.4.3, a Debug build) had RGB2Y at 15139.5 us against OpenCV's 2592.71 us.",
+  "status_note": "Abandoned: the kernel last changed on 30 Sep 2018 and the only later commit (23 Mar 2021) added the MIT license; four open issues (missing SSE path, BGR naming, an unexplained 'A bug?' report with an error image) have no replies. Vendorable after fixing the row split and padding the input.",
+  "sources_read": [
+    "https://github.com/komrad36/RGB2Y",
+    "https://github.com/komrad36/RGB2Y/commits/master",
+    "https://github.com/komrad36/RGB2Y/commit/6a822b7",
+    "https://github.com/komrad36/RGB2Y/commit/838d21e",
+    "https://github.com/komrad36/RGB2Y/commit/e8b4019",
+    "https://github.com/komrad36/RGB2Y/issues?q=is%3Aissue",
+    "https://github.com/komrad36/RGB2Y/issues/1",
+    "https://github.com/komrad36/RGB2Y/issues/2",
+    "https://github.com/komrad36/RGB2Y/issues/3",
+    "https://github.com/komrad36/RGB2Y/issues/4",
+    "https://github.com/komrad36/RGB2Y/issues/5",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/RGB2Y.h",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/Makefile",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/705f112/README.md",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/e67dffa/README.md",
+    "https://raw.githubusercontent.com/komrad36/RGB2Y/e67dffa/RGB2Y.h",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color_rgb.simd.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color.simd_helpers.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/cvdef.h",
+    "https://raw.githubusercontent.com/opencv/opencv/3.4/modules/core/include/opencv2/core/cvdef.h",
+    "https://github.com/komrad36?tab=repositories"
+  ],
+  "confidence": 0.75
+}

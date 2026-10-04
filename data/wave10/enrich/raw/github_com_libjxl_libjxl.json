@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/libjxl/libjxl",
+  "one_liner": "libjxl effort-1 lossless JPEG XL encoder (fjxl): about 19x faster than libpng, 43x faster than libwebp lossless.",
+  "what_it_does": "fast_lossless (originally the standalone 'fjxl', now lib/jxl/enc_fast_lossless.cc) is the encoder libjxl uses for lossless effort 1: `cjxl -d 0 -e 1`, or JxlEncoderSetFrameLossless plus JXL_ENC_FRAME_SETTING_EFFORT=1 through the libjxl API, sends eligible frames to it with its internal effort fixed at 2. The same file also builds standalone (-DFJXL_STANDALONE; tools/CMakeLists.txt has an enc_fast_lossless target) with a one-call C API, JxlFastLosslessEncode(rgba, width, stride, height, nb_chans, bitdepth, big_endian, effort, &out, runner_opaque, runner), plus a chunked prepare/process/write API. Output is a standard JPEG XL (ISO/IEC 18181) codestream, so it replaces a PNG or WebP lossless encoder only where readers can decode JPEG XL; there is no fjxl decoder, and decoding goes through libjxl or another JXL decoder.",
+  "how_it_is_fast": "It runs a fixed pipeline with no search (doc/encode_effort.md, e1 row): fixed YCoCg color transform, fixed ClampedGradient predictor, one entropy context with no MA tree, Huffman prefix codes instead of ANS, run-length-only LZ77 for zero runs, and a simple palette path (up to 512 colors found through a 64K-entry hash, 8-bit one-shot input only). Huffman tables come from a histogram sampled from only 2 x effort rows per 256-row group. The hot loop tokenizes and bit-packs 16 residuals at a time with SIMD (AVX2, AVX-512 or NEON: pshufb nibble lookups compute tokens, then bit fields merge from 16- to 32- to 64-bit lanes before one scalar flush). 256x256 groups are encoded independently, so a parallel runner can spread them across threads.",
+  "when_to_use": [
+    "Lossless archiving or export of 8-bit RGB/RGBA screenshots, renders and photos when encoder time dominates and readers support JPEG XL: about 106 MP/s on one i5-10210U core with AVX2, versus 5.49 MP/s for default libpng, with smaller files.",
+    "High-bit-depth lossless capture (up to 16-bit integer, or float16 input through libjxl) where PNG encoders are slow; the fast path handles 1-4 channels, alpha included.",
+    "Large single images on many cores: groups are independent, so libjxl's thread pool (or your own FJxlParallelRunner in standalone mode) parallelizes the encode.",
+    "A quick first-pass lossless JXL that a background job can later re-encode at effort 7+ (0.1548 versus 0.2171 compression ratio in the same QOIR run) without leaving the format.",
+    "Embedding a JXL writer without libjxl: the standalone build of enc_fast_lossless.cc needs no libjxl, highway or brotli."
+  ],
+  "when_not_to_use": [
+    "Consumers that need PNG or WebP, or that lack a JPEG XL decoder: the output is JXL only.",
+    "Read-heavy workloads: in the same QOIR run libjxl decoded fjxl files at 33.16 MP/s versus 56.18 for libpng and 89.94 for WebP lossless (single-threaded), and in WangXuan95's CLIC2021 run djxl -e 1 output took 57.650 s to decode versus 33.677 s for Pillow PNG.",
+    "Best ratio: WebP lossless (0.1651) and libjxl at effort 7 (0.1548) are 24-29% smaller than fjxl's 0.2171, if encode time allows.",
+    "Raw encode speed whatever the format: in the same run fpnge (312.59 MP/s, PNG), fpng (192.16), QOIR (168.90), QOI (146.87) and Zpng (126.21) all encoded faster; fpnge and fpng still emit ordinary PNG.",
+    "Frames that miss the fast path: CanDoFastLossless in lib/jxl/encode.cc rejects animation, cropped layers, frame names, frame-index boxes, extra channels other than one alpha, more than 16 bits, stripped alpha and LSB-padded bit depths, and those inputs silently fall back to the much slower general modular encoder at effort 1."
+  ],
+  "integration": {
+    "form": "shared or static lib (libjxl via CMake), or source-drop of lib/jxl/enc_fast_lossless.cc built with -DFJXL_STANDALONE",
+    "dependencies": "libjxl: brotli, highway, and skcms or lcms2 (git submodules or system packages); standalone fjxl: none beyond the C++ standard library",
+    "min_toolchain": "CMake 3.16+; C++17 when available (CMake falls back to C++14/11); Clang 7+ recommended; fjxl's AVX-512 path needs GCC 11+ or Clang 8+",
+    "platforms": "Any; fjxl SIMD on x86-64 (AVX2, AVX-512 with runtime CPUID dispatch) only with compilers that do not define _MSC_VER (GCC, Clang; not MSVC or clang-cl), NEON on aarch64, scalar elsewhere",
+    "thread_safety": "Use one JxlEncoder per thread; parallelism is internal through a JxlParallelRunner set with JxlEncoderSetParallelRunner (NULL means single-threaded). Standalone JxlFastLosslessEncode takes an FJxlParallelRunner callback or nullptr for sequential encoding.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness bugs in this path were fixed late: before 0.12.0, palette detection checked all 8 pixels of an unrolled block before inserting any, so two colors in one block with the same hash slot could slip through and produce lossy output from 'lossless' -e 1 (issue #4287 on an emoji PNG, fixed by PR #4291 in June 2025); PR #4027 (December 2024) fixed a shift-by-64 in BitWriter::WriteMultiple behind issue #4026, 'Lossless images are not actually lossless'. Use 0.12.0 or later (the README also urges 0.12 for security fixes) and round-trip check critical archives.",
+    "Default CMake builds compile out fjxl's AVX-512 code: the AVX3 highway target is off by default, and CMakeLists.txt then adds -DFJXL_ENABLE_AVX512=0. Pass -DJPEGXL_ENABLE_HWY_AVX3=ON to get it. The x86 SIMD block is enabled only when _MSC_VER is undefined, which rules out MSVC and also clang-cl (it defines _MSC_VER), the compiler of the official Windows release builds since 0.12, so Windows builds likely run fjxl's scalar path (inferred from the preprocessor guards, not measured).",
+    "Effort numbers do not line up: libjxl e1 calls fjxl with effort=2, while the standalone API takes 0-127 (more rows sampled for the Huffman histogram, slower). Below effort 2, with streaming input, or above 8 bits, palette detection is skipped.",
+    "Decode is the weak side: there is no fast decoder for the fast encoder (libjxl 0.12 notes a fix to its 'specialized decoding path for fast lossless', #4836), so measure decode on your target before switching an image store."
+  ],
+  "pick_this_over_siblings_when": "Pick fjxl over fpnge, fpng, QOI, QOIR or Zpng when you want a standardized, widely packaged format (JPEG XL) with files smaller than libpng's and can afford slower decode; pick fpnge or fpng when the output must stay PNG, and QOIR or Zpng when you control both ends and need faster decode.",
+  "verified_claims_summary": "Third-party run (nigeltao/qoir doc/full_benchmarks.txt, about 2022): the then-experimental fast_lossless.cc, compiled into the harness with gcc 10.2.1 -O3 -march=native and AVX2 intrinsics on one core of an Intel i5-10210U, encoded the QOI benchmark images at 106.48 MP/s versus 5.49 for Debian Bullseye libpng and 2.49 for libwebp lossless, at compression ratio 0.2171 versus 0.2423 and 0.1651. Measurement caveats: the harness never compares decoded pixels with the source, and the measured snapshot predates the PR #4291 palette fix (the same check-then-insert code is in v0.7.0 of July 2022 and was still reported in v0.11.1), so a few RGBA images with few colors may have been encoded lossily. That could flatter the ratio slightly but should not change the speed. The JXL decode rows also carry the adapter's inverted channel count. WangXuan95's single-threaded CLIC2021 run (i7-12700H, Windows 10, cjxl v0.9.0 -q 100 -e 1 launched once per image, so process start and PNM I/O are included) took 42.993 s versus 334.791 s for in-process Pillow PNG (zlib, optimize=False), with 18% smaller output.",
+  "status_note": "Actively maintained under the libjxl/Google JPEG XL project (0.12.0 released 2026-07-01, last commit 2026-09-29), BSD-3-Clause with a patent grant, packaged by major Linux distributions and Homebrew; copyable as part of libjxl or as one standalone .cc file, but use 0.12.0+ because of the e1 lossless corruption fixes.",
+  "sources_read": [
+    "https://github.com/libjxl/libjxl",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/README.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/BUILDING.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/tools/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/PATENTS",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/doc/encode_effort.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/doc/building_and_testing.md",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/lib/jxl/enc_fast_lossless.cc",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/lib/jxl/enc_fast_lossless.h",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/lib/jxl/encode.cc",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/lib/jxl/enc_frame.cc",
+    "https://raw.githubusercontent.com/libjxl/libjxl/HEAD/lib/include/jxl/encode.h",
+    "https://raw.githubusercontent.com/libjxl/libjxl/v0.7.0/experimental/fast_lossless/fast_lossless.cc",
+    "https://github.com/libjxl/libjxl/issues/4026",
+    "https://github.com/libjxl/libjxl/pull/4027/files",
+    "https://github.com/libjxl/libjxl/issues/4287",
+    "https://github.com/libjxl/libjxl/pull/4291",
+    "https://github.com/libjxl/libjxl/pull/4291/files",
+    "https://github.com/libjxl/libjxl/commit/986561b.diff",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/doc/full_benchmarks.txt",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/script/run_full_benchmarks.sh",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/adapter/jxl_adapter.cpp",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/test/benchmarks.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/README.md",
+    "https://raw.githubusercontent.com/WangXuan95/Image-Compression-Benchmark/HEAD/README.md",
+    "https://github.com/google/jpegli"
+  ],
+  "confidence": 0.8
+}

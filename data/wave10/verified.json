@@ -2351,8 +2351,8 @@
     "baseline": "OpenCV cv::cvtColor (CV_BGR2GRAY)",
     "metric": "throughput",
     "workload": "RGB (BGR) image to 8-bit grayscale conversion with OpenCV's default weights; main.cpp runs 50 warmups and 100 timed runs against cv::cvtColor and prints microseconds.",
-    "claimed_speedup": "README: 'Roughly 3x faster than OpenCV's implementation with AVX2, or 2x faster than OpenCV's implementation if using SSE only'; repo description: '2-4x faster than OpenCV'. No measured timings are published. The current RGB2Y.h has only an AVX2 path: the NO_AVX_PLEASE switch the README mentions is not referenced anywhere in the code, so the SSE figure has no code behind it in the current version.",
-    "evidence_tier": "C",
+    "claimed_speedup": "README (dating from the February 2017 kernel, never re-measured after the 2018 Q15 rewrite): 'roughly 3x faster than OpenCV with AVX2, 2x with SSE only'; the SSE path no longer exists. The only public run (issue #1, Debug build) has OpenCV 3.4.3 at 2592.71 us versus RGB2Y 15139.5 us.",
+    "evidence_tier": "D",
     "benchmark_url": "https://github.com/komrad36/RGB2Y",
     "compiler_and_flags": "Repo Makefile: g++ -Ofast -std=gnu++17 -fomit-frame-pointer -mavx2 -march=native -mfma -flto -funroll-all-loops -fpeel-loops -ftracer -ftree-vectorize (no compiler version; no published run).",
     "hardware": null,
@@ -2360,7 +2360,7 @@
     "usability": "copyable",
     "stars_or_usage": "92 stars",
     "tradeoffs": "Header-only (RGB2Y.h), AVX2 or SSE only, no NEON; single operation (RGB to gray) with equal or OpenCV-default weights; the author says SSE is about 50% slower than AVX2.",
-    "caveats": "Claim is a README ratio with no CPU or measured timings; the harness (main.cpp: 50 warmups, 100 timed runs, both sides multithreaded) is public but its output is not published. Output is not bit-identical to the baseline: RGB2Y rounds each weighted channel term separately (_mm256_mulhrs_epi16 in Q15, then saturating adds), while OpenCV's 8-bit BGR2GRAY rounds the weighted sum once, so some pixels can differ by one grey level; main.cpp checks RGB2Y only against its own scalar reference (RGB2Y_ref, which uses the same per-term rounding), never against cv::cvtColor's output. Each 10-pixel block loads 31 bytes, so the final block of the last row reads at least 1 byte past the end of an unpadded input buffer (main.cpp's synthetic-image path pads by 128 bytes). AVX2 only in the current code; uses the MSVC keyword __forceinline (GCC/Clang portability not checked). The harness uses the OpenCV 3-era CV_BGR2GRAY constant, so it needs changes to build against OpenCV 4, and modern OpenCV may be closer. Code last updated 29 Sep 2018; last commit 23 Mar 2021 only added the MIT LICENSE file.",
+    "caveats": "Claim is a README ratio with no CPU or measured timings; the harness (main.cpp: 50 warmups, 100 timed runs, both sides multithreaded) is public but its output is not published. Output is not bit-identical to the baseline: RGB2Y rounds each weighted channel term separately (_mm256_mulhrs_epi16 in Q15, then saturating adds), while OpenCV's 8-bit BGR2GRAY rounds the weighted sum once, so some pixels can differ by one grey level; main.cpp checks RGB2Y only against its own scalar reference (RGB2Y_ref, which uses the same per-term rounding), never against cv::cvtColor's output. Each 10-pixel block loads 31 bytes, so the final block of the last row reads at least 1 byte past the end of an unpadded input buffer (main.cpp's synthetic-image path pads by 128 bytes). AVX2 only in the current code; uses the MSVC keyword __forceinline (GCC/Clang portability not checked). The harness uses the OpenCV 3-era CV_BGR2GRAY constant, so it needs changes to build against OpenCV 4, and modern OpenCV may be closer. Code last updated 29 Sep 2018; last commit 23 Mar 2021 only added the MIT LICENSE file. [retier] No measured number for the current code. Exhaustive check of all 16,777,216 BGR triples against OpenCV 4.x: 33.2% of outputs differ by 1 (max 1). The multithreaded row split overruns the destination at 18 or more threads (385 rows on 24 threads, 721 or 1000 on 64); the tail over-reads 1-28 bytes; stride is in pixels with packed output while the reference writes strided; __forceinline and an unannotated fallthrough break the g++ -Werror Makefile; the function is really BGR2Y (issue #4).",
     "found_via": [
       "GitHub: WebSearch 'OpenCV cvtColor slower SIMD RGB to grayscale BGR to YUV AVX2 NEON library benchmark C++ github cvtColor' (github.com) surfaced komrad36/RGB2Y"
     ],
@@ -2387,7 +2387,17 @@
         "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/LICENSE"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Lowered C to D: the README's '3x AVX2 / 2x SSE' line dates from the February 2017 kernel e67dffa (6-bit weights, up to 3 levels off OpenCV, 57.4% of colours differing) and was never re-measured after the 30 September 2018 Q15 rewrite; the SSE path was removed (issue #5), so the 2x figure has no code behind it, and the only public run (issue #1, a Debug build) shows OpenCV 3.4.3 at 2592.71 us against RGB2Y at 15139.5 us. No measured number describes the current code.",
+        "urls_opened": [
+          "https://raw.githubusercontent.com/komrad36/RGB2Y/master/RGB2Y.h",
+          "https://github.com/komrad36/RGB2Y/issues/1",
+          "https://github.com/komrad36/RGB2Y/issues/5"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "Roughly 3x faster than OpenCV's implementation with AVX2, or 2x faster with SSE only (repo description: 2-4x faster than OpenCV).",
@@ -4877,7 +4887,7 @@
     "metric": "throughput",
     "workload": "Lossless encode of the QOI benchmark suite with libjxl's experimental fast_lossless encoder (regular libjxl decoder) in the QOIR harness, single-threaded, vs libpng and libwebp lossless; WangXuan95's CLIC2021 shootout with cjxl -e 1.",
     "claimed_speedup": "QOIR benchmark: JXL_Lossless/f encode 106.48 MPixels/s vs libpng 5.49 (about 19x, derived from page data) and libwebp lossless 2.49 (about 43x, derived), with smaller files than libpng (CmpRatio 0.2171 vs 0.2423, about 10% smaller, derived). Decode is slower: 33.16 MPixels/s vs libpng 56.18 and libwebp 89.94. WangXuan95 CLIC2021 shootout (cjxl v0.9.0 -q 100 -e 1): 42.993 s compress, 57.650 s decompress, 1,648,242,164 bytes vs Pillow PNG (optimize=False) 334.791 s, 33.677 s, 2,003,016,524 bytes (derived: 7.8x faster encode, 18% smaller, 1.7x slower decode).",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/doc/full_benchmarks.txt",
     "compiler_and_flags": "gcc (Debian 10.2.1-6) 10.2.1; script/run_full_benchmarks.sh defaults to CFLAGS '-Wall -O3'; adapter/jxl_adapter.cpp #includes libjxl's experimental/fast_lossless/fast_lossless.cc, so the FJXL encoder is built with -Wall -O3 -march=native -DFASTLL_ENABLE_AVX2_INTRINSICS=1 at fast_lossless's default effort 2; the libjxl library used for decoding (and the l3/l7 rows) is built separately per libjxl's README (commit and flags not stated); libpng and libwebp are Debian Bullseye system packages (build flags not stated) at default settings",
     "hardware": "Intel Core i5-10210U @ 1.60GHz (author's desktop machine), single-threaded",
@@ -4888,7 +4898,7 @@
     "stars_or_usage": "3.7k stars",
     "has_code": true,
     "tradeoffs": "The fast-lossless mode trades ratio for speed (libjxl effort 7 compresses to CmpRatio 0.1548 but encodes at 0.57 MPixels/s). Needs JPEG XL support on the consumer side. The fast encoder uses AVX2 intrinsics. Single-threaded decode is slower than libpng and libwebp in that table.",
-    "caveats": "Different format: FJXL writes JPEG XL, not PNG, so readers need a JPEG XL decoder, and in the same run libjxl decodes at 33.16 MP/s vs libpng 56.18 and WebP lossless 89.94. Files are about 10% smaller than libpng's but about 31% larger than WebP lossless (CmpRatio 0.2171 vs 0.2423 and 0.1651, derived from page data). The table is a third party's (nigeltao/qoir, Nov 2022) and measured the then experimental/fast_lossless/fast_lossless.cc; that directory no longer exists, and the code now lives in lib/jxl/enc_fast_lossless.cc behind libjxl's effort-1 lossless mode (doc/encode_effort.md), which this run did not measure. libjxl's own README has no speed numbers. Regular libjxl lossless at effort 3 (5.35 MP/s) and effort 7 (0.57 MP/s) is not faster than libpng at encode. Baselines are Debian system builds with unstated flags at default settings; the libjxl commit and build flags are unstated. qoir's JXL decode adapter requests 4 output channels for images without alpha and 3 for images with alpha (inverted) and the harness never checks decoded pixels, so the JXL decode figures are approximate; the encode figure is unaffected. Measured with AVX2 intrinsics enabled. No libavif comparison (qoir excluded AVIF).",
+    "caveats": "Different format: FJXL writes JPEG XL, not PNG, so readers need a JPEG XL decoder, and in the same run libjxl decodes at 33.16 MP/s vs libpng 56.18 and WebP lossless 89.94. Files are about 10% smaller than libpng's but about 31% larger than WebP lossless (CmpRatio 0.2171 vs 0.2423 and 0.1651, derived from page data). The table is a third party's (nigeltao/qoir, Nov 2022) and measured the then experimental/fast_lossless/fast_lossless.cc; that directory no longer exists, and the code now lives in lib/jxl/enc_fast_lossless.cc behind libjxl's effort-1 lossless mode (doc/encode_effort.md), which this run did not measure. libjxl's own README has no speed numbers. Regular libjxl lossless at effort 3 (5.35 MP/s) and effort 7 (0.57 MP/s) is not faster than libpng at encode. Baselines are Debian system builds with unstated flags at default settings; the libjxl commit and build flags are unstated. qoir's JXL decode adapter requests 4 output channels for images without alpha and 3 for images with alpha (inverted) and the harness never checks decoded pixels, so the JXL decode figures are approximate; the encode figure is unaffected. Measured with AVX2 intrinsics enabled. No libavif comparison (qoir excluded AVIF). [retier] Measured on code later fixed for a correctness bug: the 2022 fast_lossless effort-1 palette detection could emit lossy output on RGBA few-colour images (issue #4287, fixed PR #4291 in June 2025), and QOIR does no round-trip check, so the 0.2171 ratio may be slightly flattered. Different format: FJXL writes JPEG XL, so readers need a JPEG XL decoder, and libjxl decodes at 33.16 MP/s against libpng 56.18 and WebP lossless 89.94 in the same run; files are about 10% smaller than libpng's but about 31% larger than WebP lossless. Default CMake disables the fjxl AVX-512 path; x86 SIMD is gated on !_MSC_VER so MSVC and clang-cl builds are probably scalar; the fast path falls back on animation, crop and extra channels. The WangXuan95 timing includes cjxl.exe process start.",
     "found_via": [
       "Google Scholar / arXiv / ACM DL / IEEE: web search 'fast lossless image codec faster than libpng PNG encoder decoder github fpng fpnge benchmark' surfaced the codec; numbers from the QOIR benchmark page",
       "Named as 'JXL_Lossless/f' in nigeltao/qoir doc/full_benchmarks.txt; github.com/topics/jpeg?l=c%2B%2B listed libjxl; opened lib/jxl/enc_fast_lossless.h, commits page"
@@ -4923,7 +4933,17 @@
         "https://github.com/libjxl/libjxl/commits"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "Lowered A to C under the rule that numbers measured on code later fixed for a correctness bug go to C: the QOIR run (November 2022) timed the fast_lossless encoder at effort 1 whose palette detection checked 8 pixels then inserted, missing hash collisions and producing lossy output from a lossless encode on RGBA few-colour images (issue #4287); the pattern is present from v0.7.0 (July 2022) through v0.11.1 and was fixed in PR #4291 (June 2025). QOIR never round-trip checks, so the 0.2171 compression ratio may be slightly flattered; encode speed is probably unaffected, but the measured code was not a correct lossless encoder on part of the corpus. The WangXuan95 shootout timing also includes cjxl.exe process start against in-process Pillow.",
+        "urls_opened": [
+          "https://github.com/libjxl/libjxl/issues/4287",
+          "https://github.com/libjxl/libjxl/pull/4291",
+          "https://raw.githubusercontent.com/libjxl/libjxl/main/lib/jxl/enc_fast_lossless.cc"
+        ]
+      }
     },
     "corrected_fields": {
       "compiler_and_flags": "QOIR adapter built with -march=native -DFASTLL_ENABLE_AVX2_INTRINSICS=1 plus -Wall -O3 under gcc 10.2.1; libpng and libwebp are Debian Bullseye system builds",
@@ -6636,8 +6656,8 @@
     "baseline_in_list": true,
     "metric": "throughput",
     "workload": "PNG decoding only (lodepng decoder with SIMD unfiltering from the simdtests/depng submodule and libdeflate inflate); the README describes no images, sizes or methodology.",
-    "claimed_speedup": "README: 'On x86 and x86-64 or ARM systems, lodepng-turbo is twice as fast as libpng, but it may be slower elsewhere.' No numbers beyond 'twice as fast'.",
-    "evidence_tier": "C",
+    "claimed_speedup": "README: 'twice as fast as libpng' on x86, x86-64 or ARM; no measurement, harness or baseline build exists in the repository (lodepng_benchmark.cpp never links libpng).",
+    "evidence_tier": "D",
     "benchmark_url": "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/README.md",
     "compiler_and_flags": null,
     "hardware": null,
@@ -6647,7 +6667,7 @@
     "maintenance_status": "abandoned",
     "stars_or_usage": "21 stars",
     "tradeoffs": "Hacked lodepng with libdeflate (git submodule, builds with gcc/clang and GNU make) plus 'depng' prediction routines for unfiltering; accelerates decoding only. Implements both the lodepng API and a TurboPNG API. README itself warns it 'may be slower elsewhere'.",
-    "caveats": "The libpng baseline is named in the README, but the only evidence is the sentence 'twice as fast as libpng'; the repository's lodepng_benchmark.cpp times lodepng alone and never links libpng, and no CPU, compiler, images or libpng/zlib versions are given. The Makefile builds the library with -O2 -fomit-frame-pointer. Output-correctness fixes landed on 2019-01-21 ('average/paeth of first line') and 2019-01-22 ('If scanline is not a multiple of 4 bytes, the operation was not correct'), at the same time as the README edits, so the speed claim may predate those fixes. The last commit is 2019-01-22, so the comparison predates current libpng (which has its own SIMD filters) and current libdeflate. This is a code derivative of lodepng (its LICENSE carries Lode Vandevenne's copyright) rather than a GitHub fork. The predecessor kanryu/simd_lode_png states a 5x goal with no measurements.",
+    "caveats": "The libpng baseline is named in the README, but the only evidence is the sentence 'twice as fast as libpng'; the repository's lodepng_benchmark.cpp times lodepng alone and never links libpng, and no CPU, compiler, images or libpng/zlib versions are given. The Makefile builds the library with -O2 -fomit-frame-pointer. Output-correctness fixes landed on 2019-01-21 ('average/paeth of first line') and 2019-01-22 ('If scanline is not a multiple of 4 bytes, the operation was not correct'), at the same time as the README edits, so the speed claim may predate those fixes. The last commit is 2019-01-22, so the comparison predates current libpng (which has its own SIMD filters) and current libdeflate. This is a code derivative of lodepng (its LICENSE carries Lode Vandevenne's copyright) rather than a GitHub fork. The predecessor kanryu/simd_lode_png states a 5x goal with no measurements. [retier] Directional claim only. Correctness bugs at HEAD (code reading, not run): sub-8-bit grey and palette PNGs are never unfiltered after commit 61f9f24 (bytewidth = bpp/8, no case 0 in depng); Adam7 images with a dimension of 4 or less wrap the row loop (out-of-bounds read and write); the encoder passes a NULL output buffer to libdeflate_zlib_compress; two libdeflate objects leak per state; invalid filter bytes are not rejected. README SIMD and API claims match nothing in the tree (SSE2 only); the Linux Makefile hard-codes libdeflatestatic.lib.",
     "found_via": [
       "WebSearch 'fast PNG decoder encoder faster than libpng SIMD library site:github.com' (result kanryu/lodepng-turbo); opened README and commits page"
     ],
@@ -6672,12 +6692,23 @@
         "https://github.com/kanryu/lodepng-turbo/tree/master/examples"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Lowered C to D: the only evidence is the README sentence 'twice as fast as libpng' with no measurement (lodepng_benchmark.cpp times lodepng alone and never links libpng), and the enricher's code reading shows the final commit 61f9f24 broke correctness: bytewidth = bpp/8 means 1-, 2- and 4-bit grey and palette PNGs are never unfiltered (depng has no case 0) and decode to zeros or garbage; an Adam7 image with width or height of 4 or less gives depng h = 0 and the do-while wraps about 4 billion rows (out-of-bounds read and write); the encoder passes a NULL output buffer to libdeflate_zlib_compress; two libdeflate objects leak per state; invalid filter bytes are not rejected. The README's MMX, AVX2, NEON and 'TurboPNG API' claims match nothing in the tree (SSE2 only).",
+        "urls_opened": [
+          "https://raw.githubusercontent.com/kanryu/lodepng-turbo/master/lodepng.cpp",
+          "https://raw.githubusercontent.com/kanryu/lodepng-turbo/master/depng.c",
+          "https://github.com/kanryu/lodepng-turbo/commit/61f9f24"
+        ]
+      }
     },
     "corrected_fields": {
       "is_fork_of": null,
       "workload": "Baseline PNG decompression using SIMD filters and libdeflate in place of zlib (no workload described).",
-      "caveats": "No benchmark program, methodology, CPU, compiler or data in the repository; the single ratio is first-party. Repository has had no commits since January 2019, so numbers predate current libpng (which has its own SIMD) and libdeflate. The predecessor repository kanryu/simd_lode_png states a goal of 5x libpng but contains no measurements."
+      "caveats": "No benchmark program, methodology, CPU, compiler or data in the repository; the single ratio is first-party. Repository has had no commits since January 2019, so numbers predate current libpng (which has its own SIMD) and libdeflate. The predecessor repository kanryu/simd_lode_png states a goal of 5x libpng but contains no measurements.",
+      "claimed_speedup": "README: 'On x86 and x86-64 or ARM systems, lodepng-turbo is twice as fast as libpng, but it may be slower elsewhere.' No numbers beyond 'twice as fast'."
     }
   },
   {

@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/kanryu/lodepng-turbo",
+  "one_liner": "2019 lodepng hack with libdeflate inflate and SSE2 PNG unfiltering; claims 2x libpng decode, unmeasured, and HEAD has decode bugs.",
+  "what_it_does": "This is a modified copy of lodepng 20180910 (C API only; the lodepng:: C++ API and lodepng's own zlib are compiled out by the Makefile). It reroutes zlib inflate, deflate and CRC32 to libdeflate and replaces lodepng's scalar unfilter with Petr Kobalicek's public-domain depng SSE2 reverse filter from a patched simdtests fork. You call it through the usual lodepng_decode*/lodepng_inspect functions, built as liblodepngturbo.a/.so plus libdeflate. The 'TurboPNG API' the README mentions does not exist in the tree: lodepng-turbo.h only includes lodepng.h, and no turbopng header or source is present.",
+  "how_it_is_fast": "Two swaps. IDAT data is inflated by libdeflate_zlib_decompress straight into a buffer sized from the IHDR prediction, replacing lodepng's bit-by-bit inflater. Then depng_filter_sse2 reverses Sub, Up, Avg and Paeth per row in place with 16-byte SSE2 vectors: Sub uses a log-step prefix sum (shift-and-PADDB), Up is a plain vector add, and Paeth is computed branch-free in 16-bit lanes with a divide-by-3 reciprocal trick, specialized by template for 1, 2, 3, 4, 6 and 8 bytes per pixel. Rows are then memcpy'd out of the filtered buffer. There is no MMX, AVX2 or NEON code in the build, despite the README.",
+  "when_to_use": [
+    "Only for experiments: a quick check of how much libdeflate plus SIMD unfiltering speeds up a lodepng-based tool on x86-64, with trusted, non-interlaced 8-bit or 16-bit-per-channel PNGs, where you compare the output pixel for pixel against stock lodepng first.",
+    "As reading material on combining libdeflate with Kobalicek's depng SIMD reverse filter. For production, take the idea, not this code."
+  ],
+  "when_not_to_use": [
+    "1-, 2- or 4-bit greyscale or palette PNGs (icons, scans, many small UI assets). The final code commit (61f9f24, 2019-01-22) changed bytewidth to bpp/8, which is 0 for these formats, and depng_filter_sse2 has no case for 0. The rows are never unfiltered: output is all zeros, or still-filtered bytes when the row has padding bits (derived from reading lodepng-turbo.cpp and depng_sse2.cpp; not run).",
+    "Adam7-interlaced PNGs with width or height of 4 pixels or less. These have an empty Adam7 pass, and depng's do { } while (--y != 0) loop called with h = 0 wraps to about 4 billion rows, with heap reads and writes far out of bounds. Original lodepng's for-loop handled h = 0 (derived from code reading).",
+    "Untrusted input. An invalid filter-type byte (>4) is silently ignored instead of returning lodepng's error 36. The row pointer is then not advanced, so later rows are misaligned; if the first row is the bad one, the next 'previous row' pointer lands before the buffer start. Interlaced decoding also memcpys between overlapping regions of the same buffer.",
+    "Encoding. With LODEPNG_TURBO_COMPILE, addChunk_IDAT passes a NULL output buffer to libdeflate_zlib_compress, which writes the zlib header through it. The wrapper also never sets *outsize and treats the returned byte count as an error enum, so lodepng_encode* should crash (derived from code reading, including libdeflate cb7ee82's zlib_compress.c).",
+    "ARM, 32-bit x86 without -msse2, or any non-x86 target. depng_sse2.cpp (SSE2 intrinsics via emmintrin.h) is the only unfilter compiled, and it is called unconditionally, so the README's 'ARM' and 'NEON' claims do not hold for this tree."
+  ],
+  "integration": {
+    "form": "static lib (liblodepngturbo.a plus libdeflate's static lib) or shared lib; git submodules libdeflate (cb7ee82) and kanryu/simdtests (1b8e25d)",
+    "dependencies": "libdeflate (2019 snapshot, submodule); kanryu/simdtests depng (public domain, submodule)",
+    "min_toolchain": "C++11 (-std=c++11), GCC or Clang with GNU make; MSVC only through the vstudio project linking a libdeflate built with MSYS2 g++",
+    "platforms": "x86-64 in practice (SSE2 intrinsics, no runtime dispatch); no NEON/AVX2/MMX code despite the README",
+    "thread_safety": "not documented; each LodePNGState gets its own libdeflate decompressor and compressor, and no shared mutable state was seen in the decode path",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every lodepng_state_init (and so every lodepng_decode32/decode_memory call, which makes a temporary state) allocates a libdeflate decompressor and a level-6 libdeflate compressor, even for decode-only use. lodepng_state_cleanup frees neither, so each decode leaks both.",
+    "The LodePNGState layout differs from stock lodepng: it adds an 'inspected' field and libdeflate pointers. After lodepng_inspect, decode skips re-reading the header and trusts the caller's w and h, so reusing a state for another file decodes it with the stale header unless you re-init the state.",
+    "The default 'make' on Linux likely fails at the shared-library step. The Makefile hard-codes ./libdeflate/libdeflatestatic.lib, MinGW's name, while libdeflate's Makefile builds libdeflate.a on Linux. The static library target does not depend on it (derived from both Makefiles; not built).",
+    "No turbo-specific tests exist. lodepng_unittest.cpp and lodepng_benchmark.cpp are upstream's files: the unit test uses the lodepng:: C++ API that the Makefile compiles out, and the benchmark needs SDL, round-trips through the broken encoder, and never links libpng."
+  ],
+  "pick_this_over_siblings_when": "Practically never. libspng (third-party measured 1.02x-1.07x over libpng, maintained, fuzzed) and ptpng (1.80x geometric mean over libpng with zlib-ng on Linux x64, published harness) are faster-than-libpng decoders with evidence. image-png or Wuffs-based decoders cover the safe-decoder case, and fpng only wins on its own files.",
+  "verified_claims_summary": "Nothing was measured. The single README sentence, 'twice as fast as libpng' on x86/x86-64/ARM, has no CPU, compiler, libpng/zlib version, images or harness behind it, and nothing in the repository links libpng. The ARM part of the claim cannot have been measured on this tree, which has no ARM-capable unfilter.",
+  "status_note": "Abandoned since 2019-01-22 (35 commits over 11 days, 21 stars, 2 forks, no issues or releases). The zlib licence is copyable, but at HEAD sub-byte PNGs decode wrongly and small interlaced PNGs and encoding hit memory errors, so it needs fixes before any use.",
+  "measurement_notes": "Correctness bugs at HEAD, found by reading the code (not run), sit behind whatever produced the '2x' claim. (1) Commit 61f9f24 ('bugfixed: If scanline is not a multiple of 4 bytes', 2019-01-22) replaced bytewidth=(bpp+7)/8 and linebytes=(w*bpp+7)/8 with bpp/8 and w*bytewidth. For 1/2/4-bit images this makes unfilter a no-op that copies 0 bytes, so those images decode to zeros or garbage. (2) The companion commit f4f99a4 with the same message only switched the MSVC project from /arch:SSE2 to NotSet; it is a build-flag workaround, not a code fix. (3) An Adam7 image with width or height of 4 or less makes depng_filter_sse2 run with h=0, and its do-while loop then wraps around (unbounded out-of-bounds access). (4) Invalid filter bytes are not rejected. (5) The encoder writes through a NULL buffer. (6) Two libdeflate objects leak per state. It is unknown whether the 2x figure was taken before or after 61f9f24, or on which image types. Because the figure is an unsupported first-party sentence over code with these defects, tier D, or C with these shortcomings recorded, is defensible. The README's MMX/AVX2/NEON and 'TurboPNG API' statements describe nothing present in the tree. The WebSearch result for bojosos/libpng_turbo redirects to the already-catalogued bojosos/ptpng. The depng code comes from a SIMD test playground. Its test harness (depng_test.cpp) always gives row 0 filter None, 'so we don't have to handle special cases', and only checks 1/2/3/4/6/8 bytes per pixel against the scalar reference. kanryu's two first-row patches in the simdtests fork (3dcb3d2, 1b8e25d) are therefore not exercised by any test in either repository.",
+  "sources_read": [
+    "https://github.com/kanryu/lodepng-turbo",
+    "https://github.com/kanryu/lodepng-turbo/commits",
+    "https://github.com/kanryu/lodepng-turbo/commits/master",
+    "https://github.com/kanryu/lodepng-turbo/commit/61f9f24",
+    "https://github.com/kanryu/lodepng-turbo/commit/f4f99a4",
+    "https://github.com/kanryu/lodepng-turbo/commit/ea92a0d",
+    "https://github.com/kanryu/lodepng-turbo/commit/18a0123",
+    "https://github.com/kanryu/lodepng-turbo/tree/master/examples",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/README.md",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/Makefile",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng-turbo.cpp",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng-turbo.h",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng.h",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng.cpp",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/parng_emu.h",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng_benchmark.cpp",
+    "https://raw.githubusercontent.com/kanryu/lodepng-turbo/HEAD/lodepng_unittest.cpp",
+    "https://github.com/kanryu/simdtests/tree/1b8e25d/depng",
+    "https://github.com/kanryu/simdtests/commits/master",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/README.md",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/simdglobals.h",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/depng/depng.h",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/depng/depng_ref.cpp",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/depng/depng_sse2.cpp",
+    "https://raw.githubusercontent.com/kanryu/simdtests/1b8e25dce4a858081e4d86c8d0c6916979e9628e/depng/depng_test.cpp",
+    "https://raw.githubusercontent.com/ebiggers/libdeflate/cb7ee82/Makefile",
+    "https://raw.githubusercontent.com/ebiggers/libdeflate/cb7ee82/lib/zlib_compress.c",
+    "https://github.com/bojosos/libpng_turbo (redirects to bojosos/ptpng)",
+    "WebSearch: \"lodepng-turbo\" libpng benchmark (no third-party measurement found)"
+  ],
+  "confidence": 0.8
+}

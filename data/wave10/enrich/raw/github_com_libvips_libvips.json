@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/libvips/libvips",
+  "one_liner": "Demand-driven, horizontally threaded C image library; author's crop/resize/sharpen TIFF test: 7.8x faster than ImageMagick 7 convert, 16x less memory.",
+  "what_it_does": "libvips is a general image library with about 300 operations (arithmetic, colour, convolution, resampling, morphology, histograms) over 10 pixel formats and many file formats. You build a lazy pipeline of operations on immutable VipsImage objects (C API such as vips_image_new_from_file, vips_crop, vips_reduce, vips_conv, vips_image_write_to_file; a C++ binding vips8 in the same repo; a vips CLI), and pixels are only computed when the result is written. It is not a drop-in for ImageMagick: the API and command language differ, though bindings exist for Python, Ruby, PHP, Node (sharp), Go, .NET and others.",
+  "how_it_is_fast": "Pixels stream through the pipeline as small overlapping regions instead of whole images, so memory stays near the working set (94 MB peak for a 300 MB image in the table). Threading lives in the image I/O system: each worker gets its own light copy of the whole pipeline (horizontal threading, almost lock-free), and a separate write-behind thread overlaps output with compute. Hot kernels have Google Highway SIMD paths with runtime dispatch, chosen when Highway is present at build time: vips_reduce precomputes 16-bit fixed-point filter tables per sub-pixel position and uses a vector path for 3- and 4-band uchar images, and the integer convolution turns the mask into 8-bit mantissas with a shared exponent for a uchar vector path. Orc run-time code generation is the fallback when Highway is absent.",
+  "when_to_use": [
+    "Server-side batch or request-time processing of large images (thumbnails, resize, crop, sharpen, colour conversion) where peak memory per job matters, for example many concurrent jobs per box.",
+    "Very large inputs (gigapixel TIFF, OpenSlide whole-slide images, image pyramids via dzsave) that do not fit comfortably in RAM.",
+    "Multi-core machines where you want a whole load-process-save pipeline parallelised without writing threading code; the single-threaded row (VIPS_CONCURRENCY=1) was still 0.77 s against 4.44 s for 16-thread convert.",
+    "Applications already on Node (sharp), Ruby on Rails (ActiveStorage), Python (pyvips) or Go that want a mature native engine through an existing binding."
+  ],
+  "when_not_to_use": [
+    "You need a single fast in-memory resize kernel with no I/O: specialised resizers in this catalog beat libvips on that narrower task (see siblings).",
+    "Scripts that depend on ImageMagick's command-line syntax, its format coverage or its specific filter behaviour: the vips CLI is a different language, and the vips CLI writes intermediate files to disc (the wiki warns of heavy disc traffic; vips-cli row 1.25 s vs 0.57 s for the C program).",
+    "Random-access operations on formats with only sequential decoders (JPEG, PNG) at large sizes: libvips must decompress them fully to memory or a temporary file first, which costs time and space.",
+    "Projects that cannot meet LGPL-2.1 linking obligations, or that must avoid the large attack surface of optional loaders such as ImageMagick or PDF libraries when handling untrusted files (the README itself warns about this)."
+  ],
+  "integration": {
+    "form": "shared lib (static possible with meson --default-library static); also distro packages and Windows binaries",
+    "dependencies": "Required: glib-2.0 (>= 2.52) and expat. Optional, picked up by pkg-config: libjpeg(-turbo/mozjpeg), libtiff, libpng or spng, libwebp, libheif, libjxl, OpenJPEG, lcms2, fftw3, cgif, libimagequant, pangocairo, librsvg, poppler or PDFium, OpenSlide, OpenEXR, cfitsio, matio, libraw, ImageMagick/GraphicsMagick, and Highway (preferred) or Orc for SIMD.",
+    "min_toolchain": "Meson (README says 0.56+, meson.build declares >= 0.55); C++14 required since 8.18.0, C sources built as gnu11, and the 8.19 ChangeLog formally raises the toolchain requirement to C11. Default meson buildtype is release.",
+    "platforms": "Linux, macOS, other Unix-likes and Windows. SIMD through Highway runtime dispatch (x86-64 and ARM targets; big-endian Highway paths fixed in 8.18.1), else Orc, else plain C.",
+    "thread_safety": "Documented as threaded and thread-safe: call VIPS_INIT once single-threaded, then images (immutable) can be created and read from any thread. Exceptions: draw operations mutate their image, VipsRegion is per-thread, and the error buffer is a single global shared by all threads. Worker count defaults to the number of CPU cores (vips_concurrency_set or VIPS_CONCURRENCY).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Access mode matters: vips_image_new_from_file defaults to random access, which for JPEG/PNG-style formats means full decompression to memory (under about 100 MB) or to a temporary disc file. Pass access=VIPS_ACCESS_SEQUENTIAL for top-to-bottom pipelines. The benchmark uses uncompressed tiled TIFF, which libtiff can read randomly, the best case for libvips (jpg-vips-c: 0.82 s and 286 MB vs 0.57 s and 94 MB for tiled TIFF).",
+    "Integer convolution on uchar images takes a vector path that rounds the mask to 8-bit mantissas with a shared exponent and only falls back to the exact C path if the mask's DC response is off by more than 2 levels. The benchmark mask (-1 x8, 16, scale 8) is exactly representable, but other masks can give slightly different results from the C path.",
+    "Avoid 8.18.1: issue #4955 reports white artifacts from an underflow in integer convolution with a sharpening mask (introduced in 8.18.1, fixed in 8.18.2, 'convolution: avoid using unsigned accumulators').",
+    "Error handling is a single -1/NULL return plus a process-global error buffer, so under concurrency the message in the buffer may not belong to the failure you just saw."
+  ],
+  "pick_this_over_siblings_when": "Pick libvips for complete load-process-save pipelines on large images where memory and core usage matter: in the same table it beats Pillow-SIMD (1.51 s), GraphicsMagick (2.05 s), FFmpeg (2.06 s), OpenCV (3.15 s) and OpenImageIO (3.46 s). Pick fast_image_resize (which beats libvips 8.15.1 single-threaded on pure RGB8 resize kernels, e.g. Lanczos3 13.52 vs 17.31 ms) or Pillow-SIMD when you only need an in-memory resize inside Rust or Python.",
+  "verified_claims_summary": "The libvips author's vips-bench test (load a 10,000 x 10,000 8-bit RGB tiled TIFF, crop 100 px per edge, 90% bilinear shrink, 3x3 sharpen, save; quickest real time of five warm-cache runs; RSS sampled with ps) on a 16-core Threadripper PRO 3955WX under Ubuntu 25.04 reports the vips.c program at 0.57 s and 94 MB peak against ImageMagick 7.1.1 convert at 4.44 s and 1499 MB (magick 4.41 s), with both given 16 threads. The ImageMagick side is the Ubuntu package at its default 16-bit quantum; the libvips side was an unreleased 8.18 development build of unknown compiler and flags, and outputs were not compared.",
+  "status_note": "Very active (last commit 2026-10-02, 8.18.7 released 20 Sep 2026, 8.19 in development, OSS-Fuzz coverage and a steady stream of hardening fixes); LGPL-2.1-or-later, so link dynamically or meet the relinking terms if you ship it.",
+  "measurement_notes": "No correctness bug found behind the catalogued numbers; keep tier C. Provenance flaw: every libvips row is labelled 8.18 and those rows were already on the page in the 15 Aug 2025 revision (112504a), but libvips 8.18.0 was only released on 17 Dec 2025 (ChangeLog), so the measured libvips was an unreleased git build, not 'as packaged for Ubuntu' as the page says for the tools in general; its compiler, flags and whether Highway was enabled are unknown (meson's default buildtype is release). That revision's date line also still read '4 Jan 2023' under an Ubuntu 25.04 heading; the current page says 12 Aug 2025. Smaller points from the scripts: im.sh and im7.sh run vipsheader twice inside the timed script to compute the crop size, adding two libvips process start-ups to ImageMagick's time (a small penalty against the baseline, not quantified); the driver records real time only (CPU time requested in open vips-bench issue #7 since 2017) and never checks exit status or output (README: check the output yourself); the libvips pipeline is 8-bit integer (3-tap linear reduce, fixed-point Highway convolution) while ImageMagick works at its 16-bit quantum, so part of the gap is precision, not just engineering. My code reading shows the vips.c sharpen mask maps exactly onto the vector convolution's 8-bit mantissas (-4 and 64 with a shift of 5), so the libvips output is not degraded by that approximation. vips.c itself has been unchanged since Jan 2023 ('remove access=\"seq\"').",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wiki/libvips/libvips/Speed-and-memory-use.md",
+    "https://github.com/libvips/libvips/wiki/Speed-and-memory-use/_history",
+    "https://github.com/libvips/libvips/wiki/Speed-and-memory-use/112504a3119d49c3a1d4d87669cf59f19d828c35",
+    "https://raw.githubusercontent.com/wiki/libvips/libvips/Why-is-libvips-quick.md",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/README.md",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/vips.c",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/im.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/im7.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/benchmark.sh",
+    "https://github.com/libvips/vips-bench/commits/master/vips.c",
+    "https://github.com/libvips/vips-bench/issues?q=is%3Aissue",
+    "https://github.com/libvips/vips-bench/issues/7",
+    "https://github.com/libvips/vips-bench/issues/8",
+    "https://raw.githubusercontent.com/libvips/libvips/master/README.md",
+    "https://raw.githubusercontent.com/libvips/libvips/master/ChangeLog",
+    "https://raw.githubusercontent.com/libvips/libvips/master/meson.build",
+    "https://raw.githubusercontent.com/libvips/libvips/master/libvips/resample/reduceh.cpp",
+    "https://raw.githubusercontent.com/libvips/libvips/master/libvips/resample/reducev.cpp",
+    "https://raw.githubusercontent.com/libvips/libvips/master/libvips/resample/templates.h",
+    "https://raw.githubusercontent.com/libvips/libvips/master/libvips/convolution/convi.c",
+    "https://raw.githubusercontent.com/libvips/libvips/master/libvips/include/vips/vector.h",
+    "https://raw.githubusercontent.com/libvips/libvips/master/doc/meson.build",
+    "https://raw.githubusercontent.com/libvips/libvips/master/doc/using-threads.md",
+    "https://raw.githubusercontent.com/libvips/libvips/master/doc/how-it-opens-files.md",
+    "https://github.com/libvips/libvips/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/libvips/libvips/issues?q=is%3Aissue+performance+reduce+OR+conv+OR+threadpool+sort%3Aupdated-desc",
+    "https://github.com/libvips/libvips/issues/4955"
+  ],
+  "confidence": 0.85
+}

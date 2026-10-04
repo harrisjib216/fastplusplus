@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/lieff/minimp3",
+  "one_liner": "CC0 single-header float MP1/MP2/MP3 decoder with SSE2/NEON paths; ISO-conformant and 2.0-6.4x fewer cycles per file than keyj's minimp3.",
+  "what_it_does": "minimp3 decodes MPEG-1/2 Layer I, II and III audio to 16-bit PCM (or float with MINIMP3_FLOAT_OUTPUT) from one header, minimp3.h. The core API is frame by frame: mp3dec_init() on a caller-owned mp3dec_t, then mp3dec_decode_frame() on a byte buffer, which handles sync, ID3 skipping and the bit reservoir and reports bytes consumed. The optional minimp3_ex.h adds whole-file and buffer loading, callback I/O, frame iteration, and sample-accurate seeking with an index. It is not API-compatible with keyj's minimp3 (mp3_create/mp3_decode), so switching means rewriting the call sites.",
+  "how_it_is_fast": "It is a floating-point rewrite instead of keyj's fixed-point FFmpeg port: stereo processing, antialias butterflies, the 36-point IMDCT, the 32-band DCT-II and the polyphase synthesis window all have 4-wide float SIMD paths through a small macro layer (VLD/VMAC/VMUL over SSE or NEON intrinsics). Huffman decoding uses a 32-bit bit cache with peek/flush macros. Dequantisation (n^(4/3)) uses a 145-entry table plus a quadratic correction instead of a large runtime-built table, and all tables are static const, so there is no init-time table generation. On x86-64 and aarch64 the SIMD path is compiled in unconditionally (MINIMP3_ONLY_SIMD); 32-bit x86 checks for SSE2 with cpuid.",
+  "when_to_use": [
+    "Games, tools and apps that need to play or load MP3 (and MP1/MP2) assets with a dependency-free, vendorable single header and no licence friction (CC0).",
+    "Many short clips or sound effects decoded at load time: there is no runtime table set-up, which is where its lead over keyj's decoder is largest (hecommon.bit, 1.6 s of audio: 3.2M vs 20.4M cycles).",
+    "x86-64 or aarch64 targets, where the SSE2/NEON paths are always on; a scalar build (MINIMP3_NO_SIMD) still exists for other CPUs.",
+    "You need ISO-conformant output (README: PSNR above 96 dB on all ISO vectors), free-format streams, or sample-accurate seeking through minimp3_ex.h."
+  ],
+  "when_not_to_use": [
+    "Untrusted or attacker-supplied files without sandboxing or fuzzing of your own: open reports include OOB reads in the core L3_huffman (#145, unfixed), a heap OOB read in mp3dec_ex_read_frame after a seek (#147), an integer overflow in Xing/Info parsing leading to a ~10 TB allocation request (#140), and an MSan uninitialised-value report in mp3dec_decode_frame (#141).",
+    "You need evidence that it is the fastest MP3 decoder: the repo has no numbers against libmpg123, FFmpeg or dr_mp3, and in Rust nanomp3 reports higher throughput than minimp3's SIMD build (76.0 vs 71.9 MiB/s on 48 kHz stereo 320 kb/s).",
+    "Small MCUs with no FPU or very tight RAM: decoding is float, each mp3dec_t is about 6.7 KB, and mp3dec_decode_frame puts about 16 KB of scratch on the stack.",
+    "Anything beyond MPEG audio decoding (encoding, AAC, Opus, container demuxing), or projects that need tagged releases and a stable version number (none exist; issue #152 asks for them)."
+  ],
+  "integration": {
+    "form": "header-only (minimp3.h, plus optional minimp3_ex.h); define MINIMP3_IMPLEMENTATION in exactly one translation unit",
+    "dependencies": "none beyond the C standard library (the test program links -lm); minimp3_ex.h's file functions use stdio and can be excluded with MINIMP3_NO_STDIO",
+    "min_toolchain": "C89: CI builds the test program with gcc -O2 -std=c89 -Wall -Wextra -Werror; also usable from C++ (extern \"C\" guards).",
+    "platforms": "any C target; SSE2 on x86 (always on x86-64, cpuid-detected on 32-bit x86), NEON on aarch64 and on 32-bit ARM when built with NEON, ARMv6 saturating clip on ARMv6 (no longer enabled for ARMv6-M since Jul 2026), scalar fallback otherwise",
+    "thread_safety": "Not documented. From the code: all decoder state lives in the caller's mp3dec_t plus a stack scratch struct, and tables are static const, so separate decoders on separate threads are independent; the only global is a lazily set SSE2-detection flag in 32-bit x86 builds. Never share one mp3dec_t between threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Feed it enough data: mp3dec_decode_frame needs at least one full frame, short buffers can false-sync and produce 'squealing' artefacts, the README recommends about 16 KB (10 frames) per call, free-format streams need 3 frames, and trailing ID3v1/APE tags should be stripped first.",
+    "Return values are overloaded: 0 samples with frame_bytes > 0 means skipped ID3 or garbage, 0 with frame_bytes == 0 means not enough data, and the info fields may be stale in the second case.",
+    "Float output (MINIMP3_FLOAT_OUTPUT) can go outside [-1, 1] (open issue #104), so clamp before converting or mixing.",
+    "Seeking by byte (mp3dec_decode_frame at an arbitrary offset) is probabilistic sync, not guaranteed; use mp3dec_ex_seek with MP3D_SEEK_TO_SAMPLE for exact positions, and note the open #147 report against that path."
+  ],
+  "pick_this_over_siblings_when": "Pick minimp3 in C or C++ when you want a tiny CC0 MP3-only decoder you can vendor as one header; in Rust, nanomp3 (faster than minimp3 in its own benchmark) or Symphonia (many codecs, measured against FFmpeg's decoders) are the better catalogued choices.",
+  "verified_claims_summary": "The README times whole decoder processes with perf (clockticks, i7-6700K, compiler and flags not stated, file I/O included) on the ISO conformance vectors: compl.bit 14.3M vs 31.8M cycles for keyj's fixed-point minimp3 (2.2x), he_44khz 21.3M vs 41.6M (1.95x), hecommon 3.2M vs 20.4M (6.4x), sin1k0db 24.8M vs 55.6M (2.2x), while keyj's decoder fails conformance on every vector. A fit over the ten vectors puts keyj's cost at about 14M cycles fixed per run plus 1.48x minimp3's cycles (derived from page data), so on long files the gap is closer to 1.5x than the per-file 2-6x.",
+  "status_note": "Sporadically maintained: after a gap from Nov 2021, hardening PRs for VBR-tag and seek OOB reads were merged in Mar 2026 and an ARMv6-M fix on 27 Jul 2026, but 37 issues are open, including several unfixed memory-safety reports; CC0 and one header, so it is easy to vendor and patch yourself.",
+  "measurement_notes": "Measurement flaw in the catalogued ratios (not invalid evidence; tier C stands). The keyj column has a large per-run constant. Least-squares fit of cycles against audio seconds over the ten vectors that both decoders decoded: keyj about 16.8M cycles intercept and 2.34M cycles per audio second; lieff's minimp3 about 2.4M intercept and 1.49M per second. Regressing keyj cycles on minimp3 cycles gives keyj = 14.1M + 1.48 x minimp3 (derived from page data). The per-vector ratios therefore scale inversely with clip length (6.45x on the 1.6 s hecommon, 4.9x on si_block, 1.95x on the 10.7 s he_44khz), and the marginal, steady-state decode-cost advantage is about 1.5x, not 2.0-6.4x. A likely source is keyj's FFmpeg-derived init: a modified copy of keyj's minimp3.c (fredrikhederstierna/minimp3) builds the Huffman VLC tables, a 32,828-entry n^(4/3) table and an 8,192-entry exponent table at the first mp3_create(), while lieff's decoder uses static const tables. The original keyj source (keyj.emphy.de) was not reachable, and the keyj harness is unpublished, so a harness difference cannot be ruled out. The one-off init is a real cost for a process that decodes one short clip, but it is not throughput. Other points: lieff's own timed process (scripts/perf.sh running minimp3_test.c) also loads the reference .pcm and computes PSNR, which only adds cost to minimp3's side. keyj decoded 4,608 extra samples on sin1k0db (730,368 vs 725,760) with PSNR 0.15 dB and nothing at all on he_free, so parts of the baseline produce wrong output. Suggest rewording claimed_speedup to the 1.5x marginal figure plus the per-file ratios with this caveat, or a shortcoming note; no retier needed.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/README.md",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/minimp3.h",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/minimp3_ex.h",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/minimp3_test.c",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/scripts/perf.sh",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/scripts/build.sh",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/scripts/test.sh",
+    "https://raw.githubusercontent.com/lieff/minimp3/HEAD/LICENSE",
+    "https://github.com/lieff/minimp3/commits/master",
+    "https://github.com/lieff/minimp3/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/lieff/minimp3/issues/145",
+    "https://github.com/lieff/minimp3/issues/147",
+    "https://raw.githubusercontent.com/fredrikhederstierna/minimp3/master/minimp3.c",
+    "WebSearch: keyj minimp3.c \"mp3_create\" \"table_4_3\" github"
+  ],
+  "confidence": 0.8
+}
