@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/linebender/tiny-skia",
+  "one_liner": "Pure-Rust port of Skia's CPU raster pipeline; about 1.7-2.3x faster than cairo on x86 overall, slower on solid rect fills.",
+  "what_it_does": "tiny-skia is a small CPU-only 2D rasteriser. It fills and strokes paths with solid colours, gradients (linear, radial, two-point conical, sweep) and image patterns, supports dashing, alpha-mask clipping, Porter-Duff and separable/non-separable blend modes, and loads and saves PNG. The API is deliberately low level: you draw onto a Pixmap (RGBA8888 premultiplied) with fill_path, fill_rect and stroke_path, and you pass the transform and clip Mask on every call yourself. It is not an API match for cairo or Skia. There is no text, no GPU backend and no PDF output.",
+  "how_it_is_fast": "It ports SkRasterPipeline: each draw is compiled into a list of stage function pointers (load, shade, blend, store) that run over 8 or 16 pixels at a time with no branching inside stages. If every stage has a low-precision version, it runs the u16x16 'lowp' pipeline; otherwise it falls back to the f32 'highp' pipeline. On x86 the lowp path is scalar u16x16 code that LLVM auto-vectorises, with SSE2 by default and AVX2 only with -Ctarget-cpu=haswell; AArch64 uses explicit NEON. Coverage comes from Skia's scanline rasteriser, including dedicated anti-aliased hairline code for thin strokes, which is where it beats cairo's general stroker most (4.4x on AA hairlines).",
+  "when_to_use": [
+    "Pure-Rust CPU rendering of SVG-like content (paths, gradients, patterns, blend modes) without a C/C++ toolchain. It is the renderer behind resvg and has about 490 reverse dependencies on crates.io (iced_tiny_skia, typst-render, i-slint-core, cosmic-text among them).",
+    "Work heavy in non-separable or exotic blend modes, bilinear or bicubic patterns, AA clipping or hairlines. On the 3700X AVX2 run it was faster than cairo on Screen (9.1x), bilinear patterns (3.9x), AA hairlines (4.4x), spirals (2.0x), AA clip (1.65x) and linear gradients (1.55x) (derived from page data).",
+    "Small binaries and fast builds: the README cites about 14 KLOC, about 200 KiB added to the binary and builds in under 5 s, against multi-MiB Skia builds that need clang and gn.",
+    "no_std or WebAssembly targets: the crate builds without std (no-std-float feature) and has SIMD128 and relaxed-SIMD code paths for wasm."
+  ],
+  "when_not_to_use": [
+    "UI-style drawing dominated by solid rect fills and plain source-over blending. In tiny-skia's own x86 data cairo was 2.5-2.7x faster on Rect and Rect AA, 1.7x on Source Over, 3.2x on Plus and 2.6x on nearest-neighbour patterns (derived from page data); the default SSE2 build loses by more (Rect 0.31x).",
+    "When you need the fastest CPU renderer. tiny-skia is slower than Skia in 41 of 45 x86 AVX2 tests (geometric mean 0.68x) and 41 of 45 M1 tests (0.51x), and that Skia was built with SK_FORCE_RASTER_PIPELINE_BLITTER, so stock Skia may be faster still. Blend2D was faster in 870 of 870 thesis cells (about 7.5x), and Vello CPU is faster in most cells (derived from page data).",
+    "Text, GPU rendering, PDF, non-RGBA8888 pixel formats, conic segments or path effects beyond dashing. All are out of scope per the README, which also calls the project 'more of a research project', not a Skia replacement.",
+    "C or C++ code bases: there is no C API in the repository. The catalogued tiny-skia-cpp port claims up to 1.9x faster than the Rust original.",
+    "Performance-sensitive ARM use: issue 55 (open since 2022) reports 2-4x slower than Skia on M1, with rect fills up to 6x slower and gradients 2-3x slower."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "arrayvec, bytemuck, cfg-if, log, tiny-skia-path; png optional (default feature png-format)",
+    "min_toolchain": "Rust stable (README says 'MSRV: stable'; no rust-version in Cargo.toml; edition 2021). Benchmarks need nightly.",
+    "platforms": "any Rust target; SIMD on x86-64 (SSE2 by default, AVX2 only at compile time with -Ctarget-cpu=haswell, no runtime dispatch), AArch64 NEON, wasm32 SIMD128/relaxed SIMD; scalar elsewhere",
+    "thread_safety": "Not documented. No internal threading; each call renders into a caller-owned Pixmap.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "There is no runtime CPU detection, so the headline AVX2 numbers need a non-portable -Ctarget-cpu=haswell build. A default x86-64 build matches the SSE2 column: faster than cairo in 34 of 44 comparable tests, geometric mean 1.71x, against 2.32x for AVX2 (derived from page data).",
+    "There is no global alpha (only Pattern has opacity), clipping goes through a full alpha Mask (README: Skia's method is 'way faster'; issue 10 on faster rectangular clips is open since 2020), and Pixmap has no stride (issue 168).",
+    "Open panic and assertion reports: issue 100 (non-anti-aliased hairline stroke of a full-width rectangle), 51 (ClipMask debug_assert) and 167 (assertion in path.rs). Recent rendering bugs: 189 (hairline curve just outside the canvas is offset) and 179 (rounded-rect corner artefact at small sizes).",
+    "Stroke cost jumps once a stroke stops being a hairline: issue 158 reports width 2.0 as 'considerably slower' than width 1.0, because thin strokes take the hairline fast path."
+  ],
+  "pick_this_over_siblings_when": "Pick it over raqote, the other pure-Rust option, almost always: tiny-skia was faster in 40 of 41 comparable x86 tests (geometric mean about 5.8x, derived from page data) and has proper AA hairlines. Pick Vello CPU or Blend2D when speed matters more than a small, stable, dependency-light pure-Rust crate.",
+  "verified_claims_summary": "These are the project's own nightly cargo bench numbers. The x86 run (July 2021) used an AMD 3700X on Gentoo with tiny-skia built for SSE2 and for AVX2 (haswell), Skia built with clang and a forced raster-pipeline blitter, and cairo 1.16.0 from the system package (gcc -march=native). The ARM run (Aug 2022) used an Apple M1. Recounted from the gh-pages data, AVX2 beat cairo in 37 of 46 tests (geometric mean 2.24x). Dropping two unfair tests leaves 36 of 44 at 2.32x: 'Fill All' compares tiny-skia's overwrite (Pixmap::fill) with cairo's alpha-blended paint(), and 'Destination' is a no-op. On M1 the figure is 41 of 44 at 2.69x, but cairo's M1 times are 4.9-8.3x worse than its own 3700X times on basic fills while Skia's are unchanged, which points to an M1 cairo/pixman build without SIMD fast paths (the build is not documented).",
+  "status_note": "Maintained but quiet under Linebender: last release 0.12.0 (2026-02-02), and commits since September 2024 are features and maintenance, not performance work; the published benchmarks date from 2021/2022. BSD-3-Clause, about 51.7M crates.io downloads, easy to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/README.md",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/src/pixmap.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/src/pipeline/mod.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/src/pipeline/lowp.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/README.md",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/main.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/fill.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/blend.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/patterns.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/hairline.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/clip.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/gradients.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/HEAD/benches/src/spiral.rs",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/48d21dfb95ae80675faec14c56dee5f4c66d3613/benches/README.md",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/a6a1c13d1211d5371554bb2b842252463fb3495a/benches/README.md",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/gh-pages/x86_64.html",
+    "https://raw.githubusercontent.com/linebender/tiny-skia/gh-pages/arm.html",
+    "https://github.com/linebender/tiny-skia/tree/main/benches",
+    "https://github.com/linebender/tiny-skia/tree/main/benches/src",
+    "https://github.com/linebender/tiny-skia/commits/main",
+    "https://github.com/linebender/tiny-skia/issues?q=is%3Aissue+slow+OR+performance+OR+panic",
+    "https://github.com/linebender/tiny-skia/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/linebender/tiny-skia/issues/174",
+    "https://github.com/linebender/tiny-skia/issues/158",
+    "https://github.com/linebender/tiny-skia/issues/55",
+    "https://crates.io/api/v1/crates/tiny-skia",
+    "https://crates.io/api/v1/crates/tiny-skia/reverse_dependencies?per_page=10"
+  ],
+  "confidence": 0.75
+}

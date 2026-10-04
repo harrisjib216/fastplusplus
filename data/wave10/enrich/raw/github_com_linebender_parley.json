@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/linebender/parley",
+  "one_liner": "Pure-Rust rich-text layout (fallback, bidi, shaping, line breaking); 2.4-9x faster than cosmic-text on paragraph-per-layout workloads.",
+  "what_it_does": "Parley turns styled Unicode text into positioned glyph runs: it resolves fonts and fallback through Fontique, analyses text with ICU4X (bidi, scripts, segmentation), shapes with HarfRust, then breaks lines and aligns them. You build a Layout per paragraph from a RangedBuilder, TreeBuilder or StyleRunBuilder over shared FontContext (font database) and LayoutContext (scratch) objects, then call break_all_lines(max_width) and align(); a Layout can be re-broken at a new width but must be rebuilt when text or styles change. It also ships a PlainEditor with cursor and selection logic. The API is unrelated to cosmic-text's FontSystem/Buffer, so moving over means a rewrite of the text layer.",
+  "how_it_is_fast": "Shaping goes through HarfRust with per-Shaper LRU caches (16 entries each) for shaper data, variation instances and shape plans, plus a reused UnicodeBuffer, so repeated runs in the same font skip plan construction. Text is itemised by script, bidi level and style, and each item is split into runs only where grapheme clusters change font, so a uniform paragraph is shaped in a few large calls. LayoutContext keeps allocations across layouts. Nobody has profiled where the gap to cosmic-text 0.19.0 comes from, and the two used different HarfRust versions (0.12.0 vs 0.5.2) in the flui test, so part of the gap may be the shaper itself.",
+  "when_to_use": [
+    "A Rust UI or document renderer that lays out many independent paragraphs: in flui's spike (Apple Silicon, parley 0.11.1 vs cosmic-text 0.19.0) one Layout per paragraph was 2.4x (Arabic) to 9.0x (CJK) faster over 10,000 lines.",
+    "Repeated warm layout of short UI strings: a single warm paragraph took 0.07-0.14 ms against cosmic-text's 0.32-0.48 ms in the same data, 2.3-6.8x faster (derived from page data).",
+    "Mixed-script or fallback-heavy text such as Latin with embedded Arabic, CJK or emoji, where massive's criterion bench shows parley about 4.8x faster on a full mixed line and 2.7x on fallback stress.",
+    "Apps that create a font database often or need a fast cold start: massive measured parley 61 us vs cosmic-text 36 ms for a fresh font database, because cosmic-text's FontSystem construction dominates.",
+    "Projects already on the Linebender or Bevy stack (Vello, Xilem/Masonry, Blitz; bevy_text moved from cosmic-text to parley in PR 22879, merged 2026-02-11)."
+  ],
+  "when_not_to_use": [
+    "Handing one Layout a whole multi-paragraph document of a single script on released 0.11.1: shaping is quadratic in item length (devanagari 10,000 lines took 78,782 ms vs cosmic-text 3,265 ms in flui's scaling study). Split on newlines yourself, or wait for a release that includes PR 801 (merged 2026-09-09 to main, not in 0.11.1).",
+    "Terminal-style glyph-at-a-time work: cosmic-text was about 16% faster on a single ASCII cluster in massive's criterion bench.",
+    "C or C++ code bases: there is no C API, so HarfBuzz with FreeType, ICU or Pango stay the native choice.",
+    "Teams that need API stability: four minor releases (0.8 to 0.11, each semver-breaking for a 0.x crate) shipped in 2026, and main queues more breaking changes (Cluster now spans a grapheme cluster, LineMetrics ascent/descent/leading removed).",
+    "Long Arabic paragraphs with wrapping, until someone checks it: flui issue 931 relays an unaudited floem report of parley being 93% slower on Arabic wrap, and the flui spike never exercised wrapping."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "fontique (font enumeration and fallback; CoreText via objc2 on Apple, fontconfig on Linux/FreeBSD, platform backends on Windows and Android), parley_engine, parlance, HarfRust 0.12, Skrifa/read-fonts, ICU4X 2.x (segmenter, properties, normalizer), hashbrown, smallvec, linebender_resource_handle",
+    "min_toolchain": "Rust 1.88 (edition 2024)",
+    "platforms": "macOS/iOS, Windows, Linux, FreeBSD and Android with system fonts (default 'system' feature); no_std plus alloc with the 'libm' feature and caller-supplied fonts",
+    "thread_safety": "Not documented beyond the API shape: FontContext and LayoutContext are passed as &mut, so each thread needs its own pair or external locking.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Dictionary-based line breaking for CJK, Thai, Khmer, Lao and Myanmar is behind the off-by-default 'complex-scripts' feature; without it those scripts break at every character.",
+    "Layout.break_all_lines(None) means unbounded width, and align() takes no width (since 0.9 it aligns to max_advance or to the longest line), so code ported from older versions can silently misalign.",
+    "Main is churning: issue 763 recorded a 20x regression in GlyphRunIter::next on unreleased main (fixed by PR 764 before any release), so benchmark a pinned version, not a git dependency.",
+    "The catalogued speedups compare against cosmic-text only, at unbounded width, using a single paragraph repeated 10,000 times; glyph counts differ by 3.2% on the emoji ZWJ corpus, and no one checked whether the system-font fallback produced tofu on either side."
+  ],
+  "pick_this_over_siblings_when": "The other catalogued font entries are shapers (sigilbuzz, rustybuzz-wasm, text-shaper, SixLabors.Fonts), rasterizers (fontdue, font-rs, TiTanF) or a typesetter (Typst). Pick Parley when you need full paragraph layout in Rust: fallback, bidi, line breaking, alignment and editing. Draw the glyphs with a separate renderer; the repo's examples use swash, tiny-skia and Vello CPU.",
+  "verified_claims_summary": "An independent downstream project (flui PR 1276) ran a public harness: parley 0.11.1 vs cosmic-text 0.19.0, release build, macOS on Apple Silicon (chip and rustc not stated), system SansSerif at 16 px, no wrapping, 5 runs each. On 10,000-line documents (one Layout per paragraph, cold) parley was 2.4x-9.0x faster (latin 781 vs 4255 ms, cjk 566 vs 5120 ms); recomputing from the checked-in measurements.jsonl shows warm runs are within 3% of cold (2.5x-8.9x), and each large run is about 10,000 times a warm single paragraph. Separately, massive's criterion bench (M-series Mac, JetBrains Mono 13 px) found parley ahead on mixed lines (4.8x), full screens (2x) and fallback stress (2.7x), behind by 16% on a single cluster, and about 600x faster at cold start.",
+  "status_note": "Actively developed by Linebender (last commit 2026-10-02; latest crates.io release 0.11.1 on 2026-08-16, about 3.5M all-time downloads), Apache-2.0 OR MIT, pre-1.0 with breaking changes in most releases.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/README.md",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley/src/lib.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley/src/shape/mod.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_engine/src/shape/mod.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_engine/src/shape/shaper.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_engine/src/shape/cache.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_engine/src/lib.rs",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_engine/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_bench/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/parley_bench/README.md",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/fontique/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/parley/HEAD/CHANGELOG.md",
+    "https://github.com/linebender/parley/issues?q=is%3Aissue+performance",
+    "https://github.com/linebender/parley/issues?q=quadratic",
+    "https://github.com/linebender/parley/pull/801",
+    "https://github.com/linebender/parley/issues/763",
+    "https://crates.io/api/v1/crates/parley/versions",
+    "https://crates.io/api/v1/crates/parley",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/Cargo.toml",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/src/main.rs",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/src/parley_backend.rs",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/src/cosmic_backend.rs",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/scripts/run_measurements.sh",
+    "https://raw.githubusercontent.com/vanyastaff/flui/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/results/measurements.jsonl",
+    "https://raw.githubusercontent.com/vanyastaff/flui/HEAD/docs/research/text-stack-2026.md",
+    "https://github.com/bevyengine/bevy/pull/22879",
+    "https://github.com/bevyengine/bevy/pull/23012",
+    "https://github.com/gpui-ce/gpui-ce/pull/253"
+  ],
+  "confidence": 0.7
+}
