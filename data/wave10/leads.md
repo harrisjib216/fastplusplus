@@ -43,3 +43,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher leads (e88): go-gfx/gfx (Go resample and colour kernels used by go-images, no numbers), ajroetker/go-highway (Go SIMD, indirect dependency); mozilla/mozjpeg and memorysafety/rav1d (slower than dav1d) remain uncatalogued baselines.
 - Enricher lead (e92): iOrange/bcdec (single-header BC1-7 decoder; not checked).
 - Enricher leads (e93): manticore-projects/FPNG-Java (Java wrapper of fpng, fpnge and zpng; duplicate if found, but its README JMH tables are an independent source for PngEncoder); Remade-With-Rust/rusty_h264 (BSD-2, decoder 1.63-1.77x slower than ffmpeg, no win).
+- Paper-access or blocked-page retier (batch 91): bcdec cross-decoder chart in iOrange/bcdec PR #1 (user-images.githubusercontent.com) and the aras-p.info BCn decoder post could lift bcdec from D.
