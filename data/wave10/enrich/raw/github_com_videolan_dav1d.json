@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/videolan/dav1d",
+  "one_liner": "VideoLAN's BSD-2 AV1 decoder in C and assembly; about 3x the 4K60 decode rate of libaom at equal thread counts.",
+  "what_it_does": "dav1d decodes AV1 bitstreams (all profiles, chroma subsamplings and 8/10/12-bit depths, film grain, scalable operating points) into planar pictures. It is decode-only. The C API is a push/pull loop: dav1d_open() with a Dav1dSettings struct (n_threads, max_frame_delay, apply_grain, frame_size_limit, custom picture allocator), then dav1d_send_data() for OBUs and dav1d_get_picture() for frames, with EAGAIN driving the loop and dav1d_flush() for seeking. Many applications reach it through FFmpeg's libdav1d wrapper rather than calling it directly.",
+  "how_it_is_fast": "Every DSP stage (motion compensation, inverse transforms, intra prediction, deblocking, CDEF, loop restoration, film grain, palette, ref-MV projection) has hand-written assembly per ISA: x86 SSE2/SSSE3/SSE4.1, AVX2 and AVX-512 (Ice Lake feature set), ARMv7/ARMv8 NEON with DotProd, i8mm and SVE2 variants, plus RISC-V, LoongArch and Power9 paths, picked at runtime by CPU detection. The multi-symbol arithmetic decoder (msac) that reads every coefficient also has assembly versions (x86/msac.asm, arm/64/msac.S). Since 1.0 one worker pool runs a dependency-tracked task graph across several frames in flight (n_fc frame contexts), tiles and superblock rows, covering entropy decoding, reconstruction, deblock, CDEF, super-resolution, loop restoration and film grain as separate tasks (src/thread_task.c), so it can use more threads than a stream has tiles. libaom's decoder has a single frame worker with tile and row multithreading only.",
+  "when_to_use": [
+    "Software AV1 playback or transcoding on CPUs or devices without an AV1 hardware decoder, especially 4K or high frame rate: the measured run reached 61-77 fps at 4K60 on 4-6 threads of a 2017 Xeon Silver, where libaom stayed at 20-26 fps.",
+    "Any FFmpeg-based pipeline that still decodes AV1 with libaom-av1: switching the decoder name to libdav1d is the whole change, as OvenMediaEngine's PR did.",
+    "Live or low-latency ingest: cap max_frame_delay (1 or 2) to bound latency and still get most of the multithreaded throughput (the PR measured p50 33.4 ms and p99 70-115 ms at 6 threads with delay 2).",
+    "Embedding in proprietary products, drivers or mobile apps where a permissive license and small stack (62 KB on x86-64, 58 KB on ARM per NEWS 1.5.1) matter.",
+    "ARM phones and SBCs, where it has NEON assembly for both 8-bit and high bit depth."
+  ],
+  "when_not_to_use": [
+    "Encoding: dav1d has no encoder. Use SVT-AV1, libaom or rav1e for that.",
+    "When a hardware AV1 decoder is available and power draw or CPU budget matters more than portability: hardware decode beats any software decoder there.",
+    "Old x86 CPUs without SSSE3: release 1.5.0 removed some SSE2 code paths, so they run more C code.",
+    "Memory-safety requirements that rule out C and hand-written assembly in the media path: consider the Rust port rav1d, accepting that it is slower.",
+    "Untrusted input without limits: past CVEs include a thread_task.c race (CVE-2023-32570, fixed in 1.2.0) and an integer overflow on very large frames with multiple threads (CVE-2024-1580, fixed in 1.4.0). Stay on current releases and set frame_size_limit."
+  ],
+  "integration": {
+    "form": "static or shared lib (Meson + Ninja)",
+    "dependencies": "none at run time (pthreads or Win32 threads); build needs Meson 0.54+, Ninja and nasm 2.14+ for x86 assembly",
+    "min_toolchain": "C99 compiler (meson.build sets c_std=c99), Meson 0.54+, nasm 2.14+ on x86",
+    "platforms": "x86 and x86-64 (SSE2 through AVX2; AVX-512 kernels only on x86-64 with Ice Lake-class extensions), ARMv7 and AArch64 (NEON, DotProd, i8mm, SVE2), RISC-V, LoongArch, ppc64le, wasm and generic C elsewhere; Linux, Windows, macOS, Android, iOS, BSDs, OS/2",
+    "thread_safety": "Not documented in dav1d.h. Each Dav1dContext runs its own worker threads internally, and the API is written for one caller per context. Separate contexts are independent.",
+    "drop_in_for_baseline": "partial: through FFmpeg it is a decoder-name swap (libaom-av1 to libdav1d); the native API (dav1d_send_data/dav1d_get_picture, Dav1dPicture) differs from libaom's aom_codec_decode/aom_codec_get_frame"
+  },
+  "gotchas": [
+    "max_frame_delay defaults to ceil(sqrt(n_threads)) (at most 8), which buffers that many frames of latency. FFmpeg's wrapper forces 1 under AV_CODEC_FLAG_LOW_DELAY, and with thread_count 0 it starts cpu_count*3/2 threads.",
+    "The AVX-512 kernels need the Ice Lake feature set (VBMI2, GFNI, VNNI, BITALG and others; see src/x86/cpu.c). Skylake-SP parts, including the Xeon Silver 4114 in the measured run, use the AVX2 paths.",
+    "Film grain is applied by default (apply_grain=1). Calling dav1d_apply_grain() on such a picture applies the grain twice.",
+    "Meson refuses MemorySanitizer builds with assembly enabled (false positives), so sanitize with -Denable_asm=false. Each worker thread gets a 1 MB stack plus TLS."
+  ],
+  "pick_this_over_siblings_when": "Pick dav1d over rav1d-safe, the catalogued Rust port, whenever raw decode speed matters: rav1d-safe only beats rav1d with assembly disabled, and both trail dav1d's assembly build. SVT-AV1 and rusty-av1-toolkit are encoders, so they complement dav1d rather than compete with it.",
+  "verified_claims_summary": "One independent run, in merged OvenMediaEngine PR #2336: FFmpeg 7.1.5 libavcodec wrappers around dav1d 1.5.4 and libaom 3.12.0, both release builds with nasm assembly, on 2x Xeon Silver 4114 (Skylake-SP, so dav1d used its AVX2 code), 48 GB DDR4-2400, Ubuntu 22.04.5, kernel 6.8, performance governor. On two private 3840x2160 60 fps, about 10 Mbps low-delay P clips, the maximum decode rate (median of 3 runs) was 2.9-3.3x libaom's at the same 4 and 6 threads (for example 74.7 vs 22.3 fps). Part of the gap is the threading model, since libaom gained only 22.3 to 26.0 fps going from 4 to 6 threads; no single-thread ratio was published.",
+  "status_note": "Very active: last commit 2026-09-30, with many SIMD optimization commits for x86 and AArch64 in September 2026; current release 1.5.4. It is BSD-2-Clause, the README calls it production-ready, and FFmpeg ships a libdav1d wrapper. The GitHub repo is a read-only mirror, and issues and merge requests live on code.videolan.org, which was unreachable from this session.",
+  "measurement_notes": "The verifier's 'compiler and flags unstated' caveat is narrower than it looks: the PR's own cmake/InstallPrerequisites.cmake builds dav1d with meson 0.61.5 --buildtype=release --default-library=shared and nasm 2.15.05, and builds libaom 3.12.0 with CMake, ENABLE_NASM=ON and no build type, which libaom's CMakeLists.txt forces to Release. FFmpeg 7.1.5 is built with --enable-libaom --enable-libdav1d. Only the C compiler version (presumably the distro default) is unstated. Both builds are optimized and assembly-enabled, so the comparison is fair. libaom's decoder ran its defaults (row_mt on, one frame worker), and FFmpeg's libaomdec passes only cfg.threads = min(thread_count, 16). The frame delay used for the first table is not stated: the shipped setting (max_frame_delay=2 at 6 threads) measured 77.3 and 68.1 fps against 74.1 and 67.6 in the first table, so the low-latency configuration is not slower. The record's earlier reading of the PR fallback is wrong: decoder_avcodec_video.cpp falls back to libaom-av1 only when FFmpeg lacks libdav1d, and keyframe-only decoding uses max_frame_delay=1. No benchmark script or clip is published, so tier B stands. No correctness bug was found behind the numbers, and dav1d's README documents a 2763-file Argon conformance run.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/README.md",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/NEWS",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/meson.build",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/include/dav1d/dav1d.h",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/include/dav1d/picture.h",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/lib.c",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/thread_task.c",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/internal.h",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/msac.h",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/meson.build",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/src/x86/cpu.c",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/tools/dav1d_cli_parse.c",
+    "https://raw.githubusercontent.com/videolan/dav1d/HEAD/doc/PATENTS",
+    "https://github.com/videolan/dav1d/commits",
+    "https://github.com/advisories?query=dav1d",
+    "https://github.com/OvenMediaLabs/OvenMediaEngine/pull/2336",
+    "https://github.com/OvenMediaLabs/OvenMediaEngine/pull/2336/files",
+    "https://raw.githubusercontent.com/OvenMediaLabs/OvenMediaEngine/HEAD/cmake/InstallPrerequisites.cmake",
+    "https://raw.githubusercontent.com/OvenMediaLabs/OvenMediaEngine/HEAD/cmake/Versions.cmake",
+    "https://raw.githubusercontent.com/OvenMediaLabs/OvenMediaEngine/HEAD/src/transcoder/codec/decoder/decoder_avcodec_video.cpp",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/7.1/libavcodec/libdav1d.c",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/7.1/libavcodec/libaomdec.c",
+    "https://gitlab.com/webmproject/libaom/-/raw/v3.12.0/CMakeLists.txt",
+    "https://gitlab.com/webmproject/libaom/-/raw/v3.12.0/build/cmake/aom_configure.cmake",
+    "https://gitlab.com/webmproject/libaom/-/raw/v3.12.0/av1/av1_dx_iface.c"
+  ],
+  "confidence": 0.85
+}

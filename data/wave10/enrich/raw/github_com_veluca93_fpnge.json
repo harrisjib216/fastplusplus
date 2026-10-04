@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/veluca93/fpnge",
+  "one_liner": "Two-file AVX2/SSE4.1 PNG encoder; about 57x libpng's default encode speed on the QOI corpus, files about 15% larger.",
+  "what_it_does": "Encodes 8- or 16-bit, 1-4 channel images (gray, gray+alpha, RGB, RGBA; RGB or BGR input order) into standard PNG files that any decoder reads. The C API is one call, FPNGEEncode(bytes_per_channel, num_channels, data, width, row_stride, height, output, options), writing into a caller-allocated buffer sized with FPNGEOutputAllocSize; options choose a speed level 1-5, an optional cICP (PQ/Rec.2020) chunk and extra custom chunks. There is no decoder and no libpng-compatible API.",
+  "how_it_is_fast": "It replaces zlib's general LZ77 search with a single dynamic-Huffman deflate block whose only matches are distance-1 runs over whole SIMD vectors of zero filter residuals. The Huffman code is built from symbol counts of a few centre rows and constrained so residual bytes 16-239 share one code length, letting pshufb lookups on 16-entry tables (first16/last16/mid) produce code lengths and bits for 32 bytes at a time, with BMI2 PEXT (skipped when tuning for Zen 1/2) to pack them. Per-row PNG filter choice is made by costing all four predictors with those same SIMD tables (exact at the default level, approximate at level 3), Adler-32 is accumulated with psadbw, and the chunk CRC uses PCLMULQDQ folding.",
+  "when_to_use": [
+    "Screenshot, screen-recording, game-capture or render-output pipelines on x86 where PNG encode time is the bottleneck and files 7-60% larger than libpng's are acceptable.",
+    "Photographic or textured RGB/RGBA images: in the QOIR data the speedup over libpng is largest there (84x on Kodak, 95x on Tecnick) and the size penalty smallest (7-10%).",
+    "Large frames encoded on one core per image, where it stayed around 280-360 MP/s across the QOIR subsets on an i5-10210U.",
+    "When you need real .png output (unlike QOI, QOIR or Zpng), including 16-bit or HDR (cICP PQ) PNGs."
+  ],
+  "when_not_to_use": [
+    "ARM or any non-x86 target: fpnge.cc stops with '#error Requires SSE4.1 support minium' (Apple Silicon request #29 closed with no port).",
+    "Size-sensitive storage or web delivery: on flat synthetic content its LZ77 finds only zero-residual runs, so files were 59% larger than libpng's on icon_512 and 33% larger on screenshot_web; run an optimiser such as oxipng afterwards or use libpng/zlib-ng at a higher level.",
+    "Many tiny images: on 64x64 icons it fell to 82.45 MP/s, 2.3x slower than fpng (193.31 MP/s) and with larger files than fpng, because table construction and buffer setup are per call.",
+    "Indexed-colour, 1/2/4-bit, interlaced or palette PNGs: only 8/16-bit gray, gray+alpha, RGB and RGBA are written.",
+    "Decoding: it is encoder only; pair it with libspng, Wuffs or image-png for reads."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (the fpnge CLI in fpnge_main.cc uses lodepng only to read input)",
+    "min_toolchain": "C++14 (std::index_sequence, constexpr lookup tables); GCC, Clang, or MSVC since the November 2023 forceinline fix; must be compiled with at least -msse4.1, and -mavx2 -mbmi2 -mpclmul (or -march=native as build.sh does) for the fast path",
+    "platforms": "x86 and x86-64 only; SSE4.1 required, AVX2 for full speed; instruction set fixed at compile time, no runtime dispatch",
+    "thread_safety": "Reentrant: fpnge.cc has no mutable global state (only constexpr tables), so separate FPNGEEncode calls can run on separate threads; each call is single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No output capacity is passed to FPNGEEncode; it trusts the caller's buffer. FPNGEOutputAllocSize (1024 + (2*bytes*width*channels + 1)*height) ignores additional_chunks, so adding an ICC or EXIF chunk larger than the slack can overflow the heap unless you add the chunk sizes yourself. Issue #25 (fixed 2023-05-22) was an underestimate of this kind, and issue #31 (heap corruption on one 4-channel image, 2024) was closed without a documented cause.",
+    "The whole image goes into one IDAT chunk and one deflate block, and the chunk length is written as 32 bits, so outputs above PNG's 2^31-1 chunk limit (multi-gigapixel 16-bit images) would be invalid.",
+    "A binary built with -march=native or -mavx2 dies with an illegal instruction on CPUs without AVX2/BMI2; the default x86-64 target (SSE2 only) does not compile at all. Upstream CI (test.sh) round-trips the libjxl test PNGs through ImageMagick compare for all four speed levels, but only for the -march=native build on a GitHub runner, so the SSE4.1 and MSVC paths are untested.",
+    "fpnge.h defines FPNGEOutputAllocSize and FPNGEFillOptions as plain inline functions inside extern \"C\"; a C caller built without optimisation may get an undefined reference to FPNGEOutputAllocSize, since under C99 inline rules no external definition is emitted."
+  ],
+  "pick_this_over_siblings_when": "Pick fpnge over fpng when you only encode and run on AVX2 machines: in the same QOIR run it encoded 1.63x faster (312.59 vs 192.16 MP/s) with 10% smaller output, though fpng is portable C++ with a decoder and wins on tiny images. Pick it over QOI, QOIR or Zpng when the output must be a standard .png; pick libjxl's fast_lossless (106.48 MP/s, 22% smaller files) when JPEG XL output is acceptable.",
+  "verified_claims_summary": "In Nigel Tao's QOIR harness (gcc 10.2.1, -O3 -march=native, Intel i5-10210U, one thread, 5 repetitions per image, totals over the QOI benchmark corpus), a 2022 fpnge snapshot at its default level encoded 312.59 MP/s against 5.49 MP/s for Debian Bullseye's libpng through png_image_write_to_memory at default zlib settings (about 57x), with CmpRatio 0.2798 vs 0.2423 (about 15% larger files). The harness has no fpnge decoder, so it never checks fpnge's output; correctness rests on upstream's round-trip test.sh.",
+  "status_note": "Maintained at low intensity by its author (last commit 2025-10-09, a simpler Paeth predictor in February 2025, BGR input and custom chunks in March 2024); Apache-2.0, two source files, easy to vendor, but the README still calls it a proof of concept and there is no NEON port.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/README.md",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/fpnge.cc",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/fpnge.h",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/fpnge_main.cc",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/build.sh",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/test.sh",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/.github/workflows/test.yml",
+    "https://raw.githubusercontent.com/veluca93/fpnge/HEAD/LICENSE",
+    "https://github.com/veluca93/fpnge",
+    "https://github.com/veluca93/fpnge/commits/main",
+    "https://github.com/veluca93/fpnge/issues?q=is%3Aissue",
+    "https://github.com/veluca93/fpnge/issues/23",
+    "https://github.com/veluca93/fpnge/issues/26",
+    "https://github.com/veluca93/fpnge/issues/29",
+    "https://github.com/veluca93/fpnge/issues/31",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/doc/full_benchmarks.txt",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/adapter/png_fpnge_adapter.cpp",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/adapter/png_libpng_adapter.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/test/benchmarks.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/script/run_full_benchmarks.sh",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/third_party/fpnge/fpnge.h"
+  ],
+  "confidence": 0.85
+}
