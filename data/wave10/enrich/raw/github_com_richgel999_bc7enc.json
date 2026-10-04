@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/richgel999/bc7enc",
+  "one_liner": "Scalar single-file BC1-5 (rgbcx.h) and modes-1/6 BC7 encoders; first-party tables beat ispc_texcomp, independent tests mostly do not.",
+  "what_it_does": "Two small CPU texture encoders plus decoders. rgbcx.h is a single C++ header that encodes 4x4 blocks to BC1, BC3, BC4 and BC5 through rgbcx::encode_bc1(level, dst, pixels, allow_3color, use_transparent_texels_for_black) with levels 0-18, after a one-time rgbcx::init(). bc7enc.c/.h is plain C that encodes one 4x4 RGBA block per call with bc7enc_compress_block(dst, pixels, &params), after bc7enc_compress_block_init(); it uses modes 1 and 6 for opaque blocks and modes 1, 5, 6 and 7 for blocks with alpha. Neither is a drop-in for libsquish, ispc_texcomp or DirectXTex: you loop over blocks and threads yourself.",
+  "how_it_is_fast": "rgbcx's 'prioritized cluster fit' replaces cluster fit's walk over all orderings with precomputed tables. There are 969 unique 4-colour selector histograms (g_unique_total_orders4) with precomputed least-squares factors, plus, for each ordering, a ranked list of up to 128 other orderings likely to help (g_best_total_orderings4). Higher levels simply try more of them (level 10 tries 20, level 17 tries 128); low levels use bounding-box, 2D least-squares or PCA endpoint fits like stb_dxt. bc7enc's speed comes from searching only two BC7 modes. Mode-1 partitions are scanned in usage-frequency order with a cheap per-subset error estimate, and an optional 'filterbank' skips lesser-used partitions unless the best of the first 14 predicts them (about 11% faster for about 0.08 dB). Single-colour subsets use precomputed optimal-endpoint tables, and 'uber' levels 1-4 add selector perturbation passes.",
+  "when_to_use": [
+    "You need a dependency-free, portable scalar BC1/BC3/BC4/BC5 encoder with a single quality knob, e.g. in an asset pipeline that cannot run the ISPC compiler or on ARM/WASM, where SIMD-only encoders lose their edge.",
+    "Highest-quality BC1 when encode time does not matter. In Aras Pranckevicius's 2020 test (20 Unity textures, i9-8950HK, 12 threads) rgbcx level 18 had the best DXTC Luma-PSNR of any library (38.47 dB) at 4.7 Mpix/s.",
+    "Fast BC1 near stb_dxt quality: level 0 was 1.07x stb_dxt's speed at 0.17 dB lower PSNR (per-image geomean, derived from Aras's chart data). Goofy's README measured rgbcx 1.08 level 0 at 60 MP/s and 40.85 dB, against stb_dxt at 43 MP/s and 40.82 dB, on one thread.",
+    "Opaque, photographic BC7 content scored on luma, where bc7enc's perceptual YCbCr metric pays off: on kodim23crop it was 6.9x faster than ISPC slow at +1.40 dB Luma-PSNR in Aras's data.",
+    "Learning or prototyping BC7: about 2,200 lines of readable C covering endpoint fitting, p-bits, partition estimation and block packing."
+  ],
+  "when_not_to_use": [
+    "Production BC7. In the same independent run, bc7e fast was about 9x faster than bc7enc's best preset (per-image geomean) at 0.70 dB higher mean Luma-PSNR. The author's own README points to bc7e.ispc in bc7enc_rdo, and basis_universal carries bc7e_scalar and bc7f.",
+    "Whenever ispc_texcomp's fast or veryfast presets are available. At matched Luma-PSNR on Aras's 20 textures, ISPC fast (10.10 Mpix/s, 45.36 dB) was 2.6x faster than bc7enc 64.4 (3.82 Mpix/s, 45.48 dB), and bc7enc 16.0 tied ISPC vfast on speed at 0.35 dB lower.",
+    "BC7 normal maps, alpha gradients or mixed content. bc7enc lost up to 4-5 dB to ISPC on normal maps, sprites and frymire in Aras's data, and open issue #2 reports blocky, sawtooth alpha on translucent gradients, with no maintainer reply.",
+    "Throughput-critical BC1 on x86 with SIMD. ISPC BC1 was 2.1x faster than rgbcx level 0 at equal mean PSNR, and icbc level 8 (AVX2) was 3.2x faster than rgbcx level 10 at 0.11 dB lower (per-image geomeans, derived).",
+    "You need upstream maintenance: archived on 2026-01-28 with the last code change in February 2021; issues #2, #3 and #5 and PR #6 (missing abs/memcpy/memset includes) were never answered."
+  ],
+  "integration": {
+    "form": "source-drop (rgbcx.h single header with RGBCX_IMPLEMENTATION; bc7enc.c/.h and bc7decomp.cpp/.h as separate files)",
+    "dependencies": "none for the encoders (libc/libm and <algorithm>); the test app adds lodepng and dds_defs.h",
+    "min_toolchain": "C++11 for rgbcx.h (enum class, static_assert); C99 for bc7enc.c (inline functions in the header); CMake 2.8 file builds the test app with -fno-strict-aliasing",
+    "platforms": "any: portable scalar C/C++, no SIMD or intrinsics; tested by the author with MSVC, and clang warnings fixed in 2020",
+    "thread_safety": "rgbcx::init() and bc7enc_compress_block_init() write global tables and are not thread safe; call them once before starting threads. After that, all rgbcx encode and decode functions are documented as thread safe, and bc7enc_compress_block reads only static tables and stack state.",
+    "drop_in_for_baseline": "partial: per-block C/C++ calls with your own block loop and threading, unlike libsquish's image API or ispc_texcomp's rgba_surface batches; BC1 output for a chosen GPU vendor needs the matching bc1_approx_mode"
+  },
+  "gotchas": [
+    "Skipping the init call does not fail in release builds. bc7enc only asserts, and its header warns you will 'get artifacts'; rgbcx needs init() before any encode or decode.",
+    "bc7enc_compress_block_params_init() selects the perceptual YCbCr metric by default. Call bc7enc_compress_block_params_init_linear_weights() if you judge output by RGB PSNR, which is the metric under which the README shows ispc_texcomp ahead.",
+    "BC1 at level 5 and above with use_transparent_texels_for_black codes dark texels with the 3-colour transparent index, so your shader must ignore sampled alpha. An unknown level silently falls back to level 5, and level 19 is a hidden, extremely slow training mode.",
+    "The default rgbcx build carries a 969x128 uint16_t ordering table (about 248 KB). Define RGBCX_USE_SMALLER_TABLES 1 for the 969x32 table, which caps BC1 levels at 32 orderings."
+  ],
+  "pick_this_over_siblings_when": "Pick rgbcx over ICBC when you need BC3/BC4/BC5 as well as BC1, or a scalar build (scalar ICBC is slower than RGBCX at most levels in its own chart). Pick Goofy only for real-time BC1, where it is far faster at about 4 dB lower PSNR. For BC7, prefer bc7e (or bc7e_scalar/bc7f in Basis Universal); bc7enc is only worth picking for its tiny plain-C footprint.",
+  "verified_claims_summary": "The README's BC7 table is first-party: 31 images (Kodak plus others), encode time only, OpenMP on an unnamed dual Xeon, compiler unstated, ispc_texcomp at AVX. Its largest wins are against ispc_texcomp slow (9.3x at +1.0 dB Luma-PSNR in perceptual mode) and a locally patched DirectXTex (263x). At matched RGB PSNR it shows parity with ispc_texcomp fast. Independent per-image data from Aras Pranckevicius (December 2020; i9-8950HK, 12 threads, Apple clang 11.0.3 up to AVX2; 20 Unity textures; bc7enc and rgbcx built from April 2020 code) reproduce the speed lead only against ISPC slow (bc7enc 64.4: 2.62x geomean, faster on 20/20, at 0.79 dB lower mean Luma-PSNR). Against ISPC fast, basic and vfast at similar quality, bc7enc is slower or tied. The BC1 claims against libsquish and Compressonator have no numbers anywhere.",
+  "status_note": "Archived on 2026-01-28, with the last code commit on 2021-02-03; MIT or Unlicense and trivially vendorable, but the maintained rgbcx and BC7 code (with RDO) lives in richgel999/bc7enc_rdo.",
+  "measurement_notes": "1) The repo's harness is not the one behind the README table. test.cpp encodes one block at a time on a single thread, times with clock(), and has no OpenMP; CMakeLists.txt adds no OpenMP or -O/-march flags beyond CMake's Release default. So the multithreaded ispc_texcomp and DirectXTex comparison cannot be rerun from the repo. 2) Independent evidence contradicts the BC7 headline outside opaque photographic content. Aras's chart data is public at raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2020/texcompr/chart-bc7.html: 20 images per preset, bc7enc labelled 0.0/16.0/64.0/64.4 (presumably max partitions and uber level; the labels are not explained). The following are derived from page data, per-image geometric means. bc7enc 64.4 vs ISPC fast: 0.34x speed, faster on 2/20, +0.12 dB mean. bc7enc 64.4 vs ISPC basic: 0.75x, -0.59 dB. bc7enc 64.0 vs ISPC slow: 10.6x, faster on 20/20, -1.45 dB mean (-5.25 to +1.40 per image). bc7enc 16.0 vs ISPC vfast: 0.99x, -0.35 dB. bc7enc 0.0 vs ISPC ufast: 0.29x, +0.69 dB. Aras's verdict is that bc7enc 'is behind the curve in all aspects'. The README's corpus (Kodak plus others, opaque) is where bc7enc does best: on photo-like crops in Aras's set it gains up to +1.9 dB over ISPC slow. Its losses are on normal maps, sprites and alpha content. No correctness bug was found behind the numbers. Tier C (first-party) stands, but the 9.3x and 263x figures should be read as opaque-photo, perceptual-metric, slow-baseline results, not a general lead. 3) BC1 independent data, from the same source (chart-dxtc.html, derived per-image geomeans): rgbcx level 0 vs stb_dxt 1.07x faster at -0.17 dB; rgbcx 0 vs ISPC BC1 0.48x at +0.03 dB; rgbcx 10 vs icbc 8 (AVX2) 0.31x at +0.11 dB; rgbcx 18 has the best mean PSNR (38.47 dB). Goofy's README (i7-7820HQ, one thread) adds rgbcx 1.08 level 0 at 60 MP/s and 40.85 dB vs stb_dxt at 43 MP/s and 40.82 dB. Neither source measures libsquish or Compressonator, the README's stated BC1 baselines. 4) Issue #3 (January 2021, unanswered) reports wrong-colour constant blocks from encode_bc1_solid_block. In the shipped rgbcx.h v1.12, the 4-colour solid path writes the unmodified endpoint as color0 with selector 0, or uses color1 with selector 1 when both are 0, which is correct for BC1. I could not confirm the bug from the code and did not run it. 5) Lead: richgel999/bc7enc_rdo (maintained successor with RDO BC1-7 and the fixed bc7e.ispc) is not catalogued.",
+  "sources_read": [
+    "https://github.com/richgel999/bc7enc",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/README.md",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/rgbcx.h",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/bc7enc.c",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/bc7enc.h",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/test.cpp",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/richgel999/bc7enc/HEAD/bc7decomp.h",
+    "https://github.com/richgel999/bc7enc/commits/master",
+    "https://github.com/richgel999/bc7enc/issues?q=is%3Aissue",
+    "https://github.com/richgel999/bc7enc/issues/2",
+    "https://github.com/richgel999/bc7enc/issues/3",
+    "https://github.com/richgel999/bc7enc/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/richgel999/bc7enc_rdo/HEAD/README.md",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2020/12-texcompr.md",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2020/texcompr/chart-bc7.html",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2020/texcompr/chart-dxtc.html"
+  ],
+  "confidence": 0.8
+}
