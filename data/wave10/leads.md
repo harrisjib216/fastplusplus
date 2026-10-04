@@ -19,3 +19,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Paper-access retiers (e23): VVenC first-party papers (ACM TOMM 2026 IFP, MMSys 2024, PCS 2021 VVenC vs x265 vs aomenc evaluation) behind blocked ACM and IEEE; encode.su ECT thread blocked.
 - Enricher lead (e27): bitbank2/PNGenc (embedded PNG encoder, speed claim unchecked; not catalogued). wooosh/fpng is a fork of richgel999/fpng (duplicate if found).
 - Enricher leads (e32, video-audio resamplers, unverified): Surge LanczosResampler (Paul Walker; a NonIntegerSRC issue #4 user reports 2x faster than sinc) and chowdsp_utils ResamplingTypes::LanczosResampler (search snippet only).
+- Enricher lead (e32): fintelia/corpus-bench (PNG decoder harness used by the image-rs 2026-06-18 blog) as a shootout source for image-codecs.
