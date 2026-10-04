@@ -18,3 +18,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e21): gpxz.io/blog/lerc-benchmarks (independent GDAL LERC vs DEFLATE vs zstd benchmark; blocked here, snippet only) could raise LERC to B when reachable.
 - Paper-access retiers (e23): VVenC first-party papers (ACM TOMM 2026 IFP, MMSys 2024, PCS 2021 VVenC vs x265 vs aomenc evaluation) behind blocked ACM and IEEE; encode.su ECT thread blocked.
 - Enricher lead (e27): bitbank2/PNGenc (embedded PNG encoder, speed claim unchecked; not catalogued). wooosh/fpng is a fork of richgel999/fpng (duplicate if found).
+- Enricher leads (e32, video-audio resamplers, unverified): Surge LanczosResampler (Paul Walker; a NonIntegerSRC issue #4 user reports 2x faster than sinc) and chowdsp_utils ResamplingTypes::LanczosResampler (search snippet only).

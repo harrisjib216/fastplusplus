@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/jatinchowdhury18/nonintegersrc",
+  "one_liner": "SSE Holters-Parker IIR resampler, timed 17-40x faster than libsamplerate SINC_FASTEST at far lower, unmatched quality.",
+  "what_it_does": "A 2021 research repo that resamples mono float audio by a fixed ratio with a Holters-Parker multi-rate IIR filter (the JUNO-60 bucket-brigade output filter from the DAFx 2018 paper), and times it against libsamplerate SRC_SINC_FASTEST and Surge's Lanczos resampler. The resampler is a few headers (src/HPResampler.h, src/BaseSRC.h, src/src_utils/HPFilters.h, SSEComplex.h, FastMath.h) behind a small interface: prepare(sample_rate, block_size, ratio), then process(in, out, n), which returns the number of output samples. It is not a libsamplerate API replacement: there is no SRC_DATA, no time-varying ratio, no end-of-input flush and no multichannel support.",
+  "how_it_is_fast": "Instead of a windowed-sinc FIR evaluated at each output instant, the converter runs a 4th-order analog filter expanded into four complex one-pole sections whose state is updated once per output sample, with all four sections packed into one SSE register (SSEComplex, from Surge), so a 4th-order filter costs about the same as a first-order one. Each input sample adds only a complex multiply-accumulate of its step (y - y_old) weighted by a per-sample coefficient that is advanced by a precomputed complex rotation (calcG), and sin/cos come from polynomial approximations (FastMath::fastsinSSE/fastcosSSE). libsamplerate SINC_FASTEST, by contrast, evaluates a sinc filter rated at 97 dB SNR and 80% bandwidth, so most of the gap comes from doing far less filtering work.",
+  "when_to_use": [
+    "Fixed-ratio mono float conversion on x86 (SSE2) inside a plugin or synth where CPU matters far more than fidelity, such as internal modulation paths, previews or effects that low-pass the signal anyway.",
+    "Upsampling, where the filter cutoff at the input Nyquist does act as an anti-imaging filter (the 48k to 96k case is also the largest timed win, 39.8x).",
+    "As a starting point for your own Holters-Parker resampler: the four-poles-per-SSE-register layout is the reusable idea, provided you fix the time units and cutoff (see gotchas) and measure quality yourself.",
+    "Comparing SRC approaches: the harness (src/src_test.cpp) times libsamplerate, the HP resampler and Surge's Lanczos resampler on the same input, and src_sndfile converts WAV files for listening tests."
+  ],
+  "when_not_to_use": [
+    "Any path where the output is listened to critically or distributed: the author's own plot (doc/HP_compare.png) shows spurious components up to about -47 dB against a smooth libsamplerate spectrum, and the writeup says the author was 'primarily interested in speed rather than quality'.",
+    "Downsampling: the filter cutoff is fixed at the input Nyquist for every ratio, so 96k to 48k has no effective anti-aliasing filter below the 24 kHz output Nyquist.",
+    "ARM or Apple Silicon builds: the code uses SSE2 intrinsics (emmintrin.h) with no NEON or scalar fallback.",
+    "Variable-ratio, multichannel or library-style use: the ratio is fixed in prepare(), audio is mono, there is no build target for the resampler itself, and the repo has been inactive since 2021-07-12 with three unanswered issues.",
+    "Projects that cannot accept GPL-3.0: the SSE helpers and Lanczos code come from the GPL-3.0 Surge Synthesizer."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "None for the HP resampler headers (SSE2 intrinsics, <complex>, <functional>); the benchmark harness links libsamplerate 0.2.1 (submodule aae58e2) and the WAV tool links libsndfile 1.0.31 (submodule 949c891)",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17 in CMakeLists.txt); CMake 3.1+ for the harness",
+    "platforms": "x86 / x86-64 with SSE2 only",
+    "thread_safety": "Not documented; all state lives in the HPResampler instance (filter banks, tn, y_old) with no globals, so one instance per stream or thread is the safe use.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "From code reading (not executed): HPResampler keeps its sub-sample clock tn and the per-step advance in seconds (Ts = 1/fs, Ts_out = ratio/fs, about 1e-5), but OutputFilterBank::set_time and set_delta use them as exponents of a per-output-sample pole (pow(pole, 1 - tn); fast_complex_pow also keeps only the pole's angle). The timing-dependent weight therefore stays within about 1e-4 of constant, so every input step gets almost the same weight wherever it falls between output samples, and the output behaves like a filtered sample-and-hold rather than a Holters-Parker resampler. That is consistent with the spurs in doc/HP_compare.png. chowdsp_utils' BBDDelayLine uses the same seconds-based convention in its default mode and normalises tn by Ts only in its 'ALIEN' mode. The operation count does not depend on this, so the speed ratios are not inflated by it, but the measured code does not deliver the method's intended quality.",
+    "process() does not bounds-check its inner loop: for non-integer downsampling (the 0.919 case) it can read input[num_samples], one sample past the block, and the next call then consumes that sample again. It also writes outputs with no capacity argument, so the caller must size the output for about n*ratio+1 samples.",
+    "The filter cutoff is hard-wired to sample_rate*0.5 (the input Nyquist) for both directions, and the 44.1k/48k ratios in the harness are rounded to 1.088 and 0.919.",
+    "Only the output-filter ('rectangular') variant is compiled; the input-filter ('Dirac') variant sits behind #if 0, and issue #2 (2024, unanswered) asks whether cascading both would reduce aliasing. prepare() still allocates both filter banks and an unused 'middle' buffer."
+  ],
+  "pick_this_over_siblings_when": "Pick libsoxr (about 11x libsamplerate MEDIUM at the ~120 dB tier), r8brain-free-src, LibFResample, SampleRateTap or zita-resampler whenever the output is audible, since their speedups over libsamplerate are quality-matched. NonIntegerSRC only makes sense when a crude 4th-order IIR result is acceptable for minimum x86 CPU, or as research code on the Holters-Parker approach.",
+  "verified_claims_summary": "The only numbers are a spreadsheet screenshot (doc/speed_chart.png) of single std::chrono passes of src/src_test.cpp, with no warm-up or repeats, on an unnamed Intel i7 Linux machine with compiler and flags unrecorded. It shows the HP resampler 39.8x (48k to 96k), 16.9x (96k to 48k), 21.2x (44.1k to 48k) and 21.8x (48k to 44.1k) faster than libsamplerate 0.2.1 SRC_SINC_FASTEST, resampling a 1,000,000-sample mono 100 Hz sine in 2048-sample blocks. The documented build ('cmake -Bbuild; cmake --build build --config Release') applies no optimisation flags with a single-config Linux generator, because neither the top-level CMakeLists.txt nor the pinned libsamplerate 0.2.1 (aae58e2) or libsndfile 1.0.31 (949c891) sets a default CMAKE_BUILD_TYPE, so the published Linux ratios may come from -O0 builds of both sides (not recorded either way).",
+  "status_note": "Abandoned research code (15 commits, last 2021-07-12, 38 stars, 3 open unanswered issues) under GPL-3.0 with Surge-derived SSE code. It is small enough to copy, but treat it as a sketch: fix the time units, cutoff and bounds check and measure quality before using it.",
+  "sources_read": [
+    "https://github.com/jatinchowdhury18/NonIntegerSRC",
+    "https://github.com/jatinchowdhury18/NonIntegerSRC/tree/main/third_party",
+    "https://github.com/jatinchowdhury18/NonIntegerSRC/issues",
+    "https://github.com/jatinchowdhury18/NonIntegerSRC/issues/2",
+    "https://github.com/jatinchowdhury18/NonIntegerSRC/issues/4",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/README.md",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/doc/writeup.md",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/doc/speed_chart.png",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/doc/HP_compare.png",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/src_test.cpp",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/HPResampler.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/LibSamplerRateSRC.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/LanczosSRC.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/BaseSRC.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/utils.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/src_sndfile.cpp",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/src_utils/HPFilters.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/src_utils/SSEComplex.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/src/src_utils/FastMath.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/tests.py",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/libsndfile/libsamplerate/aae58e2/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libsndfile/libsndfile/949c891/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Chowdhury-DSP/chowdsp_utils/master/modules/dsp/chowdsp_dsp_utils/Delay/BBD/chowdsp_BBDFilterBank.h",
+    "https://raw.githubusercontent.com/Chowdhury-DSP/chowdsp_utils/master/modules/dsp/chowdsp_dsp_utils/Delay/BBD/chowdsp_BBDDelayLine.h",
+    "https://raw.githubusercontent.com/surge-synthesizer/surge/main/src/common/dsp/effects/chowdsp/bbd_utils/BBDFilterBank.h"
+  ],
+  "confidence": 0.7
+}
