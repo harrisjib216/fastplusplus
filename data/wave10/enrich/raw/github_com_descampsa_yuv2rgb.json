@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/descampsa/yuv2rgb",
+  "one_liner": "Two-file C99 SSE2 converter between planar YUV420 (also NV12/NV21) and RGB24 that roughly doubles old libswscale's speed.",
+  "what_it_does": "Converts 8-bit YUV420p, NV12 and NV21 to packed RGB24, and RGB24 or RGBA to YUV420p, using BT.601, BT.709 or JPEG (full-range) matrices. Each conversion has a plain C version (_std), an SSE2 version that needs 16-byte-aligned pointers and strides (_sse) and an unaligned SSE2 version (_sseu). The API is plain C functions that take width, height, plane pointers and strides plus a YCbCrType enum. It is not a drop-in for sws_scale: there is no context, no scaling and no other pixel formats.",
+  "how_it_is_fast": "The SSE2 kernels process 32 pixels across two rows per step. Chroma is handled once per 2x2 block (nearest-sample replication when decoding, a plain 2x2 sum then >>2 when encoding), and all arithmetic is 16-bit fixed point (_mm_mullo_epi16 with 6-8 fractional bits) instead of swscale's higher-precision filter path. RGB24 is interleaved and de-interleaved with chains of byte unpack/pack shuffles (rgb.txt in the repo explains the scheme). The aligned (_sse) variants write with _mm_stream_si128 non-temporal stores, and the unaligned (_sseu) variants use ordinary _mm_storeu_si128.",
+  "when_to_use": [
+    "You decode or capture planar I420, NV12 or NV21 frames on x86 and need RGB24 output with no FFmpeg or libyuv dependency.",
+    "Large frames (HD to 4K) streamed straight to a file, encoder or GPU upload, where the _sse variant's non-temporal stores avoid read-for-ownership traffic on a destination far larger than the CPU cache.",
+    "RGB24 or RGBA to I420 for an encoder input path when box-filtered chroma (2x2 average) is acceptable.",
+    "Codebases that want a small BSD-3-Clause source drop they can read and modify in an afternoon."
+  ],
+  "when_not_to_use": [
+    "ARM/aarch64 or any non-x86 target: yuv_rgb.c includes <emmintrin.h> unconditionally and there is no NEON path, so it does not compile there without editing.",
+    "You need AVX2/AVX-512 speed: the code is SSE2 only, and Intel IPP 9.0.1 already beat it on rgb2yuv (0.579-0.594 s vs 0.641-0.677 s) and matched it on yuv2rgb in the author's own run.",
+    "Quality-sensitive work: chroma is nearest-sample upsampled and box-downsampled, and the fixed-point math truncates instead of rounding, so output is not bit-exact with libswscale or IPP.",
+    "High bit depth, 4:2:2/4:4:4, BGR/ARGB output or scaling: only 8-bit 4:2:0 to or from RGB24 (plus RGBA input) is implemented.",
+    "Images narrower than 32 pixels with the SSE functions (see gotchas), or anything that needs an actively maintained dependency (last commit 2022-02-15)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (SSE2 intrinsics; the test program optionally links libswscale and Intel IPP)",
+    "min_toolchain": "C99 compiler with SSE2 intrinsics (GCC, Clang; MSVC since the Feb 2022 commit); the README numbers used GCC 4.9.2",
+    "platforms": "x86 and x86-64 with SSE2; the _std functions are portable C, but the unconditional <emmintrin.h> include must be removed for other architectures",
+    "thread_safety": "not documented; the functions keep no mutable global state (read-only coefficient tables), so concurrent calls on separate buffers are safe by inspection",
+    "drop_in_for_baseline": "partial: it replaces a same-size sws_scale YUV420P<->RGB24 call, but with a different C API, fixed BT.601/709/JPEG matrices and no scaling or dithering options"
+  },
+  "gotchas": [
+    "The SSE functions leave the last width%32 columns unconverted and the C and SSE functions leave the last row and column untouched for odd sizes (documented in yuv_rgb.h; open issue #13); the caller must convert the tail itself. The SSE loops use uint32_t `x < width-31`, which wraps for widths below 31 and runs past the buffers.",
+    "The _sse variants use non-temporal stores and never issue _mm_sfence: hand the buffer to another thread only after a fence, and expect a cold cache when you read the RGB right after converting. Much of the README's aligned vs unaligned gap (0.607 vs 0.704 s) comes from these stores, not from alignment. At 4096 width the harness's malloc'd 'unaligned' buffers are 16-byte aligned too, and swscale and IPP time the same on both buffer sets.",
+    "Bugs: the SSE2 yuv2rgb code timed in the README (commit 1fc2be8, Sept 2017; the timings have not changed since) overflowed 16 bits for BT.601/709 input with Y >= 236, so those pixels came out black (issue #12). It was fixed on 2022-02-09 (e805bf2: srai to srli and sub_epi8 to subs_epu8). rgb32_yuv420_std still scales V with cb_factor at HEAD, the same bug issue #15 fixed only in the RGB24 path, so RGBA-input chroma from the C path is desaturated.",
+    "yuv_rgb.c defines a global non-static `uint8_t clamp(int16_t)`, which can collide with other `clamp` symbols at link time. CMakeLists.txt adds -Werror globally and builds only the test program, so vendor yuv_rgb.c/.h rather than add_subdirectory."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libyuv, xxYUV or sparkyuv only when a two-file SSE2 C source drop matters more than speed or coverage, since those carry AVX2/NEON paths and many more formats. Against FFmpeg's libswscale it wins on same-size I420<->RGB24 on old x86 at the cost of precision and features.",
+  "verified_claims_summary": "Author's run of the public test_yuv_rgb harness (clock() over 100 conversions of one 4096x2160 BT.601 frame, CMake Release build with GCC 4.9.2, Core i7-5500U): yuv2rgb SSE2 0.607 s with streaming stores and 0.704 s with plain stores vs libswscale 3.0.0 about 1.22 s (about 2x) and IPP 9.0.1 0.636 s. rgb2yuv SSE2 0.641/0.677 s vs swscale 3.39 s (about 5.3x, probably swscale's generic filtered-chroma path, not an equivalent converter) and IPP 0.579-0.594 s. Each frame touches about 40 MB (13.3 MB of YUV plus 26.5 MB of RGB, derived from page data), so the loop streams from DRAM rather than running cache-warm, and outputs are never compared across methods.",
+  "status_note": "Abandoned since 2022-02-15 (191 stars, 62 forks, not archived) but BSD-3-Clause and about 1,300 lines of C, so easy to vendor and patch. The README's libswscale 3.0.0 is a 2014-era build (version number consistent with the Libav 11 packages in Debian 8, and the README uses avconv), and modern swscale has newer SIMD paths that would narrow the gap.",
+  "sources_read": [
+    "https://github.com/descampsa/yuv2rgb",
+    "https://github.com/descampsa/yuv2rgb/commits",
+    "https://github.com/descampsa/yuv2rgb/commits/master",
+    "https://github.com/descampsa/yuv2rgb/issues?q=is%3Aissue",
+    "https://github.com/descampsa/yuv2rgb/issues/12",
+    "https://github.com/descampsa/yuv2rgb/issues/13",
+    "https://github.com/descampsa/yuv2rgb/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/README.md",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/test_yuv_rgb.c",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/yuv_rgb.c",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/yuv_rgb.h",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/1fc2be8f22a961e757bbe2dff608dc073e914d03/yuv_rgb.c",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/1fc2be8f22a961e757bbe2dff608dc073e914d03/README.md",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/1fc2be8f22a961e757bbe2dff608dc073e914d03/test_yuv_rgb.c",
+    "https://raw.githubusercontent.com/descampsa/yuv2rgb/434fed1bcea70a1eb1ab8ded3f5a7303e04d4721/yuv_rgb.c",
+    "https://packages.debian.org/ja/jessie/libav-tools (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

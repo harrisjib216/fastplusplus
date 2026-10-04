@@ -425,7 +425,7 @@
     "metric": "throughput",
     "workload": "YUV420p to RGB24 and RGB24 to YUV420p conversion of a 4K (4096x2160) image, 100 iterations, using the repo's test_yuv_rgb program; SSE2 versions, a plain C version, FFmpeg swscale and Intel IPP are timed side by side.",
     "claimed_speedup": "yuv2rgb, 100 iterations: sse2_aligned 0.607 s and sse2_unaligned 0.704 s vs ffmpeg 1.227 s / 1.221 s (about 2x). rgb2yuv: sse2_aligned 0.641 s and sse2_unaligned 0.677 s vs ffmpeg 3.398 s / 3.386 s (about 5.3x). Plain C std path 2.63 s / 2.59 s. Intel IPP 9.0.1 is slightly faster than the SSE2 code (0.636 s yuv2rgb, 0.579-0.594 s rgb2yuv).",
-    "evidence_tier": "A",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/descampsa/yuv2rgb",
     "compiler_and_flags": "gcc 4.9.2, swscale 3.0.0, IPP 9.0.1; built with cmake -DCMAKE_BUILD_TYPE=Release plus -Werror -Wall -Wextra -pedantic -std=c99 from CMakeLists.txt (no explicit -O or -msse flags in the file)",
     "hardware": "Intel Core i7-5500U",
@@ -433,7 +433,7 @@
     "usability": "copyable",
     "stars_or_usage": "191 stars",
     "tradeoffs": "Small C99 library: only YUV420p <-> RGB24 (plus a few color-space matrices); aligned and unaligned SSE2 variants; no AVX2 or NEON. Author calls it an exercise in learning SSE intrinsics.",
-    "caveats": "Author's own run on one laptop CPU (i7-5500U) with an old swscale 3.0.0 whose YUV420P to RGB24 path is MMX code; modern swscale has newer SIMD paths and would narrow the gap. Intel IPP 9.0.1 beat the SSE2 code on rgb2yuv (0.579-0.594 s vs 0.641-0.677 s) and was within 5% on yuv2rgb. The swscale contexts are created with flags 0 (default scaler) and the outputs of each method are written to separate files but never compared, so equivalence is not checked. The rgb2yuv gap (about 5.3x) is likely partly different work: swscale has no unscaled fast path for RGB24 input (its special case is BGR24), so the ffmpeg row probably ran the generic scaler with filtered chroma and higher-precision intermediates, while yuv2rgb uses 8-bit fixed-point coefficients and a plain 2x2 box average for chroma. The yuv2rgb direction (about 2x) is closer to like-for-like (both use one chroma sample per 2x2 block). Flags are the CMake Release preset (-O3 -DNDEBUG) plus -Wall -Wextra -pedantic -std=c99 from CMakeLists.txt; SSE2 is the x86-64 baseline so no -msse flag is needed. Single 4K image run 100 times (cache-warm). README numbers predate the Feb 2022 commits, which include a fix to the plain C (std) rgb2yuv path, not the SSE2 path.",
+    "caveats": "Author's own run on one laptop CPU (i7-5500U) with an old swscale 3.0.0 whose YUV420P to RGB24 path is MMX code; modern swscale has newer SIMD paths and would narrow the gap. Intel IPP 9.0.1 beat the SSE2 code on rgb2yuv (0.579-0.594 s vs 0.641-0.677 s) and was within 5% on yuv2rgb. The swscale contexts are created with flags 0 (default scaler) and the outputs of each method are written to separate files but never compared, so equivalence is not checked. The rgb2yuv gap (about 5.3x) is likely partly different work: swscale has no unscaled fast path for RGB24 input (its special case is BGR24), so the ffmpeg row probably ran the generic scaler with filtered chroma and higher-precision intermediates, while yuv2rgb uses 8-bit fixed-point coefficients and a plain 2x2 box average for chroma. The yuv2rgb direction (about 2x) is closer to like-for-like (both use one chroma sample per 2x2 block). Flags are the CMake Release preset (-O3 -DNDEBUG) plus -Wall -Wextra -pedantic -std=c99 from CMakeLists.txt; SSE2 is the x86-64 baseline so no -msse flag is needed. Single 4K image run 100 times (cache-warm). README numbers predate the Feb 2022 commits, which include a fix to the plain C (std) rgb2yuv path, not the SSE2 path. [retier] README timings date from 2017 code whose SSE2 yuv2rgb path had an int16 overflow (luma 236 and above decoded black, issue #12, fixed 2022-02-09); never re-run after the fix. Author's own run on one laptop CPU (i7-5500U) with an old swscale 3.0.0 (likely Libav 11 on Debian 8) whose YUV420P to RGB24 path is MMX code; modern swscale has newer SIMD paths. Intel IPP 9.0.1 beat the SSE2 code on rgb2yuv and the plain-store SSE2 yuv2rgb path (0.704 s versus 0.636 s); the 'aligned' variant's edge is _mm_stream_si128 non-temporal stores without an sfence. The swscale contexts use flags 0 and outputs are never compared, so equivalence is unchecked; the rgb2yuv gap is partly different work (swscale has no unscaled fast path for RGB24 input). Width below 31 wraps the uint32 loop (out-of-bounds); rgb32_yuv420_std still uses cb_factor for V at HEAD (issue #15 fix missed the RGBA path); unconditional emmintrin.h, so no ARM build.",
     "found_via": [
       "GitHub: WebSearch 'swscale vs libyuv vs zimg benchmark RGB to YUV conversion speed comparison repository' surfaced descampsa/yuv2rgb"
     ],
@@ -460,7 +460,18 @@
         "https://raw.githubusercontent.com/descampsa/yuv2rgb/HEAD/LICENSE"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "A",
+        "to": "C",
+        "reason": "Lowered A to C under the rule that numbers measured on code later fixed for a correctness bug go to C: the README timings are unchanged since commit 1fc2be8 (2017-09-18), and the SSE2 yuv2rgb path timed there used srai plus sub_epi8, so (Y-16)*149 overflowed int16 for BT.601/709 luma of 236 and above and those pixels came out black (issue #12); the fix e805bf2 (2022-02-09, srli plus subs_epu8) is a same-cost swap, so the timing is probably unaffected, but it was never re-run. The harness, compiler, flags and CPU remain public. Also from the enricher: the 'aligned' SSE2 path uses _mm_stream_si128 non-temporal stores (no sfence), so the 0.607 s versus 0.704 s gap is store type rather than alignment, and the plain-store SSE2 path (0.704 s) is slower than IPP (0.636 s); the test streams about 40 MB per frame from DRAM.",
+        "urls_opened": [
+          "https://github.com/descampsa/yuv2rgb/issues/12",
+          "https://github.com/descampsa/yuv2rgb/commit/e805bf2",
+          "https://raw.githubusercontent.com/descampsa/yuv2rgb/master/yuv_rgb.c",
+          "https://raw.githubusercontent.com/descampsa/yuv2rgb/master/test_yuv_rgb.c"
+        ]
+      }
     },
     "corrected_fields": {
       "caveats": "Author's own run on one laptop CPU with an old swscale 3.0.0 (MMX path, per the README); modern swscale has AVX2 paths and would narrow the gap. Intel IPP beat it slightly. Tier A rests on public test program, stated compiler and CPU and the documented Release build; flags are the CMake Release preset, not spelled out. Inputs are a single image run 100 times (cache-warm)."

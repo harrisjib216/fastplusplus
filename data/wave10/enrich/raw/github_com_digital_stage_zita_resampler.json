@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/digital-stage/zita-resampler",
+  "one_liner": "Real-time-safe polyphase windowed-sinc audio resampler (fixed and variable ratio); claims to beat libsamplerate, with no published numbers.",
+  "what_it_does": "Converts interleaved single-precision float audio between sample rates, either at a fixed rational ratio (Resampler: fs_out/fs_inp >= 1/64, reducible to b/a with b <= 1000) or at an arbitrary, slowly drifting ratio (VResampler, with set_rratio and a first-order smoothing filter for clock-drift correction between sound cards). The API is not libsamplerate's: you set four public members (inp_count, inp_data, out_count, out_data) and call process(), which runs until the input is empty or the output is full. Either side can be driven by fixed-size periods, and NULL pointers insert zeros or discard output. This digital-stage repository is a 2021 import of Fons Adriaensen's upstream release 1.8.0 with a CMake build added. It also contains an undocumented CResampler (cubic interpolation).",
+  "how_it_is_fast": "It is a constant-bandwidth polyphase FIR: only the output samples are computed, using a precomputed table of np+1 phases x hlen taps of a sinc times a 3-term cosine window (0.384 + 0.5 cos + 0.116 cos 2x). The filter's symmetry halves the table: each output uses phase ph and the mirrored phase np-ph. Input is deinterleaved into one contiguous delay line per channel, so each output is a pair of straight dot products; in 1.8.0 these use SSE2 4-wide multiply-adds when ENABLE_SSE2 is defined, which the docs say cuts CPU load by at least 2x against the library's own scalar build. The filter is deliberately short: it is dimensioned for only 60 dB attenuation at Nyquist and lets the transition band and aliasing sit above 20 kHz for standard rates, with hlen 16-96 giving a CPU range of about 1:6. VResampler linearly interpolates coefficients between 120 fixed phases once per output frame, so the extra cost is shared across channels.",
+  "when_to_use": [
+    "Inside a JACK or other real-time audio callback: process() and reset() are documented RT-safe (no allocation), while setup() is not.",
+    "Bridging two sound cards or network streams whose clocks drift: VResampler::set_rratio (0.95-16 of the configured ratio) with set_rrfilt smoothing is what zita-ajbridge/zita-njbridge are built on.",
+    "Standard-rate conversion (44.1/48/88.2/96/192 kHz) of multichannel float audio where inaudible aliasing above 20 kHz is acceptable and hlen 32-48 is enough per the author's listening tests.",
+    "Linux audio projects that are already GPL and want a small 4-file library with distribution packages and a stable, padded class layout (reserved _dummy[8] members)."
+  ],
+  "when_not_to_use": [
+    "When you need measured throughput: no published zita versus libsamplerate, libsoxr or r8brain timing exists, while soxr and r8brain-free-src have third-party tables showing 6.8-11x over libsamplerate.",
+    "When you need deep stopband rejection or full-band transparency (mastering, measurement, 120 dB-class SRC): the filter targets 60 dB at Nyquist, so 'same quality as libsamplerate' depends on that relaxed definition.",
+    "Closed-source or permissively licensed products: GPL-3.0-or-later.",
+    "Integer, double-precision or planar (non-interleaved) buffers, or ratios outside 1/64-64 (Resampler also needs b <= 1000); there is no NEON path in 1.8.0, and the docs only promise ARM NEON for a future release.",
+    "Building this digital-stage copy with its CMakeLists.txt as is: the flags go into CMAKE_CXXFLAGS_FLAGS and CMAKE_CPPFLAGS_FLAGS, which CMake ignores, and ENABLE_SSE2 is never defined, so you get the scalar path with no -O2 unless you set flags yourself (open issue #2 since 2024-01-24)."
+  ],
+  "integration": {
+    "form": "shared or static lib (4 .cc files, easy source-drop)",
+    "dependencies": "pthreads (table registry mutex); nothing else",
+    "min_toolchain": "Plain C++ (no modern-standard features); the SSE2 path needs GCC or Clang (it subscripts __m128 as S[0]) and posix_memalign; this copy's CMake needs 3.16",
+    "platforms": "Linux and other POSIX systems; x86 SSE2 path optional; MSVC/Windows needs a port (unmerged PR #1 from 2021 swaps in pthreads4w); no ARM SIMD in 1.8.0",
+    "thread_safety": "One instance per thread; the shared, reference-counted coefficient tables are created and destroyed under a global pthread mutex, so setup()/clear() on different instances from different threads is safe; process() is RT-safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No automatic edge padding: prefill inpsize()/2 - 1 zeros to align first input and output, and append zeros at the end, or the output starts late and is truncated (documented, but easy to miss when coming from libsamplerate's src_simple).",
+    "The scalar path adds and removes a 1e-20 bias to keep the accumulator out of denormals, but the SSE2 path does not and the library never sets FTZ/DAZ: set them in your audio thread when signals decay to silence.",
+    "Docs and code disagree on limits: setup() accepts hlen down to 8 (docs say 16-96), and VResampler's 3-argument setup rejects ratios below 1/16 even though the class documents 1/64; set_rratio silently clamps to 0.95-16.",
+    "Downsampling scales the filter length by 1/r (hl = ceil(hlen/r)), so CPU per output frame and table size grow with the decimation ratio (e.g. 192 kHz to 44.1 kHz at hlen 96 gives about 418 taps per half-filter, derived from resampler.cc)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libsoxr or r8brain-free-src when you need a tiny, RT-safe, push/pull API with built-in smooth variable-ratio drift correction inside a GPL Linux audio app; pick libsoxr, r8brain-free-src or LibFResample when you want a resampler whose speed advantage over libsamplerate has actually been measured, or when you need a permissive licence or 120 dB stopbands.",
+  "verified_claims_summary": "Nothing was measured: the docs say only that at its highest quality zita 'will be faster than most similar libraries providing the same quality, e.g. libsamplerate'. The SSE2 'factor of at least 2' is against its own scalar build, and test/speedtest.cc (44.1 to 48 kHz, input frames per second, CLOCK_REALTIME) times zita alone, with no baseline, hardware or results.",
+  "status_note": "The digital-stage copy has been frozen at upstream 1.8.0 since 2021-03-10 (8 commits, 35 stars), with an open CMake-flags bug and an unmerged Windows port. Upstream by Fons Adriaensen has moved on (1.11.2 in nixpkgs per the record), so use a distribution package or the upstream tarball rather than this copy; GPL-3.0-or-later.",
+  "sources_read": [
+    "https://github.com/digital-stage/zita-resampler",
+    "https://github.com/digital-stage/zita-resampler/issues",
+    "https://github.com/digital-stage/zita-resampler/issues/2",
+    "https://github.com/digital-stage/zita-resampler/issues/3",
+    "https://github.com/digital-stage/zita-resampler/pulls",
+    "https://github.com/digital-stage/zita-resampler/pull/1",
+    "https://github.com/digital-stage/zita-resampler/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/README.md",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/docs/resampler.html",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/AUTHORS",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/resampler.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/resampler-table.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/vresampler.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/cresampler.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/zita-resampler/resampler.h",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/zita-resampler/resampler-table.h",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/zita-resampler/vresampler.h",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/source/zita-resampler/cresampler.h",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/test/speedtest.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/test/vspeedtest.cc",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/.github/workflows/build_cmake.yml",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/.github/workflows/ubuntu.yml",
+    "https://raw.githubusercontent.com/digital-stage/zita-resampler/main/.github/workflows/win.yml",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/main/async/docs/COMPARISON.md",
+    "https://raw.githubusercontent.com/lastique/src_test/gh-pages/index.html"
+  ],
+  "confidence": 0.7
+}
