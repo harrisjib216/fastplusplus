@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/depp/libfresample",
+  "one_liner": "BSD-licensed C polyphase sinc resampler for 16-bit mono/stereo using SSE2/AltiVec; roughly 8-13x libsamplerate at comparable bandwidth.",
+  "what_it_does": "LibFResample converts native-endian 16-bit mono or stereo PCM between arbitrary sample rates. It uses band-limited (Julius O. Smith) interpolation with a Kaiser-windowed sinc and quality presets Q=0..10. The API is lower level than libsamplerate's src_process. You build an lfr_param (QUALITY, INRATE, OUTRATE, or raw FPASS/FSTOP/ATTEN), create an lfr_filter, and then call lfr_resample (or a function pointer from lfr_resample_s16func). The caller owns a 32.32 fixed-point position, the inverse ratio and a dither seed, and handles buffer overlap itself using LFR_INFO_SIZE. Any format other than native s16 makes lfr_resample return without writing anything.",
+  "how_it_is_fast": "The filter is precomputed for the given ratio as a bank of 2^k+1 fractional-phase copies laid out contiguously. Each output sample linearly interpolates between two adjacent phases, using 14-bit weights packed for pmaddwd. When 16-bit coefficients meet the error budget (Q<=5 here), the dot product runs entirely in 16-bit integer SIMD (_mm_madd_epi16, eight taps per pair of instructions, four output frames combined per store). Filters of 8-24 taps get unrolled fast paths. Higher presets switch to float coefficients with SSE packed multiply-adds. The filter length is the Kaiser-formula minimum rounded up to a multiple of 8. For 48 to 44.1 kHz that gives 24 taps (16-bit) at Q=5, 72 taps (float) at Q=8 and 272 at Q=10, derived from the presets in lib/param.c and the length formula in lib/filter_new.c. The r8brain-free-src catalog entry puts libsamplerate MEDIUM at about 91 taps per output sample. Dispatch to SSE2 or AltiVec happens at run time via CPUID or sysctl, with a scalar fallback.",
+  "when_to_use": [
+    "Offline or batch conversion of 16-bit PCM at a fixed ratio (e.g. 48 kHz to 44.1 kHz) when throughput matters more than a 120 dB stop band. At Q=8 (19.5 kHz passband, 92 dB measured SNR) the README's numbers are 303-318x realtime vs 35-39x for libsamplerate Sinc Medium on a Phenom II and a 2012 Core i5.",
+    "Games, voice or embedded audio pipelines that already work in int16 and want a permissive (BSD-2-Clause) resampler without libsamplerate's GPL history or soxr's LGPL.",
+    "Low-quality fast paths: Q=2 (8 taps, 13.3 kHz bandwidth) beats libsamplerate's linear interpolator on mono, 3195x vs 1112x realtime on System D.",
+    "PowerPC/AltiVec targets, which few other resamplers vectorise."
+  ],
+  "when_not_to_use": [
+    "Float, 24-bit or multichannel (>2) audio: only native s16 mono/stereo is implemented, and other formats are silently dropped.",
+    "Mastering-grade conversion: Q=5 is a 24-tap filter designed for about 60-74 dB stop band (84 dB measured SNR). The ultra preset uses 272 taps and is still only nominally 120 dB, and every output carries 1-LSB dither.",
+    "Real-time streaming where you want a simple push API: you must track fractional positions and input overlap yourself. Issue #2 'Cannot figure out the API' and open issue #3 'API Simplification' confirm this.",
+    "ARM: no NEON path (issue #1 open since 2016), so ARM gets the scalar code.",
+    "Projects that need error reporting or maintenance: the README says the library is not release quality, there is no error return (filter allocation failure calls abort()), and the code has not changed since April 2013 (the 2022 commits only port Python scripts and the README)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc and libm); the test and benchmark scripts need Python 3, SoX and SciPy",
+    "min_toolchain": "C compiler with SSE2 intrinsics (-msse2) or AltiVec; README benchmarks used GCC 4.0-4.7 and Clang 4.0. The autoconf/genmake build and Xcode projects are described as broken; Visual C++ projects (libfresample.sln, libfresample_static.vcxproj) were added in 2013 although the README still says there is no Windows port.",
+    "platforms": "x86 and x86-64 (SSE2, runtime-detected), PowerPC (AltiVec); scalar fallback elsewhere; little- and big-endian",
+    "thread_safety": "not documented; resampler state (position, dither) lives in caller variables and filters are read-only after creation, but CPU-feature flags are a lazily initialised global and lfr_setcpufeatures writes it",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Parameter bug in lfr_param_calculate: the pass-band branch tests ISSET(ATTEN) instead of ISSET(FPASS). Setting ATTEN alone makes the filter read an FPASS value that was never set (malloc'd garbage), and setting FPASS alone is ignored. The quality presets used in the benchmarks are not affected.",
+    "lfr_resample returns silently, writing nothing, unless both formats are LFR_FMT_S16_NATIVE and nchan is 1 or 2. The header's promise of intermediate conversion buffers is not implemented.",
+    "Buffer lengths and positions are int frames with a 32.32 fixed-point position, so a single call cannot exceed 2^31 frames, and the caller must keep pos and dither across calls for gapless streaming.",
+    "Dither (an LCG adding 1 LSB of uniform noise before truncation) is always on; output is reproducible only if you reuse the same dither seed."
+  ],
+  "pick_this_over_siblings_when": "Pick LibFResample over libsoxr (LGPL, about 11x libsamplerate MEDIUM in a third-party table) or r8brain-free-src (MIT, double-precision, 120-180 dB) only when your data is 16-bit, a 90-100 dB class filter is enough, and you want the smallest permissive C code. For float pipelines, higher stop bands or maintained code, prefer r8brain-free-src or soxr; for drifting-ratio ASRC, SampleRateTap.",
+  "verified_claims_summary": "First-party README table, 48 to 44.1 kHz: LibFResample, timed by its own CLI with clock() over 20 whole-buffer passes of 2 minutes of pink noise after one warm-up, against libsamplerate 0.1.8 figures taken from SRC's throughput test. Optimisation flags are not stated; the machines are a 1.6 GHz Atom (GCC 4.4), a 2.0 GHz G5 (GCC 4.0), a 3.2 GHz Phenom II (GCC 4.7) and a 1.7 GHz Core i5 (Clang 4.0). The 36x Q=5 headline pairs a 24-tap 16-bit filter with SRC Medium's roughly 91-tap float filter (tap count per the r8brain-free-src entry), so the fairer pairs are Q=8 vs Sinc Medium (about 8-9x) and Q=10 vs Sinc Best (about 8-13x), both derived from page data. The SRC throughput test (checked in 0.1.9; 0.1.8 is not tagged on GitHub) converts mono float data at ratio 0.99, so the stereo table's SRC rows are probably mono figures that flatter SRC rather than LibFResample.",
+  "status_note": "Abandoned: the code is unchanged since April 2013, the README and Python scripts were touched in May 2022, and four issues are open (three on a Version 1.0 milestone). BSD-2-Clause, about 30 small C files, easy to vendor if 16-bit-only input and the caller-managed streaming API are acceptable.",
+  "sources_read": [
+    "https://github.com/depp/libfresample",
+    "https://github.com/depp/libfresample/commits",
+    "https://github.com/depp/libfresample/issues?q=is%3Aissue",
+    "https://github.com/depp/libfresample/tree/master/lib",
+    "https://github.com/depp/libfresample/tree/master/src",
+    "https://github.com/depp/libfresample/tree/master/tests",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/README.md",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/comparison.txt",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/include/fresample.h",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/genmake.py",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/tests/benchmark.py",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/param.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/filter_new.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/filter_new_window.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/filter.h",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/resample.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/resample_s16func.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/resample_s16n2s16_sse2.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/resample_s16n2f32_sse2.c",
+    "https://raw.githubusercontent.com/depp/libfresample/HEAD/lib/cpu.c",
+    "https://github.com/libsndfile/libsamplerate/tags",
+    "https://raw.githubusercontent.com/libsndfile/libsamplerate/0.1.9/tests/throughput_test.c"
+  ],
+  "confidence": 0.8
+}

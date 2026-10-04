@@ -13,3 +13,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Verifier lead (batch 74): mozilla/mozjpeg (C encoder, libjpeg-turbo fork with trellis quantisation) is not catalogued; baseline of mozjpeg-rs.
 - Enricher leads (e12): catid/Zdepth (Kinect depth compressor, smaller than RVL but slower; weak) and the zvezdochiot 0.2.4 fork of imagezero (unchecked).
 - Enricher lead (e14): clipperhouse/uax29 (Go grapheme and word segmentation) is not catalogued (unicode-utf8 candidate).
+- Enricher leads (e13, video-audio denoisers): Khanattila/KNLMeansCL (OpenCL non-local means, C++) and WolframRhodium/VapourSynth-BM3DCUDA (BM3D on CUDA and HIP; likely the V-BM3D arm of av-denoise's chart); neither catalogued.
