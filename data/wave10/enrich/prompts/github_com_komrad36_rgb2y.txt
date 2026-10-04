@@ -22,8 +22,8 @@ INPUT RECORD:
   "baseline": "OpenCV cv::cvtColor (CV_BGR2GRAY)",
   "metric": "throughput",
   "workload": "RGB (BGR) image to 8-bit grayscale conversion with OpenCV's default weights; main.cpp runs 50 warmups and 100 timed runs against cv::cvtColor and prints microseconds.",
-  "claimed_speedup": "README: 'Roughly 3x faster than OpenCV's implementation with AVX2, or 2x faster than OpenCV's implementation if using SSE only'; repo description: '2-4x faster than OpenCV'. No measured timings are published. The current RGB2Y.h has only an AVX2 path: the NO_AVX_PLEASE switch the README mentions is not referenced anywhere in the code, so the SSE figure has no code behind it in the current version.",
-  "evidence_tier": "C",
+  "claimed_speedup": "README (dating from the February 2017 kernel, never re-measured after the 2018 Q15 rewrite): 'roughly 3x faster than OpenCV with AVX2, 2x with SSE only'; the SSE path no longer exists. The only public run (issue #1, Debug build) has OpenCV 3.4.3 at 2592.71 us versus RGB2Y 15139.5 us.",
+  "evidence_tier": "D",
   "benchmark_url": "https://github.com/komrad36/RGB2Y",
   "compiler_and_flags": "Repo Makefile: g++ -Ofast -std=gnu++17 -fomit-frame-pointer -mavx2 -march=native -mfma -flto -funroll-all-loops -fpeel-loops -ftracer -ftree-vectorize (no compiler version; no published run).",
   "hardware": null,
@@ -31,7 +31,7 @@ INPUT RECORD:
   "usability": "copyable",
   "stars_or_usage": "92 stars",
   "tradeoffs": "Header-only (RGB2Y.h), AVX2 or SSE only, no NEON; single operation (RGB to gray) with equal or OpenCV-default weights; the author says SSE is about 50% slower than AVX2.",
-  "caveats": "Claim is a README ratio with no CPU or measured timings; the harness (main.cpp: 50 warmups, 100 timed runs, both sides multithreaded) is public but its output is not published. Output is not bit-identical to the baseline: RGB2Y rounds each weighted channel term separately (_mm256_mulhrs_epi16 in Q15, then saturating adds), while OpenCV's 8-bit BGR2GRAY rounds the weighted sum once, so some pixels can differ by one grey level; main.cpp checks RGB2Y only against its own scalar reference (RGB2Y_ref, which uses the same per-term rounding), never against cv::cvtColor's output. Each 10-pixel block loads 31 bytes, so the final block of the last row reads at least 1 byte past the end of an unpadded input buffer (main.cpp's synthetic-image path pads by 128 bytes). AVX2 only in the current code; uses the MSVC keyword __forceinline (GCC/Clang portability not checked). The harness uses the OpenCV 3-era CV_BGR2GRAY constant, so it needs changes to build against OpenCV 4, and modern OpenCV may be closer. Code last updated 29 Sep 2018; last commit 23 Mar 2021 only added the MIT LICENSE file.",
+  "caveats": "Claim is a README ratio with no CPU or measured timings; the harness (main.cpp: 50 warmups, 100 timed runs, both sides multithreaded) is public but its output is not published. Output is not bit-identical to the baseline: RGB2Y rounds each weighted channel term separately (_mm256_mulhrs_epi16 in Q15, then saturating adds), while OpenCV's 8-bit BGR2GRAY rounds the weighted sum once, so some pixels can differ by one grey level; main.cpp checks RGB2Y only against its own scalar reference (RGB2Y_ref, which uses the same per-term rounding), never against cv::cvtColor's output. Each 10-pixel block loads 31 bytes, so the final block of the last row reads at least 1 byte past the end of an unpadded input buffer (main.cpp's synthetic-image path pads by 128 bytes). AVX2 only in the current code; uses the MSVC keyword __forceinline (GCC/Clang portability not checked). The harness uses the OpenCV 3-era CV_BGR2GRAY constant, so it needs changes to build against OpenCV 4, and modern OpenCV may be closer. Code last updated 29 Sep 2018; last commit 23 Mar 2021 only added the MIT LICENSE file. [retier] No measured number for the current code. Exhaustive check of all 16,777,216 BGR triples against OpenCV 4.x: 33.2% of outputs differ by 1 (max 1). The multithreaded row split overruns the destination at 18 or more threads (385 rows on 24 threads, 721 or 1000 on 64); the tail over-reads 1-28 bytes; stride is in pixels with packed output while the reference writes strided; __forceinline and an unannotated fallthrough break the g++ -Werror Makefile; the function is really BGR2Y (issue #4).",
   "confidence": 0.55,
   "last_commit": "2021-03-23",
   "maintenance_status": "abandoned",
@@ -52,7 +52,17 @@ INPUT RECORD:
       "https://raw.githubusercontent.com/komrad36/RGB2Y/HEAD/LICENSE"
     ],
     "page_compares_against_baseline": true,
-    "numbers_found_on_page": true
+    "numbers_found_on_page": true,
+    "retier": {
+      "from": "C",
+      "to": "D",
+      "reason": "Lowered C to D: the README's '3x AVX2 / 2x SSE' line dates from the February 2017 kernel e67dffa (6-bit weights, up to 3 levels off OpenCV, 57.4% of colours differing) and was never re-measured after the 30 September 2018 Q15 rewrite; the SSE path was removed (issue #5), so the 2x figure has no code behind it, and the only public run (issue #1, a Debug build) shows OpenCV 3.4.3 at 2592.71 us against RGB2Y at 15139.5 us. No measured number describes the current code.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/komrad36/RGB2Y/master/RGB2Y.h",
+        "https://github.com/komrad36/RGB2Y/issues/1",
+        "https://github.com/komrad36/RGB2Y/issues/5"
+      ]
+    }
   }
 }
 
@@ -78,7 +88,6 @@ SIBLING ENTRIES (same category, already catalogued):
 - fast-srgb8 (https://github.com/thomcc/fast-srgb8): beats naive powf-based sRGB transfer function (reference implementation inside the crate's own benchmark); README bench output, one iteration = 51 conversions (204 for the x4 pair, 256 for sRGB8 to f32): f32 to sRGB8 scalar 144 ns/iter vs 971 ns for the naive powf re
 - FastBoxBlur (https://github.com/michelerenzullo/FastBoxBlur): beats OpenCV cv::blur (box filter); README Performance: 'designed to be a portable, easy, and faster replacement of cv::blur, using an i7-10750H, it's around 2x - 3x time faster'. The chart data (
 - FastOpenCV (fastcv kernels) (https://github.com/devpilgrin/FastOpenCV): beats OpenCV 4.14.0 cv::resize (INTER_CUBIC, INTER_AREA), cv::transform and cv::pow, built from source by the repo's scripts with IPP disabled (WITH_IPP=OFF in every variant) and TBB threading at the default thread count; libfastcv is compiled against the linux-dispatch install, so the cv:: column is most likely that build, not a distribution build.; README table: resize INTER_CUBIC 3.4 -> 0.8 ms (4.1x, bit-exact), but the 3.4 ms OpenCV time is the first kernel-audit figure, which PLAN.md stage 5e says was t
-- FastResize (fast_resize) (https://github.com/tranhuucanh/fast_resize): beats libvips 8.15 (vips CLI, parallel mode) and imageflow 2.0 (imageflow_tool); JPG 2.10 s vs libvips 5.24 s vs imageflow 6.60 s; PNG 3.43 s vs 6.18 s vs 8.41 s; BMP 1.65 s vs libvips 4.72 s; WebP 14.03 s vs libvips 23.52 s vs imageflow 15.
 - H264Sharp (native SIMD color converter) (https://github.com/ReferenceType/H264Sharp): beats OpenCV cv::cvtColor (RGB <-> YUV); Ryzen 7 3700X: 1 thread 11919 ms (OpenCV) vs 4899 ms; 4 threads 3807 vs 1303 ms; 8 threads 2543 vs 822 ms; 16 threads 2462 vs 824 ms. Intel i7 10600U: 1 thread 
 - jsColorEngine (https://github.com/glennwilton/jsColorEngine): beats Little CMS 2 (lcms2 2.18 native built with gcc at -O2 and -O3; lcms-wasm = LittleCMS 2.16 compiled to WebAssembly); README 'Current figures' table (Ryzen 7 7700X, one thread, Node 24, 1 MPx photographs), int-wasm-simd MPx/s with ratios vs lcms-wasm and vs native C lcms2: RGB 
 - KLERP / KNERP (https://github.com/komrad36/KLERP): beats OpenCV resize (bilinear and nearest-neighbor interpolation); README: 'exceeding OpenCV's implementation in speed by 25-100% while matching its output and capabilities in both interpolation modes'; 'the magnitude of the sp

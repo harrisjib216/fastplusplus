@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/tvlabs/edge264",
+  "one_liner": "Compact C H.264 (progressive High, MVC) decoder that beats single-threaded FFmpeg libavcodec by about 1.2x in its CI.",
+  "what_it_does": "Decodes H.264/AVC Annex B byte streams (progressive High profile up to level 6.2, 8-bit 4:2:0, plus MVC stereo 3D) into planar YUV frames. The C API is NAL-at-a-time: edge264_find_start_code splits the stream, edge264_decode_NAL feeds one NAL unit, and edge264_get_frame / edge264_return_frame hand out borrowed or owned frames, with optional allocation and logging callbacks. It does not replace libavcodec's API: there is no container parsing (MP4 needs h264_mp4toannexb first), no interlaced, 4:2:2/4:4:4, high-bit-depth or Baseline FMO support, and 109 of 224 JVT conformance bitstreams decode without error.",
+  "how_it_is_fast": "It replaces hand-written assembly with GCC/Clang vector extensions and aliased SSE/NEON intrinsics (about 80% shared code across x86 and ARM, and WASM SIMD via Clang). The slice decoder is a forward pipeline of non-inlined code blocks joined by tail calls, with tree-shaped jump tables for intra prediction, to keep the hot code small enough for L1. Branches are removed with fake 'unavailable' neighbour macroblocks around each frame and relative neighbour offsets, the bitstream reader uses a register-wide cached reader with on-the-fly SIMD unescaping, and CABAC keeps its state in full-width registers so it renormalises less often and decodes bypass bins in batches.",
+  "when_to_use": [
+    "Decoding progressive 8-bit 4:2:0 H.264 (High/Main/constrained Baseline without FMO) on one core per stream, for example many concurrent streams on a server",
+    "Embedding a small, dependency-free BSD-3-Clause C decoder instead of linking all of libavcodec",
+    "WebAssembly or browser decoding: the same source builds with emscripten (WASM SIMD, optional relaxed SIMD) and ran at 5.0-5.2 s on the benchmark clip versus 4.6-4.7 s for native FFmpeg",
+    "MVC (stereo 3D) streams: both views come out of one decoder, the second in Edge264Frame.samples_mvc",
+    "x86-64 or arm64 builds where you control the compiler; Clang builds measured faster than GCC builds on x86-64 (3.9 vs 4.5 s)"
+  ],
+  "when_not_to_use": [
+    "Interlaced (PAFF/MBAFF) broadcast or camera content, 10-bit, 4:2:2 or 4:4:4 streams: unsupported, decode returns ENOTSUP",
+    "Latency-bound single-stream playback where FFmpeg's frame/slice threading counts: multithreading is labelled experimental in edge264_test, issue #30 reports a segfault in worker_loop with n_threads 1-2, and the edge264-mvc fork's chart shows multithreaded FFmpeg ahead",
+    "Untrusted input without your own sandboxing: no fuzzing is set up (issue #8 open since 2024), and open issues report a hang (#21), a crash in add_idct8x8 on ESP32-P4 (#28) and decode failures on user samples (#19)",
+    "Players that depend on exact output order: issues #16 (Main profile) and #32 (High profile, August 2026, a P frame emitted where FFmpeg emits a B frame) are open",
+    "Projects that need a stable ABI or MSVC: pre-1.0 with API renames planned for 1.0 (2027), and only GCC and Clang are supported"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Makefile; CMakeLists.txt wraps it as imported target edge264::edge264)",
+    "dependencies": "none beyond libc and pthreads; SDL2 is loaded at runtime only by the edge264_test display mode",
+    "min_toolchain": "C11 (gnu11) with GCC or Clang vector extensions; Clang 15+ for the generic backend on other ISAs; emscripten for WASM",
+    "platforms": "x86/x64 (SSE; optional runtime dispatch to x86-64-v2/v3 builds via VARIANTS), ARM32/64 with NEON, WASM32/64 SIMD, other little-endian ISAs via Clang generic vectors; macOS, Linux, Windows (MinGW), Android, iOS",
+    "thread_safety": "One decoder context per stream; n_threads spawns background workers (experimental). Logging callbacks may run on worker threads for macroblock logs, alloc/free callbacks on the calling thread; concurrent calls into one context are not documented as safe",
+    "drop_in_for_baseline": "partial: it replaces libavcodec's h264 decoder only for progressive 8-bit 4:2:0 Annex B streams, through its own NAL-level API rather than avcodec_send_packet/receive_frame"
+  },
+  "gotchas": [
+    "The README API reference is out of date against edge264.h: it documents the decode_NAL callback as free_cb(void *free_arg, int ret) while the header declares Edge264UnrefCb(int ret, void *unref_arg), and shows pixel_depth_Y where the header has bit_depth_Y; code to the header.",
+    "The README's CMake FetchContent example pins GIT_TAG v1.0, but the only tag in the repository is v0.1 (2014), so pin a commit hash instead.",
+    "With borrow = 0 a frame is valid only until the next edge264_decode_NAL call, and ENOBUFS means drain frames with edge264_get_frame and resubmit the same NAL; errors are detected late per NAL by clamping, so corrupt input yields frames plus an mb_errors probability map rather than a hard failure.",
+    "Open correctness fixes are unmerged: PR #26 (High profile default scaling matrices per H.264 Table 7-2) and PR #25 (single-threaded decode hang when ready_tasks is zero), both from February 2026."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued video decoders, rivet-h26x claims gains over libavcodec mainly with all threads, on H.265 wavefront content; pick edge264 when you want a small embeddable C library for progressive H.264 with single-thread speed, a WASM build or MVC output, and stay with FFmpeg when you need the full H.264 feature set or multithreaded latency.",
+  "verified_claims_summary": "The repo's own workflow_dispatch CI (27 July 2026, GitHub-hosted ubuntu-latest x86-64 and ubuntu-24.04-arm runners, CPU model not recorded, median of 5) decoded the 1080p 10 s Big Buck Bunny clip single-threaded: edge264 Clang 3.9 s and GCC 4.5 s versus apt FFmpeg (-threads 1) 4.6 s on x86-64, and 3.8/3.9 s versus 4.7 s on arm64, built with -march=native -std=gnu11 -O3 using the runner's apt compilers. Reading bench-decoders.py against edge264_test.c shows both native edge264 and FFmpeg figures are user CPU time of the whole process (edge264's 'CPU:' line from getrusage ru_utime, FFmpeg's -benchmark utime), so that pair is like for like; only the WASM bar (wall clock), LibAVC (wall clock around the process) and OpenH264 (self-reported) use other clocks, and the harness never checks that edge264 decoded every frame (-y turns off YUV comparison and the PASS/FAIL count is ignored), although this same clip failed to decode in 2022 (issue #5, since closed).",
+  "status_note": "Active solo project (971 commits, last commit 2026-07-28, 437 stars) under BSD-3-Clause and easy to vendor, but pre-1.0 with API freeze targeted for 2027 and several open crash, hang and output-order reports.",
+  "sources_read": [
+    "https://github.com/tvlabs/edge264",
+    "https://github.com/tvlabs/edge264/commits/master",
+    "https://github.com/tvlabs/edge264/tags",
+    "https://github.com/tvlabs/edge264/forks",
+    "https://github.com/tvlabs/edge264/pulls",
+    "https://github.com/tvlabs/edge264/issues?q=is%3Aissue",
+    "https://github.com/tvlabs/edge264/issues/5",
+    "https://github.com/tvlabs/edge264/issues/30",
+    "https://github.com/tvlabs/edge264/issues/32",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/README.md",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/README-benchmark.svg",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/Makefile",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/edge264.h",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/src/edge264_test.c",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/misc-scripts/bench-decoders.py",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/misc-scripts/bench-charts.py",
+    "https://raw.githubusercontent.com/tvlabs/edge264/HEAD/.github/workflows/benchmarks.yml"
+  ],
+  "confidence": 0.8
+}

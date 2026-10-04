@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/uavs3/uavs3e",
+  "one_liner": "Open-source AVS3 (China's AVS3-P2 baseline) encoder with SIMD and fast mode decisions, far faster than the HPM reference encoder.",
+  "what_it_does": "Encodes raw YUV to an AVS3-P2 baseline-profile bitstream, the Chinese national video standard, not HEVC. The C library exposes uavs3e_load_default_cfg, uavs3e_create, uavs3e_get_img, uavs3e_enc and uavs3e_free around a large enc_cfg_t struct (speed_level 0-4, wpp_threads, frm_threads, rate control, coding-tool switches), plus a uavs3enc command-line tool that also prints PSNR and SSIM. It is a production-style replacement for the AVS3 reference software HPM, not for x265.",
+  "how_it_is_fast": "speed_level gates a stack of encoder-side shortcuts: history-based reuse of split costs at the same CU position, early depth termination, restricted binary/extended-quadtree and DT partition sizes, a coarse intra rough-mode decision on 10 of the angular modes by SATD before refinement, SATD-based pruning of inter and skip candidates, and SAD instead of SATD for sub-pel motion cost. Motion search is TZ-style raster plus diamond search. Rows are encoded in parallel with WPP threads and pictures with a frame-thread pool, and the hot kernels (interpolation, intra prediction, transforms, SAO, ALF, cost functions) have SSE4.2, AVX2 and ARMv8 NEON versions.",
+  "when_to_use": [
+    "You must produce AVS3 bitstreams (for example for a Chinese broadcast or UHD delivery chain) and HPM is too slow for anything beyond conformance testing.",
+    "Research on AVS3 encoder speed-up algorithms, where a readable C encoder with switchable fast-decision flags is a better base than HPM.",
+    "8-bit 4:2:0 offline encoding on x86-64 with AVX2 or on ARMv8 (the README recommends Kunpeng), where WPP plus frame threads can use many cores."
+  ],
+  "when_not_to_use": [
+    "You need HEVC, AVC, AV1 or VVC output: it is not a drop-in for x265 or any FFmpeg encoder, and players and containers with AVS3 support are scarce.",
+    "10-bit production encoding: bit depth is a compile-time switch, and issue #53 (open, uavs3e 1.3.2, Clang 18.1.8) reports a segfault in uavs3e_if_hor_ver_chroma_w4_avx2 as soon as encoding starts in a 10-bit AVX2 build.",
+    "Projects that need an OSI-approved license: BSD 4-clause with an advertising clause (which names uAVS3d, the decoder).",
+    "Anything that needs ongoing fixes: master's last commit is 2023-08-03, about 40 of 42 issues are open with few replies, and later work went to a separate RealTime branch (uAVS3lib, last updated 2024-10-31) whose own issues report crashes, memory leaks and non-deterministic output.",
+    "Interop-critical pipelines without your own conformance check: issue #43 (open) reports a uavs3e stream that the HPM decoder fails on."
+  ],
+  "integration": {
+    "form": "static lib (shared with BUILD_SHARED_LIBS=1) plus the uavs3enc CLI; Visual Studio 2017 solution on Windows",
+    "dependencies": "libm, pthreads; gawk and CMake 2.8+ for the Linux build (version.sh generates version.h)",
+    "min_toolchain": "C99 (CMake compiles with -std=c99 -O3, -msse4.2 and -mavx2 per directory); Visual Studio 2017 on Windows. Issue #53 says GCC 14 fails to compile the AVX2 files; PR #23 (open) reports an offsetof redefinition error with GCC 10.2.0.",
+    "platforms": "x86-64 (SSE4.2 with runtime AVX2 dispatch), aarch64 (NEON assembly), loongarch64 (C only); Windows and Linux. macOS build fails per issue #34, and com_api.h forces 8-bit on non-Linux targets.",
+    "thread_safety": "Not documented. Each encoder handle owns its WPP and frame thread pools; nothing says separate handles can be driven from different threads.",
+    "drop_in_for_baseline": "partial — it replaces HPM as an AVS3 encoder with its own API and config keys; it cannot replace x265 because it emits a different codec"
+  },
+  "gotchas": [
+    "The CLI's 'Total encoding time' and 'Average encoding speed' lines use clock(), which on Linux is CPU time summed over all threads: issue #28 shows 450.6 s reported against 80.2 s wall time with 40 WPP and 40 frame threads. Use the 'Actual encoding time/speed' lines (wall clock, added in PR #17) when timing.",
+    "The pel type in the installed header com_api.h depends on COMPILE_10BIT, so an application must be built with the same macro as the library; 8-bit and 10-bit need separate builds.",
+    "refine_input_cfg() always sets ipf_flag = 0 (intra prediction filter off) whatever the config says, and writes the speed-level partition limits back into the caller's cfg struct.",
+    "The global symbol calculate_histogram is not prefixed and collides when linked into FFmpeg (open PR #38 renames it); the CLI's kbps figure uses integer fps_num / fps_den, so it under-reports bitrate for fractional frame rates such as 24000/1001."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the output must be AVS3; for HEVC use Kvazaar (or x265), for VVC use VVenC and for AV1 use SVT-AV1, all of which are maintained and target formats with broad decoder support.",
+  "verified_claims_summary": "Snippet only (the paper PDF on jdl.link is blocked): in 'An Efficient and Open Source Encoder Uavs3e for Video Compression', speed level 3 encodes 51.8 times faster than the AVS3 reference encoder HPM 4.0 at a 4.2% coding loss, and against x265 veryslow (HEVC, a different codec) it has a small speed gap while saving 22.7% luma and 46.1%/46.2% chroma BD-rate. A search snippet adds the test conditions: Intel Xeon Gold 6154 (18 cores, 3.0 GHz), intra period 1 s, fixed QP at four QP points, encoders run single- and multi-threaded; compiler, sequences and which thread setting produced the 51.8x were not seen, and the repository has no benchmark scripts or results.",
+  "status_note": "Abandoned on master since 2023-08-03 and licensed BSD 4-clause (not OSI-approved), so treat it as a reference AVS3 encoder to study or fork rather than a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/README.md",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/COPYING",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/test/utest.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/test/config.h",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/inc/uavs3e.h",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/inc/com_api.h",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/inc/define.h",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/inc/com_define.h",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/uavs3e.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/lookahead.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/analyze.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/me.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/inter.c",
+    "https://raw.githubusercontent.com/uavs3/uavs3e/HEAD/src/intra.c",
+    "https://github.com/uavs3/uavs3e",
+    "https://github.com/uavs3/uavs3e/tree/master/src",
+    "https://github.com/uavs3/uavs3e/tree/master/src/avx2",
+    "https://github.com/uavs3/uavs3e/tree/master/inc",
+    "https://github.com/uavs3/uavs3e/tree/master/test",
+    "https://github.com/uavs3/uavs3e/tree/RealTime",
+    "https://github.com/uavs3/uavs3e/branches/all",
+    "https://github.com/uavs3/uavs3e/commits/master",
+    "https://github.com/uavs3/uavs3e/issues?q=is%3Aissue",
+    "https://github.com/uavs3/uavs3e/issues?q=is%3Aissue&page=2",
+    "https://github.com/uavs3/uavs3e/issues/16",
+    "https://github.com/uavs3/uavs3e/issues/28",
+    "https://github.com/uavs3/uavs3e/issues/35",
+    "https://github.com/uavs3/uavs3e/issues/37",
+    "https://github.com/uavs3/uavs3e/issues/43",
+    "https://github.com/uavs3/uavs3e/issues/53",
+    "https://github.com/uavs3/uavs3e/issues/61",
+    "https://github.com/uavs3/uavs3e/pulls?q=is%3Apr",
+    "https://github.com/uavs3/uavs3e/pull/38"
+  ],
+  "confidence": 0.6
+}

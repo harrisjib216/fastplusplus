@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/tranhuucanh/fast_resize",
+  "one_liner": "Batch image-resize CLI, C++ library and Ruby gem that claims 1.7-2.9x over the libvips CLI on an Apple M2.",
+  "what_it_does": "Decodes a JPEG, PNG, WebP or BMP file, resizes it (fit width, fit height, exact size or scale) and re-encodes it, either one file at a time or as a batch over a directory or file list on a thread pool. The C++ API is file-path based (fastresize::resize, resize_with_format, batch_resize, batch_resize_custom with ResizeOptions and BatchOptions); there is no in-memory buffer API in include/fastresize.h. The same core is exposed as the fast_resize CLI and a Ruby gem. It is not a drop-in for libvips or imageflow: there are no other operations, no colour management and no metadata or EXIF handling (auto-rotate is an open request, issue #3).",
+  "how_it_is_fast": "Most of the speed comes from doing less work per image: on ARM64 any downscale with the default Mitchell (or triangle) filter is rerouted to the repo's own kernels in src/simd_resize.cpp, a 2-tap fixed-point bilinear for ratios up to 3x and an integer box/area average above 3x, instead of the requested Mitchell filter. JPEG decode uses libjpeg-turbo with DCT-domain shrink-on-load (scale 1/2, 1/4 or 1/8 when the integer ratio allows), JDCT_IFAST and do_fancy_upsampling = FALSE, and JPEG encode also uses JDCT_IFAST. Files are read through mmap, and batches run on a thread pool sized 1/2/4/8 by batch size (8 for 50 or more files; docs/API.md says 0 means auto-detect CPU cores, but the code does not query the core count), or a 4/8/4 decode/resize/encode pipeline when max_speed is set. On x86 the custom kernels do not exist (simd_resize returns false), so resizing there is plain stb_image_resize2 with its own SSE2/AVX code, despite the README's 'SSE2/AVX (x86)' wording.",
+  "when_to_use": [
+    "Bulk thumbnailing of RGB JPEG/BMP/WebP photos to a fixed width on Apple Silicon or other ARM64 servers, where bilinear or box quality is acceptable",
+    "Ruby or shell pipelines that want one command for decode, resize and encode of a directory, with no libvips or ImageMagick install",
+    "Large JPEG downscales (2x or more) where libjpeg-turbo DCT scaling does most of the reduction",
+    "Workloads that stay within the four supported formats and need low peak RAM per batch"
+  ],
+  "when_not_to_use": [
+    "RGBA input on ARM64: the 4-channel NEON bilinear path overflows int16 lanes (see gotchas), so PNG or WebP with alpha downscaled by less than 3x comes out corrupted",
+    "When resampling quality matters: the default 'Mitchell' is silently replaced by 2-tap bilinear (aliases above about 2x) or truncating box averaging on ARM, and JPEG decode and encode use the less accurate IFAST DCT without fancy chroma upsampling",
+    "Shipping the x86 build to other machines: CMakeLists.txt adds -march=native on x86_64, and issue #2 (opened by the libvips maintainer) reports the prebuilt Linux x64 binary dying with an illegal instruction on a Threadripper PRO 3955WX",
+    "Untrusted or very large inputs: issue #2 also reports a segfault on a 30,000 x 30,000 image and corrupt JPEG output from a git-master build on Ubuntu 25.10, open with no maintainer reply",
+    "When you need EXIF orientation, ICC profiles, metadata, in-memory buffers, or any operation other than resize"
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib, plus CLI binary and Ruby gem",
+    "dependencies": "libjpeg-turbo, libpng (with zlib), pthreads, libwebp (optional; CMake only warns if missing); stb_image, stb_image_write and stb_image_resize2 are vendored",
+    "min_toolchain": "C++14, CMake 3.15+; Ruby 2.5+ for the gem",
+    "platforms": "macOS and Linux on arm64 (custom NEON kernels) and x86_64 (stb_image_resize2 only; release builds use -march=native)",
+    "thread_safety": "Batch functions are internally multi-threaded; the last-error code and message are one process-wide mutex-protected global, so concurrent callers overwrite each other's errors",
+    "drop_in_for_baseline": "partial: it can stand in for a 'vips resize'/'vips thumbnail' or imageflow_tool batch-resize step on JPEG/PNG/WebP/BMP files, but it has a different API and none of their other operations"
+  },
+  "gotchas": [
+    "Correctness bug behind the PNG benchmark row: resize_bilinear_neon_rgba computes the 4-channel weights with vmulq_s16 and vshrq_n_s16 on 0-255 values times 8-bit weights up to 256 (products up to 65,280), which wraps signed 16-bit lanes; emulating the lane math shows any channel interpolated to 128 or more coming out as 0 in flat areas (alpha 255 becomes 0), with about 74% of random pixel quads giving wrong values. The benchmark's 2104x1160 RGBA PNGs (2.63x downscale on an M2) take exactly this path. The 3-channel path is scalar int code and is not affected.",
+    "The same NEON path loads 8 bytes per 4-byte pixel (vld1_u8) at the last column, so it reads 4 bytes past the end of the source buffer on the last row.",
+    "A default 'cmake ..' configure fails: FASTRESIZE_BUILD_TESTS and FASTRESIZE_BUILD_BENCHMARKS default ON but the tests/ and benchmark/ directories are not in the public repo, so the benchmark harness behind the published numbers is unpublished.",
+    "Batch mode writes output_dir/<input file name>, so the output format follows the input extension; for PNG output, quality 85 maps to zlib level 2 (9 - (q-1)*9/99), which is much cheaper than libvips' default PNG compression, while BENCHMARKS.md says all output was JPEG q85."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libvips or fast_image_resize only for bulk RGB thumbnailing on ARM where a single command and low RAM matter more than filter quality; fast_image_resize gives proper convolution filters (Lanczos3, bilinear) with published single-thread numbers against libvips, and stb-image-resize-opt is the better choice if you want stb_image_resize2 itself made faster, which is all FastResize uses on x86.",
+  "verified_claims_summary": "First-party only: on a MacBook Pro M2 (16 GB, macOS Sonoma), resizing 1,000 images per format to 800 px width (two runs averaged) took FastResize v1.0.0 2.10 s (JPG), 3.43 s (PNG RGBA), 1.65 s (BMP) and 14.03 s (WebP), versus 5.24/6.18/4.72/23.52 s for the libvips 8.15 vips CLI in an unstated 'parallel' arrangement and 6.60/8.41/n.a./15.69 s for imageflow_tool 2.0. No scripts, commands or compiler are published, FastResize ran bilinear/box with IFAST JPEG coding against the baselines' default higher-quality kernels, and the PNG row ran the overflowing RGBA kernel described in the gotchas.",
+  "status_note": "BSD-3-Clause and small (21 commits, 2025-12-03 to 2026-01-07, 67 stars), but quiet since January 2026 with issue #2's corruption, illegal-instruction and segfault reports unanswered, so treat it as an unvetted single-author project and fix the RGBA kernel before vendoring.",
+  "sources_read": [
+    "https://github.com/tranhuucanh/fast_resize",
+    "https://github.com/tranhuucanh/fast_resize/tree/master/src",
+    "https://github.com/tranhuucanh/fast_resize/tree/master/bindings/ruby",
+    "https://github.com/tranhuucanh/fast_resize/issues?q=is%3Aissue",
+    "https://github.com/tranhuucanh/fast_resize/issues/2",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/README.md",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/docs/API.md",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/VERSION",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/include/fastresize.h",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/resizer.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/simd_resize.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/pipeline.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/decoder.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/encoder.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/fastresize.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/thread_pool.cpp",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/simd_utils.h",
+    "https://raw.githubusercontent.com/tranhuucanh/fast_resize/HEAD/src/internal.h"
+  ],
+  "confidence": 0.8
+}

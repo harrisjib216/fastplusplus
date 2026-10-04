@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ultravideo/kvazaar",
+  "one_liner": "BSD-licensed HEVC/H.265 encoder in C from Tampere University; papers report faster all-intra encoding than x265 at equal BD-rate.",
+  "what_it_does": "Encodes raw YUV or Y4M input to HEVC Annex B bitstreams, as a CLI (kvazaar) and as a C library reached through the kvz_api function table (config_alloc/config_parse/encoder_open/encoder_encode/encoder_close). Options mirror x264-style presets (ultrafast to placebo) and are set as key=value strings, so it is a different API from libx265, but FFmpeg ships a libkvazaar wrapper. Main and Main10 (separate build), 4:0:0 and 4:2:0, with 4:2:2/4:4:4 behind the KVZ_RANGE_EXTENSION compile flag; it also has rate control, ROI maps, tiles, slices and optional Crypto++ tile encryption.",
+  "how_it_is_fast": "Fast presets skip full rate-distortion optimisation (rd=0) and decide modes on SATD costs, with limited intra/inter PU depths, zero-block CU split termination, early skip, hexagon-based motion search (hexbs) and fast residual-cost estimation. Parallelism comes from wavefront (WPP) rows plus overlapped wavefront frames (--owf), scheduled by a dependency-driven thread queue that auto-sizes threads and OWF from the picture size. SAD, SATD, SSD, DCT, intra prediction, interpolation, quantisation, SAO and CABAC coding-tree kernels have AVX2, SSE4.1 and SSE2 versions (Altivec picture kernels on POWER) picked at run time by a CPUID-based strategy selector.",
+  "when_to_use": [
+    "You need an HEVC encoder library under a permissive license (BSD-3-Clause) instead of x265's GPLv2 or commercial license, for example inside a closed-source product.",
+    "All-intra or low-delay 8-bit 4:2:0 encoding on multicore x86-64 with AVX2, where the published papers place its fast presets ahead of x265 ultrafast/high-speed presets at equal BD-rate.",
+    "Research or teaching on HEVC encoder speed-ups: the C99 codebase is readable, has per-tool switches and is actively maintained (commits through 2026-09-30).",
+    "Real-time or embedded pipelines with the same group's uvgRTP for RTP transport of the HEVC output."
+  ],
+  "when_not_to_use": [
+    "Best compression at slow presets or general random-access encoding: every speed claim is all-intra, and no published comparison against a current x265 release was found.",
+    "Speed-critical encoding without your own benchmark: open issue #378 (2023-12-14) reports Kvazaar slower than x265 in the reporter's test, 'not conforming to the paper introduction'.",
+    "10-bit or 4:2:2/4:4:4 production work: bit depth is fixed at build time (KVZ_BIT_DEPTH), the AVX2 SAD/SATD/SSD picture kernels compile only for 8-bit builds, FFmpeg's libkvazaar wrapper accepts only yuv420p, and 4:2:2 support was merged only on 2026-09-14.",
+    "ARM servers or phones where SIMD matters: there are no NEON kernels, only generic C (plus Altivec picture kernels on POWER).",
+    "Workflows that rely on correct level signalling (strict decoders, MIAF/HEIF): by default it signals HEVC level 6.2 for every stream (open issue #451)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libkvazaar, pkg-config) plus the kvazaar CLI; Docker image; FFmpeg encoder 'libkvazaar'",
+    "dependencies": "POSIX threads (also on Windows; open issue #403 asks for the native Windows thread API); optional Crypto++ for tile encryption; the HM decoder (TAppDecoderStatic) and ffmpeg only for the test scripts",
+    "min_toolchain": "C99 (no VLAs, Visual Studio 2015.2+); Autotools or CMake on Linux/macOS; on MinGW use Clang because GCC builds disable AVX2",
+    "platforms": "x86-64 (AVX2 with BMI/BMI2/LZCNT/POPCNT, SSE4.1, SSE2, runtime dispatch), other CPUs via generic C (Altivec picture kernels on POWER); Linux, Windows, macOS",
+    "thread_safety": "Each kvz_encoder owns its thread queue, but kvazaar_open() re-runs kvz_strategyselector_init(), which writes process-wide function pointers and hardware flags; issue #444 (open) reports helgrind errors, including pthread_mutex_destroy with an invalid argument in kvz_close_rdcost_outfiles, when several encoders run in parallel threads. Open and close encoders from one thread.",
+    "drop_in_for_baseline": "partial — produces standard HEVC streams and has an FFmpeg wrapper (-c:v libkvazaar), but its API, option names and preset tunings differ from libx265 and x265's preset names map to different tool sets"
+  },
+  "gotchas": [
+    "Preset names copy x264/x265 but the tool sets do not match x265's (for example ultrafast has SAO off and rd=0), so equal preset names are not equal work; the papers compare at presets matched for BD-rate instead.",
+    "--threads and --owf default to auto (logical CPU count, 4 if unknown); for fair timing against x265, pin both encoders' thread counts and check the '--owf=auto value set to' log line.",
+    "Because kvz_strategyselector_init sets global function pointers, a per-encoder cpuid setting (cfg->cpuid) changes the kernels used by every encoder in the process.",
+    "tests/util.sh valgrind_test_422 calls prepare_444, so the 4:2:2 CI test feeds a 4:4:4 Y4M file with --input-format=P422 and may not exercise real 4:2:2 input."
+  ],
+  "pick_this_over_siblings_when": "Pick it over uavs3e when you need HEVC rather than AVS3, and over VVenC or SVT-AV1 when decoder support for HEVC matters more than the extra compression of VVC or AV1; pair it with uvgRTP when the output is streamed over RTP.",
+  "verified_claims_summary": "Snippet only; no paper or benchmark page could be opened, and the repository has no x265 comparison (tests/speed_tests.c times only SIMD kernels). The Kvazaar authors' SiPS 2015 paper reports the C implementation 19% faster than x265 at the same intra coding efficiency with 8 threads and 38% with 16; their AVX2 paper reports, on an 8-core Intel i7, 16-thread AVX2 Kvazaar ultrafast at real-time 30 fps intra up to 1080p and 20% faster than AVX2 x265 ultrafast with a 9.1% bit-rate gain. A 2024 Journal of Real-Time Image Processing paper by a different group (R. James, M. Abo-Zahhad, K. Inoue et al.) finds all-intra Kvazaar 65.44% and 69.4% faster than x265 on an Nvidia Jetson, with 1.88% and 0.6% BD-rate gains at high-speed and high-quality presets. x265 versions, compilers and test sequences were not seen.",
+  "status_note": "Actively maintained (v2.3.2 released 2025-09-16, commits to 2026-09-30, 62 open issues) and BSD-3-Clause, so it can be copied or linked into closed products; the speed advantage over x265 rests on all-intra papers from 2015-2024.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/README.md",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/Makefile.am",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/kvazaar.h",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/kvazaar.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/encoder.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/cfg.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/strategyselector.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/strategies/strategies-picture.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/strategies/strategies-ipol.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/src/strategies/avx2/picture-avx2.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/tests/speed_tests.c",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/tests/util.sh",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/tests/test_owf_wpp_tiles.sh",
+    "https://raw.githubusercontent.com/ultravideo/kvazaar/HEAD/tests/test_chroma_subsampling_422.sh",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/libkvazaar.c",
+    "https://github.com/ultravideo/kvazaar",
+    "https://github.com/ultravideo/kvazaar/commits/master",
+    "https://github.com/ultravideo/kvazaar/tree/master/src/strategies",
+    "https://github.com/ultravideo/kvazaar/tree/master/tests",
+    "https://github.com/ultravideo/kvazaar/tree/master/tools",
+    "https://github.com/ultravideo/kvazaar/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/ultravideo/kvazaar/issues/378",
+    "https://github.com/ultravideo/kvazaar/issues/444",
+    "https://github.com/ultravideo/kvazaar/issues/451"
+  ],
+  "confidence": 0.6
+}
