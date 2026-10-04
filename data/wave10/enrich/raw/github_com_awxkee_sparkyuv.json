@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/awxkee/sparkyuv",
+  "one_liner": "Archived C++20 Highway-SIMD YUV/RGB converter; ties or beats libyuv on 8-bit decode on Apple M3, loses on encode.",
+  "what_it_does": "A static (or shared) C++ library of free functions that convert interleaved RGB/RGBA to and from planar and semi-planar YUV: YCbCr 4:4:4/4:2:2/4:2:0/4:1:1/4:1:0/4:0:0, NV12/21, NV16/61, NV24/42, at 8, 10 and 12 bits, plus less common matrices (YCgCo, YCgCo-Re/Ro, YIQ, YDbDr, YDzDx, BT.2020 constant-luminance YcCbcCrc). Calls name the format and matrix (YCbCr420BT601ToRGBA, RGBAToNV12BT601, YCbCr420P10ToRGBA10) or take kr/kb plus a TV/PC range enum. The destination comes first and every stride is in bytes. It also ships premultiply/unpremultiply, rotate/flip/transpose, bit-depth widening, F16 helpers, resampling and a fast Gaussian blur. It is not a libyuv drop-in: names, argument order and stride units differ.",
+  "how_it_is_fast": "The kernels are written once against Google Highway (pinned to the author's fork, branch widen_mul) and compiled per SIMD target. 8-bit decode follows libyuv's approach: 6-bit fixed-point coefficients, 16-bit saturating multiply-add, interleaved RGBA stores. 8-bit encode uses 8-bit fixed point with 32-bit WidenMulAccumulate and averages chroma pairs in registers (SumsOf2). The 10/12-bit paths widen to 32-bit lanes and narrow back to 16-bit RGBA, so they skip libyuv's reduction to 8-bit ARGB.",
+  "when_to_use": [
+    "C++ code that needs YUV matrices libyuv lacks (YCgCo-Re/Ro, YIQ, YDbDr, YDzDx, BT.2020 CL) or 10/12-bit YUV to 16-bit-per-channel RGBA.",
+    "8-bit YCbCr 4:2:0/4:2:2 to RGBA decode on arm64 (NEON), where the README shows about 1.3x over libyuv I420/I422ToABGR on an M3 Pro.",
+    "Targets Highway covers (SVE/SVE2, RVV, POWER, Z, WASM) where you want one portable SIMD codebase rather than per-ISA assembly.",
+    "Projects that will vendor and freeze the code, since upstream is archived."
+  ],
+  "when_not_to_use": [
+    "8-bit RGBA to YUV encode: libyuv is 2.0x faster to 4:2:0 and 1.37x faster to 4:2:2 in the project's own table, and libyuv also wins premultiply (1.21x).",
+    "x86: there are no x86 numbers, and the README says 8-bit decode 'should be considered same' as libyuv off arm64.",
+    "When you need output that matches libyuv bit for bit or a tested library: the repo has no tests (CI runs ctest, but CMakeLists.txt defines none), and nothing compares output with libyuv.",
+    "When chroma downsampling quality or siting matters: the subsampling filter is fixed and cannot be turned off, and the 8-bit 4:2:0 SIMD encoder skips vertical averaging (see gotchas).",
+    "When you need maintenance or bug fixes: archived 10 Feb 2025, last commit 14 Jul 2024, 0 issues ever filed."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Google Highway, cloned by deps.sh from the author's fork (github.com/awxkee/highway, branch widen_mul) into ./highway; the benchmark/tools targets also need libjpeg, Google Benchmark and a prebuilt libyuv.a placed in the repo root (not shipped)",
+    "min_toolchain": "C++20, CMake 3.22",
+    "platforms": "Highway targets: x86 SSE2 to AVX-512 (AVX3/AVX3_DL/ZEN4/SPR), Arm NEON/SVE/SVE2, POWER8-10, IBM Z14/Z15, RISC-V RVV, WASM. HWY_SCALAR is disabled. Apple builds use static dispatch only (HWY_COMPILE_ONLY_STATIC); other platforms use runtime dispatch.",
+    "thread_safety": "Not documented. The conversion functions are stateless and work only on caller buffers (from reading the source); FastGaussian spawns threads when THREADS_SUPPORTED is set.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Strides are in bytes even for uint16_t planes: the YCbCrP16 kernels advance a uint8_t pointer by yStride/uStride/vStride. The project's own 10-bit benchmark passes element counts (yPlaneStride = inWidth), so it runs on overlapping rows.",
+    "Correctness bug in the 8-bit 4:2:0 SIMD encoder (src/YCbCr420-inl.h): its 'next row' load calls LoadRGBA(du8, mSrc, ...) on the same row, so vertical chroma averaging does nothing and chroma comes from even rows only. The scalar tail does average 2x2, so the two paths disagree. This contradicts the README's 'bi-linear scaling is automatically applied'.",
+    "The Release-only -O3 is the sole optimisation flag. The Dockerfile runs plain 'cmake -G Ninja .' with no build type, which gives an unoptimised build, and it does not run deps.sh.",
+    "YCgCo-Re/Ro 8-bit needs 16-bit storage and is always full range. 4:2:0/4:2:2/NV inputs reject null U/V planes."
+  ],
+  "pick_this_over_siblings_when": "Pick it over yuvutils-rs (same author, Rust, active, with Fast/Balanced/Professional precision modes) only if you must stay in C++ and want its unusual matrices or 16-bit RGBA output. For plain 8-bit BT.601/709 conversion, libyuv (faster encode, maintained) or the tiny xxYUV are safer choices.",
+  "verified_claims_summary": "Only valid on Apple M3 Pro, as Google Benchmark output from the author against a prebuilt libyuv.a of unknown version and flags, on one JPEG (filirovska.jpeg, not in the repo, size unstated) with no compiler named. 8-bit 4:2:0/4:2:2 decode to RGBA is about 1.32x libyuv (347.9 vs 458.8 us), 4:4:4 is 1.10x, NV12/NV21 tie, and libyuv is 1.37-2.0x faster at encode and 1.21x faster at premultiply. Three claims are not like-for-like: the 1.92-2.12x 10-bit decode lead (different output depth, and byte strides passed as element counts so sparkyuv reads overlapping half-size planes while libyuv reads full ones), and the 1.54x unpremultiply lead, where libyuv has no NEON ARGBUnattenuate row ('TODO(fbarchard): Neon version' in libyuv 1974 planar_functions.cc), so it races libyuv's C fallback.",
+  "status_note": "Abandoned: archived 10 Feb 2025, last commit 14 Jul 2024, 9 stars. Apache-2.0 (BSD-3-Clause file from the same author also present), so it is copyable, but vendoring also means carrying the author's Highway fork and fixing the 4:2:0 encoder bug yourself.",
+  "sources_read": [
+    "https://github.com/awxkee/sparkyuv",
+    "https://github.com/awxkee/sparkyuv/issues?q=is%3Aissue",
+    "https://github.com/awxkee/sparkyuv/tree/main/.github/workflows",
+    "https://github.com/awxkee/highway/tree/widen_mul",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/README.md",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/DOC.md",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/deps.sh",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/Dockerfile.msvc",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/.github/workflows/multiarch.yml",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/.github/workflows/graviton.yml",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/tools/YuvBenchmarkMain.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/tools/bench/YuvBenchmark10.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/tools/bench/YuvBenchmarkBase.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/tools/bench/YuvBenchmarkNV.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/tools/bench/YuvSupport.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/include/sparkyuv.h",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/include/sparkyuv-def.h",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/sparkyuv.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/yuv-inl.h",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/YCbCr420-inl.h",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/YCbCrP16-inl.h",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/YCbCrP16.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/NV12Flyer.cpp",
+    "https://raw.githubusercontent.com/awxkee/sparkyuv/HEAD/src/ChannelsReformat.cpp",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/planar_functions.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/convert_argb.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/convert_argb.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/row.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/version.h"
+  ],
+  "confidence": 0.8,
+  "measurement_notes": "Harness findings for the orchestrator (tools/bench/*.cpp, tools/YuvBenchmarkMain.cpp). (1) The 10-bit rows are invalid as a speed comparison. sparkyuv's P16 API takes strides in bytes, but the harness passes yPlaneStride = inWidth and uvPlaneStride = inWidth or (inWidth+1)/2 for uint16 planes, so sparkyuv's 10-bit encode and decode walk overlapping rows that cover about half of each input plane. The libyuv side (I410/I210/I010ToARGBMatrix, element strides) reads full planes and, in the 4:2:2/4:2:0 rows, gets a full-width chroma stride. Its output is also 8-bit ARGB against sparkyuv's 16-bit RGBA. Its kYuvI601ConstantsVU (a macro for kYvuI601Constants in libyuv 1974) is passed without swapping the U/V planes, so libyuv's colours are wrong; this went unnoticed because no output is compared. (2) The unpremultiply 1.54x pits sparkyuv NEON against libyuv's C fallback: libyuv ARGBUnattenuate has only SSE2/AVX2 rows ('TODO(fbarchard): Neon version'). (3) The libyuv 8-bit 4:2:2 decode row is fed chroma made by the 4:2:0 encoder. The libyuv 4:2:2 encode row uses ABGRToJ422 (full-range JPEG) against sparkyuv's BT.601 TV range. LibyuvNV21ToRGBA8 calls NV12ToABGR and LibyuvNV12ToRGBA8 calls NV21ToABGR. These are timing-neutral. (4) libyuv.a is prebuilt, unversioned and not in the repo; no compiler, flags or image size are given; there are no tests and no equality checks. (5) Correctness bug: the 8-bit 4:2:0 SIMD encoder reloads the current row instead of the next, so chroma is not vertically averaged. It sits in a row where libyuv already wins, so it does not inflate any sparkyuv win. The rows that stand are 8-bit 4:2:0/4:2:2 decode (about 1.32x), 4:4:4 decode (1.10x) and the NV12/NV21 ties. A retier or a caveat on the 10-bit and unpremultiply ratios is warranted."
+}

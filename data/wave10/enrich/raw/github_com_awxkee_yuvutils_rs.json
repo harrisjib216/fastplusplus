@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/awxkee/yuvutils-rs",
+  "one_liner": "Pure-Rust SIMD YUV/RGB conversion crate (yuv) that matches or beats libyuv by 1.1-2x on NEON and Linux x86.",
+  "what_it_does": "The yuv crate converts between interleaved RGB/RGBA/BGR/BGRA and planar, bi-planar (NV12/NV16/NV24), packed (YUY2 family) and grey YUV at 8 to 16 bits. It covers YCbCr (BT.601/709/2020 and others), YCgCo, YCgCo-Re/Ro, identity GBR and Sharp YUV, plus rotation/mirroring and RemoteFX helpers. The API is safe Rust: you fill a YuvPlanarImage/YuvBiPlanarImage struct (strides counted in elements) and call functions such as yuv420_to_rgba(image, dst, stride, YuvRange, YuvStandardMatrix). Encoders and NV decoders also take a YuvConversionMode (Fast, Balanced or Professional). The repo has no C or C++ API, so a C++ caller needs its own FFI shim.",
+  "how_it_is_fast": "Each format has hand-written row kernels for NEON (with RDM vqrdmulh and optional i8mm), SSE4.1, AVX2, AVX-512BW/VBMI (nightly) and WASM simd128. x86 picks a kernel at runtime with is_x86_feature_detected; aarch64 checks for RDM at runtime. Planar decoding runs 13-bit fixed-point arithmetic with rounding shifts, which is more precise than libyuv's 6-bit coefficients, and 4:2:0/4:2:2 decoding uses dedicated 422 kernels that reuse each chroma sample for two pixels. Encoding offers a libyuv-precision Fast mode, a default higher-precision Balanced mode and a Professional mode.",
+  "when_to_use": [
+    "Rust code (AVIF/HEIF/video pipelines) that wants libyuv-class speed without linking C. It is a pure crate with no build script, and at 4.27M downloads it is widely used.",
+    "8-bit YUV 4:2:0/4:2:2/NV12 to RGB/RGBA on Apple silicon or other aarch64, where the README shows 1.6-1.95x over libyuv's NEON rows.",
+    "10/12/14/16-bit formats (I010/I210/I410, P010/P210/P016) to 16-bit or F16/AR30 RGB, which libyuv covers only partly.",
+    "Sharp YUV encoding, YCgCo-R, or a choice between libyuv-equivalent and higher-precision encoding."
+  ],
+  "when_not_to_use": [
+    "C++ projects that cannot add a Rust FFI layer: the crate has no C header or C ABI.",
+    "x86 workloads dominated by 4:4:4 or 4:0:0 decode, or by RGBA to 4:2:0/4:2:2 encode on AVX-512: libyuv wins or ties several of these rows in the README.",
+    "Pipelines that need bit-identical output across platforms: issue #144 (open, 2 Oct 2026) reports the AVX2/SSE kernels differing from the scalar path by up to 2 levels on 29-35% of samples, so wasm and x86 builds decode the same AVIF differently.",
+    "When you must reproduce the published numbers exactly: the tables are from Nov 2024 to Jan 2025 (git blame), the crate has since moved to 0.8.19, and the harness no longer runs some rows."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "num-traits; optional rayon (feature rayon) and fast_transpose (feature geometry). The benchmarks also use yuv-sys (libyuv built from source), image and criterion.",
+    "min_toolchain": "Rust 1.82 (rust-version). The nightly_avx512, nightly_i8mm and nightly_f16 features need a nightly compiler, and the repo's rust-toolchain.toml selects an undated nightly.",
+    "platforms": "x86/x86-64 (SSE4.1, AVX2, AVX-512BW/VBMI with nightly; runtime dispatch), aarch64 NEON (RDM runtime-detected, i8mm opt-in), wasm32 with simd128 enabled at compile time; scalar fallback elsewhere. Big-endian YUV via the big_endian feature.",
+    "thread_safety": "Not documented. The functions are stateless and work on caller-provided slices; the rayon feature splits work across threads internally.",
+    "drop_in_for_baseline": "partial: the formats and BT.601/709 matrices match libyuv, but the API is Rust structs plus enums rather than libyuv's C functions, and Balanced/Professional output differs numerically from libyuv."
+  },
+  "gotchas": [
+    "The x86 SIMD kernels have shipped wrong output before. #92 (yuyv422_to_yuv420 broken with SSE/AVX), #97 (AVX rgba_to_yuv400 black vertical lines) and #130 (SSE 16-bit bilinear wrong chroma, i414 panics) are all fixed. The fuzz crate builds yuv with default-features = false and without sse/avx/rdm, so those kernels are not fuzzed by default; the fuzzers check only for panics and the alpha value, not against a reference.",
+    "The default YuvConversionMode is Balanced, not libyuv-equivalent. Fast (libyuv precision) and Professional exist only when the fast_mode/professional_mode features are enabled.",
+    "AVX-512 needs both the nightly_avx512 feature and a nightly compiler. Without them, x86 tops out at AVX2 even on AVX-512 hardware.",
+    "Unit tests check round trips within a per-mode tolerance (for example max_diff of 3 levels); nothing in the repo compares output with libyuv."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sparkyuv (same author's archived C++ predecessor) for anything new: it is maintained, has more formats and has a precision knob. Pick xxYUV or libyuv itself when you need a C/C++ library without a Rust toolchain or FFI glue.",
+  "verified_claims_summary": "These are first-party Criterion runs (500 samples, 7 s) on one 1997x1331 JPEG against libyuv built by the yuv-sys crate's cc build (0.3.7 vendors libyuv 1886). On an M3 (NEON), 8-bit decode to RGB/RGBA is 1.64-1.95x libyuv and RGB to 4:2:0 encode is 1.20x. On Linux AVX2 (m4.large) and AVX-512 (c5.large), CPU models unstated, the lead is 1.07-1.89x and libyuv wins several rows. The Windows i9-14900HX column and the NEON 10-bit rows are not fair comparisons: libyuv there runs C or SSSE3 row code, as the measurement notes explain.",
+  "status_note": "Actively maintained (last commit 17 Sep 2026, 1,062 commits, 126 stars, 21 forks; crate yuv 0.8.19 with 4.27M downloads), dual BSD-3-Clause OR Apache-2.0, so it is copyable, but only from Rust or through an FFI shim you write.",
+  "sources_read": [
+    "https://github.com/awxkee/yuvutils-rs",
+    "https://github.com/awxkee/yuvutils-rs/tree/master/src",
+    "https://github.com/awxkee/yuvutils-rs/tree/master/fuzz",
+    "https://github.com/awxkee/yuvutils-rs/issues?q=is%3Aissue",
+    "https://github.com/awxkee/yuvutils-rs/issues/144",
+    "https://github.com/awxkee/yuvutils-rs/commits/master/README.md",
+    "https://github.com/awxkee/yuvutils-rs/blame/master/README.md",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/app/Cargo.toml",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/app/Cargo.lock",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/app/benches/yuv8/main.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/app/benches/yuv16/main.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/src/yuv_to_rgba.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/src/rgba_to_yuv.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/src/yuv_support.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/src/images.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/fuzz/Cargo.toml",
+    "https://raw.githubusercontent.com/awxkee/yuvutils-rs/HEAD/fuzz/yuv_to_rgb/yuv_to_rgb.rs",
+    "https://raw.githubusercontent.com/livekit/rust-sdks/main/yuv-sys/build.rs",
+    "https://raw.githubusercontent.com/livekit/rust-sdks/main/yuv-sys/Cargo.toml",
+    "https://crates.io/api/v1/crates/yuv-sys/versions",
+    "https://crates.io/api/v1/crates/yuv",
+    "https://crates.io/api/v1/crates/yuv-sys/0.3.7/download",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/row.h"
+  ],
+  "confidence": 0.8,
+  "measurement_notes": "Harness findings for the orchestrator. (1) The README tables were committed between 23 Nov 2024 and 21 Jan 2025 (git blame: 'Benchmarks', 'Fuzzing encoders', 'Refactorings'). That is the yuv-sys 0.3.6/0.3.7 era: 0.3.7, published 15 Dec 2024, vendors libyuv 1886 and builds every .cc file in one cc::Build with no extra flags. app/Cargo.lock is an empty stub, so the exact yuv-sys version is not pinned. (2) The Windows i9-14900HX 'AVX2 Win' column is not a valid libyuv baseline, which strengthens the verifier's inference with source evidence. For *-msvc targets the cc crate compiles with cl.exe. libyuv 1886's row.h gates its general SSSE3/AVX2 rows on _M_IX86/__x86_64__/__i386__ or CLANG/GCC_HAS_AVX2, none of which cl.exe defines on x64. The only x64 Visual C decode rows are I444ToARGBRow_SSSE3 and I422ToARGBRow_SSSE3 (plus alpha variants). So libyuv runs SSSE3 on the 4:2:0/4:2:2/4:4:4 to ABGR rows (525.90-579.24 us) and portable C on every other Windows row (NV21ToABGR, I420ToRGB24, I400ToARGB, ABGRToI420, ABGRToJ422, RGB24ToI420, I010/I210ToABGR: 1.82-6.86 ms). (3) The NEON 10-bit rows (yuvutils 765.23 vs libyuv 1.54 ms for 4:2:0 to RGBA8, 799.25 vs 1.55 ms for 4:2:2) race libyuv's C fallback: libyuv 1886's I010ToARGBMatrix/I210ToARGBMatrix dispatch only to I210ToARGBRow_SSSE3/AVX2 and has no NEON row (newer libyuv, for example 1974, adds I210ToARGBRow_NEON/SVE2). The 8-bit NEON rows are fair, since libyuv 1886 has NEON rows for I422/I444ToARGB, I422ToRGB24, NV21ToARGB, I400ToARGB and ABGRToY/UV(J). (4) On the AVX-512 column, libyuv 1886 has AVX-512 only for I422ToARGBRow and only when compiled by clang; the cc crate's default Linux compiler is gcc, so libyuv runs AVX2 rows there. That is libyuv as shipped, not a flaw, but it is worth stating. (5) The current yuv8 harness has the 'yuvutils RGB -> YUV 4:2:0' (Fast/Balanced/Professional), 'libyuv RGB -> YUV 4:2:0' and 'yuvutils RGBA -> YUV 4:2:0 Fast' benches commented out (lines 128-344). The README's RGB to YUV 4:2:0 rows, including the record's 1.20x NEON encode figure, therefore cannot be re-run from HEAD. (6) Mode: planar decoders (yuv420/422/444_to_rgba) take no mode and always run the 13-bit path. For encode and NV12 rows the README does not say which of the harness's Fast/Balanced/Professional variants was published. (7) No bench, test or fuzzer compares output with libyuv. Like-for-like settings otherwise check out: BT.601 limited on both sides except ABGRToJ422 (full range), and the known 4-byte rs_NV21ToABGR vs 3-byte RGB headline. Net: the 8-bit NEON and Linux x86 rows stand at 1.07-1.95x. The Windows column and the NEON 10-bit 2x should be dropped or labelled SIMD-vs-C."
+}
