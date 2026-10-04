@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/grokimagecompression/grok",
+  "one_liner": "AGPL C++23 JPEG 2000 (Part 1 and HTJ2K) codec. Its GDAL driver beats OpenJPEG on tiled, region and S3 reads.",
+  "what_it_does": "Grok (libgrokj2k) reads and writes JPEG 2000 Part 1 and Part 15 (HTJ2K) JP2/J2K files at 1-16 bits per sample. It adds random-access region decoding through TLM/PLT markers, a tile and compressed-chunk cache, S3/cloud reads via libcurl, and a packet-level transcoder (grk_transcode). The API is a C interface (grok.h): grk_initialize sets a process-wide thread pool, then grk_decompress_init, read_header, an optional window, and grk_decompress, with an asynchronous swath mode for streaming. It is not an OpenJPEG drop-in: the API differs. Since GDAL 3.13 it ships upstream as the JP2Grok driver, so GDAL users can switch drivers with `-if JP2Grok`.",
+  "how_it_is_fast": "Code-block (T1) decoding and the per-tile pipeline run on a Taskflow work-stealing pool, and the inverse 5/3 and 9/7 lifting wavelets use Google Highway SIMD kernels with an int16 fast path for low-precision data. HTJ2K blocks go through a vendored copy of OpenJPH's BSD-2 HT block coder, with SSSE3/AVX2/AVX-512 variants. For the GDAL workflows that were measured, most of the gain comes from I/O: TLM/PLT markers let it fetch and decode only the tiles and packets inside the window, AdviseRead-driven async decode overlaps packet parsing with T1, and cached tile-part offsets and compressed chunks avoid re-walking the codestream or re-fetching from S3. Newer builds also route eligible full-resolution decodes through 'Mercury', a Rust streaming engine (bounded SPSC rings, O(window) buffering). Its README reports ~10.9 s and ~63 MB RSS versus ~14.4 s and multiple GB for the classic pipeline on one HiRISE image.",
+  "when_to_use": [
+    "GDAL pipelines that read large tiled JPEG 2000 satellite or aerial products (Spot, Pleiades) from local disk or S3/MinIO, especially windowed reads of files with TLM markers.",
+    "Remote (S3/HTTP) reads where request count and latency dominate: the first-party network-storage run is 35 s vs OpenJPEG's 85 s, a gap that comes from fetch strategy rather than entropy-decoding speed.",
+    "You need an open-source codec that both reads Part 1 (EBCOT/MQ) files and reads and writes HTJ2K, with multi-threaded decode, and AGPL terms are acceptable.",
+    "Server-side region or overview extraction where the caller can pass the read window up front (AdviseRead in GDAL, or a decode window in the C API)."
+  ],
+  "when_not_to_use": [
+    "Proprietary or permissively licensed products, or network services you cannot open-source: the library is AGPL-3.0-only (no 'or later'). OpenJPEG (BSD-2) or OpenJPH (BSD-2, HTJ2K only) avoid that.",
+    "If you need a codec-only speed claim: the published numbers are end-to-end gdal_translate timings dominated by I/O, caching and region selection, and no single-image decode throughput against OpenJPEG is published.",
+    "Older toolchains: the build sets CMAKE_CXX_STANDARD 23, and INSTALL.md asks for GCC 12+, Clang 16+ or MSVC 2022 and CMake 3.20+ (CMakeLists requires 3.21).",
+    "Code that needs a stable decoder: releases arrive every few days (v20.4.5 to v20.4.14 in September 2026 alone), the default decode path changed to the Rust Mercury engine in August 2026, and that change shifts lossy 9/7 output by plus or minus 1 LSB (issue #425).",
+    "Whole-image decode of huge single-tile files on memory-limited hosts: the pre-2025 README showed Grok 9.7.8 using 16.6 GB against Kakadu's 0.05 GB on a HiRISE image (13.74 s vs 9.02 s). Mercury targets this case, but only for eligible streams."
+  ],
+  "integration": {
+    "form": "shared lib by default (BUILD_SHARED_LIBS ON), static optional; CMake package and pkg-config; Debian, AUR and Homebrew packages; SWIG Python/C#/Java and Rust bindgen bindings",
+    "dependencies": "git submodules Highway, Taskflow (maintainer's fork), spdlog, CLI11; lcms2 (built by default); libcurl for S3/HTTP reads; libtiff, libpng and libjpeg for the command-line tools (built by default); optional Rust toolchain (cargo, rust-version 1.87) for the Mercury fast path; a private, off-by-default CUDA/Metal GPU plugin submodule",
+    "min_toolchain": "C++23; GCC 12+, Clang 16+, MSVC 2022 per INSTALL.md (CMakeLists only rejects GCC < 10); CMake 3.21",
+    "platforms": "Linux x86-64 and AArch64, Windows, macOS, WebAssembly (Emscripten); runtime SIMD dispatch through Highway; s390x big-endian test failures fixed in issue #418",
+    "thread_safety": "Process-wide Taskflow pool set by grk_initialize(num_threads; 0 = all CPUs). Per grok.h, num_threads = 1 decodes on an inline executor so that concurrent single-threaded decompresses are independent. Sharing one codec object across threads is not documented.",
+    "drop_in_for_baseline": "partial: in GDAL, swapping the JP2OpenJPEG driver for JP2Grok (GDAL 3.13+, Grok >= 20.3.5 for 3.13.2) needs no code change; at the library level the C API is Grok's own, not OpenJPEG's"
+  },
+  "gotchas": [
+    "Builds differ silently: the Mercury fast path is compiled in only when a working cargo is found at configure time, and otherwise mercury_fastpath.cpp compiles to a no-op. GRK_MERCURY=0 forces the classic pipeline. Mercury rejects HT, BYPASS and RESTART code-block modes, tile-part POC, region and reduced-resolution decodes, and falls back to the classic path for them.",
+    "In GDAL the JP2Grok driver decodes asynchronously only when the caller calls AdviseRead first. Without it the driver falls back to synchronous per-swath decode, which the driver docs call 'much slower, especially when decompressing over the network'.",
+    "The early JP2Grok driver had correctness fixes after release: GDAL 3.13.1 scaled overview coordinates (#14516) and fixed the overview tile-cache strategy, and GDAL 3.13.2 fixed 'CopyTileData was using tile origin as region offset'. Use GDAL 3.13.2 or later.",
+    "Recent correctness issues, all now closed: #420, nondeterministic decoded samples with 4+ threads on macOS arm64 (v20.3.10); #442, rate control silently writes an empty image when an ICC profile exceeds the first layer's byte budget; #427, LTO with AVX-512 constant initialisers."
+  ],
+  "pick_this_over_siblings_when": "Pick Grok over OpenJPH when you must read ordinary Part 1 JPEG 2000 or want multi-threaded and region decode of large tiled files; Grok embeds OpenJPH's HT block coder anyway. OpenJPH stays the permissive (BSD-2), dependency-free choice for HTJ2K-only work. CharLS and HALIC are different formats (JPEG-LS, custom) and do not read JPEG 2000 archives.",
+  "verified_claims_summary": "A first-party README table times gdal_translate decodes with the JP2Grok, JP2KAK (Kakadu 8.4.1) and JP2OpenJPEG (2.5.4) drivers on an unnamed '8 core / 16 thread' CPU under Fedora 42, with Grok 20.0.0 built by GCC 15.2. Those details were in the October 2025 README and were removed later. Results: Spot 6 26624x26624 12-bit lossless with TLM, local 26.92 s vs OpenJPEG 52.09 s; the same file on MinIO 35.17 s vs 85 s; an 8000x8000 region of a Pleiades 16-bit lossy file 0.74 s vs 4.28 s. The local-storage OpenJPEG cell was 34.91 s (1.30x) until commit ac33404 (2026-02-26, 'README: update benchmark number') changed only that cell to 52.09 s (1.94x), with no re-run of the Grok or Kakadu cells and no explanation.",
+  "status_note": "Very active (last commit 2026-10-03, v20.4.14 on 29 Sep, ~1,000 commits, OSS-Fuzz and 2,000+ tests, upstream GDAL driver since 3.13). Copyable only under AGPL-3.0-only, and the LICENSE file shows the code incorporates OpenJPEG's BSD-2 work.",
+  "measurement_notes": "Findings for the orchestrator: (1) Baseline-only edit. In ac33404 the README's OpenJPEG local-storage time went from 34.91 s to 52.09 s, while the Grok (26.92 s) and Kakadu (30.57 s) cells and the stated versions stayed the same. The commit also touched an unrelated header and has no message body. The catalogued 1.9x local ratio depends on that edit; the earlier figure gives 1.30x. (2) Method drift. The October 2025 README said MinIO with 20 ms latency and page cache cleared before local runs, while benchmark/results.txt says 50 ms latency and still has 'xx' placeholders. Its last 'MinIO' command in section B reads the local $HOME/spot6_tlm.jp2 instead of /vsis3, a copy-paste slip. No OpenJPEG or Kakadu build flags, GDAL commit or CPU model are recorded, and the test images are not public. (3) The network row mostly measures fetch strategy: Kakadu is 344 s over MinIO vs 30.57 s locally. (4) The measured Grok 20.0 classic decoder is no longer the default path; Mercury became default in August 2026 with plus or minus 1 LSB lossy output changes. None of this shows invalid evidence, but finding (1) suggests a shortcoming note, and the ratio should be quoted as 1.3x-1.9x locally. Tier C stands.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/README.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/benchmark/results.txt",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/src/lib/core/CMakeLists.txt",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/src/lib/core/grok.h",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/src/lib/core/t1/part1/block_coder/BlockCoderDec.cpp",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/src/lib/core/t1/part15/coding/ojph_block_decoder32.cpp",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/DESIGN_TODO.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/TESTING.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/doc/TileCache.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/mercury/README.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/HEAD/mercury/Cargo.toml",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/ac33404f787fc9a2c71ebfa60c7ca6ffac005eff/README.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/06b56b68e4b976a14da5803917553475ae50e1a2/README.md",
+    "https://raw.githubusercontent.com/GrokImageCompression/grok/06b56b68e4b976a14da5803917553475ae50e1a2~1/README.md",
+    "https://github.com/GrokImageCompression/grok",
+    "https://github.com/GrokImageCompression/grok/tree/master/src/lib/core",
+    "https://github.com/GrokImageCompression/grok/tree/master/integrations",
+    "https://github.com/GrokImageCompression/grok/releases",
+    "https://github.com/GrokImageCompression/grok/commits/master/README.md",
+    "https://github.com/GrokImageCompression/grok/commit/ac33404f787fc9a2c71ebfa60c7ca6ffac005eff",
+    "https://github.com/GrokImageCompression/grok/issues?q=is%3Aissue",
+    "https://github.com/GrokImageCompression/grok/issues/420",
+    "https://github.com/GrokImageCompression/grok/issues/425",
+    "https://github.com/GrokImageCompression/grok/wiki",
+    "https://raw.githubusercontent.com/OSGeo/gdal/master/NEWS.md",
+    "https://raw.githubusercontent.com/OSGeo/gdal/master/frmts/CMakeLists.txt",
+    "https://raw.githubusercontent.com/OSGeo/gdal/master/doc/source/drivers/raster/jp2grok.rst"
+  ],
+  "confidence": 0.75
+}

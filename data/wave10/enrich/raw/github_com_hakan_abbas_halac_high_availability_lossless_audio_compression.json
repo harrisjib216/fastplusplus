@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/hakan-abbas/halac-high-availability-lossless-audio-compression",
+  "one_liner": "Fast lossless audio codec, closed Windows binaries plus an early MIT source; encodes 2.2-4.4x faster than FLAC 1.5.0 at similar size.",
+  "what_it_does": "HALAC compresses PCM WAV losslessly into its own .halac format, trading a little compression for speed. Current releases cover 16/24-bit integer and 32-bit float audio, up to 128 channels, compression levels 0-5 and lossyWAV input, but ship only as Windows x64 encoder and decoder executables. The repository's MIT source is v0.1.9: two standalone command-line programs (encoder and decoder) for 16-bit stereo WAV, with no library API. Their main() functions walk a hard-coded Windows test folder; the argv handling is commented out. It is not FLAC-compatible: no FLAC player or tool can read the output.",
+  "how_it_is_fast": "In the public v0.1.9 code each 24 KiB block is split into channels, mid/side transformed (X = L - R, Y = R + X/2), and delta coded. An order-8 Levinson-Durbin LPC (double precision, coefficients stored as float) then predicts each sample. Each zigzagged residual is split into a high byte, coded with Yann Collet's FSE (tANS), and a low byte, coded with his Huff0, with an escape list for values at or above 65535. One fixed-order predictor per block plus table-driven ANS/Huffman decoding is far cheaper than FLAC -8's search over orders, apodizations and Rice partitions. The faster 0.4.x-0.6.x builds add AVX2/AVX-512, multithreading, compression levels and 'Rice coding overflow control' (0.4.9 notes), so the shipped codec also uses Rice coding somewhere. Its internals are not public.",
+  "when_to_use": [
+    "You control both encoder and decoder (archive or cache on Windows x64) and encode speed matters more than format interoperability: the first-party run shows about 1,900x realtime for -plus and 3,100x for -normal on one core for 24-bit/44.1 kHz stereo (derived from page data).",
+    "Bulk re-encoding of large 24-bit stereo or multichannel libraries where FLAC -8's encode time is the bottleneck and the size target is about FLAC -8 (-plus was 0.25% smaller in the author's set).",
+    "32-bit float stereo (0.4.8 notes) or many-channel float audio (0.6.6 adds 128 channels for float), which FLAC does not support at all.",
+    "As a reference design for a low-complexity lossless audio coder that pairs a fixed LPC with FSE/Huff0 entropy coding (v0.1.9 source, MIT)."
+  ],
+  "when_not_to_use": [
+    "Anything that needs a published, stable format or players and tools that understand it: .halac has no spec, no FLAC-style ecosystem or tagging, and is versioned only by a closed binary that changes every few weeks.",
+    "Linux, macOS, ARM, or embedding as a library: releases are Windows x64 .exe files only, and the source is a 16-bit-stereo CLI from 2024-2025 that cannot reproduce any published 24-bit or float result.",
+    "Archival where silent corruption matters: the public v0.1.9 format stores no MD5 or CRC, and integrity checks in 0.5.4+ are not documented. FLAC verifies a whole-stream MD5 and per-frame CRCs.",
+    "Maximum compression: in the 0.4.8 float set OptimFROG fast was 2.5% smaller, and at -normal HALAC matches FLAC -5 size, not -8.",
+    "Building from the repository source for real use: see gotchas. v0.1.9 has a decoder overflow-index bug and unchecked WAV header parsing."
+  ],
+  "integration": {
+    "form": "Measured versions: closed Windows x64 executables (0.5.4: HALAC_ENCODE_0.5.4_AVX/AVX2/AVX512.exe plus one HALAC_DECODE_0.5.4.exe; 0.6.6: an x64_avx2 encoder and x64 decoder). Public: source-drop of two v0.1.9 CLI programs with no library API.",
+    "dependencies": "v0.1.9: vendored FiniteStateEntropy (FSE 0.9.x plus Huff0, Yann Collet, dual BSD/GPLv2) in FSE/; standard library only otherwise",
+    "min_toolchain": "v0.1.9: C++17 (std::filesystem) with GCC or Clang. It relies on variable-length arrays, a GNU extension that MSVC rejects. No build files are provided.",
+    "platforms": "Releases: Windows x64 only (AVX, AVX2 or AVX-512 encoder builds in 0.5.4). v0.1.9 source: little-endian only (raw memcpy of u32/float fields and native-endian WAV header reads); no SIMD.",
+    "thread_safety": "v0.1.9: not thread-safe or re-entrant (file handles, header fields and sizes are globals). The multithreaded release binaries are closed and their threading model is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "v0.1.9 decoder bug: escape values are indexed with `u8 counter`, while the encoder's escape count is a u16 (up to 6,144 per channel block). With more than 256 escaped residuals (|residual| of about 32768 or more) in one channel block, the counter wraps and the decoder silently adds the wrong overflow values. Loud, noisy or wide-stereo 16-bit material (for example full-scale white noise) would not round-trip, and with no checksum nothing reports it.",
+    "v0.1.9 input handling: `block_count = INPUT_SIZE / BLOCK_SIZE - 1` is unsigned, so PCM shorter than 24,576 bytes (about 0.14 s of CD audio) underflows to 4,294,967,295 iterations. A WAV with a non-'data' chunk larger than 16 KiB overflows the global METADATA[16384] buffer, in the encoder and, through crafted .halac files, the decoder. WAVE_FORMAT_EXTENSIBLE or fmt chunks other than 16 bytes are misparsed.",
+    "The predictor is floating point (double accumulation of float coefficients, truncated with (int)), so encoder and decoder must round identically. The 0.5.4 release pairs three ISA-specific encoders (AVX/AVX2/AVX-512) with one decoder. If the closed builds keep this predictor and the compiler contracts multiply-adds into FMA differently, cross-build output could differ by one LSB. This is an unverified inference, and no cross-build test is published.",
+    "v0.1.9 keeps a 1 MiB output buffer plus VLAs on the stack, so it needs more than a 1 MiB thread stack."
+  ],
+  "pick_this_over_siblings_when": "Choose HALAC over flacenc-rs or go-flac only when FLAC compatibility does not matter and you run Windows x64. flacenc-rs beats flac -8 by about 1.44x but loses to -5, while HALAC's first-party numbers beat both presets, but its output is readable only by HALAC. For anything that must decode in standard players, or a library you can build and audit, stay with libFLAC or flacenc-rs; libfoxenflac and Symphonia cover fast FLAC decoding.",
+  "verified_claims_summary": "The author's 0.5.4 notes time single-threaded encode and decode of six albums (5.88 GB, 24-bit/44.1 kHz stereo, about 6.2 hours) on an AMD Ryzen 9600X: HALAC -plus 11.578 s / 13.201 s vs FLAC 1.5.0 -8 50.802 s / 14.357 s at 0.25% smaller output, and -normal 7.200 s / 9.353 s vs FLAC -5 15.857 s / 13.451 s at 0.07% larger output. OS, compilers, FLAC build and options, timing method and the audio are not given. The FLAC and WavPack rows are copied unchanged from the 0.5.1 notes of March 4 rather than re-run with 0.5.4.",
+  "status_note": "Releases are active (0.6.6 on 2026-09-26, adding 128-channel float), but the repository source has not moved past v0.1.9 (last commit 2025-11-17, 13 commits, every release's 'Source code' archive is that snapshot). The MIT code is an early 16-bit prototype with a lossless-roundtrip bug, so 'reference' fits better than 'mixed'.",
+  "measurement_notes": "For the orchestrator: (1) Baseline reuse. The FLAC 1.5.0 -8/-5 and WavPack 5.9.0 -h rows and the HALAC 0.5.1 rows in the 0.5.4 table are identical to the 0.5.1 notes of March 4, so the baselines were measured at least five weeks before the HALAC 0.5.4 rows, in an unrecorded system state. (2) Integrity work (inference, unmeasured). FLAC's CLI computes a whole-stream MD5 when encoding and checks it when decoding, by default, and v0.1.9 HALAC computes none. Over 5.88 GB of PCM, a single-core MD5 pass likely takes several seconds, comparable to the 1-4 s decode gaps (14.357 vs 13.201 s; 13.451 vs 9.353 s), so the decode advantage may not survive a like-for-like run. (3) HALAC decode is slower than its own encode (9.353 s vs 7.200 s at -normal), which fits file-write-bound timing (about 630 MB/s output, inference). The public v0.1.9 harness times a whole directory walk, file I/O included, with clock(). (4) Correctness bug in the public v0.1.9 decoder: a u8 escape counter against a u16 escape count (see gotchas), not behind the catalogued 0.5.4 numbers, which come from closed binaries. (5) Correction to the record's tradeoffs: the 0.4.9 notes list 'Rice coding overflow control', so current HALAC does not use ANS alone. Tier C stands; the bug argues for usability 'reference' and has_code false. Search snippets of the hydrogenaudio topic 125248 and encode.su thread 4180 (not opened; egress-blocked) say HALAC compresses slightly worse than FLAC -4 but better than -3 and encodes faster than FLAC -0. These are unattributed and possibly the author's own posts, so they are not independent evidence.",
+  "sources_read": [
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/tree/main/FSE",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/tag/0.5.4",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/tag/0.5.1",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/tag/0.4.9",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/expanded_assets/0.5.4",
+    "https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/expanded_assets/0.6.6",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/README.md",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/halac_encode_v.0.1.9.cpp",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/halac_encode_v.0.1.9.h",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/halac_decode_v.0.1.9.cpp",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/halac_decode_v.0.1.9.h",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/FSE/fse.h",
+    "https://raw.githubusercontent.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/HEAD/FSE/huf_compress.c",
+    "WebSearch snippets only (pages not opened): https://hydrogenaudio.org/index.php/topic,125248.0.html and https://encode.su/threads/4180-HALAC(High-Availability-Lossless-Audio-Compression)"
+  ],
+  "confidence": 0.7
+}
