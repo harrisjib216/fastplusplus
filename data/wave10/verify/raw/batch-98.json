@@ -1,0 +1,92 @@
+[
+  {
+    "id": "https://github.com/kornia/kornia-rs",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The harness is public (kornia-py/benchmarks/bake_off_pil_cv2.py, _bench.py, bench_resize_modes.py) and Rust 1.93.0 opt-level=2 on a Cortex-A78AE is stated, but the headline 'resize 1080p->720p (Lanczos)' row times kornia's default bilinear against cv2 INTER_LANCZOS4 and PIL LANCZOS, the resize matrix's aa=False and PIL columns are not produced by any committed script, the measured commit 07e52d7 returns 404 on GitHub, and the OpenCV build and thread count are unstated, so the numbers are first-party with partial methodology.",
+    "corrections": {
+      "claimed_speedup": "kornia-py/benchmarks.md (Jetson Orin Cortex-A78AE, best-of-N min, random-noise 1080p RGB u8). The bake-off row 'resize 1080p->720p (Lanczos)' reads kornia 1.67 ms vs cv2 7.36 ms (4.4x) vs PIL 43.6 ms, but bake_off_pil_cv2.py calls k_img.resize(1280, 720) and Image.resize defaults to interpolation=\"bilinear\" (pyo3 signature in kornia-py/src/image.rs, same at commit 9e040c4 where the bake-off was added), so that row is kornia bilinear against Lanczos4/LANCZOS, not a Lanczos result. Like-for-like bilinear rows from the resize matrix (kornia bilinear vs cv2 INTER_LINEAR): 1080p->2160p 1.78 vs 9.80 ms (5.52x, exact-2x vrhaddq_u8 fast path), 1080p->224x224 0.25 vs 0.72 ms (2.84x), 1080p->540p 0.42 vs 0.82 ms (1.97x), 640->320 0.09 vs 0.29 ms (3.09x). Lanczos: kornia's kernel is 3-lobe against OpenCV's 4-lobe INTER_LANCZOS4 (bench_resize_vs_libs.py docstring); with antialias=False kornia is 1.64x (1080p->540p, 4.15 vs 6.80 ms), 2.47x (224x224), 1.66x (640->320) and 1.07x (2160p up) faster; with the default antialias=True kornia Lanczos is slower than cv2 on downscale, 8.63 vs 6.80 ms (0.79x), 7.13 vs 4.57 ms (0.64x), 2.90 vs 2.53 ms (0.87x), and bicubic AA 0.85x and 0.55x at 1080p (derived from page data), but faster than Pillow LANCZOS with the same AA semantics: 5.3x, 4.2x, 3.1x (derived from page data). Bicubic antialias=False vs INTER_CUBIC: 1.75x, 2.93x, 1.60x, 1.21x. Colour conversions vs cv2.cvtColor (1080p f32): RGB->Lab 1.55x, grayscale u8 1.48x, XYZ 1.03x, HLS 1.00x, HSV 0.91x, Luv 0.87x; the page's byte-exactness table gives different ratios for the same ops (Lab 1.35x, XYZ 1.08x, YCbCr 0.84x, HSV 0.73x, HLS 0.69x, Luv 0.61x). JPEG decode 39.64 vs 39.3 ms (tie, libjpeg-turbo on all sides), JPEG encode 0.94x.",
+      "baseline": "OpenCV 4.13.0 cv2.resize (INTER_LINEAR, INTER_CUBIC, INTER_LANCZOS4) and cv2.cvtColor; Pillow 12.2.0 Image.resize (LANCZOS)",
+      "compiler_and_flags": "Rust 1.93.0, release build with opt-level=2 (LLVM bug workaround for faer), NEON intrinsics, rayon; pyo3 0.28, Python 3.10.12 (the script header says pixi py312), numpy 2.2.6, OpenCV 4.13.0 (build not stated; the script's install hint is opencv-python; no cv2.setNumThreads call, so OpenCV ran with its default threading), Pillow 12.2.0; run at commit 07e52d7 on branch feat/gray-f32-neon (2026-06-20), a commit that returns 404 on GitHub",
+      "workload": "Python bake-off on a random-noise 1080p RGB u8 array, best-of-N minimum time per call with GC disabled (kornia-py/benchmarks/bake_off_pil_cv2.py and _bench.py), plus a resize matrix over bilinear, bicubic and lanczos with antialias on and off for several shapes and a colour-conversion table; no output comparison is published alongside the timings (bench_resize_vs_libs.py can print byte fidelity but its results are not on the page).",
+      "caveats": "First-party numbers on one ARM machine (Jetson Orin), no x86 results. The headline 4.4x 'Lanczos' resize is kornia bilinear (the default interpolation of Image.resize) against cv2 INTER_LANCZOS4 and PIL LANCZOS, so it compares different work and the page's 'at the same kernel' note is wrong. kornia's Lanczos is 3-lobe while OpenCV's INTER_LANCZOS4 is 4-lobe, so even the antialias=False rows do fewer taps than OpenCV; with the default antialias=True kornia Lanczos and bicubic are slower than OpenCV on downscale and only beat Pillow. kornia runs rayon across 6 cores; OpenCV threading is left at its default and not reported. The resize matrix has aa=True, aa=False and PIL columns that the committed bench_resize_modes.py does not produce (it times only the default antialias against cv2 and has no 640x640 case), and the measured commit 07e52d7 is not reachable on GitHub, so the published table cannot be regenerated exactly from public code. The page states 'OpenCV 4.13.0' in the run info but labels the colour section 'OpenCV 5', and two colour tables on the same page give different ratios for the same conversions. Inputs are uniform random noise. The page itself says resize 1080p is noise-bound (1.81-2.03x run to run). JPEG decode and encode are ties because all three use libjpeg-turbo; WebP and PNG encode wins compare different settings (kornia lossless WebP vs lossy, PNG level 1 vs PIL default). A WebSearch snippet of arXiv 2501.13131 (page blocked, snippet only) reports JPEG decode on Apple M4 Max of 1034 images/s for kornia-rs vs 1016 for OpenCV and 775 for Pillow; the current ternaus/imread_benchmark README does not mention kornia, so that figure is unverified. The bilinear rows (kornia bilinear vs INTER_LINEAR, max 1 LSB difference per bench_resize_vs_libs.py) are the defensible like-for-like claims and could support tier A on a rerun of bench_resize_modes.py at a public commit with the OpenCV build and thread count stated.",
+      "stars_or_usage": "720 stars, 205 forks; crates.io crate kornia and PyPI package kornia-rs; v0.2.0 released 2026-09-26"
+    },
+    "notes": "Downgraded A to C: the 4.4x Lanczos headline is bilinear vs Lanczos4 (Image.resize default interpolation=\"bilinear\" at HEAD and at 9e040c4), matrix columns are not regenerable from committed scripts, and run commit 07e52d7 is 404. Best like-for-like claim is bilinear: 5.52x on exact-2x upscale, 1.97x-3.09x elsewhere; antialiased Lanczos and bicubic lose to OpenCV on downscale.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks.md",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks/bake_off_pil_cv2.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks/_bench.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks/bench_resize_modes.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks/bench_resize_vs_libs.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/benchmarks/bench_resize.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/python/kornia_rs/image.pyi",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/src/image.rs",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/HEAD/kornia-py/src/resize.rs",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/9e040c4/kornia-py/src/image.rs",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/9e040c4/kornia-py/benchmarks/bake_off_pil_cv2.py",
+      "https://raw.githubusercontent.com/kornia/kornia-rs/07e52d7/kornia-py/src/image.rs",
+      "https://github.com/kornia/kornia-rs",
+      "https://github.com/kornia/kornia-rs/commits/main",
+      "https://github.com/kornia/kornia-rs/commit/07e52d7",
+      "https://github.com/kornia/kornia-rs/tree/main/kornia-py",
+      "https://github.com/kornia/kornia-rs/tree/main/kornia-py/benchmarks",
+      "https://github.com/kornia/kornia-rs/tree/main/kornia-py/python/kornia_rs",
+      "https://github.com/kornia/kornia-rs/tree/main/kornia-py/src",
+      "https://raw.githubusercontent.com/ternaus/imread_benchmark/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/go-gfx/gfx",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "docs/perf.md carries every number in the record and the Go side is public (resample/bench_test.go), but the Pillow timing script is not committed (docs/ holds only perf.md; testdata/generate.py only writes parity fixtures) and the Apple Silicon chip is not named, so it is first-party with partial methodology.",
+    "corrections": {
+      "caveats": "Mixed, asymmetric result: Bicubic and Lanczos beat Pillow (1.66x and 1.72x on 1024->256 reduction, 4.9x and 3.2x on 256->1024 enlargement), while Box loses (0.65x and 0.77x). The filtered modes fan out across GOMAXPROCS goroutines (resample/parallel.go, up to 16 logical CPUs here) against single-threaded Pillow, so those wins mix algorithm and thread count; Box runs serially in go-gfx, making it the only like-for-like single-thread comparison, and it is a loss. Pillow-SIMD was not tested, and there is no golang.org/x/image, OpenCV or stb_image_resize comparison. bench_test.go says it matches 'the Pillow harness in docs/perf.md', but no Pillow timing script is committed, so the baseline side is not reproducible; perf.md notes Pillow's RGBA resize is premultiplied-alpha aware while the benchmark times the straight-alpha Resize, so if the harness fed Pillow RGBA images Pillow also did premultiply and unpremultiply passes (harness mode not stated). go-gfx works in float64 and Pillow in 8-bit; parity vs Pillow is 42.7-61.2 dB PSNR (parity_test.go). Inputs are random opaque RGBA. Chip model missing (Apple Silicon, 16 logical CPUs). Repo is new (commits seen from 2026-08-28 to 2026-10-01, 57 commits, 0 stars). The vector package section only claims parity with earlier code, with no competitor comparison."
+    },
+    "notes": "Numbers match docs/perf.md exactly; tier C stands. Wins are multi-core Go vs single-thread Pillow on Bicubic/Lanczos; the serial Box path loses 0.65x-0.77x.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/go-gfx/gfx/HEAD/docs/perf.md",
+      "https://raw.githubusercontent.com/go-gfx/gfx/HEAD/resample/bench_test.go",
+      "https://raw.githubusercontent.com/go-gfx/gfx/HEAD/resample/parallel.go",
+      "https://raw.githubusercontent.com/go-gfx/gfx/HEAD/resample/testdata/generate.py",
+      "https://raw.githubusercontent.com/go-gfx/gfx/HEAD/LICENSE",
+      "https://github.com/go-gfx/gfx",
+      "https://github.com/go-gfx/gfx/commits/main",
+      "https://github.com/go-gfx/gfx/tree/main/docs",
+      "https://github.com/go-gfx/gfx/tree/main/resample",
+      "https://github.com/go-gfx/gfx/tree/main/resample/testdata"
+    ]
+  },
+  {
+    "id": "https://github.com/bfraboni/fastgaussianblur",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The README states only the project's own absolute times (~7 ms for 2000k pixels; the data/time.png plot annotates FHD ~7 ms, 4K ~50 ms, 8K ~200 ms); the comparison is against the author's unpublished true Gaussian blur with unstated sigma, whose values exist only as points on a log-log plot, and no OpenCV or other incumbent is measured.",
+    "corrections": {
+      "claimed_speedup": "No numeric speedup against a named library. README: 'blurs 2000k pixels in ~7ms on all cores of a Ryzen 7 2700X CPU with OpenMP'. The README graph (data/time.png, log-log, 'Average execution time RGB 24 bits images') annotates the template multi-core version at FHD ~7 ms, 4K ~50 ms and 8K ~200 ms and plots the author's own true Gaussian blur (single core and OpenMP) roughly two orders of magnitude slower at every size; the baseline values are only readable off the plot, not stated.",
+      "caveats": "No comparison against OpenCV GaussianBlur, ImageMagick or any library in the README, the ten issues (none mention OpenCV or benchmarks against libraries) or main.cpp. The true Gaussian baseline in the graph is not in the repo and its sigma is not stated; the box-blur method is independent of sigma, so the gap depends on the sigma chosen. main.cpp times a single call with std::chrono::system_clock truncated to whole milliseconds, with no warm-up. README TODO lists 'redo timings', and the README says the method is not well suited to small sigmas (<=2) and is inaccurate near borders and in the exact sigma. Issue #4 reported slightly darker output with uchar arrays due to a non-rounded multiply (round_v added in v1.2). Lead for the orchestrator: the derivative michelerenzullo/FastBoxBlur (box blur only, based on this code) states in its own README about 2x-3x faster than cv::blur on an i7-10750H; that is a different project and not evidence for this one. Last commit 2024-08-18, so stale."
+    },
+    "notes": "Tier D kept per the orchestrator: own absolute times plus a plot against an in-house, unpublished true Gaussian; no incumbent. 128 stars (<1k), kept under the keep-and-document rule rather than rejected as not notable.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/README.md",
+      "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/data/time.png",
+      "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/Makefile",
+      "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/main.cpp",
+      "https://github.com/bfraboni/FastGaussianBlur",
+      "https://github.com/bfraboni/FastGaussianBlur/commits/main",
+      "https://github.com/bfraboni/FastGaussianBlur/issues?q=is%3Aissue",
+      "https://github.com/bfraboni/FastGaussianBlur/issues/5",
+      "https://github.com/bfraboni/FastGaussianBlur/issues/9"
+    ]
+  }
+]
