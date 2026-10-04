@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/syoyo/tinyexr",
+  "one_liner": "Pure-C11 separable float resizer in tinyexr's tools/resize; 2.2-3.6x tinyexr's own resizer, roughly level with SSE2-built stb_image_resize2.",
+  "what_it_does": "tir resamples interleaved 1-4 channel images (u8, u16, f16 or f32 in, any of those out, f32 internally) with box, triangle, B-spline, Gaussian, Mitchell, Catmull-Rom, Lanczos-2/3 or Kaiser filters. It is not a drop-in for stb_image_resize2: the API is tir_resize(alloc, &src_view, &dst_view, &options) for one-shot use, a reusable tir_sampler for repeated geometries, and push_row/pull_row streaming with O(filter support) memory. It adds content modes that general resizers lack: HDR anti-ringing applied once after both passes, normal-map decode/filter/renormalize, and height-map grid-vertex registration.",
+  "how_it_is_fast": "Two-pass separable convolution over precomputed, edge-folded, zero-padded coefficient tables, so inner loops have no edge branches; pass order (horizontal-first or vertical-first) is chosen by a multiply-count cost model. The AVX2+FMA kernels use independent accumulator chains: the 1-channel horizontal pass computes 4 outputs at once and reduces them with one 4x4 transpose, and the 4-channel pass packs two RGBA output pixels per 256-bit register for narrow windows (commit fdf7b0d took 4-channel 2x up from 275 to 295 MP/s). Kernels are compiled with __attribute__((target)) and selected by CPUID at run time, so a baseline-ISA build still runs AVX2 on capable CPUs.",
+  "when_to_use": [
+    "HDR / float32 or half-float texture pipelines in C or C++ that need resampling without clamping, with optional anti-ringing plus clamp_min = 0 for a hard no-negative-pixel guarantee",
+    "Normal-map or height-map mip and LOD generation, where renormalization after filtering and endpoint-exact grid-vertex registration matter",
+    "Distributing one portable x86-64 binary: tir dispatches AVX2+FMA at run time, while stb_image_resize2 only uses AVX/AVX2 when the including TU is compiled with -mavx2 (or STBIR_AVX2), so in a default -O2 build tir is 1.07-1.19x faster on 4-channel Mitchell (Ryzen 9 3950X, page data)",
+    "Streaming or memory-bounded resizing (tiles, scanline EXR decode) through push_row/pull_row with a single arena allocation",
+    "Replacing tinyexr's own exr_resize_float, which tir beats 2.2-3.6x on every measured Mitchell shape"
+  ],
+  "when_not_to_use": [
+    "If you can build stb_image_resize2 with -mavx2 -mfma: no published run compares against an AVX2 build of stb2, and stb2's header says AVX is 10-40% faster than SSE2 plus about 12% more for AVX2, which exceeds tir's 7-19% 4-channel lead",
+    "1-channel 2x Mitchell resizes, where the SSE2 stb2 build is already faster in the README table (0.95x up, 0.92x down)",
+    "8-bit sRGB photo thumbnailing at scale: tir always filters in f32, has no gamma-aware/linear-light conversion option in the header, and was only benchmarked on f32 random data; libvips, Pillow-SIMD or fast_image_resize target that workload",
+    "Projects that need a stable, separately versioned dependency: tir is version 0.1.0, about three months old, lives inside the tinyexr tree rather than its own repository, and its tools/resize code last changed 2026-07-05",
+    "MSVC-only or non-x86/non-ARM targets that want SIMD: x86 kernels rely on GCC/Clang target attributes (MSVC compiles intrinsics without them), NEON is compile-time on AArch64, and other ISAs get the scalar path"
+  ],
+  "integration": {
+    "form": "source-drop (tools/resize/src: about 12 .c files plus include/tir.h; make resize-lib builds build/libtir.a)",
+    "dependencies": "none for the library (libm); the CLI and benchmark link libtinyexr3.a for EXR I/O; optional C11 <threads.h> or pthreads for -DTIR_ENABLE_THREADS",
+    "min_toolchain": "C11 compiler (tested gcc/clang; header is C++-safe via extern \"C\"); AVX2 kernels need GCC/Clang target attributes for runtime dispatch",
+    "platforms": "x86-64 (SSE2/SSE4.1/AVX2+FMA+F16C runtime dispatch), AArch64 NEON, SVE behind an HWCAP gate on Linux, scalar fallback elsewhere",
+    "thread_safety": "Separate samplers can run on separate threads; optional band parallelism (num_threads, built with -DTIR_ENABLE_THREADS) gives output byte-identical to serial. tir_simd_force is documented as not thread-safe; the global kernel table is also built lazily on first use without atomics (tir_cpu.c), so make one call before spawning threads (inferred from source, not documented).",
+    "drop_in_for_baseline": "partial — same job and comparable filters (Mitchell, Catmull-Rom, box, triangle, B-spline), but a different API, options struct and enum set; default alpha mode is premultiply and default filter is Mitchell, so set alpha = TIR_ALPHA_STRAIGHT to match stb's STBIR_4CHANNEL"
+  },
+  "gotchas": [
+    "The README's stb2 column comes from make resize-bench STB=1, which compiles stb_image_resize2.h at -O2 -g with no -m flags (the recipe ignores CFLAGS), so stb2 ran its SSE2 kernels while tir ran AVX2+FMA; the stb header is not vendored or version-pinned.",
+    "SIMD kernels reassociate sums (multiple accumulators, FMA), so output differs from the scalar path by a few ULP; set deterministic = 1 for bit-identical output across ISAs and thread counts, at scalar speed.",
+    "Defaults differ from stb2: premultiplied-alpha filtering for 4 channels and no clamping (Mitchell can undershoot below 0 on HDR edges unless antiring/clamp_min are set).",
+    "EDGE_WRAP on the y axis buffers the whole image; a heap overflow on WRAP/REFLECT axes with trimmed windows (found by fuzzing, repro 28x10 to 26x2 heightmap) was fixed in 94405e1 on 2026-07-02, along with a threaded-band deadlock (8c631a7)."
+  ],
+  "pick_this_over_siblings_when": "Pick tir over stb_image_resize2 (and the stb-image-resize-opt fork) when you need HDR, normal-map or height-map aware float resizing, streaming rows, or runtime AVX2 dispatch in a portable binary; pick zimg for C++ float resizing with colorspace conversion, and fast_image_resize or libvips for 8-bit photo resizing, where tir has no published numbers.",
+  "verified_claims_summary": "Author-run make resize-bench on one Zen 2 core (Ryzen 9 3950X), compiler unnamed (system cc, -O2 -g), Mitchell 4-tap, f32 random data, clamp edges, straight alpha: tir AVX2 reached 295/78/7.6 MP/s on 4-channel 2x up/2x down/7.3x down versus 266/73/6.4 for stb_image_resize2 built at SSE2 and 135/30/2.2 for tinyexr's exr_resize_float; on 1-channel stb2 led the two 2x cases (1279 vs 1218, 365 vs 334) and tir led 7.3x down (27.3 vs 25.4). The stb2 comparison is ISA-mismatched, so the solid result is the 2.2-3.6x gain over exr_resize_float; the win over stb2 is unproven against an AVX2 build of stb2.",
+  "status_note": "Active (tinyexr last commit 2026-09-07, tools/resize last changed 2026-07-05), BSD-3-Clause and copyable; tir itself is 0.1.0, written July 2026 with an AI co-author, with unit tests against an independent double-precision reference, ASan/UBSan/TSan targets and a libFuzzer corpus.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/README.md",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/tests/tir_bench.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/tests/tir_test.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/include/tir.h",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_kernels_x86.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_cpu.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_core.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_pipeline.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_table.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_internal.h",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/tools/resize/src/tir_thread.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/Makefile",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/LICENSE",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/README.md",
+    "https://raw.githubusercontent.com/nothings/stb/master/stb_image_resize2.h",
+    "https://github.com/syoyo/tinyexr/tree/release/tools/resize/src",
+    "https://github.com/syoyo/tinyexr/commits/release/tools/resize",
+    "https://github.com/syoyo/tinyexr/commit/94405e1",
+    "https://github.com/syoyo/tinyexr/commit/f0b9160",
+    "https://github.com/syoyo/tinyexr/commit/fdf7b0d",
+    "https://github.com/syoyo/tinyexr/issues?q=resize"
+  ],
+  "confidence": 0.8
+}
