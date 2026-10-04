@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/brion/mtpng",
+  "one_liner": "Multithreaded Rust PNG encoder with a C API; chunked zlib deflate gives libpng-like file sizes, several times faster on many cores.",
+  "what_it_does": "mtpng encodes pre-packed pixel rows (every standard colour type and bit depth, palette and tRNS, custom chunks) into a non-interlaced PNG, splitting the image into row chunks that are filtered and deflated in parallel on a Rayon thread pool. The Rust API is Header + Options + Encoder (write_header, write_palette, write_image_rows, finish) over any io::Write. The C API in c/mtpng.h has the same shape, with opaque handles, a write callback and a flush callback. It is an encoder only, not a libpng replacement: there is no decoder, no Adam7 interlacing (rejected with an error), and no metadata helpers beyond raw write_chunk.",
+  "how_it_is_fast": "The pigz scheme applied to PNG. Rows are grouped into chunks of at least 256 KiB. Each chunk is filtered on its own thread, then deflated by stock zlib (through libz-sys) as an independent stream: a raw stream after the first chunk, primed with the previous chunk's last 32 KiB of filtered bytes through deflateSetDictionary, ended with Z_SYNC_FLUSH so the pieces concatenate into one valid IDAT stream. The Adler-32 values are merged with adler32_combine. Filtering runs all four predictive filters (Sub, Up, Average, Paeth) over each whole row and keeps the one with the smallest sum of absolute signed bytes. The loops are plain iterator code compiled several times under target_feature (AVX2, AVX, SSE4.2, SSE4.1) and picked at run time, so LLVM auto-vectorises them. That is where the single-thread gain over libpng comes from; deflate itself is the same zlib.",
+  "when_to_use": [
+    "Saving large images (screenshots, renders, frames of tens of megapixels) on a multi-core machine where PNG encode latency matters and output should stay close to libpng's default size (zlib level 6, adaptive filters, Z_FILTERED strategy).",
+    "Many-core boxes: the author's 2026 runs on the 7680x2160 RGBA screenshot take 23 ms on 16 threads (Apple M3 Max) and 25 ms on 32 threads (Ryzen 9 5950X), against 237 ms and 301 ms on one thread.",
+    "Rust or C/C++ programs that need palette, greyscale, 1/2/4-bit or 16-bit output, which fpng (24/32bpp only) does not cover.",
+    "Streaming a big PNG to a socket or file as it is produced: Rust Options::set_streaming emits one IDAT per chunk so bytes leave before the image is finished (not exposed in the C API)."
+  ],
+  "when_not_to_use": [
+    "Small images: below 128 KiB of uncompressed data there is no threading gain (README), and the project says small-file support 'needs work'.",
+    "Raw single-core speed: one-thread mtpng on the dual-4K screenshot runs at about 30 Mpx/s on a 2015 i7 and 55 Mpx/s on a Ryzen 9 5950X (derived from page data). fpnge and fpng are far faster per core if larger files are acceptable.",
+    "32-bit ARM single-threaded: on a Raspberry Pi 3B+ under armhf, mtpng took 6068 ms against libpng's 5368 ms.",
+    "Projects that need a stable API or a current crates.io release: both APIs are documented as unstable before 1.0, and crates.io's latest is 0.4.1 (2024-04-26). That release predates the February 2026 fix (PR #31, issue #30) for rows wider than the chunk size, which failed with 'Incomplete image input'.",
+    "Decoding, Adam7 interlacing, or writing gamma, ICC or text metadata without hand-building chunks."
+  ],
+  "integration": {
+    "form": "crate (rlib), plus cdylib/staticlib with the C header c/mtpng.h when built with the 'capi' feature",
+    "dependencies": "rayon, crc, itertools, libz-sys (system zlib, or builds C zlib where none ships, e.g. Windows); libc for the C API; png, clap and time only for the mtpngenc CLI",
+    "min_toolchain": "Rust 1.88 or newer for the repo's 0.5.0 (edition 2024, and encoder.rs uses an if-let chain; Cargo.toml declares no rust-version); the C header needs a C99 compiler (stdint.h, stdbool.h)",
+    "platforms": "any Rust target with zlib; README lists Linux x86/x86-64/arm/arm64, macOS x86-64, iOS arm64, Windows x86/x86-64/arm64; runtime-dispatched x86 SIMD paths, scalar elsewhere",
+    "thread_safety": "One encoder per image, driven by the caller; work runs on the Rayon global pool or a supplied pool, and one pool may serve several encoders as long as it outlives them (c/mtpng.h).",
+    "drop_in_for_baseline": "partial: same PNG output family as libpng's default write path (zlib level 6, filtered strategy, adaptive filters), but a different API (no png_struct/png_info, no transforms, no interlace), encode only"
+  },
+  "gotchas": [
+    "Adaptive filtering never scores the None filter (libpng's default PNG_ALL_FILTERS does), so screenshot-style truecolor images, where None often wins, can come out larger. The README says the heuristic 'fails to correctly predict good performance of the none filter'. Palette images are forced to None.",
+    "Speed depends on which zlib libz-sys links. Open PR #29 (zlib-rs backend) reports 128 ms down to 55 ms on one image, and open PR #17 adds zlib-ng, so the C zlib in use matters as much as the threading.",
+    "Without streaming mode the whole compressed IDAT is buffered in memory and written at finish(); the C API offers no streaming toggle.",
+    "The C API returns only OK or ERR, with no message. The Rust code still has internal panics (chunk bookkeeping), and a panic in a rayon::spawn job or across the extern \"C\" boundary aborts the process."
+  ],
+  "pick_this_over_siblings_when": "Pick mtpng over fpng or fpnge when you need libpng-like compression ratios or non-RGB formats (palette, greyscale, 16-bit), and over pngenc when you want a Rust crate or a maintained C API that reuses stock zlib. If single-core speed matters more than file size, fpnge (about 57x libpng encode in the QOIR benchmark, about 15% larger files) wins outright.",
+  "verified_claims_summary": "The author re-encoded one 7680x2160 RGBA screenshot (samples/dual4k.png, 1.69 MB) with mtpngenc --repeat=10, keeping the fastest run. In 2018 on a 2015 MacBook Pro (Linux), one thread took 555 ms against 850 ms for libpng built with gcc (1.53x), and 4 threads took 248 ms (3.4x vs single-threaded libpng). On a Xeon E5520, 8 threads took 165 ms against libpng's 1695 ms. The libpng timings have no published harness, version or zlib build ('@fixme how did I measure those libpng times?'), no output sizes are reported for either side, and the 2026 reruns time mtpng only. Code read this session shows a like-for-like zlib configuration (level 6, Z_FILTERED, 32 KiB window), but mtpng skips None-filter scoring and the timed 2018 builds predate the 0.3.5 heuristic change. No correctness bug affects the timed image: its 30,720-byte rows are far below the 256 KiB chunk size involved in issue #30.",
+  "status_note": "Active again in 2026 (last commit 2026-06-08: edition 2024, clippy cleanup, C-API build rework; chunk-row fix merged in February), MIT-licensed, 228 stars, about 95k crates.io downloads and 3 reverse dependencies. crates.io still ships 0.4.1 from 2024, and the README's CLI example link still points to src/bin/mtpng.rs, which was renamed to mtpngenc.rs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/readme.md",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/docs/perf.md",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/c/mtpng.h",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/c/sample.c",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/encoder.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/filter.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/deflate.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/capi.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/writer.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/utils.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/src/bin/mtpngenc.rs",
+    "https://raw.githubusercontent.com/bvibber/mtpng/HEAD/samples/dual4k.png (IHDR bytes only)",
+    "https://github.com/bvibber/mtpng/issues?q=is%3Aissue",
+    "https://github.com/bvibber/mtpng/issues/30",
+    "https://github.com/bvibber/mtpng/pulls?q=is%3Apr",
+    "https://github.com/bvibber/mtpng/pull/29",
+    "https://github.com/bvibber/mtpng/commits/main",
+    "https://crates.io/api/v1/crates/mtpng",
+    "https://crates.io/api/v1/crates/mtpng/versions",
+    "https://crates.io/api/v1/crates/mtpng/reverse_dependencies"
+  ],
+  "confidence": 0.75
+}
