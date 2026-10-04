@@ -44,3 +44,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e92): iOrange/bcdec (single-header BC1-7 decoder; not checked).
 - Enricher leads (e93): manticore-projects/FPNG-Java (Java wrapper of fpng, fpnge and zpng; duplicate if found, but its README JMH tables are an independent source for PngEncoder); Remade-With-Rust/rusty_h264 (BSD-2, decoder 1.63-1.77x slower than ffmpeg, no win).
 - Paper-access or blocked-page retier (batch 91): bcdec cross-decoder chart in iOrange/bcdec PR #1 (user-images.githubusercontent.com) and the aras-p.info BCn decoder post could lift bcdec from D.
+- Seed lead (seed-d): wavey-ai/soundkit soundkit-alac (Rust ALAC decoder, 13.51% and 11.58% less time than FFmpeg's C ALAC decode on a Xeon 8581C; private corpus) for a later video-audio pass.
