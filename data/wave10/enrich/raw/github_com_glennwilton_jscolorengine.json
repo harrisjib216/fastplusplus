@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/glennwilton/jscolorengine",
+  "one_liner": "Pure-JavaScript ICC colour engine with WebAssembly SIMD CLUT kernels; 3.1-3.6x faster than lcms-wasm on 8-bit LUT image transforms.",
+  "what_it_does": "A complete ICC v2/v4 colour management system in JavaScript. It covers RGB, CMYK, Lab, XYZ, N-channel output and DeviceLink profiles, all four intents and black-point compensation. One Transform object has three call shapes: transform(colorObj) runs the full f64 pipeline for single colours, array(typedArray) runs a pre-baked LUT for image bytes, and transformImages() spreads batches across a worker pool. The API is its own (Profile, Transform, createMultiStage), not lcms2's, and there is no C ABI, so C++ code can only reach it by embedding a JS/WASM runtime.",
+  "how_it_is_fast": "When the transform is created, the whole profile chain is sampled into a u16 CLUT (33^3 for RGB input, 17^4 for CMYK input, the same grid sizes lcms2's _cmsReasonableGridpointsByColorspace picks by default). Each pixel is then evaluated with tetrahedral interpolation and Q0.16 weights, in hand-written WebAssembly (.wat). The SIMD is channel-parallel: the 3-4 output channels at each tetrahedron corner are loaded into one i32x4 vector (v128.load64_zero + i32x4.extend_low_i16x8_u), so all channels of a pixel are interpolated at once. There is one monomorphic kernel per (input dims x output channels x data format), picked at create(). Stock lcms2 interpolates with scalar code behind a general stage walker, so the project's own analysis puts the ~2x over native C down to 128-bit width, not a better algorithm. Since 1.5.5, RGB-to-RGB matrix-shaper pairs skip the CLUT and run a fused curve-3x3-curve kernel (328-331 MPx/s at int8 on photos).",
+  "when_to_use": [
+    "JavaScript or TypeScript code (Node, browsers, Electron, web workers, Adobe CEP panels) that converts images between ICC profiles and would otherwise install lcms-wasm.",
+    "8-bit photographic content of about 1 MPx or more, where one core sustains roughly 80-120 MPx/s on RGB/CMYK LUT workflows (Ryzen 7 7700X, Node 24).",
+    "Soft-proofing or prepress previews in the browser or on a headless server where WebGL/WebGPU shaders are not an option.",
+    "Folders of images on a multicore Node host: transformImages() peaked at 787 MPx/s on 8 workers (noise content, int kernel) with output byte-identical to the sequential path.",
+    "Shipping a baked, content-signed LUT JSON (Transform.fromJSON) instead of the ICC profiles themselves."
+  ],
+  "when_not_to_use": [
+    "C or C++ code bases: there is no native API. Use lcms2 (with the GPL3 fast_float plugin for matrix-shaper RGB) or moxcms from Rust.",
+    "Work that needs bit-identical output to LittleCMS: the image path is within 1 LSB of lcms on 100% of samples but only 96.8-99.2% bit-exact. The f64 path (buildLut: false) is an order of magnitude slower.",
+    "Matrix-shaper RGB-to-RGB at peak speed: lcms2 with fast_float reaches about 455 MPx/s (SSE2) against jsCE's 328-331 MPx/s fused kernel. WebAssembly SIMD is fixed at 128 bits, so AVX2/AVX-512 native code can always go wider.",
+    "Memory-constrained parallel use: each worker holds its own copy of every LUT (about 1.4 MB for a 33-point CMYK LUT, about 11.5 MB across 8 workers, plus a WASM copy per worker), where lcms's threaded plugin shares one.",
+    "Named-colour (ncl2), abstract or ColorSpace-class profiles and MPE-only profiles are unsupported. N-channel input is slow: 5CLR and 6CLR got only WASM-scalar LUT kernels in 1.6.0 (16.4 and 7.66 MPx/s), and 7-15CLR input has no LUT path at all, so it runs per pixel on the accuracy pipeline."
+  ],
+  "integration": {
+    "form": "module (npm package jscolorengine; CommonJS source, or a UMD bundle of about 115 KB gzip with the WASM inlined)",
+    "dependencies": "none at runtime (canvas, esbuild, jest, utif and wabt are dev-only)",
+    "min_toolchain": "not documented (no engines field); the top tier needs a WebAssembly engine with 128-bit SIMD, and the dispatcher falls back to WASM scalar and then pure JS",
+    "platforms": "any JavaScript host: Node, browsers, Electron, web workers, React Native, Adobe CEP; results quoted for x86-64 Windows and Apple M4",
+    "thread_safety": "Single-threaded per JS realm. Parallelism comes only from the transformImages() worker pool: worker_threads on Node, and a separate worker bundle URL in browsers; without that URL it runs sequentially.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "lutMode 'auto' picks int-wasm-simd only for int8/int16 data with buildLut: true; every other combination resolves to the slow 'float' path. Check xform.lutMode after create().",
+    "pixelCache defaults to 'auto' since 1.6.0. The in-kernel last-pixel memo gains up to 3.94x on flat colour, costs about 4% on noisy photos and runs 5-channel photos at 0.84x; set pixelCache: 0 for grainy input.",
+    "Throughput depends on CLUT coverage. Buffers under about 1x the CLUT cell count (for example 64K px against a 17^4 CMYK grid) or synthetic gradients read up to 1.8x high. The project withdrew its pre-1.5 figures (about 210-216 MPx/s) because its noise generator produced only 256 distinct colours.",
+    "Premultiplied-alpha pixels must be unpremultiplied first (alpha.unpremultiply). Before 1.6.1 (issue #9), profiles loaded from a Uint8Array view with a non-zero byteOffset, as embedded in TIFF or JPEG, were silently mis-parsed."
+  ],
+  "pick_this_over_siblings_when": "Pick jsColorEngine when the code has to run inside a JavaScript or WebAssembly host. In C or C++, stay with Little CMS 2 plus the fast_float plugin, and in Rust use moxcms. babl is GEGL/GIMP's pixel-format converter rather than a general ICC CMYK engine.",
+  "verified_claims_summary": "The README 'Current figures' table (Ryzen 7 7700X, one thread, Node v24.16.0 on Windows 10, 1 MPx from a 5-photo corpus, GRACoL2006 and AdobeRGB1998, relative colorimetric, 8-bit) gives int-wasm-simd at 78.6-120.3 MPx/s. That is 3.1-3.6x lcms-wasm 1.0.5 (LittleCMS 2.16 built with Emscripten, flags not stated) and 1.8-2.2x native lcms2 2.18 (gcc 9.3.0 -O2/-O3 under WSL2, taskset -c 0). None of these README rows appears in any generated table. The frozen same-run snapshot bench/history/1.6.0 (2026-08-22: BenchResults.md plus native-content-O2/O3.txt) gives jsCE SIMD 112.2/113/81.2/81/110.6 MPx/s against best cached native lcms at 66.4/61.5/39.7/35.8/57.1, which is 1.69/1.84/2.05/2.26/1.94x (derived from page data). On photos lcms's cmsFLAGS_NOCACHE build is faster (72.8/65.6/40.1/35.8/61.5), so against lcms's best configuration the margin is 1.54-2.26x (derived from page data). The README's RGB-to-Lab 3.6x over lcms-wasm does not follow from any published lcms-wasm figure (120.3/35.9 = 3.35x; the 1.6.0 table says 3.2x).",
+  "status_note": "Active, single maintainer: 1.6.1 shipped on 2026-09-10, the last commit is 2026-09-09 (195 commits) and no issues are open. MPL-2.0 is file-level copyleft and fine to vendor into JS applications, but the library is not usable from C++ without embedding a JS/WASM runtime.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/README.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/docs/LcmsComparison.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/docs/BenchResults.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/docs/deepdive/WasmKernels.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/docs/deepdive/Architecture.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/package.json",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/reproduce.js",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/release_matrix/run.js",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/release_matrix/README.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/lcms_c/bench_content_matrix.c",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/lcms_c/bench_lcms.c",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/lcms_c/bench_marti.c",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/lcms_c/Makefile",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/lcms_c/README.md",
+    "https://github.com/glennwilton/jsColorEngine/tree/main/bench/history/1.6.0",
+    "https://github.com/glennwilton/jsColorEngine/tree/main/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core/summary.txt",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core/conditions.md",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core/native-content-O2.txt",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core/native-content-O3.txt",
+    "https://raw.githubusercontent.com/glennwilton/jsColorEngine/HEAD/bench/history/1.6.0/win32-x64-amd-ryzen-7-7700x-8-core/SNAPSHOT.json",
+    "https://github.com/glennwilton/jsColorEngine",
+    "https://github.com/glennwilton/jsColorEngine/commits/main",
+    "https://github.com/glennwilton/jsColorEngine/issues?q=is%3Aissue",
+    "https://github.com/glennwilton/jsColorEngine/issues/6",
+    "https://raw.githubusercontent.com/mm2/Little-CMS/master/src/cmspcs.c"
+  ],
+  "confidence": 0.8
+}
