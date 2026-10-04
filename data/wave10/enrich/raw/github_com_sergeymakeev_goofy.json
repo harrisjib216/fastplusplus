@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/sergeymakeev/goofy",
+  "one_liner": "Header-only SSE2 BC1/ETC1 encoder, about 1.4 GP/s per core, trading about 4 dB PSNR for 24-400x speed.",
+  "what_it_does": "Compresses a whole RGBA8 image to BC1/DXT1 (8 bytes per 4x4 block) or ETC1 blocks with two calls, goofy::compressDXT1 and goofy::compressETC1(dst, src, width, height, stride), which return 0, or -1/-2 when width is not a multiple of 16 or height not a multiple of 4. It is a whole-image API, not a per-block call like stb_compress_dxt_block, and it does a single pass with no quality knob. ETC1 output always uses the ETC1S subset (one base colour per block), and alpha is ignored.",
+  "how_it_is_fast": "Each call encodes four 4x4 blocks (a 16x4 pixel strip, one 64-byte cache line per row) entirely in 8-bit SSE2 lanes. Per-channel min/max via _mm_min_epu8/_mm_max_epu8 plus 4x4 transposes give bounding-box endpoints (quantised to RGB555 with shifts done as repeated _mm_avg_epu8). Luma is computed as YCoCg Y = avg(avg(R,B),G), and each pixel is classified against the block's luma midpoint and a 0.375*range threshold. The two resulting byte masks are packed into 2-bit selectors with movemask. There is no endpoint search, least-squares refinement, floating point or error evaluation; for ETC1 the base colour is the block average and the intensity-table control byte comes from a 256-entry lookup on the luma range.",
+  "when_to_use": [
+    "On-the-fly BC1 compression of runtime-generated or downloaded RGBA8 textures on x86-64, when encode time matters more than about 4 dB of PSNR (README: 1429 MP/s per thread on an i7-7820HQ).",
+    "Fast 'preview' content builds with thousands of textures, re-encoding later with rgbcx, ICBC or bc7e for shipping.",
+    "Live-sync editor tools: show a Goofy encode immediately, then replace it with a slow high-quality encode in the background.",
+    "ETC1 targets where ETC1S-level quality is already acceptable: the README puts Goofy ETC1 (36.30 dB) level with Basis Universal ETC1S output (36.27 dB) on its image set, with no supercompression."
+  ],
+  "when_not_to_use": [
+    "Shipping assets: on the README image set it scores 3.8-4.6 dB lower RGB-PSNR than stb_dxt, rgbcx level 0, icbc fast and rg_etc1 low quality, the fastest settings of those encoders.",
+    "Normal maps (the README warns quality is much worse), alpha or punch-through textures, and any format other than BC1 and ETC1 (no BC3/BC4/BC5/BC7, ETC2 or ASTC; the README's DXT5/ETC2 alpha plan never landed and issue #5 asking about ETC2 is unanswered).",
+    "ARM devices, where ETC1 is mostly used: GOOFY_SSE2 is hard-coded to 1, there is no NEON path, and the scalar emulation path needs a header edit and has no published speed numbers.",
+    "Arbitrary image sizes or unaligned buffers without padding or copying first (width must be a multiple of 16, height of 4, and rows 16-byte aligned).",
+    "Projects that need an active upstream: last commit 2024-01-29 (README and contributor WASM/CI work), and issues #4 and #5 from 2025 have no reply."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (SSE2 intrinsics from <emmintrin.h>)",
+    "min_toolchain": "not documented; the header uses C++11 features and the repo's CMake builds it as C++17, with CI Release builds on MSVC, GCC and Clang",
+    "platforms": "x86/x86-64 with SSE2; WebAssembly via Emscripten SSE2 emulation (-msimd128 -msse2, used by the in-repo test page); no NEON",
+    "thread_safety": "not documented; by inspection the encoder keeps no mutable global state (only static const tables) and spawns no threads, so concurrent calls on separate buffers look safe",
+    "drop_in_for_baseline": "partial: produces standard BC1/ETC1 blocks, but the API is whole-image with size and alignment preconditions rather than stb_dxt's per-block call, and it has no quality or alpha options"
+  },
+  "gotchas": [
+    "Loads use _mm_load_si128, so the input pointer and every row (stride) must be 16-byte aligned (the code asserts 64-byte). With NDEBUG the assert is compiled out and misaligned input crashes instead of failing cleanly. The Jan 2024 Linux port of the test harness hit exactly this ('compilation on linux (crashes though)', then 'fix alignment').",
+    "The header #defines GOOFYTC_IMPLEMENTATION itself and has no include guard, so the non-inline compressDXT1/compressETC1 are compiled into every translation unit that includes it. Include it from exactly one .cpp and declare the two functions elsewhere, or you get duplicate-symbol link errors.",
+    "Endpoints are the per-channel bounding-box min and max, with no choice of box diagonal, and selectors come from luma alone. Blocks whose channels move in opposite directions (red-to-green or blue-to-yellow edges) or change only in chroma at equal luma are badly encoded, beyond the normal-map warning in the README.",
+    "DXT1 output is always 4-colour opaque (colour0's green LSB is forced to 1 so colour0 > colour1), and endpoints are effectively RGB555, so smooth green gradients lose a bit of precision against encoders that use full 565."
+  ],
+  "pick_this_over_siblings_when": "Pick Goofy over bc7enc/rgbcx or ICBC only when raw single-thread encode speed dominates and about 4 dB lower PSNR is acceptable; those encoders are the ones to use for shipping BC1. For ETC1, etcpak is the quality-and-speed incumbent (QuickETC2 paper: 3250 Mpx/s with 16 threads on a Ryzen 7 3700X, about 200 per thread, derived); Goofy's 1221 MP/s on one i7-7820HQ thread is a different machine and harness and a simpler ETC1S-only search, so prefer Goofy only for x86 previews where ETC1S quality is enough.",
+  "verified_claims_summary": "The author's 2020 README table (Src/main.cpp harness, i7-7820HQ single thread, best of 128 runs, 42 images; compiler and flags not stated, likely the repo's VS2017 Win64 build) gives Goofy DXT1 1429 MP/s at 37.02 dB against stb_dxt 43 MP/s at 40.82 dB (about 33x), rgbcx 1.08 level 0 60 MP/s (about 24x), icbc 1.0 fast 24 MP/s (about 60x), and Goofy ETC1 1221 MP/s against rg_etc1 1.04 low quality 3 MP/s (about 407x), all ratios derived from page data. Reading the harness narrows the init-in-loop concern: rgbcx's init returns at once after its first call and rg_etc1's is under 1% of its time, so only the icbc ratio is inflated (see measurement_notes), and the README's 'RGB-PSNR' sits about 4.8 dB above conventional RGB PSNR for every encoder alike.",
+  "measurement_notes": "Enricher reading of Src/main.cpp and the vendored ThirdParty encoders. No correctness bug was found behind Goofy's own numbers. (1) Init calls inside the timed function. rgbcx::encode_bc1_init() opens with 'if (g_initialized) return;', so it does real work only on the first call; best-of-128 timing excludes it and the rgbcx ratio (about 24x) is clean. rg_etc1::pack_etc1_block_init() rebuilds its inverse lookup on every call, but that is at most 2*8*4*256*32 = 524,288 inner iterations with an early break, under 1% of rg_etc1's roughly 130 ms per 768x512 image at 3 MP/s. icbc::init_dxt1() has no guard: on every timed call it reruns PrepareOptTable for s_match5 and s_match6, 256*(32*32+64*64) = 1,310,720 inner iterations with an integer divide by 3. By loop count that is likely a few milliseconds against icbc's roughly 11-16 ms per image at 24 MP/s, so the 60x ratio against icbc is probably overstated by something like 10-25%. This is an estimate from the code, not a measurement, and icbc would remain tens of times slower either way. (2) PSNR definition. getMsePsnr sums squared R, G and B errors per pixel and then calls getPSNR(mseRGB, 768.0), i.e. 10*log10(768^2/mseRGB), whereas conventional RGB PSNR is 10*log10(255^2/(mseRGB/3)). The README values are therefore 4.805 dB above conventional RGB PSNR (Goofy DXT1 about 32.2 dB, stb_dxt about 36.0 dB, baseline about 28.6 dB, derived). The gaps between encoders are unchanged, but the absolute dB values cannot be compared with PSNR published by other BC1 encoders. The same function reads RGBA bytes as a little-endian uint32 and treats bits 16-23 as red, which swaps R and B in the per-channel and luma-PSNR columns (not in RGB-PSNR, the README metric). (3) Other details. Competitor wrappers memcpy each 4x4 block into a 64-byte local buffer before encoding (negligible next to their per-block cost), and the timer has whole-microsecond resolution (Goofy needs about 275 us per Kodak image, so quantisation is about 0.4%). The harness was reworked in Jan 2024 by contributor adam-ce for Linux, Clang and WebAssembly, while the README table comes from the 2020 Windows version; test-results/ publishes no raw output. Decoding for PSNR uses standard reference decoders (squish-style DecompressColour with 3-colour handling for BC1, ETCPACK's decompressBlockETC2c for ETC1); the vendored versions are stb_dxt v1.09, rgbcx v1.08, icbc v1.0 and rg_etc1 v1.04. Suggest no tier change (stays C); the icbc ratio and the absolute PSNR values deserve a caveat.",
+  "status_note": "Stale: code essentially unchanged since 2020, last commit 2024-01-29 (README edits and a contributor's WASM/CI port), and two 2025 issues are unanswered. It is MIT and a single 1,500-line header, easy to vendor on x86 if you accept the size, alignment and quality limits.",
+  "sources_read": [
+    "https://github.com/SergeyMakeev/Goofy",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/README.md",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/GoofyTC/goofy_tc.h",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/Src/main.cpp",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/Src/decoder.cpp",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/Src/decoder.h",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/Src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/.github/workflows/cmake-multi-platform.yml",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/ThirdParty/icbc/icbc.h",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/ThirdParty/bc7enc/rgbcx.h",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/ThirdParty/rgetc/rg_etc1.cpp",
+    "https://raw.githubusercontent.com/SergeyMakeev/Goofy/HEAD/ThirdParty/ryg/stb_dxt.h",
+    "https://github.com/SergeyMakeev/Goofy/issues",
+    "https://github.com/SergeyMakeev/Goofy/issues/4",
+    "https://github.com/SergeyMakeev/Goofy/issues/5",
+    "https://github.com/SergeyMakeev/Goofy/commits/master",
+    "https://github.com/SergeyMakeev/Goofy/commits/master/Src/main.cpp"
+  ],
+  "confidence": 0.85
+}
