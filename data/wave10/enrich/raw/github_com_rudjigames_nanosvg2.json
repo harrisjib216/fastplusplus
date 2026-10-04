@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/rudjigames/nanosvg2",
+  "one_liner": "Copy of the two-header NanoSVG parser and rasterizer with SSE2 blending and span-delta coverage, 2.5-3.7x faster than its own previous rasterizer.",
+  "what_it_does": "Parses SVG files into lists of cubic Bezier paths (nanosvg.h) and rasterizes them into a caller-provided RGBA8 buffer with a small scanline rasterizer (nanosvgrast.h). The API is NanoSVG's: nsvgParseFromFile/nsvgParse, then nsvgCreateRasterizer and nsvgRasterize(rast, image, tx, ty, scale, dst, w, h, stride), so code written against upstream memononen/nanosvg compiles unchanged. It handles solid fills, linear and radial gradients and strokes with joins, caps and dashes; there is no clipping, masking, filters, text or embedded images.",
+  "how_it_is_fast": "The rasterizer is NanoSVG's 5-subsample scanline converter with exact horizontal fixed-point coverage; the fork stores fully covered spans as start/end deltas in an int array and prefix-sums them once per pixel row instead of adding 51 to every byte five times per row. The blend loop fuses that prefix sum with SSE2 4-pixel source-over blending (div255 as _mm_mulhi_epu16(x+1, 257)), skips zero-coverage pixels, writes fully opaque runs directly, evaluates gradient colors only for covered pixels, starts at the first edge's row and stops when edges run out, and limits the unpremultiply/defringe pass to the drawn bounding box using 24-bit reciprocals instead of divisions. It also stops zero-length cubics from recursing 2047 times in the flattener, and the parser replaces strtoll/pow/sscanf/strchr with hand-written digit loops and power-of-ten tables.",
+  "when_to_use": [
+    "Baking SVG icons or UI glyphs into textures at load time in a game or tool, where a two-header, dependency-free C library is worth more than full SVG conformance.",
+    "You already ship upstream NanoSVG and want a faster drop-in rasterizer on x86-64 without changing call sites.",
+    "Small to medium images (tens to a few hundred pixels per side) with simple fills and gradients, rendered on one thread per rasterizer object.",
+    "Builds that cannot pull in C++ or a large dependency tree (Cairo, Skia, Blend2D)."
+  ],
+  "when_not_to_use": [
+    "You need correct rendering of real-world SVG: no clip paths, masks, filters, patterns, text, <use> handling beyond the parser's support, or embedded images; the inherited README still calls the rasterizer 'not particular fast or accurate'.",
+    "Quality matters: anti-aliasing uses only 5 vertical subsamples per pixel, so near-horizontal edges show visible banding compared with analytic-coverage renderers.",
+    "Non-x86 targets expect the full gain: the SSE2 path is x86 only, and PR #3's own NSVG_NO_SIMD column runs about 1.0-1.1x the post-PR #2 code, so ARM gets roughly the PR #2 algorithmic speedup only.",
+    "You need upstream NanoSVG's newer features: this copy lacks upstream's paint-order support (shape->paintOrder) and uses its own 2024 CSS style handling rather than upstream's class-based one.",
+    "You want a maintained, reviewed library: 0 stars, 12 commits, all speed work landed on 2026-09-24 from an AI-agent branch, and no tests or fuzzing harness are in the repo."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond libc and libm (stdio.h, string.h, stdlib.h, math.h); emmintrin.h for the SSE2 path",
+    "min_toolchain": "C99 for nanosvg.h (the CDATA skip in nsvg__parseXML declares a variable after a statement); nanosvgrast.h is stated to build with -std=c89 -pedantic; CMake 3.10 for the optional package",
+    "platforms": "any; SSE2 fast path on x86-64 (GCC, Clang, MSVC) and 32-bit MSVC with /arch:SSE2, scalar elsewhere or with NSVG_NO_SIMD",
+    "thread_safety": "not documented; no mutable globals in either header, but an NSVGrasterizer holds scratch buffers, so use one rasterizer per thread",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Output is not byte-identical to the pre-PR code or to upstream: PR #2 fixes the defringe check (x-1 > 0 became x > 0), which changes the color of fully transparent pixels in column 1 and row 1, and the hex color parser now rejects malformed colors (spaces, signs, 0x prefixes) that the sscanf version accepted.",
+    "nsvgRasterize still clears the whole destination buffer each call, so it cannot composite onto existing pixels; the unpremultiply pass then runs only over the drawn bounding box plus a one-pixel border.",
+    "Coverage still wraps modulo 256 like the original unsigned char sums, so heavily overlapping sub-paths under the nonzero rule keep NanoSVG's existing artifacts.",
+    "The repository is a standalone copy of a 2024 NanoSVG snapshot with local parser changes (title capture, CDATA skipping, rgba alpha), not a GitHub fork, so upstream fixes do not flow in automatically."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LunaSVG or ThorVG when you want two C headers with no build step and only need flat fills, gradients and strokes for icon baking; pick LunaSVG for a C++ renderer with much broader SVG support, and Blend2D or ThorVG when rendering quality, clipping or throughput on large scenes matter.",
+  "verified_claims_summary": "The fork's own PRs time its rasterizer against its pre-PR master (essentially upstream NanoSVG's 2024 rasterizer) on example/23.svg, drawing.svg, nano.svg and a gradient test at 1x and 3x scale, -O2 on x86-64 with no CPU or compiler version: PR #2 reports 2.5-3.7x (mean of 40 runs) and PR #3 adds 1.34-1.98x with SSE2 (best of 11, callgrind counts); no harness is committed, and the two PRs' absolute times are not comparable, so the gains should not be multiplied. Reading the diffs found no correctness bug behind these numbers: the SSE2 blend, coverage prefix sum and reciprocal unpremultiply match the scalar arithmetic (the reciprocal identity holds for all 8-bit inputs when rechecked).",
+  "status_note": "Active only in the sense that the owner merged three AI-authored PRs on 2026-09-24 (0 stars, README still says 'not actively maintained'); zlib-licensed and two headers, so it is easy to vendor, but treat it as a lightly tested patch set over NanoSVG.",
+  "sources_read": [
+    "https://github.com/RudjiGames/nanosvg2",
+    "https://github.com/RudjiGames/nanosvg2/commits/master",
+    "https://github.com/RudjiGames/nanosvg2/pull/1",
+    "https://github.com/RudjiGames/nanosvg2/pull/2",
+    "https://github.com/RudjiGames/nanosvg2/pull/3",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/README.md",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/src/nanosvgrast.h",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/src/nanosvg.h",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/example/example1.c",
+    "https://raw.githubusercontent.com/RudjiGames/nanosvg2/HEAD/example/example2.c",
+    "https://raw.githubusercontent.com/memononen/nanosvg/HEAD/src/nanosvgrast.h",
+    "https://raw.githubusercontent.com/memononen/nanosvg/HEAD/src/nanosvg.h"
+  ],
+  "confidence": 0.6
+}

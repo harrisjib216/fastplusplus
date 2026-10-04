@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/sammycage/lunasvg",
+  "one_liner": "Small C++17 SVG 1.1/Tiny 1.2 renderer on the plutovg rasterizer; converts icons to PNG about 2x faster than cairosvg through Python.",
+  "what_it_does": "Parses an SVG document into a DOM (Document::loadFromFile/loadFromData), applies CSS (including applyStyleSheet at run time), and renders it with renderToBitmap(width, height, bg) or render(bitmap, matrix) into a premultiplied ARGB32 Bitmap that can be written to PNG. It also exposes element lookup, attribute editing, bounding boxes and elementFromPoint hit testing. It is a library with its own API, not a drop-in for librsvg or Cairo; the Python binding pillow-lunasvg makes SVG an Image.open format in Pillow.",
+  "how_it_is_fast": "Rendering goes through plutovg, a small C library whose scan converter is FreeType's ftgrays (exact-area coverage per pixel cell, emitted as coverage spans) and whose strokes come from the FreeType stroker; spans are composited with Qt-style per-span blend functions on premultiplied 32-bit pixels (scalar code; SSE2 is used only for the 32-bit fill helper). LunaSVG itself is a compact C++ DOM and layout tree with no Cairo context, no external XML or CSS library and no Python in the loop, which is where most of the measured advantage over cairosvg (a Python SVG parser driving Cairo) comes from.",
+  "when_to_use": [
+    "Rendering SVG icons, UI assets or emoji glyphs to bitmaps inside a C++ application or game (it is used by Dear ImGui, RmlUi, OpenSiv3D and node-canvas) where pulling in Cairo, librsvg or Skia is too heavy.",
+    "Python thumbnail or icon pipelines that currently call cairosvg: pillow-lunasvg ships self-contained wheels (259-467 KB, no system cairo) and was measured at about half cairosvg's per-file time.",
+    "Static SVG content that sticks to SVG 1.1 basics: paths, shapes, gradients, patterns, clip paths, masks, markers, <use>, <text> with registered fonts.",
+    "Applications that need to restyle or hit-test a loaded document (applyStyleSheet, setAttribute, elementFromPoint) and re-render without reparsing."
+  ],
+  "when_not_to_use": [
+    "SVGs with filters (blur, drop shadows, lighting), mix-blend-mode, CSS transform properties, transform-origin, context-fill, or SVG/WebP inside <image>: none are implemented, and only 59% of resvg's feature tests match resvg's output at loose tolerance.",
+    "Untrusted input without hardening: CVE-2024-33763 and CVE-2024-33764 (lunasvg 2.3.9) and CVE-2024-57720, -57721 and -57722 (lunasvg 3.0.0) are stack, segfault and allocation bugs, a fuzzer is still only requested (issue #223), and the pillow-lunasvg author had to add his own guards against deep-nesting stack overflow, exponential <use> expansion and a plutovg dashing loop that never terminates.",
+    "Throughput-critical rendering of large scenes on many cores: plutovg's compositing is scalar, and engines such as Blend2D or ThorVG are built for that workload.",
+    "Animated content (no SMIL; LunaSVG says animation is unlikely ever to be supported) or Lottie, where ThorVG is the fit.",
+    "Patterns in documents with large user-space coordinates: open issue #248 reports the pattern tile canvas being allocated at user-space size (16,000 x 16,000 px in the report) before downscaling."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "plutovg (C, bundled as a git submodule or found as plutovg >= 1.3.0 via USE_SYSTEM_PLUTOVG), which itself bundles FreeType's ftgrays/stroker (FTL license) and stb_image/stb_truetype",
+    "min_toolchain": "C++17, CMake 3.15 or Meson",
+    "platforms": "any (portable C/C++; SSE2 used only for a fill helper when available)",
+    "thread_safety": "not documented; LunaSVG keeps a process-wide font cache, and pillow-lunasvg's code notes that plutovg's mutex is a no-op without <threads.h> (e.g. macOS), so that binding serializes every LunaSVG call with one global lock",
+    "drop_in_for_baseline": "partial: in Python, pillow-lunasvg replaces cairosvg.svg2png calls with Image.open plus load(scale=) and save; in C/C++ it has its own API with nothing in common with Cairo or librsvg"
+  },
+  "gotchas": [
+    "Bitmaps are ARGB32 premultiplied (BGRA bytes on little-endian); call Bitmap::convertToRGBA() in place before handing pixels to code that expects straight RGBA.",
+    "By default <image href=\"/path\"> may load local files; build with LUNASVG_DISABLE_EXTERNAL_RESOURCES=ON (as pillow-lunasvg does) when rendering untrusted SVGs, and consider LUNASVG_DISABLE_LOAD_SYSTEM_FONTS for reproducible text.",
+    "<use> is expanded by deep copy, so a short chain of nested <use> grows exponentially in memory and time; cap input size or element counts yourself.",
+    "Text needs fonts registered through lunasvg_add_font_face_from_file/_data or system font loading, so the same file can render differently on different machines."
+  ],
+  "pick_this_over_siblings_when": "Pick LunaSVG over NanoSVG2 when you need real SVG documents (clipping, masks, patterns, CSS, <use>, text) rather than flat fills, and over ThorVG when you only need static SVG to bitmap with a smaller codebase and a DOM API; pick ThorVG for Lottie or animation, and Blend2D when you are drawing your own vector content at high throughput rather than rendering SVG files.",
+  "verified_claims_summary": "On an Apple M4 (macOS 26.5.1), pillow-lunasvg 0.1.0 (LunaSVG 3.5.0; built by scikit-build-core, whose default CMake build type is Release, compiler not stated) converted 3,460 simple-icons SVGs to PNG at a median 1.00 ms versus 2.17 ms for cairosvg 2.9.1 (Cairo 1.18.4) and 2.84 ms for resvg-py 0.5.0 at 256 px, and 12.56 versus 23.63 and 34.85 ms at 1024 px. LunaSVG's own parse plus render was only 0.11 ms and 0.88 ms of those times (about 89% and 93% of the pillow-lunasvg time is Pillow PNG encoding and Python overhead, derived from page data), and no render-only time is given for the baselines, so this is an end-to-end SVG-to-PNG comparison dominated by Python front-ends and PNG encoders, not a rasterizer comparison.",
+  "status_note": "Actively maintained (last commit 2026-09-17, release 3.5.0), MIT-licensed, 1.2k stars and embedded in Dear ImGui, RmlUi, node-canvas and others; safe to adopt for trusted static SVG, but harden it before rendering untrusted files.",
+  "sources_read": [
+    "https://github.com/sammycage/lunasvg",
+    "https://raw.githubusercontent.com/sammycage/lunasvg/HEAD/README.md",
+    "https://raw.githubusercontent.com/sammycage/lunasvg/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/sammycage/lunasvg/HEAD/meson.build",
+    "https://raw.githubusercontent.com/sammycage/lunasvg/HEAD/include/lunasvg.h",
+    "https://github.com/sammycage/lunasvg/issues?q=is%3Aissue+crash+OR+overflow+OR+slow+OR+performance",
+    "https://github.com/sammycage/lunasvg/issues/150",
+    "https://github.com/sammycage/lunasvg/issues/248",
+    "https://github.com/sammycage/plutovg/tree/main/source",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/README.md",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-blend.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-ft-raster.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-rasterize.c",
+    "https://github.com/Maksim-Burtsev/pillow-lunasvg",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/README.md",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/benchmarks/results.md",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/benchmarks/bench.py",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/src/_lunasvg.cpp",
+    "https://raw.githubusercontent.com/Maksim-Burtsev/pillow-lunasvg/HEAD/src/pillow_lunasvg/__init__.py",
+    "https://raw.githubusercontent.com/scikit-build/scikit-build-core/HEAD/README.md",
+    "https://www.strix.ai/cve/CVE-2024-33763 (search snippet only)",
+    "https://www.strix.ai/cve/CVE-2024-33764 (search snippet only)",
+    "https://vulners.com/cve/CVE-2024-57721 (search snippet only)",
+    "https://osv.dev/vulnerability/CVE-2024-57722 (search snippet only)",
+    "https://cyberstrike.io/cve/CVE-2024-57720/ (search snippet only)"
+  ],
+  "confidence": 0.7
+}
