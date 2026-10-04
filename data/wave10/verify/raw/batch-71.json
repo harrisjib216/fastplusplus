@@ -1,0 +1,87 @@
+[
+  {
+    "id": "https://github.com/go-images/images",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party parity table (BENCHMARKS.md) with a public harness (benchmarks/parity_test.go, benchmarks/run.py), go1.26.4, go test -cpu=1 -count=5 and an Apple M4 Max, which would meet A on paper, but the measured scikit-image side does different work: run.py feeds skimage float64 arrays (img_as_float) and gets float64 HSV and float64 box-blur output, while go-images reads uint8 RGBA and writes byte-quantized HSV, and the headline RGB to HSV op is not in the correctness gate (benchmarks/verify.py has no HSV check). The like-for-like uint8 reference in the same table, OpenCV, is about 24x faster than go-images on RGB to HSV, so the claimed win is format-dependent and off the category baselines.",
+    "corrections": {
+      "claimed_speedup": "Single thread, Apple M4 Max: RGB to HSV go-images 65.6 vs scikit-image 13.7 Mpix/s at 512x512 (4.81x), 4.71x at 1024x1024, 4.76x at 4096x4096. Box blur r=2 RGB: 2.64x, 1.78x, 2.29x. Flip horizontal 2.01x to 2.28x. Gaussian sigma 2: 1.02x, 1.26x, 1.30x. OpenCV, the uint8-to-uint8 reference in the same table, is far faster: RGB to HSV 1,554 Mpix/s at 512x512 (about 24x go-images, derived from page data) and box blur r=2 2,322 Mpix/s (about 15x go-images at 512x512, about 30x at 4096x4096, derived from page data).",
+      "caveats": "Off the category baselines (ImageMagick, stb_image_resize) and not a resampling benchmark: the parity table has no resize rows. OpenCV beats go-images by a wide margin on every op where it is shown (at one thread about 24x on RGB to HSV, 15x to 30x on box blur, 6x to 8x on Gaussian, 7x to 8x on Sobel and 165x to 186x on morphology, derived from page data). The scikit-image side runs float64 input and output (run.py converts with img_as_float before timing) while go-images and OpenCV run uint8, so the HSV and box-blur wins partly reflect float64 memory traffic; go-images also encodes hue into one byte (0-255), and its Gaussian truncates at 3 sigma against scipy's 4 sigma (fewer taps, author-stated). RGB to HSV has no correctness check in benchmarks/verify.py; BENCHMARKS.md calls BoxBlur exact but verify.py allows a 2-level difference. go-images is slower than scikit-image on Rotate90 (0.35x to 0.53x), Crop (0.24x to 0.33x), Otsu (0.37x to 0.47x), Close r=3 (0.64x to 0.93x), Open r=3 (0.69x to 0.91x) and Erode/Dilate at 512 and 1024 (0.79x to 0.87x). Raw result files (go-1t.txt, py-1t.json) are not committed. Author-run, very young project (37 commits, first visible commit June 2026) with one star."
+    },
+    "notes": "Numbers on BENCHMARKS.md match the record exactly; Gaussian range was understated (1.30x at 4096x4096) and the slower-op ranges were narrower than the page. Keep with the off-baseline, different-precision and OpenCV-wins shortcomings; downgraded A to C because the headline comparison is float64 skimage against uint8 go-images with no HSV correctness gate.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/go-images/images/HEAD/BENCHMARKS.md",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/README.md",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/benchmarks/parity_test.go",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/benchmarks/run.py",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/benchmarks/verify.py",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/color.go",
+      "https://raw.githubusercontent.com/go-images/images/HEAD/filters.go",
+      "https://github.com/go-images/images",
+      "https://github.com/go-images/images/tree/main/benchmarks",
+      "https://github.com/go-images/images/commits/main"
+    ]
+  },
+  {
+    "id": "https://github.com/sixlabors/imagesharp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Third-party BenchmarkDotNet suite (kleisauke/net-vips tests/NetVips.Benchmarks/Benchmark.cs, README.md) with public code, .NET SDK 10.0.101 NativeAOT Release, x86-64-v4 RyuJIT, AMD Ryzen 9 7900, ImageSharp 3.1.12 vs Magick.NET-Q8-AnyCPU 14.10.1; both sides use the Triangle filter, JPEG quality 75 and the same crop-resize-convolve pipeline, so the Magick.NET comparison is like-for-like. All rows in the record match the README table.",
+    "corrections": {
+      "license": "Six Labors Split License 1.0 (not an SPDX id, non-OSI): Apache-2.0 for open-source or source-available use, transitive dependency use, for-profit under 1M USD annual gross revenue and non-profits; paid Six Labors Commercial License otherwise",
+      "caveats": "Workload is the libvips load, crop 100 px, shrink to 90 percent, 3x3 sharpen, save pipeline, so decode and encode dominate along with resampling. Settings checked in Benchmark.cs: Magick.NET-Q8-AnyCPU with OpenCL disabled, FilterType Triangle and Quality 75; ImageSharp KnownResamplers.Triangle and default quality 75; neither ImageSharp nor Magick.NET is pinned to a thread count (library defaults on a 24-thread CPU), while NetVips is set to concurrency 4. ImageSharp's convolution kernel is passed without the 1/8 scale the other libraries apply (NetVips scale 8, Magick convolve:scale 0.125, Skia gain 0.125), so its output image differs although the 3x3 cost is the same. System.Drawing skips the sharpen step and uses GDI+ bilinear. The benchmark is by the NetVips author and NetVips beats ImageSharp in the same table (ratio 4.93 on JPEG, 3.75 on TIFF). SixLabors' own LoadResizeSave stress benchmark (tests/ImageSharp.Benchmarks/LoadResizeSave, 2022 comment results, Intel Core i7-6700K, .NET 6.0.5, one thread) shows ImageSharp 1,098.4 ms vs Magick 4,089.8 ms and System.Drawing 3,624.2 ms, but there ImageSharp decodes the JPEG straight to the 150 px target size while Magick.NET-Q16 decodes full size and resizes with its default filter (different work), and NetVips (806.8 ms) and MagicScaler (888.0 ms) beat ImageSharp. The repo's Resize benchmark (tests/ImageSharp.Benchmarks/Processing/Resize.cs) carries 2019 results only against System.Drawing: ImageSharp with MaxDegreeOfParallelism = 1 took 75.32 ms vs 120.11 ms (ratio 0.63) on .NET Framework 4.7.2 and 88.56 ms vs 120.33 ms (0.74) on .NET Core 2.1, bicubic 3032 to 400 px, Intel Core i7-7700HQ. The README itself carries no performance numbers. ImageSharp 3+ is not OSI-licensed and version 4 needs a build-time license key (net-vips footnote)."
+    },
+    "notes": "Confirmed A: NetVips benchmark matches filter (Triangle), quality (75) and pipeline across ImageSharp and Magick.NET Q8; only threading is left at library defaults. Usability stays reference (Six Labors Split License, non-OSI). The image-codecs search's System.Drawing evidence lives in the same tests/ImageSharp.Benchmarks project and is first-party.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/README.md",
+      "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/Benchmark.cs",
+      "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/NetVips.Benchmarks.csproj",
+      "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/Config.cs",
+      "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/TestImage.cs",
+      "https://github.com/kleisauke/net-vips/tree/master/tests/NetVips.Benchmarks",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/tests/ImageSharp.Benchmarks/Processing/Resize.cs",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/tests/ImageSharp.Benchmarks/LoadResizeSave/LoadResizeSaveStressBenchmarks.cs",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/tests/ImageSharp.Benchmarks/LoadResizeSave/LoadResizeSaveStressRunner.cs",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/tests/ImageSharp.Benchmarks/LoadResizeSave/README.md",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/tests/ImageSharp.Benchmarks/ImageSharp.Benchmarks.csproj",
+      "https://github.com/SixLabors/ImageSharp/tree/main/tests/ImageSharp.Benchmarks/LoadResizeSave",
+      "https://raw.githubusercontent.com/SixLabors/ImageSharp/HEAD/LICENSE",
+      "https://github.com/SixLabors/ImageSharp",
+      "https://github.com/SixLabors/ImageSharp/commits/main"
+    ]
+  },
+  {
+    "id": "https://github.com/bamiaux/rez",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The speedtest-resize README tables match the record, and the harness is public (pure.go, exec.go, main.go), but the rez row and the ImageMagick_resize row do different work: rez runs a bilinear filter directly on subsampled YCbCr planes and saves with Go's default JPEG quality (jpeg.Encode with nil options), while ImageMagick runs `convert -resize 150x150>` as an external process with its default filter and output quality (output 0.542% of input size vs 0.140% for rez in the i7 table). No Go version, ImageMagick version or CPU model is given (only '3.4GHz Intel Core i7').",
+    "corrections": {
+      "caveats": "Different work on the two sides: rez_bilinear (pure.go) decodes with Go image/jpeg, resizes the YCbCr planes with a bilinear filter and re-encodes at Go's default quality, while ImageMagick_resize (exec.go) spawns `convert -resize 150x150>` per file with ImageMagick's default resize filter and quality, so its thumbnails are about 3.9x larger (0.542% vs 0.140% of input, derived from page data) and the filters differ. The fast ImageMagick path in the same harness, `-define jpeg:size=300x300 -thumbnail 150x150>`, takes 0.057 s per file in the i7 table, about 6x faster than rez (derived from page data), and vips, epeg, fastjpeg, opencv, vipsthumbnail, GraphicsMagick, magickwand and T-REZ are all faster than rez there. On the original Pentium T2390 run rez (2.913 s) is slower than ImageMagick -resize (2.316 s). The metric includes JPEG decode and encode. Old hardware and Go versions (2014 to 2016 era), with no Go version, ImageMagick version, flags or CPU model stated. speedtest-resize is MIT-licensed and lists rez's author (Benoît Amiaux) among its authors; the i7 table was run by nono and one Windows table by bamiaux himself. rez's own bench_test.go only compares its Go and assembly paths. Repo archived on 2024-05-19."
+    },
+    "notes": "Numbers verified on the speedtest-resize README; downgraded B to C because the ImageMagick -resize baseline uses a different filter, colour path, output quality and process-spawn overhead, and the like-for-like fast ImageMagick thumbnail path beats rez by about 6x. Keep with shortcoming; record's claim that speedtest-resize has no license was wrong (MIT).",
+    "urls_opened": [
+      "https://github.com/fawick/speedtest-resize",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/README.md",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/main.go",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/pure.go",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/exec.go",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/go.mod",
+      "https://github.com/bamiaux/rez",
+      "https://github.com/bamiaux/rez/commits/master",
+      "https://raw.githubusercontent.com/bamiaux/rez/HEAD/README.md",
+      "https://raw.githubusercontent.com/bamiaux/rez/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/bamiaux/rez/HEAD/bench_test.go"
+    ]
+  }
+]
