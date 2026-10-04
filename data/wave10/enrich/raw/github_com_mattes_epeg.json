@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/mattes/epeg",
+  "one_liner": "Small C library and CLI for JPEG-to-JPEG thumbnails via libjpeg scaled decode; beats plain 'convert -resize', loses to ImageMagick -thumbnail and libvips.",
+  "what_it_does": "epeg opens a JPEG from a file or memory, reads its size, comment, Enlightenment Thumb:: APP7 markers and EXIF orientation, decodes it at reduced size and re-encodes a JPEG thumbnail to a file or memory buffer. The C API is handle-based (epeg_file_open, epeg_decode_size_set, epeg_quality_set, epeg_file_output_set, epeg_encode, epeg_close) with epeg_pixels_get for raw GRAY8, YUV8, RGB8/BGR8/RGBA8/BGRA8/ARGB32 or CMYK pixels; the epeg CLI wraps it with -w/-h (pixels or %), -m max side, -p, -i, -q and -c. It is not a drop-in for ImageMagick: JPEG in and JPEG out only, no filters, no other formats.",
+  "how_it_is_fast": "All the speed comes from libjpeg's scaled decoding: _epeg_decode sets scale_denom to min(floor(in_w/out_w), floor(in_h/out_h)) clamped to 1..8, with JDCT_IFAST, do_fancy_upsampling = FALSE and do_block_smoothing = FALSE, so a 5616x3744 photo is decoded straight to 702x468 in the DCT domain. _epeg_scale then point-samples (nearest neighbour, in place) to the exact thumbnail size and libjpeg re-encodes it. There is no SIMD or filtering of its own; the gain is bounded by libjpeg's entropy decoding, which is why the measured 7.2x over a full-resolution ImageMagick resize is far below the 1,402x pixel-count ratio the README's 'speedup proportional to the size difference' would imply (derived from page data).",
+  "when_to_use": [
+    "Bulk JPEG-to-JPEG thumbnails at 1/8 linear size or smaller (gallery previews from camera files), where nearest-neighbour quality is acceptable and you want an in-process C call rather than spawning a tool.",
+    "Embedding in a C or C++ program that cannot take on ImageMagick or libvips: the library is one 1,450-line C file depending only on libjpeg, libexif and libm.",
+    "Replacing an existing 'convert -resize' thumbnail step that lacks the jpeg:size hint: 0.079 s vs 0.568 s per 21-megapixel file in the one recorded run.",
+    "Feeding reduced-size YUV or grey pixels into your own pipeline via epeg_pixels_get after setting EPEG_YUV8 or EPEG_GRAY8, which skips colour conversion."
+  ],
+  "when_not_to_use": [
+    "When ImageMagick or libvips is available: in the same table 'convert -define jpeg:size=300x300 -thumbnail 150x150>' took 0.057 s and the vips binding 0.070 s per file against epeg's 0.079 s, and both resample with a filter instead of point sampling.",
+    "Quality-sensitive thumbnails: JDCT_IFAST, no fancy upsampling and nearest-neighbour sampling give aliasing on fine detail; vipsthumbnail, ImageMagick -thumbnail or the filtered resizers in this category (fast_image_resize, Pillow-SIMD, MagicScaler) look better.",
+    "Thumbnails larger than half the source on either axis: the scale factor falls to 1, so it decodes at full resolution and then point-samples, with no speed advantage.",
+    "Colour-managed or metadata-preserving workflows: ICC profiles are not copied (open issue #26), EXIF other than Orientation is dropped, and pixels are not rotated (only the Orientation tag is carried over).",
+    "Untrusted input at scale: there is no test suite, the project has been idle since April 2023, and _epeg_decode computes the pixel buffer size as a 32-bit unsigned product (output_width * output_height * output_components) with no overflow check, which a JPEG of more than about 1.4 gigapixels decoded at scale 1 could wrap (found by code reading, not tested)."
+  ],
+  "integration": {
+    "form": "C static or shared library (autotools, or CMake 3.0+ with BUILD_STATIC_LIB / BUILD_SHARED_LIB / BUILD_PROGRAM) plus an optional epeg command-line tool",
+    "dependencies": "libjpeg (any IJG-API implementation such as libjpeg-turbo), libexif, libm; open PR #31 (2025, unmerged) would make libexif optional",
+    "min_toolchain": "Plain C with POSIX headers (unistd.h, sys/stat.h, setjmp.h); autoconf 2.52+ and automake 1.6+, or CMake 3.0+; Windows builds through CMake since the April 2023 commits",
+    "platforms": "Linux and other Unix-likes; Windows via CMake (WIN32 fixes from 2023); any CPU libjpeg supports",
+    "thread_safety": "Not documented. Separate Epeg_Image handles are independent except for the file-static exif_byte_order, which every open writes and every encode reads, so concurrent opens and encodes race on the byte order used for the output Orientation tag.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The CLI ignores epeg_encode's return value and always exits 0, so scripts (and the speedtest-resize harness, which also counts the time of failed runs) cannot detect a failed thumbnail.",
+    "The CLI always enables thumbnail comments, so every output carries APP7 markers with 'Thumb::URI file://<input path>' and the source mtime, plus an EXIF APP1 block; strip them before publishing if paths are sensitive. With memory input and thumbnail comments enabled, _epeg_encode writes the uninitialised stack buffer buf as the first APP7 marker (bug).",
+    "The decode colour space defaults to EPEG_RGB8 (EPEG_GRAY8 or EPEG_CMYK for those sources), although the epeg_decode_colorspace_set comment says the default is EPEG_YUV8; the CLI therefore converts YCbCr to RGB and back. Call epeg_decode_colorspace_set(im, EPEG_YUV8) to avoid both conversions.",
+    "epeg_encode tears down the decoder and closes the input (issue #20), so a handle produces one output; the library default quality is 75, the CLI's is 85, and quality 90 or higher switches the output to 4:4:4 sampling."
+  ],
+  "pick_this_over_siblings_when": "Pick epeg over libvips or ImageMagick only when you need a tiny C dependency for JPEG-only thumbnails and accept point-sampled quality; libvips (in-process binding 0.070 s per file) and ImageMagick's -thumbnail with jpeg:size (0.057 s) were faster in the same run and filter properly. Against fast_image_resize, Pillow-SIMD or MagicScaler it trades quality for not decoding at full resolution, so it only wins when the source is far larger than the thumbnail.",
+  "verified_claims_summary": "In one contributor run of fawick/speedtest-resize (nono; 3.4 GHz Intel Core i7, model unstated, Ubuntu 16.10; first 10 JPEGs of 5616x3744 to 150x100; process start-up included; one pass; epeg, libjpeg and ImageMagick versions not stated), 'epeg -m 150' averaged 0.079 s per file against 0.568 s for 'convert -resize 150x150>' (7.2x, derived from page data), but that ImageMagick command decodes at full resolution and filters while epeg decodes at 1/8 scale and point-samples; ImageMagick's own '-define jpeg:size=300x300 -thumbnail 150x150>' (0.057 s, 1.39x faster than epeg) and the vips binding (0.070 s) beat it. The harness times each external command without checking its output, and epeg's CLI exits 0 even on failure; the non-zero average output size (0.207% of the input) shows thumbnails were written but per-file success is unverified.",
+  "status_note": "Abandoned: the last commits (2023-03-30 to 2023-04-05) added CMake and Windows builds, orientation get/set and a memory-leak fix in epeg_close; 6 issues and 2 pull requests (one from 2015) are open and there are no releases beyond Enlightenment's v0.9.1.042. The Enlightenment MIT variant requires public acknowledgment when source is not shipped, which keeps it a reference entry, though the single C file is easy to read or vendor if that licence is acceptable.",
+  "sources_read": [
+    "https://github.com/mattes/epeg",
+    "https://github.com/mattes/epeg/commits/master",
+    "https://github.com/mattes/epeg/issues?q=is%3Aissue",
+    "https://github.com/mattes/epeg/pulls",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/README.md",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/COPYING",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/COPYING-PLAIN",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/AUTHORS",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/src/lib/Makefile.am",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/src/lib/Epeg.h",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/src/lib/epeg_private.h",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/src/lib/epeg_main.c",
+    "https://raw.githubusercontent.com/mattes/epeg/HEAD/src/bin/epeg_main.c",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/README.md",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/main.go",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/exec.go"
+  ],
+  "confidence": 0.8
+}
