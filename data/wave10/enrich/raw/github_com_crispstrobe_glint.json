@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/crispstrobe/glint",
+  "one_liner": "Clean-room MIT C++17 AAC-LC/MP3/Opus encoder suite; AAC encode about 2-10x faster than FFmpeg's native AAC encoder.",
+  "what_it_does": "glint is a from-the-spec codec library: encoders for AAC-LC, MP3 and Opus (CELT only), plus decoders for those formats, Ogg-Vorbis and FLAC. The AAC encoder is a C API (glint_aac_create, glint_aac_encode on exactly 1024 samples per channel, glint_aac_flush, glint_aac_destroy) that returns one ADTS frame per call, with CBR and constant-quality VBR, 1-2 channels and the 12 standard rates from 8 to 96 kHz. A glint_cli binary and Python, Rust (crate glint-audio), Dart and wasm bindings wrap the same ABI. It does not replace libavcodec's API: you feed PCM frames and write ADTS bytes yourself.",
+  "how_it_is_fast": "The AAC rate loop computes each band's scalefactor in closed form from the psychoacoustic mask (noise target proportional to mask^0.6, with a 10 dB minimum-SNR cap), then bisects one integer offset to fit the bit budget, followed by a single measure-and-correct pass. FFmpeg's default two-loop search iterates quantization and scalefactors band by band. Each bisection step counts bits exactly but cheaply: band_costs() scores all 11 Huffman codebooks in two passes over a band, zero bands cost O(1), and optimal sectioning is a dynamic program over (band, book) with closed-form side-info counts, so no count-only emission is needed. PLAN.md A3 credits that change with a 52-54% cut in encode time at identical output. The MDCT is a radix-2 N/4-point complex FFT with pre- and post-twiddles; |x|^0.75 is cached per frame. Release builds use -O3 -march=native -ffast-math with LTO.",
+  "when_to_use": [
+    "You need an AAC-LC encoder under a plain permissive licence: ffmpeg's native AAC is LGPL, FDK's licence is not OSI-approved, and vo-aacenc is unmaintained and ranks last on quality in the same league.",
+    "Batch or server transcoding to 128-256 kbps stereo AAC where FFmpeg's native encoder is the incumbent. In the v0.8 league glint -q normal ran 175x-273x realtime against ffmpeg's 25x-89x, with better mean NMR on all 6 clips at 128 kbps.",
+    "Embedded or no-FPU targets: GLINT_MODE=fixed fits the AAC encoder in 47.4 KB of RAM (plus about 30 KB of transient stack) with integer per-coefficient paths at -q speed. There are ready-made benchmark projects for Raspberry Pi Pico and ESP32, but no on-silicon throughput has been published.",
+    "One small library that must both encode and decode MP3/AAC/Opus and decode Vorbis/FLAC, from C, C++, Python, Rust, Dart or the web."
+  ],
+  "when_not_to_use": [
+    "Best quality at 128 kbps on speech or electronic music: Apple (afconvert) and FDK lead on noise-to-mask there (speech NMR -6.9/-5.4 dB vs glint -3.6; electronic -9.9/-11.4 vs -4.3).",
+    "HE-AAC, HE-AACv2, multichannel (more than 2 channels) or MP4/M4A output: the AAC encoder is AAC-LC only, 1-2 channels, and emits ADTS frames.",
+    "Opus encoding of speech at low rates: the Opus encoder is CELT-only (no SILK or hybrid modes), so libopus remains the choice there.",
+    "Production use that needs an outside track record: the first commits date from mid-2026, there are 2 stars and one author, the crate has 98 downloads, and every quality and speed number is first-party."
+  ],
+  "integration": {
+    "form": "static lib and shared lib (CMake), plus a CLI; Rust crate glint-audio builds the C++ from source; vcpkg port, ESP-IDF component",
+    "dependencies": "none for the library (C++17 standard library; std::thread pool only for MP3 scalefactor search, GLINT_NO_THREADS for bare metal); Python, numpy and ffmpeg only for the test and league scripts",
+    "min_toolchain": "C++17, CMake 3.16; the Rust crate declares rust-version 1.70",
+    "platforms": "any C++17 target; README says CI builds release libraries for 9 platforms and shows Android NDK, iOS and aarch64 Linux cross builds; fixed-point builds for Cortex-M0+/M3, RP2040 and ESP32; wasm via Emscripten",
+    "thread_safety": "Not documented for the AAC encoder; contexts are independent handles. glint_set_threads is process-wide and affects only the MP3 scalefactor search (byte-identical output at any thread count).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "A zero-initialized glint_aac_config selects GLINT_QUALITY_SPEED (no psychoacoustic shaping), and the current CLI also defaults to -q speed, although the README's usage text says the default is normal. Set quality explicitly.",
+    "Encoder behaviour can change through process environment variables read once into function statics (GLINT_AAC_NO_TNS, GLINT_AAC_SNRMIN, GLINT_AAC_ALPHA, GLINT_AAC_ALPHA_S), so the same binary can produce different streams on different hosts.",
+    "glint_aac_flush is required and returns the tail frames; the README gives the encoder delay as 2048 samples. Gapless playback needs that trim, since ADTS carries no delay metadata.",
+    "At 128-256 kbps stereo, -q best and -q normal gave identical quality metrics on all 12 league rows: above 56 kbps per channel, best differs only in extra walk iterations on frames just after a transient. Do not pay for best expecting better output at these rates."
+  ],
+  "pick_this_over_siblings_when": "Pick glint over remade_ffmpeg_rs (also faster than FFmpeg's native AAC encoder, but a Rust crate) when you want a C/C++ library with a C ABI and an AAC quality league against Apple and FDK. For MP3, pick it over Shine when you need a psychoacoustic model: it is ahead of LAME 3.100 on PEAQ ODG on 8 of 10 clips at 128 kbps, and its fixed build needs about 64 KB against Shine's 96 KB, both per glint's README. Shine and SuperLAME remain the MP3-only incumbents in this catalog.",
+  "verified_claims_summary": "The author's tests/compare_encoders.py encoded six local clips (speech, electronic, quartet, industrial, piano, castanets; the script's defaults are 60 s files apart from castanets) to 128 and 256 kbps ADTS. Each encode is one subprocess timed by wall clock, including process start-up and file I/O, on an unstated machine (the README names an M1, and PLAN.md places FFmpeg 8.1 on the same box). glint -q normal ran 2.1x-9.8x faster than ffmpeg's default native AAC encoder, 1.2x-2.5x faster than FDK and 1.0x-3.0x faster than Apple afconvert (derived from page data). Two noise signals stand out. glint-normal and glint-best produce identical output at these rates, yet their timings differ by up to 21% (quartet 128 kbps: 196x vs 238x). ffmpeg alone spans 25x-89x on clips of the same length. The Release flags (-O3 -march=native -ffast-math, LTO) are public in CMakeLists.txt; the compiler version and exact CPU are not. No correctness bug was found behind the numbers. The latest commit (2026-08-19) fixes glint's AAC decoder for foreign streams, which the league does not use, since ffmpeg decodes every stream for scoring.",
+  "status_note": "Active (322 commits, last 2026-08-19, GitHub releases up to v0.9.0, crate glint-audio 0.11.0 with 98 downloads), MIT, 0 issues and 0 PRs ever filed. Small and self-contained enough to vendor, but it is a mid-2026 one-author project with no outside users yet.",
+  "sources_read": [
+    "https://github.com/CrispStrobe/glint",
+    "https://github.com/CrispStrobe/glint/commits/main",
+    "https://github.com/CrispStrobe/glint/releases",
+    "https://github.com/CrispStrobe/glint/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/README.md",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/tests/aac_league_v0.8.txt",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/tests/compare_encoders.py",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/PLAN.md",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/cli/main.cpp",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/include/glint/glint.h",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/src/aac_encoder.cpp",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/src/aac_coder.cpp",
+    "https://raw.githubusercontent.com/CrispStrobe/glint/HEAD/src/aac_mdct.cpp",
+    "https://crates.io/api/v1/crates/glint-audio",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/aacenc.c",
+    "https://github.com/FFmpeg/FFmpeg/commits/master/libavcodec/aacenc.c"
+  ],
+  "confidence": 0.75,
+  "measurement_notes": "For the orchestrator, no correctness bug found. (1) The README's '~272x/168x realtime (speed/best) on an M1' is not from the v0.8 league. PLAN.md section A3 (2026-07-06) took it from a 300 s speech clip, interleaved min-of-5, timing glint and Apple (~104x) only, not ffmpeg. (2) The league is single-run wall clock, and the author's own notes say league runs were taken under 'moderate load': the A1b run recorded ffmpeg-native at 6-56x, and a 2026-07-10 rerun was abandoned at loadavg ~45. The identical-output glint-normal/glint-best pairs differ by up to 21%, so treat every ratio as about +/-20%. (3) Compiler flags are public in CMakeLists.txt (Release: -O3 -march=native -ffast-math, IPO/LTO), contradicting the record's 'flags not stated'; the compiler version and CPU model are still missing from the log. (4) ffmpeg ran with its default coder and no -aac_coder option. PLAN.md names FFmpeg 8.1 on the author's machine, whose default is presumably twoloop. FFmpeg master made a new NMR scalefactor-trellis coder the default on 2026-07-01 (commits 'aaccoder: add NMR-based coder' and 'aacenc: use the NMR coder by default'), so the ffmpeg baseline will change with the next release. ffmpeg's faster '-aac_coder fast' mode was not timed."
+}
