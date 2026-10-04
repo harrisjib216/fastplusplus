@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/blend2d/blend2d",
+  "one_liner": "Zlib-licensed C/C++ CPU 2D vector renderer with JIT-compiled pipelines; about 4x Skia's and 7x Cairo's raster throughput.",
+  "what_it_does": "Blend2D is an anti-aliased 2D vector rendering engine for the CPU. It fills and strokes paths, rectangles and polygons with solid colours, gradients (linear, radial, conic) and image patterns, using Porter-Duff composition operators, onto a BLImage. It also includes TrueType/OpenType text and BMP/JPEG/PNG/QOI codecs. The API is its own (BLContext, BLPath, BLImage, BLGradient, BLPattern), exposed as both a C API (bl_context_*) and C++ wrappers. It is not a drop-in for Skia or Cairo. Rendering can be synchronous, or asynchronous across a built-in thread pool when BLContextCreateInfo::thread_count is set.",
+  "how_it_is_fast": "Fill and composition pipelines are generated at runtime with AsmJit, so each combination of pixel format, composition operator, fill type and fetch type gets specialised SIMD machine code for the host CPU. The analytic rasterizer is AGG-derived but renders strictly top to bottom so it can work in bands. It uses a dense cell buffer plus a per-scanline bit vector in which one bit covers N cells, which lets the compositor skip empty pixels in large steps. The thesis also points to fixed-point math where possible and a dedicated filler for unaligned rectangles. Multi-threaded mode queues commands and gives each worker horizontal bands, with the calling thread acting as one of the workers.",
+  "when_to_use": [
+    "Server-side or headless CPU rendering in C or C++ (charts, maps, thumbnails, PDF-to-image style rasterisation) where Skia's or Cairo's raster backend is the bottleneck. In the thesis data it was faster than Skia in 1032 of 1044 test cells (geometric mean about 4.1x) and faster than Cairo in 863 of 870 (about 7.2x) on an Apple M1 Pro (derived from page data).",
+    "Large shapes with gradient or pattern paints where you can spare cores. With 8 threads the geometric-mean speedup over its own single-threaded mode at 256x256 was 3.95x on the M1 Pro and 4.65x on an i9-14900K (derived from page data).",
+    "Replacing AGG, JUCE's software renderer or tiny-skia in a CPU-only stack. Single-threaded it was faster than AGG in 513 of 522 cells (about 3.3x), JUCE 8.0.8 in 838 of 870 (about 2.4x) and tiny-skia in 870 of 870 (about 7.5x) on the same M1 Pro run (derived from page data).",
+    "x86-64 or AArch64 targets where runtime code generation is allowed, so the JIT pipelines that produced these numbers are actually used."
+  ],
+  "when_not_to_use": [
+    "You need GPU rendering or GPU compositing for an interactive UI. Blend2D rasterises every frame on the CPU, and open issue #264 asks exactly this question with no answer yet. Look at Skia's GPU backends, ThorVG or vkvg.",
+    "Mostly tiny, curve-heavy paths. At 8x8-32x32 on the Fish, Butterfly and Dragon shapes, Vello CPU single-threaded was up to 2.9x faster in the 2026-06-08 M1 Pro run, and Skia beat it by up to 1.13x on 8x8 Butterfly and Dragon (derived from page data).",
+    "Workloads dominated by large axis-aligned solid rectangle strokes. Cairo was faster on StrokeRectA Solid at 32x32-256x256, by up to 1.35x on the M1 Pro and 3.0x on the i9-14900K (derived from page data).",
+    "Targets without the JIT (32-bit ARM, RISC-V and other non-x86/AArch64 targets, BLEND2D_NO_JIT builds, sandboxes that forbid executable memory). These fall back to the reference pipelines, and none of the published numbers covers that configuration.",
+    "Projects that need PDF, SVG or print output surfaces, SVG/Lottie parsing, or a frozen API. The source tree contains only the raster (CPU image) rendering context, and the library is still pre-1.0 (0.21.3) with recent renames."
+  ],
+  "integration": {
+    "form": "shared lib by default, static lib with BLEND2D_STATIC=ON (CMake)",
+    "dependencies": "AsmJit, cloned into 3rdparty/asmjit and embedded (required unless BLEND2D_NO_JIT=ON); nothing else for the library. The shared build avoids linking the C++ standard library by default (BLEND2D_NO_STDCXX). Qt and the comparison libraries are needed only for demos and bl_bench backends.",
+    "min_toolchain": "C++20 compiler (cxx_std_20 is a PUBLIC compile feature on the CMake target), CMake 3.24; the C API is usable from C (the repo builds .c samples)",
+    "platforms": "x86 and x86-64 (runtime dispatch from SSE2 to AVX2/AVX-512 plus JIT), AArch64 (JIT plus ASIMD), AArch32 (ASIMD, no JIT); other CPUs use the reference pipelines; Windows, Linux and macOS (Windows threads or POSIX threads)",
+    "thread_safety": "One BLContext, including its weak copies, must not be used by several threads at once. Objects are atomically reference-counted, so images, paths and fonts can be shared between threads. Multi-threaded rendering is internal (thread_count in BLContextCreateInfo), and results are visible only after flush(BL_CONTEXT_FLUSH_SYNC) or end().",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The API was renamed between the measured version and HEAD. The thesis harness (Blend2D 0.12.0) calls setCompOp, threadCount and BLRuntime::queryBuildInfo, while 0.21.3 headers use snake_case (set_comp_op, thread_count, bl_context_* C functions). The GitHub repo publishes no releases or tags, and the vcpkg port lags (issue #249 asks for 0.21.2), so pin a commit.",
+    "There are no exceptions (built with -fno-exceptions -fno-rtti). Errors come back as BLResult, and convenience constructors such as BLContext(BLImage&) swallow errors, so use begin() and check its result.",
+    "Threads hurt very small shapes. In the M1 Pro data, 8-thread mode was slower than single-threaded in 24 of 174 cells at 8x8 (derived from page data), and the thesis notes a slowdown 'for very small sizes' in Fill-Linear-RectA. Use the threaded context for large or numerous shapes, not for UI glyph-sized work.",
+    "Open robustness issues: #252 (ASan READ in the edge builder when stroking a path with a subnormal move_to and a huge control point), #255 and #256 (integer overflow in BLString and BLPath reserve, fixes staged), and #265 (stroke coverage gap when a segment is shorter than the pen width). Separately, the CMake error for a missing AsmJit uses message(FATAL ...), which CMake does not treat as an error, so the build fails later at add_subdirectory."
+  ],
+  "pick_this_over_siblings_when": "Pick Blend2D over Vello CPU, AGG, JUCE, tiny-skia or raqote when you want the fastest single-threaded CPU rasteriser in C or C++. In the same harness it beat all of them in most cells, and Vello CPU wins mainly on tiny curved shapes and in some 4-8 thread configurations. Pick ThorVG instead if you need SVG or Lottie loading, or Vello CPU if you want a Rust-native library.",
+  "verified_claims_summary": "Laurenz Stampfl's ETH Zurich master's thesis (Vello CPU author, advised by Raph Levien) ran Blend2D 0.12.0, Skia (vcpkg unofficial-skia, version unstated) and Cairo 1.18.4 in Blend2D's own bl_bench harness on an Apple M1 Pro. Rendering 1000 unaligned 256x256 solid rectangles took 10.8 ms for Blend2D single-threaded, 50.3 ms for Skia and 21.9 ms for Cairo (about 4.7x and 2.0x). Across the published result JSON it was faster than Skia in 1032 of 1044 cells and Cairo in 863 of 870 (derived from page data). The compiler and the Skia/Cairo build flags are not stated, and Blend2D used its CMake release flags (-O2).",
+  "status_note": "Actively developed (last commit 2026-09-05, version 0.21.3 in core/api.h, about 2.0k stars, 37 open issues) under the Zlib licence, so it is copyable. It is pre-1.0 with API renames between versions and no GitHub releases, so vendor a pinned commit together with its AsmJit checkout.",
+  "measurement_notes": "Harness code read (LaurenzV/blend2d-apps bl_bench: backend.cpp, backend_blend2d.cpp, backend_skia.cpp, app.cpp). Every backend replays the same rewound random coordinate and colour sequences onto a 512x600 premultiplied 32-bit buffer. Anti-aliasing is on everywhere: Skia sets setAntiAlias(true), and Cairo, an image surface over the same pixels, keeps its default antialias mode. Blend2D's timed region includes flush(BL_CONTEXT_FLUSH_SYNC); Skia's and Cairo's flush() are no-ops because both draw immediately into the installed pixels. Each path is built once outside the timed loop for both libraries. Quantity is chosen adaptively (at least 1 ms per run), and the best of 10 repeats (15 in the 2026-06-08 run) is kept. Results are reported as renders per ms, and the thesis's 'ms per 1000 renders' figures are 1000/rcpms. Nothing here favours Blend2D beyond the harness being Blend2D's own design, and the thesis author builds a competing renderer. No correctness or measurement flaw found; no reason to retier. Extra derived data, M1 Pro 2025-09-24: Blend2D ST lost to Skia only in 12 cells, all 8x8 FillButterfly/FillDragon (by 1.07-1.11x), and lost to Cairo in 7 cells (StrokeRectA Solid and FillRectU Pattern at 32x32-256x256, by up to 1.35x). i9-14900K (no Skia column): StrokeRectA Solid 256x256 Cairo was 3.0x faster.",
+  "sources_read": [
+    "https://github.com/blend2d/blend2d",
+    "https://raw.githubusercontent.com/blend2d/blend2d/HEAD/README.md",
+    "https://raw.githubusercontent.com/blend2d/blend2d/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/blend2d/blend2d/HEAD/blend2d/core/api.h",
+    "https://raw.githubusercontent.com/blend2d/blend2d/HEAD/blend2d/core/context.h",
+    "https://raw.githubusercontent.com/blend2d/blend2d/HEAD/blend2d/raster/analyticrasterizer_p.h",
+    "https://github.com/blend2d/blend2d/tree/master/blend2d-testing/bench",
+    "https://github.com/blend2d/blend2d/tree/master/blend2d/raster",
+    "https://github.com/blend2d/blend2d/tree/master/blend2d/pipeline",
+    "https://github.com/blend2d/blend2d/issues",
+    "https://github.com/blend2d/blend2d/issues/252",
+    "https://github.com/blend2d/blend2d/issues/264",
+    "https://github.com/blend2d/blend2d/issues/265",
+    "https://github.com/blend2d/blend2d/releases",
+    "https://github.com/blend2d/blend2d/tags",
+    "https://raw.githubusercontent.com/LaurenzV/master-thesis/main/main.pdf",
+    "https://github.com/LaurenzV/blend2d-apps/tree/master/bl_bench",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/README.md",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/app.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/backend.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/backend.h",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/backend_blend2d.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/backend_skia.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/master/bl_bench/backend_cairo.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/vello_chart/main/data/arm/2025-09-24.json",
+    "https://raw.githubusercontent.com/LaurenzV/vello_chart/main/data/arm/2026-06-08.json",
+    "https://raw.githubusercontent.com/LaurenzV/vello_chart/main/data/x86/2026-01-22.json"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/bitbank2/giflib-turbo",
+  "one_liner": "Single-file C rewrite of giflib's slurp-style API whose LZW decoder uses the output image as its dictionary; speed unmeasured.",
+  "what_it_does": "giflib-turbo is one C file (gif_lib.c) with a gif_lib.h that copies giflib 5.2.1's names, structs and error codes. Decoding works only through the whole-file path: DGifOpenFileName or DGifOpenFileHandle, then DGifSlurp, which reads the entire file into memory and decodes every frame into SavedImages[].RasterBits. Encoding goes through EGifSpew or EGifPutLine. It is not a full giflib replacement: DGifOpen (callback/memory input) is a stub that returns NULL, the line-by-line DGifGet* calls are not declared, and six declared functions have no definition.",
+  "how_it_is_fast": "The LZW decoder stores each dictionary entry as an (offset, length) pair pointing into pixels already written to the frame buffer. Emitting a code is then a forward copy, done 8 bytes at a time with unaligned 64-bit loads and stores on 64-bit targets, instead of walking a prefix linked list backwards and reversing the result. The compressed data is first 'de-chunked' in place, with the 255-byte sub-block headers removed, so the inner loop refills a 64-bit bit buffer without checking block boundaries. The file is read with a single read() call, and there are no per-byte input bounds checks in the hot loop (see gotchas).",
+  "when_to_use": [
+    "Trusted GIF files on Linux or macOS x86-64/arm64 when the code already uses only DGifOpenFileName/DGifOpenFileHandle + DGifSlurp + DGifCloseFile and you want to try a faster decoder without changing source.",
+    "Batch or offline jobs (thumbnailing your own assets, tests) where you can confirm the output matches giflib's pixel for pixel on your own corpus, and where buffering the whole file plus each frame in memory is acceptable.",
+    "Studying the output-as-dictionary LZW technique; the same author's maintained AnimatedGIF library uses it as its 'Turbo' mode."
+  ],
+  "when_not_to_use": [
+    "Any untrusted input (browsers, upload services, chat clients). The decoder does not validate the LZW minimum code size, ignores the compressed-data length, does not bounds-check sub-block parsing, and leaves malloc results unchecked. Valid images can also overflow the heap (see gotchas). The README itself lists security vulnerabilities as an open risk.",
+    "Code that uses DGifOpen with a read callback or in-memory buffer, the DGifGetRecordType/DGifGetImageDesc/DGifGetLine low-level decoder, the GraphicsControlBlock helpers (DGifSavedExtensionToGCB and others) or GifFreeSavedImages. These fail at runtime or at link time.",
+    "Big-endian 64-bit CPUs, or 64-bit CPUs that trap on unaligned access. INTELLONG reads a native-endian uint64_t, and LZWCopyBytes does unaligned 8-byte stores.",
+    "Windows or non-seekable input. The code includes unistd.h and sys/fcntl.h and uses open/read/lseek/close. On a pipe, lseek fails, no file buffer is allocated, and GIFPreprocess then dereferences a NULL file pointer.",
+    "Production use where you need a maintained, measured option. There are 10 commits, the last core change was on 2023-01-16, there are no tests, and there is no benchmark. gif_load is the measured alternative."
+  ],
+  "integration": {
+    "form": "source-drop (gif_lib.c + gif_lib.h), or a CMake library installed as 'gif' with giflib.pc and SOVERSION 7",
+    "dependencies": "none beyond libc and POSIX file I/O",
+    "min_toolchain": "C99 (Makefile uses -std=c99 -O3); CMake 3.11 for the CMake build",
+    "platforms": "POSIX (Linux, macOS, BSD); the fast path assumes a little-endian 64-bit CPU with cheap unaligned access (x86-64, arm64); 32-bit builds fall back to byte-by-byte copies; no Windows support in the source",
+    "thread_safety": "not documented; decoder state (symbol table, file buffer) is allocated per GifFileType in DGifSlurp and no mutable globals are used in the decode path, so separate handles on separate threads look safe from the code",
+    "drop_in_for_baseline": "partial: only the DGifOpenFileName/DGifOpenFileHandle + DGifSlurp and EGifSpew paths are implemented. DGifOpen returns NULL, and the DGifGet* line API is absent. DGifExtensionToGCB, DGifSavedExtensionToGCB, EGifGCBToExtension, EGifGCBToSavedExtension, EGifPutExtension and GifFreeSavedImages are declared but undefined. Installing it as libgif.so.7 in place of giflib 5.2 would break dynamically linked programs that call any of these."
+  },
+  "gotchas": [
+    "Heap overflow on valid files. Each frame buffer is malloc'd as Width*Height+8 rounded up to 64 KiB, but DecodeLZW writes the 2^codesize root dictionary bytes just past Width*Height. With 8-bit LZW codes, any frame where Width*Height mod 65536 falls in 65281-65528 overruns the buffer; for example, a 300x218 frame writes 120 bytes past it (derived from reading gif_lib.c). Separately, the 8-byte copy overshoot near the end of a frame can overwrite those root bytes before the last few pixels are decoded.",
+    "Out-of-bounds reads on malformed or truncated files. The sub-block de-chunk loop and extension parsing never compare iOff with the file size. DecodeLZW never uses its iLZWSize argument, so a stream with no EOI keeps reading past the file buffer until the frame is full. The LZW code-size byte is never range-checked: a value of 13 or more gives memset a negative length, and 14 or more writes past the 12,288-entry symbol table. The decoder always returns GIF_OK, so pixels a short stream never writes stay as uninitialized heap memory.",
+    "Ownership differs from giflib. Local ColorMap->Colors and every ExtensionBlock.Bytes point into the slurped file buffer, which DGifCloseFile frees. Copying decoded frames with GifMakeSavedImage and then calling EGifSpew/EGifCloseFile passes those pointers to free() in GifFreeExtensions, which is an invalid free. This is the decode-and-re-encode loop in test.c that is never reached.",
+    "Each handle is closed twice: DGifSlurp and EGifSpew close the file descriptor, then DGifCloseFile and EGifCloseFile close the same number again. In a multithreaded program that fd number may already belong to another file. EGifSpew writes the LZW code-size byte from SColorResolution and dereferences SColorMap without a NULL check."
+  ],
+  "pick_this_over_siblings_when": "Only when you need giflib's exact SavedImage structures from a recompile and the input is trusted. Otherwise use gif_load (C tier, measured 1.28x-1.78x over giflib 5.2.2 in its own README tables, different callback API), or msf_gif if what you need is fast GIF encoding.",
+  "verified_claims_summary": "Nothing has been measured. The only numbers are first-party prose: the DecodeLZW comment in gif_lib.c claims about 2.5x over giflib on poorly compressed images and up to 30x on well-compressed ones, and a search summary of the blocked 2021 blog post gives 2x/5x/20x. None of them names a CPU, compiler, giflib version or image set. The repo's A/B Makefile (gif_test_old against Homebrew -lgif vs gif_test_new, gcc -O3) builds a test.c that has no timer and only writes a generated wedge image.",
+  "status_note": "Stale (last commit 2024-03-22, a BSD build fix; last code change 2023-01-16; 39 stars, no releases, no tests, no open issues). It is Apache-2.0 and small enough to vendor, but it is not safe for untrusted input without substantial hardening.",
+  "measurement_notes": "Correction to the record: the '2.5x to 30x' figure is not only a deepwiki summary. It appears in the theory-of-operation comment above DecodeLZW in gif_lib.c (opened via raw.githubusercontent.com): 'For poorly compressed images, the speed gain is about 2.5x compared to giflib. For well compressed images (long runs) the speed can be as much as 30x faster.' That is a first-party number on an opened page, with no setup, comparable to lodepng-turbo's README 'twice as fast as libpng' (tier C). Part of any measured gain would also come from dropping input bounds checks that giflib performs. Code reading found memory-safety defects on valid input (the root-table overflow for Width*Height mod 65536 in 65281-65528) and on malformed input (unbounded LZW and sub-block reads, unvalidated code size), and these should be recorded as shortcomings whatever the tier.",
+  "sources_read": [
+    "https://github.com/bitbank2/giflib-turbo",
+    "https://github.com/bitbank2/giflib-turbo/commits",
+    "https://github.com/bitbank2/giflib-turbo/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/gif_lib.c",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/gif_lib.h",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/test.c",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bitbank2/giflib-turbo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bitbank2/AnimatedGIF/HEAD/README.md",
+    "WebSearch: \"Big Memory GIF Decoder\" bitbank giflib faster (snippets only; blog post blocked)"
+  ],
+  "confidence": 0.75
+}
