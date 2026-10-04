@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/mhaugstrup/opuspp-ai-port",
+  "one_liner": "Header-only C++23 port of the libopus 1.6.1 decoder for one CELT stream type, bit-exact and 1.27-1.48x faster.",
+  "what_it_does": "Decodes exactly one kind of Opus stream: CELT-only fullband 10 ms single-frame packets (TOC config 30) from an encoder set to RESTRICTED_CELT, complexity 0-4 and prediction disabled, always to 48 kHz stereo interleaved float, with CELT packet-loss concealment. The API is a small C++ class, opuspp::Decoder with decode(data, size, AudioBuffer&), decode_lost() and reset(), writing into a 64-byte aligned 3840-byte AudioBuffer; anything else returns Error::unsupported_packet with state untouched. It replaces opus_decode_float only for that stream and is not API-compatible with libopus.",
+  "how_it_is_fast": "Specialisation alone was not enough (0.68x of libopus with GCC -O2 per the project's notes); the speed comes from an explicit portable SIMD layer, simd<T,N> on GCC/Clang vector extensions, that ports libopus's SSE xcorr/inner-product kernels lane for lane and vectorises code libopus runs scalar (radix-3/4/5 FFT butterflies with compile-time twiddles, IMDCT rotation and TDAC windowing, noise fill with a 4-lane LCG using jump-ahead constants, Hadamard/Haar steps, de-emphasis loads). Every buffer and table is alignas(64) and sliding windows are built from aligned blocks with compile-time shuffles. Serial integer code was rewritten exactly: a 6 KB constexpr bits2pulses lookup table instead of a binary search, a hardware-sqrt-plus-correction isqrt in theta decoding, and a branch-free counting search in cwrsi (PVQ index decoding). Being header-only, all of it inlines into the caller, whereas libopus is a separately compiled library.",
+  "when_to_use": [
+    "You control both ends of a low-latency link (wireless or LAN audio streaming) and can pin the encoder to RESTRICTED_CELT, fullband, 10 ms frames, complexity 0-4 and OPUS_SET_PREDICTION_DISABLED(1).",
+    "High-bitrate stereo music streams (128-510 kb/s) where decode CPU per stream matters; the largest measured gain is at 320 kb/s.",
+    "Freestanding or embedded C++ builds that need no heap, no libm, no exceptions or RTTI, and a fixed 18.1 KB decoder object the caller places.",
+    "Systems that must stay bit-identical to a reference libopus build (SSE baseline, strict IEEE) for conformance testing via final_range()."
+  ],
+  "when_not_to_use": [
+    "General Opus playback: SILK, hybrid, 20/40/60 ms frames, narrower bandwidths, multi-frame packets and packets that enable the pitch post-filter are rejected, so VoIP/WebRTC or file playback needs libopus.",
+    "Streams whose encoder you do not control: a sender switching to complexity 5+ or prediction enabled produces packets opuspp refuses, so keep a libopus fallback.",
+    "Needs beyond the CELT PLC: no FEC, DRED, OSCE or deep PLC, no multistream, no int16 output or other sample rates.",
+    "Non-x86 targets where speed matters: everything was built and measured on x86-64 Linux (one Ryzen 5 9600X core); NEON and RVV come only through the generic vector-extension backend and are unmeasured.",
+    "Production code that needs a track record: one commit (2026-10-02), 0 stars, no outside users, written by Claude Code; fuzzed and sanitizer-checked by the author but not externally reviewed."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library (only <cstddef>, <cstdint>, <bit>); libopus 1.6.1 sources, CMake 3.21+, ffmpeg and a music clip only for tests and benchmarks",
+    "min_toolchain": "C++23; GCC 16.2 and Clang 22.1 tested; other compilers fall back to an untested plain-array SIMD backend",
+    "platforms": "any C++23 target in principle (GCC/Clang vector extensions lower to SSE, AVX, NEON, RVV); verified and measured only on x86-64 Linux (baseline, v2, v3, v4 builds)",
+    "thread_safety": "Not documented; all mutable state is inside each Decoder object and the tables are constexpr, so one decoder per thread is safe (inference from the code).",
+    "drop_in_for_baseline": "partial: replaces opus_decode_float only for CELT-only fullband 10 ms single-frame packets from a prediction-disabled encoder, through a different C++ API"
+  },
+  "gotchas": [
+    "Bit-exactness needs strict IEEE: with FMA enabled (e.g. -march=native) normal frames differ at about 135 dB SNR unless you add -ffp-contract=off, and -ffast-math is only accepted together with -DOPUSPP_FLOAT_APPROX (#error otherwise).",
+    "A stock x86 libopus picks an AVX2+FMA pitch kernel at run time, so its concealment differs from opuspp (about 86 dB SNR at 10% loss); the project's bit-exact reference is libopus built with OPUS_X86_MAY_HAVE_AVX2=OFF.",
+    "Concealment peaks at 9.6-12.1 KB of stack (3.8-6.5 KB for normal decoding), which matters for small embedded thread stacks.",
+    "GCC -Os builds gain least: 1.27x like for like and 0.88x of a GCC -O3 -march=native libopus, so build it at -O2 or higher with GCC."
+  ],
+  "pick_this_over_siblings_when": "Pick opuspp over libopus or full-codec ports such as opus-pure, ruopus or ropus only when the stream is pinned to fullband 10 ms CELT with prediction off and you want header-only freestanding C++ with libopus-bit-exact output; the full ports and libopus handle SILK, hybrid and every frame size, and gopus/ruopus/ropus are the choices for Go or Rust.",
+  "verified_claims_summary": "tests/bench.cpp decodes the same libopus-encoded packets (60 s of tones, noise, transients and orchestral music; 320 kb/s, complexity 4, 10 ms fullband stereo) with opus_decode_float and with opuspp, best of 7 passes on one pinned Ryzen 5 9600X core with the packet arena clflushed before each pass; libopus 1.6.1 is built statically with the same GCC 16.2 or Clang 22.1 flags per profile (-Os, -O2, or -O3 -march=native -ffast-math with FLOAT_APPROX in both) and keeps its run-time AVX2 dispatch. opuspp is 1.27-1.48x faster like for like and 1.09-1.50x across 128/510 kb/s, 10% loss and complexities 0 and 2; libopus is not built with -flto, so part of the gain is the header-only inlining the project argues for, and only the rendered tables (not results.json) are committed.",
+  "status_note": "Brand-new single-commit AI-written experiment (active, 0 stars) under BSD-3-Clause as a libopus derivative; the code, tests and benchmark are complete and reproducible, but nobody else is using it yet.",
+  "sources_read": [
+    "https://github.com/mhaugstrup/opuspp-ai-port",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/README.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/performance-additional.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/performance-shared-library.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/performance-build-profiles.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/verification.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/how-claude-made-it.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/code-size.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/docs/memory.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/README.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/include/opuspp/opuspp.hpp",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tests/bench.cpp",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tests/bench_signal.hpp",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tests/bench_stream.hpp",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tests/data/README.md",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tools/profile_report.py",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tools/fetch_deps.sh",
+    "https://raw.githubusercontent.com/mhaugstrup/opuspp-ai-port/HEAD/opuspp/tools/verify.sh"
+  ],
+  "confidence": 0.85
+}
