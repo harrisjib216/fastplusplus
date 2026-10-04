@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/sixlabors/imagesharp",
+  "one_liner": "Fully managed C# image library; 4.4x faster than Magick.NET and 3.2x faster than System.Drawing on a load-resize-sharpen-save JPEG pipeline.",
+  "what_it_does": "A cross-platform 2D image library written entirely in C#: decoders and encoders (JPEG, PNG, GIF, TIFF, WebP and others), pixel-typed Image<TPixel> buffers, and a processing pipeline for resize, crop, convolution, colour and drawing operations. The API is its own: Image.Load, then image.Mutate(x => x.Crop(...).Resize(...)) or Clone, then Save; it is not source compatible with Magick.NET or System.Drawing. No native binaries are needed, so the same package runs wherever .NET runs.",
+  "how_it_is_fast": "Hot codec paths use .NET hardware intrinsics picked at run time: the JPEG float DCT has an AVX Vector256 path (FloatingPointDCT.Intrinsic.cs) and colour conversion has AVX, Arm and Vector<T> converters (JpegColorConverterBase). Resize is a separable two-pass filter with precomputed ResizeKernelMap weights run by a sliding-window ResizeWorker over a transposed Vector4 first-pass buffer sized to Configuration.WorkingBufferSizeHintInBytes, which keeps the working set in cache; in 3.1.12 and on main it is one sequential worker per image. Convolution-type processors are row-parallel through ParallelRowIterator with MaxDegreeOfParallelism defaulting to Environment.ProcessorCount. Much of the gap to Magick.NET also reflects the baseline: the Magick.NET-Q8-AnyCPU package is built without OpenMP, so ImageMagick runs every step on one thread.",
+  "when_to_use": [
+    "A .NET service or app that needs in-process decode, resize and encode with no native dependency (containers, ARM64, trimmed builds; the benchmark itself ran under NativeAOT) and currently uses Magick.NET or System.Drawing: 4.4x faster than Magick.NET-Q8-AnyCPU on the JPEG pipeline and 8.2x on TIFF in the NetVips table.",
+    "Replacing System.Drawing for thumbnail-style work: 3.2x faster on JPEG and 5.3x on TIFF even though the System.Drawing path skipped the sharpen step.",
+    "Your use qualifies for the Apache-2.0 side of the Six Labors Split License: transitive dependency, open-source or source-available use, a for-profit under 1M USD annual gross revenue, or a non-profit.",
+    "Pipelines dominated by convolution-type filters on large images, which ImageSharp spreads over every core by default."
+  ],
+  "when_not_to_use": [
+    "You want the fastest option in .NET: NetVips (libvips) is 4.93x faster on JPEG and 3.75x on TIFF in the same table, and NetVips (806.8 ms) and MagicScaler (888.0 ms) beat ImageSharp (1,098.4 ms) in Six Labors' own LoadResizeSave stress benchmark.",
+    "A for-profit direct dependency above 1M USD revenue without a paid Six Labors Commercial License; version 4 enforces a build-time licence key (a third-party issue seen as a search snippet says it is an error in Release builds), and the net-vips project pins 3.1.12 for that reason.",
+    "Staying on 3.1.12 to avoid the key while decoding untrusted files: GHSA-jj3q-cwqj-842r (heap out-of-bounds write in TIFF CCITT T4/Modified Huffman decompression, CVSS 7.5) affects >= 3.0.0 and is patched only in 4.1.1, and eight more advisories followed in August-September 2026 (TIFF, ICC, EXR, HistogramEqualization).",
+    "One very large resize where you expect all cores to help: the resampling pass runs as a single worker (the source comments that parallelism would need multiple workers), so parallelise across images instead.",
+    "JPEG decode-bound workloads where Huffman decoding dominates: issue #1607 'JpegDecoder: Optimize HuffmanScanDecoder' has been open since 2021."
+  ],
+  "integration": {
+    "form": "NuGet package (managed assembly SixLabors.ImageSharp)",
+    "dependencies": "none (fully managed, no native libraries)",
+    "min_toolchain": "3.1.x targets net6.0 (.NET 6+); 4.x releases moved to .NET 8 (v4.0.0 release notes); the main-branch csproj now targets net10.0",
+    "platforms": "any platform .NET runs on; SIMD paths for x86 AVX/AVX2 and Arm intrinsics with a Vector<T> fallback chosen at run time; marked IsTrimmable",
+    "thread_safety": "not documented in the files read; processors parallelise internally up to Configuration.MaxDegreeOfParallelism (default Environment.ProcessorCount)",
+    "drop_in_for_baseline": "false: its own Image/Mutate/Save API, not source compatible with Magick.NET or System.Drawing"
+  },
+  "gotchas": [
+    "MaxDegreeOfParallelism defaults to the processor count; a server that already processes many images concurrently should lower it (Six Labors' own Resize benchmark sets it to 1) to avoid oversubscription.",
+    "In 3.1.12 the general 2D ConvolutionProcessor<TPixel> is internal; the NetVips benchmark reaches it through reflection (Type.GetType plus MakeGenericType), which is fragile under trimming, NativeAOT and version upgrades.",
+    "Convolution kernels are applied exactly as given, with no divisor parameter: the benchmark's sharpen kernel sums to 8, so ImageSharp's output is brighter and clipped compared with libvips and ImageMagick, which divide by 8.",
+    "Processors work on rows converted to Vector4 floats (ToVector4 and FromVector4Destructive per row), so 8-bit pipelines pay a conversion each step; chaining many cheap operations costs more than the per-operation numbers suggest."
+  ],
+  "pick_this_over_siblings_when": "Among .NET options, pick ImageSharp over NetVips/libvips or MagicScaler when a fully managed library with no native binaries matters more than raw speed, since both are faster in the same benchmarks; against Magick.NET and System.Drawing it is the faster managed choice, provided the Six Labors licence terms fit.",
+  "verified_claims_summary": "Third-party BenchmarkDotNet suite by the NetVips author (.NET 10.0.1 NativeAOT, x86-64-v4, AMD Ryzen 9 7900 with 24 threads, Windows 11): load a 5000x5000 JPEG or tiled TIFF, crop 100 px, shrink to 90% with a Triangle filter, 3x3 sharpen, save at quality 75. ImageSharp 3.1.12 took 366.95 ms against Magick.NET-Q8-AnyCPU 14.10.1 at 1,626.85 ms (about 4.4x, derived from page data) and System.Drawing at 1,185.58 ms (about 3.2x, no sharpen); on TIFF 186.51 ms against 1,533.49 ms (8.2x) and 985.05 ms (5.3x). Magick.NET ran single-threaded (non-OpenMP package) while ImageSharp's sharpen step used up to 24 threads.",
+  "status_note": "Actively maintained (v4.1.2 released 2026-09-14, 8.0k stars, 14,518 commits); usability stays reference because of the non-OSI Six Labors Split License and v4's build-time key, and the benchmarked 3.1.12 is the latest 3.x release on the releases page, so it does not carry the fix for GHSA-jj3q-cwqj-842r (patched only in 4.1.1).",
+  "measurement_notes": "No correctness bug in the timed ImageSharp code, but the record's 'only threading is left at library defaults' understates one asymmetry. Magick.NET's docs/Readme.md says Magick.NET does not use OpenMP (OpenMP builds are separate *-OpenMP-x64/arm64 packages), so the benchmarked Magick.NET-Q8-AnyCPU ran crop, resize, convolve and codec work on one thread. ImageSharp's Configuration defaults MaxDegreeOfParallelism to Environment.ProcessorCount (24 here) and its ConvolutionProcessor<TPixel> uses ParallelRowIterator, so the sharpen step was multi-threaded. Its Triangle resize (one sequential ResizeWorker) and the JPEG code read (decoder and encoder SpectralConverter, FloatingPointDCT, JpegColorConverterBase, none with parallel loops) were single-threaded; TIFF codec threading was not checked. So the 4.4x and 8.2x ratios over Magick.NET include a single-threaded-versus-24-thread sharpen; the codec and resize steps are like for like. NetVips was capped at Concurrency = 4 and System.Drawing skips the sharpen step. ImageSharp's kernel lacks the 1/8 scale, so the output image differs (same cost). The suite reaches the internal ConvolutionProcessor via reflection under NativeAOT; it produced numbers, so the processor did run. Tier A stays valid for reproducibility; the orchestrator may want a shortcoming noting the Magick.NET thread asymmetry.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/README.md",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/Benchmark.cs",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/NetVips.Benchmarks.csproj",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/Config.cs",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/TestImage.cs",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/Runner.cs",
+    "https://raw.githubusercontent.com/kleisauke/net-vips/HEAD/tests/NetVips.Benchmarks/ImageSharp/ConvolutionProcessor.cs",
+    "https://github.com/kleisauke/net-vips/tree/master/tests/NetVips.Benchmarks",
+    "https://github.com/kleisauke/net-vips/tree/master/tests/NetVips.Benchmarks/ImageSharp",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/README.md",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/LICENSE",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/ImageSharp.csproj",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Configuration.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Processing/Processors/Transforms/Resize/ResizeProcessor%7BTPixel%7D.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Processing/Processors/Transforms/Resize/ResizeWorker.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Processing/Processors/Convolution/ConvolutionProcessor%7BTPixel%7D.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Processing/Processors/Convolution/Convolution2DProcessor%7BTPixel%7D.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Formats/Jpeg/Components/Decoder/SpectralConverter%7BTPixel%7D.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Formats/Jpeg/Components/Encoder/SpectralConverter%7BTPixel%7D.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Formats/Jpeg/Components/FloatingPointDCT.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Formats/Jpeg/Components/FloatingPointDCT.Intrinsic.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/v3.1.12/src/ImageSharp/Formats/Jpeg/Components/ColorConverters/JpegColorConverterBase.cs",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/main/README.md",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/main/src/ImageSharp/ImageSharp.csproj",
+    "https://raw.githubusercontent.com/SixLabors/ImageSharp/main/src/ImageSharp/Processing/Processors/Transforms/Resize/ResizeProcessor%7BTPixel%7D.cs",
+    "https://github.com/SixLabors/ImageSharp",
+    "https://github.com/SixLabors/ImageSharp/releases",
+    "https://github.com/SixLabors/ImageSharp/issues?q=is%3Aissue+is%3Aopen+performance",
+    "https://github.com/SixLabors/ImageSharp/security/advisories",
+    "https://github.com/SixLabors/ImageSharp/security/advisories/GHSA-jj3q-cwqj-842r",
+    "https://github.com/dlemstra/Magick.NET",
+    "https://raw.githubusercontent.com/dlemstra/Magick.NET/main/Readme.md",
+    "https://raw.githubusercontent.com/dlemstra/Magick.NET/main/docs/Readme.md"
+  ],
+  "confidence": 0.75
+}

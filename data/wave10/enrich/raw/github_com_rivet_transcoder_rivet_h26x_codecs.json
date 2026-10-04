@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/rivet-transcoder/rivet-h26x-codecs",
+  "one_liner": "Pure-Rust H.264/H.265 decoders, conformance bit-exact; beats libavcodec only on all-thread WPP HEVC, at parity or behind elsewhere.",
+  "what_it_does": "Native H.264 (Baseline through High 4:4:4 Predictive, PAFF and MBAFF, FMO/ASO, SP/SI) and H.265 (Main, Main 10, Main 12 and the range extensions up to 16-bit) decoders written from the ITU-T Recommendations in Rust, with no C, no system libraries, no build script and one dependency. You push whole Annex-B NAL units in decode order (push_annexb or push_nal), pull cropped planar Picture values in output order (next_picture, or try_next_picture to avoid stalling), and flush at the end. Features it does not implement (H.264 data partitioning, HEVC SCC and multi-layer, separate colour planes in HEVC) are refused with Error::Unsupported rather than decoded wrongly. It does no demuxing and is not an API replacement for libavcodec; an H.264/H.265 encoder is in progress in the same crate.",
+  "how_it_is_fast": "Two threading layers on one FIFO worker pool: frame threading with per-row progress (motion compensation waits only on the reference rows it needs, deblocking and SAO trail the decode row by row) and, for H.265, wavefront (WPP) rows, tiles and slice segments run as separate tasks inside a picture. libavcodec picks frame threading exclusively whenever a codec supports it (validate_thread_parameters in libavcodec/pthread.c), so on a WPP stream rivet exploits intra-picture parallelism that ffmpeg's default does not, which is where its one win comes from. Pixel kernels are Rust intrinsics behind a run-time function table that climbs SSE2, SSSE3, SSE4.1, AVX, AVX2 with an AVX-512 (F+BW+VL) supplement for wide H.265 shapes, and NEON plus sdot on AArch64; per the README, SSE2 alone is 2.4-2.9x over scalar and everything above it adds only 1-2% on H.264 and 15-18% on H.265. Output buffers come from a pool, so steady-state decoding allocates nothing per frame.",
+  "when_to_use": [
+    "You need an H.264 or H.265 software decoder in a pure-Rust build: no C toolchain, no system FFmpeg, no build script (cross-compiles, sandboxed CI, wasm32 probing).",
+    "Correctness and coverage matter more than CPU cost: 204/204 JVT AVC streams plus 38 professional-profile streams against JM, 147/147 HEVC_v1 and 49/49 RExt streams against the suite MD5s, identical output on 1 and 12 threads.",
+    "Throughput per wall second on a many-core box decoding x265 streams encoded with WPP (or tiles), with spare CPU to burn: the one measured cell ahead of libavcodec (1963 vs 1774 fps on a 32-thread Ryzen 9 9950X).",
+    "Unusual formats that matter to you: H.264 MBAFF, FMO/ASO, SP/SI, High 4:4:4 up to 14-bit, HEVC RExt up to 16-bit with extended precision."
+  ],
+  "when_not_to_use": [
+    "CPU cost, battery or density matters: single-threaded it costs 1.46-1.55x libavcodec's CPU time on H.264 and 1.02-1.12x on H.265, and its all-thread runs spend 1.02-1.75x libavcodec's CPU seconds (4.656 vs 2.656 s on the winning WPP clip).",
+    "HEVC streams without WPP or tiles on many threads: 7.1% fewer frames per second than libavcodec on hevc6.265; H.264 all-thread gains (+1.7%, +2.4%) are inside the noise.",
+    "You need an OSI licence, GPL compatibility or no attribution duty: the Open Encoding Attribution License v1.0 requires a visible credit in commercial products and for-profit services and states it is not open source.",
+    "You want a published, versioned dependency: crates.io has no rivet-h26x crate (checked 2026-10-04) despite the README badge, rust-version is 1.99 with edition 2024, and the project is one author with 0 stars.",
+    "You decode untrusted streams and need documented hardening: no fuzzing harness or security policy is documented, and the SIMD kernels are unsafe intrinsics (plus an asm! sdot wrapper on AArch64)."
+  ],
+  "integration": {
+    "form": "crate (Rust library imported as h26x; not on crates.io as of 2026-10-04, so a git dependency)",
+    "dependencies": "thiserror 2 (md5 0.7 for tests only)",
+    "min_toolchain": "Rust 1.99 (rust-version in Cargo.toml), edition 2024",
+    "platforms": "x86-64 (SSE2 baseline, run-time ladder up to AVX2 plus AVX-512 F+BW+VL supplement), AArch64 (NEON, dot product), wasm32 checked by tools/wasm.sh; scalar kernels exist as the reference; other targets not documented",
+    "thread_safety": "Each decoder drives an internal worker pool sized by H26X_THREADS (default every core, up to 32) with up to H26X_INFLIGHT pictures in flight (default threads clamped to 2-16); output is deterministic across thread counts; Send/Sync guarantees for the decoder types are not documented",
+    "drop_in_for_baseline": "false: different API (push NAL units, pull Picture), H.264 and H.265 only, no demuxer, no AVFrame, no hardware decode path"
+  },
+  "gotchas": [
+    "Thread count, in-flight depth and SIMD caps are environment variables (H26X_THREADS, H26X_INFLIGHT, H26X_MAX_SIMD, H26X_NO_SIMD) per the README, and the default grabs every core up to 32, far more than libavcodec's auto setting (capped at 16); cap it on a shared machine.",
+    "A dropped Picture returns its packed buffer to the decoder's OutputPool (bounded at 32 buffers); Picture::into_packed takes the buffer for good, so keeping frames that way costs a fresh allocation per frame.",
+    "Picture data is already packed Y, Cb, Cr in one buffer (8-bit as bytes, 9-16-bit as little-endian 16-bit words, every plane at the wider depth when luma and chroma depths differ), not strided planes you can decode into.",
+    "Some docs are stale: src/lib.rs still says verification uses MD5s against libavcodec while the README says none of it involves FFmpeg any more, and the h26xdec comment says H26XDEC_NOMD5 skips packing, although packing happens inside the decoder (picture.rs), so the benchmarked binary did materialise every frame."
+  ],
+  "pick_this_over_siblings_when": "Against edge264 (an H.264 decoder that beats libavcodec single-threaded in its own chart) and rusty_h265 (Rust HEVC, about 1.05x FFmpeg 8.1.2 single-core on one stream), pick rivet-h26x when you want both codecs in one pure-Rust crate with full JVT and JCT-VC conformance including RExt and MBAFF, not when you want the fastest single-thread decode; for raw speed on H.264 libavcodec itself or edge264 stays ahead.",
+  "verified_claims_summary": "First-party tables from tools/benchmark.py at cc9195a on an AMD Ryzen 9 9950X (32 threads, Windows, AVX-512 rung, machine 17% busy): the ffmpeg CLI of unstated version decoding to rawvideo on NUL against the h26xdec example, best of 5, process-tree CPU seconds and frames per wall second, on unpublished 720p Big Buck Bunny x264/x265 clips. Only the all-thread wpp10.265 cell is ahead (1963 vs 1774 fps, +10.7%), with 32 rivet threads and 1.75x the CPU seconds against libavcodec's frame-only auto threading; single-threaded rivet takes 1.02x and 1.12x libavcodec's CPU time on H.265 and 1.46-1.55x on H.264.",
+  "status_note": "Actively developed by one author (515 commits, last 2026-10-03, moved from rivet-transcoder to safewords), 0 stars and no crates.io release; source-available Open Encoding Attribution License, so reference only, and the libavcodec comparison can no longer be regenerated by the current tooling.",
+  "measurement_notes": "No correctness bug found behind the numbers: the benchmarked h26xdec run with H26XDEC_NOMD5=1 skips only the MD5, since the decoder itself packs every cropped picture into a pooled buffer (src/picture.rs, identical at cc9195a), so both sides materialise frames. Measurement weaknesses on the one winning cell, all in the all-thread fps column: (1) the stated 4% noise floor is borrowed from the byte-identical AVX-512/AVX2 pair in the H.264 tables. The harness version in force since df463da (2026-08-19, before the 2026-09 run) prints a same-binary control line under every table, H.265 included, but the README omits those lines, so the control for wpp10.265 was measured and not published. (2) Ladder inversions in the same column exceed 4%: wpp10.265 SSE4.1 1913 vs AVX 1799 fps (6.3%) and cavlc3.264 SSE2 2985 vs SSSE3 2831 fps (5.4%), while check_ladder only tests the single-thread CPU column. So the +10.7% margin is less than twice the spread visible in its own column. (3) fps is frames divided by whole-process wall time over runs of 0.33-1.12 s (derived from page data), so fixed start-up costs (ffmpeg DLL loading and stream probing, plus a second process launch if 'ffmpeg' on PATH was still the scoop shim tools/README.md mentions) count against libavcodec; the wpp10.265 margin is about 65 ms of wall time (0.611 vs 0.676 s, derived from page data). (4) Job assignment and core pinning happen after Popen without a suspended start, so a child spawned by a shim before AssignProcessToJobObject or SetProcessAffinityMask escapes both; the 50%-of-wall guard catches only gross escapes, and the error would favour ffmpeg's CPU column. (5) libavcodec chooses frame threading exclusively (pthread.c), so the win reflects rivet's WPP-plus-frame threading against ffmpeg defaults; no run with ffmpeg -threads 32 or slice threading was made. The C tier stands; the 'faster' claim rests on a single noisy, unequal-work cell.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/README.md",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/cc9195a/README.md",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/tools/benchmark.py",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/cc9195a/tools/benchmark.py",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/tools/README.md",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/examples/h26xdec.rs",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/cc9195a/examples/h26xdec.rs",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/src/picture.rs",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/cc9195a/src/picture.rs",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/src/threading.rs",
+    "https://github.com/safewords/rivet-h26x-codecs",
+    "https://github.com/safewords/rivet-h26x-codecs/commits/develop/tools/benchmark.py",
+    "https://github.com/safewords/rivet-h26x-codecs/issues?q=is%3Aissue",
+    "https://github.com/safewords/rivet-h26x-codecs/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/pthread.c",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/pthread_internal.h"
+  ],
+  "confidence": 0.75
+}
