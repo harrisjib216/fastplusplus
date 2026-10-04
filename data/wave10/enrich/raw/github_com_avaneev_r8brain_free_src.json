@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/avaneev/r8brain-free-src",
+  "one_liner": "Header-only MIT C++ audio sample-rate converter; 3.4x to 8.8x libsamplerate's stereo throughput in a third-party near-unity benchmark.",
+  "what_it_does": "Converts a mono stream of doubles between any two sample rates, fixed at construction, with a user-set transition band (0.5-45 %) and stop-band attenuation (49-218 dB), linear or minimum phase. The API is r8b::CDSPResampler(src, dst, maxInLen, transBand, atten, phase) with process(double* in, int len, double*& out), which returns a variable number of output samples in an internal buffer, plus oneshot() for whole-buffer work and the CDSPResampler16/16IR/24 presets. It is not a drop-in for libsamplerate: no interleaved float I/O, one object per channel, and no per-call or varying ratio.",
+  "how_it_is_fast": "The input is first upsampled 2x by single-block overlap-save FFT convolution with a Kaiser-windowed low-pass (Ooura FFT by default, Intel IPP or PFFFT optional), so a long, steep filter costs roughly log-time per sample. A bank of short (8-30 tap) polynomial-interpolated sinc fractional-delay filters then produces the target rate with SSE2/NEON dot products. Power-of-2 and 3x ratios use dedicated half-band stages, and whole-number stepping is used when the GCD of the rates allows. libsamplerate instead runs a time-domain sinc with per-tap coefficient interpolation: about 91 taps per output sample per channel for MEDIUM and about 286 for BEST (half length divided by increment in its coefficient tables). Designed filters and FFT setups sit in a process-wide cache, so creating more resamplers is cheap.",
+  "when_to_use": [
+    "Offline or file-based conversion at arbitrary ratios (44.1k to 48k, to and from DSD-class rates) where you want linear phase and a 120-180 dB stop band. REAPER, OpenMPT and Audirvana ship it.",
+    "Replacing libsamplerate SINC_MEDIUM or SINC_BEST in a desktop pipeline that can absorb 4-37 ms of filter delay: 3.4-3.7x MEDIUM's stereo throughput and 8.8x BEST's at a stricter 180 dB setting in the third-party table.",
+    "Projects that need a permissive (MIT), header-only resampler with no build step or external dependency.",
+    "Power-of-2 up- or downsampling (2x, 4x, 3x2x, ...), which uses the faster half-band path automatically.",
+    "Resampling of impulse responses or general 1D time series through oneshot() with relaxed attenuation."
+  ],
+  "when_not_to_use": [
+    "Low-latency live paths: in the SampleRateTap measurement the default 2 % band holds back 789 input frames (16.4 ms at 48 kHz), the 140-180 dB presets 1,700-1,782 frames (35-37 ms), and the passband-matched 8 % band still 200 frames (4.2 ms). libsamplerate MEDIUM holds back 46 frames.",
+    "Maximum host throughput when LGPL is acceptable: soxr HQ/VHQ is 1.7-3.2x faster than r8brain in every row of the same table.",
+    "FPU-less or FP64-less microcontrollers: the code is double precision only with no fixed-point path, and costs 30,004 instructions per stereo frame on Cortex-M33 in the same report.",
+    "Varispeed or continuously drifting ratios (ASRC): rates are fixed at construction and there is no ratio setter, so you would rebuild the resampler or use an ASRC such as SampleRateTap.",
+    "Interleaved float multichannel callers that cannot afford a per-channel deinterleave and float-to-double conversion around every call."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library; optional Intel IPP, or the bundled PFFFT / PFFFT-double .c file compiled into the build",
+    "min_toolchain": "C++11 for the std::mutex path (pre-C++11 builds use pthread or Windows.h); tested by the author with GCC, Clang, MSVC and Intel C++",
+    "platforms": "any platform with a 64-bit IEEE double; SSE2 and NEON intrinsic paths; 32- and 64-bit Windows, macOS, Linux",
+    "thread_safety": "README says the code is thread-safe with one resampler object per channel or stream; the shared filter and filter-bank caches are guarded by std::mutex during construction",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "process() returns a pointer into the resampler's own buffer and a count that varies per call; early calls return nothing while the filter delay is consumed, so real-time callers need a pull loop around getInputRequiredForOutput().",
+    "The input length must not exceed the aMaxInLen given at construction. This is checked only by R8BASSERT, which r8bconf.h compiles to a no-op by default.",
+    "Issue #33 (2026-10-02) reports that the 7.6 filter-design speedups slightly lowered quality against 7.5 in the Hydrogenaudio SRC test. It was closed with no comment and no follow-up commit visible, and the benchmarked build was 7.5.",
+    "The single-precision R8B_PFFFT back end limits precision to about 24-bit, and the README advises against it for critical work. Use R8B_PFFFT_DOUBLE or IPP for speed without that loss. R8B_EXTFFT trades more latency for speed. Bare-metal builds need a mutex stand-in for the filter cache."
+  ],
+  "pick_this_over_siblings_when": "Pick r8brain over libsoxr when you need an MIT, header-only library and can give up about 2-3x of soxr's throughput. Pick it over SampleRateTap when you need real rate conversion at arbitrary ratios, not drift correction around one nominal rate, and can accept 33-45x SampleRateTap's filter delay. Over zita-resampler, it is the permissive-license option.",
+  "verified_claims_summary": "SampleRateTap's COMPARISON.md streamed a float 997 Hz sine at 48000 to 48000*(1+200 ppm) in 128-frame blocks on an unnamed shared Xeon at 2.10 GHz, median of 5. The harness was built with GCC 13.3 -O3 and no -march flag, against r8brain 7.5 (commit 9e73d2dd, Ooura FFT) and Ubuntu 24.04's libsamplerate 0.2.2. Stereo results: r8brain 16.5 (2 % band) and 17.9 (8 % band) vs MEDIUM 4.8 Mframes/s; 14.1 at 180.15 dB vs BEST 1.6. On settings, libsamplerate's own coefficient headers give MEDIUM a 120.61 dB stop band with its -3 dB point at 90.5 % of Nyquist (about a 9.5 % band in r8brain's terms), and BEST 154.67 dB at 96.1 % (about 3.9 %). So the 8 % row (3.7x) is the closest MEDIUM match, the 2 % rows filter more steeply than libsamplerate, the 180.15 dB row (8.8x) beats BEST on both axes, and the 136.45 dB row (11.5x) has about 18 dB less stop band than BEST's design, not the 144 dB the harness comment assumes. A second third-party data point, cmicali/vibe PR #84 (merged 2026-09-28), has r8brain CDSPResampler24 (1 % band, PFFFT double, -O3) using 0.06-0.18 % of one core against 0.9-3.5 % for Apple AudioConverter at Mastering/Max quality on an unnamed Apple silicon Mac, and 0.54-0.56 % vs 3.27-3.39 % on iPhone 17 Pro for 44.1 to 48 kHz.",
+  "status_note": "Actively maintained: versions 7.2-7.6 shipped between July and September 2026 and no issues are open. MIT, header-only and widely shipped, so it is easy to vendor; pin 7.5 if issue #33's quality report matters to you.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/README.md",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPResampler.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPBlockConvolver.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPFracInterpolator.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPFIRFilter.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/r8bbase.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/r8bconf.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPHBUpsampler.h",
+    "https://raw.githubusercontent.com/avaneev/r8brain-free-src/HEAD/CDSPHBDownsampler.h",
+    "https://github.com/avaneev/r8brain-free-src",
+    "https://github.com/avaneev/r8brain-free-src/commits",
+    "https://github.com/avaneev/r8brain-free-src/issues?q=is%3Aissue",
+    "https://github.com/avaneev/r8brain-free-src/issues/33",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/docs/COMPARISON.md",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/compare/bench_compare.cpp",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/compare/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/cmake/r8brain.cmake",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libsndfile/libsamplerate/master/src/mid_qual_coeffs.h",
+    "https://raw.githubusercontent.com/libsndfile/libsamplerate/master/src/high_qual_coeffs.h",
+    "https://raw.githubusercontent.com/libsndfile/libsamplerate/master/src/src_sinc.c",
+    "https://github.com/cmicali/vibe/pull/84"
+  ],
+  "confidence": 0.75
+}

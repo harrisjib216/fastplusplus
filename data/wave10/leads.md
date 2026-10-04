@@ -7,3 +7,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Licence policy question for the user: verifiers set VVenC and SVT-AV1 (BSD-3-Clause-Clear) and uavs3e (BSD-4-Clause) to reference because SPDX marks them not OSI approved; rule on whether Clear BSD counts as copyable.
 - Raster shootout sources: LaurenzV/vello_chart data/arm/2026-06-08.json (Apple M1 Pro; Blend2D 4.08x, Vello CPU 2.50x, JUCE 1.68x, AGG 1.21x, raqote 1.08x vs Skia, geomeans derived). ctx.graphics/performance, ragg.r-lib.org, codeberg.org blocked; blend2d-bench 404.
 - Enricher leads (e02): aplghl/stb-image-opt (stb_image v2.30 fork, AVX2 JPEG IDCT and YCbCr, PNG speedup) and aplghl/stb-image-write-opt for an image-codecs seed pass.
+- Enricher lead (e05): google/skcms (Google's C++ colour management system, used by Skia and Chromium) is not catalogued; candidate for a color-and-resampling seed pass.
