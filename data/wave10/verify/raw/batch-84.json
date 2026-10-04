@@ -1,0 +1,55 @@
+[
+  {
+    "id": "https://github.com/symplenz/rkvdec-vdpu383-h264-hevc",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README and the commit message in patches/0001-vdpu383-hevc-h264-read-cache.patch give first-party cache-off versus cache-on hardware decode times (HEVC ~12 ms to 1.70 ms, H.264 8.7 ms to 3.6 ms) with SoC (RK3576), kernel (7.0.1-edge-rockchip64), resolution (1080p) and timing point (MMIO kick to completion), but no clip name, frame count, repetition count or timing harness is published. That is a number with a partial setup, so C rather than D; nothing independent exists.",
+    "corrections": {
+      "claimed_speedup": "Pure hardware decode time, 1080p, RK3576, kernel 7.0.1-edge-rockchip64, upstream driver with read cache off versus this patch with it on: HEVC ~12 ms to 1.70 ms (~7x), H.264 8.7 ms to 3.6 ms (~2.4x). The README table labels the HEVC result '= vendor MPP', but the same README later says a 'consistent ~1.9x residual vs the vendor stack across all codecs (HEVC and VP9 alike)' remains after the cache fix, so the parity-with-MPP claim is contradicted by the page itself. Whether the times are per frame or per clip is not stated (the values are consistent with per-frame times).",
+      "workload": "MMIO-kick-to-completion hardware decode time of one unnamed 1080p clip (HEVC and H.264) on the RK3576 VDPU383 decoder under kernel 7.0.1-edge-rockchip64, with the patch's hevc_cache module parameter set to 0 (upstream behaviour) versus 1.",
+      "caveats": "This is a Linux kernel driver patch that writes three read-cache configuration registers before the decode kick in the mainline rkvdec-vdpu383 HEVC and H.264 backends; the speedup is hardware decoder throughput on one SoC (RK3576), not a software codec, and the baseline is the upstream kernel driver rather than FFmpeg, x264/x265 or Opus, so it is off the category baselines. First-party numbers on an unnamed clip with no published timing harness, frame count or repetition count. The README contradicts itself: the table says HEVC with the cache on equals vendor MPP, while the 'Honest residual' section says a ~1.9x gap to the vendor stack remains for HEVC and VP9 after the fix. The HEVC output is stated byte-identical (md5 18f9bbc46cf0528a, cache off and on); no checksum is quoted for H.264 with the cache on (the separate '64/64 bit-exact' statement refers to the H.264 deblock warmup fix, which is not in this repo). The patch file is a hunk sketch with elided paths ('drivers/.../rkvdec.c') and a prose instruction to add a struct field, so it does not apply with git am; the buildable driver lives in the sibling rkvdec-vdpu383-av1 and rkvdec-vdpu383-vp9 repos. Requires a device-tree 'cache' reg window that the RK3576 node may lack. Not yet accepted upstream. All three commits (2026-06-28) are co-authored with an AI assistant. Very new repo, 1 star."
+    },
+    "notes": "Repo page, commit list and patch confirmed: GPL-2.0, not a fork, 3 commits all dated 2026-06-28, 1 star; the numbers match the record. Verdict is downgrade only because the 'equal to vendor MPP' part of the claim is contradicted by the README's own residual section; tier stays C as a first-party number with partial setup. WebSearch found the upstream VDPU383 HEVC/H.264 series (Collabora) and a May 2026 linux-media H.264 bug thread title, but no independent measurement of this cache fix; the sibling rkvdec-vdpu383-mpp-mainline repo carries checksums only, no timings.",
+    "urls_opened": [
+      "https://github.com/SympleNZ/rkvdec-vdpu383-h264-hevc",
+      "https://github.com/SympleNZ/rkvdec-vdpu383-h264-hevc/commits",
+      "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-h264-hevc/HEAD/README.md",
+      "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-h264-hevc/HEAD/patches/0001-vdpu383-hevc-h264-read-cache.patch",
+      "https://github.com/SympleNZ/rkvdec-vdpu383-mpp-mainline"
+    ]
+  },
+  {
+    "id": "https://github.com/gcanat/video_reader-rs",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README 'Performance comparison' table gives first-party wall-clock seconds against OpenCV and decord on a named CPU (i7-9750H) and OS, but the script that produced the table is not in the repo (scripts/bench_get_batch.py only times get_batch against decord and publishes no results), and no FFmpeg, OpenCV or decord version, video codec or compiler is stated; the decord column ran on a different, unspecified machine. First-party with partial methodology is C.",
+    "corrections": {
+      "claimed_speedup": "Seconds to decode a (2004, 1472, 1472, 3) video into a numpy array, OpenCV / decord / vr.decode / vr.decode_fast: f 1.0 65 / 18 / 9.3 / 6.2; f 0.5 33.96 / 14.6 / 5.5 / 4.2; f 0.25 7.16 / 14.03 / 4.2 / 3.8; f 0.25 r 512 6.5 / 13.3 / 3.92 / 3.5; f 0.25 g 20.2 / 25.7 / 6.6 / N/A. At f 1.0 decode_fast is about 10.5x faster than OpenCV and 2.9x faster than decord; at f 0.25 about 1.9x faster than OpenCV and 3.7x faster than decord (derived from page data). README: 'performing equally or better than decord, while using less memory.'",
+      "caveats": "The decoding itself is FFmpeg's libavcodec through the ffmpeg-next 9.0.0 Rust bindings (current Linux wheels bundle the PyAV-Org pyav-ffmpeg 8.1.1-2 build, Windows builds use FFmpeg 7.0 and macOS Homebrew ffmpeg@7; the FFmpeg version behind the benchmark table is not stated). The baselines, OpenCV VideoCapture and decord, also decode with libavcodec, so the gains come from the pipeline rather than codec speed: libavcodec frame threading with an automatic thread count, a compression factor that still decodes every packet but colour-converts only the selected frames, YUV-to-RGB conversion with the Rust yuv crate instead of swscale, and (decode_fast) conversion spread over tokio tasks. First-party table with no script for it in the repo (scripts/bench_get_batch.py covers get_batch against decord only), no FFmpeg, OpenCV or decord versions, and no codec or container named for the test video. The decord column came from a different, unspecified machine with more RAM and cores because decord crashed on the 15 GB laptop, so it is not like for like. The table was created in July 2024 and last updated in October 2024 (decode_fast and grayscale rows), so it measures 2024 code, not the current 0.4.5 release after the January 2026 speed and get_batch correctness changes. The README 'Crash test' snippet calls bench_video_decode with two arguments although the function takes three, and prints 4.81 s for f 0.25 against 4.2 s in the table. Baselines are other FFmpeg-based readers, not the FFmpeg tools. The source is MIT; the Python wheels bundle (L)GPL FFmpeg binaries (pyproject declares 'MIT OR GPL-2.0 OR GPL-3.0')."
+    },
+    "notes": "Repo page and commit list confirm MIT, 126 stars, 9 forks, not a fork, last commit 2026-09-30, version 0.4.5; numbers match the README exactly. I judge it a pipeline library over libavcodec (its own frame selection, YUV-to-RGB conversion and batching), not a thin binding of the listed FFmpeg entry, so not a duplicate; the orchestrator may still fold it under FFmpeg if it prefers. The speedup is pipeline, threading and conversion against other libavcodec-based readers, not faster decoding.",
+    "urls_opened": [
+      "https://github.com/gcanat/video_reader-rs",
+      "https://github.com/gcanat/video_reader-rs/commits",
+      "https://github.com/gcanat/video_reader-rs/commits/main/README.md",
+      "https://github.com/gcanat/video_reader-rs/tree/main/scripts",
+      "https://github.com/gcanat/video_reader-rs/tree/main/.github/workflows",
+      "https://github.com/gcanat/video_reader-rs/tree/main/src",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/README.md",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/scripts/bench_get_batch.py",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/.github/workflows/build.yml",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/pyproject.toml",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/license_notes.md",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/src/reader.rs",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/src/decoder.rs",
+      "https://raw.githubusercontent.com/gcanat/video_reader-rs/HEAD/src/convert.rs"
+    ]
+  }
+]
