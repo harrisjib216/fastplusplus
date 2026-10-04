@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/doubangotelecom/compv",
+  "one_liner": "GPL C++ computer-vision library with hand-written x86/ARM assembly; first-party numbers show 3-11x over OpenCV colour conversion and bilinear resize.",
+  "what_it_does": "CompV is Doubango's in-house computer-vision base library: colour conversion (RGB/BGR/RGBA/RGB565/YUV420P/NV12/NV21/YUV422/YUYV/UYVY to grayscale, RGB24, RGBA32, YUV444P, HSV), bilinear/bicubic scaling, remap, thresholding, filters, features (FAST, ORB, HOG), CCL, MSER and Hough. The API is its own (CompVImage::convert(src, dstSubtype, &dst), CompVImage::scale(src, &dst, w, h, type) on reference-counted CompVMatPtr objects) after a global init; it is not a cv::Mat drop-in. The README says there is no documentation and the library is not intended for use by other companies.",
+  "how_it_is_fast": "Each kernel has a scalar C++ reference plus SSE2/SSSE3/SSE4.1/AVX2 intrinsics, YASM x86/x64 assembly and NEON32/NEON64 assembly, chosen at run time by CPU flags and buffer alignment, and rows are split across a custom thread dispatcher (8 threads in the published run). Much of the speed comes from low-precision fixed point: grayscale uses 7-bit coefficients (Y = ((33R+65G+13B)>>7)+16), YUV to RGB uses 5-bit coefficients (R = (37Y'+51V')>>5), bilinear scaling uses 8-bit fractional coordinates and weights so every product fits in 16-bit lanes (mullo/mulhi_epu16), and HSV uses lookup tables of reciprocals, with an optional approximate SSSE3 reciprocal. Results quoted in the comparison file were taken with assembler code and TBBMalloc or TCMalloc.",
+  "when_to_use": [
+    "A GPL-3.0 (or commercially licensed from Doubango) pipeline on 8-bit grayscale frames where CompV's own resize, threshold, Canny, FAST, CCL or MSER chain replaces several OpenCV calls.",
+    "Studio-range BT.601 luma is acceptable or wanted: CompV's 'grayscale' from RGB is limited-range Y (16-235), the same as the Y plane of a YUV conversion, not OpenCV's full-range 0.299R+0.587G+0.114B.",
+    "Real-time HD camera pipelines on x86 AVX2 or ARM NEON (Android, iOS, Raspberry Pi, Jetson) where a few levels of rounding error per pixel do not matter and multithreading across rows is available.",
+    "Building pyramids or downscaled detection inputs, where the 8-bit fixed-point bilinear scaler's small geometric drift and slight darkening are tolerable."
+  ],
+  "when_not_to_use": [
+    "When output must match OpenCV: CompV's RGB-to-gray is limited-range Y with truncation (white maps to 237, not 255), YUV-to-RGB uses 5-bit coefficients (1.156 instead of 1.164 for Y), HSV hue spans 0-255 (OpenCV CV_RGB2HSV uses 0-180), and bilinear resize is neither centre-aligned nor bit-exact.",
+    "Quality-sensitive resizing: the bilinear scaler uses 8-bit fractional steps, which the maintainer's open issue #176 says 'produces drift'. For 1282x720 to 1064x597 the step is quantized to 1.203125 instead of 1.2049, so the last column samples source x 1278.9 instead of OpenCV's 1280.9 (derived from the code). Weights sum to 255/256, so a flat white image comes out at 253.",
+    "Colour (RGB) resizing: CompVImageScaleBilinear::process returns NOT_IMPLEMENTED unless the input is 8u with one plane.",
+    "Single-threaded use: the result file's own single-thread AVX2 bilinear time (5435 ms) is slower than OpenCV's 4148 ms; bicubic scaling and rotation have no result ('Shame!!'), and issue #167 says bicubic is slower than OpenCV.",
+    "Proprietary products without a Doubango licence (GPL-3.0), or teams that need documentation and support: the README calls it an undocumented R&D project with 143 open issues and no releases."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; also Visual Studio .sln and Xcode project)",
+    "dependencies": "YASM for x86/x64 assembly (CMake fails without it); bundled tbbmalloc sources and thirdparties headers; pthread/dl on Unix, Shlwapi/Winmm on Windows; optional Intel IPP (COMPV_HAVE_INTEL_IPP), CUDA, OpenCL, OpenGL and other GPU back ends in separate modules",
+    "min_toolchain": "C++11, CMake 3.10+, YASM; MSVC, GCC or Clang (Release builds use -O3)",
+    "platforms": "x86 and x86-64 (SSE2 to AVX2/FMA, run-time dispatch) on Windows, Linux and macOS; ARM32/ARM64 NEON on Android, iOS, Raspberry Pi and Jetson",
+    "thread_safety": "not documented; functions split work over a global thread dispatcher (CompVParallel) and avoid nested dispatch when called from a pool thread",
+    "drop_in_for_baseline": "partial — covers cvtColor-style conversions and resize, but through its own CompVMatPtr API and with different output definitions (limited-range gray, 0-255 hue, non-centre-aligned 8-bit bilinear), so results will not match OpenCV"
+  },
+  "gotchas": [
+    "SIMD and assembly paths are selected only when output pointers and strides are 16- or 32-byte aligned; unaligned buffers silently fall back to slower intrinsics or the scalar C++ path.",
+    "The bilinear SIMD kernels are hard-coded for 8-bit fixed point; the source comment says a shift of 11 is correct but no SIMD code exists for it, so the drift in issue #176 (open since 2022-11-30) applies to the AVX2 path behind the published numbers.",
+    "Builds with COMPV_HAVE_INTEL_IPP switch RGB24-to-gray to ippiRGBToGray (full range), which gives different output from the default build's limited-range formula.",
+    "HSV conversion can use an approximate SSSE3 reciprocal, and its expected MD5 differs between x86 and ARM, so HSV output is not bit-identical across platforms."
+  ],
+  "pick_this_over_siblings_when": "Pick CompV over RGB2Y, DeltaCV or KLERP only when you want a whole GPL vision stack (scaling, thresholding, features, CCL) with ARM and x86 assembly from one vendor. For standalone conversions that must match OpenCV or a standard, KLERP (bilinear, matches OpenCV output) and libyuv, sparkyuv or yuvutils-rs (YUV) are permissive, documented and verifiable.",
+  "verified_claims_summary": "One first-party result file (last edited 2019) on an Intel Core i7-4790K iMac running Windows 8 reports 10,000 iterations at 1282x720: RGB24 to gray 449 vs 3086 ms (6.9x), YUV420P to RGB24 968 vs 5919 ms (6.1x), RGB24 to HSV 2137 vs 15709 ms (7.4x), YUV420P to HSV 3045 vs 32920 ms (10.8x), and 8-bit grayscale bilinear 1282x720 to 1064x597 1474 ms (8 threads, AVX2) vs 4148 ms (2.8x), all ratios derived from page data. OpenCV's version, build, harness and compiler flags are unpublished, and the CompV side computes lower-precision, differently defined outputs (7-bit limited-range gray, 5-bit YUV coefficients, 0-255 hue, 8-bit bilinear with acknowledged drift), so the rows are not like-for-like in output.",
+  "status_note": "Code is still committed to (last commit 2026-09-20 per the verifier) and used in Doubango's commercial SDKs, but it is GPL-3.0, undocumented, has no releases and 143 open issues, so it is copyable mainly for GPL projects willing to vendor a large codebase.",
+  "sources_read": [
+    "https://github.com/DoubangoTelecom/compv",
+    "https://github.com/DoubangoTelecom/compv/issues",
+    "https://github.com/DoubangoTelecom/compv/issues/176",
+    "https://github.com/DoubangoTelecom/compv/tree/master/base/image",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/README.md",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/speed_compare%20(core%20i7%20quad%404ghz).txt",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/tests/image/chroma_conv.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/tests/image/scale.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/tests/image/main.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_scale_bilinear.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/intrin/x86/compv_image_scale_bilinear_intrin_avx2.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_conv_common.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_conv_rgbfamily.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_conv_to_grayscale.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_conv_to_rgbx.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/image/compv_image_conv_hsv.cxx",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/base/CMakeLists.txt",
+    "https://raw.githubusercontent.com/DoubangoTelecom/compv/HEAD/common.cmake"
+  ],
+  "confidence": 0.75
+}

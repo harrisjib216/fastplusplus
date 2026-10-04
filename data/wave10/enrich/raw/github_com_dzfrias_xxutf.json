@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/dzfrias/xxutf",
+  "one_liner": "Allocation-free C library for Unicode NFD/NFC/NFKD/NFKC and case folding; ARM NEON NFD runs about 3-4.5x ICU4C on non-ASCII UTF-8.",
+  "what_it_does": "xxUTF normalizes (NFD, NFC, NFKD, NFKC) and case-folds UTF-8, UTF-16LE and UTF-16BE text with Unicode 17.0.0 tables. Each operation is one C call into a caller-supplied output buffer (xxutf_normalize_utf8_nfd(in, len, out) returns the output length), with *_check functions that report whether the input is already normalized and how large the output buffer must be, plus find_first/last_stable helpers for streaming. It is not an ICU drop-in: there is no UTF-16 UChar API, no locale or Turkic folding, and input must already be valid.",
+  "how_it_is_fast": "It works on UTF-8 or UTF-16 directly instead of converting to UTF-16 as ICU's C API does. The NEON path builds a 64-bit code-point boundary mask per 64-byte block, copies all-ASCII blocks 63 bytes at a time, and otherwise decodes 4-8 code points per step with simdutf-derived shuffles. It looks up decomposition data in a two-level trie with vector table lookups and checks canonical-combining-class order in registers, falling back to a scalar sort only when marks are out of order. Hangul syllables are decomposed arithmetically and branch-free. Other targets run the scalar implementation.",
+  "when_to_use": [
+    "Normalizing or case-folding large volumes of already-validated UTF-8 on ARM64 (Apple Silicon, Graviton, phones), for example search-index or dedup pipelines doing NFD/NFKC plus case folding before comparison.",
+    "Mostly-ASCII text where you want an almost free pass-through: the ASCII fast path copies 63-byte blocks, and the README chart shows about 35 GB/s on pure-ASCII Latin text.",
+    "Embedded, kernel or WASM-style environments that cannot allocate or link libc and need standard-conformant normalization (outputs are fuzzed against ICU4C).",
+    "Streaming normalization over chunked input, using the find_first/last_stable APIs (the xxu tool shows the pattern)."
+  ],
+  "when_not_to_use": [
+    "x86-64 servers when you need proven speed: there is no SSE/AVX path yet, and the README's 'fastest even in scalar mode' claim has no published scalar or x86 numbers.",
+    "Untrusted or possibly invalid input without a separate validation pass (e.g. simdutf validate_utf8): the API assumes valid encoding and 'cannot fail'.",
+    "When you need ICU features beyond NFx and default case folding: Turkic or locale-specific folding, collation, segmentation or a UTF-16 UChar interface.",
+    "Production code with strict security review requirements: the README calls it alpha with a security review still pending. It has 15 stars and one author, and the NEON ASCII fast path shipped with bugs that a follow-up commit (5d54cc2) fixed the same day.",
+    "MSVC builds: the code uses GCC/Clang builtins and attributes (__builtin_expect, __builtin_ctzll, __attribute__((always_inline)))."
+  ],
+  "integration": {
+    "form": "source-drop (single-file amalgamation .c plus xxutf.h from the releases page) or static lib (zig build produces libxxutf.a)",
+    "dependencies": "none at run time (no libc, no allocation); building from source needs Zig 0.16.0 and Python (gen/gen.py generates the Unicode tables); the benchmark and fuzzer need ICU4C",
+    "min_toolchain": "C compiler with GCC/Clang builtins (built by Zig's clang with -Wall -Wextra -Wc++-compat -Werror); header has extern \"C\" guards for C++; Zig 0.16.0 to build from source",
+    "platforms": "aarch64 with NEON (SIMD path, chosen at build time via XXUTF_IMPLEMENTATION_NEON); any other target uses the scalar path (no x86 SIMD yet)",
+    "thread_safety": "not documented; the functions take caller buffers, never allocate and read only constant tables, so concurrent calls on separate buffers look safe (inferred from the API and source)",
+    "drop_in_for_baseline": "partial — same normalization and default case-fold results as ICU4C (the fuzzer compares outputs), but a different C API on UTF-8/UTF-16 bytes with caller-sized buffers and no error reporting"
+  },
+  "gotchas": [
+    "Size the output buffer with the matching *_check function (the README says a safe NFKD/NFKC bound is about 11x the input). The NF(K)C check deliberately overestimates since an ASan-caught overrun fix (db3117a).",
+    "The NEON loop does oversized stores by design ('It is possible that we do buffer overruns (but only _use_ the appropriate number of bytes)'), guarded by a 64-byte margin on input length. Leave slack after the output buffer rather than allocating exactly the normalized length.",
+    "The README documents uint8_t* parameters, but xxutf.h declares const char* input and char* output.",
+    "Unicode 17.0.0 data is compiled in. To compare outputs with ICU, use an ICU built for the same Unicode version; a Unicode upgrade needs a rebuild that regenerates the tables."
+  ],
+  "pick_this_over_siblings_when": "Pick xxUTF over libutf (brazilofmux/utf) or unicode-transforms when the job is only normalization or case folding on ARM64 and you want an allocation-free single-file C drop. Choose libutf if you also need grapheme breaks or collation, and stay on ICU, or watch simdutf PR #999 (the same author's normalization work with AVX-512 and NEON), if you need x86 SIMD.",
+  "verified_claims_summary": "A first-party README bar chart (UTF-8 NFD, unnamed ARM NEON machine, Zig 0.16.0 ReleaseFast build, system ICU4C of unstated version) shows about 0.78-4.1 GB/s for xxUTF vs 0.24-1.03 GB/s for ICU4C on seven non-ASCII language files (3.2-4.5x) and about 35 vs 0.34 GB/s on pure-ASCII Latin text. Values are read from bar heights. ICU is timed per 4 KiB chunk including UTF-8 to UTF-16 to UTF-8 conversion around unorm2_normalize, while xxUTF works on UTF-8 directly.",
+  "status_note": "Active alpha (v0.2.0, last commit 2026-07-11, MIT, 15 stars); small and dependency-free enough to vendor as one file, but treat it as pre-1.0 and validate input upstream.",
+  "sources_read": [
+    "https://github.com/dzfrias/xxUTF",
+    "https://github.com/dzfrias/xxUTF/commits/main",
+    "https://github.com/dzfrias/xxUTF/tree/main/impl",
+    "https://github.com/dzfrias/xxUTF/tree/main/impl/neon",
+    "https://github.com/dzfrias/xxUTF/commit/db3117a",
+    "https://github.com/dzfrias/xxUTF/commit/5d54cc2d143daf3ddcf85ec61abc693dde7fed5e",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/README.md",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/build.zig",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/bin/benchmark/benchmark.zig",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/bin/common/shim.c",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/test/README.md",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/test/fuzz.c",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/impl/neon/neon_normalize_utf8.c",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/impl/neon/neon_common.h",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/xxutf.h",
+    "https://raw.githubusercontent.com/dzfrias/xxUTF/HEAD/common_defs.h",
+    "https://github.com/simdutf/simdutf/pulls?q=is%3Apr+author%3Adzfrias",
+    "https://github.com/simdutf/simdutf/pull/999"
+  ],
+  "confidence": 0.78
+}
