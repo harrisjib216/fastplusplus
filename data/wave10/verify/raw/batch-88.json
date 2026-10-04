@@ -1,0 +1,92 @@
+[
+  {
+    "id": "https://github.com/komrad36/cudargb2y",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README and main.cpp header state 'Roughly 5x to 30x faster than OpenCV's implementation, depending on your card', and main.cpp is a real harness that times CUDARGB2Y and cv::cvtColor(CV_BGR2GRAY) over 2000 runs and checks pixels agree within 1; but no run output, GPU model, CPU model or OpenCV version is recorded, so this is first-party evidence with partial methodology (C).",
+    "corrections": {
+      "baseline": "OpenCV cv::cvtColor(image, out, CV_BGR2GRAY) on a host cv::Mat (CPU), as called in main.cpp; OpenCV version and build (SIMD, threading backend) unstated, though the CV_BGR2GRAY and CV_WINDOW_NORMAL C-API constants point to OpenCV 2.x/3.x",
+      "workload": "RGB to 8-bit grayscale of the repo's test.jpg. GPU side: host high_resolution_clock wall time per call averaged over 2000 calls after 100 warm-ups, where each call is a kernel launch plus cudaDeviceSynchronize (so launch and sync overhead are included), with the input already uploaded to the GPU as a linear texture object and the result left on the device (host-to-device and device-to-host copies are outside the timed loop). CPU side: cv::cvtColor over 2000 calls after 100 warm-ups. The harness then checks every pixel agrees with OpenCV within 1.",
+      "compiler_and_flags": "Makefile: .cu built with nvcc --use_fast_math -arch=sm_30 -O3 -std=c++11 -Xcompiler \"-Ofast -march=native -funroll-all-loops ...\"; main.cpp built with g++ -Ofast -std=gnu++17 -march=native -flto -funroll-all-loops; OpenCV linked as a prebuilt library, so these flags do not apply to the baseline",
+      "caveats": "GPU against CPU: the kernel runs on an unnamed GPU with input already resident on the device, against OpenCV's CPU cvtColor on an unnamed CPU, so the ratio compares different hardware and excludes the upload/download a CPU caller would pay; it is not an end-to-end comparison. The 5x to 30x range is a README sentence with no recorded per-card output; GPU, CPU and OpenCV version are not stated, and whether OpenCV ran its SIMD and threaded cvtColor path depends on that unstated build. Timed GPU calls include launch plus cudaDeviceSynchronize, measured with a host clock. The kernel uses 6-bit fixed-point weights (scale 64, truncating shift) instead of OpenCV's higher-precision rounding, accepted by the harness's tolerance of 1. sm_30 build target is obsolete (removed from current CUDA toolkits). Code dates from Oct 2016; the only later commit (2021-03-23) added the MIT LICENSE. Sibling komrad36 RGB2Y (CPU) is at D after its README figure proved stale; this CUDA claim at least has a harness."
+    },
+    "notes": "Harness exists (main.cpp) and verifies output against OpenCV, so the claim is not unsupported, but there are no recorded results or hardware, so C stays. Metadata checked on github.com: MIT, 16 stars, 6 forks, 3 commits (2016-10-30 x2, 2021-03-23), not archived, not a fork.",
+    "urls_opened": [
+      "https://github.com/komrad36/CUDARGB2Y",
+      "https://github.com/komrad36/CUDARGB2Y/commits",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/README.md",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/main.cpp",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/Makefile",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/CUDARGB2Y.cu",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/CUDARGB2Y.h",
+      "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/morousg/cvgpuspeedup",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README states 38x for 50 crops on an RTX A2000 12GB, 1/167th of the time in an NSight timeline, and 2x to 10000x from unit tests run as benchmarks; the harness is public (tests/batchresize/test_batchresize_x_split3D.cu with cudaEvent timing macros in tests/testsCommon.cuh, which verify results against OpenCV-CUDA and write CSVs), but no result files are committed, the host CPU is unstated and the build optimisation level for the quoted runs is unstated, so first-party C.",
+    "corrections": {
+      "benchmark_url": "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV",
+      "baseline": "OpenCV-CUDA calls launched as separate kernels on one stream (per crop cv::cuda::GpuMat::convertTo and cv::cuda::resize INTER_LINEAR, then cv::cuda::multiply, cvtColor RGB2BGR, subtract, divide and split), against one fused cvGS::executeOperations kernel",
+      "compiler_and_flags": "README: nvcc -std=c++20; CMake build with -DENABLE_BENCHMARK=ON adds host -march=native -mtune=native on Linux (/arch:AVX2 with MSVC); tested with CUDA 11.8/12.1/12.3/12.8, VS 2022 v14.39-14.43 and OpenCV 4.8/4.9/4.11; which toolchain, OpenCV version and build type produced the quoted numbers is not stated",
+      "workload": "GPU pre-processing before a neural network: crop N detections (60x120 crops, batch 10 to 300 in the batchresize test; 50 in the README example) from a 3840x2160 8UC3 image, resize to 64x128 with INTER_LINEAR, convert to 32F, multiply, swap channels, subtract, divide and split into planar channels; OpenCV-CUDA runs a chain of separate kernels, cvGPUSpeedup one fused kernel. Timed with cudaEvents on the same stream over 100 iterations, inputs already on the GPU, no host transfers timed; outputs compared against OpenCV-CUDA.",
+      "caveats": "First-party numbers only. GPU against GPU on the same card (RTX A2000 12GB), so same hardware, but the gain comes from removing launch overhead and global-memory round trips of many tiny OpenCV-CUDA kernels; it is largest for long chains of small kernels and says nothing against a CPU resizer. The 38x figure is a README example and the 167x figure an NSight screenshot of a user's pipeline; neither has a committed result file, and the 2x to 10000x range comes from running unit tests with ENABLE_BENCHMARK whose CSV outputs are not in the repo. benchmarks/benchmark_CPU_OpenCV_vs_cvGS.cu measures host-side launch time (steady_clock without stream sync), not GPU execution, and benchmarks/benchmark_CPUandGPU_cvGS_vs_fk.cu compares cvGS with its own FKL core, not OpenCV. The authors' arXiv preprint 2508.07071 (The Fused Kernel Library) reports up to 20931x on an RTX 4090 against OpenCV-CUDA in synthetic vertical plus horizontal fusion and about 200x in production (search snippet only; arXiv blocked here). Host CPU unstated. The repository was transferred and renamed to Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV; the old morousg/cvGPUSpeedup URL redirects. It wraps the Fused Kernel Library (Libraries-Openly-Fused/FusedKernelLibrary) as a mandatory submodule."
+    },
+    "notes": "Repo moved to https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV (old URL redirects); repo_url is not a correctable field, so consider updating it. The Fused Kernel Library core (Libraries-Openly-Fused/FusedKernelLibrary) is not filed separately in wave 10 merged.json, so this is not a duplicate. Metadata on github.com: Apache-2.0, 56 stars, 8 forks, 858 commits, last commit 2026-08-27, active.",
+    "urls_opened": [
+      "https://github.com/morousg/cvGPUSpeedup",
+      "https://github.com/morousg/cvGPUSpeedup/commits",
+      "https://github.com/morousg/cvGPUSpeedup/tree/main/benchmarks",
+      "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup",
+      "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV",
+      "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/tree/main/tests",
+      "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/tree/main/tests/batchresize",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/README.md",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/benchmarks/CMakeLists.txt",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/benchmarks/benchmark_CPU_OpenCV_vs_cvGS.cu",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/benchmarks/benchmark_CPUandGPU_cvGS_vs_fk.cu",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/benchmarks/benchmark_image_resolution_MAD_loop.cu",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/benchmarks/cmake/benchmark.cmake",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/tests/main.h",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/tests/testsCommon.cuh",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/cmake/archflags.cmake",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/cmake/cuda_init.cmake",
+      "https://raw.githubusercontent.com/morousg/cvGPUSpeedup/HEAD/cmake/cmake_init.cmake",
+      "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/batchresize/test_batchresize_x_split3D.cu"
+    ]
+  },
+  {
+    "id": "https://github.com/stolk/hsvbench",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README shows `time ./hsvbench` runs (standard 3.745 s, fast 0.655 s, table 1.865 s) from the public hsvbench.c and hsv.h built by the Makefile with clang-10 -O2, but no CPU model is given and the baseline is the repo's own 6-way-switch function, not a library, so first-party C.",
+    "corrections": {
+      "baseline": "the repo's own hsv_to_rgb in hsv.h: the common 6-way switch formula seen in StackOverflow answers (calls double-precision floor() and branches on the hue sector); a naive in-repo baseline, not an incumbent library",
+      "compiler_and_flags": "Makefile: clang-10 -std=c99 -D_GNU_SOURCE -O2 -g, linked with -lm (no -march); timed with the shell's time over the whole process",
+      "workload": "300 passes over 1,048,576 HSV triples from rand() (uniform random hue, saturation and value), converting to float RGB in a global array; three separate process runs (bench=standard, bench=fast, bench=table) each timed end to end with time, so setup (3M rand() calls, table init) is included in every figure.",
+      "caveats": "Public-domain (Unlicense) dedication carries no patent grant. The baseline is a naive in-repo function, not an incumbent library such as OpenCV or libswscale; with uniformly random hues its 6-way switch mispredicts heavily and it calls double-precision floor() per pixel, while the branchless expression is amenable to auto-vectorisation (no disassembly or counters given), so the 5.7x (derived from page data) reflects branch-free code against a branchy scalar loop on random data. Whole-process timing includes identical setup in each run, which slightly understates the per-function ratio. No CPU model; single compiler setting. The branchless output is not bit-identical: per the README ppmhist output, 396 of 65,536 test pixels differ by 1 LSB from the standard version; the table version is visibly inaccurate. The branchless formula comes from a Hacker News comment (item 21158888, not opened: HN blocked), so the repo is a measurement rather than the origin of the technique."
+    },
+    "notes": "Baseline confirmed as an in-repo naive switch, not an incumbent; numbers match the README exactly. Metadata on github.com: Unlicense, 2 stars, 0 forks, 7 commits, last commit 2020-12-08, abandoned.",
+    "urls_opened": [
+      "https://github.com/stolk/hsvbench",
+      "https://github.com/stolk/hsvbench/commits",
+      "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/README.md",
+      "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/hsvbench.c",
+      "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/hsv.h",
+      "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/Makefile",
+      "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/LICENSE"
+    ]
+  }
+]
