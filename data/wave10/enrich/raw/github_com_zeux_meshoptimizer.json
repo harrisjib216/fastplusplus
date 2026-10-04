@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/zeux/meshoptimizer",
+  "one_liner": "Mesh library whose lossless vertex codec, misused on float pixels, beat OpenEXR ZIP: 1.4x encode, 3.1x decode, 7% smaller.",
+  "what_it_does": "meshoptimizer is an MIT C/C++ library for GPU mesh optimization; one of its parts is a lossless codec for arrays of fixed-size records (meshopt_encodeVertexBufferLevel / meshopt_decodeVertexBuffer). The catalogued benchmark treats each pixel of an interleaved half/float image as a 'vertex', encodes 16K-pixel chunks in parallel and optionally runs zstd over each chunk. There is no image API, file format or channel metadata: the caller writes its own container (the harness's MOPF header plus a chunk-size table), so this is a building block for internal storage, not a replacement for OpenEXR files.",
+  "how_it_is_fast": "Records are processed in blocks of up to 256 (8 KB / record size). Each block is transposed into one byte stream per byte position and delta-coded against the previous record (byte delta, 16-bit delta or, at level 3, 32-bit XOR with a rotation, chosen once per 4-byte lane at levels 2-3) with zigzag mapping. Each 16-byte group of deltas is then bit-packed at 0, 1, 2, 4 or 8 bits with a sentinel-plus-literal escape for outliers, chosen per group with 2-bit headers. There is no entropy coder or match search, so decoding is table-driven shuffles: SSSE3 (picked by cpuid on MSVC x64), NEON on arm64, Wasm SIMD and an opt-in AVX-512 path, about 8 GB/s on a 16-thread Ryzen 9 5950X and 14.8 GB/s on an M4 Max in the measured run. Encoding is scalar C++.",
+  "when_to_use": [
+    "Internal caches or intermediate files of half/float render buffers, AOVs, lightmaps or simulation fields where you control both writer and reader and do not need interop (the harness author's own recommendation).",
+    "Decode-bound pipelines: the decode stayed at 7.9-8.1 GB/s (Ryzen 9 5950X) and 14.7-14.8 GB/s (M4 Max) across levels 0-3, versus 2.5 and 6.0 GB/s for EXR ZIP level 4.",
+    "Layered images with many interleaved channels (the test set had up to 37 channels per pixel), as long as one pixel fits in 256 bytes.",
+    "When you want a better ratio and can afford a bit more encode time: stacking zstd level 1 on level 2 raised the ratio from 2.011 to 2.248 at 1.53 GB/s encode and 6.7 GB/s decode on the Ryzen.",
+    "Code-size-sensitive builds: the harness measured +26 KB of executable for the codec (+431 KB with zstd) versus +308 KB for EXR HTJ2K and +6017 KB for libjxl."
+  ],
+  "when_not_to_use": [
+    "Files other tools must read: there is no image format, and the 'MOP' container exists only in the benchmark repository. Use OpenEXR (ZIP, or HTJ2K via OpenJPH) for interchange.",
+    "Maximum lossless ratio: libjxl effort 7 reached 2.180 and effort 8 2.434 on the same files (at 0.05 and 0.007 GB/s encode), and plain Mop2 stops at 2.011.",
+    "Data without left-to-right correlation: the only predictor is the previous record in memory order (no vertical or 2D prediction), and the README warns that unordered input compresses poorly.",
+    "Records over 256 bytes or not a multiple of 4: the API asserts on both, so callers must pad (the harness zero-pads, which costs a copy per chunk) or split wide pixels into several streams.",
+    "Data that must stay readable by glTF EXT_meshopt_compression decoders or meshoptimizer older than v0.23: the benchmark used vertex format version 1, which those cannot decode; pin version 0 if needed (levels then have no effect)."
+  ],
+  "integration": {
+    "form": "static lib by default (CMake, MESHOPT_BUILD_SHARED_LIBS option) or source-drop: the codec is src/vertexcodec.cpp plus the C-compatible header src/meshoptimizer.h",
+    "dependencies": "none (zstd only if you add the optional second pass yourself)",
+    "min_toolchain": "any mainstream C++ compiler; CMake 3.5+ if using CMake; the README says the sources build without special options or warnings; the benchmark used MSVC 2022 17.14 and Xcode clang 16",
+    "platforms": "any; SIMD decode on x86/x64 (SSSE3+POPCNT, runtime cpuid fallback on MSVC and GCC/clang), AVX-512 VBMI2 only when compiled in, NEON on ARM/AArch64, Wasm SIMD; scalar fallback elsewhere",
+    "thread_safety": "Encode and decode use only stack buffers and can run concurrently on separate buffers (the harness runs 16 chunks at once); meshopt_encodeVertexVersion sets a global and must not race with encoders, so pass the version argument explicitly as the harness does.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Channel modes are chosen per 4-byte lane of the record, so a float channel straddling a 4-byte boundary (possible in mixed half/float layouts) or an odd count of half channels gets a worse delta mode; reorder channels so each 4-byte lane holds one float or two halves.",
+    "The decoder does not store the record count or size: the caller must keep vertex_count and vertex_size next to the payload (the harness keeps them in its own header).",
+    "The decoder is safe on untrusted input but 'may produce garbage data' on malformed streams; check the return code and add your own checksum if integrity matters.",
+    "The measured build was v0.25. The v1.2 release notes say a new mostly branchless SSSE3 decoder is about 20-45% faster on Intel/AMD and AVX-512 adds about 10%, so the current v1.3 should decode faster on x86 than measured; this has not been re-benchmarked in the harness."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued image codecs only OpenJPH (as OpenEXR HTJ2K) and LERC target float or raster data; pick meshoptimizer over HTJ2K when you do not need a standard file and want speed (HTJ2K_256 in the same run: ratio 1.947 at 0.709/1.045 GB/s on the Ryzen versus Mop2 2.011 at 1.600/7.861 GB/s). The 8-bit lossless codecs (QOI, fpng, fpnge, QOIR) do not handle half/float pixels at all.",
+  "verified_claims_summary": "Aras Pranckevicius's public harness (aras-p/test_exr_htj2k_jxl) round-tripped ten float EXR images (3122 MB raw) in memory with a bit-exact check, best of 3 runs, 16 threads on both sides, Release builds with MSVC 2022 17.14 on a Ryzen 9 5950X and Xcode clang 16 on an M4 Max. meshoptimizer v0.25 level 2 reached ratio 2.011 at 1.600 GB/s encode and 7.861 GB/s decode versus OpenEXR 3.4.0 ZIP level 4 at 1.873, 1.172 and 2.526 GB/s on the Ryzen (1.37x and 3.1x, derived), and 3.104/14.808 versus 1.723/5.993 GB/s on the M4 Max (1.80x and 2.47x, derived).",
+  "status_note": "Very actively maintained (v1.3 released September 2026, last commit 2026-09-28, about 8.5k stars, 4 open issues), MIT-licensed and packaged by Debian, Ubuntu, Arch, FreeBSD, Nix, vcpkg and Conan; copyable, but the image use is off-label and the container format is yours to write.",
+  "measurement_notes": "Read the harness code behind the numbers. main.cpp times SaveMopFile/LoadMopFile against OpenEXR's OutputFile/InputFile writing to and reading from in-memory streams, sums times over the ten files and keeps the best of three runs; CompareImages checks fp16 channels bit for bit and fp32 channels by value (so +0/-0 or NaN payload differences would not be caught, irrelevant for a byte-exact codec). SanitizePixelValues flushes fp16 subnormals to zero for every codec before the test. The thread count is the physical core count (16 on both machines); the Mop path uses a parallel-for over chunks, OpenEXR its global thread pool. The OpenEXR side also pays for converting its scanline/planar layout to the interleaved buffer, which the Mop container avoids by storing interleaved pixels; that cost is part of what 'faster than EXR ZIP' means here. The Mop wrapper's per-thread padding buffers came after meshoptimizer's author opened PR #3 on the harness ('~doubles decoding performance on Windows' by avoiding allocation contention and page faults); the harness owner closed it and implemented the same idea himself. That is a fair wrapper fix rather than library tuning and the run is still public and reproducible, so it does not affect the A tier, but the harness is not entirely independent of the library author (he also merged PR #1, a Linux build fix). zstd return codes are not checked in the wrapper; the round-trip check would catch a failure. No correctness bug or measurement flaw found behind the catalogued numbers.",
+  "sources_read": [
+    "https://github.com/zeux/meshoptimizer",
+    "https://github.com/zeux/meshoptimizer/commits/master",
+    "https://github.com/zeux/meshoptimizer/releases",
+    "https://github.com/zeux/meshoptimizer/releases/tag/v1.0",
+    "https://github.com/zeux/meshoptimizer/releases/tag/v1.1",
+    "https://github.com/zeux/meshoptimizer/releases/tag/v1.2",
+    "https://github.com/zeux/meshoptimizer/issues?q=is%3Aissue+vertex+codec",
+    "https://raw.githubusercontent.com/zeux/meshoptimizer/HEAD/README.md",
+    "https://raw.githubusercontent.com/zeux/meshoptimizer/HEAD/src/meshoptimizer.h",
+    "https://raw.githubusercontent.com/zeux/meshoptimizer/HEAD/src/vertexcodec.cpp",
+    "https://raw.githubusercontent.com/zeux/meshoptimizer/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/README.md",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/src/image_mop.cpp",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/src/image_mop.h",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/src/image_exr.cpp",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/src/image.cpp",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/run_mac.sh",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/img/win-ryzen5950x-20250908.html",
+    "https://raw.githubusercontent.com/aras-p/test_exr_htj2k_jxl/HEAD/img/mac-m4max-20250908.html",
+    "https://github.com/aras-p/test_exr_htj2k_jxl/issues?q=is%3Aissue",
+    "https://github.com/aras-p/test_exr_htj2k_jxl/pulls?q=is%3Apr",
+    "https://github.com/aras-p/test_exr_htj2k_jxl/pull/3"
+  ],
+  "confidence": 0.85
+}
