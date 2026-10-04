@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty-opus",
+  "one_liner": "Pure-Rust Opus codec (opus-rs performance fork) claiming 1.5-1.6x libopus single-core CELT encode speed; SILK 4% slower.",
+  "what_it_does": "A full Opus (RFC 6716 / RFC 8251) encoder and decoder in Rust with no C: SILK, CELT and Hybrid modes, VBR/CBR, DTX, in-band FEC, packet-loss concealment, comfort noise, multistream 5.1/7.1 and a repacketizer. OpusEncoder::new(rate, channels, Application) takes 8/12/16/24/48 kHz and 1-2 channels, exposes libopus's CTLs as public fields (bitrate_bps, complexity, use_cbr, use_inband_fec, use_dtx, packet_loss_perc, ...), and encode(&[f32], frame_size, &mut [u8]) returns one raw packet; OpusDecoder::decode writes f32 PCM. There is no Ogg layer in the library (examples/encode_ogg.rs carries a minimal muxer) and no C ABI, so it replaces libopus only inside Rust code; parallel::encode_parallel adds a multi-threaded whole-buffer encoder.",
+  "how_it_is_fast": "It is a structural port of libopus's float encoder (tonality analysis, CELT MDCT, band energy and PVQ, SILK NSQ) with hand-written SIMD kernels chosen at runtime and kept beside scalar twins: AVX/AVX+FMA CELT kernels and AVX2 pitch/PVQ/comb-filter code inherited from opus-rs, plus three byte-identical AVX2 SILK kernels the fork added (LPC short-term prediction, warped autocorrelation, cross-state NSQ noise-shaping filter), and NEON on aarch64. The CELT encoder allocates its per-frame work buffers once in CeltEncoder::new. docs/benchmarks.md says the single-thread CELT lead was already in upstream opus-rs (music 250x upstream vs 262x for the fork, with the fork's own gains on SILK/Hybrid) and warned then that the encoder's VBR was effectively CBR with less tonality/VBR analysis than libopus; the fork has since wired in the missing analysis signals, while libopus's tonality VBR boost is still opt-in (RUSTY_OPUS_TONAL_VBR). For wall-clock time, encode_parallel splits a stream into chunks on std::thread workers, each re-encoding 8 warm-up frames to prime its state (PEAQ delta-ODG <= 0.03, not byte-identical).",
+  "when_to_use": [
+    "Rust applications that need Opus encode and decode without a C toolchain, bindgen or cross-compiled libopus, under the same BSD-3-Clause licence as libopus.",
+    "CELT-path encoding (48 kHz music, or speech the classifier routes to CELT, at about 32-128 kb/s) where the first-party table shows 1.50x and 1.60x libopus single-core throughput.",
+    "Offline or batch transcoding of long files on multi-core machines, where encode_parallel trades a little extra CPU (warm-up frames per chunk) and byte-identity for wall-clock speed.",
+    "Real-time voice or streaming stacks in Rust that need the libopus feature set (FEC, DTX, PLC, CNG, multistream surround) rather than a decode-only crate."
+  ],
+  "when_not_to_use": [
+    "SILK and VoIP speech at low rates: libopus is 4% faster on the only SILK row (about 3 Windows timer quanta), Hybrid mode was not timed at all, and the README's own quality table puts the encoder behind libopus on VoIP-application speech (BD-ODG -0.200 to -0.416) and on stereo piano and guitar (-0.217, -0.162).",
+    "C or C++ projects: there is no C API, so linking libopus directly is simpler and is the measured baseline anyway.",
+    "When encoder output must match libopus byte for byte: decisions differ by design (zero-lookahead analysis with a 10-frame warm-up guard, opt-in tonality VBR boost, default complexity 9), and only the decoder claims bit-exact conformance on the 12 RFC vectors.",
+    "Integer PCM pipelines or 44.1 kHz input without a resampler: the API takes f32 only and the encoder accepts 8, 12, 16, 24 or 48 kHz.",
+    "Teams that need an engaged upstream: no issue has ever been filed, the last library change was 0.9.1 on 2026-08-08 (later commits are README install-count bumps and CI), and docs/benchmarks.md in the same repo still says SILK is 2.9x and Hybrid 2.7x slower than libopus, which the README later calls a mis-measurement and re-measures only for SILK."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none at runtime; dev-dependencies criterion, proptest and rusty_alloc-api (benches and examples only)",
+    "min_toolchain": "Rust 1.85 (rust-version in Cargo.toml), edition 2024",
+    "platforms": "std targets; AVX/AVX2/FMA kernels on x86-64 and NEON on aarch64, runtime-detected with scalar fallbacks; benchmarked only on Windows x86-64 (i7-14650HX)",
+    "thread_safety": "Not documented. Encoders and decoders are independent owned objects; encode_parallel runs one stream across std::thread workers, each with its own primed encoder (deterministic chunk boundaries, worker count defaults to available_parallelism).",
+    "drop_in_for_baseline": "partial — same bitstream and libopus-style knobs (interop with libopus in both directions per the README), but a Rust API with public fields, f32-only PCM and no C ABI"
+  },
+  "gotchas": [
+    "Behaviour depends on environment variables read when an encoder is built or once per process: RUSTY_OPUS_FORCE_MODE, RUSTY_OPUS_SILENCE_FLAG=0, RUSTY_OPUS_TONAL_VBR, RUSTY_OPUS_ANALYSIS_WARMUP, RUSTY_OPUS_MODE_DWELL and RUSTY_OPUS_LSB_DEPTH change the bitstream, RUSTY_OPUS_GATE_HARVEST=<path> makes the library append a CSV row per encoded frame to that file, and the unprefixed names CELT_PF_OFF (turns off the CELT pitch prefilter) and NO_STEREO_TRIM also apply process-wide.",
+    "lsb_depth defaults to 24 (libopus float-API default); the source says to set 16 for s16-sourced material to match opus_demo, since the analysis noise floor depends on it.",
+    "encode_parallel output differs from serial encoding at chunk seams, and every chunk re-encodes 8 warm-up frames, so it spends more total CPU than one serial encoder.",
+    "Benches and examples run under the org's rusty_alloc global allocator (a dev-dependency; the library itself sets none). CHANGELOG 0.9.1 reports no measurable encode-speed change from that switch because steady-state encode reuses its buffers."
+  ],
+  "pick_this_over_siblings_when": "Pick it over upstream opus-rs for the same API plus AVX2 SILK kernels, frame-parallel encode and the later quality fixes, and over ruopus, opus-pure or ropus when you want the full libopus feature set (FEC, DTX, PLC, multistream, repacketizer) in a crate already shipped inside remade_ffmpeg_rs. If the decision rests on a controlled libopus comparison, ropus's in-process cc-built harness and the libopus 1.6.1 baselines named by opus-pure and ruopus are better documented than this README's FFmpeg-hosted libopus of unknown version.",
+  "verified_claims_summary": "First-party, i7-14650HX on Windows: each encoder runs as a process on looped 300 s and 150 s clips, the slope of process CPU time is taken, pinned to one core at High priority, ABBA order, 31-41 reps with a null arm: CELT 48 kHz speech at 32 kb/s 436x vs libopus 291x realtime (1.50x), CELT stereo music at 128 kb/s 213x vs 133x (1.60x), SILK 16 kHz VoIP at 16 kb/s 139x vs 145x (0.96x), with the coded path checked from TOC bytes; rustc and flags are unstated and the libopus arm is ffmpeg -c:a libopus from PATH (docs/benchmarks.md names FFmpeg 8.1.2 for its earlier run) with no libopus version or build flags. The slope cancels start-up but not FFmpeg's per-frame CLI work (WAV demux, PCM decode, filtergraph, Ogg mux and, since FFmpeg 7.0, thread hand-offs between those stages, here time-sliced on the one pinned core), speed is compared at nominal bitrate although the README says libopus's VBR overshoots by 15-20% on this corpus, and the complexity 9 vs 10 mismatch adds almost no libopus work (libopus 1.5.2 float gates nothing above complexity 8 except a fixed-point-only analysis switch); no correctness bug was found behind the numbers.",
+  "status_note": "Code last changed with 0.9.1 on 2026-08-08 and later commits through 2026-10-04 only bump the README banner or CI; BSD-3-Clause, 5 stars, 4 forks, no issues ever filed, and the README's '35,223 Active Installs' equals the crates.io total download count (35,223), not a measured install base.",
+  "sources_read": [
+    "https://github.com/Remade-With-Rust/rusty-opus",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/COPYING",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/tools/bench_encode_3way.ps1",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/examples/encode_ogg.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/examples/encode_speed.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/examples/decode_bit.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/src/celt.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/src/parallel.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/src/pvq.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/tests/oracle_bitexact.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/.github/workflows/portfolio-check.yml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/tools/gate_ladder.py",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty-opus/HEAD/tools/corpus_coverage.py",
+    "https://github.com/Remade-With-Rust/rusty-opus/commits/main",
+    "https://github.com/Remade-With-Rust/rusty-opus/pulls?q=is%3Apr",
+    "https://github.com/Remade-With-Rust/rusty-opus/issues?q=is%3Aissue",
+    "https://github.com/Remade-With-Rust/rusty-opus/tree/main/.github/workflows",
+    "https://github.com/Remade-With-Rust/rusty-opus/tree/main/tests",
+    "https://github.com/Remade-With-Rust/rusty-opus/tree/main/examples",
+    "https://github.com/Remade-With-Rust/rusty-opus/tree/main/docs",
+    "https://raw.githubusercontent.com/xiph/opus/v1.5.2/src/opus_encoder.c",
+    "https://raw.githubusercontent.com/xiph/opus/v1.5.2/celt/celt_encoder.c",
+    "https://raw.githubusercontent.com/xiph/opus/v1.5.2/celt/bands.c",
+    "https://raw.githubusercontent.com/xiph/opus/v1.5.2/silk/control_codec.c",
+    "https://crates.io/api/v1/crates/rusty-opus"
+  ],
+  "confidence": 0.7
+}
