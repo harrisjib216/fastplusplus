@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/unilibs/uniwidth",
+  "one_liner": "Pure-Go terminal cell-width library; CI shows 1.1-52x faster StringWidth than go-runewidth v0.0.19, with width bugs on symbols.",
+  "what_it_does": "Returns how many monospace terminal cells a rune (RuneWidth) or a string (StringWidth) occupies. RuneWidthWithOptions and StringWidthWithOptions add an East Asian Ambiguous setting. The package-level names match go-runewidth's StringWidth and RuneWidth, so the common calls compile after an import swap. It has no Truncate, TruncateLeft, Wrap, FillLeft/FillRight, Condition, IsAmbiguousWidth or CreateLUT, and it does not read the locale or RUNEWIDTH_EASTASIAN. StringWidth gives ZWJ sequences, skin-tone modifiers, VS15/VS16 pairs and regional-indicator flags special widths without running full UAX #29 grapheme segmentation.",
+  "how_it_is_fast": "ASCII strings go through SWAR: 8-byte words are tested against a 0x8080... mask, and control bytes are found with the subtract-and-mask zero-byte trick (Lemire), while strings under 8 bytes use one fused loop. RuneWidth answers from hard-coded range checks for CJK ideographs, Hangul, kana and Bopomofo, four SMP emoji blocks and U+2600-27BF, and otherwise from a 3-stage table (ROOT[256], MIDDLE[17x64], LEAVES[78x32], 2 bits per code point, about 3.8 KB). Non-ASCII strings are converted to []rune and scanned once with a 3-state ZWJ/modifier state machine. go-runewidth v0.0.19's StringWidth instead runs clipperhouse/uax29 grapheme segmentation on every string, ASCII included, and binary-searches interval tables per rune; that difference explains the 12-52x ASCII gap.",
+  "when_to_use": [
+    "Go TUIs and CLI tables whose cells are mostly ASCII. In CI on an EPYC 7763: 6.06 vs 73.18 ns for 5 characters and 64.08 vs 3,327 ns for 228 characters against go-runewidth, with 0 allocations.",
+    "CJK, Hangul or kana text where per-code-point width is all you need: StringWidth is about 2.1-2.2x faster, and RuneWidth('世') takes 2.50 vs 21.97 ns.",
+    "Modules that must stay dependency-free. The library module imports only the standard library; the competitors are confined to the separate bench/ module.",
+    "Emoji-heavy status lines where ZWJ families, skin tones and flags should count as 2 cells, without pulling in a grapheme segmenter."
+  ],
+  "when_not_to_use": [
+    "Text with dingbats or miscellaneous symbols such as ❯ ✓ ✗ ➜ ★ ♥ ☀ ❤ (without VS16). RuneWidth returns 2 for every code point in U+2600-27BF and in U+1F300-1F5FF, U+1F680-1F6FF and U+1F900-1F9FF. Per the Unicode 15.1 tables in go-runewidth v0.0.19, 402 of the 448 code points in U+2600-27BF are not East Asian Wide (✓ U+2713, ❯ U+276F and ➜ U+279C are Neutral and not even emoji), nor are 259 in those SMP blocks. Prompts and check-mark columns come out misaligned.",
+    "CJK-locale terminals that draw ambiguous characters wide. StringWidthWithOptions drops the ZWJ, VS and flag handling (a family emoji measures 8), returns len(s) for ASCII input so control characters count 1, and ambiguous symbols inside the hard-coded ranges (★ ♥ ♠) stay 2 whatever the option says.",
+    "Code that needs truncation, wrapping, padding or grapheme iteration; none of these exist in the package.",
+    "Layouts that must match uniseg or terminals exactly. Widths come from heuristics rather than segmentation: any character followed by U+FE0F counts 2, and Extended_Pictographic is approximated by whole blocks, including arrows, geometric shapes and Misc Technical.",
+    "Toolchains older than Go 1.25. The project is also young (v0.2.0, 18 commits, 8 stars)."
+  ],
+  "integration": {
+    "form": "module (pure-Go package)",
+    "dependencies": "none (bench/ is a separate module that pins go-runewidth v0.0.19 and rivo/uniseg v0.4.7)",
+    "min_toolchain": "Go 1.25.1 per go.mod (README says Go 1.25+)",
+    "platforms": "any GOOS/GOARCH (no assembly; the SWAR helpers do unaligned 8-byte loads through unsafe); benchmarked on linux/amd64 and windows/amd64",
+    "thread_safety": "README: 'Thread-safe (immutable design, no global state)'; the functions are pure over read-only generated tables",
+    "drop_in_for_baseline": "partial: StringWidth and RuneWidth share go-runewidth's names and signatures, but the Truncate, Wrap and Fill helpers, Condition and locale/env detection are missing, and results differ on symbols in U+2600-27BF, on VS16 sequences and on clusters that only UAX #29 merges"
+  },
+  "gotchas": [
+    "The tests cannot catch range mistakes. cmd/generate-tables filters U+2600-27BF and the other hot ranges out of the generated tables, and the test reference function runeWidthViaBinarySearch repeats the same hard-coded ranges, so the tests compare the code with itself. The conformance test even expects ☀ U+2600 and ❤ U+2764 to be 2.",
+    "RuneWidth/StringWidth and the *WithOptions variants disagree: the options path has no ZWJ/VS/flag state machine, counts ASCII control characters, and uses a narrower kana range (0x3040-0x30FF, so Bopomofo is excluded). WithEmojiPresentation is accepted but never read.",
+    "The README's truncate example adds up RuneWidth per rune. That miscounts ZWJ sequences and flags, which only StringWidth handles.",
+    "Non-ASCII StringWidth builds a []rune copy for lookahead. The CHANGELOG lists this as one allocation; the verifier observed it only for medium and long strings."
+  ],
+  "pick_this_over_siblings_when": "displaywidth is the safer Go choice: it measures grapheme clusters with clipperhouse/uax29, has ANSI-aware truncation and ships in lipgloss v2 and tablewriter. Choose uniwidth only when almost all your strings are ASCII and you can avoid or patch the U+2600-27BF over-width. The two were benchmarked against different go-runewidth versions on different machines, so catalog data cannot rank them. uwcwidth is the Python counterpart and not an option in Go.",
+  "verified_claims_summary": "The 'Library Comparison' comment on PR #5 (2026-08-25) ran on a GitHub-hosted AMD EPYC 7763 (linux/amd64) with Go 1.25, -count=3 -benchtime=100ms, taking medians, against go-runewidth v0.0.19 and uniseg v0.4.7 in default configuration. Against go-runewidth: StringWidth 12-52x faster on ASCII, 2.1-2.2x on CJK, 1.7-2.0x on mixed, emoji and flags, 1.1x on ZWJ and 1.2x on the table header; RuneWidth 8.7x on CJK. The workflow itself warns of 10-20% runner variance. Reading the code: the ASCII gap comes mostly from skipping go-runewidth's per-string UAX #29 segmentation. The TUI Prompt row (156.0 vs 270.7 vs 389.7 ns) times a wrong result: uniwidth returns 17 for '❯ Enter command:', where go-runewidth's Neutral classification gives 16, and the harness never cross-checks outputs.",
+  "status_note": "Active but small: v0.2.0 (2026-02-05), last commit 2026-08-25, 8 stars, 18 commits, no open issues. MIT and dependency-free, so easy to vendor, but patch the U+2600-27BF hot path before relying on it for symbol-heavy TUIs.",
+  "sources_read": [
+    "https://github.com/unilibs/uniwidth",
+    "https://github.com/unilibs/uniwidth/pull/5",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/README.md",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/ROADMAP.md",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/go.mod",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/uniwidth.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/options.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/tables_generated.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/cmd/generate-tables/main.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/docs/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/conformance_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/uniwidth_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/options_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/fuzz_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/benchmark_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/bench/comparison_test.go",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/bench/go.mod",
+    "https://raw.githubusercontent.com/unilibs/uniwidth/HEAD/.github/workflows/benchmarks.yml",
+    "https://raw.githubusercontent.com/mattn/go-runewidth/v0.0.19/runewidth.go",
+    "https://raw.githubusercontent.com/mattn/go-runewidth/v0.0.19/runewidth_table.go"
+  ],
+  "confidence": 0.75
+}
