@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/restsend/rustrtc",
+  "one_liner": "Pure-Rust WebRTC/RTP/SRTP stack with its own ICE, DTLS and SCTP; first-party data-channel loopback runs 3.3x webrtc-rs and 3.2x pion.",
+  "what_it_does": "A tokio-based real-time communication library: one PeerConnection type covers WebRTC (ICE, DTLS, SRTP, SCTP data channels), plain RTP and SRTP, and, behind the t38 feature, a T.38 fax terminal, with RTP packetizers, jitter buffer, NACK/RTX, TWCC/GCC bandwidth estimation, TURN, ICE-TCP, mDNS and UPnP. The API follows the W3C shape (create_offer, set_local_description, create_data_channel, add_track) but is its own Rust interface, so moving from webrtc-rs or pion means rewriting call sites; data-channel events arrive through an async recv() queue instead of callbacks. There is no C API.",
+  "how_it_is_fast": "It replaces webrtc-rs's layered crates with in-tree implementations: an SCTP association (src/transports/sctp.rs) that drains up to 1000 queued chunks per transmit pass under one lock, delivers the next in-order TSN straight to the channel without touching the reassembly queue, sends SACKs with SACK_DELAY = 0 and computes the CRC-32C checksum with SSE4.2 or the aarch64 CRC instructions; a homegrown DTLS 1.2 record layer using RustCrypto AES-128-GCM; Bytes buffers and parking_lot locks; and fat LTO with one codegen unit in the release profile. Part of the published gap comes from the benchmark configuration rather than the stack: rustrtc's default data channel is reliable unordered (DataChannelConfig derives Default, so ordered = false and DATA chunks carry the U flag), while both baselines run ordered reliable channels.",
+  "when_to_use": [
+    "Rust SIP/WebRTC gateways, SFUs or voice-agent backends (the author's rustpbx and active-call) that need ICE, DTLS-SRTP, RTP and data channels in one dependency without OpenSSL or libwebrtc.",
+    "Many concurrent peer connections in one process where memory matters: 21 MB peak RSS for ten loopback pairs against 44 MB for webrtc-rs and 48 MB for pion in the author's run.",
+    "Bulk data-channel transfer where message order does not matter, which is exactly the default rustrtc channel and the case the benchmark measures.",
+    "Mixed telephony deployments that also need plain RTP latching, RTP rewrite bridging, UPnP port mapping or T.38 fax alongside WebRTC."
+  ],
+  "when_not_to_use": [
+    "C or C++ applications: there is no C ABI; libwebrtc or libdatachannel are the native options, and neither was compared.",
+    "Expecting the 3.3x on ordered channels: every quoted throughput number compares rustrtc's unordered channel with ordered channels in webrtc-rs 0.17.1 and pion v3.3.6, so no like-for-like ordered result exists; ordered receive also caps pending out-of-order messages per stream at 128 (MAX_INBOUND_STREAM_PENDING).",
+    "Deployments that need an audited TLS stack: DTLS handshake and record layer are written in-house (src/transports/dtls), and the ClientHello also offers TLS_RSA_WITH_AES_128_GCM_SHA256, a suite without forward secrecy, after the two ECDHE suites.",
+    "CPU-bound hosts: in the same run rustrtc used 739.62% CPU against 555.20% for pion, so the gain is in throughput per CPU-percent (0.74 against 0.31 MB/s), not lower absolute CPU.",
+    "Code that needs a frozen API: 0.3.x has had 145 patch releases since 2025-11-27 and still ships protocol-behaviour fixes (two ICE restart/nomination issues, #54 and #55, open on 2026-10-04)."
+  ],
+  "integration": {
+    "form": "crate (rustrtc on crates.io, 0.3.145)",
+    "dependencies": "tokio (multi-thread runtime), RustCrypto aes/aes-gcm/ctr/hmac/sha1/sha2/md-5/p256, rcgen (ring) and x509-parser for certificates, bytes, parking_lot, socket2, crc32fast/crc32c, igd (UPnP), serde/serde_json, tracing, rand, base64, local-ip-address",
+    "min_toolchain": "Rust edition 2024 with let-chains in src (Rust 1.88 or later); no rust-version is declared; the README run used rustc 1.97.1",
+    "platforms": "Any tokio target; hardware CRC-32C on x86-64 (SSE4.2) and aarch64 (CRC extension), software fallback elsewhere. The benchmark ran only on Linux x86-64.",
+    "thread_safety": "PeerConnection and DataChannel are shared through Arc and used from multiple tokio tasks (the benchmark spawns sender and receiver tasks per pair); sends on one channel serialise on a per-channel async lock. A tokio runtime is required.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "create_data_channel(label, None) gives a reliable unordered channel, unlike the W3C, webrtc-rs and pion default of ordered; pass a DataChannelConfig with ordered = true if the application relies on order.",
+    "Data-channel events go into an unbounded tokio mpsc queue, so a slow consumer grows memory instead of exerting SCTP backpressure. On the send side, send_data waits once flight plus queued bytes exceed sctp_max_buffered_amount (256 KB by default).",
+    "The benchmark's 'Setup Latency' is not comparable across stacks: the rustrtc arm starts its timer only after both peers report Connected and then reads a DataChannelEvent::Open that may already sit in that queue, while the webrtc-rs and pion arms start after pc1 alone is Connected and wait for an on_open callback; pion's figure is also truncated to whole milliseconds.",
+    "The harness's send-side pacing differs per stack: rustrtc's send_data has the built-in 256 KB limit, the pion sender blocks above a 100 KB bufferedAmount threshold, and the webrtc-rs sender has no explicit gate. CPU is the process-lifetime ps %cpu value, sampled every 500 ms in Rust and every 2000 ms in Go, from one run per stack."
+  ],
+  "pick_this_over_siblings_when": "The only transport sibling is uvgRTP, a C++ RTP library for high-rate media without ICE, DTLS or data channels; pick rustrtc when a Rust service needs a full WebRTC peer (ICE, DTLS-SRTP, SCTP data channels) and pick uvgRTP for raw RTP streaming from C++. The codec siblings (opus-rs from the same author, dav1d, the Opus ports) solve a different problem and pair with it rather than compete.",
+  "verified_claims_summary": "Author's single run at release 0.3.141 on an Intel i7-9700T (8 cores, Debian 13), rustc 1.97.1 with fat LTO for rustrtc and webrtc-rs 0.17.1 in one example binary, go 1.24.4 for pion v3.3.6: ten in-process loopback pairs each push 1 KiB messages for 10 s, giving 549.04 MiB/s for rustrtc against 165.98 (webrtc-rs) and 169.58 (pion). The comparison is not like-for-like: rustrtc's channel is unordered while both baselines are ordered, the stacks pace their senders differently, and the setup-latency timers start at different points, so the 3.3x figure is an upper bound for unordered bulk transfer, not a general WebRTC speedup.",
+  "status_note": "Very active (352 commits, 0.3.145 published 2026-10-03, issues closed within days) and MIT-licensed, so it is easy to adopt in Rust, but its speed evidence is first-party, it is networking rather than audio or video coding, and its security-critical DTLS is homegrown.",
+  "sources_read": [
+    "https://github.com/restsend/rustrtc",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/README.md",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/config.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/peer_connection.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/transports/datachannel.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/transports/sctp.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/src/transports/dtls/mod.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/examples/benchmark.rs",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/examples/go_bench/benchmark.go",
+    "https://raw.githubusercontent.com/restsend/rustrtc/HEAD/examples/go_bench/go.mod",
+    "https://github.com/restsend/rustrtc/tree/main/src/transports",
+    "https://github.com/restsend/rustrtc/tree/main/src/transports/dtls",
+    "https://github.com/restsend/rustrtc/issues?q=is%3Aissue",
+    "https://github.com/restsend/rustrtc/issues/1",
+    "https://crates.io/api/v1/crates/rustrtc"
+  ],
+  "confidence": 0.75
+}

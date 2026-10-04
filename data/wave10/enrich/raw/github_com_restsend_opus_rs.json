@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/restsend/opus-rs",
+  "one_liner": "Pure-Rust, no_std, zero-dependency port of libopus 1.6; first-party tables show parity on SILK and 5-28% gains on 48 kHz CELT encode.",
+  "what_it_does": "A Rust reimplementation of the Opus codec (RFC 6716) with an OpusEncoder (encode from f32, or encode_i16 from PCM16 since 0.1.34) and an OpusDecoder, both writing into caller-provided buffers; multistream decode (channel mapping family 1) arrived in 0.1.33. Encoder settings are public struct fields (bitrate_bps, complexity, use_cbr, use_inband_fec, packet_loss_perc) instead of libopus's ctl calls. It is a Rust API, not a C ABI drop-in for libopus, and the default build has no runtime dependencies; with default features off it is #![no_std] with no allocator.",
+  "how_it_is_fast": "Line-by-line port of libopus's float encoder and decoder with hand-written intrinsics: runtime-dispatched SSE/AVX/AVX2+FMA kernels on x86-64 (is_x86_feature_detected) and unconditional NEON on aarch64 for the comb filter, haar1, MDCT/kiss FFT and PVQ search. Part of the CELT gain is algorithmic rather than code generation: for bands with n >= 32 and at least 8 pulses left after projection, pvq_search_fast_select places pulses four at a time from one select_nth_unstable ranking (BATCH_SIZE = 4 in src/pvq.rs), where libopus re-scores after every pulse, and the encoder has no port of libopus's tonality analysis (analysis.c), which libopus 1.6.1 float runs at complexity >= 7 for 16-48 kHz input.",
+  "when_to_use": [
+    "Rust VoIP, SIP or WebRTC services (the author's rustpbx and rustrtc stacks) that want Opus encode and decode without building or linking C, at about libopus speed on SILK and somewhat faster on 48 kHz CELT.",
+    "Bare-metal, RTOS or wasm32-unknown-unknown targets: default-features = false gives a no_std, no-alloc build (libm feature for float math), verified by the author on thumbv7em-none-eabi and wasm32.",
+    "Mono or stereo encode at 8, 16 or 48 kHz with 10 or 20 ms frames, the configurations the README tables and the interop tests cover.",
+    "Pipelines holding PCM16 audio: encode_i16 feeds the SILK high-pass filter directly and is documented as byte-identical to encode() on the converted samples."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: no C API, so libopus itself is the simpler choice, and the measured gain over it is at most 12% (Ryzen) on the 48 kHz rows and nil on the SILK rows.",
+    "Encoding 24 kHz input (open issue #37: decodes to garbage in every application mode; resample to 48 kHz first), 60 ms frames (open issue #35: rejected as an invalid frame size), or in-band FEC at CBR (open issue #36: no LBRR emitted).",
+    "Strict bit-exactness or interop expectations: open issues #34 (mono SILK decode one sample ahead of libopus) and #38 (48 kHz SILK/hybrid output lags libopus's pre-skip by up to 17 samples; low-bitrate Audio mangles the first ~200 ms), and the repo's own interop table lists hybrid mono 48 kHz decode at 14.6 dB SNR against libopus 1.6.1.",
+    "Fleets that include AVX-without-FMA CPUs (Sandy Bridge, Ivy Bridge, Bulldozer, some VMs): open issue #30, still present at HEAD, where celt.rs gates the avx,fma comb_filter_const_avx kernel on an AVX-only check and the CPU gets SIGILL; fix PR #31 is unmerged.",
+    "Workloads that rely on libopus's high-complexity quality tools: tonality analysis is not ported and PVQ search uses a batched approximation, so output at default complexity is not the same bitstream libopus would produce."
+  ],
+  "integration": {
+    "form": "crate (opus-rs on crates.io, 0.1.34)",
+    "dependencies": "none at runtime with default features (std, heap); libm (pure Rust) for no_std builds; criterion, proptest and the opus 0.3 bindings crate (audiopus_sys) are dev-dependencies only",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85+); no rust-version is declared in Cargo.toml",
+    "platforms": "x86-64 with runtime SSE/AVX/AVX2 dispatch (compile-time detection without std, so build with -C target-feature=+avx2), x86 32-bit (AVX import fix in PR #16), aarch64 with NEON, thumbv7em-none-eabi and wasm32-unknown-unknown in no_std mode",
+    "thread_safety": "Not documented. encode and decode take &mut self, so use one encoder or decoder per stream or thread; constant tables are built once through an internal heap-free OnceCell.",
+    "drop_in_for_baseline": "partial: the same codec and bitstream format, with Opus packets decodable by libopus, but a Rust API with struct fields in place of opus_encoder_ctl, no C ABI, and gaps (24 kHz encode, 60 ms frames, FEC at CBR, tonality analysis)"
+  },
+  "gotchas": [
+    "The README's command cargo bench --bench opus_vs_c_bench does not exist: Cargo.toml registers only opus_bench, whose opus_real group runs Rust encode plus decode at complexity 0, CBR, 20 or 64 kb/s, with 48 kHz input made by repeating each 16 kHz sample three times and 8 kHz input by dropping every other sample. libopus 1.6.1 skips tonality analysis below complexity 7, so if the private C bench matched complexity 0 the work was comparable; if it ran at the default complexity 9, libopus did analysis work opus-rs never does. The README does not say which.",
+    "Byte-exact CELT output against libopus is claimed per architecture only: tests/oracle_celt.rs keeps separate x86_64 and aarch64 fixtures, and its impulse fixture diverges from libopus 1.6.1 after byte 7 because analysis.c is not ported. The PVQ cross-check against C (tests/verify_pvq_match.rs) uses n = 8, so it never reaches the batched n >= 32 search path.",
+    "Without the heap feature (no_std) OpusEncoder and OpusDecoder are about 250 KB and 175 KB inline, so place them in a static; before 0.1.29 even the std build needed about 0.85 MiB of stack to construct an encoder (issue #12).",
+    "pvq.rs (71 unsafe occurrences) and celt.rs use raw-pointer loops and intrinsics; the crate is not #![forbid(unsafe_code)], and issue #7 (closed) asked for decoder hardening against untrusted packets."
+  ],
+  "pick_this_over_siblings_when": "Pick opus-rs over ropus, ruopus, rusty-opus or gopus when you need a pure-Rust Opus encoder and decoder that is already widely pulled from crates.io (about 182,000 downloads), has zero runtime dependencies and builds no_std without an allocator; the siblings' own first-party numbers are larger (ruopus 1.4-1.8x libopus decode, opus-pure 1.09-1.76x encode, rusty-opus 1.50x on CELT speech), so do not pick opus-rs for speed alone.",
+  "verified_claims_summary": "The author's README tables time mono encoding of one 16 kHz speech clip (resampled crudely to 8 and 48 kHz) against libopus 1.6.1 built from a local, gitignored tree, Rust built with --release and ThinLTO (rustc version and C flags not stated): on a Ryzen 7 5700X the SILK VoIP rows are within 2% of libopus and the 48 kHz Audio rows are 5-12% faster; on an unnamed Apple M-series (2026-04-23, version 0.1.17) they are within 3% and 20-28% faster. The C-comparison harness is not public, the checked-in bench has no libopus arm and times encode plus decode, and the 48 kHz CELT rows benefit from the batched PVQ search and the absent tonality analysis, so the gain is not a like-for-like code-generation result.",
+  "status_note": "Actively maintained (0.1.34 on 2026-09-22, 96 commits, outside contributors fixing CELT byte-exactness and SIMD bugs) and BSD-3-Clause, so it is easy to adopt from Rust, but nine issues were open on 2026-10-04, five of them encoder or decoder correctness bugs filed in late September 2026.",
+  "sources_read": [
+    "https://github.com/restsend/opus-rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/bench_quick.sh",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/benches/opus_bench.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/src/pvq.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/src/compat.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/src/celt.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/tests/c_interop_diff.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/tests/oracle_celt.rs",
+    "https://raw.githubusercontent.com/restsend/opus-rs/HEAD/tests/verify_pvq_match.rs",
+    "https://github.com/restsend/opus-rs/tree/main/src",
+    "https://github.com/restsend/opus-rs/tree/main/tests",
+    "https://github.com/restsend/opus-rs/commits/main",
+    "https://github.com/restsend/opus-rs/issues?q=is%3Aissue",
+    "https://github.com/restsend/opus-rs/pulls?q=is%3Apr",
+    "https://github.com/restsend/opus-rs/issues/18",
+    "https://github.com/restsend/opus-rs/issues/20",
+    "https://github.com/restsend/opus-rs/issues/30",
+    "https://github.com/restsend/opus-rs/issues/37",
+    "https://raw.githubusercontent.com/xiph/opus/v1.6.1/src/opus_encoder.c",
+    "https://crates.io/api/v1/crates/opus-rs",
+    "https://crates.io/api/v1/crates/opus-rs/0.1.34",
+    "https://crates.io/api/v1/crates/opus/0.3.0/dependencies"
+  ],
+  "confidence": 0.75
+}
