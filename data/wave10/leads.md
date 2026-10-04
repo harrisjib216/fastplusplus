@@ -10,3 +10,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e05): google/skcms (Google's C++ colour management system, used by Skia and Chromium) is not catalogued; candidate for a color-and-resampling seed pass.
 - Enricher leads (e07, image-codecs texture encoders): Traverse-Research/intel-tex-rs-2 (ISPC texture kernels sped up 2.1-6.2x over Intel ispc_texcomp, PR #50 merged 2026-09-28); richgel999/bc7enc_rdo (not catalogued; carries the bc7e.ispc determinism fix); QuickBC7 paper (Computers and Graphics 2026, ScienceDirect S0097849326001020, claims 2.23x versus etcpak 2.0; ScienceDirect blocked here).
 - Enricher lead (e08): bitbank2/AnimatedGIF (same Turbo LZW decoder as giflib-turbo, README claims 2-30x, MCU-oriented; not catalogued).
+- Verifier lead (batch 74): mozilla/mozjpeg (C encoder, libjpeg-turbo fork with trellis quantisation) is not catalogued; baseline of mozjpeg-rs.
