@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/pngencoder/pngencoder",
+  "one_liner": "Pure-Java PNG encoder that beats javax.imageio's PNG writer by compressing image segments in parallel on a thread pool.",
+  "what_it_does": "Encodes a java.awt.image.BufferedImage to PNG (8- and 16-bit RGB, ARGB, grayscale and indexed) through a small immutable builder: new PngEncoder().withBufferedImage(img).withCompressionLevel(n).toStream/toFile/toBytes(). It replaces ImageIO.write(img, \"png\", out) for writing only; there is no decoder and almost no metadata support (no text chunks), though ICC profiles, sRGB/gAMA/cHRM and pHYs chunks can be written. Published on Maven Central as com.pngencoder:pngencoder (0.16.0), MIT licensed.",
+  "how_it_is_fast": "The speedup is mostly parallel DEFLATE: scanlines are cut into segments of at least 128 KiB (raw size / (9 x availableProcessors)), each segment is compressed by a thread-local raw java.util.zip.Deflater with SYNC_FLUSH on a shared fixed pool of availableProcessors daemon threads, and the byte-aligned outputs are concatenated with a combined Adler-32, in the style of pigz. Each segment starts with an empty dictionary, which costs about 2% in size. By default it also skips PNG row filtering (filter type 0 on every row), whereas ImageIO tries all five filters per row; scanlines are pulled straight from the raster's int/byte buffer for the common BufferedImage types, and Deflater objects are reused per thread.",
+  "when_to_use": [
+    "A JVM service or batch job that writes large PNGs (multi-megapixel photos, renders, screenshots) on a machine with several idle cores and no JNI allowed.",
+    "Latency of a single large encode matters more than total CPU spent, e.g. one request thread producing one big image while other cores are free.",
+    "You want a dependency-free, Java 8 compatible ImageIO replacement with a tunable compression level (level 1 trades about 2.5x larger files for about 2.3x more speed per the README table).",
+    "Images known to have at most 256 colors, where withTryIndexedEncoding(true) plus withPredictorEncoding(true) gives smaller files than ImageIO (at extra time)."
+  ],
+  "when_not_to_use": [
+    "Servers already encoding many images concurrently: the pool is one static fixed pool of availableProcessors threads shared by all callers, so the parallel gain mostly disappears (the project's own 8-thread JMH runner commit is titled 'ImageIO gains more :(' and publishes no numbers).",
+    "Single-core or CPU-limited containers: the README says the speedup will not be significant there, and an independent single-threaded JMH run (FPNG-Java suite, JDK 21) measured only 1.13x to 1.44x over ImageIO even at compression level 2.",
+    "Small images: when the raw scanline data is at most one segment (128 KiB, about 181x181 RGBA, derived from code) it always encodes on the calling thread with a plain Deflater.",
+    "When smallest output matters at default settings: unfiltered rows compress worse than ImageIO's adaptive filtering on photographic content, so you must enable predictor encoding and give back much of the speed.",
+    "When you need much higher throughput and JNI is acceptable: native fpng (SSE2) and fpnge (AVX2) through the FPNG-Java wrapper took about 4x to 20x less time than PngEncoder at level 2 in that same JDK 21 suite (derived from page data)."
+  ],
+  "integration": {
+    "form": "module (Maven Central jar, com.pngencoder:pngencoder)",
+    "dependencies": "none (JDK java.awt and java.util.zip only; JUnit, Hamcrest and JMH are test-scope)",
+    "min_toolchain": "Java 8 (maven.compiler.source/target 8); no module-info (issue #59 open; PR #124 for Automatic-Module-Name is unmerged)",
+    "platforms": "any JVM with java.desktop/AWT image classes",
+    "thread_safety": "Not documented; the code shows immutable builder objects, thread-local Deflaters and per-call buffer pools, so concurrent calls look safe, but all calls share one static fixed thread pool sized at class-load time and the calling thread blocks while its segments compress.",
+    "drop_in_for_baseline": "partial: replaces ImageIO.write(img, \"png\", ...) only; different API, no ImageWriteParam/IIOMetadata support, encoder only"
+  },
+  "gotchas": [
+    "Default output is unfiltered and split into independent deflate segments, so files are not byte-identical to ImageIO and are typically somewhat larger; the 'about the same size as ImageIO' claim was never measured by the benchmark, and ImageIO itself uses deflate level 9 on JDK 8 but level 4 on JDK 9+.",
+    "Peak transient memory in multithreaded mode is roughly 0.75x the raw scanline size on top of the image: up to 3 x availableProcessors queued segments, each holding two pool buffers of 1.125x the segment size (derived from PngEncoderDeflaterOutputStream and PngEncoderDeflaterBufferPool). That is about 90 MB for a 4900x6000 RGBA image.",
+    "toStream()/toFile() return a byte count that omits the sRGB, gAMA, cHRM, pHYs, iCCP, PLTE and tRNS chunks, because PngEncoderLogic.encode writes those to the raw stream instead of its counting wrapper; do not use the return value as the file size when those chunks are present.",
+    "The test helper PngEncoderTestUtil.assertThatPixelIs computes alphaExpected from the actual pixel, so round-trip tests accept any pixel whose decoded alpha is 0; an earlier indexed-encoding corruption bug (issue #34) was fixed in 2022."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you must stay pure Java on the JVM; mtpng and pngenc use the same parallel-deflate idea natively (Rust with a C API, and C), and fpng/fpnge are far faster but need native code and give larger files on big photos.",
+  "verified_claims_summary": "First-party JMH (1 fork, one 5 s measurement iteration, one benchmark thread, CPU and JDK not stated, '8 logical cores'): PngEncoder at level 9, unfiltered, compressing on an 8-thread pool encoded 5.1x to 7.1x more images per second than single-threaded ImageIO.write with defaults (random 1024x1024 ARGB, a 2121x350 logo, a 4900x6000 photo). An independent JMH suite in manticore-projects/FPNG-Java (JDK 21.0.1 GraalVM CE, -XX:+UseSerialGC, 10 iterations, CPU not stated) ran pngencoder 0.14.0 with multithreading disabled: at level 2 it took 0.70 to 0.88 of ImageIO's time (1.13x to 1.44x faster; 1120 vs 1270 ms on the same 4900x6000 photo) and at level 1 it was 2.26x to 3.53x faster (derived from page data), with output sizes not shown in the README.",
+  "status_note": "Active but in maintenance mode (last commit 2025-11-25, release 0.16.0 of 2025-05-19, later commits are dependency bumps); MIT licensed, Java 8, no dependencies and small enough to vendor.",
+  "measurement_notes": "Independent measurement found: the manticore-projects/FPNG-Java README publishes a JMH table (JMH 1.37, JDK 21.0.1 GraalVM CE 23.1, -XX:+UseSerialGC -Xms512M -Xmx2G, avgt, 10 samples with error bars; CPU not stated) whose PNGEncoderBenchmark.java calls com.pngencoder 0.14.0 with withMultiThreadedCompressionEnabled(false). At withCompressionLevel(2) it took 1120.410 ms against ImageIO's 1270.494 ms on looklet-look-scale6.png (the same 4900x6000 photo as the first-party table), 4 channels (1.13x), 854.307 vs 1099.045 ms with 3 channels (1.29x), and 44.704 vs 64.538 ms and 39.813 vs 54.189 ms on example.png (1.44x and 1.36x). At level 1 the ratios are 2.97x, 3.53x, 2.29x and 2.26x (all derived from page data). ImageIO there is JDK 21's writer (deflate level 4 plus adaptive filtering, confirmed in openjdk PNGImageWriter.java and RowFilter.java), writing to a ByteArrayOutputStream. Output sizes are said to be in a benchmark.ods that returned 404. The table shows a 'channels' parameter that the current EncoderBenchmark.java does not define, and 10 samples where build.gradle sets 3 iterations, so it came from an earlier harness revision. This independent single-threaded figure supports the verifier's reading that the README's 5.1x-7.1x comes mainly from the 8-thread pool. In the first-party table, the random 1024x1024 ARGB case (7.1x) is incompressible noise, where ImageIO's five-filter trial per row is pure overhead. Code defects found that do not affect the published numbers: toStream()/toFile() undercount the returned byte size when ancillary chunks are written; PngEncoderTestUtil.assertThatPixelIs uses actual for alphaExpected; getProfileName's UTF-16 branch reads data[endIdx] twice instead of data[endIdx+1]. The README's example comment says level 1 is 'about three times faster' with files 'about three times larger', while its own table says 2.31x speed and 2.50x size.",
+  "sources_read": [
+    "https://github.com/pngencoder/pngencoder",
+    "https://github.com/pngencoder/pngencoder/issues?q=is%3Aissue",
+    "https://github.com/pngencoder/pngencoder/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/README.md",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/pom.xml",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/test/java/com/pngencoder/PngEncoderBenchmarkPngEncoderVsImageIO.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/test/java/com/pngencoder/PngEncoderBenchmarkCompressionSpeedVsSize.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/test/java/com/pngencoder/PngEncoderTestUtil.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoder.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderLogic.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterExecutorService.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterExecutorServiceThreadFactory.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterOutputStream.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterSegmentTask.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterThreadLocalDeflater.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderDeflaterBufferPool.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderIdatChunksOutputStream.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderCountingOutputStream.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderPredictor.java",
+    "https://raw.githubusercontent.com/pngencoder/pngencoder/HEAD/src/main/java/com/pngencoder/PngEncoderScanlineUtil.java",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.desktop/share/classes/com/sun/imageio/plugins/png/PNGImageWriter.java",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.desktop/share/classes/com/sun/imageio/plugins/png/RowFilter.java",
+    "https://raw.githubusercontent.com/manticore-projects/FPNG-Java/HEAD/README.md",
+    "https://github.com/manticore-projects/FPNG-Java/tree/master/benchmark",
+    "https://github.com/manticore-projects/FPNG-Java/tree/master/benchmark/src/jmh/java",
+    "https://github.com/manticore-projects/FPNG-Java/tree/master/benchmark/src/jmh/java/com/manticore",
+    "https://raw.githubusercontent.com/manticore-projects/FPNG-Java/master/benchmark/build.gradle",
+    "https://raw.githubusercontent.com/manticore-projects/FPNG-Java/master/benchmark/src/jmh/java/com/manticore/EncoderBenchmark.java",
+    "https://raw.githubusercontent.com/manticore-projects/FPNG-Java/master/benchmark/src/jmh/java/com/manticore/PNGEncoderBenchmark.java",
+    "https://raw.githubusercontent.com/manticore-projects/FPNG-Java/master/benchmark/src/jmh/java/com/manticore/ImageIOEncoderBenchmark.java"
+  ],
+  "confidence": 0.75
+}

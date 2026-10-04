@@ -42,3 +42,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e89): vstroebel/jpeg-encoder (Rust, AVX2, MIT/Apache; pure-Rust JPEG encoder with no published speed numbers).
 - Enricher leads (e88): go-gfx/gfx (Go resample and colour kernels used by go-images, no numbers), ajroetker/go-highway (Go SIMD, indirect dependency); mozilla/mozjpeg and memorysafety/rav1d (slower than dav1d) remain uncatalogued baselines.
 - Enricher lead (e92): iOrange/bcdec (single-header BC1-7 decoder; not checked).
+- Enricher leads (e93): manticore-projects/FPNG-Java (Java wrapper of fpng, fpnge and zpng; duplicate if found, but its README JMH tables are an independent source for PngEncoder); Remade-With-Rust/rusty_h264 (BSD-2, decoder 1.63-1.77x slower than ffmpeg, no win).

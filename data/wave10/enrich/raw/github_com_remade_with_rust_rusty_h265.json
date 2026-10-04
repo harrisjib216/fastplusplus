@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty_h265",
+  "one_liner": "Pure-Rust, memory-safe HEVC decoder: about 5% faster than FFmpeg's hevc decoder on one stream, 1.1-1.67x slower on three.",
+  "what_it_does": "A single-threaded HEVC/H.265 decoder written in Rust from ITU-T H.265, with the HM reference decoder as the transcribable source. It covers Main, Main 10 and Main Still Picture (4:2:0, 8 and 10 bit) with every version-1 coding tool, and refuses Range Extensions, screen content coding and layered profiles with Error::Unsupported. The API follows FFmpeg's send/receive model: Decoder::new(), push_annexb() or push_nal() with an optional pts, flush(), then next_frame() until Error::Again; frames carry u16 Y/Cb/Cr planes at the coded size plus a crop window. Input must be an Annex-B elementary stream: there is no demuxer and no C API.",
+  "how_it_is_fast": "The pixel kernels (motion compensation, intra prediction, inverse DCT/DST, deblocking, SAO) live in a separate rusty_h265-accel crate with runtime-dispatched SSE2/SSE4.1/AVX2 versions, each differential-tested bit-exact against a scalar twin; the CHANGELOG measures them at 2.81x over scalar, with AVX2 only 1.045x over SSE4.1. CABAC fuses the LPS-range and state-transition tables into one branchless step. Most of the remaining gains are removed allocations and copies, found with a stage profiler and an assembly-level memcpy census: a picture-buffer pool that zeroes only coding tree blocks no slice covered, per-4x4 maps reused without pre-filling, sequence-invariant scan tables cached, and short copies dispatched to constant widths so they inline. The non-kernel code (about 87% of the time) builds for baseline x86-64 SSE2 unless you build with -C target-cpu=x86-64-v3 (1.066x).",
+  "when_to_use": [
+    "A Rust program that must decode HEVC without C, FFI or libavcodec's LGPL/GPL licensing; the crate is Apache-2.0 with no required third-party dependencies.",
+    "Untrusted HEVC input where memory safety matters more than speed: the decoder core is #![forbid(unsafe_code)], and --no-default-features builds with no unsafe code anywhere (at about 2.8x lower speed).",
+    "Main or Main 10 4:2:0 content where single-threaded decoding at roughly 0.6x to 1.05x of FFmpeg's single-thread speed is enough, e.g. thumbnailing, inspection or offline 720p work.",
+    "Content heavy in explicit weighted prediction (fades), the only stream class measured at or above FFmpeg's speed."
+  ],
+  "when_not_to_use": [
+    "Throughput-bound decoding: the pipeline is single-threaded (tiles and wavefronts are parsed but not run in parallel), and even on one core it is 1.45x to 1.67x slower than FFmpeg on mainstream 8- and 10-bit inter content.",
+    "Range Extensions (4:2:2, 4:4:4, 12-bit), screen content coding, or SHVC/MV-HEVC enhancement layers (only the base layer is decoded).",
+    "Debug-profile builds: open issue #3 (2026-09-30) reports that a debug_assert in rusty_h265-accel's luma_edge fires on horizontal edges at x < 4, so every HEVC stream panics in a dev build; release builds stay correct by falling back to the scalar edge filter.",
+    "8-bit pipelines that are bound by memory bandwidth: every plane is stored as u16 (frame.rs calls an 8-bit u8 plane domain a future 'speed brick'), and converting to 8-bit output cost 5.4% of decode per the README.",
+    "Production use that needs a track record: 0.1.0 to 0.6.0 were all published 2026-09-06 to 2026-09-08 by one organisation, with no independent users or measurements found."
+  ],
+  "integration": {
+    "form": "crate (rusty_h265 on crates.io, with the companion rusty_h265-accel kernel crate)",
+    "dependencies": "rusty_h265-accel (default simd feature); rusty_alloc-api =1.1.6 only with the optional bench-alloc feature used by the bundled CLI",
+    "min_toolchain": "Rust 1.85 (MSRV), edition 2021",
+    "platforms": "any Rust target on the scalar path; SIMD kernels runtime-dispatched SSE2/SSE4.1/AVX2 on x86-64 (the README also lists a NEON baseline rung); the optional x86-64-v3 build needs AVX2, BMI1/2 and FMA (Haswell or later)",
+    "thread_safety": "not documented; one Decoder per stream, decoding runs on the calling thread, and reference pictures are Arc-shared with the output queue",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The top-level README's Quick start calls dec.decode_nal(nal) and annex_b_nal_units(), which do not exist in 0.6.0; use push_annexb/push_nal, flush and next_frame as shown in the crate README and lib.rs docs.",
+    "The published numbers use the bench-alloc build (rusty_alloc, a pure-Rust mimalloc remake), which the harness notes was measured 1.133x apart from the system allocator; a library user gets whatever global allocator the application uses.",
+    "Debug builds panic on every stream (issue #3); until it is fixed, set debug-assertions off for this dependency or build it with an optimized profile.",
+    "Frames are u16 planes at the coded size with a separate crop rectangle, so callers must apply cropping and narrow 8-bit samples themselves."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FFmpeg's libavcodec only when a pure-Rust, Apache-2.0, memory-safe HEVC decoder matters more than speed. If you need multicore throughput, rivet-h26x (also pure Rust, with frame and wavefront threading and single-thread parity on wavefront streams) fits better, provided you accept its source-available attribution licence. remade_ffmpeg_rs ships this same decoder.",
+  "verified_claims_summary": "First-party run on an unnamed Windows machine, one pinned core, 21 ABBA-alternated pairs on four unpublished 720p-class streams: rusty_h265 0.6.0 (rusty_alloc build; portable or x86-64-v3 not stated) took 703 ms against 741 ms for FFmpeg 8.1.2's hevc decoder at -threads 1 on a weighted-prediction stream (1.05x), but took 1.10x, 1.45x and 1.67x as long on the deblocking-heavy, 10-bit and 8-bit mainstream streams. The two timers differ in scope: rusty_h265's decode_ms starts after the file is in memory, while ffmpeg's -benchmark rtime spans its whole transcode() with demuxer, decoder, filter and null-muxer threads sharing the one pinned core, so a 5% margin is within that bias.",
+  "status_note": "Active but very new: six releases between 2026-09-06 and 2026-09-08, and later commits only edit the README (its banner now claims 2,634 active installs against 520 total crates.io downloads); Apache-2.0 and copyable.",
+  "measurement_notes": "Points found in this pass, beyond the verifier's caveats: (1) The harness default reference argv is '-v error -stats -threads 1 -f hevc -i {S} -f null -', which has no -benchmark. FFmpeg also logs its 'bench: utime= stime= rtime=' line at AV_LOG_INFO (fftools/ffmpeg.c), and -v error suppresses that, so the README's rtime-based table needs reference arguments that are not published; the defaults would void the self-reported-time comparison. (2) The null arm ('resolution floor 0.992x') always uses the QPC wall clock of the whole process (Run-Pinned .ms), not the self-reported timers the table uses, and it times ffmpeg against itself, so it cannot detect the systematic gap between decode_ms and rtime. (3) decode_ms is truncated to whole milliseconds (as_millis), which is negligible at 700 ms. (4) The harness's own OursMs comment says ffmpeg 'has no equivalent' internal time and that a mixed comparison falls back to the wall clock, which contradicts the README's rtime-versus-decode_ms method. No correctness bug was found behind the numbers: work parity is checked against ffprobe frame counts, and conformance is 147/147 HEVC_v1 by MD5 (first-party, release builds).",
+  "sources_read": [
+    "https://github.com/Remade-With-Rust/rusty_h265/commits",
+    "https://github.com/Remade-With-Rust/rusty_h265/issues",
+    "https://github.com/Remade-With-Rust/rusty_h265/issues/3",
+    "https://github.com/Remade-With-Rust/rusty_h264",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/tools/bench/codec-bench.ps1",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/tools/build-v3.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/src/lib.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/src/bin/rusty_h265.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/src/decoder.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/src/frame.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_h265/HEAD/crates/rusty_h265/src/error.rs",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/fftools/ffmpeg.c",
+    "https://crates.io/api/v1/crates/rusty_h265"
+  ],
+  "confidence": 0.7
+}
