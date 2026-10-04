@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/jrmuizel/raqote",
+  "one_liner": "Small pure-Rust CPU 2D rasterizer built on Skia-style 4x4 supersampling. Its path fills beat Cairo's image surface on an M1 Pro; overall it does not beat Skia.",
+  "what_it_does": "raqote is a software 2D drawing library in Rust. A DrawTarget owns a premultiplied ARGB u32 buffer. You fill or stroke Paths built with PathBuilder (move_to, line_to, quad_to, cubic_to, arc, rect), with caps, joins and dashes, using solid, linear, radial, two-circle radial, sweep-gradient or image sources. It also supports rectangle and path clips, layers, 28 blend modes, global alpha, and optional text (font-kit) and PNG output. The API is its own Rust API, not Cairo's. C or C++ code can reach it only through an FFI shim, such as the unofficial LaurenzV/raqote_c used by the benchmark.",
+  "how_it_is_fast": "DESIGN.md calls the design 'very conservative' and says it 'borrows heavily from Skia'. The rasterizer is an active-edge-list scanline rasterizer with 4x4 supersampling and 30.2 fixed-point coordinates. Edges are kept sorted with a bubble sort, because the list is almost always nearly sorted. Quadratic curves are split into y-monotonic pieces and stepped directly as curve edges, and cubics are first approximated by quadratics (lyon_geom, tolerance 0.01). Coverage goes into an 8-bit mask over the path's bounding box, which is then composited one scanline at a time through sw-composite shaders. Those shaders use SWAR arithmetic (two 8-bit channels per u32 with 0xff00ff masks) and gradient lookup tables, with no SIMD intrinsics and no threads. An integer-aligned fill_rect with an identity transform and no clip skips the mask entirely.",
+  "when_to_use": [
+    "A Rust program needs a small CPU canvas (UI widgets, charts, thumbnails, generated images) with pure-Rust dependencies. With default-features = false, no C toolchain or system library is needed.",
+    "Path-fill-heavy scenes such as maps, complex polygons and outlines. In the 2026-06-08 M1 Pro run those were raqote's wins over Skia (FillWorld 1.77x, FillPolyEOi40 1.44x, FillFish 1.43x), and fills were 1.86x Cairo 1.18.4 by geometric mean (derived).",
+    "Replacing Cairo's image surface in a Rust codebase on ARM: 1.48x Cairo overall on the M1 Pro with the broken rotated tests excluded (derived).",
+    "You need the full Porter-Duff set plus separable and non-separable blend modes, layers and clips in a code base small enough to read and patch."
+  ],
+  "when_not_to_use": [
+    "Stroke-heavy or rectangle-heavy work. Strokes were 0.77x Skia and 1.11x Cairo on the M1 Pro and 0.61x Cairo on the i9-14900K, and FillRectA was 0.68x Skia (rotated tests excluded, derived). The stroker emits separate overlapping subpaths for each segment, join and cap and then fills them.",
+    "x86-64 desktops, or whenever peak throughput matters: raqote was 0.89x Cairo 1.18.2 on the i9-14900K, and Blend2D 0.12 was about 3.8x faster single-threaded (raqote 0.26x as published). tiny-skia and Vello CPU are maintained Rust alternatives.",
+    "Anti-aliasing quality close to analytic coverage. 4x4 supersampling gives at most 17 coverage levels per pixel, and the only modes are Gray and None.",
+    "Multi-threaded rendering: DrawTarget is neither Send nor Sync (issue #185), and there is no internal parallelism (issue #155). Non-separable blend modes are about 10x slower than Skia (issue #156: Hue and Saturation about 13.7 ms versus 1.4 ms).",
+    "Projects that need an active upstream or a C/C++ API. The last commit was 2025-02-11, with 60 open issues and 10 open PRs. Servo's canvas crate now uses vello_cpu, resvg dropped its raqote backend (#214), and C++ access is only through unofficial shims."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "euclid 0.22, lyon_geom 1.0, typed-arena 2.0, sw-composite 0.7.15. Default features add font-kit 0.14 and pathfinder_geometry 0.5 (text, which uses platform font libraries; see build-failure issue #176) and png 0.17.",
+    "min_toolchain": "Rust 2018 edition; Cargo.toml declares no rust-version (MSRV)",
+    "platforms": "Any target with Rust std (the rasterizer and compositor are portable scalar Rust, so speed depends on autovectorization and target features). Benchmarked on aarch64 macOS (Apple M1 Pro) and x86-64 Windows built with +avx2.",
+    "thread_safety": "DrawTarget is not Send or Sync, because the rasterizer's active-edge list holds NonNull pointers and there is no unsafe impl (issue #185 open). Create and use each DrawTarget on a single thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default features pull in font-kit and png. Set default-features = false for the pure-Rust core. Text rendering has open panics on a missing glyph (#150) and on '\\n' (#196), and transform bugs (#145, #179).",
+    "BlendMode::Src overwrites pixels across the whole canvas row outside the drawn rectangle, because the temporary row buffer is canvas-wide (#193; open, with a proposed fix unmerged). Clips ignore the current transform (#187).",
+    "Validate untrusted geometry: arc() loops forever on NaN or inf (#177), drawing an image with alpha can panic (#202), and the rasterizer uses 30.2 fixed-point endpoints with 16.16 intermediates, which the source comments say limits coordinates to a 16.16 space.",
+    "Each fill allocates a coverage mask the size of the path's clipped bounding box and shades all of it, including zero-coverage pixels. DESIGN.md and #158 describe the run-length alternative as future work. Large sparse paths such as long diagonals or big outlines therefore cost their whole bounding-box area. Only integer-aligned fill_rect with an identity transform and no clip avoids the mask."
+  ],
+  "pick_this_over_siblings_when": "Pick raqote over tiny-skia only if you need its wider blend-mode set or already depend on it: tiny-skia's README says it is faster than raqote in many cases, and tiny-skia is maintained under linebender. For throughput, Blend2D (C++) and Vello CPU (Rust) beat it in the same bl_bench runs. raqote's remaining advantage is a small, readable pure-Rust code base with Cairo-beating path fills on ARM.",
+  "verified_claims_summary": "An independent run by the Vello CPU author of Blend2D's bl_bench (29 tests x 6 paint styles x 6 sizes, SrcOver, 512x600 target, single thread), calling raqote 0.8.5 through the unofficial raqote_c FFI shim on an Apple M1 Pro (2026-06-08) and an Intel i9-14900K on Windows (2026-01-22); compiler versions and the Skia and Cairo build flags are unrecorded. As published, raqote is 1.08x Skia and 1.84x Cairo 1.18.4. The four rotated tests are inflated by the backend's transform-order bug, and without them raqote is 0.93x Skia and 1.48x Cairo on the M1 Pro and 0.89x Cairo 1.18.2 on x86 (all derived). Its wins are path fills; its losses are strokes and rectangle fills.",
+  "status_note": "Stale: the last commit was 2025-02-11 ('Allow writing png to memory'), the last release is 0.8.5 (release commit 2024-07-24, published on crates.io 2024-09-11), and there are 60 open issues and 10 open PRs. It is BSD-3-Clause and small enough to vendor, with 711k all-time crates.io downloads and 32 reverse dependencies, but two of the three 'notable users' in the README (Servo, resvg) no longer use it.",
+  "measurement_notes": "This confirms the verifier's harness bug from the code. backend_raqote.cpp (benching branch, lines 201-204 and 265-268) builds t = rq_transform_multiply(rq_transform_multiply(translate1, rotate), translate2), and raqote_c implements rq_transform_multiply(a, b) as euclid ta.then(&tb), which applies a first. Each point is therefore translated to the shape centre, rotated about the canvas origin, then shifted by minus half the size, so most rotated shapes land off the 512x600 target and are clipped. No further correctness bug was found in the raqote path. beforeRun creates a fresh DrawTarget per run, so transforms do not leak between tests. renderRectA passes integer rectangles to fill_rect, which takes raqote's no-mask fast path, so FillRectA (0.68x Skia) already measures raqote's best case. rq_draw_target_stroke_rect builds a 4-segment path and calls the general stroker, which has no rectangle-stroke fast path. The BGRA-to-ARGB sprite conversion in beforeRun is a no-op on little-endian hosts and does not alter the pattern tests. Record correction: the 0.8.5 release commit is dated 2024-07-24, but crates.io lists the 0.8.5 publish as 2024-09-11. The README's users list is out of date: servo/servo components/canvas/Cargo.toml depends on vello_cpu (and optional vello), not raqote, and raqote issue #214 says resvg no longer provides a raqote backend. Lead re-checked: mfabbri77/VGCPU-Benchmark, which includes a Raqote adapter, still publishes no results.",
+  "sources_read": [
+    "https://github.com/jrmuizel/raqote",
+    "https://github.com/jrmuizel/raqote/commits/master",
+    "https://github.com/jrmuizel/raqote/issues",
+    "https://github.com/jrmuizel/raqote/issues/156",
+    "https://github.com/jrmuizel/raqote/issues/173",
+    "https://github.com/jrmuizel/raqote/issues/193",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/README.md",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/DESIGN.md",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/draw_target.rs",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/rasterizer.rs",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/blitter.rs",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/stroke.rs",
+    "https://raw.githubusercontent.com/jrmuizel/raqote/HEAD/src/path_builder.rs",
+    "https://raw.githubusercontent.com/jrmuizel/sw-composite/HEAD/src/lib.rs",
+    "https://crates.io/api/v1/crates/raqote",
+    "https://crates.io/api/v1/crates/raqote/reverse_dependencies?per_page=20",
+    "https://raw.githubusercontent.com/servo/servo/main/components/canvas/Cargo.toml",
+    "https://raw.githubusercontent.com/servo/servo/main/components/canvas/raqote_backend.rs",
+    "https://raw.githubusercontent.com/LaurenzV/raqote_c/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/LaurenzV/raqote_c/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/benching/bl_bench/backend_raqote.cpp",
+    "https://github.com/mfabbri77/VGCPU-Benchmark"
+  ],
+  "confidence": 0.8
+}

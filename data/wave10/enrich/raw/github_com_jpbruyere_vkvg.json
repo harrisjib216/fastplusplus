@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/jpbruyere/vkvg",
+  "one_liner": "Cairo-style 2D vector library in C on Vulkan; the author's chart shows it beating Cairo's GL ES3 backend on lines, circles and stars.",
+  "what_it_does": "vkvg draws Cairo-style paths (move_to, line_to, arc, curve_to, rectangle), fills, strokes with caps, joins and dashes, linear and radial gradients, image sources, clipping and text into Vulkan images. The API copies Cairo's names and drawing model with a vkvg_ prefix and float arguments. Setup is Vulkan-specific: a VkvgDevice is created from vkvg_device_create_info_t (sample count, optional existing VkInstance/VkPhysicalDevice/VkDevice and queue), surfaces are GPU images readable with vkvg_surface_get_vk_image, and contexts are created per surface with vkvg_create. It is in the same family as Cairo but is not a drop-in replacement.",
+  "how_it_is_fast": "Path geometry is tessellated on the CPU and appended to per-context vertex and index caches, which are drawn as batched indexed draws in one command buffer per flush, so many shapes share a pipeline and a submit. Strokes become triangle geometry with joins and caps, and curves are flattened with AGG's recursive Bezier subdivision (README credit). Non-zero fills are triangulated with the bundled GLU tessellator (VKVG_USE_GLUTESS, on by default) or ear clipping. Even-odd fills and clips use the stencil buffer: the path is drawn into the stencil, then a quad over the path bounds is covered. Anti-aliasing comes only from hardware MSAA chosen at device creation, and destroyed contexts are cached per thread so that recreating one is cheap.",
+  "when_to_use": [
+    "A Vulkan application on Linux or Windows (engine, tool UI, HUD, plotting overlay) that needs Cairo-style 2D drawing rendered into a VkImage on its own VkDevice and queue, with no CPU raster and upload step.",
+    "Porting existing Cairo drawing code to the GPU: call names and semantics (paths, line caps and joins, dashes, gradients, save/restore) mostly map one to one.",
+    "Frames with many thin strokes or simple polygons, batched in one context per frame. Lines were vkvg's largest margin in the author's chart: about 0.00013 s versus about 0.0031 s for Cairo GL ES3 per 100 random 1 px lines.",
+    "You can accept MSAA anti-aliasing (2x to 8x samples) instead of exact-coverage anti-aliasing."
+  ],
+  "when_not_to_use": [
+    "You need exact-coverage anti-aliasing or output that matches Cairo pixel for pixel. A 1-sample device (the default) draws aliased edges, and higher quality costs MSAA memory and bandwidth.",
+    "macOS or iOS through MoltenVK: vkvg enables the logicOp device feature (vkvg_device.c), and device creation fails on an Apple M2 with VK_ERROR_FEATURE_NOT_PRESENT (issue #141, open since 2023-07).",
+    "You need Cairo's full compositing model: only CLEAR, SOURCE, OVER and DIFFERENCE are enabled, the other operators are commented out of vkvg.h, and 'Operators' is still unchecked in the README to-do list.",
+    "Production use where robustness matters. The README calls the project alpha, and open bugs include a save/restore segfault (#165), test crashes and validation errors (#121), first dashes with an offset not drawn (#50), and premultiplied-alpha problems on image load and save (#115, #156) and on unclipped paint (#157).",
+    "Circle- or arc-heavy scenes, or targets without a Vulkan 1.1 GPU. In the author's own chart Skia's Vulkan backend was about 4x faster on circles, because vkvg tessellates every arc on the CPU. A CPU fallback exists only as an open idea (#149)."
+  ],
+  "integration": {
+    "form": "static or shared lib (CMake, BUILD_SHARED_LIBS); AUR and MPR packages exist",
+    "dependencies": "Vulkan 1.1 loader and driver; git submodules vkh (jpbruyere/vkhelpers), glutess and vkvg-svg; bundled vk_mem_alloc; optional FontConfig, FreeType (stb_truetype otherwise) and HarfBuzz; GLFW for tests; glslc and xxd only to rebuild the shaders (precompiled SPIR-V headers are in the tree)",
+    "min_toolchain": "C11 (C_STANDARD 11 required), CMake 3.16+, Vulkan 1.1+",
+    "platforms": "Linux and Windows with a Vulkan 1.1 GPU driver. CI builds on Windows, Ubuntu and macOS, and CMake has an Android branch, but MoltenVK on Apple M2 fails at device creation (logicOp, #141).",
+    "thread_safety": "Partial. A device created with threadAware=true guards the queue and font cache with mutexes, and contexts are cached per thread. The README says only 'Context should be thread safe, extensive tests required'. Use one context per thread.",
+    "drop_in_for_baseline": "partial: the drawing API mirrors Cairo with a vkvg_ prefix and float arguments, but device and surface setup is Vulkan-specific, only 4 operators exist and anti-aliasing is MSAA-only, so call sites and setup must be ported"
+  },
+  "gotchas": [
+    "Anti-aliasing is fixed when the device is created. vkvg.h says a 1-sample device is non-antialiased, so set info.samples above 1 for smooth edges. With deferredResolve the multisampled image is resolved only on vkvg_surface_get_vk_image or an explicit resolve call.",
+    "vkvg_flush submits and then blocks the CPU on the context's fence until the GPU finishes (_flush_cmd_buff then _wait_ctx_flush_end). A full vertex buffer also forces a submit-and-wait in the middle of a path (_poly_fill). Flush once per frame, not per shape. Issue #163 (2026-06) reports long CPU waits in this function.",
+    "The MSVC branch of the stock CMakeLists adds '/O2 /TC /W0 /Od' to non-Debug builds. cl lets the later /Od override /O2, so Windows builds are probably unoptimized unless you edit the flags. Unix Release builds use CMake's defaults.",
+    "Clone with --recursive (forks need the submodule fallback URLs given in the README). The older entry points vkvg_device_create_from_vk and vkvg_device_create_from_vk_multisample are gone from include/vkvg.h (only vkvg_device_create(info) remains), so older code, including the vgperf harness, must be ported. With VKVG_USE_GLUTESS=OFF, ear clipping puts a stack VLA sized by the path's point count, so very large paths risk stack overflow."
+  ],
+  "pick_this_over_siblings_when": "Pick vkvg over Blend2D, AGG or tiny-skia when the frame is already on a Vulkan GPU and you want Cairo-style calls that render straight into a VkImage. Pick vger for Apple-only Metal UIs, and the Rive Renderer or TGFX for a more mature GPU renderer with more backends. For exact anti-aliased output or CPU-only targets, Blend2D is the better-measured choice in this category.",
+  "verified_claims_summary": "The only evidence is the author's vgperf chart from 2022-01. It shows median wall-clock seconds per iteration of 100 random shapes on a 512x512 window for vkvg, Cairo's GL ES3 backend and a patched Skia Vulkan build, with GPU, CPU, versions and options unstated. Derived readings: vkvg about 24x faster than Cairo ES3 on lines, 5x on circles and 3x on stars, tied on rectangles; against Skia about 3x faster on lines, tied on stars, slightly slower on rectangles and about 4x slower on circles. With the harness defaults the anti-aliasing is unequal (Cairo anti-aliases, vkvg and Skia do not), Skia's rectangle test uses different placement, and the harness no longer builds against current vkvg.",
+  "status_note": "Actively developed by a single maintainer (639 commits, last 2026-10-01, version 0.3.0, self-described alpha, 35 open issues). MIT-licensed and copyable, but its only performance evidence is a 2022 chart made against an older API.",
+  "measurement_notes": "Read from vgperf src/main.c, src/{vkvg,cairo,skia}/common.c and shapes.c. (1) The default -a option is ANTIALIAS_DEFAULT. It makes vkvg create a device without multisampling (1 sample, which vkvg.h calls non-antialiased) and makes Skia call sk_paint_set_antialias(false), while Cairo keeps CAIRO_ANTIALIAS_DEFAULT (anti-aliased) on a GLFW_SAMPLES 0 ES3 surface. The chart's options are not stated, and the README shows no command line. If defaults were used, the 24x (lines) and 5x (circles) margins over Cairo compare aliased with anti-aliased rendering. (2) The Skia rectangle test places rectangles at x,y in [0, 0.2*w/h), while vkvg and Cairo use [0, w/h), so vkvg and Cairo rectangles are often clipped at the canvas edge and cover fewer pixels than Skia's: the rectangles row is not like for like. (3) Skia draws circles with sk_canvas_draw_circle (its dedicated circle path), while vkvg and Cairo flatten and tessellate an arc. (4) The default build also compiles Cairo's image (CPU, pixman), Xlib, XCB and GLX backends (TESTS_CAIRO_IMAGE and the others default ON), but the chart shows only 'cairo es3'. (5) Timing uses gettimeofday around perform plus present. vkvg's present waits on its flush fence; Skia's present only calls gr_context_flush, and its GPU work is waited for at the next iteration's vkh_presenter_draw fence. (6) vgperf calls vkvg_device_create_from_vk and vkvg_device_create_from_vk_multisample, which are no longer declared in vkvg's include/vkvg.h, so the chart cannot be reproduced against current vkvg without porting the harness. vgperf's own CMakeLists defaults to a Debug build.",
+  "sources_read": [
+    "https://github.com/jpbruyere/vkvg",
+    "https://github.com/jpbruyere/vkvg/commits/master",
+    "https://github.com/jpbruyere/vkvg/issues",
+    "https://github.com/jpbruyere/vkvg/issues?page=2&q=is%3Aissue+is%3Aopen",
+    "https://github.com/jpbruyere/vkvg/issues/163",
+    "https://github.com/jpbruyere/vkvg/issues/141",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/README.md",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/include/vkvg.h",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/src/vkvg_device.c",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/src/vkvg_device_internal.c",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/src/vkvg_context.c",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/src/vkvg_context_internal.c",
+    "https://raw.githubusercontent.com/jpbruyere/vkvg/HEAD/.github/workflows/cmake.yml",
+    "https://raw.githubusercontent.com/jpbruyere/vkhelpers/HEAD/src/vkh_presenter.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/README.md",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/vgperf.h",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/vkvg/common.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/vkvg/shapes.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/cairo/common.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/cairo/shapes.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/skia/common.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/HEAD/src/skia/shapes.c",
+    "https://raw.githubusercontent.com/jpbruyere/vgperf/master/vgperf.png"
+  ],
+  "confidence": 0.75
+}
