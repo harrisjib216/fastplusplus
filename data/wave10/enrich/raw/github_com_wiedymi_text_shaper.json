@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/wiedymi/text-shaper",
+  "one_liner": "Pure-TypeScript OpenType shaper and rasterizer; about 1.2-1.5x harfbuzzjs (WASM) on simple-script shaping under Bun.",
+  "what_it_does": "A zero-dependency TypeScript font stack for browsers, Bun and Node.js. It parses TrueType/OpenType/TTC/WOFF2 fonts, shapes text with GSUB/GPOS (plus AAT morx/kerx), and renders glyphs to paths, SVG, Canvas, hinted grayscale/LCD/mono bitmaps, atlases and SDF/MSDF. The shaping API resembles HarfBuzz but is not a drop-in: fill a UnicodeBuffer with addStr, call shape(font, buffer, {script, direction, features}) or the allocation-free shapeInto(font, buffer, glyphBuffer), then read glyphBuffer.infos and positions. Script and direction come from the options object, not from guessing like hb_buffer_guess_segment_properties.",
+  "how_it_is_fast": "It is plain JIT-friendly TypeScript with no JS-to-WASM boundary. Shape plans are cached per font, script, language, features and axis coordinates, and shapeInto reuses caller-owned buffers. Each lookup carries a SetDigest filter, so lookups whose coverage cannot match any glyph in the buffer are skipped, and single-subtable delta substitutions take a fast path. In the benchmark, each harfbuzzjs call instead pays for buffer creation, a text copy into WASM memory, segment-property guessing and destroy. Glyph outlines and default SVG strings are memoized in WeakMaps (getGlyphPath, pathToSVG), and optional embedded WASM kernels accelerate some raster paths. Much of the measured lead on complex scripts comes from doing less shaping work, not from faster code.",
+  "when_to_use": [
+    "Browser, Bun or Node apps that need shaping plus rendering in JavaScript without shipping a HarfBuzz WASM binary: Canvas or WebGL text, glyph atlases, SDF/MSDF, hinted grayscale or LCD bitmaps.",
+    "Latin, Cyrillic, Greek and CJK text with standard features (ccmp, locl, liga, calt, kern, mark). These are the only like-for-like rows, at about 1.2-1.5x harfbuzzjs ops/s on an M1 Pro under Bun.",
+    "Hot loops that shape many short strings with the same font and options, where shapeInto with reused buffers and cached plans avoids per-call allocation.",
+    "Repeated SVG or path output for the same glyphs (icons, labels), where the WeakMap path and SVG caches turn repeated requests into lookups."
+  ],
+  "when_not_to_use": [
+    "Arabic, Indic, Thai, Khmer, Myanmar or other complex scripts where output must match HarfBuzz. getDefaultGsubFeatures enables Arabic, Syriac, Mongolian, Tibetan, Ethiopic and Georgian extras but no Indic, Thai, Khmer, Myanmar or USE features. GSUB lookups run in lookup-index order over the whole buffer, and no code in shaper.ts reads the per-glyph masks that setupArabicMasks or setupIndicMasks write. The complex-script tests check glyph counts and mask arrays, not glyph output.",
+    "RTL or mixed-direction text through shape() alone: reversal happens only when options.direction is 'rtl'. UnicodeBuffer.setDirection does not trigger it, and shapeInto does no bidi, despite the README's 'automatically reordered' example. Use processBidi and reorderGlyphs yourself.",
+    "C, C++ or native code: it is TypeScript only, and native HarfBuzz was never measured. The baseline is harfbuzzjs, the WASM build.",
+    "Decisions based on the README table: it does not match the committed results file. The results come from one 2025-12-16 run, and on mixed text with features turned off text-shaper is slower (0.91x).",
+    "CommonJS-only consumers: the package is ESM-only (\"type\": \"module\", import-only exports), built for a browser target."
+  ],
+  "integration": {
+    "form": "module (npm package text-shaper, ESM, 0.1.28 at HEAD)",
+    "dependencies": "none at runtime (harfbuzzjs, opentype.js and freetype2 are dev-only, for the benchmarks)",
+    "min_toolchain": "an ES-module JavaScript runtime (modern browser, Bun or Node.js); no minimum versions documented; built with Bun and TypeScript 7.0.2",
+    "platforms": "any JavaScript runtime; optional embedded WebAssembly kernels for some raster paths",
+    "thread_safety": "not documented; shape() draws from a module-level GlyphBuffer pool, and the shape-plan, path and SVG caches are per-module state, so each Worker has its own copies",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "shape() returns a GlyphBuffer from a shared pool. Call releaseBuffer() when done, and do not keep using a buffer after releasing it, or the next shape() call will overwrite it.",
+    "Without options.script, the buffer's default script 'Zyyy' selects the font's DFLT (then latn) lookups with only the default feature set. Content-based detection then sets masks that lookups never consult, so pass script and features explicitly.",
+    "getGlyphPath and pathToSVG return cached objects and strings for default options. Mutating a returned GlyphPath corrupts later calls for that glyph.",
+    "Cluster values from addStr are code-point indices starting at startCluster, not UTF-8 or UTF-16 offsets."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Typr.js (a parser vs opentype.js) when you need GSUB/GPOS shaping plus hinted rasterization in pure JavaScript. Pick it over rustybuzz-wasm (parity with harfbuzzjs) when you want no WASM and your text is Latin, Cyrillic, Greek or CJK. For correct complex-script output in JavaScript, harfbuzzjs or rustybuzz-wasm remains the safer choice. fontdue, font-rs and TiTanF are Rust rasterizers and do not compete in JS.",
+  "verified_claims_summary": "Under Bun 1.3.4 on an M1 Pro (one run, 2025-12-16, 10 warmup calls then 3 batches of 100), shapeInto with reused buffers beat harfbuzzjs ^0.4.13 by about 1.2-1.5x on Latin, Cyrillic, Greek and CJK text. These are the only comparable rows, and output was never compared. The Hindi 3.25x, Khmer 2.25x, Thai 1.58x and Myanmar 10.6x rows time shaping that applies no script-specific GSUB features (only content-detected reordering), so they are not comparable. The path-extraction (50x) and text-to-SVG (5.3-7.1x) rows time WeakMap cache hits for getGlyphPath and pathToSVG against harfbuzzjs regenerating path strings, plus a buffer.json() serialization in the pipeline case.",
+  "status_note": "Active (version 0.1.28, last commit 2026-07-17, MIT, 51 stars, 2 closed issues and 0 open). It is a young solo project, fine to vendor for JavaScript rendering of simple scripts, but not a verified HarfBuzz substitute for complex scripts.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/README.md",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/package.json",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/bench/shaping.test.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/bench/utils.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/bench/path.test.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/bench/raster.test.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/docs/.vitepress/data/benchmarks.json",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/shaper/shaper.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/shaper/shape-plan.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/shaper/complex/arabic.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/buffer/unicode-buffer.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/src/render/path.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/tests/shaper/shaper.test.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/tests/shaper/complex/indic.test.ts",
+    "https://raw.githubusercontent.com/wiedymi/text-shaper/HEAD/tests/shaper/complex/arabic.test.ts",
+    "https://github.com/wiedymi/text-shaper/tree/main/tests",
+    "https://github.com/wiedymi/text-shaper/tree/main/tests/shaper",
+    "https://github.com/wiedymi/text-shaper/tree/main/tests/shaper/complex",
+    "https://github.com/wiedymi/text-shaper/issues?q=is%3Aissue",
+    "https://github.com/wiedymi/text-shaper/commits/main"
+  ],
+  "confidence": 0.75
+}

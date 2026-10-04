@@ -36,3 +36,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e72, weak): mycophonic/flac (Go, fork of mewkiz/flac, 'about 2x faster decode', no numbers).
 - Paper-access retier (e75): Kvazaar Jetson 2024 paper (Journal of Real-Time Image Processing; James, Abo-Zahhad, Inoue et al., not the Tampere group, so independent) could raise Kvazaar to B when Springer is reachable; AVX2 paper snippet names an 8-core i7 with 16 threads.
 - Enricher lead (e77): DioxusLabs/icu4x fork with unmerged segmenter PRs #1 and #2 (September 2026; 2.0-2.5x on ASCII without LTO, about 1.1x with LTO); fork of the catalogued ICU4X, duplicate if found.
+- Enricher lead (e80): wavey-ai/soundkit soundkit-opus 0.13.0 (crates.io, MIT AND BSD-3-Clause), successor of libopus-rs, not catalogued.
