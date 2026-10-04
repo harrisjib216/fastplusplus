@@ -12,3 +12,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e08): bitbank2/AnimatedGIF (same Turbo LZW decoder as giflib-turbo, README claims 2-30x, MCU-oriented; not catalogued).
 - Verifier lead (batch 74): mozilla/mozjpeg (C encoder, libjpeg-turbo fork with trellis quantisation) is not catalogued; baseline of mozjpeg-rs.
 - Enricher leads (e12): catid/Zdepth (Kinect depth compressor, smaller than RVL but slower; weak) and the zvezdochiot 0.2.4 fork of imagezero (unchecked).
+- Enricher lead (e14): clipperhouse/uax29 (Go grapheme and word segmentation) is not catalogued (unicode-utf8 candidate).
