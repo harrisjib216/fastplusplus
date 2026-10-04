@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/jkriege2/tinytiff",
+  "one_liner": "Small C library that appends fixed-size uncompressed frames to a multi-page TIFF with less per-frame overhead than libTIFF.",
+  "what_it_does": "TinyTIFF writes and reads basic multi-page TIFF stacks: uncompressed, stripped, classic (non-BigTIFF) files in which every frame has the same width, height, sample count and type. The writer API is TinyTIFFWriter_open(file, bitsPerSample, sampleFormat, samples, width, height, interpretation), then TinyTIFFWriter_writeImage(tif, data) once per frame, then TinyTIFFWriter_close; the reader walks frames with TinyTIFFReader_open, getSampleData and readNext. It is its own C API (with optional header-only C++ helpers in tinytiff_tools.hxx), not a libTIFF-compatible interface. It was written to stream 100,000+ microscope camera frames into one file.",
+  "how_it_is_fast": "All frames share one shape, so the writer reserves a fixed IFD block per frame (500 bytes, at most 20 entries plus space for rational and array values), assembles it in a reused memory buffer, and issues two fwrite calls per frame: the IFD, then the pixels as a single strip in host byte order, with no copy or byte swap. The next-IFD pointer is computed arithmetically from the known frame size, so the writer never seeks back or walks the directory chain; it seeks only at close to end the chain and fill in the ImageDescription. libTIFF 3.8.2's per-frame time grows with the number of directories already written, consistent with walking the IFD chain to link each frame, while libTIFF 4.6.0 caches the last directory offset (tif_lastdiroff in TIFFLinkDirectory) and stays flat. Against current libTIFF the remaining gain (1.5-5x on the author's SSD) comes from libTIFF's per-frame tag serialisation, its roughly 8 KB TIFFDefaultStripSize strips, and the harness's strip-copy loop, not from a different I/O technique.",
+  "when_to_use": [
+    "Streaming fixed-size camera or microscope frames (8-64-bit integer or float, greyscale or RGB(A)) into one uncompressed multi-page TIFF that ImageJ/Fiji or libTIFF will read later, as long as the file stays under 4 GB.",
+    "Many small frames, where per-frame overhead dominates: on the author's SSD run against libTIFF 4.6.0, 64x64 16-bit frames took 0.018-0.022 ms vs 0.05-0.06 ms per frame (2.6-2.8x) for 100 to 10,000 frames, and 128x128 to 512x512 frames were 3.1-5.1x faster.",
+    "Code still linked against old libTIFF 3.x, whose per-frame write time grows with frame count (205.8 ms vs 0.085 ms per 64x64 frame at 100,000 frames on the author's hard-disk run).",
+    "Projects that want a small C dependency with no zlib, libjpeg or libTIFF behind it, for both writing and reading simple stacks."
+  ],
+  "when_not_to_use": [
+    "Output that can exceed 4 GB. There is no BigTIFF; libTIFF 4.x opened with mode \"w8\" writes BigTIFF. Builds without ftello64/_ftelli64 detected at configure time are limited to 2 GB. Issue #23 (files over 2 GB fail to open in ImageJ, Nov 2023) is still open, although release 4.0.0.0 (May 2024) improved 2-4 GB handling.",
+    "Compressed (LZW, Deflate, JPEG), tiled, palette or pyramidal TIFF, frames that change size or type within a file, or rich metadata (OME-XML, per-frame tags). The writer emits a fixed tag set with resolution 1/1 and a single ImageDescription of at most 1024 characters, and only in the first frame.",
+    "Large frames, where the disk is the bottleneck. On the SSD the gain shrinks to 1.5-2.1x from 1024x1024 upward. On the author's 2020 hard-disk run TinyTIFF was slower than libTIFF 3.8.2 at 1024x1024 (22.28 vs 4.21 ms per frame), 2048x2048 and 4096x4096.",
+    "Reading untrusted TIFF files. Issue #35 (June 2026, no maintainer reply) reports a reproducible memory-safety bug reachable through TinyTIFFReader_open on malformed input; two earlier security reports (#19, #20) were closed in April 2024.",
+    "Projects that cannot accept LGPL-3.0. Issue #16 asks for BSD or dual licensing and is still open."
+  ],
+  "integration": {
+    "form": "static or shared lib (CMake; BUILD_SHARED_LIBS defaults to ON; targets TinyTIFF::TinyTIFF and the header-only TinyTIFF::TinyTIFFXX C++ helpers in tinytiff_tools.hxx); vcpkg port 'tinytiff'",
+    "dependencies": "none (libTIFF only for the optional comparison tests)",
+    "min_toolchain": "C core (pure C since 3.0.0.0; no C standard pinned in CMake), CMake 3.10+; C++ only for the .hxx helpers and tests",
+    "platforms": "Windows (MSVC CI) and Linux (CI); stdio file I/O, with an optional WinAPI path; writes files in host byte order; the reader byte-swaps opposite-endian files",
+    "thread_safety": "not documented; each writer and reader handle keeps its own state and the writer has no mutable globals, so separate handles on separate threads look safe from the code",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Check every TinyTIFFWriter_writeImage return value. When the next frame would push the file past the size limit (0xFFFFFFFE minus 1 KB with 64-bit ftell, otherwise 2 GB), the writer has already written and linked that frame's IFD before it returns false without the pixels. On close the chain therefore ends in a frame whose strip lies beyond the end of the file, and every further call appends another data-less IFD.",
+    "TinyTIFFWriter_writeImagePlanarReorder (interleaved input, planar output) is wrong for samples wider than 8 bits. In tinytiffwriter.c the source index sampidx counts samples but is used as a byte offset into the input, so 16-, 24-, 32- and 64-bit samples are copied from the wrong bytes (derived from reading the code). Issue #32 ('Cannot write RGB images', open) uses this path. The planar-to-chunky direction indexes bytes correctly.",
+    "Without large-file support detected, TINYTIFF_MAX_FILE_SIZE is defined as (2*1024*1024*1024-1), an int expression that overflows, so that build's limit depends on the compiler.",
+    "Issue #21 (RGBA writes missing the alpha channel) is open. Frames must all match the shape given to TinyTIFFWriter_open; there is no per-frame size or type."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued image-codecs siblings writes TIFF; they are PNG, JPEG, QOI or texture codecs, all of which compress. Pick TinyTIFF when you need an uncompressed multi-page TIFF stack that scientific tools open directly, and one of the PNG/QOI encoders (fpng, fpnge, QOI) when the frames are standalone images and size on disk matters.",
+  "verified_claims_summary": "The author's tinytiffwriter_speedtest writes 64x64 16-bit greyscale frames and a frame-size sweep, timing each frame with QueryPerformanceCounter and reporting a trimmed mean in ms per frame. Against libTIFF 4.6.0 on a Ryzen 7 5800H (Windows 11, SSD, 64-bit Release, compiler not stated), TinyTIFF was 1.6-2.8x faster for 10 to 100,000 frames and 1.5-5.1x faster across frame sizes; against libTIFF 3.8.2 on a Ryzen 5 3600 (Windows 10, hard disk, 32-bit Release), the gap grew with frame count to 2421x at 100,000 frames, but TinyTIFF was slower from 1024x1024 upward.",
+  "status_note": "Stale: the last commit was on 2024-05-22 (release 4.0.1.0 followed on 2024-05-23), and issues #23, #32 and #35 have no maintainer reply. It is small and dependency-free, but LGPL-3.0, so link it as a library or accept the LGPL terms if you vendor it.",
+  "measurement_notes": "Harness findings for the orchestrator (tests/tinytiffwriter_speedtest/tinytiffwriter_speedtest.cpp, tests/common_tinytiff_test_lib/*). (1) The 1,000,000-frame SSD row (3.10x) is not a valid comparison, and the record's 'no file-size check' needs correcting. The current writer has one: TINYTIFF_MAX_FILE_SIZE, added in commit 54e8391 ('improved support for large files (>2GB)', 2024-05-08), and the code before that commit already checked against 0xFFFFFFFF-1024 using fgetpos. The SSD sheet was committed on 2024-04-30 (85915e4), before that commit. At about 8.7 KB per frame, TinyTIFF passes the limit after roughly 494,000 frames; from then on each call writes only a 502-byte IFD and returns false. Before the fix, TinyTIFFWriter_ftell used plain ftell, which is 32-bit on Windows, so IFD offsets were already broken past 2 GB (consistent with issue #23). libTIFF 4.6.0 in classic mode (TIFFOpen(...,\"w\")) refuses writes past 4 GB with 'Maximum TIFF file size exceeded' (tif_write.c and tif_dirwrite.c). The harness's libTIFF error handler prints every such error to std::cout inside the timed loop. The harness ignores every return value (TinyTIFFWriter_writeImageMultiSample, TIFFWrite, TIFFWriteDirectory) and marks each run successful, so neither writer did the nominal work in that row. (2) The frame-size sweep changes the frame count with the size: 10,000 frames up to 128x128, then 5,000, 1,000, 500, 200 and 50 for 256x256 to 4096x4096. On libTIFF 3.8.2 the 289-3674x frame-size ratios are therefore mostly the frame-count effect (18.4 ms per 32x32 frame at 10,000 frames, matching 19.7 ms per 64x64 frame at 10,000 frames in the count table), and the 1024x1024-and-up rows, where TinyTIFF loses, ran only 500 to 50 frames. (3) The RAW reference opens its file with fopen(filename, \"w\"), which is text mode on Windows, while TinyTIFF uses \"wb\". The 16- and 32-bit test patterns contain no 0x0A bytes, so the output is unchanged, but the CRT's text-mode write path likely contributes to TinyTIFF beating raw fwrite() in several SSD rows (for example 512x512: 0.315 vs 1.444 ms). Treat the README's 'comparable to fwrite()' framing with that in mind. (4) Per-frame times exclude close and flush. libTIFF's 4.21 ms per 2 MiB frame on the hard disk (about 500 MB/s) shows that the HDD numbers reflect OS write caching, not disk throughput. (5) Units: get_time() returns microseconds and perframe_duration_ms = mean/1e3, so the sheets' unlabelled 'time/frame' values are ms per frame. evaluateRuntimes drops the given percentage of runs from both ends (1% in most rows, 10% in the 10-frame row). (6) The SSD sheet carries the same 'Tinytiff 3.0.0.0 (2020-10-11, Git: 4eaa173)' label as the 2020 hard-disk sheet, although it was committed in April 2024 with libTIFF 4.6.0, so the exact TinyTIFF build measured on the SSD is not recorded. The headline 1.5-3x and 1.5-5x SSD figures (100 to 10,000 frames, and the frame-size sweep) are not affected by (1). No change of tier is implied; C stands.",
+  "sources_read": [
+    "https://github.com/jkriege2/TinyTIFF/issues?q=is%3Aissue",
+    "https://github.com/jkriege2/TinyTIFF/issues/23",
+    "https://github.com/jkriege2/TinyTIFF/issues/32",
+    "https://github.com/jkriege2/TinyTIFF/issues/35",
+    "https://github.com/jkriege2/TinyTIFF/releases",
+    "https://github.com/jkriege2/TinyTIFF/commits/master/src/tinytiff_ctools_internal.h",
+    "https://github.com/jkriege2/TinyTIFF/commits/master/doc/images/performance_measure_ssd.ods",
+    "https://github.com/jkriege2/TinyTIFF/commit/54e8391",
+    "https://github.com/jkriege2/TinyTIFF/commit/54e8391.diff",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/README.md",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiffwriter.c",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiffwriter.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiffreader.c",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiffreader.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiff_tools.hxx",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiff_ctools_internal.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiff_ctools_internal.c",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/src/tinytiff_defs.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/tinytiffwriter_speedtest/tinytiffwriter_speedtest.cpp",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/tinytiffwriter_speedtest/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/libtiff_tools.cpp",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/libtiff_tools.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/test_results.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/test_results.cpp",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/testimage_tools.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/tinytiffhighrestimer.h",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/tests/common_tinytiff_test_lib/tinytiffhighrestimer.cpp",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/doc/images/performance_measure.ods",
+    "https://raw.githubusercontent.com/jkriege2/TinyTIFF/master/doc/images/performance_measure_ssd.ods",
+    "https://gitlab.com/libtiff/libtiff/-/raw/v4.6.0/libtiff/tif_write.c",
+    "https://gitlab.com/libtiff/libtiff/-/raw/v4.6.0/libtiff/tif_dirwrite.c"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/jmg049/ruopus",
+  "one_liner": "Pure-Rust Opus encoder and decoder: SILK/hybrid decode 1.4-1.8x faster than libopus 1.6.1; encode at parity at matched complexity.",
+  "what_it_does": "ruopus is an RFC 6716 Opus implementation written from scratch in Rust. OpusDecoder outputs 48/24/16/12/8 kHz mono or stereo, with FEC, packet-loss concealment and a separate MultistreamDecoder. OpusEncoder covers SILK, hybrid and CELT, with automatic per-frame mode choice (encode_auto), VBR/CBR, DTX and in-band FEC, and Ogg Opus files can be read and written. The API works on Rust slices and returns a new Vec per packet; there is no libopus-style C API and no C header, so C or C++ callers need their own shim, while Python gets PyO3 wheels. The decoder builds for no_std + alloc and wasm32; the encoder needs std.",
+  "how_it_is_fast": "The decode path has no SIMD of its own. The README does not explain why SILK and hybrid decode beat libopus; it attributes the CELT deficit (0.89x) to libopus's SIMD MDCT. The default 'spectrograms' feature routes the CELT MDCT's inner FFT through realfft/rustfft plans, which Cargo.toml puts at about 10x faster decode than the built-in O(n^2) evaluation. Encode speed comes from profile-driven hot-loop work listed in the v0.1.2 CHANGELOG: AVX2+FMA/SSE2 dot products and a four-lag cross-correlation for SILK and CELT pitch analysis, an SSE2 PVQ pulse search, a port of silk_NSQ_sse4_1's rate-distortion lookup table, LPC filters specialised by prediction order, and stack-allocated scratch buffers; the 1.6-3.2x wins over libopus at complexity 10 come mainly from search that ruopus does not do (delayed-decision NSQ, warped noise shaping).",
+  "when_to_use": [
+    "Rust, wasm32 or no_std targets that need an Opus decoder without a C toolchain. Speech-mode streams decoded 1.79x (SILK wideband 16 kb/s) and 1.41x (hybrid fullband 32 kb/s) faster than libopus 1.6.1 in the author's in-process bench.",
+    "Python pipelines that want Opus encode and decode from pip wheels. The bindings release the GIL around codec calls, and the CHANGELOG reports decode scaling from 810x to 2308x realtime across 1 to 4 threads.",
+    "Pure-Rust speech or VoIP encoding where libopus would otherwise run at its default complexity 10 and the simpler ruopus search is good enough: 1.6-3.2x faster than libopus at complexity 10, and at parity with libopus at complexity 0.",
+    "Projects that want a memory-safe codec whose decoder passes all twelve RFC 8251 vectors (99.2-100% on opus_compare, final ranges bit-exact), with unsafe code limited to Miri-checked SIMD kernels."
+  ],
+  "when_not_to_use": [
+    "C++ code bases. There is no C API, so you would write and maintain a Rust FFI layer; for C++ the existing libopus or a C/C++ port is less work.",
+    "Music- or CELT-heavy decoding (0.89x of libopus at 64 kb/s fullband), or pipelines that need PCM bit-identical to libopus.",
+    "Encoders where quality at complexity 10 matters. ruopus lacks delayed-decision NSQ and warped noise shaping, and its encoder quality is checked only by waveform SNR (examples/encoder_quality.rs), not a perceptual metric such as PESQ, POLQA or ViSQOL.",
+    "Encoding on ARM or wasm. The encoder's SIMD kernels exist only for x86-64 (AVX2+FMA detected at runtime, SSE2 baseline), and other targets fall back to scalar code; no non-x86 numbers are published.",
+    "Teams that need a mature dependency. ruopus is at version 0.1.2 (first published 2026-06-29), has one author and 1 star, and has no surround or multistream encoder."
+  ],
+  "integration": {
+    "form": "crate (ruopus 0.1.2 on crates.io; rlib + cdylib for the PyO3 module); Python wheels on PyPI; no C header",
+    "dependencies": "none required; default feature 'spectrograms' 2.0 (realfft) for the fast MDCT; optional libm for no_std; pyo3 0.29 + numpy 0.29 behind the 'python' feature",
+    "min_toolchain": "Rust 1.85 (edition 2024), stable",
+    "platforms": "any Rust target; decoder also no_std + alloc (CI builds thumbv7em-none-eabihf) and wasm32; encoder SIMD AVX2+FMA (runtime-detected) or SSE2 on x86-64, scalar elsewhere",
+    "thread_safety": "not documented; encoders and decoders are owned per-stream values with no shared mutable state apart from an atomic cached CPU-feature flag, and the Python bindings release the GIL around codec calls",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "default-features = false, the zero-dependency and no_std configuration, swaps the FFT-backed MDCT for an O(n^2) evaluation. The CHANGELOG puts that at about 10x realtime decode, against 410-730x with the default 'spectrograms' feature.",
+    "decode_packet and encode_auto return a fresh Vec for every packet, and there is no decode-into-buffer call, so tight loops pay an allocation per packet (the bench includes this on the ruopus side).",
+    "encode_auto picks SILK, hybrid or CELT itself, from a cheap energy, tilt and zero-crossing analysis with hysteresis (CELT once the smoothed music probability exceeds 0.7). The encoder defaults to application Audio and signal Auto; call set_application or set_signal if you need libopus-like VoIP behaviour.",
+    "Decoded PCM differs from libopus in float rounding (only the final range is bit-exact), and encoded bitstreams differ from libopus's, so golden-file tests against libopus output will fail."
+  ],
+  "pick_this_over_siblings_when": "Among the Rust Opus siblings, pick ruopus when you need both a conformance-checked decoder that builds no_std and wasm32 and a feature-complete encoder (FEC, DTX, hybrid, Python bindings); ropus (a libopus 1.5.2 port at about 0.96-0.97x time against fixed-point libopus) and opus-rs (encoder within a few percent of libopus) report near-parity speed. A C++ project is better served by opuspp's decoder, which was compared with libopus under identical compiler and flags and needs no FFI layer.",
+  "verified_claims_summary": "The author's in-process harness (benches/vs_libopus.rs, built with the release profile: opt-level 3, fat LTO, codegen-units 1) ran on one pinned core against system libopus 1.6.1 through the opus 0.3 FFI crate. Decoding identical libopus-made packets, ruopus was 1.79x (SILK WB 16 kb/s) and 1.41x (hybrid FB 32 kb/s) faster and 0.89x on CELT FB 64 kb/s; encoding identical input, it was 0.99-1.00x at complexity 0 and 1.60-3.18x against libopus at complexity 10, which is unequal work. CPU model, OS, rustc version and libopus build flags are not stated, and the test signal is mostly clipped noise rather than the speech-like tones it is described as (see measurement_notes).",
+  "status_note": "Active (last commit 2026-07-07, crate 0.1.2), but very young, with one author and 1 star. It is MIT-licensed, so wrapping or vendoring it is unrestricted.",
+  "measurement_notes": "Harness findings for the orchestrator (benches/vs_libopus.rs, src/encoder.rs, src/encoder_analysis.rs). (1) Workload correction: signal() is not 'tones under a syllabic envelope plus light noise'. The noise term is 0.02*n with n = (seed >> 9) as f32 / f32::from(u16::MAX) - 0.5. Because seed >> 9 is a 23-bit value, n spans -0.5 to 127.5 instead of +/-0.5 (the intended shift was probably 16). Recomputing the 6 s, 288,000-sample signal (derived from the code, not run in Rust): the noise term contributes a +1.27 DC offset and 0.74 RMS white noise, while the tones are 0.30 RMS, about 7.8 dB below the noise. Total RMS is 1.50, the peak is 3.28, and 61% of samples exceed the +/-1.0 float full scale. Both codecs get the same input and the same packets, so the ratios still compare like with like on that input. But the measured workload is clipped broadband noise with a DC offset (ruopus applies a 3 Hz DC-reject high-pass per its CHANGELOG), not speech- or music-like audio. Speech, with its voiced frames, LTP synthesis and pitch-driven encoder paths, is not measured, so the SILK and hybrid decode ratios may not carry over to real voice traffic. (2) Mode agreement in the encode bench. libopus is told Application::Voip for the SILK and hybrid configurations, while ruopus is left at its defaults (Application::Audio, Signal::Auto) and switches to CELT only if its smoothed music probability exceeds 0.7. Porting analyze_frame to Python on this signal gives per-frame probabilities of 0.57-0.71 and a smoothed maximum of 0.66, so ruopus most likely coded SILK and hybrid like libopus (derived; not verified by running). The margin is small, and the bench never checks packet TOCs. (3) Each configuration is timed once (repetitions doubled until a pass exceeds 0.4 s), with ruopus always before libopus and no repeat runs or variance. Core pinning is external and not scripted. (4) libopus comes in through audiopus_sys 0.2.2, which uses pkg-config's system libopus when present and otherwise builds its bundled Opus source with CMake, so a reproducer without a system libopus 1.6.1 gets a different baseline (the bench prints opus::version()). (5) The encoder's SIMD is x86-64 only; 'pinned to a single performance core' suggests a hybrid-core CPU, but the model is not stated. I found no correctness bug in the codec paths behind the numbers; the signal-generator bug changes the workload description, not the like-for-like comparison, so tier C stands.",
+  "sources_read": [
+    "https://github.com/jmg049/ruopus/tree/main/src",
+    "https://github.com/jmg049/ruopus/commits/main",
+    "https://github.com/jmg049/ruopus/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/README.md",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/benches/vs_libopus.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/examples/encoder_quality.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/src/decoder.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/src/encoder.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/src/encoder_analysis.rs",
+    "https://raw.githubusercontent.com/jmg049/ruopus/HEAD/src/simd.rs",
+    "https://crates.io/api/v1/crates/ruopus",
+    "https://crates.io/api/v1/crates/opus",
+    "https://crates.io/api/v1/crates/opus/0.3.0/dependencies",
+    "https://crates.io/api/v1/crates/opus/0.3.1/dependencies",
+    "https://crates.io/api/v1/crates/audiopus_sys",
+    "https://raw.githubusercontent.com/lakelezz/audiopus_sys/HEAD/build.rs"
+  ],
+  "confidence": 0.8
+}
