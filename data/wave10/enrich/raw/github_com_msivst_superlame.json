@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/msivst/superlame",
+  "one_liner": "Multithreaded MP3 encoder CLI that runs many LAME r6531 instances on chunks; beats single-threaded LAME on wall time, not per core.",
+  "what_it_does": "A Windows command-line MP3 encoder (LAME-style flags: -b, -V, --abr, -q, -t) that splits a WAV/AIFF/FLAC input into 128-frame blocks, encodes them in parallel with separate libmp3lame instances and stitches one bit-reservoir-valid MP3. It also decodes MP3 via libmpg123, resamples with r8brain and writes ID3v1/v2 tags with cover art. There is no library API: the parallel encoder is the SuperEncoder/SuperWorker/SuperRepacker classes in src/, which you would have to lift out (GPL).",
+  "how_it_is_fast": "Chunk-level thread parallelism (Robert Kausch's fre:ac/BoCA 'SuperFast' technique): workers encode overlapping blocks (128 frames, overlap 4*1152/frameSize = 4 MPEG-1 frames) and flush with lame_encode_flush_nogap; a single serial SuperRepacker then unpacks each frame's main data, rewrites main_data_begin, zero-fills surplus reservoir, re-picks VBR bitrate indices, enlarges earlier frames (padding or bitrate) when the reservoir runs short, and asks a worker to re-encode with dummy frames when a frame still does not fit. Since v1.1.0 worker handoffs use condition variables instead of a 1 ms sleep-poll that Windows rounded to ~15.6 ms, which made MT encodes 1.8-1.9x faster. The LAME core is unchanged apart from per-CPU builds (-O3 -march=znver3 etc.); per thread SuperLAME is no faster than LAME.",
+  "when_to_use": [
+    "Turning one long file (album, audiobook, DJ mix) into an MP3 as fast as possible on a many-core x86-64 Windows machine, where single-file latency matters more than total CPU spent.",
+    "VBR -V2 encodes: the largest measured gains (5.84-6.17x with 16 threads against single-threaded LAME in the June 2026 report).",
+    "You want LAME r6531 with the maikmerten q4 CBR/ABR quality patch, plus native FLAC/24-bit/hi-res input and a complete Xing/Info tag even when writing to stdout.",
+    "Hi-res or FLAC sources that need resampling to an MP3 rate: r8brain resampling is parallelized and done up front."
+  ],
+  "when_not_to_use": [
+    "Batch conversion of many files: one stock LAME process per file keeps every core busy with no seam overlap or serial repacker (SuperLAME's own docs recommend one process per file; v1.1.0 reports only ~61% parallel efficiency at 16 threads).",
+    "You need output that is byte-identical to a reference LAME encode: multithreaded output differs at chunk seams (ST-vs-MT decoded difference -45 to -87 dB in the June report), and single-thread output matches only a LAME built with the same -march flags.",
+    "Linux, macOS or ARM: build scripts target clang with x86_64-windows-msvc and all tests are PowerShell; no non-Windows build is documented and the engines are x86-64 only.",
+    "Streaming or memory-constrained encoding: the whole input, its float copy and the output MP3 are held in RAM (about 1-2 GB practical input), and nothing is written until the encode finishes.",
+    "CBR on dense, loud material: the June report measured only 1.49x (Static-X) and 2.02x (American Head Charge) at CBR 320, because the repacker needs more seam retries in CBR."
+  ],
+  "integration": {
+    "form": "CLI application (prebuilt Windows .exe in releases) or source-drop of the C++17 frontend; not a library",
+    "dependencies": "LAME trunk r6531 plus patches (q4 clamp, ID3v2.4 synchsafe sizes), libmpg123 >= 1.26 (1.33.6 used), r8brain-free-src (header-only), dr_flac (vendored); build needs clang/LLVM 21 with llvm-ar, llvm-nm and llvm-objcopy, plus CMake and NASM for mpg123. build/build_dispatch.sh also reads a LAME config.h from build/phase4-znver3/, which is not in the repository.",
+    "min_toolchain": "C++17; clang/LLVM 21 (tested 21.1.6) targeting x86_64-windows-msvc; MSVC cannot build the SIMD paths",
+    "platforms": "x86-64 Windows (tested on Windows 11, Zen 3); CPUID picks a znver5, znver4 (AVX-512), znver3 (AVX2/FMA) or SSE2 engine; znver4/znver5 engines are built but never run, and Intel CPUs are untested",
+    "thread_safety": "Not applicable as a library; internally one dispatcher thread drives N worker threads (one lame_t each) and a single serial repacker",
+    "drop_in_for_baseline": "partial — accepts the common LAME CLI flags (-b, -V, --abr, --preset, -q, -m, --resample, ID3 flags) and reads WAV/AIFF/FLAC, but it is not a libmp3lame replacement, many LAME options are absent, and -q is clamped to >=4 for CBR/ABR"
+  },
+  "gotchas": [
+    "The speed and realtime figures SuperLAME prints come from a timer that covers only encode and repack (main.cpp starts it after input read and resampling and stops before the file write), whereas stock LAME's time includes reading the WAV; compare whole-process wall time or use --bench, which reports wall and CPU clocks.",
+    "The self-heal safety net (FrameChainValid, which re-encodes single-threaded if the MT stream is broken) only walks frame headers; a repacker error that leaves headers intact but corrupts main_data_begin chaining would not trigger it.",
+    "The regression suite never compares against a stock lame.exe: it checks ST against MT (<= -40 dB) and znver3 against SSE2 (<= -50 dB, the two differ by FMA-contraction rounding), so 'bit-identical to stock LAME' holds only for a LAME built the same way.",
+    "Files under about 300 MB become cache-resident and give flat, misleading thread-scaling timings (the project's own warning); docs/SCALING_NOTES.md and CONTRIBUTING.md still describe a plateau at about 2 workers and a -t1 1.5x slower than LAME, figures that predate the v1.1.0 sleep-poll fix."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fre:ac's SuperFast drivers (enzo1982/superfast), which use the same technique, when you want a standalone LAME-style CLI with FLAC/hi-res input and the post-2018 BoCA repacker fixes, rather than a full converter GUI. Pick it over Shine when you need LAME quality and have many cores; Shine is a fixed-point encoder aimed at weak or embedded CPUs and trades quality for speed.",
+  "verified_claims_summary": "First-party only, on a Ryzen 7 5800X3D (Zen 3, 8C/16T, Windows 11) using the clang 21.1.6 -O3 -march=znver3 engine. docs/COMPARISON_REPORT.md (2026-06-29, before v1.1.0) times 16-thread SuperLAME against a single-threaded lame.exe built from the same patched LAME r6531 (its flags unstated) on four commercial albums: VBR -V2 5.84-6.17x and CBR 320 1.49-4.73x. The v1.1.0 fix took the 44-minute CBR 320 album from 7.19 to 3.85 s at 16 threads, but no stock-LAME run was repeated on v1.1.x, and the timing method for the June table is not documented, so the README's '~8x' rests on SCALING_NOTES (about 28 s against about 3.6 s, mode unstated, pre-v1.1.0).",
+  "status_note": "Active (v1.1.1 released 2026-08-21, 21 commits, 3 stars, one closed issue, no pull requests), maintained by one person on a best-effort basis; GPL-2.0-or-later because it combines LGPL LAME and mpg123 with GPL code ported from fre:ac/BoCA, so it is copyable only under GPL terms.",
+  "sources_read": [
+    "https://github.com/MSIVST/SuperLAME",
+    "https://github.com/MSIVST/SuperLAME/issues?q=is%3Aissue",
+    "https://github.com/MSIVST/SuperLAME/pulls?q=is%3Apr",
+    "https://github.com/MSIVST/SuperLAME/releases",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/README.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/COMPARISON_REPORT.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/SCALING_NOTES.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/CHANGELOG.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/BENCHPLAN.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/PROJECT_REPORT.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/BUILDING.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/BUILD_PLAN.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/docs/FFMPEG-NOTES.md",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/tests/scaling.ps1",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/tests/regression.ps1",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/build/build_dispatch.sh",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/build/build_final.sh",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/main.cpp",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/worker.cpp",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/worker.h",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/repacker.cpp",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/repacker.h",
+    "https://raw.githubusercontent.com/MSIVST/SuperLAME/master/src/lame_dispatch.cpp",
+    "https://github.com/maikmerten/hmp3"
+  ],
+  "confidence": 0.75
+}

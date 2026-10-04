@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/nigeltao/qoir",
+  "one_liner": "Single-header C codec for a new lossless image format; encodes about 30x and decodes about 4.9x faster than libpng.",
+  "what_it_does": "QOIR is both an experimental lossless image file format and its reference implementation in one header (src/qoir.h: about 3,000 lines of C plus look-up tables, Apache-2.0). qoir_encode turns an 8-bit RGB/RGBA/BGR(A)/RGBX pixel buffer into a QOIR file in memory; qoir_decode returns pixels, either newly allocated or written into a caller's buffer with pixel-format conversion, clip rectangles and an offset, and exposes ICC/EXIF/XMP/CICP metadata chunks. It is not PNG: other tools cannot read the files, so it replaces PNG only where you control both writer and reader.",
+  "how_it_is_fast": "The image is cut into independent 64x64 tiles. Each tile is coded with QOI-style byte opcodes (colour-index hash, small RGB and luma deltas, runs), helped by a 64 KiB luma look-up table and SSE2 on x86-64, and the encoder keeps the smallest of four tile formats: raw literals, opcodes, or either one compressed with the bundled LZ4 block codec. There is no Huffman/deflate stage and no per-row filter search, which is where libpng's default zlib encode spends its time. Because tiles are independent, a caller can decode them on several threads into one pre-allocated buffer (the qoirview commit 913011d reports 2.56x on a 1165x859 image and 3.56x on 3600x2085, and a slowdown on a 160x120 one).",
+  "when_to_use": [
+    "Lossless 8-bit RGB/RGBA images that your own code both writes and reads (game or app asset pipelines, thumbnail and texture caches, screenshot or frame dumps) where encode and decode time matter more than PNG compatibility.",
+    "Decode-heavy paths that still want a PNG-like ratio: 276 MPixels/s single-threaded decode at ratio 0.2525 against libpng's 56 MPixels/s at 0.2423 in the author's suite, and 582 against 77 MPixels/s on web screenshots.",
+    "You need premultiplied-alpha output, decoding into an existing buffer, region (clip) decoding, or tile-parallel decoding of large images.",
+    "You want no dependencies: one header with its own LZ4 and a permissive licence."
+  ],
+  "when_not_to_use": [
+    "Files leave your system (browsers, editors, other tools): use PNG, WebP or JPEG XL. QOIR is marked 'experimental and subject to incompatible changes' and no release is listed on the repository page.",
+    "Smallest files matter: lossless WebP (0.1651) and JPEG XL at effort 7 (0.1548) are much smaller than QOIR (0.2525), and libpng is about 4% smaller overall and smaller on the photo_tecnick, photo_wikipedia, textures_photo and pngimg subsets.",
+    "Mostly photographic content: ZPNG (zstd plus PNG filters) makes 15-31% smaller files and decodes 1.3-1.5x faster on the photo subsets, and on textures_photo it beats QOIR on ratio, encode and decode at once (derived from page data).",
+    "Images beyond 8-bit RGB/RGBA: no 16-bit, grayscale-only, palette or float/HDR support (the lossy mode only quantizes 8-bit channels).",
+    "Parsing untrusted files in a security-sensitive service: the repository has no fuzz target, and a 2026 report (issue #4) showed the decoder's length checks were wrong for tiny files (it rejected valid ones)."
+  ],
+  "integration": {
+    "form": "header-only (single-file C library: #define QOIR_IMPLEMENTATION in one translation unit)",
+    "dependencies": "none (bundled LZ4; QOIR_CONFIG__USE_OFFICIAL_LZ4_LIBRARY switches to liblz4)",
+    "min_toolchain": "C99 compiler (uses stdbool.h/stdint.h); also compiles as C++; benchmarked with gcc 10.2.1; MSVC gets a memcpy-based little-endian peek/poke path",
+    "platforms": "any; SSE2 fast paths on x86-64 (gcc/clang/MSVC) can be turned off with QOIR_CONFIG__DISABLE_SIMD; published numbers are x86-64 only",
+    "thread_safety": "Reentrant: no global state is written (the static look-up tables are only read), so separate calls can run on separate threads if each has its own qoir_decode_buffer/qoir_encode_buffer. The library spawns no threads; for parallel decoding the caller splits work by clip rectangles.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decoding with default options yields RGBA_NONPREMUL even for RGB images; set qoir_decode_options.pixfmt or pass a pixbuf to get 3-byte RGB. (The benchmark used the default, so QOIR wrote 4 bytes per pixel where libpng wrote 3, which slightly handicaps QOIR.)",
+    "The scratch structs are large (about 32 KiB for decode, about 37 KiB for encode); pass preallocated decbuf/encbuf to avoid a malloc per call (the benchmark reuses static ones), and do not put them on small thread stacks.",
+    "Use a copy at or after commit ce7b583 (2026-07-07): earlier versions reject valid tiny images whose QPIX payload is under 8 bytes (issue #4, up to about 282 pixels).",
+    "qoir_lz4_block_encode fails when dst_len is below the worst-case bound even if the output would fit; the default build also carries a 64 KiB luma table (QOIR_CONFIG__DISABLE_LARGE_LOOK_UP_TABLES removes it)."
+  ],
+  "pick_this_over_siblings_when": "Choose QOIR over QOI when you want about 11% smaller files (0.2525 vs 0.2823) and 1.4x faster decode plus metadata, premultiplied alpha and tiling, and over fpng/fpnge when decode speed matters more than PNG output (fpng decodes 148 MPixels/s and only its own PNGs; fpnge has no decoder). Choose ZPNG instead for smaller files on photos if a zstd dependency is acceptable, and stay with PNG (libspng, the Wuffs decoder, fpnge) whenever other software must read the files.",
+  "verified_claims_summary": "Author-run and reproducible: on the qoiformat.org benchmark suite (December 2022 run, Intel i5-10210U, gcc 10.2.1, QOIR built -Wall -O3 without -march, single-threaded, 5 timed repetitions per image with allocation included), QOIR lossless encodes 168.90 and decodes 276.45 MPixels/s against Debian Bullseye's libpng through the simplified API at default zlib settings at 5.49 and 56.18 (30.8x and 4.9x) and libwebp lossless at 2.49 and 89.94, at ratio 0.2525 against 0.2423 and 0.1651. The benchmark harness does not compare decoded pixels, but a separate round_trip_tests.c checks pixel equality; the published run shows no encode or decode failures.",
+  "status_note": "Mostly dormant (140 commits, 134 stars; one bug fix on 2026-07-07 after a gap since 2023-03-19, and one 2022 suggestions issue still open without a reply), but Apache-2.0 and a single dependency-free header that is easy to vendor; the file format itself is still labelled experimental.",
+  "sources_read": [
+    "https://github.com/nigeltao/qoir",
+    "https://github.com/nigeltao/qoir/commits",
+    "https://github.com/nigeltao/qoir/issues?q=is%3Aissue",
+    "https://github.com/nigeltao/qoir/issues/2",
+    "https://github.com/nigeltao/qoir/issues/3",
+    "https://github.com/nigeltao/qoir/issues/4",
+    "https://github.com/nigeltao/qoir/tree/main/test",
+    "https://github.com/nigeltao/qoir/commit/913011d51da68c4f9c3e7c9d98aa4f9a04ac8d8e",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/README.md",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/doc/full_benchmarks.txt",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/doc/qoir_file_format.md",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/src/qoir.h",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/test/benchmarks.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/test/round_trip_tests.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/util/check_round_trip.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/script/run_full_benchmarks.sh",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/adapter/png_libpng_adapter.c",
+    "https://raw.githubusercontent.com/nigeltao/qoir/HEAD/adapter/webp_adapter.c"
+  ],
+  "confidence": 0.85
+}

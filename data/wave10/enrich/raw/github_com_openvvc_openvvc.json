@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/openvvc/openvvc",
+  "one_liner": "INSA Rennes' lightweight C decoder for H.266/VVC; matches Fraunhofer VVdeC's speed in an independent study while using about half the memory.",
+  "what_it_does": "libovvc decodes H.266/VVC Annex B elementary streams (.266) into YUV frames. The C API is a push/pull loop: ovdec_init(), ovdec_config_threads(dec, nb_entry_th, max_nb_frame_th), ovdec_start(), then a demuxer (ovdmx) feeds OVPictureUnit objects to ovdec_submit_picture_unit() and frames come back from ovdec_receive_picture() and ovdec_drain_picture(). It ships a dectest CLI (dectest -i in.266 -o out.yuv -t frame_threads -e entry_threads) and the team maintains an FFmpeg fork with an --enable-libopenvvc wrapper; it is not a drop-in for VTM's or VVdeC's own APIs.",
+  "how_it_is_fast": "Written from scratch in C rather than derived from the C++ VTM reference, with SIMD kernels for the reconstruction stages: SSE4.1 for transforms, intra (angular, DC/planar, MIP, CCLM), motion compensation, DMVR, BDOF/PROF, ALF/CC-ALF, SAO, deblocking and dequantization, plus AVX2 versions of MC, ALF, SAO, MIP, DMVR, BDOF/PROF and intra angular (5,374 lines in x86/rcn_mc_avx2.c alone), selected at run time with __builtin_cpu_supports. On Arm the same SSE code is translated through a vendored SIMDe, plus hand-written AArch64 assembly for MC and DC/planar. Parallelism combines frame-level threads (several pictures in flight) with entry (tile) threads; both default to the core count.",
+  "when_to_use": [
+    "You need a small, LGPL-2.1 C library to play or analyse 10-bit 4:2:0 VVC main-profile streams (JVET CTC-style random-access or all-intra) and want lower memory than VVdeC: the independent JRTIP 2023 study measured VVdeC needing about 2x OpenVVC's memory.",
+    "Embedded or mobile Arm decoding (Linux, Android, macOS, iOS build support) where memory footprint matters and real-time HD on 4 cores or FHD on 8 cores is enough, per the same study.",
+    "Research on VVC decoder parallelism or energy, where a compact C codebase with separate 8-bit and 10-bit DSP templates is easier to modify than VVdeC's C++.",
+    "Feeding VVC into an FFmpeg-based pipeline through the OpenVVC FFmpeg fork, as in the authors' uvg266 + uvgRTP + OpenVVC live 4K intra toolkit."
+  ],
+  "when_not_to_use": [
+    "General-purpose or untrusted VVC playback: 72 of the 238 JVET conformance streams in CI/conf.vmd5 are commented out as failing, including WPP_A/B, SLICES_A, SUBPIC_A to E, TILE_B to G, WP_A/B (weighted prediction), LMCS_A/B, DMVR_A, SCALING_A to C, GDR, FIELD, PALETTE, ACT, BDPCM and all 4:4:4 streams; the project site lists WPP, subpictures, 4:0:0/4:2:2/4:4:4 and 12-bit as unsupported and slices and multi-tile as partial.",
+    "8-bit content when speed matters: every SIMD init in rcn.c is guarded by bitdepth == 10, so 8-bit streams run the scalar C templates only.",
+    "Anything that needs maintenance or security fixes: the last commit on master is 2022-03-22, issue #17 (June 2026) asking whether it is still maintained has no reply, and issue #7 on decoding corrupted files was never answered; no fuzzing or error-resilience work is documented.",
+    "When FFmpeg's native VVC decoder (FFVVC, the subject of a FOSDEM 2024 talk seen in search results) or VVdeC is an option: both avoid the out-of-tree FFmpeg fork OpenVVC needs; their speed and conformance were not checked in this pass.",
+    "Builds on a fresh macOS toolchain or Linux/ARM64 without some effort: issues #16 (configure failure on a MacBook, April 2025) and #15 (ARM64 build and test request) are open with no maintainer response."
+  ],
+  "integration": {
+    "form": "shared lib (libovvc.so via libtool) and static lib, with pkg-config file libopenvvc.pc and the dectest example binary",
+    "dependencies": "POSIX threads (required); optional SLHDR library (slhdr_cwrap via pkg-config, enabled automatically if found, --disable-slhdr to skip); SIMDe headers are vendored under libovvc/arm/simde",
+    "min_toolchain": "C compiler (configure probes gcc, then clang), autoconf, automake and libtool; Windows only through Cygwin or MSYS2; no C standard level documented",
+    "platforms": "x86 and x86-64 (SSE4.1 and AVX2 kernels for 10-bit), AArch64 and 32-bit Arm (SIMDe-translated SSE code plus AArch64 assembly), Linux, macOS, Windows (Cygwin/MSYS2), Android, iOS (build support added March 2022)",
+    "thread_safety": "Decoder state lives in each OVDec instance with its own frame and entry worker threads; the log level and log callback (ovdec_set_log_callback) are process-wide globals, so set them once before creating decoders. Concurrent use of one OVDec from several threads is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "configure appends -msse4.1 and -mavx2 to the global CFLAGS whenever the compiler accepts them, so every source file, not only the kernels behind the __builtin_cpu_supports checks, may be compiled with AVX2 code; a binary built this way is not safe to ship to CPUs without AVX2 unless you override CFLAGS or pass --disable-simd.",
+    "The README changelog stops at v1.0.0 and says only 8-bit bitstreams were added, yet VERSION reads 1.1.0 and the library builds both 8-bit and 10-bit DSP templates, with all SIMD on the 10-bit path; trust the code and CI/conf.vmd5, not the README, for what is supported.",
+    "OVDEC_NB_ENTRY_THREADS parallelises tiles only (per ovdec.h), so single-tile streams get no intra-picture speedup and scale only through frame threads; the frame-thread count is capped at the entry-thread count.",
+    "The CI conformance script and README test command download bitstreams from openvvc.insa-rennes.fr and nasext-vaader.insa-rennes.fr, which may not stay online now that the project is idle."
+  ],
+  "pick_this_over_siblings_when": "No other VVC decoder is catalogued; VVenC (the Fraunhofer encoder) and uvgRTP are pipeline partners rather than competitors. Pick OpenVVC over the uncatalogued VVdeC or FFmpeg's native VVC decoder only when memory footprint on 10-bit 4:2:0 content outweighs conformance coverage and maintenance.",
+  "verified_claims_summary": "Snippet only: search summaries of the authors' arXiv 2205.12217 paper (blocked) give about 37 fps FHD and 12 fps UHD single-threaded, 249 fps FHD and 75 fps UHD on average multi-threaded, and above 290 fps FHD and 90 fps UHD at best on an unnamed multi-core x86 platform (compiler and flags not visible), with VVdeC slightly faster single-threaded and OpenVVC scaling better. The independent JRTIP 2023 embedded study (also snippet only) found speed and energy on par with VVdeC (real-time FHD on 8 cores, HD on 4) and VVdeC using about 2x the memory, so the confirmed advantage is memory, not decode speed; the 34,000x MMSys 2023 figure is an end-to-end pipeline result driven by the encoder.",
+  "status_note": "Abandoned since 2022-03-22 (2,197 commits, 133 stars, open issues unanswered) but LGPL-2.1 and plain C, so it can be vendored for 10-bit 4:2:0 decoding if you accept the conformance gaps listed in its own CI file.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/README.md",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/VERSION",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/.gitlab-ci.yml",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/CI/conf.vmd5",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/CI/checkMD5.sh",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/Makefile.am",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/x86/Makefile.am",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/arm/Makefile.am",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/ovdec.h",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/ovdec.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/ovthreads.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/ovthreads.h",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/dec_init.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/rcn.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/ovlog.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/x86/rcn_mc_avx2.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/arm/rcn_mc_sse.c",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/libovvc/arm/simde/x86/sse4.2.h",
+    "https://raw.githubusercontent.com/OpenVVC/OpenVVC/HEAD/examples/dectest.c",
+    "https://raw.githubusercontent.com/OpenVVC/openvvc.github.io/HEAD/index.md",
+    "https://raw.githubusercontent.com/OpenVVC/openvvc.github.io/HEAD/_config.yml",
+    "https://raw.githubusercontent.com/OpenVVC/openvvc.github.io/HEAD/_data/supported_tools.csv",
+    "https://github.com/OpenVVC/OpenVVC",
+    "https://github.com/OpenVVC/OpenVVC/commits/master",
+    "https://github.com/OpenVVC/OpenVVC/issues?q=is%3Aissue",
+    "https://github.com/OpenVVC/OpenVVC/issues/17",
+    "https://github.com/OpenVVC/OpenVVC/issues/16",
+    "https://github.com/OpenVVC/OpenVVC/issues/7",
+    "WebSearch: OpenVVC decoder fps UHD VVdeC comparison (result snippets for arXiv 2205.12217 and Springer JRTIP 2023; pages not opened)"
+  ],
+  "confidence": 0.6
+}
