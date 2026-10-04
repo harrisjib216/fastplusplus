@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/loveencounterflow/rustybuzz-wasm",
+  "one_liner": "Abandoned wasm-bindgen wrapper around rustybuzz 0.4 for Node.js; claims about 1.5x harfbuzzjs 0.1.5 on Latin text shaping.",
+  "what_it_does": "Compiles rustybuzz (a Rust port of HarfBuzz's shaping) together with ttf-parser, textwrap and hyphenation into one WebAssembly module for Node.js. The API is its own and string-based. register_font(idx, hex) loads a font as a hex string into one of 16 slots. shape_text({text, font_idx, format}) returns glyph IDs and positions as a JSON string, a compact 'short' string or HarfBuzz's serialized text format ('rusty'). glyph_to_svg_pathdata and wrap_text add SVG outlines and line wrapping. It is not a drop-in for harfbuzzjs or HarfBuzz.",
+  "how_it_is_fast": "There is no novel technique. Shaping is rustybuzz 0.4's port of HarfBuzz's algorithm, compiled to WASM by wasm-pack in release mode. The measured edge comes from crossing the JS/WASM boundary once per line and returning one string, where harfbuzzjs's buffer.json() builds a JS object per glyph. The author's own to-do list says he does not know why the 'rusty' format is faster than the minimal 'short' one.",
+  "when_to_use": [
+    "Prototyping Node.js typesetting of Latin-script text where you want shaping, SVG glyph outlines and hyphenated line wrapping from one WASM package, and can parse the returned strings yourself.",
+    "Batch-shaping many short left-to-right lines with a font's default features, where per-call overhead dominates. The benchmark shaped 100 lines of 100 random French dictionary words in EB Garamond 12 Italic.",
+    "As a small worked example of wrapping rustybuzz with wasm-bindgen (the whole API is in one src/lib.rs)."
+  ],
+  "when_not_to_use": [
+    "Anything needing maintenance or a clear licence: last commit 2022-02-08, 4 stars, and LICENSE contains only 'the liecense goes here'. Cargo.toml's 'MIT/Apache-2.0' line comes from the wasm-pack template.",
+    "Right-to-left or complex scripts, or language-specific shaping: shape_text hard-codes Direction::LeftToRight and language 'English', leaves script unset and uses BufferClusterLevel::Characters. Script, language and face selection are on the to-do list.",
+    "OpenType feature control (dlig, smcp, ss01 and so on): the features list is always empty, so you get only the font's default features.",
+    "Current shaping correctness: it pins rustybuzz 0.4 (2021) and ttf-parser 0.11, while rustybuzz itself reached 0.20.1 and has been succeeded by HarfRust.",
+    "C/C++ or native code: use HarfBuzz directly. The benchmark never measures native HarfBuzz, only harfbuzzjs (WASM) and the hb-shape CLI spawned once per line."
+  ],
+  "integration": {
+    "form": "module (wasm-pack --target nodejs package; prebuilt pkg/ committed to the repo, version 4.6.0)",
+    "dependencies": "rustybuzz 0.4, ttf-parser 0.11, textwrap 0.13 (smawk, hyphenation, unicode-width), hyphenation 0.8, wasm-bindgen 0.2 (serde-serialize), serde/serde_json, svgtypes 0.5, regex, html-escape, hex, plus pico-args, libc, lazy_static and unicode-linebreak, left as normal dependencies because the [dev-dependencies] header is commented out",
+    "min_toolchain": "Rust edition 2018 with wasm-pack (release build required); Node.js version not documented",
+    "platforms": "Node.js through the nodejs wasm-pack target; browser use not documented",
+    "thread_safety": "Not documented; fonts live in 16 global `static mut` byte vectors accessed in unsafe blocks, so treat the module as single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The committed pkg/ artefacts may be debug builds. The README warns they can be 'orders of magnitude slower' and says to rebuild with `wasm-pack build --target nodejs` before measuring anything.",
+    "Fonts must be sent as hex strings (twice the byte size, then hex-decoded in WASM) into slots 0-15. An unregistered slot calls alert and then panics, and a malformed font hits .unwrap() on Face::from_slice. Both trap the WASM instance.",
+    "Each shape_text call parses the font twice (rustybuzz::Face and ttf_parser::Face) and deserialises the config with into_serde, so per-call cost grows with call count, not only with text length.",
+    "Outputs are strings: 'rusty' is HarfBuzz's serialized text with glyph names and flags, and 'json' is a JSON string. Callers pay JSON.parse or custom parsing, which the published benchmark does not time."
+  ],
+  "pick_this_over_siblings_when": "Rarely. text-shaper (wiedymi) is the catalogued JS shaper that beats a much newer harfbuzzjs (^0.4.13) across Latin, Arabic, Hebrew, Indic and CJK and is maintained, and Parley or HarfRust-based stacks cover Rust. Pick rustybuzz-wasm only to study or salvage its rustybuzz-plus-textwrap typesetting glue.",
+  "verified_claims_summary": "These are the author's own Node.js runs on an unnamed 2015 laptop (Node.js version and build flags unstated). 100 lines x 100 French dictionary words (65,732 UTF-16 code units) in EB Garamond 12 Italic, 3 shuffled repetitions averaged. The 'rusty' string format reached 218,840 Hz vs harfbuzzjs 0.1.5 at 176,392 Hz in one run (about 1.24x) and 220,399 vs 143,434 Hz in another (about 1.54x). The JSON format, the closest to harfbuzzjs's per-glyph output, was 1.01x and 1.26x in those runs (derived from page data). The 12x-17.7x figures are against hb-shape spawned as a child process per line.",
+  "status_note": "Abandoned since 2022-02-08 (the README says the code is under development and will probably be incorporated into InterText) and has a placeholder LICENSE, so it stays reference-only; nothing here is safe to vendor without the author's licence.",
+  "measurement_notes": "Found the harfbuzzjs wrapper the record could not: hengist/apps/glyphshapes-and-typesetting-with-harfbuzz is a symlink to ../../glyphshapes-and-typesetting-with-harfbuzz, i.e. the separate repo loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz (src/demo-harfbuzzjs.coffee, package.json pinning harfbuzzjs 0.1.5). (1) Feature parity is fine after all: harfbuzzjs 0.1.5's shape(font, buffer, features) ignores its third argument and calls hb_shape(font.ptr, buffer.ptr, 0, 0), and rustybuzz-wasm passes an empty feature list, so both shape with default features. Only the hb-shape CLI row adds --features=liga,clig,dlig,hlig, so it does extra work and produces different output. (2) The timing is asymmetric and favours rustybuzz-wasm. hengist lib/benchmarks.js times only the function returned by the test's setup. For rustybuzz-wasm the module require and font registration happen in setup, and registration happens once per process because font_register_is_free stays false afterwards. The harfbuzzjs wrapper loads lazily inside the timed loop. Its first arrange_text call runs `HBJS ?= await require 'harfbuzzjs'` (WASM compile and instantiate on the first harfbuzzjs run of the process). Every run also reads the font file and builds blob, face and font, because new_fontshaper creates an empty cache each run. Every line allocates a new hb buffer without destroying the previous one (a leak) and runs intertype validation plus an await. The size of this bias was not measured. In the first table the JSON-format gap is only 5 ms per run (0.368 s vs 0.373 s), which these setup costs could cover entirely. (3) Output work differs: harfbuzzjs returns a JS array of {g, cl, ax, ay, dx, dy} objects, while the headline 'rusty' format returns one unparsed string. (4) The README's 'Benchmarks' prose says 'exceeding 280,000 glyfs (outlines) per second, around twenty times the speed attained by OpenTypeJS'. The harness counts text.length (UTF-16 code units; no outlines are drawn), and the table right below shows 4.6x over opentype.js, not 20x. (5) The current benchmark source has harfbuzzjs_shaping commented out, so the harfbuzzjs rows cannot be regenerated as is (as the verifier found). Net: a speedup over harfbuzzjs beyond rough parity is not supported once the output format is matched and setup costs are separated. This is a measurement flaw, not fabrication.",
+  "sources_read": [
+    "https://github.com/loveencounterflow/rustybuzz-wasm",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/loveencounterflow/rustybuzz-wasm/HEAD/pkg/package.json",
+    "https://raw.githubusercontent.com/loveencounterflow/hengist/master/dev/glyphshapes-and-typesetting-with-harfbuzz/src/textshaping.benchmarks.coffee",
+    "https://github.com/loveencounterflow/hengist/tree/master/dev/glyphshapes-and-typesetting-with-harfbuzz/src",
+    "https://github.com/loveencounterflow/hengist/tree/master/apps",
+    "https://raw.githubusercontent.com/loveencounterflow/hengist/master/apps/glyphshapes-and-typesetting-with-harfbuzz",
+    "https://raw.githubusercontent.com/loveencounterflow/hengist/master/lib/benchmarks.js",
+    "https://raw.githubusercontent.com/loveencounterflow/hengist/master/lib/data-providers-nocache.js",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/README.md",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/package.json",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/src/main.coffee",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/src/demo-harfbuzzjs.coffee",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/lib/demo-harfbuzzjs.js",
+    "https://raw.githubusercontent.com/loveencounterflow/glyphshapes-and-typesetting-with-harfbuzz/HEAD/src/demo-harfbuzz.coffee",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzzjs/0.1.5/hbjs.js",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzzjs/HEAD/package.json",
+    "https://crates.io/api/v1/crates/rustybuzz"
+  ],
+  "confidence": 0.8
+}
