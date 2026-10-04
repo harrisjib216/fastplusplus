@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/tdewolff/canvas",
+  "one_liner": "Pure-Go vector drawing library (paths, booleans, text, raster/PDF/SVG/EPS output); claims 2x over Inkscape/Cairo, no published numbers.",
+  "what_it_does": "A Go vector graphics target in the spirit of Cairo or node-canvas: you build paths, text and images on a canvas.Canvas through a Context API, then render the same scene to raster images (PNG, JPEG, WebP, AVIF and others), PDF, SVG, PS/EPS, HTML Canvas via WASM, OpenGL, Gio or Fyne. Around that it carries precise flattening, stroking and dashing, O((n+k) log n) path boolean operations, an SVG parser, and TeX-quality text layout with HarfBuzz shaping and FriBidi bidi. It is a Go API, not a drop-in for Cairo's C API or for the Inkscape/Cairo command-line converters named in the claim.",
+  "how_it_is_fast": "The raster backend (renderers/rasterizer) flattens Béziers and arcs to line segments at a tenth-of-a-pixel tolerance, converts them to 26.6 fixed point and feeds them to srwiley/scanx, a Go port of FreeType's 'smooth' area/coverage accumulation scanner that writes spans straight into an image.RGBA; it replaced golang.org/x/image/vector in February 2025 after issue #334 reported x/image/vector as 500-1000x slower for many rounded rectangles. The README's 'highly optimized with ASM' wording dates from the x/image/vector era: scanx is plain Go with no assembly files, and rasterizer.go itself carries a TODO for an ASM version. Path booleans use a Bentley-Ottmann sweep with snap rounding (Hobby, Hershberger) for numerical stability.",
+  "when_to_use": [
+    "Go services that need one scene rendered to several outputs (PNG plus PDF/SVG/EPS) without cgo or an external Cairo/Inkscape install.",
+    "Server-side charts, maps and documents in Go (it ships go-chart and gonum/plot renderers and OpenStreetMap/Natural Earth examples) where text quality and bidi/complex scripts matter.",
+    "Very large raster outputs from Go: the rasterizer accepts any image up to MaxInt32 pixels (it panics above that), allocated as one image.RGBA at 4 bytes per pixel.",
+    "Robust polygon boolean operations on messy GIS data in pure Go, where it is comparable to Clipper2 in the author's own benchmark."
+  ],
+  "when_not_to_use": [
+    "When you need a measured rasterization speedup: the only claim (at least 2x over 'existing solutions' on one extreme SVG, issue #280 comment 1995990038) has no readable number, machine or harness, and if measured it was on the x/image/vector backend that is no longer the default.",
+    "Raster throughput-critical paths: C/C++ rasterizers in this category (Blend2D, ThorVG, tiny-skia) publish measured wins over Cairo or Skia, and gradient fills here go through a per-pixel color callback while sRGB output does a per-pixel At()/SetRGBA pass (marked 'TODO: parallelize').",
+    "Fast polygon booleans: in the author's canvas_benchmarks union(Europe, Chile) at 87,721 segments takes 0.2563 s against 0.0368 s for iOverlay (about 7x slower, derived from page data; no hardware stated).",
+    "Production code that cannot tolerate panics or rough edges: the README says the library 'inevitably must have a great amount of bugs', path-intersection panics recur in the issue tracker (#272, #280, #287, #306, #313), and #348 (SetCoordRect not scaling paths in the rasterizer) is open.",
+    "Projects needing an old Go toolchain or a small module graph: go.mod requires Go 1.26 and lists Fyne, Gio, go-gl, gonum/plot, go-chart and AVIF/WebP encoders as direct requirements."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Go module github.com/tdewolff/canvas; the raster path uses srwiley/scanx (2019 pseudo-version, self-described beta), srwiley/rasterx and golang.org/x/image; text uses go-text/typesetting and benoitkugler/textprocessing (native Go or CGO HarfBuzz/FriBidi). The root go.mod also requires Fyne, Gio, go-gl, gonum/plot, go-chart, go-avif and go-webp for the optional backends. FriBidi is LGPL.",
+    "min_toolchain": "Go 1.26 (go.mod 'go 1.26.0')",
+    "platforms": "any Go target for the pure-Go raster/PDF/SVG/EPS paths; HTML Canvas via WASM; OpenGL, Gio and Fyne backends need their own platform support",
+    "thread_safety": "not documented; a Rasterizer owns one scanx.Scanner and its target image, so use one per goroutine (issue #208 was a race in ToRasterizer, since closed)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README's ASM claim is stale: the default rasterizer has used pure-Go scanx since February 2025, and scanx's own README warns 'Scanx is beta software. There are known bugs being worked on.'",
+    "From reading the code (not tested): Path.ToScanxScanner, the default fill path, emits no implicit closing edge for open subpaths (ToVectorRasterizer closes the last one), and scanx's Start() does not close the previous contour, so filling an open subpath can lose coverage; close fill paths explicitly.",
+    "From reading rasterizer.go: with a non-linear color space (e.g. SRGBColorSpace), RenderImage gamma-decompresses the source image in place when no rotation or shear margin is added, so the caller's image (and the canvas layer that references it) is modified, and a source that is not a draw.Image (e.g. *image.YCbCr from JPEG decoding) hits an unchecked type assertion and panics.",
+    "Errors surface as panics: FromImage panics on a zero-sized raster and on images over MaxInt32 pixels, and path-intersection panics have been reported repeatedly."
+  ],
+  "pick_this_over_siblings_when": "Pick it over stilus (also Go, with measured wins over x/image/vector) when you need the whole pipeline (text layout, booleans, PDF/SVG/EPS output), not only a fast scanline fill; pick Blend2D, ThorVG or tiny-skia when raster speed is the requirement, since they publish measured results against Cairo or Skia and canvas does not.",
+  "verified_claims_summary": "Nothing measured is verifiable: the README asserts at least 2x over 'existing solutions' and larger images than Inkscape and Cairo for one extreme SVG (an end-to-end SVG-to-raster conversion of score.svg from issue #280), but the linked comment does not render, and no Go version, flags, hardware, tool versions or harness exist in the repo or in tdewolff/canvas_benchmarks, which covers only polygon booleans. Treat it as a directional, first-party claim made on a since-replaced rasterizer backend.",
+  "status_note": "Active (1.8k stars, 124 forks, 21 open issues, last commit 2026-09-23) and MIT-licensed apart from the LGPL FriBidi component; the README asks for funding and leaves production readiness to the user's judgment.",
+  "sources_read": [
+    "https://github.com/tdewolff/canvas",
+    "https://github.com/tdewolff/canvas/issues/280",
+    "https://github.com/tdewolff/canvas/issues/334",
+    "https://github.com/tdewolff/canvas/issues/348",
+    "https://github.com/tdewolff/canvas/issues/391",
+    "https://github.com/tdewolff/canvas/issues?q=is%3Aissue+rasterizer",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/README.md",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/go.mod",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/renderers/rasterizer/rasterizer.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/renderers/rasterizer/util.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/renderers/renderers.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/canvas.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/path.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/path_scanner.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas/HEAD/svg.go",
+    "https://raw.githubusercontent.com/tdewolff/canvas_benchmarks/HEAD/README.md",
+    "https://github.com/srwiley/scanx",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/scan.go"
+  ],
+  "confidence": 0.65
+}

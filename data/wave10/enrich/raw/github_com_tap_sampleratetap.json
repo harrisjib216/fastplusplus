@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/tap/sampleratetap",
+  "one_liner": "Header-only C++20 near-unity ASRC for clock-drift bridging; its datapath beats libsamplerate MEDIUM/BEST at near-unity ratios.",
+  "what_it_does": "Bridges two audio clock domains running at nominally the same rate (for example 48 kHz to 48 kHz from independent crystals): one thread push()es input frames at the input clock, another pull()s output frames at the output clock, and the converter estimates and absorbs the ppm mismatch itself. The API is a push/pull converter object (tap::sr::async::converter, converter_q15, converter_q31) with a config struct and a telemetry status(). It is not a src_process-style resampler, and the ratio range is limited to +-max_deviation_ppm (default 1000 ppm). The same repo carries separate 'bridge' (fixed 44.1<->48 kHz) and 'rational' (small L/M) engines that are not part of this entry's measurements.",
+  "how_it_is_fast": "At near-unity the conversion degenerates into a creeping fractional delay, so each output frame needs only one short polyphase FIR: a Kaiser-windowed sinc prototype split into L phase rows of T taps (balanced: 256 x 48), with coefficients linearly interpolated between the two rows adjacent to the fractional position. The position is an unsigned Q0.64 accumulator that adds only the rate deviation per sample, so whole-sample slips are detected by integer wraparound and the per-sample path has no double arithmetic. For multichannel streams the blended coefficient row is computed once per frame and shared by all channels, and from 4 channels up on hosts the history is stored frame-major so the dot product vectorizes across channels (the float path keeps strict per-channel double accumulation, so mono and stereo float dots are scalar by design).",
+  "when_to_use": [
+    "Bridging two independently clocked devices at the same nominal rate (USB or network audio into a local DAC, AVB, ALSA device pairs) where you also need the clock recovery that libsamplerate, soxr and r8brain leave to the caller.",
+    "Live monitoring or duplex paths with a 1-2 ms latency budget: 24-frame (0.5 ms) filter group delay for balanced, about 1.5 ms end to end with the default 48-frame FIFO setpoint.",
+    "FPU-less or FP64-less embedded targets (Cortex-M33/RP2350 class, Hexagon, HiFi-style DSPs) via the Q15/Q31 datapaths, where the author's QEMU counts put the Q15 steady state at 879 (M33) and 457 (Hexagon) instructions per stereo frame.",
+    "Multichannel streams that must stay phase-coherent: every channel of one instance is resampled at the same fractional position each frame.",
+    "Fixed near-unity ratios where you would otherwise run libsamplerate MEDIUM/BEST block by block and can accept a 20 kHz passband instead of libsamplerate's wider one."
+  ],
+  "when_not_to_use": [
+    "General sample-rate conversion (44.1 to 48 kHz, 2x, arbitrary ratios): the async engine only handles small deviations around a common nominal rate; use soxr, r8brain or libsamplerate (or this repo's separate bridge/rational engines).",
+    "Maximum host throughput or offline/batch work: on the author's own x86 table soxr HQ (52.9 M stereo frames/s) and r8brain 120 dB (16.5) beat SampleRateTap balanced (14.6) when latency does not matter.",
+    "When you need libsamplerate-equivalent filtering: balanced is 48 taps with a 20 kHz passband and a 28 kHz stopband edge above the 24 kHz Nyquist, so 20-24 kHz content can alias into 20-24 kHz, while libsamplerate MEDIUM/BEST use roughly 2x and 3.5x the taps with wider passbands; at the 24-bit interface it measures -133.9 dB THD+N against about -143.5 dB for the oracle-fed libraries.",
+    "Devices that construct converters at boot on FP64-less cores: filter design runs in double at construction and costs about 870-884 M QEMU instructions on Cortex-M33 (seconds on a 150 MHz part), against 20.9 M for libsamplerate MEDIUM.",
+    "Projects that need a stable, packaged dependency: pre-1.0 (v0.5.0 family version), API may still change, no install/package rules, 5 stars, single main author."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "DspTap (tap::dsp, MIT, header-only C++20, standard library only; pulled as a git submodule, so clone with --recurse-submodules). GoogleTest for tests; Google Benchmark, libsamplerate, soxr and r8brain-free-src only for the optional comparison benchmarks.",
+    "min_toolchain": "C++20, CMake 3.24+, GCC 11+ / Clang 14+ / MSVC 19.30+",
+    "platforms": "any; CI covers Linux (GCC, Clang, ASan/UBSan, TSan), macOS, Windows MSVC, arm64, and Cortex-M33, Cortex-M55 and Hexagon under QEMU. Tensilica HiFi4/5 only as a commented self-hosted CI template.",
+    "thread_safety": "Single producer and single consumer: one thread calls push() at the input clock and one calls pull() at the output clock; both are noexcept, lock-free and allocation-free; status() is safe from any thread. The constructor allocates, designs the filter and may throw.",
+    "drop_in_for_baseline": "partial — not a src_process replacement: different push/pull interface with built-in clock recovery, and only near-unity ratios (default +-1000 ppm). The lower-level fractional_resampler can be driven at a fixed known ratio as the benchmark does, but it is an internal-style API with priming and reset preconditions."
+  },
+  "gotchas": [
+    "The filter presets' band edges and servo bandwidths are absolute Hz for about 48 kHz; at other rates construct through config::for_sample_rate() or quality drops silently (the README measures about 32 dB lost at 16 kHz with unscaled defaults).",
+    "The FIFO setpoint must exceed the pull block size; the converter raises it automatically and latency follows, and callbacks above about 340 frames also need fifo_frames set explicitly. With coarse blocks (32 frames and up) the servo stays in its Track stage and the README documents cent-scale low-rate FM (about 62 dB wideband at 32-frame blocks, 54 dB at 5 ms blocks).",
+    "Q15 is format-limited to about 77 dB SNR; use float or Q31 when quality matters, Q15 when cycles do.",
+    "polyphase_filter.h exposes a blend_row(bank, row, mu) helper that calls bank.numPhases(), which polyphase_filter_bank does not have (its accessor is num_phases()); it compiles only because the template is never instantiated, so calling it fails to build. The shipped datapath uses blend_row_phase and is unaffected."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libsoxr and r8brain-free-src when you need drift correction with clock recovery inside a 1-2 ms budget or a fixed-point embedded path; those two are faster on x86 but carry 8.8-37 ms of latency in the same table and have no servo. Pick zita-resampler with zita-ajbridge instead if you are on Linux/JACK and GPL is acceptable, and LibFResample or r8brain for genuine rate conversion.",
+  "verified_claims_summary": "The author's Google Benchmark harness (bench_compare.cpp; GCC 13.3 -O3 for SampleRateTap, Ubuntu 24.04 distro builds of libsamplerate 0.2.2 and soxr 0.1.3, on an unnamed shared Xeon @ 2.10 GHz) times only SampleRateTap's fractional_resampler at a fixed known ratio of 1 + 200 ppm in 128-frame blocks: 14.6 vs 4.8 M stereo frames/s against libsamplerate MEDIUM (3.04x, derived from page data), 20.3 vs 5.2 mono, 3.0 vs 1.9 at 8 channels, and 9.6 vs 1.6 stereo against BEST. Deterministic QEMU instruction counts on Cortex-M55, Cortex-M33 and Hexagon (arm-none-eabi-gcc 13.2.1, hexagon-clang 19.1.5, -O3) show libsamplerate MEDIUM executing 2.7-3.3x the steady-state instructions per stereo frame; the speedup is real for the timed code but partly comes from a shorter filter with a narrower passband, and neither the servo nor the FIFO is timed.",
+  "status_note": "Active (225 commits, last activity 2026-10-03, v0.5.0 family version, 1 open PR, no issues filed) and MIT-licensed, but young, pre-1.0 and consumable only via add_subdirectory/FetchContent; the benchmarks are first-party.",
+  "sources_read": [
+    "https://github.com/tap/SampleRateTap",
+    "https://github.com/tap/SampleRateTap/pulls?q=is%3Apr",
+    "https://github.com/tap/SampleRateTap/tree/main/async/include/tap/sr/async",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/README.md",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/README.md",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/docs/COMPARISON.md",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/docs/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/compare/bench_compare.cpp",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/compare/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/bench/icount/cmp_main.cpp",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/.github/workflows/compare.yml",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/include/tap/sr/async/polyphase_filter.h",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/include/tap/sr/async/converter.h",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/include/tap/sr/async/sample_traits.h",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/include/tap/sr/async/async.h",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/include/tap/sr/async/spsc_ring.h",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/async/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/tap/SampleRateTap/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tap/dsptap/HEAD/include/tap/dsp/fir_kernels.h",
+    "https://raw.githubusercontent.com/tap/dsptap/HEAD/include/tap/dsp/sample_traits.h",
+    "https://raw.githubusercontent.com/tap/dsptap/HEAD/README.md",
+    "https://raw.githubusercontent.com/tap/dsptap/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}
