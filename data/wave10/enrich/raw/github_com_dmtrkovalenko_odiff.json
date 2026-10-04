@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/dmtrkovalenko/odiff",
+  "one_liner": "Zig (formerly OCaml) CLI and Node tool that diffs screenshots pixel by pixel with a YIQ threshold; README times it 4.8-7.6x faster than ImageMagick compare and pixelmatch.",
+  "what_it_does": "Compares two images (png, jpg, webp, tiff, bmp, mixed formats allowed), counts the pixels whose YIQ color distance exceeds a threshold (default 0.1), and optionally writes a red-highlighted diff PNG, a mask or an overlay. It supports ignore regions, optional anti-aliasing detection, the list of changed rows and columns, and layout-difference handling. Interfaces: the odiff CLI (odiff base comp [diff.png]), the odiff-bin npm package (compare() spawns the binary), a persistent JSON-over-stdio --server mode (ODiffServer in Node), and playwright-odiff and cypress-odiff wrappers. It is not a drop-in for ImageMagick compare's metrics (AE, RMSE, PSNR) and differs from pixelmatch in defaults.",
+  "how_it_is_fast": "compareSameLayouts loads std.simd.suggestVectorLength(u32) packed RGBA pixels at a time and tests base != comp as whole vectors; the YIQ NTSC color delta (the Kotsarenko-Ramos metric pixelmatch also uses) is computed only for lanes that differ, so mostly identical screenshots cost little more than a memory compare. The delta itself uses 12-bit fixed-point integer arithmetic (calculatePixelColorDeltaSimd) instead of doubles. The two input images are decoded in parallel on two threads with bundled libspng, libjpeg-turbo (TJFLAG_FASTDCT unless threshold is 0), libtiff and libwebp. Optional extras: a hand-written AVX-512 NASM kernel (vxdiff.asm) for count-only runs and an RVV C kernel on riscv64; server mode removes process spawn cost.",
+  "when_to_use": [
+    "Screenshot-based visual regression in CI (Playwright via playwright-odiff, Cypress via cypress-odiff; Argos, Lost Pixel and Visual Regression Tracker use it) where most pixels are identical between baseline and candidate.",
+    "Large full-page captures (tens of megapixels) where a JavaScript pixelmatch run takes seconds and you want a native single binary.",
+    "High comparison counts from Node: keep one ODiffServer alive to avoid per-call process start-up and initialization.",
+    "Pipelines that compare across formats (PNG baseline vs JPEG or WebP capture) or need ignore regions and the bounding rows/columns of the change."
+  ],
+  "when_not_to_use": [
+    "When you need ImageMagick compare's metrics (AE with fuzz, RMSE, PSNR, SSIM) or a perceptual metric such as SSIM or CIEDE2000: odiff only reports a count and percentage over a YIQ threshold.",
+    "When diff counts must match pixelmatch: anti-aliasing detection is off by default in odiff (--antialiasing to enable) but on by default in pixelmatch, JPEGs decode with libjpeg-turbo's fast DCT, and the delta is fixed-point (discussion #82 reports 1.07% vs pixelmatch's 0.75% at threshold 0.1).",
+    "Small images compared in-process from JavaScript: a third-party benchmark by Vizzly (vendor of the competing Honeydiff; blog read from a search snippet only, method unknown) timed odiff at 240 ms vs pixelmatch 80 ms on 2.1-2.5 MP images and 710 ms vs 450 ms at 18 MP, so process and decode overhead can erase the advantage.",
+    "Saturating many cores on one huge image pair: the per-pixel loop is single-threaded; only the two image decodes run in parallel.",
+    "Relying on the README's 6x figure for the current Zig build: it was measured in 2021 on the OCaml version and has not been re-run against ImageMagick or pixelmatch since."
+  ],
+  "integration": {
+    "form": "CLI executable plus npm package (odiff-bin) and server mode; the Zig sources build a static odiff_lib library",
+    "dependencies": "libspng, libjpeg-turbo, libtiff, libwebp (fetched and built through the imgz Zig package, or system libspng/libjpeg/libtiff with -Ddynamic=true outside Windows); nasm for x86_64 Linux and macOS builds; Node.js for the npm API",
+    "min_toolchain": "Zig 0.16.0 (build.zig.zon minimum_zig_version) plus nasm on x86_64 Linux/macOS; prebuilt binaries need no toolchain",
+    "platforms": "Prebuilt for macOS, Linux and Windows on x86_64 and aarch64, plus Linux riscv64 (generic and RVA23 builds); SIMD width is fixed at compile time (SSE2/AVX2/AVX-512/NEON/RVV); the AVX-512 asm kernel is x86_64 Linux/macOS only",
+    "thread_safety": "Process-level tool: each CLI call or server process handles one comparison at a time; ODiffServer spawns one server process per core for parallel test workers; the Zig library's compare() has no documented thread-safety guarantees",
+    "drop_in_for_baseline": "partial: the CLI argument order matches pixelmatch's (img1 img2 diff), but defaults differ (no anti-aliasing detection, threshold semantics), and it does not replace ImageMagick compare's metric options"
+  },
+  "gotchas": [
+    "The fast AVX-512 kernel almost never runs: it needs a build targeting AVX-512BW/VL (the release targets in build.zig set only arch and OS, so they get Zig's baseline CPU), the --enable-asm flag, threshold exactly 0.1, no diff image, no anti-aliasing, no ignore regions and identical dimensions.",
+    "Any threshold other than 0 switches JPEG decoding to libjpeg-turbo TJFLAG_FASTDCT, so JPEG inputs can show small decode-dependent differences that other tools would not report; use -t 0 for the accurate DCT.",
+    "Correctness fixes to know about: before PR #185 (merged 2026-08-24, after v4.5.0) the fixed-point YIQ constants were truncated, which under-counted near the threshold (3 extra pixels out of 2.27 million on a test image after the fix); versions 4.1.1-4.1.2 could write incomplete diff PNGs for large files (issue #153, fixed in PR #155).",
+    "The diff PNG is written only when pixels differ; with --fail-on-layout (CLI, off by default) or failOnLayoutDiff (Node), images of different sizes return reason 'layout-diff' without being compared, and otherwise extra non-transparent pixels count as differences."
+  ],
+  "pick_this_over_siblings_when": "Pick odiff over imgdiff (Go), which its own README times at 1.442 s vs 6.475 s for an older odiff on the same cypress pair, when you want the Node, Playwright and Cypress integrations, server mode, ignore regions and anti-aliasing detection; pick libvips or OpenCV only if you are scripting a custom absdiff-and-threshold pipeline rather than running a turnkey visual-regression comparator.",
+  "verified_claims_summary": "Only first-party hyperfine wall-clock runs exist (MacBook Pro 16 on macOS 11 beta, CPU and tool versions unstated; images/README.md invokes the OCaml-era binary 'ODiffBin'), timing whole processes including PNG decode and encode: on the cypress.io screenshot pair 1.168 s vs ImageMagick compare -compose src 8.881 s (7.6x) and pixelmatch 7.712 s (6.6x), and on the water pair 1.951 s vs 9.326 s (4.8x) and 10.614 s (5.4x), with ratios derived from the means. The tools do different work (pixelmatch runs anti-aliasing detection by default, and odiff does not), so the README's claim that all three produce the same difference is wrong.",
+  "status_note": "Actively maintained (v4.5.0 released in July 2026, fixes merged 2026-08-24), MIT-licensed, 3.2k stars and used by several visual-testing services; the speed claim is first-party, five years old and was measured on the OCaml version.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/README.md",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/images/README.md",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/bench.sh",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/build.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/package.json",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/diff.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/color_delta.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/antialiasing.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/vxdiff.asm",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/rvv.c",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/cli.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/io.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/io/io.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/io/jpeg.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/test_avx.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/test_color_delta.zig",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/src/root.zig",
+    "https://github.com/dmtrKovalenko/odiff/tree/main/src",
+    "https://github.com/dmtrKovalenko/odiff/pull/185",
+    "https://github.com/dmtrKovalenko/odiff/releases",
+    "https://github.com/dmtrKovalenko/odiff/issues?q=is%3Aissue+slow+OR+performance+OR+wrong+OR+incorrect",
+    "https://github.com/dmtrKovalenko/odiff/issues/101",
+    "https://github.com/dmtrKovalenko/odiff/issues/153",
+    "https://github.com/vizzly-testing/honeydiff",
+    "https://github.com/vizzly-testing/honeydiff/tree/main",
+    "WebSearch snippet: https://vizzly.dev/blog/honeydiff-vs-odiff-pixelmatch-benchmarks/ (page not opened; blogs blocked)"
+  ],
+  "confidence": 0.8
+}

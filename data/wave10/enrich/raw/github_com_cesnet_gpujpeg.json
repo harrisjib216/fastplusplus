@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/cesnet/gpujpeg",
+  "one_liner": "CUDA baseline-JPEG encoder/decoder doing DCT, quantization and restart-segmented Huffman coding on the GPU; no measured comparison against libjpeg-turbo or nvJPEG.",
+  "what_it_does": "A C library (libgpujpeg, C + CUDA, shared by default) plus the gpujpegtool command-line program that encode raw RGB/YUV/planar/alpha buffers to baseline 8-bit Huffman JPEG and decode such JPEGs back, with input and output in host memory, CUDA device memory or OpenGL textures. The API is its own: create a gpujpeg_encoder or gpujpeg_decoder (optionally bound to a cudaStream_t), fill gpujpeg_parameters and gpujpeg_image_parameters, then call gpujpeg_encoder_encode or gpujpeg_decoder_decode repeatedly; buffers are allocated once and reused for same-sized frames. It is not a libjpeg/TurboJPEG API drop-in.",
+  "how_it_is_fast": "Every stage except stream parsing and formatting runs on the GPU: color conversion, a fixed-point 8x8 forward/inverse DCT with quantization (the DCT file carries NVIDIA CUDA SDK sample code), and Huffman coding. Restart markers split the bitstream into thousands of independent segments: the library default is 8 MCUs, and gpujpegtool asks for RESTART_AUTO, which picks 4 to 12 MCUs by megapixel count, times the component count for non-interleaved streams (the README's 24-36); gpujpeg_huffman_encoder_encode_kernel_warp codes one segment per warp, using __ballot_sync bitmaps of nonzero coefficients and constant-memory codeword LUTs with in-kernel byte stuffing. The decoder parses segment offsets on the CPU (faster when the encoder wrote its APP13 segment-info header) and decodes segments in parallel with a 10-bit quick lookup table plus a JPEG-spec slow path.",
+  "when_to_use": [
+    "Real-time capture or streaming pipelines that encode many equal-sized HD to 16K frames per second on an NVIDIA GPU (README: about 1.7 ms per 4K frame and 6.2-6.3 ms per 8K frame on RTX 3080/4080 including PCIe copies).",
+    "Frames already in CUDA or OpenGL memory, where skipping host transfers matters (8K q70 encode 2.28 ms without PCIe copies vs 6.21 ms with them on RTX 3080).",
+    "Closed systems where GPUJPEG both writes and reads the JPEGs, so the restart markers and segment-info header that enable GPU Huffman decoding are always present (the UltraGrid-style use case).",
+    "Batch tools that can keep one encoder or decoder alive across images to amortize the 28.6 ms (8K) to 87.1 ms (16K) first-frame initialization measured on RTX 3080."
+  ],
+  "when_not_to_use": [
+    "Decoding arbitrary camera or web JPEGs: progressive and arithmetic-coded files are unsupported, and files without restart markers fall back to the CPU Huffman decoder (the FAQ shows a 600 ms foreign-JPEG decode dominated by a 543 ms stream reader).",
+    "Choosing it as 'faster than libjpeg-turbo' or 'faster than nvJPEG' on the catalog's evidence: no such comparison exists in the repo, and the only cross-codec numbers (2020 issues #47/#48) are mixed (1.8x faster on a noise texture, 1.4x slower on a portrait) with unknown GPU and method.",
+    "Single small images or one-shot command-line conversions: initialization and PCIe transfers dominate, and the README timings exclude the first iteration.",
+    "Machines without an NVIDIA GPU (AMD only through ZLUDA), or very large images on small GPUs: about 20 bytes of GPU memory per pixel per component (1901 MiB for 8K 4:4:4).",
+    "Needs beyond baseline 8-bit: no 12-bit (issue #13 open since 2018), no progressive, no lossless JPEG."
+  ],
+  "integration": {
+    "form": "shared lib (static via BUILD_SHARED_LIBS=OFF)",
+    "dependencies": "CUDA toolkit and runtime (cudart); optional OpenGL/GLEW/GLFW/GLUT for texture interop; optional fpnge (C++, SSE4.1) for PNG output in the tool",
+    "min_toolchain": "CMake 3.10 (3.18 for CMAKE_CUDA_ARCHITECTURES), C compiler plus nvcc; GPU compute capability 2.0 or newer per README",
+    "platforms": "Linux and Windows (MSW tool support since 2020) with an NVIDIA CUDA GPU; AMD Radeon via ZLUDA; host CPU architectures and macOS not documented",
+    "thread_safety": "not documented; each encoder/decoder owns its buffers and takes its own CUDA stream, and NEWS 0.20.4 removed implicit synchronization between parallel encoders, so one instance per thread is the intended model",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "License: COPYING is BSD-2-Clause, but src/gpujpeg_dct_gpu.cu carries a 'Copyright 1993-2010 NVIDIA Corporation' header that refers to the NVIDIA end-user license agreement and says use outside that EULA 'is strictly prohibited'; check this before vendoring.",
+    "Encoder defaults favour speed over compatibility: non-interleaved scans, restart markers, and SPIFF or Adobe headers when the internal color space is not full-range BT.601 (some third-party decoders ignore SPIFF color information).",
+    "The README timings feed the encoder from cudaMallocHost pinned memory (gpujpeg_image_load_from_file); pageable user buffers will make the PCIe part slower. Reported numbers are gpujpegtool's 'Avg w/o 1st Iter' wall time from encode start to formatted stream, which includes host-device copies and CPU stream formatting.",
+    "Open decoder bugs as of 2026-10-04: issue #108 (bug label, open) reports wrong colors on the second image when one decoder instance is reused; issue #107 (rows of odd-width images misaligned for OpenCV, width_padding always 0) got only an alignment option, GPUJPEG_DEC_OPT_ALIGNMENT_BYTES_INT, in 0.27.13."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libjpeg-turbo, jpeg-nitro or zenjpeg when you control both ends and have an NVIDIA GPU with frames in GPU memory and need millisecond 4K/8K encode; pick oss-nvjpg only on Tegra/Switch hardware decoders, and look at the Weissenberger-Schmidt GPU decoder (catalogued as a paper) when you must decode JPEGs that lack restart markers, which GPUJPEG cannot parallelize.",
+  "verified_claims_summary": "Only absolute first-party times exist: gpujpegtool -n 100 on a 16K DCI frame scaled to HD-16K at quality 75, encode 4K 1.65 ms (RTX 4080) and 1.71 ms (RTX 3080), decode 4K 1.46 ms (RTX 4080), including PCIe copies and excluding the first iteration, with CUDA, driver and host CPU unstated and some rows built without Release flags; there is no CPU or nvJPEG baseline, hence tier D. One table cell looks wrong: RTX 2080 Ti decode is 1.02 ms at HD and 1.07 ms at 4K (four times the pixels) but 11.29 ms at 8K, and that 4K cell beats the RTX 4080's 1.46 ms.",
+  "status_note": "Actively maintained by CESNET (release 0.27.13 in March 2026, commits into October 2026) and BSD-2-Clause apart from the NVIDIA-EULA header on the DCT file; usable as a library today, but its speed advantage over CPU or nvJPEG codecs is unmeasured.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/README.md",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/FAQ.md",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/COPYING",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_common.c",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_encoder.c",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_decoder.c",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_huffman_gpu_encoder.cu",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_huffman_gpu_decoder.cu",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_dct_gpu.cu",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/src/gpujpeg_reader.c",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/libgpujpeg/gpujpeg.h",
+    "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/libgpujpeg/gpujpeg_encoder.h",
+    "https://github.com/CESNET/GPUJPEG/tree/master/src",
+    "https://github.com/CESNET/GPUJPEG/issues",
+    "https://github.com/CESNET/GPUJPEG/issues/107",
+    "https://github.com/CESNET/GPUJPEG/issues/108",
+    "https://github.com/CESNET/GPUJPEG/issues?q=is%3Aissue+is%3Aclosed+label%3Abug"
+  ],
+  "confidence": 0.8
+}
