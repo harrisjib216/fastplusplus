@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/ghaerr/agg-2.6",
+  "one_liner": "Classic scalar C++ template 2D rasterizer; an independent bl_bench run puts it ~1.2x Skia and ~2.3x Cairo single-threaded.",
+  "what_it_does": "AGG renders anti-aliased vector graphics (paths, strokes, dashes, gradients, image transforms, alpha masks) into a caller-owned pixel buffer in memory, with no dependency on any graphics API or platform. It is not a drop-in for SkCanvas or cairo_t: you assemble a pipeline of templates (vertex source, converters such as conv_curve / conv_stroke / conv_transform, rasterizer_scanline_aa, scanline_u8 or scanline_p8, renderer_scanline_aa_*, and a pixfmt over a rendering_buffer). The optional Agg2D class in agg-src/agg2d gives a simpler canvas-style API; the benchmark drove a modified Agg2D.",
+  "how_it_is_fast": "The core is an exact-area-coverage scanline rasterizer in the lineage of FreeType's gray rasterizer: edges are converted to 24.8 fixed point and walked into per-pixel cells holding signed area and cover, the cells are bucketed by row and sorted by x (qsort_cells), and sweep_scanline accumulates cover into 8-bit coverage spans with an optional gamma table and non-zero or even-odd fill. Every stage (vertex converters, span generators, blenders, pixel formats) is a template, so the whole pipeline inlines into one specialised loop with no virtual calls or per-pixel dispatch, and cell blocks (4096 cells each) and scanline buffers are reused between paths. It is plain scalar C++ with no SIMD and no threading; its lead over Skia in this benchmark comes from polygon, path and stroke work at 32 px and larger, while Skia wins simple rectangle and rounded-rect fills.",
+  "when_to_use": [
+    "Single-threaded CPU rendering of complex anti-aliased paths and strokes (charts, maps, plotting backends) where Cairo is the incumbent: 2.29x Cairo 1.18.4 by geometric mean on an M1 Pro, faster in 94% of cells.",
+    "Stroke-heavy scenes: 1.39x Skia on strokes overall (StrokeWorld 1.92x, StrokeFish 1.82x, StrokeButterfly 1.67x).",
+    "Portable or embedded targets where Skia's build or a SIMD- or JIT-dependent renderer is not an option: scalar C++, no dependencies for the core, renders into any custom pixel format.",
+    "When you want a small, permissively licensed (Modified BSD or AGG Public License) renderer you can vendor and modify, or you already maintain an AGG-based stack."
+  ],
+  "when_not_to_use": [
+    "When raw CPU throughput is the goal: in the same M1 Pro dataset Blend2D 0.12.0 is about 3.3x faster single-threaded and scales with threads, Vello CPU is about 2.1x faster single-threaded and JUCE 8.0.8's software renderer about 1.43x faster (derived from page data).",
+    "Many small simple shapes: at 8x8 and 16x16 it is only at parity with Skia, and it loses FillRectA (0.84x except solid), FillRoundU (0.80x) and StrokeRectA (0.52x).",
+    "Untrusted vector input without hardening: CVE-2019-6245 (unbounded recursion in the cell rasterizer) and CVE-2019-6247 (heap overflow via blend_hline) were filed against AGG 2.4 as used in svgpp, and the default integer clipper overflows on huge coordinates.",
+    "When you need a maintained dependency: this GitHub copy last changed 2023-08-21 and has open build failures (issue #13: GCC 14.2.1 with FreeType 2.13.3 in agg_font_freetype.cpp); the SourceForge SVN fixed that and C++23 warnings in r140-r145 (2024).",
+    "When you need modern features out of the box: no text shaping, colour management, GPU backend or multi-threading; the bench backend only supports Solid, Linear and Radial paints, with Agg2D's gradients limited to pad linear and centred radial (core AGG has gradient_radial_focus and repeat/reflect adaptors in agg_span_gradient.h)."
+  ],
+  "integration": {
+    "form": "mostly header-only templates (agg-src/include) plus a small static library (agg-src/src/*.cpp: curves, strokes, dashes, affine transforms, arcs; built as libagg.a); commonly source-dropped",
+    "dependencies": "none for the core; FreeType or Win32 TrueType optional for fonts; X11, SDL2, Win32 or Nano-X only for the demos; GPC only for boolean polygon operations",
+    "min_toolchain": "no minimum C++ standard documented (pre-C++11 style code); MSVC 2019 fixes merged in 2022; GCC 14 fails on agg_font_freetype.cpp with FreeType 2.13.3 in this copy (issue #13)",
+    "platforms": "any (portable scalar C++, no SIMD); demo platform layers for X11, SDL2, Win32, Nano-X and macOS",
+    "thread_safety": "not documented; the rasterizer, scanline and renderer classes keep their state in members, so use one set per thread and do not share an object across threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default rasterizer_scanline_aa<> uses rasterizer_sl_clip_int, which converts coordinates with a plain iround(v * 256) to 24.8 fixed point before clipping, so coordinates beyond about +/-8.4 million px overflow; use rasterizer_sl_clip_int_sat or rasterizer_sl_clip_dbl and a clip box for untrusted input.",
+    "Cell storage is capped (cell_block_limit, default 1024 blocks x 4096 cells = 4,194,304 cells) and add_curr_cell() simply returns once the cap is hit, so a huge or very detailed path renders incomplete with no error; raise the limit through the rasterizer constructor.",
+    "As read in this copy, rasterizer_cells_aa::line() splits a segment spanning 16384 px or more horizontally into two recursive calls but has no return afterwards, so such a segment is also rasterized whole; keep geometry clipped to the canvas so segments never get that long.",
+    "The benchmarked Agg2D is blend2d-apps' modified copy (fillRectangleI fast path for integer solid rectangles, three-colour gradients), which this repo's agg-src/agg2d lacks; this repo's Agg2D instantiates pixfmt_custom_blend_rgba, whose copy_pixel() does not compile when used (issue #14: pixel_type* passed to make_pix(int8u*)). Do not copy agg-src/gpc (non-commercial licence here; SourceForge r144 has it under MIT)."
+  ],
+  "pick_this_over_siblings_when": "Pick Blend2D (about 3.3x faster single-threaded, multi-threaded) or JUCE's software renderer (about 1.43x faster) when speed is the main goal; pick AGG over them when you want a dependency-free, portable scalar renderer with a fully pluggable template pipeline (custom pixel formats, gamma, subpixel-accurate strokes) or already run on an AGG-based stack. Against tiny-skia and raqote AGG is faster in the same data (2.42x and 1.10x geomean, derived).",
+  "verified_claims_summary": "LaurenzV's independent run of the Blend2D bl_bench harness on an Apple M1 Pro (2026-06-08, macOS, 512x600 PRGB32 target, SrcOver, single thread, options.repeat 15; compiler and flags unrecorded, Skia from vcpkg's unofficial-skia, Cairo 1.18.4 from pkg-config) gives AGG a 1.21x geometric-mean speedup over Skia and 2.29x over Cairo across the 522 cells they share (29 tests x Solid/Linear/Radial x 6 sizes), which I recomputed from the rcpms values; the same file puts AGG at 0.30x Blend2D ST, 0.48x Vello CPU ST, 0.70x JUCE 8.0.8, 1.10x raqote and 2.42x tiny-skia. The measured code is blend2d-apps' bundled AGG 2.4-line copy with its own modified Agg2D wrapper, whose core rasterizer headers match this repository.",
+  "status_note": "This GitHub mirror (367 stars, 92 forks, 6 open issues, 2 stale PRs) has been unchanged since 2023-08-21 while the upstream SourceForge SVN reached r145 on 2024-09-28 with C++23, FreeType 2.13.3 and fallthrough fixes and MIT-licensed GPC, so vendor from SourceForge; the core is BSD-3-Clause or AGG Public License and copyable, and usability is mixed only because of agg-src/gpc here (issue #10 also flags a GPL-licensed SDL2 demo platform file).",
+  "sources_read": [
+    "https://github.com/ghaerr/agg-2.6",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/README.md",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/copying",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/Makefile",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_basics.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_config.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_array.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_rasterizer_scanline_aa.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_rasterizer_cells_aa.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_rasterizer_sl_clip.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_pixfmt_rgba.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_scanline_u.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_renderer_scanline.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/include/agg_span_gradient.h",
+    "https://raw.githubusercontent.com/ghaerr/agg-2.6/HEAD/agg-src/agg2d/agg2d.h",
+    "https://github.com/ghaerr/agg-2.6/tree/master/agg-src",
+    "https://github.com/ghaerr/agg-2.6/tree/master/agg-src/src",
+    "https://github.com/ghaerr/agg-2.6/commits/master",
+    "https://github.com/ghaerr/agg-2.6/issues?q=is%3Aissue",
+    "https://github.com/ghaerr/agg-2.6/issues/13",
+    "https://github.com/ghaerr/agg-2.6/issues/14",
+    "https://github.com/ghaerr/agg-2.6/pulls",
+    "https://sourceforge.net/p/agg/svn/HEAD/log/",
+    "https://raw.githubusercontent.com/LaurenzV/vello_chart/HEAD/data/arm/2026-06-08.json",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/backend_agg.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/app.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/backend.h",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/3rdparty/agg2d/agg2d.h",
+    "https://www.cvedetails.com/cve/CVE-2019-6245/ (WebSearch snippet only)",
+    "https://cyberstrike.io/cve/CVE-2019-6247/ (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

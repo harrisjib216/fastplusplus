@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/google/skia",
+  "one_liner": "Google's 2D graphics library; its 2016 convolution scaler (Skia 53) resized 4.2x to 9.7x faster than single-threaded ImageMagick 6.8.",
+  "what_it_does": "Skia is the CPU/GPU 2D drawing engine behind Chrome and Android; image resizing is a side feature reached through SkPixmap::scalePixels / SkImage::scalePixels with SkSamplingOptions, or by drawing an SkImage onto a canvas. The catalogued numbers come from a different, older API: SkBitmapScaler::Resize(dst, src, method) in Skia 53, a standalone separable resampler with box, triangle, Mitchell, Hamming and Lanczos-3 filters. That API was deleted from Skia on 2017-07-20 (commit 'Assume HQ is handled by pipeline, delete legacy code-path'), so it is not a drop-in replacement for ImageMagick's -resize today.",
+  "how_it_is_fast": "The measured Skia 53 scaler is a two-pass separable convolution over 8-bit BGRA pixels with precomputed per-output-pixel filter taps stored as int16 fixed point (kShiftBits = 14), with SSE2 (x86) and NEON kernels for the horizontal, four-rows-at-once horizontal and vertical passes; that matches the 'Skia 53 SSE2' label in pillow-perf. Current Skia instead resamples by drawing through its raster pipeline: bilinear (2x2 taps) or cubic B/C (fixed 4x4 taps, bicubic_n3x..p3x stages) per output pixel, optional mipmaps for linear filtering, plus a dedicated bicubic_clamp_8888 fast stage.",
+  "when_to_use": [
+    "You already link Skia (Chrome-, Android- or Flutter-style apps, PDF/vector renderers) and need decent-quality thumbnails without adding another imaging library.",
+    "Moderate downscales or upscales of 8-bit RGBA/BGRA images where bilinear or Mitchell/Catmull-Rom cubic quality is enough.",
+    "Workloads that already draw images to a canvas or GPU surface, where scaling is fused into the draw instead of being a separate pass.",
+    "Large-ratio downscales on the CPU using mipmapped linear sampling or SkImage::asyncRescaleAndReadPixels with RescaleMode::kRepeatedLinear / kRepeatedCubic."
+  ],
+  "when_not_to_use": [
+    "You want the speed measured here: the SkBitmapScaler code that produced the 4.2x to 9.7x numbers no longer exists in Skia, and no benchmark of current scalePixels against ImageMagick was found.",
+    "You need Lanczos or other scale-adaptive convolution filters: current SkSamplingOptions offers only nearest, linear (plus mipmaps) and cubic B/C, and cubic cannot be combined with mipmaps.",
+    "You only need a resize kernel: in the same pillow-perf data Pillow-SIMD 4.3 AVX2 needs 0.32x to 0.54x of Skia 53's time (Lanczos 320x200: 6.23 ms vs 18.1 ms on c4.large), so dedicated resizers are faster and much smaller to integrate.",
+    "16-bit, float or high-precision resizing pipelines (the measured scaler worked on 8-bit pixels with 14-bit fixed-point weights).",
+    "Projects that cannot take a GN/Ninja build with Python-driven dependency sync, Clang and C++20."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (GN + Ninja; is_component_build for shared)",
+    "dependencies": "Python 3 for tools/git-sync-deps and bin/fetch-gn; GN and Ninja; third-party codecs and fonts (libpng, libjpeg-turbo, libwebp, FreeType, ICU, etc.) are optional per skia_use_* flags; Bazel for some Rust third-party code; CMake 3.30+ only for Dawn",
+    "min_toolchain": "C++20 (site/docs/user/build.md); Clang strongly preferred, since software-rasterizer and color-conversion paths are documented to be 'dramatically' slower with GCC or MSVC",
+    "platforms": "Linux, macOS, Windows, Android, iOS, ChromeOS; x86-64 and arm64 CPU paths, plus GPU backends",
+    "thread_safety": "SkBitmap is not thread-safe (each thread needs its own SkBitmap, pixel memory may be shared); SkPixelRef is thread-safe; one surface/canvas per thread",
+    "drop_in_for_baseline": "partial — a library call (SkPixmap::scalePixels) rather than ImageMagick's CLI/MagickWand API, with no codec-to-codec pipeline, no Lanczos and no 16-bit quantum depth"
+  },
+  "gotchas": [
+    "The measured API (SkBitmapScaler, SkConvolver, SkResizeFilter) was removed on 2017-07-20; nanobench numbers for Skia 53 do not describe any Skia release after that.",
+    "Current cubic sampling uses a fixed 4x4 footprint per output pixel, so very large downscales with cubic alias unless you downscale in steps (asyncRescaleAndReadPixels kRepeatedCubic) or use mipmapped linear sampling.",
+    "Skia has no stable API: RELEASE_NOTES.md lists removals and signature changes almost every milestone, so pin a milestone branch (chrome/mNNN).",
+    "Chromium still carries the old convolution resizer (skia::ImageOperations::Resize in skia/ext, Lanczos-3/box/Hamming with SSE2, NEON and LSX), but it lives in the Chromium tree, not in Skia."
+  ],
+  "pick_this_over_siblings_when": "Pick Skia when it is already in the binary and you also need drawing or GPU compositing; for a standalone fast resizer, Pillow-SIMD's resample code (faster than Skia 53 in the same dataset), libvips or OpenCV are better choices, and stb-image-resize-opt is the lightweight single-header option.",
+  "verified_claims_summary": "pillow-perf (python-pillow) timed Skia 53's SSE2 SkBitmapScaler in a C++ nanobench loop on a white 2560x1600 N32 bitmap against ImageMagick 6.8.9-9 through Python Wand with MAGICK_THREAD_LIMIT=1 on an RGB image, on a Xeon E5-2666 v3 (c4.large, Ubuntu 16.04.1) and a Core i5-4258U; Skia was 6.4x to 9.5x and 4.2x to 9.7x faster across 12 size/filter cases (derived from page data), with no compiler or flags recorded. The harnesses are not symmetric: the Skia loop reuses a destination preallocated outside the timed loop, while each ImageMagick run includes a clone, a fresh result image and Python call overhead.",
+  "status_note": "Very actively developed (last commit 2026-10-03; RELEASE_NOTES.md already has a Milestone 156 section) and BSD-3-Clause, so copyable, but the benchmarked scaler was deleted in 2017 and today's equivalent is an unbenchmarked raster-pipeline path.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/c4.large.json",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/macbook.json",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/index.js",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/README.md",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/wand_scale.py",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/wand.py",
+    "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/base.py",
+    "https://gist.github.com/homm/6e048cb0dad135b6db63b924458730e8",
+    "https://raw.githubusercontent.com/google/skia/main/README",
+    "https://raw.githubusercontent.com/google/skia/main/include/core/SkPixmap.h",
+    "https://raw.githubusercontent.com/google/skia/main/include/core/SkSamplingOptions.h",
+    "https://raw.githubusercontent.com/google/skia/main/include/core/SkImage.h",
+    "https://raw.githubusercontent.com/google/skia/main/include/core/SkBitmap.h",
+    "https://raw.githubusercontent.com/google/skia/main/RELEASE_NOTES.md",
+    "https://raw.githubusercontent.com/google/skia/main/site/docs/user/build.md",
+    "https://raw.githubusercontent.com/google/skia/main/BUILD.gn",
+    "https://raw.githubusercontent.com/google/skia/main/gn/skia.gni",
+    "https://raw.githubusercontent.com/google/skia/main/src/core/SkPixmap.cpp",
+    "https://raw.githubusercontent.com/google/skia/main/src/core/SkPixmapDraw.cpp",
+    "https://raw.githubusercontent.com/google/skia/main/src/shaders/SkImageShader.cpp",
+    "https://raw.githubusercontent.com/google/skia/main/src/core/SkBitmapScaler.cpp",
+    "https://raw.githubusercontent.com/google/skia/main/src/core/SkConvolver.h",
+    "https://github.com/google/skia/commits/main/src/core/SkBitmapScaler.cpp",
+    "https://raw.githubusercontent.com/google/skia/chrome/m53/src/core/SkBitmapScaler.h",
+    "https://raw.githubusercontent.com/google/skia/chrome/m53/src/core/SkBitmapScaler.cpp",
+    "https://raw.githubusercontent.com/google/skia/chrome/m53/src/core/SkConvolver.h",
+    "https://raw.githubusercontent.com/google/skia/chrome/m53/src/core/SkConvolver.cpp",
+    "https://raw.githubusercontent.com/google/skia/chrome/m53/src/opts/opts_check_x86.cpp",
+    "https://raw.githubusercontent.com/chromium/chromium/main/skia/ext/image_operations.h",
+    "https://raw.githubusercontent.com/chromium/chromium/main/skia/ext/convolver.h"
+  ],
+  "confidence": 0.75
+}

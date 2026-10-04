@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/gereoffy/jpeg-nitro",
+  "one_liner": "Parallel single-image baseline JPEG and 8-bit PNG decoders in C; one-thread speed equals libjpeg-turbo, all-core latency ~9x lower.",
+  "what_it_does": "nitrojpeg decodes one baseline JPEG (8-bit Huffman, gray or YCbCr, any chroma subsampling, with or without restart markers) on all cores into planar Y/Cb/Cr through nj_read_info() and nj_decode_planes(); the library does no upsampling or RGB conversion (the author's viewer does that in a GPU shader). nitropng decodes one 8-bit non-interlaced gray, gray+alpha, RGB or RGBA PNG into the unfiltered rows, each still prefixed by its filter byte, and np_zlib_decompress() exposes the parallel inflate for any zlib stream of known output size. Neither is a drop-in for the libjpeg/TurboJPEG or libpng APIs: unsupported or damaged input returns -1 and the caller must fall back to another decoder.",
+  "how_it_is_fast": "nitrojpeg strips byte stuffing in parallel, cuts the entropy-coded data into about 32 x CPU chunks and decodes each speculatively from an arbitrary bit offset; Huffman codes self-synchronise (2.4 garbage MCUs on average over the author's 10,240 measured sync points), and an in-order stitching pass finds where each chunk meets the true decoding path, which fixes its MCU index and DC predictors. Coefficients are Huffman-decoded once, and each stitched chunk is dequantised and run through libjpeg's ISLOW IDCT (AVX2 or NEON, same constants and rounding as jidctint.c) by the thread that decoded it while it is still in cache; restart-marker files are decoded per interval in parallel. nitropng is a pugz-style speculative parallel inflate (each thread finds a valid dynamic-block header in its chunk, writes 16-bit placeholders for back-references into the unknown 32 KB window, resolves them after chaining, and combines per-chunk Adler-32 sums) followed by a wavefront filter reversal where row r trails row r-1 in 1 KB segments. Per-core speed is about libjpeg-turbo's (single 11-bit lookup Huffman decoder), so the whole gain is intra-image parallelism.",
+  "when_to_use": [
+    "Image viewers, editors or on-demand previews where the latency of one large (12-50 MP) camera JPEG matters and cores are idle: about 11.7 ms instead of 107 ms per 24 MP photo on the author's 16-thread i9.",
+    "Pipelines that consume planar YCbCr directly (GPU shader colour conversion, video or ML preprocessing that does its own conversion), since that is the library's native output.",
+    "Camera and phone JPEGs without restart markers (the common case), which libjpeg-turbo cannot split across threads at all.",
+    "Large 8-bit truecolour PNGs (screenshots, scans, AI-generated images) when raw unfiltered rows are enough: about 4x lower latency than Wuffs to BGRA on all 16 threads of the author's i9.",
+    "Parallel inflate of one big zlib stream of known output size (np_zlib_decompress), as the repo does for PSD ZIP data."
+  ],
+  "when_not_to_use": [
+    "Batch or server workloads that decode many images at once: on one thread nitrojpeg is at parity with libjpeg-turbo (1.04x i9, 1.09x M1) and nitropng is about 1.24x slower than Wuffs, so decoding images in parallel with libjpeg-turbo gives the same or better total throughput; on Linux the shared pthread pool makes concurrent calls take turns.",
+    "Progressive, arithmetic-coded, 12-bit, lossless, CMYK, RGB-coded or multi-scan JPEGs and images over 16384 px; palette, 16-bit, sub-8-bit and interlaced PNGs (palette PNGs are common on the web). All return 'unsupported'; issue #3 (the reporter's first JPEG was progressive) was closed as not planned.",
+    "When you need RGB/RGBA pixels or a libjpeg/TurboJPEG/libpng-compatible API: the shipped library outputs planar YCbCr or filtered-byte-prefixed rows only; the BGRX path exists only in the -DNJ_REFERENCE test build and uses libjpeg-turbo.",
+    "GCC- or MSVC-only toolchains: the loop bodies are clang blocks, so it needs clang with -fblocks (issue #3 also reports no MSYS GCC build).",
+    "Code that needs a mature dependency: single-author repository first committed 2026-09-27, 0 stars, no releases, README numbers revised daily, and a nitropng bug (incomplete fixed-Huffman distance table, so every fixed block with a match failed and fell back) was only fixed on 2026-09-30."
+  ],
+  "integration": {
+    "form": "source-drop (src/nitrojpeg.c/.h, src/nitropng.c/.h, src/nitropsd.c/.h, src/nitro_os.h); on Linux `make linux` also builds libnitro.so / libnitro.a",
+    "dependencies": "none at runtime beyond pthreads (Grand Central Dispatch on macOS); libjpeg-turbo 3 (TurboJPEG 3 API), Wuffs, stb_image and zlib only for the benchmarks, verify tools and the viewer's fallback",
+    "min_toolchain": "clang with -fblocks (GCC unsupported; no blocks runtime library needed); C standard not documented; Windows via llvm-mingw or MSYS2 CLANG64",
+    "platforms": "x86-64 (AVX2 IDCT and Adler-32 when compiled with -march=x86-64-v3 or native, otherwise scalar), aarch64 (NEON); macOS, Linux, Windows (MinGW)",
+    "thread_safety": "Concurrent calls allowed (global buffer pool behind a mutex; the author ran ThreadSanitizer with four threads decoding at once), but on non-macOS the single pthread pool serialises parallel loops of concurrent calls; nj_set_max_workers / nj_set_chunks / nj_set_bands are process-wide globals.",
+    "drop_in_for_baseline": "partial: decodes the same baseline JPEGs bit-exactly to libjpeg-turbo's ISLOW planes (verified on the author's 50 photos), but through its own API, YCbCr-planes-only output and a required fallback decoder for unsupported files"
+  },
+  "gotchas": [
+    "SIMD is chosen at compile time (#ifdef __AVX2__ / __ARM_NEON), with no runtime dispatch: a generic x86-64 build silently uses the scalar IDCT, whose speed is not documented.",
+    "Large internal buffers (unstuffed bit stream, per-chunk coefficient buffers sized at about twice the image's coefficient count) go into a process-global pool of up to 4096 buffers that is never freed and has no release API, so after one 24 MP decode on the order of 100-200 MB stays resident (estimated from the pool_take sizes in nitrojpeg.c).",
+    "The 'nthreads' argument is the number of work pieces, not threads (<= 0 means 4 x CPUs; 1 means truly single-threaded); the thread count is set globally with nj_set_max_workers.",
+    "Output planes are padded to whole MCUs and the padding differs from libjpeg-turbo (the verify tool compares only the visible region); EXIF orientation is parsed but not applied; nitropng verifies the zlib Adler-32 but not PNG chunk CRC-32s."
+  ],
+  "pick_this_over_siblings_when": "libjpeg-turbo-rs and zenjpeg compete with libjpeg-turbo on single-thread speed and give RGB output; pick nitrojpeg only when wall-clock latency of one image on many idle cores matters and planar YCbCr is acceptable. For PNG, libspng, zune-png and ptpng give complete pixel output, checksum handling and wider format coverage; nitropng wins only on latency for a large 8-bit truecolour PNG with spare cores.",
+  "verified_claims_summary": "On the author's macOS 'Intel i9 13th gen' (16 threads, SKU and clang version not stated) with 50 private 24 MP camera JPEGs, bench/bench (one timed pass per decoder, from memory) measured nitrojpeg 103.0 ms on one thread vs libjpeg-turbo 3.1.2 107.4 ms to YUV planes (parity) and 11.7 ms on 16 threads (9.2x); on an M1 Air 153.8 vs 168.1 ms and 30.4 ms on 8 threads; for 34 PNGs nitropng took 45.5 ms in parallel vs Wuffs to BGRA 180.1 ms, but 222.6 ms on one thread. The '5.0x to BGRX' row (24.7 ms) is not the shipped decoder: nj_decode_bgrx exists only under -DNJ_REFERENCE and calls the old engine in which libjpeg-turbo decodes re-emitted bands and does the upsampling and colour conversion; also, bench/pngbench divides nitropng's total by every file, including any it rejects as unsupported (palette, 16-bit, interlaced) in near-zero time while Wuffs decodes them, so such a file in the private PNG set would flatter nitropng's average.",
+  "status_note": "Very active (82 commits between 2026-09-27 and 2026-10-01, two merged PRs from a second contributor adding the GNOME viewer and the Linux shared library) and MIT-licensed C that is small enough to vendor, but it is a weeks-old single-author project with 0 stars, no releases and commits co-authored with an AI coding assistant; treat it as experimental.",
+  "sources_read": [
+    "https://github.com/gereoffy/jpeg-nitro",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/README.md",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/Makefile",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/scripts/get-deps.sh",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/bench.m",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/pngbench.m",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/nbench.c",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/verify.c",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/pngverify.c",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/results/results.txt",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/results/m1.txt",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/bench/results/ab_results.txt",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/nitrojpeg.c",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/nitrojpeg.h",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/nitro_os.h",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/nitropng.c",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/nitropng.h",
+    "https://raw.githubusercontent.com/gereoffy/jpeg-nitro/HEAD/src/libnitro.map",
+    "https://github.com/gereoffy/jpeg-nitro/tree/main/bench/results",
+    "https://github.com/gereoffy/jpeg-nitro/commits/main",
+    "https://github.com/gereoffy/jpeg-nitro/commit/29ba3122c7e84a37c79ffcc8ea9903c598cffdf0",
+    "https://github.com/gereoffy/jpeg-nitro/commit/21b7ac614f6303802ccc0b0227f0918ccee31812",
+    "https://github.com/gereoffy/jpeg-nitro/issues?q=is%3Aissue",
+    "https://github.com/gereoffy/jpeg-nitro/issues/3",
+    "https://github.com/gereoffy/jpeg-nitro/pulls?q=is%3Apr"
+  ],
+  "confidence": 0.8
+}
