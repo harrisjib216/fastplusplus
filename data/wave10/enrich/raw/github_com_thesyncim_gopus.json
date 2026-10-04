@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/thesyncim/gopus",
+  "one_liner": "Pure-Go (no cgo) Opus encoder/decoder whose SIMD build roughly matches, and in most tested encode cases beats, SIMD libopus 1.6.1.",
+  "what_it_does": "A from-scratch Go implementation of the Opus codec (SILK, CELT and Hybrid modes, 8-48 kHz, 2.5-120 ms frames, CBR/VBR/CVBR, FEC, PLC, DTX, multistream/ambisonics, Ogg Opus and RTP RED containers) tracked against pinned libopus 1.6.1. The API mirrors libopus semantics but is idiomatic Go: gopus.NewEncoder/NewDecoder with a config struct, Encode/Decode on caller-owned float32, int16 or int24 slices, and setter methods instead of opus_encoder_ctl. It is not a drop-in for C callers; from C++ you would need a Go service or a cgo-exported shim.",
+  "how_it_is_fast": "It ports the libopus algorithms source-for-source, then replaces all 53 former assembly routines (41 .s files) with Go kernels written against Go 1.27's experimental simd/archsimd package (AVX2/FMA on amd64, NEON on arm64), chosen by runtime CPU checks with scalar fallbacks. Hot paths are allocation-free after warmup (caller-owned buffers), the 256-bit SILK kernels are arranged to avoid legacy-SSE/AVX transition penalties (table-loaded NSQ constants, paired stores), and the published builds use PGO from a profile of the repo's own encode/decode benchmarks.",
+  "when_to_use": [
+    "Go services (WebRTC SFUs, voice bots, transcoders) that need Opus without cgo, a C toolchain, or shipping libopus binaries.",
+    "Cross-compiled or static Go binaries where cgo is off, e.g. scratch containers or CGO_ENABLED=0 builds for several OS/arch targets.",
+    "amd64 (AVX2/FMA) or arm64 hosts where you can build with GOEXPERIMENT=simd and GOAMD64=v3: 20 ms SILK/Hybrid/CELT encode measured 2.5-28.7% less time than SIMD libopus, decode 3.1-7.7% less.",
+    "Real-time paths that are sensitive to GC pressure: the packet APIs report zero allocations per encode/decode after warmup."
+  ],
+  "when_not_to_use": [
+    "Default builds without GOEXPERIMENT=simd: scalar Go takes 18-66% more time than SIMD libopus on every row of the published table (e.g. Hybrid fullband mono encode 420.99 vs 253.40 ns/sample; float decode 42.29 vs 35.90) (derived from page data).",
+    "Low-delay CELT with short frames: 5 ms CELT encode takes 14.6% more time than libopus, and the repo's own 56-config interleaved scoreboard (Intel Xeon, revision 6c0b0640b) has 2.5 ms CELT decodes at 1.22-1.25x libopus time even with SIMD.",
+    "C/C++ codebases: there is no C ABI, so libopus or a C/C++ port is the natural choice; calling Go from C++ adds cgo export and runtime overhead.",
+    "Toolchains older than Go 1.27, or builds where an experimental compiler feature is unacceptable: the SIMD path depends on GOEXPERIMENT=simd, and the validation report lists several open Go compiler SIMD bugs the code has to work around.",
+    "Production use that needs a stable API or long track record: pre-v1 (v0.1.2, v0.1.0 retracted), 27 stars, and a stream of correctness fixes merged on 2026-10-01/02 (FEC, Ogg granules, soft clipping on NaN, codec boundaries)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (go.mod lists no requirements); optional DRED, OSCE, QEXT, custom-modes and fixed-point features behind build tags; libopus and a C compiler are needed only to run the parity tests and benchmarks",
+    "min_toolchain": "Go 1.27 for master (go.mod 'go 1.27.0'); GOEXPERIMENT=simd for SIMD kernels; v0.1.2 is the published release",
+    "platforms": "any Go target with scalar kernels; SIMD kernels on amd64 (runtime AVX2/FMA checks, GOAMD64=v3 recommended) and arm64 (NEON); CI parity on Linux, macOS and Windows",
+    "thread_safety": "Encoder and Decoder instances keep stream history and are not safe for concurrent calls; use one per stream",
+    "drop_in_for_baseline": "partial — bitstream-compatible with libopus and controls map one to one (bitrate, complexity, VBR, DTX, FEC, packet loss, bandwidth, signal), but it is a Go API, not the opus_encode/opus_decode C ABI"
+  },
+  "gotchas": [
+    "The fast numbers need three opt-ins: GOEXPERIMENT=simd, GOAMD64=v3 and PGO. Go applies a default.pgo only from the main package's directory (or an explicit -pgo path), so an application importing gopus does not inherit the repo's profile; the published Go SIMD rows have no no-PGO counterpart, while the C side had no PGO or LTO.",
+    "The PGO profile is generated from benchmarks (EncoderEncode_Restricted CELT, CELT5ms and SILK CBR after reset, CELT/stereo decode) that mirror the timed workloads, so the table may be a best case for those shapes.",
+    "Parity with libopus is scoped, not universal: the CBR contract (19 cases, 2,175 packets/ranges) is packet- and range-exact on the recorded lanes, but floating-point paths allow narrow documented differences and the README states universal packet or float-bit identity is not a release requirement.",
+    "The default bitrate is 64 kbps while libopus defaults to automatic; set bitrate explicitly when comparing outputs, and note DTX makes Encode return zero bytes with a nil error."
+  ],
+  "pick_this_over_siblings_when": "Pick gopus when the host language is Go and cgo is off; the other catalogued Opus reimplementations (opus-rs, ropus, ruopus, rusty-opus, opus-pure for Rust; opuspp for C++; libopus-rs's tuned libopus) target Rust or C/C++ callers. Of these, gopus has the most detailed matched-ISA parity and benchmark evidence, but its speed margin over libopus is smaller and less uniform than the larger claims some siblings make.",
+  "verified_claims_summary": "On a GitHub Actions AMD EPYC 7763 runner at revision 4b660d668, Go 1.27.1 (GOAMD64=v3, GOEXPERIMENT=simd, PGO) was timed against a libopus 1.6.1 static build (GCC 13.3.0, -O3 -march=x86-64-v3, RTCD + intrinsics, AVX2/FMA lane) on identical PCM and controls (complexity 10, CBR): Go SIMD took 2.5-28.7% less time in four 20 ms encode cases, 14.6% more for 5 ms CELT, and 7.7% / 3.1% less for float32 / int16 decoding of the 12 RFC test vectors. Scalar Go against scalar C was slower in 6 of 7 rows; each row is the median of three runs of at least 250 ms with one codec instance per side, while the repo's own interleaved harness notes buffer placement alone can move a config's speed by up to about 15%.",
+  "status_note": "Very actively developed (3,296 commits, last merges 2026-10-02, branch names such as codex/correctness-edges suggest agent-assisted development) and BSD-3-Clause, but pre-v1 with a fast-moving master that requires Go 1.27; pin a commit and rerun tools/encoderbenchcmp on your own hardware before relying on the speed claim.",
+  "sources_read": [
+    "https://github.com/thesyncim/gopus",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/README.md",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/go.mod",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/reports/validation.md",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/tools/encoderbenchcmp/main.go",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/tools/csrc/libopus_encoder_bench.c",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/tools/testvectorbenchcmp/main.go",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/tools/csrc/libopus_testvector_bench.c",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/internal/libopustooling/libopustooling.go",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/Makefile",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/benchmark_libopus_scoreboard_test.go",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/benchmark_libopus_scoreboard_interleaved_test.go",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/thesyncim/gopus/HEAD/CONTRIBUTING.md",
+    "https://github.com/thesyncim/gopus/issues",
+    "https://github.com/thesyncim/gopus/issues?q=is%3Aissue+state%3Aclosed",
+    "https://github.com/thesyncim/gopus/pulls?q=is%3Apr",
+    "https://github.com/thesyncim/gopus/pull/519",
+    "https://github.com/thesyncim/gopus/pull/523",
+    "https://github.com/thesyncim/gopus/commits/master",
+    "https://raw.githubusercontent.com/golang/website/master/_content/doc/pgo.md"
+  ],
+  "confidence": 0.8
+}

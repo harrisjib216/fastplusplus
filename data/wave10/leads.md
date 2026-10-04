@@ -41,3 +41,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher leads (e84, GPU codecs): CESNET/GPUJPEG (BSD-2, CUDA JPEG, no baseline numbers, parallel Huffman only with restart markers); weissenberger/bzip2gpu (MIT, ICPP 2024 GPU bzip2, checksum check TODO). Neither catalogued.
 - Enricher lead (e89): vstroebel/jpeg-encoder (Rust, AVX2, MIT/Apache; pure-Rust JPEG encoder with no published speed numbers).
 - Enricher leads (e88): go-gfx/gfx (Go resample and colour kernels used by go-images, no numbers), ajroetker/go-highway (Go SIMD, indirect dependency); mozilla/mozjpeg and memorysafety/rav1d (slower than dav1d) remain uncatalogued baselines.
+- Enricher lead (e92): iOrange/bcdec (single-header BC1-7 decoder; not checked).

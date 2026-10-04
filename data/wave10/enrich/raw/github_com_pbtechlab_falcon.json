@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/pbtechlab/falcon",
+  "one_liner": "New MIT-licensed MDCT audio codec in Rust, with a C API, whose decoder runs about 1.5x faster than libopus at equal file size.",
+  "what_it_does": "Falcon is its own codec and file format (magic FALC, bitstream version 0x10), not an Opus or Vorbis decoder: you encode WAV into .falcon with its encoder and play it back with its decoder. Rust crates expose encode_file / decode_file and a frame-by-frame Decoder (960 f32 samples per channel per 20 ms frame); falcon_capi adds a C99 ABI (falcon_decoder_open / read_f32 / seek / close, falcon_encode_buffer) and a header-only, exception-free C++17 wrapper. It targets game audio and file playback at 48 kHz, up to 64 channels, with no packet-loss concealment and no low-delay mode.",
+  "how_it_is_fast": "The format moves every decision to the encoder: the decoder reads static canonical Huffman codes for 27 band energies, derives each band's pulse count from the transmitted energies (no allocation side info), decodes integer pulse vectors from static cell tables (stars-and-bars composition index plus Fischer pyramid enumeration or Golomb-Rice), scales each band in one autovectorized pass and runs one FFT-based inverse MDCT (rustdct/rustfft) per frame, or four short ones on transients. There is no decoder-side psychoacoustics, spreading rotation or anti-collapse logic, the per-band 10^(dB/20) uses a polynomial instead of libm powf, and x86-64 builds default to x86-64-v3 (AVX2, FMA) with fat LTO.",
+  "when_to_use": [
+    "Games or apps that ship their own audio assets, control both encoder and decoder, and want lower CPU per voice than libopus or libvorbis/Tremor at Opus-like file sizes.",
+    "Mixing many simultaneous 48 kHz stereo streams on one thread, where decode CPU matters more than memory (README: 256 voices in 291 ms vs 365 ms for float libopus on x86-64).",
+    "C or C++ engines that want an MIT-licensed codec with a small C ABI and a CMake target, and that can take a Rust-built static or shared library.",
+    "Projects that prefer a codec whose design avoids four named patents (PATENTS.md), accepting that this is the author's own analysis, not legal advice."
+  ],
+  "when_not_to_use": [
+    "Anything that must interoperate: browsers, WebRTC, Ogg/Opus or Vorbis files, or third-party players cannot read .falcon, and 1.x files cannot be read by 2.x.",
+    "Real-time voice or lossy networks: no packet-loss concealment, no low-delay mode, 20 ms frames plus encoder look-ahead.",
+    "Memory-tight many-voice playback: about 318-345 KB of heap per stereo stream plus a full copy of the compressed file in the C API (libopus 27 KB), and about 629 KB of decoder code vs 130 KB for libopus.",
+    "When stb_vorbis is an option: in Falcon's own table it is 4% faster on the x86-64 P-core and 1.28x faster on Apple M5, with less memory per stream and a standard format.",
+    "Production use that needs an outside track record: two stars, five commits, first release July 2026, no independent measurement, and the cross-codec harness is not published."
+  ],
+  "integration": {
+    "form": "Rust crates (falcon_decoder, falcon_encoder, falcon_core), plus static lib and shared lib via falcon_capi (C99 header falcon.h, C++17 falcon.hpp)",
+    "dependencies": "rustfft, rustdct, num-complex, thiserror, crc, byteorder, once_cell (Rust); the C library links the Rust standard library, plus ntdll on MSVC or pthread, dl and m on Linux/macOS",
+    "min_toolchain": "Rust 1.70 (declared MSRV), Cargo; C99 or C++17 compiler for the bindings; verified with MSVC and MinGW",
+    "platforms": "Windows, Linux, macOS; x86-64 builds default to x86-64-v3 (AVX2, FMA, BMI) via .cargo/config.toml, aarch64 uses NEON; tuned for 48 kHz",
+    "thread_safety": "A decoder handle is not thread-safe; separate handles are independent, and falcon_encode_buffer, falcon_free and the version/error functions can be called from any thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Pulse counts come from f32 powf/exp/ln on both encoder and decoder (falcon_core::alloc), so a different libm can in principle change an integer pulse count and desynchronize the stream; the README says cross-platform agreement has not been tested systematically, and the CLI and C API encoders emit a random-access frame only at the start, so a desync would not recover.",
+    "The release profile sets panic = \"abort\", so any panic that slips past the decoder's error paths aborts the host process; the corrupt-input coverage is deterministic truncation and byte-flip tests on one synthetic tone, not a coverage-guided fuzzer.",
+    "The default x86-64 build requires AVX2/FMA (x86-64-v3); rebuild with RUSTFLAGS=\"-C target-cpu=x86-64\" for older CPUs. Before 2.0.1 the same setting broke aarch64 builds, which produced invalid output.",
+    "Seeking is linear: a backward seek re-decodes from the file start, and the decoder makes about seven heap allocations (about 8 KB) per 20 ms frame. A MinGW build of the Rust library decodes 1.45x slower (771x) because it links msvcrt pow/exp/log."
+  ],
+  "pick_this_over_siblings_when": "The catalogued Opus decoders (ruopus, opuspp, opus-pure) report decode gains over libopus 1.6.1 of a similar size (1.27x to 1.79x in their own first-party tests) while keeping the standard Opus bitstream, so take one of those when you need Opus compatibility. Pick Falcon only for a closed asset pipeline where you choose the codec and want an MIT-licensed format with a deliberately simple decoder.",
+  "verified_claims_summary": "First-party, single-thread, library-level decode of an 18-file 48 kHz stereo corpus from memory in 20 ms reads (open, decode and close timed; best run over two passes): Falcon 2.0 through its C API at 1114x real time vs float libopus 1.6.1 at 731x on an Intel Core Ultra 9 185H P-core (Windows 11; Falcon built with the MSVC Rust toolchain for x86-64-v3, C decoders with GCC 15.1 MinGW-w64 -O3 -march=x86-64-v3), and 1551x vs 1056x on Apple M5 (Apple clang 17). Falcon decodes its own files, size-matched to libopus VBR files of 96-214 kbps, while raw libopus is fed pre-extracted packets; the C program that produced the table is not public, the 2.0.0 numbers it replaced were withdrawn the same day (FFmpeg's built-in decoders and cached reference times), and 11 of the 18 corpus files are not redistributed.",
+  "status_note": "Active but very new (five commits, v1.0.0 July 2026, v2.0.0 and v2.0.1 both on 2026-09-29, two stars); MIT-licensed and copyable, but the format is young and the speed claim is first-party with no public harness.",
+  "sources_read": [
+    "https://github.com/pbtechlab/Falcon",
+    "https://github.com/pbtechlab/Falcon/commits/main",
+    "https://github.com/pbtechlab/Falcon/tree/main/falcon_decoder/src",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/README.md",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/PATENTS.md",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_decoder/Cargo.toml",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_decoder/src/decode.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_decoder/src/imdct.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_decoder/src/lib.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_core/Cargo.toml",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_core/src/alloc.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_core/src/lib.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_capi/README.md",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_capi/Cargo.toml",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_capi/src/lib.rs",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_capi/include/falcon.h",
+    "https://raw.githubusercontent.com/pbtechlab/Falcon/HEAD/falcon_capi/include/falcon.hpp",
+    "WebSearch: \"Falcon\" audio codec pbtechlab MDCT Rust libopus decode faster (no independent measurement found)"
+  ],
+  "confidence": 0.75
+}
