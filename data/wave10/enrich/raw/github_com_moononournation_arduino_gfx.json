@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/moononournation/arduino_gfx",
+  "one_liner": "Arduino display library for about 40 panel controllers and many buses; 1.2x-5.2x faster than Adafruit_GFX on an ESP32 SPI ILI9341.",
+  "what_it_does": "Arduino_GFX drives small colour displays (SPI, 8/16-bit parallel, ESP32-S3 RGB panels, ESP32-P4 DSI and others; the README lists 49 display entries covering 39 controllers) and draws primitives, bitmaps (1/3/8/16/24-bit, indexed, YCbCr), Adafruit GFXfont and U8g2 fonts (including CJK and UTF-8), plus in-RAM Canvas framebuffers. You build it from two objects in the sketch, a data-bus class (for example Arduino_ESP32SPI) and a display class (for example Arduino_ILI9341), so the panel, pins and bus are chosen at run time rather than in a config header. The drawing API keeps Adafruit_GFX names and signatures (drawPixel, drawLine, fillRect, drawCircle, setTextColor, print), but the class derives from Print and its own Arduino_G, not from Adafruit_GFX.",
+  "how_it_is_fast": "The display layer is split from the bus layer, and each bus class writes the MCU's peripheral directly. On ESP32, Arduino_ESP32SPI programs the SPI registers itself, packs bytes into a 64-byte DMA-capable buffer and polls cmd.usr until each transfer ends; fills preload the hardware data buffer with the colour and re-trigger 32-pixel transfers, and DC and CS are toggled with single GPIO set/clear register writes. Arduino_ILI9341::writeAddrWindow caches the last column and row windows and skips CASET or PASET when unchanged. Arduino_TFT::writeSlashLine splits Bresenham lines into horizontal or vertical runs sent as one window each, and opaque built-in or GFXfont characters go out as one address window per character with a row buffer (writePixels) instead of per-pixel writes, which is why it posted the fastest Text row. Like the other non-Adafruit libraries, it never reads back display memory.",
+  "when_to_use": [
+    "Arduino IDE projects on ESP32-family boards (ESP32, S2, S3, C3, C5, C6, H2, P4), RP2040/RP2350, ESP8266, AVR, nRF52, RTL872x, STM32 or SAMD21 that use a panel or bus few other libraries cover: 9-bit SPI panels (HX8357B), ESP32-S3 RGB panels, ESP32-P4 DSI, AMOLED dev boards from LilyGo, Waveshare, Makerfabs and others.",
+    "Replacing Adafruit_GFX plus a controller driver when text, outline shapes and lines are slow: the 2021 run measured 5.2x on text, 2.9x on outline circles and 2.6x on lines against Adafruit_GFX with Adafruit_ILI9341.",
+    "Text-heavy screens with opaque (background-coloured) built-in or GFXfont text, where it had the fastest Text row of the four libraries (18,960 us vs 21,752 for TFT_eSPI and 22,473 for LovyanGFX).",
+    "Projects that want the panel and pins chosen in the sketch (or from the bundled dev-device declarations) instead of editing a header inside the library folder, or that need CJK text from U8g2 fonts.",
+    "LVGL front ends on supported dev boards; the library ships LVGL benchmark, hello-world and widgets examples."
+  ],
+  "when_not_to_use": [
+    "Maximum drawing speed on ESP32 SPI: in the same 2021 run LovyanGFX and TFT_eSPI beat it on every row except Text, by up to 1.65x (Lines 412,026 vs 264,950 us; Rounded rects outline 21,562 vs 13,089 us; derived from page data). Its own README says speed is not its first priority.",
+    "Fill-dominated screens: fills are bound by the 40 MHz SPI link, so it is only 1.2x faster than Adafruit_GFX there; the blocking poll per 32-pixel chunk reached 95.9% of the link rate versus 98.5-99.5% for TFT_eSPI and LovyanGFX (derived from page data).",
+    "PlatformIO or ESP-IDF-first projects: the README says only the Arduino IDE is supported and points PlatformIO problems to PlatformIO; ESP32LCD8, ESP32LCD16 and ESP32RGBPanel buses work only on arduino-esp32 2.x, not 3.x.",
+    "Projects needing support or new features on request: the author estimates sponsorship at under one man-hour per month, closes non-issue issues and routes feature requests to Discussions.",
+    "Desktop, anti-aliased or vector-path rendering: it is an integer RGB565 embedded display stack, not a path rasterizer like the Blend2D, Skia or AGG entries in this category."
+  ],
+  "integration": {
+    "form": "Arduino library compiled from source (src/*.cpp: core classes plus per-bus and per-display classes)",
+    "dependencies": "Arduino core for the target board; optional U8g2 (include U8g2lib.h before Arduino_GFX_Library.h for U8g2 fonts); LVGL only for the LVGL examples",
+    "min_toolchain": "Arduino IDE (the only supported IDE per README); C++ standard not documented; ESP32 RGB/LCD parallel buses need arduino-esp32 2.x, and v1.6.5 added compatibility with arduino-esp32 3.3.6",
+    "platforms": "ESP32, ESP32-S2/S3/C2/C3/C5/C6/H2/P4, ESP8266, RP2040/RP2350, AVR (Uno, Nano, Mega), Arduino UNO R4, nRF52 (Nano 33 BLE), RTL8720/8722, STM32 (BlackPill F411), SAMD21, Sony Spresense; generic boards through the Arduino SPI class",
+    "thread_safety": "Not documented. Arduino_ESP32SPI takes the Arduino core's SPI bus lock in beginWrite when is_shared_interface is true (the default), but object state such as the cached address window and the partial-byte buffer index is unprotected, so drive each display object from one task.",
+    "drop_in_for_baseline": "partial: drawing calls keep Adafruit_GFX names, but construction differs (data-bus object plus display object, begin(speed)), colour constants are RGB565_*, and the class does not derive from Adafruit_GFX, so code taking an Adafruit_GFX reference will not accept it"
+  },
+  "gotchas": [
+    "The published numbers are from a mid-2021 release on arduino-esp32 1.0.6 and are not reproducible as-is today: the PDQ sketch uses WHITE, BLACK, RED and similar names, while the 1.6.8 headers read here define only RGB565_* constants, and the bus and text code has changed since (v1.6.5 fixed drawChar crashes, v1.6.7 clips built-in font pixels before preclipped writes).",
+    "Arduino_ESP32SPI defaults to is_shared_interface = true, which runs spiTransaction on every startWrite; pass false to hold the bus from begin() when no other SPI device shares it. The benchmark sketch kept the default and also passed a MISO pin, which makes writeRepeat reload the SPI data registers for every 32-pixel chunk.",
+    "Plain drawLine with diagonal slopes still costs one address-window update per run, and drawPixel costs a CASET (or PASET), RAMWR and a blocking transfer per pixel; batch pixels into a Canvas or draw16bitRGBBitmap when you can.",
+    "Open bug #754 (January 2026): 9-bit SPI on ESP32-family chips pads partial bytes with garbage in flush_data_buf, corrupting 9-bit panels; the 8-bit DC/SPI path used in the benchmark is not affected."
+  ],
+  "pick_this_over_siblings_when": "Pick Arduino_GFX over TFT_eSPI or LovyanGFX when you need its panel and bus breadth (9-bit SPI, RGB and DSI panels, many ready-made dev-board declarations), sketch-level configuration, U8g2 CJK fonts or the fastest opaque text; pick LovyanGFX or TFT_eSPI when SPI drawing speed for lines, shapes and pixels dominates, since both were faster on every other row of the same run.",
+  "verified_claims_summary": "The author's single-pass Arduino_graphicstest_PDQ run (2021-06-16; Arduino IDE 1.8.15, arduino-esp32 1.0.6, TTGO T8 v1.8 ESP32, PSRAM off, ILI9341 over 4-wire SPI at 40 MHz, no DMA; compiler flags, CPU clock and library versions not recorded) timed identical test bodies in four libraries: Arduino_GFX beat Adafruit_GFX with Adafruit_ILI9341 by 5.2x on text, 2.9x on outline circles, 2.6x on lines, 2.5x on outline triangles, 1.5x on pixels and 1.2x on fills. Timings stop after the last call returns, and Arduino_ESP32SPI blocks until each SPI transfer completes, so no queued work escapes the timer; the 2020-10-15 run of the same suite gave nearly identical Arduino_GFX numbers (Text 18,933, Pixels 903,550, Lines 433,864 us).",
+  "status_note": "Active, single maintainer: release v1.6.8 (September 2026, mostly new boards and DSI fixes), 1,539 commits, 1.1k stars, 249 forks and only 2 open issues because non-bug issues are closed; the Adafruit-derived two-clause BSD licence (license.txt; GitHub detects none) makes it copyable, but support is explicitly minimal.",
+  "sources_read": [
+    "https://github.com/moononournation/Arduino_GFX",
+    "https://github.com/moononournation/Arduino_GFX/issues",
+    "https://github.com/moononournation/Arduino_GFX/issues/754",
+    "https://github.com/moononournation/Arduino_GFX/releases",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/README.md",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/library.properties",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/license.txt",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_GFX.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_GFX.cpp",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_G.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_GFX_Library.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_TFT.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_TFT.cpp",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_DataBus.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/Arduino_DataBus.cpp",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/databus/Arduino_ESP32SPI.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/databus/Arduino_ESP32SPI.cpp",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/display/Arduino_ILI9341.h",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/src/display/Arduino_ILI9341.cpp",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/examples/PDQgraphicstest/PDQgraphicstest.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/README.md",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/result.txt",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/Adafruit_GFX_graphicstest_PDQ/Adafruit_GFX_graphicstest_PDQ.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/Arduino_GFX_graphicstest_PDQ/Arduino_GFX_graphicstest_PDQ.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/LovyanGFX_graphicstest_PDQ/LovyanGFX_graphicstest_PDQ.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/TFT_eSPI_graphicstest_PDQ/TFT_eSPI_graphicstest_PDQ.ino"
+  ],
+  "confidence": 0.75
+}
