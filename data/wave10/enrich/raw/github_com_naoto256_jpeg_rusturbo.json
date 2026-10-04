@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/naoto256/jpeg-rusturbo",
+  "one_liner": "Pure-Rust SIMD JPEG encoder and decoder with libjpeg-turbo-derived kernels; encodes about 5x faster than the image crate's encoder.",
+  "what_it_does": "A Rust crate that writes baseline or progressive JPEG (4:4:4, 4:2:2, 4:2:0, grayscale, CMYK pass-through, EXIF/ICC, restart markers, custom quant tables, optional two-pass optimized Huffman) and decodes baseline and progressive Huffman JPEG into ten pixel layouts. JpegEncoder mirrors the method shape of image::codecs::jpeg::JpegEncoder (new_with_quality, encode_rgb/encode_rgba), so call sites can switch with a use change, but it does not implement image's ImageEncoder trait. The decoder is a standalone decode::decode / Decoder API and, by the author's own account, is bundled for API symmetry rather than speed.",
+  "how_it_is_fast": "The encoder front end (RGB to YCbCr, 4:2:0/4:2:2 downsample, integer LL&M forward DCT, reciprocal-multiply quantize) is a translation of libjpeg-turbo's NEON and AVX2 kernels, selected at compile time on aarch64 and by runtime AVX2 detection on x86_64. The Huffman AC emit walks a SIMD-built 64-bit nonzero bitmap with trailing_zeros jumps, and set_threads splits quantize and bitmap work across MCU rows on rayon. Its profile puts about 65% of single-thread encode in the scalar Huffman emitter, so further front-end SIMD buys little. The decoder ports libjpeg-turbo's jidctint IDCT (with DC-only and sparse-row fast paths), fancy upsample and YCC-to-RGB, and adds a SWAR bit-reader refill.",
+  "when_to_use": [
+    "Rust services that encode many JPEGs and currently use the image crate's encoder: about 5x (Apple M) to 5.6x (Xeon 8272CL) faster single-threaded at 4:2:0 q=80, and more with threads on many-core hosts.",
+    "You need encoder features image's encoder lacks: 4:4:4/4:2:2, progressive output, optimized Huffman (about 5% smaller), restart markers, EXIF/ICC pass-through, CMYK.",
+    "You want a pure-Rust build with no C toolchain or nasm on x86_64 (AVX2) or aarch64 (NEON); CI covers Linux, macOS, Windows x64 and Windows on Arm, with a bit-exact scalar fallback elsewhere.",
+    "Decode, operate and re-encode pipelines that must preserve EXIF and ICC on both sides."
+  ],
+  "when_not_to_use": [
+    "You can link C: libjpeg-turbo (catalogued, whose kernels these are) or the libjpeg-turbo-rs and zenjpeg ports were benchmarked against libjpeg-turbo itself, while this crate never was. Its speed relative to libjpeg-turbo is unknown.",
+    "Decode-heavy workloads: the decoder is at parity with image's zune-jpeg backend (0.97x to 1.22x), and the 4K lead is partly harness overhead (see gotchas). Use zune-jpeg or libjpeg-turbo for decode speed.",
+    "You need arithmetic-coded, lossless, hierarchical or 12-bit JPEG, CMYK-to-RGB conversion, or progressive grayscale/CMYK encode: all return Unsupported.",
+    "Many-core scaling on small VMs: on the 4-vCPU Xeon, threads=auto adds only 1.06x at 1080p and 1.22x at 4K over one thread.",
+    "Smallest files at a given quality: there is no trellis quantization (mozjpeg-rs and mozjpeg do that), and no output-size or quality comparison against any other encoder is published."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon (image and minifb are dev-dependencies only)",
+    "min_toolchain": "Rust 1.85 (edition 2024)",
+    "platforms": "x86_64 (AVX2 runtime-detected, SSE2 baseline, scalar fallback), aarch64 (NEON), any other target via the scalar path; CI on ubuntu-latest, macos-14, windows-latest, windows-11-arm",
+    "thread_safety": "Encoder and Decoder are per-call values with no documented global state. set_threads(0) runs on the caller's ambient rayon pool, and set_threads(n>1) builds a fresh rayon ThreadPool inside every encode call.",
+    "drop_in_for_baseline": "partial — the encoder's constructor and encode_rgb/encode_rgba methods mirror image's JpegEncoder, but it does not implement image::ImageEncoder or accept DynamicImage, and the decoder has its own API"
+  },
+  "gotchas": [
+    "The decode comparison is not like for like: benches/vs_image.rs times image's ImageReader::decode().to_rgb8(), which converts into a second full-frame buffer (about 24.9 MB at 4K RGB), while jpeg-rusturbo decodes straight into an uninitialised output Vec. The 1.18-1.22x 4K natural-content lead may be mostly that copy. Encode was compared only on a synthetic XOR full-AC pattern, with one 50-iteration mean, no Cargo.lock (image 0.25.x and zune-jpeg versions unrecorded) and no size or quality check.",
+    "decode/mod.rs compose_output calls Vec::set_len on uninitialised u8 memory (clippy::uninit_vec allowed) to skip zero-fill. This rests on every byte being written before it is read, and the code comment's claim that u8 makes it sound contradicts set_len's documented precondition. CI runs no Miri or fuzzing, so treat the decoder as unhardened for untrusted input.",
+    "set_threads(n) for n>1 spawns a new thread pool per encode, which hurts small images. Benchmarks used threads=auto (0), which reuses the global pool.",
+    "Before 0.9.1 the encoder returned Ok with a corrupt JPEG for dimensions above 65535 and accepted zero quant-table entries; pin 0.9.1 or later."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libjpeg-turbo when you must stay pure Rust with no C or nasm in the build and encode is the bottleneck. Pick it over mozjpeg-rs when encode speed matters more than the last few percent of file size. libjpeg-turbo-rs and zenjpeg are the Rust alternatives with published numbers against libjpeg-turbo itself, so prefer them when you need that assurance.",
+  "verified_claims_summary": "The first-party harness benches/vs_image.rs (release profile with fat LTO and codegen-units=1, unstated rustc, mean of one 50-iteration batch) encodes a synthetic 4K RGB pattern at q=80 4:2:0 in 13.41 ms against 67.61 ms for the image 0.25 crate's own scalar encoder on an unnamed Apple M-series laptop (5.04x), and 57.27 against 320.93 ms on a 4-vCPU Xeon Platinum 8272CL (5.60x); threads=auto raises that to 10.02x and 6.86x against single-threaded image. Decoding its own q=80 output, it runs 0.97x to 1.22x of image's zune-jpeg path, and libjpeg-turbo is never measured.",
+  "status_note": "Single-author pre-1.0 crate (0.9.2, 197 commits, last commit 2026-06-08, 0 stars, about 7.8k crates.io downloads) under MIT OR Apache-2.0, with libjpeg-turbo's BSD-3 notice kept in NOTICE.md for the translated kernels.",
+  "sources_read": [
+    "https://github.com/naoto256/jpeg-rusturbo",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/README.md",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/BENCH.md",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/benches/vs_image.rs",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/NOTICE.md",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/src/decode/mod.rs",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/src/encode/mod.rs",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/docs/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/naoto256/jpeg-rusturbo/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

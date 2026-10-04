@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/licaredmoth/png-xl",
+  "one_liner": "Lossless PNG-replacement format (.pxl) and C library: PNG row filters plus zstd, decoding about 2x faster than libpng.",
+  "what_it_does": "Defines a new lossless still-image format (.pxl, PXL1 container) and an animated container (.apxl), with a C99 library and the pxltool CLI to convert PNG/APNG to and from it. It is not a faster PNG decoder: existing PNGs must be converted first, and libpng is used only by the PNG front end. The core API is pxl_encode/pxl_decode on memory buffers plus a push-style streaming decoder (pxl_stream_new/feed/finish) that can emit rows in RGBA8888 or the PSP GE formats RGB565/5551/4444. It preserves palettes, 1- to 16-bit depths and ancillary PNG chunks (eXIf, iCCP, cICP, text) byte for byte.",
+  "how_it_is_fast": "Pixels go through one of four exactly reversible filters (none, Zpng's left-delta, Zpng's BCIF colour transform y=b, u=g-b, v=g-r with a planar split, or PNG-style adaptive per-row None/Sub/Up/Average/Paeth), and the result is one Zstandard frame instead of DEFLATE. The encoder keeps whichever filter compresses smallest. zstd decompression is much cheaper than inflate, so for none/delta/BCIF decode time is mostly zstd, and the unfilter adds 2-12% (bench/stages.c measurements). The unfilter loops are specialised per filter type, and Paeth is branchless. LTO was measured to undo that specialisation and is deliberately off.",
+  "when_to_use": [
+    "You control both ends of the pipeline (game assets, texture packs, thumbnail caches) and want lossless images that decode about 2x faster than libpng into RGBA on photographs and about 1.5x on synthetic stills, in files 12-15% smaller than default-settings PNG.",
+    "Single-core or memory-tight targets (the design floor is a 32 MB PSP): the decode-only library is 174 KB of .text including zstd, and with -p the row-window streaming path decodes in about the memory of the output image.",
+    "Progressive or row-at-a-time decode straight into GPU texture formats (RGB565, RGBA5551, RGBA4444, RGBA8888) without a separate conversion pass.",
+    "Lossless photographs where QOI's files (about 103.5% of PNG) are too big but you still want decode speed close to QOI's (QOI is about 16% faster on the Kodak set)."
+  ],
+  "when_not_to_use": [
+    "You must read or serve existing .png files or deliver to browsers: nothing outside this repo (plus its own Qt/KDE plugins and FFmpeg patch) reads .pxl.",
+    "Smallest files matter: JPEG XL (65.8% of PNG) and WebP (73.6%) beat PXL (85.6-88.6%) on photographs. On synthetic stills WebP is both smaller (44.6% vs 50.3%) and faster (570 vs 485-537 MB/s).",
+    "Grayscale 8-bit content (100.3% of PNG, slightly worse) or texture-sized photographs on PSP-class CPUs: the BCIF filter the encoder picks for photos decoded at 0.54x libpng at 512x512 on a real PSP-3008. Encode with -s there.",
+    "You need a frozen, interoperable format: the ROADMAP says the format is pre-release with no outside users and the spec can still change without a version bump until a freeze decision is made.",
+    "You want encode speed at high levels or decode speed at high levels on photos: level 19 makes zstd decompression about 3x slower than level 1 on a Kodak photograph, and levels 6 and 12 can produce larger BCIF files than level 1."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (CMake; libpxlcore is PNG-free and needs only zstd, libpxl adds the libpng front end)",
+    "dependencies": "zstd (core); libpng and zlib for PNG/APNG interop; optional vendored submodules pinning libpng 1.6.59 and zstd 1.5.7",
+    "min_toolchain": "C99 compiler, CMake 3.10+; benchmarks used gcc 16.1.1/16.2.1 at -O3",
+    "platforms": "Linux x86-64 (only platform in CI, ubuntu-latest); decoder also cross-compiled with psp-gcc and run on a real PSP-3008 (MIPS Allegrex); no SIMD required. Windows/macOS not documented as tested.",
+    "thread_safety": "not documented; the decode path takes all state as arguments and no mutable globals were seen in the codec sources, but no guarantee is stated",
+    "drop_in_for_baseline": "partial — pxl_load_png/pxl_save_png wrap libpng, but the speedup applies only to .pxl files: PNGs must be converted with pxl_encode or pxltool c first, and the API is PXL's own, not libpng's"
+  },
+  "gotchas": [
+    "No integrity check: pxl_encode calls ZSTD_compress with default parameters (no zstd content checksum) and the container has no CRC, whereas libpng verifies chunk CRC-32 and zlib's Adler-32 on every decode. Part of the measured gap is libpng doing integrity work PXL skips, and a corrupted .pxl can decode to wrong pixels without an error.",
+    "BCIF (picked for all 24 Kodak photographs) has no row window: it materialises the whole filtered image, roughly doubles decode memory, cannot stream, and delivers all rows only at pxl_stream_finish. -p excludes it at a 4-6.6% size cost on large images; -s keeps only none/delta.",
+    "tRNS, bKGD, hIST and PLTE are not carried as chunks: transparency is canonicalised to a real alpha channel, so a PNG round-trip is pixel-exact but not always type-identical.",
+    "Hard decode limits: width and height at most 1,000,000 and width x height at most 2^28 pixels. A 2026-09-15 heap overflow in the streaming DELTA path for sub-8-bit indexed images (fixed in cab6ccf) and two 32-bit integer-overflow out-of-bounds reads (fixed after the 2026-09-16 audit) show the decoders are young; CI runs an ASan/UBSan fuzz soak."
+  ],
+  "pick_this_over_siblings_when": "Pick PXL over Zpng, which it descends from, when you need a real container with palettes, 1- to 16-bit depths, metadata pass-through, streaming, animation and a written SPEC.md; pick it over QOI or QOIR when you want zstd-level compression (about 85-88% of PNG) at near-QOI decode speed. If you must keep standard .png files, use a faster PNG decoder instead (libspng, image-png, ptpng, or fpng for fpng-written PNGs).",
+  "verified_claims_summary": "bench/rawdec.c over the 24 Kodak photographs (median of 15 runs per file, single thread, Pentium B960, gcc 16.x -O3) times PXL decoding an in-memory level-12 .pxl at 143.2 ms total against 333.6 ms for system libpng 1.6.x decoding a default-settings PNG of the same pixels through pxl_load_png, about 2.3x, with PXL output memcmp-checked every repetition. bench/formatdec.c, with every decoder producing RGBA8888 in process, gives 199.6-275.8 MB/s for PXL levels 12 and 1 against 98.6 MB/s for libpng on photographs (about 2.0-2.8x), 449.8-536.7 against 308.7 MB/s on 30 synthetic stills, and on a real PSP-3008 none/delta are 2.8-3.5x libpng while adaptive ties and BCIF loses (0.54x) at 512x512.",
+  "status_note": "Very active single-author project (81 commits, last 2026-09-29, 7 stars, no open issues) with unusually candid append-only benchmark logs, but the format is pre-release and not yet frozen; libpng-2.0 AND BSD-3-Clause, small enough to vendor.",
+  "sources_read": [
+    "https://github.com/LicaRedMoth/PNG-XL",
+    "https://github.com/LicaRedMoth/PNG-XL/commits",
+    "https://github.com/LicaRedMoth/PNG-XL/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/README.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/docs/ROADMAP.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/docs/RESEARCH.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/SPEC.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/rawdec.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/formatdec.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/formats.sh",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/stages.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/bench/mkpsptest.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/VERSIONS.json",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/src/pxl.h",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/src/pxl_png.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/src/pxl_codec_decode.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/src/pxl_codec_encode.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/src/pxl_codec_common.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/psp/README.md",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/psp/main.c",
+    "https://raw.githubusercontent.com/LicaRedMoth/PNG-XL/HEAD/.github/workflows/ci.yml"
+  ],
+  "confidence": 0.8
+}

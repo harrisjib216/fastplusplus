@@ -39,3 +39,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e80): wavey-ai/soundkit soundkit-opus 0.13.0 (crates.io, MIT AND BSD-3-Clause), successor of libopus-rs, not catalogued.
 - Enricher leads (e81, e86): QuickETC2-HQ (CAG 2023, nahjaeho) and H-ETC2 CPU-GPU hybrid ETC2 (CGF 2023); ShadowMitia/libqoi (issue #1 claims 20-30% over qoixx, no numbers), chocolate42/qoi-simd, MKCG/qoi simd_avx2_implementation branch, hchargois/qoi (Go); kornia/kornia-rs (Rust CV kernels, proposed as OpenCV replacement in Albumentations issue #1584, benchmarks unchecked).
 - Enricher leads (e84, GPU codecs): CESNET/GPUJPEG (BSD-2, CUDA JPEG, no baseline numbers, parallel Huffman only with restart markers); weissenberger/bzip2gpu (MIT, ICPP 2024 GPU bzip2, checksum check TODO). Neither catalogued.
+- Enricher lead (e89): vstroebel/jpeg-encoder (Rust, AVX2, MIT/Apache; pure-Rust JPEG encoder with no published speed numbers).
