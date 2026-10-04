@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/michelerenzullo/fastboxblur",
+  "one_liner": "Header-only C++ sliding-sum box blur with reflect-101 borders; claims 2-3x over OpenCV cv::blur on huge kernels.",
+  "what_it_does": "Blurs an interleaved 1-4 channel image buffer in place with N passes of a square box filter, using mirrored (reflect-101, OpenCV's default) borders without allocating a padded copy. The API is one template call, fastboxblur(T* buf, w, h, channels, ksize, passes), on a contiguous buffer with no stride or ROI; it is not a cv::Mat drop-in.",
+  "how_it_is_fast": "Each 1D pass is a running-sum (sliding accumulator) box filter, O(1) per pixel regardless of kernel size, with the mirrored border folded into the initial sum instead of padding the row. Vertical passes are run as horizontal passes on a transposed image, with a cache-blocked transpose (flip_block, blocks sized for 256 KB). Every row loop and the transpose are '#pragma omp parallel for', so with -fopenmp (the repo Makefile's flag) it uses all cores; there is no SIMD.",
+  "when_to_use": [
+    "You need a cv::blur-like box filter with reflect-101 borders and want no OpenCV dependency (one ~250-line header).",
+    "Large odd kernels that stay below the image's smaller dimension (ksize <= min(w,h) - 1), where the O(1)-per-pixel sliding sum pays off.",
+    "Repeated box passes (passes = 2-3) as a cheap Gaussian approximation on 8-bit, 16-bit or float buffers with 1-4 channels.",
+    "Multi-core x86 or ARM builds with OpenMP, where the parallel row loops supply the speed (the code is scalar)."
+  ],
+  "when_not_to_use": [
+    "Kernels wider than about half an image dimension: the large-radius path in horizontal_blur_kernel_reflect computes wrong sums (see gotchas); up to 59/255 off in a transliteration test.",
+    "Small kernels (3x3, 5x5) or single-threaded builds: no SIMD, and the only published numbers use kernels thousands of pixels wide.",
+    "Even ksize, non-square kernels, an anchor, or border modes other than reflect-101: r = (ksize-1)/2 is truncated, so ksize 4 becomes a 3-tap box.",
+    "More than 4 channels, strided or ROI buffers, or images above about 715 MP RGB: other channel counts only print a message and leave garbage, and w*h*channels is computed in int."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (stb_image only in the demo); OpenMP optional",
+    "min_toolchain": "C++17 (std::is_integral_v, if constexpr per commit history); repo Makefile uses g++ -O3 -fopenmp -std=c++17",
+    "platforms": "any (portable scalar C++)",
+    "thread_safety": "not documented; no global state and each call allocates its own temporary image, but the call itself spawns OpenMP parallel loops",
+    "drop_in_for_baseline": "partial: same reflect-101 box average as cv::blur for odd ksize below the image size, but a raw-pointer, in-place API with square odd kernels only"
+  },
+  "gotchas": [
+    "Correctness bug for big kernels: when 2r+2 exceeds the row length (ksize above about the dimension minus 1), the middle loop is skipped and the tail loop restarts at position w-r-1 <= r, so the running sum is out of step with the output position. The mirror index 'max_end - ri % max_end' uses absolute buffer indices, so later rows can read the previous row's last pixel and row 0 mirrors differently. A Python transliteration of the loop gave wrong sums at every pixel for w=20, r=10..19, and up to 59/255 error on a 150x100 test image at ksize 151. At the benchmark's own setting (ksize 2*width-1, radius clamped to dimension-1 on both axes) the 2D error was at most 1 level.",
+    "The radius is clamped per axis (r = min(r, w-1)), so ksize larger than the smaller side silently gives a non-square kernel that cv::blur would not use.",
+    "The header includes only <vector> but calls sqrt, std::min, printf and std::conditional_t, so add <cmath>, <algorithm>, <cstdio> and <type_traits> before including it on stricter toolchains. The demo driver parses ksize as 'sigma', defaults passes to 3 (README says 1), and its USE_FLOAT path writes back a buffer that is never filled.",
+    "Benchmark provenance is unclear. The only published cv::blur-vs-fastboxblur driver is in the same author's Blur_algorithms Source.cpp (Test flag 4 and -Dboxblur, commented-out loop over the same 45 sizes, which are actually 1000 wide by 1500 tall via cv::Size(y, x)). It passes ksize = x (the image height, e.g. 1500) to fastboxblur but (int)sqrt(x)^2 (e.g. 1444) to cv::blur, with 2 passes each. That is not the chart's '2*width-1', and on 1000-wide rows radius 749 falls in the wrong-output range above. Which driver produced the chart is not documented."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued entries only go-images/images also does box blur, in Go, and loses to OpenCV there. Pick FastBoxBlur when you want a dependency-free C++ header and can keep kernels below the image size. For SIMD-tuned general image kernels, FlyCV or OpenCV itself (with IPP) is the safer choice.",
+  "verified_claims_summary": "The README claims 2-3x over cv::blur on an i7-10750H. The hard-coded notebook timings (45 RGB 8-bit images, 1500x1000 to 11400x7600, ksize = 2*width-1) give 1.27x to 2.92x for 1 pass and 1.49x to 3.36x for 2 passes (derived from page data), rising with size. The cv::blur driver, OpenCV version and build (IPP or HAL), and thread settings are not in the repo, and FastBoxBlur most likely ran OpenMP on 12 threads against single-threaded FilterEngine code, so per-core it may not be faster.",
+  "status_note": "Abandoned since 2022-11-01 (5 stars, no issues or PRs); MIT is stated in the README only (no LICENSE file). The header is small enough to vendor, but fix or guard the large-kernel path first. The chart was last updated on 2022-09-28, before the 2022-10-11 flip_block block-size change, so HEAD differs slightly from the timed code.",
+  "sources_read": [
+    "https://github.com/michelerenzullo/FastBoxBlur",
+    "https://github.com/michelerenzullo/FastBoxBlur/issues?q=is%3Aissue",
+    "https://github.com/michelerenzullo/FastBoxBlur/pulls?q=is%3Apr",
+    "https://github.com/michelerenzullo/FastBoxBlur/commits/main",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/README.md",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/Makefile",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/fast_box_blur.h",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/fastboxblur.cpp",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/py/performance.ipynb",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/box_filter.dispatch.cpp",
+    "https://github.com/bfraboni/FastGaussianBlur",
+    "https://github.com/awxkee/libblur",
+    "https://raw.githubusercontent.com/michelerenzullo/Blur_algorithms/HEAD/Source.cpp"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/oneiriq/sigilbuzz",
+  "one_liner": "Pure-Rust, no_std HarfBuzz-API text shaper with an hb_* C library; faster than rustybuzz on Latin/Hebrew only, slower on complex scripts.",
+  "what_it_does": "Turns a Unicode string plus an OpenType font into positioned glyph IDs (blob, face, font, buffer, shape), covering GSUB/GPOS, AAT morx/kerx, Arabic, Indic, Khmer, Myanmar, USE scripts, bidi paragraphs and variable fonts. The Rust API mirrors HarfBuzz's object model with Rust types; C and C++ callers use the separate sigilbuzz-capi crate, which exports HarfBuzz 8.2-level hb_* symbols (hb_version() reports 8.2.0) and claims ABI-compatible enums and struct layouts so code built against hb.h can link it instead of libharfbuzz. The workspace also ships a subsetter, WOFF/WOFF2, UAX 14 line breaking, hyphenation, a CPU rasterizer, COLRv1 paint and a Slug GPU outline encoder.",
+  "how_it_is_fast": "There is no special fast-path technique; the documented gains are removal of algorithmic waste in the GSUB driver. Per docs/PERFORMANCE.md (0.6.0, #74-#76) it keeps one glyph-ID snapshot per lookup instead of rebuilding a Vec at every cursor step, parses each lookup's subtables once per lookup walk (ParsedGsubSubtable in src/shape/gsub_parsed.rs) instead of at every position, and pre-checks coverage so positions whose glyph is in no subtable's coverage skip dispatch, mirroring HarfBuzz's skip-iterator digest check. In 0.22.0 GSUB moved to HarfBuzz's out-buffer model (out_info/next_glyph/replace_glyphs), making ligature and multiple substitution linear instead of quadratic in run length. src/shape/pipeline.rs states there is no shape-plan cache, so every shape() call re-selects features and re-parses lookup subtables, which is a likely reason it trails rustybuzz on complex scripts.",
+  "when_to_use": [
+    "Rust projects that need a dependency-free, no_std (alloc-only) shaper, e.g. wasm32-unknown-unknown or embedded targets, where linking C HarfBuzz is not an option.",
+    "Byte-for-byte deterministic shaping output for golden-file tests, replays or lockstep networking (no random hashers, integer design-unit output).",
+    "Mostly Latin or Hebrew text where the first-party Criterion run showed it 1.32x (Latin, Open Sans) and 1.57x (Hebrew, Noto Sans Hebrew) faster than rustybuzz 0.20 on an unnamed Apple arm64 machine.",
+    "C or C++ builds that want to drop the C/C++ toolchain dependency of HarfBuzz and can live with the hb_* subset declared in sigilbuzz-capi's include/hb.h.",
+    "Projects that also want subsetting, WOFF2, COLRv1 paint and a GPU outline encoder from one pure-Rust workspace."
+  ],
+  "when_not_to_use": [
+    "Arabic, Indic (Devanagari etc.) or Khmer heavy workloads: the only published numbers show it 2.70x, 4.89x and 1.87x slower than rustybuzz, which rustybuzz's own README puts at 1.5-2x slower than HarfBuzz; there is no measurement against HarfBuzz at all.",
+    "When you want a speedup over libharfbuzz from C/C++: the hb_* drop-in library has never been benchmarked against HarfBuzz, and every shape() call rebuilds its plan (no shape-plan cache), unlike hb_shape_plan caching in HarfBuzz.",
+    "Production stacks that need maturity: 0 stars and 0 forks, crates.io publication only since 2026-10-02, releases 0.1.0 to 0.21.0 all cut on 2026-04-24/25, pre-1.0 API that may change in any minor release, and a ROADMAP 'Known bugs' list (CFF2 FDSelect format 4 truncation, morx ligature action bug, VARC axis inheritance, CFF hint-mask sizing).",
+    "Code that relies on the full HarfBuzz C API: sigilbuzz-capi exports only what include/hb.h declares (e.g. no hb_font_draw_glyph, no hb_paint_funcs_get_empty, the paint image callback never fires) and targets the 8.2 API surface.",
+    "Text that needs HarfBuzz's automatic fraction features or rand, or relies on Script-property lookups outside the older UnicodeScript block ranges (ROADMAP lists these as gaps)."
+  ],
+  "integration": {
+    "form": "crate (sigilbuzz); C library via sigilbuzz-capi built as cdylib + staticlib with cargo-c (cargo cinstall installs libsigilbuzz, include/sigilbuzz/hb.h, sigilbuzz.pc and a CMake package)",
+    "dependencies": "none for the core crate; companion crates add miniz_oxide (WOFF1/PNG), brotli (WOFF2) and clap (CLI); sigilbuzz-capi build needs cargo-c 0.10.0+ for the install step",
+    "min_toolchain": "Rust 1.81 (MSRV, edition 2021); cargo-c 0.10.0+ for the C library install",
+    "platforms": "any target stable Rust builds, including wasm32-unknown-unknown and no_std + alloc; benchmarks only reported for macOS arm64",
+    "thread_safety": "Not documented for shape(); OwnedFace (Arc<[u8]>, no lifetime) is documented as a face you can cache or share across threads. C API thread safety not documented.",
+    "drop_in_for_baseline": "partial — sigilbuzz-capi claims link-level compatibility with HarfBuzz's hb_* ABI for the covered 8.2 subset (blobs, faces, fonts, buffers, shaping, sets, subset, paint), but not the whole HarfBuzz API; the Rust API is HarfBuzz-shaped but differs from rustybuzz's (Buffer/shape(&font,&buffer,&features) vs UnicodeBuffer/shape(&face,..))."
+  },
+  "gotchas": [
+    "An unset direction shapes as LTR even for Arabic or Hebrew (no automatic direction detection in shape()); set Direction::Rtl yourself, as the benches do for Arabic and Hebrew.",
+    "With no script set, shape() splits mixed text into script runs and shapes each with its own shaper, which differs from HarfBuzz; call buffer.guess_segment_properties() first to get HarfBuzz's one-shaper behavior.",
+    "sigilbuzz-capi returns a fresh empty object where HarfBuzz returns its inert singleton, and earlier capi releases had different reference/destroy rules for subset sets: code written for capi before 0.3.0 can double-free now.",
+    "The published PERFORMANCE.md numbers come from 0.6.0 (2026-04-24) and were never re-run after the 0.22.0 rewrite of GSUB and the Indic, Khmer, Myanmar and USE shapers, despite the file's own rule to update it whenever a hot path changes; current speed relative to rustybuzz is unknown in either direction."
+  ],
+  "pick_this_over_siblings_when": "Among shaping siblings, SixLabors.Fonts is the pick for .NET and text-shaper or rustybuzz-wasm for JavaScript, and those at least compare against a HarfBuzz build; pick sigilbuzz only when you need a pure-Rust, no_std or C-toolchain-free shaper (or an hb_*-compatible C library built from Rust) and can accept that no HarfBuzz parity in speed has been shown. For full paragraph layout in Rust, Parley (on HarfRust) is the more established choice.",
+  "verified_claims_summary": "First-party Criterion medians from the 0.6.0 release on the maintainer's unnamed macOS arm64 machine (rustc version not stated) shape one fixed string per script against rustybuzz 0.20 with default features: sigilbuzz is faster on Latin (11.39 vs 15.03 us) and Hebrew (10.99 vs 17.28 us) and slower on Arabic (290 vs 108 us), Devanagari (419 vs 85.8 us) and Khmer (91.6 vs 49.0 us). Reading the bench sources shows only the Latin corpus is the 200 codepoints PERFORMANCE.md claims (compile-time asserted); Arabic is 183, Devanagari 188, Hebrew 179 and Khmer 147 codepoints (same string for both engines, so ratios are unaffected). The CHANGELOG says the Indic shaper matched HarfBuzz 14.5.0 on only 4,826 of 7,656 test strings and the Khmer shaper on 281 of the first 510 before the 0.22.0 rewrites, so the Devanagari and Khmer timings were taken on shapers later replaced for correctness, and no run shows output parity on the bench strings.",
+  "status_note": "Very active (0.23.0 on 2026-10-03, 546 commits, Apache-2.0) but young and unadopted: 0 stars, crates.io since 2026-10-02, pre-1.0 API, and a speed table that predates the current shaping engine by 16 minor releases.",
+  "sources_read": [
+    "https://github.com/Oneiriq/sigilbuzz",
+    "https://github.com/Oneiriq/sigilbuzz/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/README.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/docs/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/benches/shape_latin.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/benches/shape_arabic.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/benches/shape_devanagari.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/benches/shape_khmer.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/benches/shape_hebrew.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/crates/sigilbuzz-capi/README.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/crates/sigilbuzz-capi/Cargo.toml",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/crates/sigilbuzz-capi/src/lib.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/src/shape.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/src/shape/gsub_parsed.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/src/shape/pipeline.rs",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/docs/ROADMAP.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/docs/STABILITY.md",
+    "https://raw.githubusercontent.com/Oneiriq/sigilbuzz/HEAD/agent.md"
+  ],
+  "confidence": 0.75
+}

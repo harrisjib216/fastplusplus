@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/michelerenzullo/libgaussianblur",
+  "one_liner": "C++20 FFT (pffft) separable Gaussian blur for 8-bit RGB/RGBA; 9-20x faster than cv::GaussianBlur at very large sigma.",
+  "what_it_does": "Applies a true (non-approximated) Gaussian blur in place to an interleaved 8-bit RGB or RGBA image held as Image{std::vector<uint8_t>, ImgGeom{rows, cols, channels}}, via gaussianblur::gaussianblur(image, sigma, apply_to_alpha). prepare_kernel_DFT is exposed separately, so a kernel spectrum can be computed once per geometry. It ships as a CMake static/shared library, a pybind11 module (pip install gaussianblur, 1.1.2 wheels for CPython 3.11 on macOS arm64 and manylinux x86-64), and WASM/Android/iOS builds; it is not a cv::Mat drop-in.",
+  "how_it_is_fast": "Separable FFT convolution: each row is reflect-101 padded and zero-padded to a 2^a*3^b*5^c length, transformed with pffft (Pommier's SIMD real FFT), multiplied by the precomputed spectrum of a centred, symmetric Gaussian (real-valued, so only real parts are used), and inverse transformed. Columns get the same treatment after a cache-blocked transpose. Cost per pixel grows with log(FFT length) instead of with the kernel width, which is what beats direct convolution once sigma reaches tens of pixels. Rows and columns are split across std::thread workers (hybrid_loop) when built with ENABLE_MULTITHREADING.",
+  "when_to_use": [
+    "Very large sigma (roughly 30 px and up) on multi-megapixel photos, where direct separable convolution needs hundreds of taps per pixel.",
+    "8-bit RGB/RGBA in apps that cannot ship OpenCV: mobile (Android/iOS), browser (WASM with threads and SIMD), or a small native dependency.",
+    "Python 3.11 on macOS arm64 or Linux x86-64 where a pip wheel without OpenCV is convenient.",
+    "Smooth photographic content, where the Nyquist-bin defect below stays under about 1 level."
+  ],
+  "when_not_to_use": [
+    "Small or moderate sigma: OpenCV was faster at the smallest benchmark size (1500x1000, sigma 38.7: 24.97 ms vs 32.05 ms), and FFT padding overhead dominates small kernels.",
+    "Content with pixel-level texture, noise, dithering or halftones: the highest-frequency component is not blurred (gotcha 1), so stripes survive and leak across whole rows.",
+    "Elongated images with sigma above about one third of the short side: the reflect padding then overruns the row buffer (gotcha 2).",
+    "Grayscale, 16-bit, float or planar data (only 3- or 4-channel uint8 is accepted; other channel counts print an error and return unchanged), or when bit-exact parity with cv::GaussianBlur is needed."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "pffft (Pommier, git submodule, built as an object library); pybind11 for the Python module; googletest for tests",
+    "min_toolchain": "C++20 (std::numbers), CMake 3.14+",
+    "platforms": "Linux, macOS, Android, iOS, WebAssembly (Emscripten, -msimd128); pffft SIMD on SSE/NEON/WASM; Windows not supported yet (on roadmap)",
+    "thread_safety": "not documented; no global state, but each call spawns hardware_concurrency std::threads per stage when ENABLE_MULTITHREADING is on (it is OFF by default in CMakeLists.txt)",
+    "drop_in_for_baseline": "partial: replaces cv::GaussianBlur(src, dst, Size(0,0), sigma) for interleaved 8-bit RGB/RGBA only, with a different kernel width (radius sigma*sqrt(2 ln 255)-1, about +-3.33 sigma, vs OpenCV's +-3 sigma for 8-bit) and float, not bit-exact, arithmetic"
+  },
+  "gotchas": [
+    "Nyquist-bin bug (in LibGaussianBlur's src/gaussianblur.cpp and in the benchmarked Blur_algorithms pffft_ path): pffft_transform_ordered packs F(0) and F(N/2) into elements 0 and 1, but pffft_sorted_optimized_convolution scales element 1 by the kernel's DC gain (1) instead of its Nyquist response (about 1e-4). The alternating component therefore passes unblurred across the whole row. In a Python transliteration (n=200, sigma=sqrt(n)), 1-px stripes came out 243.8/11.2 instead of 127.5, uniform noise was off by up to 11.9 levels, and a half-striped/half-black row gave +-58 in the black half. With the index fixed, the output matched direct convolution exactly. The fix costs nothing, so timings are unaffected.",
+    "The kernel width is clamped to the larger image side, but the reflect-pad copy needs pad <= tile length - 1. For aspect ratio above 2 and sigma above about short side/3.33 (e.g. 500x2000 at sigma 200: pad 665 vs 499), std::copy_n reads outside the column buffer (heap over- and under-read). The benchmark's pads (128-514) were well inside, and the tests use only 3x3 and 10240x10240 square images.",
+    "Float to uint8 conversion adds 0.5 with no clamp, so negative or >255.5 results (which the Nyquist leak can produce) are undefined conversions in C++.",
+    "Performance knobs are hard-coded for the author's Apple M3 Pro: L2_CACHE_SIZE is 16 MB (2048x2048-float transpose blocks, far larger than typical x86 L2), threads are created per stage rather than pooled, and every row and column task copies three aligned buffers."
+  ],
+  "pick_this_over_siblings_when": "No other catalogued color-and-resampling entry does large-sigma Gaussian blur; FastBoxBlur (same author) is the cheaper option when a box-blur approximation is acceptable. Use LibGaussianBlur when you need a true Gaussian at huge sigma without OpenCV, and stay with OpenCV for small kernels or bit-exact output.",
+  "verified_claims_summary": "Blur_algorithms' notebook (hard-coded single runs, Apple M3 Pro, 12 cores) shows the pffft path taking 9.0x to 20.0x less time than cv::GaussianBlur(img, img, Size(0,0), sigma=sqrt(x)) at 45 of 46 sizes, and 0.78x at 1500x1000 (derived from page data). The timed pffft_ includes deinterleave, kernel FFT and setup, so it is end-to-end. Current OpenCV 4.x runs 8-bit GaussianBlur as a bit-exact fixed-point direct convolution (233 taps at sigma 38.7) under parallel_for_, so both sides were probably multi-threaded, but the OpenCV version, build, compiler and thread settings are not stated.",
+  "status_note": "Stale: 23 commits, 5 stars, no issues or PRs, PyPI 1.1.2 on 2025-03-29, and the last commit is a coverage-badge update. It is Apache-2.0 with a LICENSE file, so it is copyable, but fix the Nyquist index and guard the pad length before production use. The benchmark itself lives in the archived Blur_algorithms repo, which has no LICENSE file.",
+  "sources_read": [
+    "https://github.com/michelerenzullo/LibGaussianBlur",
+    "https://github.com/michelerenzullo/LibGaussianBlur/tree/main/tests",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/README.md",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/src/gaussianblur.cpp",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/include/gaussianblur/gaussianblur.h",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/include/gaussianblur/helpers.hpp",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/tests/test_gaussianblur.cpp",
+    "https://raw.githubusercontent.com/michelerenzullo/LibGaussianBlur/HEAD/tests/test_helpers.hpp",
+    "https://pypi.org/pypi/gaussianblur/json",
+    "https://raw.githubusercontent.com/michelerenzullo/Blur_algorithms/HEAD/README.md",
+    "https://raw.githubusercontent.com/michelerenzullo/Blur_algorithms/HEAD/Source.cpp",
+    "https://raw.githubusercontent.com/michelerenzullo/Blur_algorithms/HEAD/Utils.hpp",
+    "https://raw.githubusercontent.com/michelerenzullo/Blur_algorithms/HEAD/py/performance.ipynb",
+    "https://raw.githubusercontent.com/marton78/pffft/master/include/pffft/pffft.h",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/smooth.dispatch.cpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/smooth.simd.hpp"
+  ],
+  "confidence": 0.75
+}

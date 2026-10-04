@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/pdeljanov/symphonia",
+  "one_liner": "Pure, safe-Rust audio demuxing and decoding library; beats single-threaded libavcodec on FLAC, ALAC, MP1/MP2, high-bitrate MP3.",
+  "what_it_does": "Symphonia demuxes WAV, AIFF, CAF, OGG, MKV/WebM and ISO/MP4 and decodes FLAC, ALAC, MP1, MP2, MP3, AAC-LC, Vorbis, ADPCM (IMA, MS) and PCM, with metadata readers (ID3v1/v2, APE, Vorbis comments) and gapless playback for several codecs. The API is a Rust pipeline: probe a MediaSourceStream to get a FormatReader, pull packets with next_packet(), and feed them to an AudioDecoder built from the codec registry. It is decode-only, and there is no C API yet (listed as planned), so it is not a drop-in for libavcodec.",
+  "how_it_is_fast": "The decoders are written so LLVM can auto-vectorize them: the FLAC LPC predictor is a const-generic function specialised for maximum orders 4, 6, 8, 10, 12 and 32, so the common subset orders run fixed-length i64 multiply-accumulate loops. AAC, Vorbis and MP3 compute the IMDCT through an N/2-point complex FFT, backed by rustfft's SSE/AVX/NEON kernels when the default opt-simd features are on. The README warns that speed depends strongly on the rustc version and target CPU because it relies on these LLVM optimisations.",
+  "when_to_use": [
+    "Rust applications decoding FLAC, ALAC, MP1/MP2 or 320 kbps MP3 on x86-64 or Apple silicon, where the published table shows 0.45-0.84x of single-threaded FFmpeg's decode time.",
+    "Services that parse untrusted media and want memory safety: symphonia-core is #![forbid(unsafe_code)] and the project fuzzes its demuxers.",
+    "Players needing gapless playback and tag reading in one dependency (FLAC, MP3, Vorbis, ALAC, ADPCM, PCM gapless; WAV, AIFF and OGG gapless demuxing).",
+    "Builds that want to avoid linking FFmpeg: MPL-2.0, a handful of pure-Rust dependencies, and per-codec feature flags to keep the binary small."
+  ],
+  "when_not_to_use": [
+    "AAC-LC or Vorbis heavy workloads: 1.10-1.27x and 1.05-1.24x FFmpeg's time in the 2023 table; 128 kbps MP3 is at parity to 7% slower.",
+    "Low-power ARM such as a Raspberry Pi 4: margins shrink to 0.81-0.96 and 16-bit FLAC is 4% slower than FFmpeg.",
+    "Opus, HE-AAC, WavPack, video, encoding or resampling: not implemented (Opus and HE-AAC only through third-party adapters that wrap libopus and libfdk-aac).",
+    "C or C++ codebases: there is no C API, so you need a Rust toolchain and your own FFI shim; libavcodec, dr_flac or minimp3 integrate directly.",
+    "Multi-threaded decoding of one FLAC or ALAC stream: Symphonia decoders use one thread, while FFmpeg can frame-thread those codecs (BENCHMARKS.md footnote)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "lazy_static, log, smallvec, bitflags, bytemuck, num-complex; rustfft (optional, pulled in by the default opt-simd features)",
+    "min_toolchain": "Rust 1.85, edition 2024 (0.6.x); 0.5.x needs Rust 1.53",
+    "platforms": "any Rust target; SIMD FFT paths for x86 SSE/AVX and ARM NEON; benchmarked on x86-64 (i7-4790K), Apple M1 Pro and Cortex-A72 (Raspberry Pi 4B)",
+    "thread_safety": "FormatReader and AudioDecoder are Send + Sync trait objects, one per stream; each decoder runs on a single thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default features enable only royalty-free formats (FLAC, Vorbis, ADPCM, PCM, WAV, OGG, MKV): AAC, ALAC, MP1/MP2/MP3, ISO/MP4, AIFF and CAF need the aac, alac, mpa, isomp4, aiff, caf or all features. The README table lists opus and wavpack as default features, but they are neither in Cargo's default list nor implemented.",
+    "0.6.0 (2026-05-15) is a breaking API redesign with MSRV 1.85; 0.5 code needs the migration guide.",
+    "Safe Rust prevents memory corruption but not panics: open fuzzing reports #559 (index out of bounds on a fragmented MP4 trun) and #560 (unreachable!() on an lpcm sample entry), both in the isomp4 demuxer, so isolate or catch_unwind when parsing hostile files.",
+    "The published numbers use RUSTFLAGS=-C target-cpu=native; a generic distribution build was not measured and may be slower, since the decoders rely on auto-vectorisation."
+  ],
+  "pick_this_over_siblings_when": "Pick Symphonia when you want one safe-Rust library that both demuxes and decodes many formats. For a single codec, rusty_flac (FLAC against FFmpeg 8.1.2) or minimp3/nanomp3 (MP3, from C or Rust) are narrower and easier to embed from C/C++.",
+  "verified_claims_summary": "BENCHMARKS.md (first-party, 2023-02-03) times whole-process hyperfine runs (30 after 3 warmups) of symphonia-play --decode-only (rustc 1.67.0, target-cpu=native) against a statically linked FFmpeg ffbench example (plain ./configure, compiler unstated) on an i7-4790K, an M1 Pro and a Pi 4B, using one or two unpublished files per codec. Symphonia needs 0.45-0.84x FFmpeg's time for MP1/MP2/FLAC/ALAC/320 kbps MP3 on x86 and M1 but loses on AAC-LC and Vorbis. From the code, ffbench uses default decoder options (one thread) and discards frames, and decode-only mode decodes with verification off and gapless trimming on, logging and skipping decode errors; PCM/WAV rows, where an FFmpeg developer reported Symphonia 1.5-2x slower in issue #179, are not in the table.",
+  "status_note": "Actively maintained (v0.6.1 on 2026-08-13, about 15.7 million crates.io downloads), MPL-2.0 and usable as a crate today. The benchmark table predates the v0.5.4 'major optimizations for AAC, FLAC, MP3, and Vorbis' and the 0.6.0 decoding speedups, so current ratios are unmeasured.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/README.md",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/Cargo.toml",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia/Cargo.toml",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/Cargo.toml",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/src/lib.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/src/codecs/audio.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/src/formats/mod.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/src/dsp/mdct.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-core/src/dsp/fft/mod.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-bundle-flac/src/decoder.rs",
+    "https://raw.githubusercontent.com/pdeljanov/Symphonia/main/symphonia-play/src/main.rs",
+    "https://raw.githubusercontent.com/pdeljanov/FFmpeg/symphonia-ffbench/doc/examples/ffbench.c",
+    "https://github.com/pdeljanov/Symphonia/tree/main/symphonia-core/src/dsp",
+    "https://github.com/pdeljanov/Symphonia/tree/main/symphonia-bundle-flac/src",
+    "https://github.com/pdeljanov/Symphonia/issues?q=is%3Aissue+performance",
+    "https://github.com/pdeljanov/Symphonia/issues?q=is%3Aissue+is%3Aopen+panic",
+    "https://github.com/pdeljanov/Symphonia/issues/308",
+    "https://github.com/pdeljanov/Symphonia/issues/179",
+    "https://github.com/pdeljanov/Symphonia/issues/269",
+    "https://github.com/pdeljanov/Symphonia/releases",
+    "https://crates.io/api/v1/crates/symphonia"
+  ],
+  "confidence": 0.8
+}
