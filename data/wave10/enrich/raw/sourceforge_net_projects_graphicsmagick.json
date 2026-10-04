@@ -1,0 +1,59 @@
+{
+  "id": "https://sourceforge.net/projects/graphicsmagick",
+  "one_liner": "ImageMagick-derived C image-processing library and gm CLI; about 2.2x faster than ImageMagick 7 on libvips's crop-shrink-sharpen test.",
+  "what_it_does": "GraphicsMagick is a 2002 fork of ImageMagick that reads and writes many raster formats and offers resize, convolution, colour and drawing operations through the gm command-line utility, a C core API, a Wand C API and the Magick++ C++ API. It targets the same jobs as ImageMagick, and its gm convert syntax is close to ImageMagick 6's convert, but it is not a drop-in for the ImageMagick 7 libraries or the magick command.",
+  "how_it_is_fast": "Pixel loops are parallelised across rows or columns with OpenMP, and the pixel cache was rewritten so several threads can work on one image. Resize is a classic two-pass separable filter (HorizontalFilter then VerticalFilter in magick/resize.c), with per-thread contribution tables and the pass order chosen to minimise work. Convolution (magick/effect.c) uses a float kernel normalised by its sum, with a fixed-size inner loop per channel. There are no hand-written SIMD intrinsics in these paths; speed depends on the compiler's auto-vectorisation and on the build's quantum depth.",
+  "when_to_use": [
+    "Batch command-line or server image pipelines (decode, resize, sharpen, encode) that use ImageMagick today and want lower latency on a multi-core machine.",
+    "C or C++ programs that need ImageMagick-style format coverage with an MIT-style licence and a conservative, stable API (core C API, Wand or Magick++).",
+    "Scripts written for ImageMagick 6 convert syntax that can be pointed at gm convert, or at the compatibility links from --enable-magick-compat, after checking each command.",
+    "Q8 builds for 8-bit-only workloads where speed matters more than precision; the project's install guide says Q16 runs 15% to 50% slower and uses twice the memory."
+  ],
+  "when_not_to_use": [
+    "Large-image or memory-limited jobs: on the libvips test gm peaked at about 1.98 GB against about 94 MB for libvips, which was also about 3.6x faster.",
+    "When you need ImageMagick 7 features or exact ImageMagick 7 command semantics: the two projects have diverged, and GraphicsMagick's own benchmarks page says the same filter arguments now do different amounts of work in each.",
+    "Processing untrusted uploads without sandboxing: the 2025-2026 releases still fix heap overflows in coders (MIFF, PCX, TIFF EXIF, MNG and others), and the project's security page tells users to run it in a container and keep up with releases rather than trust distribution packages.",
+    "Single-image latency work dominated by file I/O or start-up: the project's OpenMP notes say decode and encode usually do not speed up with threads, and start-up can outweigh the operation itself."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none required for the core; optional delegate libraries per format (libjpeg or libjpeg-turbo, libpng, libtiff, zlib, bzip2, lcms2, FreeType, libwebp, JasPer, Ghostscript and others); optional tcmalloc",
+    "min_toolchain": "C99 compiler with stdint.h and inttypes.h (required since 2025-06-17); C++ compiler for Magick++; OpenMP-capable compiler (GCC or Clang) for multi-threading",
+    "platforms": "Linux, BSD, macOS, Cygwin, MinGW/MSYS2 and Windows (Visual Studio); portable C, any CPU architecture",
+    "thread_safety": "The library is built thread-safe by default (locking through thread APIs), and the pixel cache supports several threads working on one image; OpenMP thread count is set with OMP_NUM_THREADS or -limit threads.",
+    "drop_in_for_baseline": "partial: gm convert accepts most ImageMagick 6-style convert options, and --enable-magick-compat installs convert-style links, but the APIs differ from ImageMagick 7's MagickCore and MagickWand and some options behave differently."
+  },
+  "gotchas": [
+    "Quantum depth is fixed at build time and defaults to 8 bits; distribution packages appear to use 16 bits (the measured 1.98 GB peak matches two 10000x10000 images at about 1 GB each under the install guide's QuantumDepth*Rows*Columns*5/8 formula; derived, package flags not read). Q8 and Q16 builds differ in both speed and output precision.",
+    "ConvolveImage divides a user kernel by its sum, so -convolve with the benchmark's sharpen kernel (sum 8) gives a mild sharpen; output can differ from an ImageMagick command that does not normalise. The libvips benchmark does not compare output images.",
+    "Distribution version strings are misleading: Debian and Ubuntu package 1.3.x releases as '1.4+really1.3.x'. GraphicsMagick 1.4 is still an unreleased development branch (version.sh on the default branch: PACKAGE_VERSION '1.4', release date 'unreleased'); the latest release is 1.3.48 (2026-07-23).",
+    "glibc malloc can limit OpenMP scaling on many cores; the install guide recommends --with-tcmalloc and reports up to 2x on some algorithms."
+  ],
+  "pick_this_over_siblings_when": "Pick GraphicsMagick over libvips when you need ImageMagick-style command syntax, a broad set of formats and a whole-image API, and can accept far higher memory (2.05 s and about 1.98 GB against libvips's 0.57 s and 94 MB on the same test); pick it over OpenImageIO (3.46 s) or ImageMagick itself when the job is ImageMagick-style batch conversion. FFmpeg (2.06 s) is about equal on this test but is not a general still-image toolkit.",
+  "verified_claims_summary": "In the libvips maintainers' vips-bench run (Threadripper PRO 3955WX, Ubuntu 25.04 distribution packages, 16 OpenMP threads, quickest of five runs, 12 Aug 2025), gm took 2.05 s against 4.44 s for ImageMagick 7.1.1 convert (about 2.2x) and 2.49 s against 4.38 s with JPEG input (about 1.76x), while using about 32% more peak memory (derived from page data). The 'gm 1.4' label is the Debian package string '1.4+really1.3.x', so the tested build was a 1.3.4x release (Ubuntu 24.04 shipped 1.3.42 and 25.10 ships 1.3.45+hg17696; the 25.04 build is no longer listed). GraphicsMagick's own benchmarks page (www/benchmarks.rst) gives only first-party hyperfine examples (rotate 92 degrees on a 3500x2300 PNM: gm 178.0 ms vs magick 785.3 ms, no CPU named).",
+  "status_note": "Actively maintained by one lead developer (Bob Friesenhahn; release 1.3.48 on 2026-07-23, Mercurial commits on 2026-10-03) and MIT-licensed, so it can be copied or linked freely; use the latest release because nearly every release carries security fixes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wiki/libvips/libvips/Speed-and-memory-use.md",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/gm.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/im.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/im7.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/benchmark.sh",
+    "https://raw.githubusercontent.com/libvips/vips-bench/master/README.md",
+    "https://sourceforge.net/projects/graphicsmagick/",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/log/",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/NEWS.txt?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/README.txt?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/Copyright.txt?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/version.sh?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/www/",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/www/benchmarks.rst?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/www/OpenMP.rst?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/www/INSTALL-unix.rst?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/www/security.rst?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/magick/effect.c?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/code/ci/default/tree/magick/resize.c?format=raw",
+    "https://sourceforge.net/p/graphicsmagick/bugs/search/?q=slow+OR+performance+OR+openmp&limit=50",
+    "https://packages.ubuntu.com/search?keywords=graphicsmagick&searchon=names&suite=all&section=all"
+  ],
+  "confidence": 0.75
+}
