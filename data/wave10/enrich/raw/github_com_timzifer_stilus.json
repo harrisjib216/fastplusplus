@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/timzifer/stilus",
+  "one_liner": "Pure-Go sparse 2D rasterizer; 2.0x x/image/vector on 20k short strokes (first-party); 477x hatch figure is harness-inflated.",
+  "what_it_does": "stilus is a CPU rasterizer core for 2D vector paths in pure Go (no cgo, no dependencies, any GOOS/GOARCH including js/wasm). It has three layers: a Rasterizer that emits spans to a Blitter interface (BlitRun for constant runs, BlitCoverage for anti-aliased edge pixels), a Stroker (caps, joins, miter limit, dashes, exact under anisotropic transforms), and a Canvas over a caller-owned *image.RGBA with Fill, Stroke, ClipRect, ClipPath and PopClip, plus image, pattern, gradient and Gouraud-mesh shaders, blend-mode layers and a glyph coverage cache. Its API differs from x/image/vector's MoveTo/LineTo-into-a-box Rasterizer. It is milestone M1 of a planned PDF renderer and has no PDF, font or colour-space handling.",
+  "how_it_is_fast": "Cost follows edge length plus covered spans, not bounding-box area: edges are accumulated as FreeType/AGG-style area/cover cells into a 32-row band (24.8 fixed point) instead of a page-sized buffer, and the sweep integrates only the touched cells of narrow rows, or walks a dirty bitset and emits constant runs on wide rows, zeroing cells as it reads them. Stroked polyline segments take an analytic path in which each pixel's coverage is the difference of two closed-form half-plane areas; only the rows around joins and caps go through the accumulator. Rectangle clips cost nothing per pixel, compositing is SWAR on premultiplied RGBA8 (AVX2/AVX-512 kernels under GOEXPERIMENT=simd), destination rows are pre-touched so cache misses overlap, prepared Shapes let band-parallel workers reuse stroking, and drawing allocates nothing after warm-up.",
+  "when_to_use": [
+    "Go programs that render technical drawings, CAD- or PDF-like pages, maps or plots with many long thin strokes (hatching, contours) on the CPU, where x/image/vector's cost per path grows with the path's bounding-box area.",
+    "Builds that must stay pure Go with no cgo, for cross-compiling or js/wasm.",
+    "Large pages rendered in bands on several cores: the README Numbers table gives 67 ms on 1 core and 19 ms on 4 cores for 2,000 hatch lines at 0.35 mm, and 41 ms vs 12 ms for 20,000 short strokes.",
+    "Custom compositors or GPU upload paths that want spans rather than pixels, by implementing Blitter or Shader.",
+    "Render loops sensitive to GC pressure, since the README and alloc-gate tests claim zero allocations per scene after warm-up."
+  ],
+  "when_not_to_use": [
+    "Production code that needs a stable, proven library: the repository is days old (0 stars, tags v0.4.0 to v0.7.0 all on 1-2 October 2026, one maintainer, some commits authored by an AI coding agent account), and the API is still moving.",
+    "Text layout, font loading, colour management, or SVG/PDF parsing or output: the README lists these as out of scope.",
+    "Dense overlapping fills or strokes of one colour that must look seamless: separately drawn paths conflate at anti-aliased edges. Open issue #28 reports 24.9% of pixels off by more than 16/255 on the 2,000-line hatch at 150 dpi against an exact union (Ghostscript 0.06%), and the proposed union fill is in open PR #29.",
+    "Glyph-sized or short shapes where x/image/vector is already box-efficient: the gain there is about 2x (55 vs 111 ms on 20,000 short strokes), and the SIMD kernels stay scalar below 16 px spans.",
+    "Picking a renderer across languages: only Go baselines (x/image/vector, gogpu/gg) were measured, with no comparison against C/C++ engines such as Blend2D, Skia or AGG."
+  ],
+  "integration": {
+    "form": "Go module (github.com/timzifer/stilus); comparison benchmarks live in a separate bench module",
+    "dependencies": "none (standard library only); the bench module adds golang.org/x/image v0.46.0, gogpu/gg v0.52.5 and timzifer/figure",
+    "min_toolchain": "Go 1.24 (go.mod); Go 1.26 or 1.27 with GOEXPERIMENT=simd for the AVX2/AVX-512 compositing kernels",
+    "platforms": "all GOOS/GOARCH including js/wasm with scalar kernels; SIMD kernels only on amd64 with GOEXPERIMENT=simd, chosen at run time",
+    "thread_safety": "Use one Canvas per goroutine; a prepared Shape can be drawn by several band canvases concurrently (README). Other concurrency guarantees are not documented.",
+    "drop_in_for_baseline": "partial: it replaces x/image/vector's role as a pure-Go anti-aliased path filler, but the API differs (Path plus Matrix plus FillRule into a Canvas or Blitter, rather than MoveTo/LineTo into a box-sized Rasterizer followed by Draw), so call sites must be rewritten"
+  },
+  "gotchas": [
+    "Strokes thinner than one device pixel are drawn one pixel wide (PDFium-style hairlines), so very thin lines come out wider and darker than their exact geometry.",
+    "Dash patterns past the subdivision budget skip or truncate the affected subpath and set ErrDashBudget, and patterns finer than a quarter pixel are drawn as a solid stroke at the pattern's mean coverage; the Canvas never panics, so check Err() after drawing.",
+    "The SIMD kernels exist only with GOEXPERIMENT=simd on amd64, and the experiment's API changed between Go 1.26 and 1.27 (handled by build-tagged wrappers); STILUS_SIMD=0 or 256 forces scalar or AVX2-only at run time.",
+    "Drawing many paths of one paint one by one gives conflation seams on touching anti-aliased edges (issue #28); until a union fill lands, merge such geometry into one path yourself."
+  ],
+  "pick_this_over_siblings_when": "The closest catalogued sibling is tdewolff/canvas (Go): pick stilus when you only need a fast, allocation-free rasterizer core for stroke-heavy pages and will build the rest yourself, and tdewolff/canvas when you want a complete Go vector library with text and file output. For C or C++ code, Blend2D or Vello CPU have far stronger evidence.",
+  "verified_claims_summary": "First-party README table produced by bench/compare_test.go (go test -bench, one goroutine, bench module on Go 1.26 with x/image v0.46.0 and gogpu/gg v0.52.5) on an unnamed 'cloud Xeon @ 2.1 GHz', A3 page at 150 dpi: 20,000 short 0.35 mm strokes take 55 ms with stilus versus 111 ms with x/image/vector (2.0x, derived from page data) and 2,090 ms with gg; 2,000 page-spanning hairline hatch lines take 70 ms versus 33,400 ms (477x) and 14,800 ms. The x/image/vector side uses stilus's own stroker and a separate box-sized rasterizer for each outline.",
+  "status_note": "Very active but brand new (95 commits, last commit 2026-10-02, latest tag v0.7.0 on 2026-10-02, 0 stars, one open issue and one open PR); MIT and dependency-free, so copyable, but treat it as experimental.",
+  "measurement_notes": "Harness read (bench/compare_test.go, internal/scenes/scenes.go). (1) Hatch row: BenchmarkXImageVector resets one vector.Rasterizer per outline to the outline's bounding box intersected with the page, and its own comment says vector's cost is proportional to box area. For a 45-degree line that box spans the line's horizontal extent times the full page height, so the 2,000 boxes add up to about 3.6 billion pixels (derived from the scene geometry), about 9.2 ns per box pixel at 33.4 s. All hatch lines share one opaque black paint, so a single page-sized rasterizer (4.35 million pixels) filled with every outline would cost roughly 40 ms at that rate plus edge work (derived estimate, not measured), the same order as stilus's 70 ms. The 477x therefore reflects per-path box-sized use, which is the realistic pattern only when each path has its own paint (as in a PDF display list). (2) Clip asymmetry: stilus draws under the scene's page clip, inset 10 mm on every side, while the x/image/vector run clips only to the image bounds and gg draws with no clip; about 13% of the 20,000 random short strokes touch that margin and about 9% lie wholly in it (derived by simulation of the scene's generator), a small work advantage for stilus in the 2.0x row. (3) The comparison reports go test -bench means, while the Numbers table reports the minimum of 15 runs from cmd/stilus-scenes, possibly at another revision, which explains 55 vs 41 ms (short strokes) and 70 vs 53 ms (hairline hatch). No correctness bug found behind the numbers; the conflation seams of issue #28 apply equally to all three per-path renderers. Tier C stands, but the 477x should be presented as a harness artifact rather than a representative speedup.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/timzifer/stilus/HEAD/README.md",
+    "https://raw.githubusercontent.com/timzifer/stilus/HEAD/go.mod",
+    "https://raw.githubusercontent.com/timzifer/stilus/HEAD/bench/go.mod",
+    "https://raw.githubusercontent.com/timzifer/stilus/HEAD/bench/compare_test.go",
+    "https://raw.githubusercontent.com/timzifer/stilus/HEAD/internal/scenes/scenes.go",
+    "https://github.com/timzifer/stilus",
+    "https://github.com/timzifer/stilus/tags",
+    "https://github.com/timzifer/stilus/commits/main",
+    "https://github.com/timzifer/stilus/issues",
+    "https://github.com/timzifer/stilus/issues/28",
+    "https://github.com/timzifer/stilus/pulls"
+  ],
+  "confidence": 0.75
+}

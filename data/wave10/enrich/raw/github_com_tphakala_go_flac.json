@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/tphakala/go-flac",
+  "one_liner": "Pure-Go (no cgo) FLAC encoder and decoder with AVX2/NEON kernels; encodes slightly faster than FFmpeg's flac, about 1.5x slower than libFLAC.",
+  "what_it_does": "A clean-room Go implementation of FLAC encoding and decoding behind a streaming PCM API: pcm.NewEncoder(w, Config) is an io.WriteCloser that takes interleaved little-endian PCM (1-8 channels, 4-32 bits) and pcm.NewDecoder(r) is an io.Reader/io.WriterTo that yields it. It also has one-shot EncodeInterleaved/DecodeInterleaved, Encoder/Decoder.Reset for pooling, optional SEEKTABLE and VORBIS_COMMENT, sample-accurate SeekToSample and raw frame I/O for muxing into MP4. The point is to remove an ffmpeg or libFLAC dependency from Go programs, not to beat libFLAC.",
+  "how_it_is_fast": "It follows libFLAC's level-5 recipe (fixed 4096-sample blocks, Tukey(0.5) window, autocorrelation, Levinson-Durbin with the order picked from the per-order prediction error, up to 8, 15-bit quantized coefficients, Rice partition orders 0-5, all four stereo assignments estimated) and ranks fixed vs LPC predictors by a cheap Rice-bit estimate, running the full partition search only on the winner whose residual is carried forward rather than recomputed. Hot loops (fixed and LPC residuals, Rice partition cost, stereo decorrelation, min/max) are Go-assembly AVX2/NEON kernels in internal/i32 with runtime dispatch and a bit-identical pure-Go fallback; float64 autocorrelation and CRC-16 come from the author's tphakala/simd module. Per-encoder scratch buffers keep steady-state per-block allocations near zero.",
+  "when_to_use": [
+    "Go services that write FLAC (recording, clip export, uploads) and want to drop an ffmpeg subprocess or cgo libFLAC; BirdNET-Go's release 20260713 notes say its built-in Go FLAC encoder is now the only FLAC path, with no FFmpeg dependency.",
+    "Cross-compiled or static Go binaries on amd64, arm64 (Raspberry Pi class Cortex-A76 was benchmarked) or any other Go target, since there is no cgo.",
+    "Many short streams: pool encoders or decoders with Reset to skip the 1-2 MB per-encoder setup the in-repo benchmark comments describe.",
+    "32-bit integer PCM that must stay lossless; the README reports ffmpeg's flac encoder truncating to 24-bit there (first-party snapshot, no harness)."
+  ],
+  "when_not_to_use": [
+    "Raw encode speed from C or C++: libFLAC's flac -5 is about 1.56x faster on the i7-1260P and 1.49x on the Cortex-A76 in the README's own table (derived from page data) at an identical ratio.",
+    "Smallest files: levels 7 and 8 share parameters and lack libFLAC's subdivide_tukey apodization (code comment calls it future work), only a fixed 4096-sample block size and one window exist, and ffmpeg level 5 already produced slightly smaller output (0.8519 vs 0.8523) on the harness input.",
+    "Callers outside Go: no C API or c-shared build is provided or documented.",
+    "Projects that need a long track record: first commit June 2026, 2 stars, one maintainer; the ratio and throughput regression gate (issue #45) is still open."
+  ],
+  "integration": {
+    "form": "Go module (github.com/tphakala/go-flac, packages flac and pcm) plus the cmd/wav2flac demo CLI",
+    "dependencies": "github.com/tphakala/simd v1.9.0 (CPU detection, float64 autocorrelation, CRC-16) and its transitive golang.org/x/sys; go.mod also lists github.com/quasilyte/go-ruleguard/dsl for the repo's lint rules",
+    "min_toolchain": "Go 1.27 (go.mod, bumped 2026-09-08)",
+    "platforms": "any Go target; AVX2 kernels on amd64 and NEON kernels on arm64 (Go assembly, runtime dispatch); pure-Go fallback elsewhere",
+    "thread_safety": "not documented; Encoder and Decoder are per-stream stateful objects that the docs show being pooled with sync.Pool, so use one per goroutine",
+    "drop_in_for_baseline": "partial: it replaces 'ffmpeg -c:a flac' or libFLAC calls in Go programs with a different, Go-only io.Writer/io.Reader API; output is standard FLAC, cross-validated against libFLAC 'flac -d' and the IETF test corpus"
+  },
+  "gotchas": [
+    "Config.CompressionLevel's zero value is level 0 (fixed predictors only), not libFLAC's default 5; set it explicitly.",
+    "Pass an io.WriteSeeker (for example *os.File): with a plain io.Writer the streaming encoder leaves STREAMINFO MD5 and frame-size fields as 'unknown' unless TotalSamples is declared or the one-shot EncodeInterleaved is used.",
+    "MD5 hashing costs about 10-14% of encode and decode (issue #40); Config.SkipMD5 removes it but writes an all-zero MD5.",
+    "Early versions wrote frame headers that iOS/macOS CoreAudio rejected (issue #4, sample rate and bit depth coded as 'from STREAMINFO'); fixed in July 2026, so pin a 1.x release."
+  ],
+  "pick_this_over_siblings_when": "Pick go-flac when the program is in Go and must avoid cgo or an ffmpeg binary; in Rust, flacenc-rs or rusty_flac fill the same role, and from C or C++ libFLAC itself is the faster choice at the same compression. libfoxenflac is decode-only and HALAC is a different, non-FLAC format.",
+  "verified_claims_summary": "One first-party run per encoder of scripts/bench-encoders.sh (GNU time wall clock, process start-up included) on a generated 30-minute mono 48 kHz/16-bit sine-plus-white-noise file at level 5, single-threaded: go-flac 147 vs ffmpeg 128 MB/s on an i7-1260P (1.15x) and 51 vs 48 MB/s on a Cortex-A76 (1.06x, within single-run noise), with libFLAC 229 and 76 MB/s; Go, ffmpeg, flac and SoX versions and OS are not stated. The table was committed on 2026-06-05 (commit 12138c9) and not re-run on the 1.x code, the input is mono so the stereo-decorrelation path is never timed, 'MB/s' is actually MiB/s, and 'level 5' is not equal work: current FFmpeg flacenc.c uses 105 ms blocks (4608 samples at 48 kHz) and Rice partition orders 0-8 at level 5, against 4096 and 0-5 for go-flac and libFLAC, so libFLAC is the like-for-like peer and it is faster.",
+  "status_note": "Active (last commit 2026-09-08, version bumped to 1.1.0 on 2026-08-23, 2 open issues) and MIT-licensed with no third-party code beyond the author's own simd module, so it is copyable; the speed edge over ffmpeg is small and first-party.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/README.md",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/scripts/bench-encoders.sh",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/go.mod",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/Taskfile.yml",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/flac_test.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/THIRD_PARTY.md",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/cmd/wav2flac/main.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/doc.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/pcm.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/encoder.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/ratio_test.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/realistic_bench_test.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/pcm/encode_bench_test.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/internal/frame/params.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/internal/frame/subframe_encode.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/internal/frame/encode.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/internal/frame/decorrelate.go",
+    "https://raw.githubusercontent.com/tphakala/go-flac/HEAD/internal/lpc/analyze.go",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavcodec/flacenc.c",
+    "https://github.com/tphakala/go-flac",
+    "https://github.com/tphakala/go-flac/commits/main",
+    "https://github.com/tphakala/go-flac/commits/main/README.md",
+    "https://github.com/tphakala/go-flac/commit/12138c9",
+    "https://github.com/tphakala/go-flac/issues?q=is%3Aissue",
+    "https://github.com/tphakala/go-flac/issues/45",
+    "https://github.com/tphakala/go-flac/tree/main/pcm",
+    "https://github.com/tphakala/go-flac/tree/main/internal",
+    "https://github.com/tphakala/go-flac/tree/main/internal/frame",
+    "https://github.com/tphakala/go-flac/tree/main/internal/lpc",
+    "https://github.com/tphakala/go-flac/tree/main/internal/i32",
+    "https://github.com/tphakala/birdnet-go/releases",
+    "https://github.com/mycophonic/flac"
+  ],
+  "confidence": 0.8
+}

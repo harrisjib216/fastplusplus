@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/toots/shine",
+  "one_liner": "Small fixed-point C MP3 (Layer III) encoder that runs about 2-4x faster than LAME by skipping most of LAME's quality work.",
+  "what_it_does": "libshine encodes 16-bit PCM (mono or stereo, MPEG-1/2/2.5 sample rates, CBR bitrates from the standard tables) to MP3. The API is its own, not LAME's: shine_initialise(config), then shine_encode_buffer() (planar int16_t**) or shine_encode_buffer_interleaved() on exactly shine_samples_per_pass() samples per channel (1152 for MPEG-1), each call returning a library-owned byte buffer, then shine_flush() and shine_close(). The repo also ships the shineenc WAV-to-MP3 CLI, an emscripten JS/wasm build (npm @toots/shine.js) and Android NDK build files; FFmpeg exposes it as the libshine encoder and Liquidsoap as %shine.",
+  "how_it_is_fast": "Mostly by doing far less work than LAME, not by a cleverer algorithm. calc_xmin() sets the allowed distortion to zero for every band and the outer loop only binary-searches the global quantizer step (bin_search_StepSize, then the inner rate loop), so there is no psychoacoustic model and no scalefactor noise shaping; only long blocks are coded (no block switching), the bit reservoir is off (ResvMax is fixed at 0, so each granule gets mean_bits and the rest is stuffing), and mode_ext is always 0, so -j only sets the joint-stereo header with no mid/side coding. What remains is a direct-form 32-band polyphase analysis filter and a direct 18x36 MDCT in Q31 fixed point (32x32-to-64-bit multiplies; ARMv6 SMMUL/SMULL and MIPS32 inline asm, plain C int64 elsewhere including AArch64), a 10,000-entry x^(3/4) lookup table for quantization, and loops unrolled by 7.",
+  "when_to_use": [
+    "CPUs without an FPU or with weak floating point (ARMv5/armel, MIPS32, microcontrollers): the fixed-point core needs only integer multiplies (issue #29 reports use on STM32).",
+    "Live streaming or transcoding many channels at once (Liquidsoap, FFmpeg -c:a libshine) where CPU per stream matters more than MP3 quality at a given bitrate.",
+    "Constant-bitrate MP3 at 128 kbps or higher where the result only has to decode everywhere (voice, monitoring, previews) and transparency is not required.",
+    "In-browser or Node MP3 encoding through the wasm build; its README reports 46x to 99x realtime on a 5.57 s file in Chrome 108, Firefox 108, Safari 16.2 and Node 19 (first-party, December 2022)."
+  ],
+  "when_not_to_use": [
+    "Music archiving or any use where quality per bit matters: no psychoacoustic model, no block switching (pre-echo on transients), no bit reservoir and no mid/side stereo, and no quality measurement exists (issue #27 open since 2017).",
+    "Full-scale or clipping-prone input: issue #24 (open since 2017, no reply) reports the output level wobbling on full-amplitude sines, and the README warns the encoder 'may not be exempt of bugs'.",
+    "Bit-exact or strictly valid final frames: issue #37 and the unmerged PR #38 report a truncated last frame, and at HEAD shine_flush() returns only whole 32-bit words, so up to 31 bits left in the bitstream cache are never written.",
+    "VBR/ABR, 24-bit or float input, or LAME-style presets: none are implemented; input is int16 only and bitrate is fixed per encoder.",
+    "Projects needing an active upstream: last commit 2023-01-01, 11 open issues and 5 open PRs (three are dependabot bumps) with no maintainer replies on the bug reports."
+  ],
+  "integration": {
+    "form": "shared lib or static lib (autotools libshine), or source-drop of the nine src/lib/*.c files",
+    "dependencies": "libm only (sin/cos/pow at init, log in calc_scfsi, sqrt in the out-of-table quantize path); no other libraries",
+    "min_toolchain": "C99-era C with GCC-style extensions (statement expressions and inline asm in the ARM and MIPS multiply headers, __attribute__((unused))); Makefile.am adds -O2 -funroll-loops -fsigned-char; Windows needs third-party build files (open PR #40, issue #45)",
+    "platforms": "any with a 64-bit integer multiply; hand-written multiplies for 32-bit ARM (non-Thumb) and MIPS32 only; big-endian via SHINE_BIG_ENDIAN from configure; wasm via emscripten",
+    "thread_safety": "not documented; all mutable state lives in the per-encoder shine_t struct (the 2006 conversion made it no-globals) and shared tables are const, so separate encoders on separate threads look safe, but one handle must not be shared",
+    "drop_in_for_baseline": "partial: produces standard MP3 that any decoder plays, but the C API differs from libmp3lame's lame_* API and LAME's quality, VBR and preset options have no equivalent; inside FFmpeg it is a codec swap (-c:a libshine instead of libmp3lame)"
+  },
+  "gotchas": [
+    "Each encode call needs exactly shine_samples_per_pass() samples per channel; the caller pads the last block (shineenc zero-pads), and the returned buffer is only valid until the next call.",
+    "shineenc ignores the WAV data-chunk length (wave.c 'TODO: respect data chunk length'), so trailing chunks after the PCM data are encoded as audio; the library itself is unaffected.",
+    "Joint stereo (-j or JOINT_STEREO) only changes the header: mode_ext is always 0, so channels are coded as plain left/right.",
+    "Issue #39: the padding bit can be wrong at some rate/bitrate pairs (32 kHz/48 kbps reported) because slot accounting uses double arithmetic with truncation in layer3.c."
+  ],
+  "pick_this_over_siblings_when": "Pick Shine over SuperLAME (multi-threaded LAME at LAME quality) when the target has no FPU, only one core per stream, or needs a tiny dependency-free encoder; pick SuperLAME, or glint's LAME 3.100 numbers, whenever MP3 quality at a given bitrate matters.",
+  "verified_claims_summary": "The only numbers are first-party pasted CLI runs from the README: on an M1 Pro (2022-12-30) stock LAME 3.100 -b 128 (qval=3, joint stereo, psychoacoustic model) reports 88.773x realtime by CPU time while shineenc reports 318.0x for a 318 s file, which is 318 s divided by a 1 s reading of whole-second time() wall clock that also includes WAV open and file writes, so Shine's real speed is only bounded to more than about 1.8x LAME's. The code shows Shine skips the psychoacoustic model, block switching, bit reservoir, noise shaping and mid/side, so the ratio compares much less work against LAME at qval=3; the fair comparison (LAME -q 9 or -f) was never run.",
+  "status_note": "Abandoned (last commit 2023-01-01, open correctness issues #24, #37, #39 unanswered) but small, dependency-free and LGPL (COPYING is the GNU Library GPL v2 text; js/package.json declares LGPL-2.0-only), so it is copyable as a library or vendored source if LGPL obligations are acceptable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/toots/shine/HEAD/README.md",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/bin/main.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/bin/wave.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/layer3.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/layer3.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/types.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/l3loop.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/l3mdct.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/l3subband.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/reservoir.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/bitstream.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/bitstream.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/l3bitstream.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/huffman.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/tables.c",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/mult_noarch_gcc.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/mult_sarm_gcc.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/src/lib/mult_mips_gcc.h",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/js/README.md",
+    "https://raw.githubusercontent.com/toots/shine/HEAD/js/package.json",
+    "https://github.com/toots/shine",
+    "https://github.com/toots/shine/issues?q=is%3Aissue",
+    "https://github.com/toots/shine/pulls?q=is%3Apr",
+    "https://github.com/toots/shine/issues/24",
+    "https://github.com/toots/shine/issues/26",
+    "https://github.com/toots/shine/issues/32",
+    "https://github.com/toots/shine/issues/37",
+    "https://github.com/toots/shine/pull/38",
+    "https://github.com/savonet/liquidsoap/discussions/3643"
+  ],
+  "confidence": 0.8
+}

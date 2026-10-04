@@ -33,3 +33,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher lead (e65, rasterizers-2d): intel/fastuidraw (C++, MPL-2.0, GPU canvas, archived 2023, no numbers).
 - Retier check (e67): opus-pure docs/interop-validation.md lists defects in the aarch64 NEON code inherited from rusty-opus and opus-rs (PVQ search maximised the wrong objective, worse on 450 of 1880 cases, fix costs about 1.5% encode time; pitch_downsample without decimation; celt_fir with 4x input; silk_sum_sqr_shift truncation; upstream CELT below 48 kHz decoded to noise). Check whether the catalogued rusty-opus 0.9.1 and restsend/opus-rs numbers ran on these kernels.
 - Enricher lead (e69, rasterizers-2d, Go): srwiley/scanx (anti-aliased scanner; its README gives ImgSpanner 513 ms vs FTScanner 1645 ms vs GVScanner (x/image/vector) 38,053 ms at 5x; beta, 2019).
+- Enricher lead (e72, weak): mycophonic/flac (Go, fork of mewkiz/flac, 'about 2x faster decode', no numbers).
