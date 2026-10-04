@@ -1,0 +1,50 @@
+{
+ "id": "paper:accelerating-jpeg-decompression-on-gpus-weissenberger-and-schmidt-hipc-2021",
+ "one_liner": "HiPC 2021 CUDA JPEG decoder design; claims up to 51x over libjpeg-turbo and 8x over nvJPEG on A100; no code.",
+ "what_it_does": "A research paper (Weissenberger and Schmidt, Uni Mainz, HiPC 2021, pages 121-130) describing GPU decompression for a subset of the JPEG standard in which the Huffman entropy-decoding stage, normally the serial bottleneck, is split into independent chunks of one scan that decode in parallel, without needing restart markers in the file. There is no library or API to adopt: no code was released, and the authors' GitHub account holds only gpuhd (Huffman), multians (ANS), bzip2gpu and HIPSW4. Which JPEG features the subset covers (progressive, arithmetic coding, 12-bit, chroma layouts) could not be read here.",
+ "how_it_is_fast": "It applies the authors' self-synchronising Huffman decoding (ICPP 2018, code in weissenberger/gpuhd) to the JPEG bitstream. Each thread starts decoding a fixed-size bit window at an arbitrary offset. Prefix codes tend to resynchronise, so a guessed start converges on the true codeword boundaries after a few codewords. In gpuhd this runs as an intra-block sync pass (phase1_decode_subseq), inter-block passes repeated from the host until every block agrees (phase2_synchronise_blocks), a thrust::exclusive_scan over per-chunk symbol counts that gives output offsets, and a final decode-and-write pass. The data-parallel stages after that (dequantisation, IDCT, colour conversion) map to the GPU directly. The JPEG-specific handling of DC/AC run-length symbols is described in the paper, which was not readable here.",
+ "when_to_use": [
+  "As a design reference when building a GPU JPEG decoder that must parallelise baseline Huffman decoding of files without restart markers (camera, web or dataset JPEGs)",
+  "Batch decoding of many large JPEGs on NVIDIA datacenter GPUs (A100, V100) where CPU libjpeg-turbo or nvJPEG's hybrid path is the bottleneck, for example ML data loading, provided you reimplement it",
+  "Comparing against nvJPEG and the A100 hardware JPEG decoder: the abstract reports up to 3.4x over nvJPEG with that decoder",
+  "Starting a prototype from the authors' gpuhd Huffman stage (LGPL-3.0, CUDA 8+, compute capability 3.0+)"
+ ],
+ "when_not_to_use": [
+  "You need something to link today: no code, binary or artifact was published with the paper",
+  "Files that need features outside the paper's subset (the abstract says it implements 'an important subset of the JPEG standard'; which features are left out is not documented in any source readable here)",
+  "Small images or low-latency single-image decode: PCIe transfers, kernel launches and gpuhd-style host round-trips for the sync loop are fixed costs, and whether the paper's timings include host-device transfers is not documented",
+  "Non-NVIDIA GPUs or CPU-only deployments; use libjpeg-turbo or a multithreaded CPU decoder instead",
+  "Pathological Huffman tables or streams that resynchronise slowly: gpuhd repeats its inter-block pass until all blocks agree, and no worst-case bound is documented"
+ ],
+ "integration": {
+  "form": "none (paper only; no code released)",
+  "dependencies": "NVIDIA CUDA per the paper (A100 and V100 tested); the related gpuhd decoder needs CUDA SDK 8+, GCC 5.4+, GNU/Linux and Thrust",
+  "min_toolchain": "not documented for the JPEG decoder (gpuhd: CUDA 8, GCC 5.4, compute capability 3.0)",
+  "platforms": "NVIDIA GPUs (A100 and V100 in the paper's evaluation)",
+  "thread_safety": "not documented",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "CPU baseline setup is unknown: if libjpeg-turbo ran on one thread, the 51x headline compares a whole A100 with one CPU core, and a multithreaded CPU decode of a batch would shrink the gap",
+  "nvJPEG version, CUDA version, image set, chroma subsampling and whether transfers are timed are not documented in any readable source, so the 8.0x and 3.4x nvJPEG ratios cannot be checked",
+  "The speedups are 'up to' figures; median or per-image results were not readable",
+  "CESNET GPUJPEG, the common open-source alternative, decodes Huffman on the GPU only when the file has restart markers and otherwise falls back to the CPU (per its README). This paper's selling point is not needing restart markers."
+ ],
+ "pick_this_over_siblings_when": "The catalogued siblings (libjpeg-turbo, jpeg-nitro, zenjpeg, libjpeg-turbo-rs, MANGO) are all CPU decoders you can install; this is the only GPU JPEG decode design in the category, but with no code it is a reference for building a decoder, not a choice. For a working GPU path use nvJPEG (proprietary) or CESNET GPUJPEG (BSD-2-Clause, not catalogued, parallel Huffman only with restart markers); for CPU decoding use libjpeg-turbo or jpeg-nitro.",
+ "verified_claims_summary": "Two search-result snippets of the arXiv abstract (2111.09219; the paper itself is blocked here) report up to 51x over libjpeg-turbo and 8.0x over nvJPEG on an A100, 34x and 5.7x on a V100, and up to 3.4x over nvJPEG using the A100's hardware JPEG decoder. Neither snippet names the CPU model, thread count, CUDA or nvJPEG version, the images, or whether transfers are timed.",
+ "status_note": "Peer-reviewed 2021 paper with no released code and nothing to maintain; it stays a research reference, and the authors' related gpuhd repository was last touched in February 2019 (8 commits, LGPL-3.0, no issues filed).",
+ "sources_read": [
+  "https://github.com/weissenberger/gpuhd",
+  "https://github.com/weissenberger/gpuhd/tree/master/src",
+  "https://github.com/weissenberger/gpuhd/issues?q=is%3Aissue",
+  "https://github.com/weissenberger/gpuhd/commits",
+  "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/README.md",
+  "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/src/cuhd_gpu_decoder.cu",
+  "https://raw.githubusercontent.com/weissenberger/multians/HEAD/README.md",
+  "https://raw.githubusercontent.com/weissenberger/bzip2gpu/HEAD/README.md",
+  "https://raw.githubusercontent.com/CESNET/GPUJPEG/HEAD/README.md",
+  "https://raw.githubusercontent.com/actcwlf/PIC/HEAD/README.md"
+ ],
+ "confidence": 0.45,
+ "retier_note": "No change: stays C reference. This session confirmed the V100 figures (34x, 5.7x) and the 3.4x over the A100 hardware decoder in its own search snippets, but the paper (arXiv, arxiv-vanity, paperswithcode, x-mol, hgpu, encode.su) is still blocked, so the setup is unread. No correctness bug can be checked because no code exists. Leads: CESNET/GPUJPEG (BSD-2-Clause CUDA JPEG codec; README has decode timings per GPU but no libjpeg-turbo or nvJPEG baseline) and weissenberger/bzip2gpu (MIT, ICPP 2024 GPU bzip2 decompressor; README says not for production and checksum verification is still a TODO); neither is catalogued."
+}

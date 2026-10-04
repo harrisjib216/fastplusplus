@@ -1,0 +1,69 @@
+{
+ "id": "paper:nv-path-rendering-nvpr",
+ "one_liner": "NVIDIA OpenGL extension for GPU path rendering; its peer-reviewed figure shows about 2-40x over Cairo and Skia's CPU rasterizer.",
+ "what_it_does": "GL_NV_path_rendering adds path objects to OpenGL. They are built from SVG or PostScript path strings, explicit commands, or glyphs loaded from font files, and are filled or stroked in two calls: a stencil call (glStencilFillPathNV or glStencilStrokePathNV) followed by a cover call (glCoverFillPathNV or glCoverStrokePathNV). Paths can be mixed freely with 3D rendering, depth testing and shaders. The renderer lives inside NVIDIA's proprietary driver (release 275.33 and later, GeForce 8 and later), so there is nothing to vendor. The public code is the NVprSDK samples (github.com/markkilgard/NVprSDK), including the nvpr_svg viewer that renders the same SVG scene through Cairo, Qt, Skia, Direct2D and OpenVG backends. It replaces a Cairo or Skia canvas API with OpenGL calls, so it is not a drop-in.",
+ "how_it_is_fast": "The technique is 'stencil, then cover'. Each path is baked once into resolution-independent GPU geometry: triangle-fan anchor geometry, Loop-Blinn quadratic and cubic discard triangles (cubics are subdivided into convex hulls), and conservative cover geometry. The stencil step accumulates per-sample winding numbers in the stencil buffer. The cover step rasterizes the cover geometry, shades the samples whose stencil value is non-zero and resets the stencil as it goes. Strokes use a quadratic Bezier stroke discard shader. Antialiasing comes from multisampling (16 samples per pixel in the benchmarks), and each sample keeps its own colour, which avoids conflation artifacts. The paper credits three hardware features: coarse stencil culling that rejects hundreds of pixels per clock, 8-bit stencil traffic that runs near memory-bus saturation, and a GPU front-end processor that switches between stencil and cover without driver revalidation, so many small paths stay GPU-bound.",
+ "when_to_use": [
+  "Static or retained vector content (SVG art, maps, UI, glyph runs) redrawn many times under changing transforms (zoom, rotation, projective warps) on NVIDIA GPUs, so the one-time bake is amortised",
+  "Compositing 2D paths with 3D: depth-tested paths, paths in perspective, stencil-clipping 3D against paths, or custom fragment shaders on fills",
+  "Content with exactly shared edges (Flash-style art) where coverage-to-alpha renderers show background bleeding: per-sample colour avoids conflation",
+  "Desktop Windows or Linux apps that already own a compatibility-profile OpenGL context and target NVIDIA hardware only"
+ ],
+ "when_not_to_use": [
+  "Anything that must run on AMD, Intel, Apple or mobile GPUs, or under Vulkan, Direct3D or Metal: this is an NVIDIA OpenGL extension (the 2011 SDK deck lists no Mac support)",
+  "Immediate-mode drawing that re-specifies paths every frame (browser canvas, dynamic charts): baking time is linear in path commands and is excluded from the benchmark loops, and the paper itself notes that browsers re-specify paths on every redraw",
+  "Simple line-segment scenes at large window sizes against Direct2D hardware: in the paper's figure the Spikes scene falls to about 0.95x at 1100x1100 (Direct2D slightly faster), and on the GeForce 650 most ratios shrink as the window grows",
+  "Memory-tight GPUs: quality depends on a multisampled colour plus stencil framebuffer. The 2011 deck calls 4 samples the bare minimum and 16x 'extremely memory intensive', and the paper's future work targets the memory footprint.",
+  "New projects that need ecosystem support: Qt deprecated Shape.NvprRenderer in 5.12 and Qt 6 has no NVPR backend; Skia has dropped its NVPR backend (per the verifier)"
+ ],
+ "integration": {
+  "form": "driver extension (OpenGL; nothing to link or vendor); SDK samples are a source-drop under NVIDIA's SDK licence",
+  "dependencies": "NVIDIA proprietary driver 275.33+ on GeForce 8 or later; a stencil-capable, multisampled OpenGL framebuffer; the SDK samples use GLEW and GLUT, and nvpr_svg bundles Cairo, Qt 4, Skia, FreeType, TinyXML and Boost 1.50",
+  "min_toolchain": "OpenGL 1.1+ (spec version 1 requires ARB_compatibility on OpenGL 3.x); SDK projects for Visual Studio 2008, 2010 and 2012 plus GNU make on Linux",
+  "platforms": "NVIDIA GPUs on Windows and Linux (the 2011 deck also lists FreeBSD and Solaris; no macOS)",
+  "thread_safety": "Follows OpenGL context rules (calls go to the context current on the calling thread); nothing further documented",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "The comparisons are not at identical output: NVPR runs at 16 samples per pixel while Cairo, Skia, Qt and Direct2D use coverage-to-alpha antialiasing, and the 2011 deck's numbers pit the GPU against a single CPU core",
+  "The SDK sample code is under NVIDIA's SDK agreement (derivatives allowed with an attribution statement; NVIDIA may terminate the licence), not an OSI licence, and the renderer itself is closed",
+  "The spec copy in the SDK (version 1, June 2011) is written against the OpenGL 3.2 compatibility profile and requires ARB_compatibility on 3.x; core-profile use relies on later spec revisions not read here",
+  "nvpr_svg's benchmark.bat is stale (it runs gs_bezier.exe). The paper's 12-scene, 11-resolution sweep is the undocumented -xbenchmark mode in nvpr_svg.cpp, where OpenVG is compiled out as 'too slow to benchmark'."
+ ],
+ "pick_this_over_siblings_when": "Choose it only for an NVIDIA-only OpenGL application that needs paths composited with 3D, depth or custom shaders. For portable CPU rendering Blend2D wins nearly all configurations in the ETH thesis comparison, and Vello or Pathfinder are portable GPU options. NVPR's speedups were measured against 2010-2012 Cairo and Skia builds and a 2012 GPU, so they say little about today's Blend2D, Vello CPU or Skia Graphite.",
+ "verified_claims_summary": "The paper's performance figure was read from the authors' LaTeX source and its vector EPS on github.com/markkilgard/gpupathrender; the values are derived from the chart's vector data, so they are approximate. Setup: NV_path_rendering at 16 samples per pixel on a GeForce 650 with an unnamed 'fast Core i7', 12 SVG scenes, windows from 100x100 to 1100x1100. NVPR beats Cairo by 2.7x (Spikes, 100x100) to 40x (Cougar, 200x200), Skia's CPU raster by 2.1x to 34x, Skia Ganesh (GPU) by 1.6x to 78x, Direct2D hardware by 0.95x to 29x, and Direct2D WARP by 4.4x to 31x. Most ratios fall as the window grows: Tiger versus Cairo goes from 17x at 200x200 to 6.3x at 1100x1100. The 105x clipping showcase (8.69 ms versus Cairo's 909 ms at 1000x1000) is a separate figure from a Core i7 with a GeForce 560M laptop GPU; the chart's own clipped-tiger scene shows 6.3x to 22x versus Cairo.",
+ "status_note": "Shipped in NVIDIA drivers since 275.33 (June 2011); NVprSDK's last commit was February 2020. Qt deprecated its NVPR backend in 5.12 and removed it in Qt 6, and Skia dropped its backend, so treat it as a vendor-locked historical reference, not a dependency.",
+ "sources_read": [
+  "https://github.com/markkilgard/NVprSDK",
+  "https://github.com/markkilgard/NVprSDK/commits",
+  "https://github.com/markkilgard/NVprSDK/tree/master/docs",
+  "https://github.com/markkilgard/NVprSDK/tree/master/nvpr_examples/nvpr_svg",
+  "https://github.com/markkilgard/NVprSDK/tree/master/nvpr_examples/nvpr_svg/skia",
+  "https://github.com/markkilgard/NVprSDK/tree/master/nvpr_examples/nvpr_svg/cairo",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/README.md",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/LICENSE.txt",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/docs/An%20Introduction%20to%20NV_path_rendering.pdf",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/docs/NV_path_rendering%20FAQ.pdf",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/docs/Getting%20Started%20with%20NV_path_rendering.pdf",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/docs/GL_NV_path_rendering.txt",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/nvpr_svg.cpp",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/ReadMe.txt",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/benchmark.bat",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/skia/renderer_skia.cpp",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/cairo/renderer_cairo.cpp",
+  "https://raw.githubusercontent.com/markkilgard/NVprSDK/HEAD/nvpr_examples/nvpr_svg/cairo/scene_cairo.cpp",
+  "https://github.com/markkilgard/gpupathrender",
+  "https://github.com/markkilgard/gpupathrender/tree/master/paper",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/gpupathrender.tex",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/abstract.tex",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/approach.tex",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/discuss.tex",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/future.tex",
+  "https://raw.githubusercontent.com/markkilgard/gpupathrender/HEAD/paper/nvpr_performance.eps",
+  "https://raw.githubusercontent.com/qt/qtdeclarative/5.15/src/quickshapes/qquickshape.cpp",
+  "https://raw.githubusercontent.com/qt/qtdeclarative/5.15/src/quickshapes/qquickshapenvprrenderer.cpp",
+  "https://raw.githubusercontent.com/qt/qtdeclarative/dev/src/quickshapes/qquickshape.cpp"
+ ],
+ "confidence": 0.7,
+ "retier_note": "Paper-access retier candidate C to B. The peer-reviewed figure (ACM TOG 31(6), SIGGRAPH Asia 2012) is now readable from the first author's own LaTeX source and EPS at github.com/markkilgard/gpupathrender, and the ratios above were derived from the chart's vector data. The public NVprSDK harness (nvpr_svg -xbenchmark) runs the same 12 scenes and 11 resolutions. It is not A: the CPU is unnamed ('fast Core i7'), and no compiler, flags or library builds are given. Corrections to the record: the paper's chart compares Cairo, Skia CPU raster, Skia Ganesh, Direct2D and Direct2D WARP, not Qt or OpenVG (Qt appears only in the 2011 deck; OpenVG is compiled out of the sweep). The 105x figure comes from a separate GeForce 560M clipping showcase, not from the ratio chart. Cairo 1.9.6 is the version the SDK ReadMe names, and that ReadMe flags it for a path-clipping bug. In the harness code no correctness bug was found: CPU timings exclude the blit to screen, which favours the baselines; GPU timings include buffer swaps and glFinish, with vsync off by default; path baking is excluded on both sides. The second source, the 2011 NVIDIA deck (first-party; GTX 480 against one core of a 2.9 GHz Core i3, 16 samples per pixel), shows ratios rising with resolution: up to about 80x over Cairo, about 100x over Skia and about 500x over Qt, and near or below 1x against Direct2D at 100x100 on the Coat of Arms and Cowboy scenes."
+}
