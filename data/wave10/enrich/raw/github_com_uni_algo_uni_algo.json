@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/uni-algo/uni-algo",
+  "one_liner": "Header-only C++17 Unicode library (UTF conversion, case, normalization, UAX #29 segmentation); its grapheme iteration runs 2.7-3.0x faster than ICU's.",
+  "what_it_does": "Implements Unicode algorithms over the data in standard strings (std::string, std::u16string, std::u32string and views) without adding a string type. It covers UTF-8/16/32 conversion with W3C-conformant handling of ill-formed input, default case mapping and folding, NFC/NFD/NFKC/NFKD normalization, UAX #29 grapheme and word segmentation, code point properties, a simple DUCET-based collation and caseless search. The API offers both one-call functions (for example una::utf8to16) and lazy views such as una::views::grapheme::utf16(str), una::views::word::utf8(str) and word_only, which work with std::distance and range-for. It is not a drop-in replacement for ICU's BreakIterator: the interface differs, and there is no line breaking (UAX #14), bidi (UAX #9), full UCA or locale-tailored segmentation.",
+  "how_it_is_fast": "Character properties come from generated two-stage lookup tables (stage2[(stage1[c >> 7] << 7) + (c & 127)]). These feed a hand-written cascade of the UAX #29 rules (WB3 through WB999; grapheme rules including the Unicode 15.1 GB9c InCB states), whose small state struct keeps the previous one or two non-ignorable code points. Decoding is fused with segmentation: the view decodes UTF-16 or UTF-8, classifies and decides boundaries in one pass, with no copy into a library string type and no virtual call per boundary. Being templates in headers, the whole loop can be inlined; the perf harness even suggests __attribute__((flatten)). Word segmentation has no dictionary stage: CJK ideographs break at every code point under WB999. That avoids work ICU does, which inflates the word-break ratio (see measurement_notes).",
+  "when_to_use": [
+    "Counting or stepping through user-perceived characters (extended grapheme clusters) in UTF-8 or UTF-16 for cursor movement, truncation or text editing, where it measured about 2.7-3x faster than ICU's character BreakIterator.",
+    "UAX #29 default word boundaries for space-delimited scripts (Latin, Cyrillic, Greek, Hebrew and similar), for example tokenizing with views::word_only.",
+    "Builds that must avoid ICU: the only dependency is the C++ standard library, it compiles with -fno-exceptions and -fno-rtti, and UNI_ALGO_DISABLE_* defines shrink the Unicode data that gets compiled.",
+    "Untrusted text: ill-formed UTF sequences are replaced as The Unicode Standard recommends instead of causing errors or undefined behaviour.",
+    "Projects that want public-domain (Unlicense text) or MIT licensing for vendoring."
+  ],
+  "when_not_to_use": [
+    "Chinese, Japanese or Thai-style word segmentation where you need dictionary words: uni-algo returns one boundary per ideograph (UAX #29 default), while ICU's word iterator applies dictionary break engines.",
+    "Line breaking (UAX #14), the bidirectional algorithm (UAX #9), full UCA collation or locale-tailored rules: none are implemented (the README lists them as future work).",
+    "When you need current Unicode data: the library is at Unicode 15.1, the last commit was 2024-01-05, and issue #43 'Update to Unicode 17' is open.",
+    "Word segmentation over single-pass input iterators or streams: the WB6/WB7b/WB12 lookahead needs at least forward iterators (stated in the source).",
+    "Pre-C++17 toolchains: the CMake targets require cxx_std_17."
+  ],
+  "integration": {
+    "form": "header-only plus one compiled Unicode data .cpp by default (static or shared lib via CMake); UNI_ALGO_HEADER_ONLY gives a pure header-only, constexpr build; a single-include variant and a vcpkg port exist",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "C++17 (cxx_std_17), CMake 3.12+; the low-level functions also compile as C99",
+    "platforms": "any; portable C++ with no SIMD or platform intrinsics (CI on Linux, Windows and macOS)",
+    "thread_safety": "not documented (algorithms keep state in per-view or per-call structs and read constant tables)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "views::word yields spaces and punctuation as words too (the README notes this); use views::word_only to get only words.",
+    "Bounds-checked 'safe layer' iterators are on in debug builds and off in release unless UNI_ALGO_ENABLE_SAFE_LAYER is defined, so debug timings are not representative.",
+    "Outside header-only mode the Unicode data .cpp must be compiled, and UNI_ALGO_DISABLE_* config defines must be applied to that target (the README shows target_compile_definitions PUBLIC).",
+    "views::nfc is only an input_range (open issue #45); the README says the one-call functions are faster than the ranges for single jobs."
+  ],
+  "pick_this_over_siblings_when": "Against libutf (brazilofmux/utf), which has a newer UTF-8 comparison with ICU 78.3 covering grapheme breaks, NFC and collation, pick uni-algo for C++17 range/view APIs over standard string types, a pure header-only option and dual public-domain/MIT licensing. fast-grapheme-segmenter and unicode-segmenter target Rust and JavaScript, not C++. For dictionary-based word segmentation or line breaking, ICU4X (catalogued for its line and word segmenters) or ICU itself is the better fit.",
+  "verified_claims_summary": "First-party perf/result/segment_utf16.md times 50,000 UTF-16 strings of 4,347 code units each (a seven-language CC BY-SA paragraph repeated three times) under MSVC 19.12 (VS 2017 15.5.5). ICU version, compiler flags and CPU are not stated. Grapheme breaks: 2067 vs 5601 ms on x64 (2.7x), about 210 vs 78 MB/s (derived from page and harness data), and 2239 vs 6766 ms on x86 (3.0x). Word breaks: 2355 vs 11379 ms on x64 (4.8x) and 2545 vs 13137 ms on x86 (5.2x), but that row compares different algorithms (see measurement_notes). GCC 7.3 rows time uni-algo alone.",
+  "status_note": "Stale since 2024-01-05 (v1.2.0, Unicode 15.1; Unicode 17 update requested in open issue #43) but dual public-domain/MIT, dependency-free and easy to vendor, so it stays copyable.",
+  "measurement_notes": "Harness findings for the orchestrator (perf/perf_segment_utf16.h). (1) The word-break comparison is not like for like. ICU's word rules (icu4c/source/data/brkitr/rules/word.txt on ICU main) define the special $dictionary set to include $Han, $Hiragana, $Katakana and Hangul syllables ($dictionaryCJK), so createWordInstance hands those runs to ICU's dictionary break engine. uni-algo's impl_segment_word.h implements only the UAX #29 rule cascade and breaks between ideographs under WB999. The Chinese and Japanese paragraphs are 648 of the 4,347 UTF-16 units per test string (about 15%, or about 24% with Korean), and the harness only sums both libraries' boundary counts into an unused accumulator without comparing them. The 4.8x (x64) and 5.2x (x86) word-break ratios therefore include ICU doing dictionary segmentation that uni-algo does not do. The ICU version used in 2018 is not stated; this rule set is from current main. The grapheme comparison (createCharacterInstance against views::grapheme, 2.7x x64 and 3.0x x86) is like for like and should be the headline figure. (2) The numbers come from 2018 toolchains (MSVC 2017 15.5.5, GCC 7.3) and an older library version: the word rules are commented 'Unicode 11.0 - 15.0', and the grapheme code has since gained the Unicode 15.1 GB9c InCB states, so current code was not what was timed. (3) The ICU path copies each string into an icu::UnicodeString inside the timed loop, which is negligible at about 112-228 microseconds per string. No correctness bug was found in uni-algo's segmentation code. Suggest keeping tier C and leading claimed_speedup with the grapheme ratio.",
+  "sources_read": [
+    "https://github.com/uni-algo/uni-algo",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/README.md",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/LICENSE.md",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/config.h",
+    "https://github.com/uni-algo/uni-algo/tree/main/include/uni_algo/impl",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/impl/impl_segment_word.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/impl/impl_segment_grapheme.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/impl/internal_stages.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/impl/impl_unicode_version.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/include/uni_algo/ranges_word.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/perf/result/segment_utf16.md",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/perf/perf_segment_utf16.h",
+    "https://raw.githubusercontent.com/uni-algo/uni-algo/main/perf/main.cpp",
+    "https://github.com/uni-algo/uni-algo/issues?q=is%3Aissue",
+    "https://github.com/uni-algo/uni-algo/issues/42",
+    "https://raw.githubusercontent.com/unicode-org/icu/main/icu4c/source/data/brkitr/rules/word.txt"
+  ],
+  "confidence": 0.75
+}
