@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/cometkim/fast-grapheme-segmenter",
+  "one_liner": "Forward-only Rust UAX #29 grapheme segmenter: 1.3-2.1x faster than ICU4X's icu_segmenter at splitting, 2.7-36x at counting.",
+  "what_it_does": "Splits a Rust &str into Unicode 17.0 extended grapheme clusters, from start to end only. The API mirrors the forward half of unicode-segmentation: graphemes(s), grapheme_indices(s) and grapheme_boundaries(s) iterators, count_graphemes(s), and a GraphemeSegmentation extension trait on str, with no is_extended flag because only extended clusters exist. It also takes &[u16] (count_graphemes_utf16, grapheme_boundaries_utf16) and returns UTF-16 offsets, treating lone surrogates as U+FFFD. It has no reverse iteration, no cursor or seek, no chunked input, no legacy clusters and no word, sentence or line breaking.",
+  "how_it_is_fast": "Category lookup is tiered. A single byte load from flat per-codepoint tables covers U+0000-U+309F, U+A660-U+ABFF and U+1F000-U+1FAFF. Arithmetic covers CJK through Vai, Hangul syllables (LV every 28th code point) and the variation selectors, and a binary search over packed ranges covers the rest. Every pairwise UAX #29 rule is folded at compile time into a 256-byte PAIR_MASK table indexed by (before << 4 | after), and the context that GB9c (Indic conjuncts), GB11 (emoji ZWJ) and GB12/13 (flag parity) need is packed into one u8 state, so each boundary decision is one AND against a table byte. count_graphemes adds a SWAR path: when at least half of the first 64 bytes are printable ASCII, it finds printable-ASCII runs 8 bytes at a time with zero-byte bit tricks and adds each run's length in one step. That path produces the 35.7x English count, because the English sample is a single printable-ASCII run. The iterators use a lazily armed one-byte shortcut for adjacent printable-ASCII pairs.",
+  "when_to_use": [
+    "Rust code that counts user-perceived characters (length limits, truncation, column counts), especially on ASCII-heavy text, where count_graphemes is close to a SWAR byte count (0.05 us for the ~290-byte English sample).",
+    "Forward-only iteration over short strings (hundreds of bytes) where unicode-segmentation is used today: the README shows 2.6x-5.5x faster cluster and offset collection, and forward call sites map one to one.",
+    "no_std, embedded or wasm targets that need current Unicode 17 rules: no dependencies, #![forbid(unsafe_code)], about 19 KB of tables, and a wasm/ build of about 41 KB with UTF-16 entry points for JavaScript hosts.",
+    "Code that must agree with ICU4X on segmentation without ICU4X's data-provider stack: tests/conformance.rs checks agreement with icu_segmenter on every GraphemeBreakTest.txt case and on 20,000 random rule-stress strings, and CI runs cargo test."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: this is a Rust crate with no published C header. The wasm/ crate exports a plain C ABI (fgs_count_utf8, fgs_boundaries_utf8 and others), but it is unpublished (publish = false) and only built and documented for wasm32. For C++, the catalogued uni-algo needs no FFI.",
+    "Editors and rope-based text that need backward motion, seeking from an arbitrary offset or chunked input: there is no DoubleEndedIterator and no GraphemeCursor equivalent, so use unicode-segmentation or icu_segmenter.",
+    "Word, sentence or line breaking, or locale tailoring: use icu_segmenter.",
+    "Dependencies that must be mature: the crate is one author's port, published 2026-09-17 (versions 0.0.0, 0.1.0 and 0.1.1 the same day), with 43 crates.io downloads and no reverse dependencies as of 2026-10-04.",
+    "Mostly non-ASCII text where the count speedup is the reason to switch: against icu_segmenter the count lead falls to 2.7x (Hindi) to 5.9x (Japanese), and splitting is only 1.3x faster on Russian and Hindi."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none (dev-dependencies only: criterion 0.8, icu_segmenter 2.3.0, unicode-segmentation 1.13.3)",
+    "min_toolchain": "Not declared (no rust-version in Cargo.toml). Edition 2024 needs Rust 1.85+, and tables.rs calls u32::is_multiple_of, which implies Rust 1.87+ (inferred). CI tests stable only.",
+    "platforms": "Any Rust target, including no_std and wasm32. Scalar code only, with no SIMD intrinsics; the SWAR words are read with u64::from_le_bytes, so it is endian-neutral.",
+    "thread_safety": "Not documented. These are pure functions and iterators over a borrowed &str or &[u16], with no global mutable state and only static tables, so they are usable from any thread (inferred from the source).",
+    "drop_in_for_baseline": "partial — covers the forward subset of unicode-segmentation's graphemes/grapheme_indices without the is_extended argument, and has no reverse iteration or GraphemeCursor. Against icu_segmenter, grapheme_boundaries yields cluster start offsets only, whereas segment_str also yields 0 and the final length."
+  },
+  "gotchas": [
+    "The README timings were measured before commit 0bdcd1f (released as 0.1.1). That commit removed the iterators' 64-byte ASCII sample from Driver::new and arms the ASCII shortcut lazily, after 'perf regressions observed in real-world use cases' where callers rebuild an iterator for each cluster. The collect-cluster and collect-offset tables were not re-run on the shipped code.",
+    "count_graphemes still picks its path from a 64-byte head sample. Text that starts ASCII-heavy and then turns non-ASCII pays a word-at-a-time run scan in every gap, and text that starts non-ASCII never takes the bulk path. Both paths are correct; only speed changes.",
+    "In count mode the crate's dedicated count function runs against the baselines' iterator .count(), because neither baseline has a count API. The 35.7x and 66.6x English figures therefore measure the SWAR ASCII shortcut on a pure printable-ASCII sample, not faster rule evaluation.",
+    "The Unicode 17.0 tables are compiled in, so a Unicode upgrade needs a new crate release (scripts/unicode.py regenerates them). In the UTF-16 API, each lone surrogate becomes U+FFFD as its own cluster, which is ICU4X's policy."
+  ],
+  "pick_this_over_siblings_when": "Within the catalog it is the Rust choice for grapheme-only work. Pick ICU4X when you need word or line segmentation, backward iteration or locale data, and pick the same author's unicode-segmenter in JavaScript, ugrapheme in Python, or uni-algo in C++ (which also beats ICU on grapheme and word breaks) for those languages.",
+  "verified_claims_summary": "The author's criterion harness (benches/graphemes.rs) timed ~300-byte UDHR, emoji and Rust-source samples in nine corpora on an unnamed x86_64 Linux machine, with cargo's default bench profile and an unstated rustc. Counting was 2.7x (Hindi) to 35.7x (pure-ASCII English) faster than icu_segmenter 2.3.0 and 7.2x-66.6x faster than unicode-segmentation 1.13.3; collecting cluster slices or start offsets was 1.3x-2.1x faster than icu_segmenter and 2.6x-5.5x faster than unicode-segmentation. Between the first README (commit cf97507) and the current one (d31274d) the crate's code did not change, yet its own times moved by up to 45% (Russian count 0.29 to 0.42 us, Korean collect 0.75 to 0.93 us). The tables also predate 0.1.1's iterator change, so read the ratios as roughly +/-30%.",
+  "status_note": "Active but brand-new: one author, all 20 commits and three releases on 2026-09-17, and no issues yet (one open Renovate PR). MIT-licensed, about 1,100 lines plus generated tables, no unsafe and no dependencies, so it is easy to vendor or pin.",
+  "sources_read": [
+    "https://github.com/cometkim/fast-grapheme-segmenter",
+    "https://github.com/cometkim/fast-grapheme-segmenter/commits/main",
+    "https://github.com/cometkim/fast-grapheme-segmenter/commits/main/README.md",
+    "https://github.com/cometkim/fast-grapheme-segmenter/commits/main/src/lib.rs",
+    "https://github.com/cometkim/fast-grapheme-segmenter/commit/0bdcd1f026190692f5b1cc27c0b58e4b009f1c26",
+    "https://github.com/cometkim/fast-grapheme-segmenter/commit/d31274d0ac1ea824c1de13e670a12440c56711ee",
+    "https://github.com/cometkim/fast-grapheme-segmenter/issues?q=is%3Aissue",
+    "https://github.com/cometkim/fast-grapheme-segmenter/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/README.md",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/cf9750752cefb1d242a66ba153e560896cd41861/README.md",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/cf9750752cefb1d242a66ba153e560896cd41861/Cargo.toml",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/benches/graphemes.rs",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/src/tables.rs",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/tests/conformance.rs",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/scripts/unicode.py",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/wasm/Cargo.toml",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/wasm/build.sh",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/wasm/src/lib.rs",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/LICENSE",
+    "https://crates.io/api/v1/crates/fast-grapheme-segmenter",
+    "https://crates.io/api/v1/crates/fast-grapheme-segmenter/reverse_dependencies"
+  ],
+  "confidence": 0.75
+}

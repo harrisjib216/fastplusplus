@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/cometkim/unicode-segmenter",
+  "one_liner": "Zero-dependency JavaScript UAX #29 grapheme segmenter, about 2x faster than built-in Intl.Segmenter on Node and Bun.",
+  "what_it_does": "Splits JavaScript strings into Unicode 17.0 extended grapheme clusters, using its own data rather than the host's ICU. The grapheme entry point offers four APIs: graphemeSegments(str), a generator of Intl-style {segment, index, input} objects plus internal fields _hd, _catBegin and _catEnd; splitGraphemes(str), a generator of substrings; collectGraphemes(str), which returns an array; and countGraphemes(str), which returns a number. unicode-segmenter/intl-adapter and unicode-segmenter/intl-polyfill provide the Intl.Segmenter interface for granularity 'grapheme' only. There are also emoji and general-category predicate modules.",
+  "how_it_is_fast": "The work stays in plain JavaScript loops that the JIT optimizes, instead of crossing into the engine's native ICU iterator for every segment. Category lookup is a one-load read from flat Uint8Arrays for U+0000-U+309F, U+A660-U+ABFF and the U+1F000-U+1FAFF emoji block, arithmetic for CJK/Vai and Hangul syllables (LV every 28th code point), and a binary search over a packed Uint32Array tail for rare ranges, about 19 KiB in total. All UAX #29 pair rules are precomputed into a 256-entry PAIR mask table, and the GB9c, GB11 and GB12/13 context lives in one small integer, so each boundary test is `!(st & PAIR[before << 4 | after])`. The hot functions are sized to V8's inlining limits: nextState stays under the 100-bytecode Maglev cap and cat() under the 460-bytecode limit. countGraphemes and collectGraphemes each own a loop with no generator, so they skip per-segment objects entirely.",
+  "when_to_use": [
+    "JavaScript engines without Intl.Segmenter or with an outdated one: React Native/Hermes, QuickJS, older browsers and some edge runtimes. The count/split entry is 2,321 bytes min+gzip and 15.8 kB of Hermes bytecode.",
+    "Node.js or Bun server code that segments many short strings, such as chat messages, usernames or form fields: the author's records show 1.9x-2.7x faster than Intl.Segmenter on Node 26.5 and 1.41x-2.04x on Bun 1.3.14.",
+    "Counting graphemes in hot paths (length limits, string width, cursor maths): countGraphemes allocates no segment objects and has its own loop.",
+    "When results must be identical across runtimes: Unicode 17.0 data ships with the package instead of depending on each host's ICU version.",
+    "Replacing graphemer or grapheme-splitter, which implement older Unicode rules (15.0 and 10.0 per the README table) and ran 15x-26x slower on the ASCII case in the M4 Pro record."
+  ],
+  "when_not_to_use": [
+    "Browser code where Firefox matters: in the 20260727 Firefox 154.0b1 record it is 1.49x-1.97x slower than the built-in Intl.Segmenter on every corpus, and the README concedes it.",
+    "Word or sentence segmentation, locale tailoring or backward iteration: only grapheme clusters are implemented (issues #25 word/sentence and #26 DoubleEndedIterator are open), and the adapter throws TypeError for 'word' and 'sentence'.",
+    "Memory-tight cold starts: the author's memory stats show 217 kB of retained JS heap plus 19.1 kB of ArrayBuffers, against 86.1 kB for Intl.Segmenter. The tables are decoded at module load, which the 0.17.2 changelog puts at about 1.5 ms.",
+    "C or C++ code: it is JavaScript only. The same author's Rust port, fast-grapheme-segmenter, is the native option."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "ES2015 runtime with String.prototype.codePointAt, typed arrays, generators and modules (README). Ships as ESM with CommonJS builds and TypeScript declarations from JSDoc.",
+    "platforms": "Any JavaScript engine: Node.js, Bun, Deno, browsers, Hermes (React Native) and QuickJS.",
+    "thread_safety": "Not documented. JavaScript is single-threaded per realm; the lookup tables are module-level typed arrays that are only read after initialization, and each worker loads its own copy.",
+    "drop_in_for_baseline": "partial — intl-adapter's Segmenter matches Intl.Segmenter's API for granularity 'grapheme' only. intl-polyfill installs it only when Intl.Segmenter is missing, so on modern runtimes it changes nothing. The fast paths (countGraphemes, collectGraphemes, splitGraphemes) are separate functions, not part of the Intl interface."
+  },
+  "gotchas": [
+    "The output follows Unicode 17 and can differ from the host's Intl.Segmenter. In a check this session on Node 22.22.0 (ICU 77.1, Unicode 16), Intl.Segmenter kept U+2701 ZWJ U+2701 as one cluster while unicode-segmenter split it, which matches the Unicode 17.0 GraphemeBreakTest.txt shipped in test/_unicode_testdata.js. Issues #149 and #150 reported this as a bug against Unicode 16 test data and were closed. All 766 Unicode 17 test cases passed in the same check.",
+    "The intl-adapter wraps graphemeSegments in a second generator. Its Segments.containing(i) rescans from the start of the string on every call (O(n)), returns the internal object with the _hd/_catBegin/_catEnd fields, and returns the first segment for negative indices.",
+    "Versions before 0.17.0 (2026-07-06) had GB9c and GB11 rule bugs that diverged from Intl.Segmenter: ZWNJ and InCB state leaks in Indic scripts (issue #124, fixed in 0.16.0 on 2026-04-23) and ZWJ joins to non-pictographic characters (fixed in 0.17.0). 0.17.3 also dropped Gurmukhi U+0A4D from the InCB linker set. Pin 0.17.3 or later.",
+    "The benchmark's correctness assertion runs only in Node, Bun and Deno: the browser records (Chrome, Firefox, Safari) were timed without checking output. The graphemer, grapheme-splitter and wasm unicode-segmentation baselines behind the README's '5~48x' and '3.5~8x' claims are not checked either, because the harness notes they do not support Unicode 15.1."
+  ],
+  "pick_this_over_siblings_when": "Pick it in JavaScript. Its Rust port fast-grapheme-segmenter (same author and algorithm, plus a ~41 KB wasm build) is the choice in Rust, ugrapheme in Python, and uni-algo or ICU4X in native code. None of those siblings is benchmarked against Intl.Segmenter.",
+  "verified_claims_summary": "The author's mitata harness, benchmark/grapheme/perf.js run as `node --expose-gc`, first asserts that segments equal Intl.Segmenter's. It then times [...graphemeSegments(s)] against [...Intl.Segmenter().segment(s)] on six short strings of 63-410 UTF-16 units. On an Apple M4 Pro with Node 26.5.0 (record 20260727, code at 0.17.2) unicode-segmenter was 1.9x-2.7x faster; it was 1.41x-2.04x faster on Bun 1.3.14 on the same machine and 2.13x-3.05x faster on an Intel Core Ultra 7 258V with Node 25.2.1 (record 20251213, 0.14.x code that still had the later-fixed GB9c/GB11 bugs, though not on these inputs), and 1.49x-1.97x slower in Firefox 154.0b1. The author's own benchmark/grapheme/_corpora.js says these short cases 'mostly measure call overhead'. An unofficial spot check this session (Node 22.22.0, shared Intel Xeon 2.10 GHz VM, simple hrtime loop, single run) measured 6.6x-8.2x on the same strings and 4.3x on a 39K-unit concatenation, so the lead depends heavily on the engine's Intl.Segmenter version.",
+  "status_note": "Actively maintained: 324 commits, latest release 0.17.3 on 2026-07-29, 112 stars, an e18e recommendation, and 6 open issues that are mostly feature requests (Unicode 18, word/sentence). MIT-licensed pure JavaScript with no build step needed to vendor it.",
+  "sources_read": [
+    "https://github.com/cometkim/unicode-segmenter",
+    "https://github.com/cometkim/unicode-segmenter/commits/main",
+    "https://github.com/cometkim/unicode-segmenter/tree/main/test",
+    "https://github.com/cometkim/unicode-segmenter/issues?q=is%3Aissue",
+    "https://github.com/cometkim/unicode-segmenter/issues/124",
+    "https://github.com/cometkim/unicode-segmenter/issues/149",
+    "https://github.com/cometkim/unicode-segmenter/issues/150",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/README.md",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/package.json",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/benchmark/grapheme/perf.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/benchmark/grapheme/_corpora.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/benchmark/grapheme/_testcases.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/benchmark/grapheme/_records/20260727-apple_m4_pro-macos_26.5-nodejs_26.5.0.txt",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/grapheme.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/core.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/utils.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/general.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/index.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/_grapheme_data.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/intl-adapter.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/src/intl-polyfill.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/test/_unicode_testdata.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/test/grapheme.js",
+    "https://raw.githubusercontent.com/cometkim/unicode-segmenter/HEAD/test/_helper.js",
+    "https://raw.githubusercontent.com/cometkim/fast-grapheme-segmenter/HEAD/tests/testdata.rs",
+    "https://registry.npmjs.org/unicode-segmenter"
+  ],
+  "confidence": 0.8
+}
