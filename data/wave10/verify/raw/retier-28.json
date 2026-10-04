@@ -1,0 +1,44 @@
+[
+  {
+    "id": "https://github.com/imazen/mozjpeg-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Tier C stands; the '6% faster' trellis claim is not like-for-like: the Rust side times TrellisMode::Optimized (standard-table rates, no gather or requantize passes) with the Adaptive limiter (lookback 8/16, 3/4 candidates, blocks with more than 48/55 non-zero coefficients), while the C side is mozjpeg-sys's upstream quantize_trellis doing the full search with no speed limiter; the adaptive limiting landed in 0.6.0, the same release that first claimed 7% faster, and the timed image's output sizes were never checked.",
+    "corrections": {
+      "claimed_speedup": "README table at 2048x2048: Trellis (AC + DC) 197 ms vs C mozjpeg 210 ms ('6% faster'), but the Rust side runs TrellisMode::Optimized with adaptive candidate limiting against the C full trellis search, so it does less work rather than the same algorithm faster, and output sizes for the timed image are unchecked; Baseline (Huffman opt) 42 ms vs 9 ms for C mozjpeg ('4.6x slower'). README also claims 0.05-0.80% smaller files in trellis modes."
+    },
+    "urls_opened": [
+      "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/trellis.rs",
+      "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/tests/bench_2k.rs",
+      "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/CHANGELOG.md"
+    ]
+  },
+  {
+    "id": "https://github.com/libaudioflux/audioflux",
+    "evidence_tier_final": "C",
+    "tier_reason": "Tier C stands; the librosa ratios are inflated and the torchaudio comparison is the usable one: run_librosa.py times librosa.feature.melspectrogram, and librosa 0.10.0 rebuilds the mel filter bank on every call (filters.mel caching is off without LIBROSA_CACHE_DIR) and the call omits sr so it runs at the 22050 Hz default rather than 32000 Hz, while audioFlux and torchaudio build their banks at init outside the timer; audioFlux's STFT also runs omp_get_max_threads()/2 OpenMP threads (32 on the 3970X) with no thread limits set for any library.",
+    "corrections": {
+      "claimed_speedup": "Against torchaudio (the like-for-like baseline; Linux AMD Threadripper 3970X, audioFlux on 32 OpenMP threads): 1.2-7.1x across time steps, but 0.92x (slower) at 100 steps; on a Linux Intel i7-6850K audioFlux is slower than torchaudio at 10 steps and above (13.07378 s vs 12.14323 s at 3000); on macOS Intel and Apple M1 torchaudio is faster for short inputs while audioFlux is faster for long ones. The librosa ratios (about 56x at 1 step and 10.5x at 3000 steps, derived from page data) are inflated: librosa rebuilt its mel filter bank inside the timed call (filters.mel cache off) at a 22050 Hz default sample rate. Off the category's C baselines in every case.",
+      "caveats": "Off-baseline (librosa and torchaudio, Python). librosa rows inflated by per-call filter-bank construction and a mismatched sample rate; audioFlux runs 32 OpenMP threads unthrottled. Build flags live in src/CMakeLists.txt (Linux clang -O3 with MKL and libomp) but the measured build is not recorded. Open issues #35 (mel output changes after importing torch), #46 (unreported vulnerability), #27 (1.4 GB allocation for a 3-minute track), #44 (arm64, unanswered); PyPI stuck at 0.1.9 (2024-05-24); run_benchmark.py's -r and -er flags are swapped against the README."
+    },
+    "urls_opened": [
+      "https://raw.githubusercontent.com/libAudioFlux/audioFlux/master/benchmark/run_librosa.py",
+      "https://raw.githubusercontent.com/libAudioFlux/audioFlux/master/benchmark/README.md",
+      "https://raw.githubusercontent.com/libAudioFlux/audioFlux/master/src/CMakeLists.txt"
+    ]
+  },
+  {
+    "id": "https://github.com/farama-foundation/tinyscaler",
+    "evidence_tier_final": "C",
+    "tier_reason": "Tier C stands with corrections: the author's original repository github.com/222464/TinyScaler is reachable and holds the benchmark scripts (examples/benchmark_bilinear.py and benchmark_area.py) and a scaler.c identical to the 1.2.8 sdist, so the verifier's 'script unreachable' caveat no longer holds (still no compiler or flags). The 206x against scikit-image is invalid: skimage was called as resize(img, (852, 567)), producing a transposed 852x567x4 output with default Gaussian anti-aliasing, and Pillow received uint8 RGBA while TinyScaler and OpenCV ran float32 RGBA (that pair is fair; OpenCV bilinear is 1.64x faster). The 1.87x area win runs a mis-weighted kernel: the area weight's second term is always 1 (the loop never reaches src_upper), so weights are 1-2 and a 2x downscale is an overlapping 3x3 mean.",
+    "corrections": {
+      "claimed_speedup": "Bilinear, 100 resizes (author's benchmark_bilinear.py): TinyScaler 0.797 s vs OpenCV 0.487 s (OpenCV about 1.6x faster, fair float32 RGBA pair); vs Pillow 12.67 s (about 15.9x, but Pillow received uint8 RGBA and uses a wider antialiased filter); the scikit-image row (164.45 s, about 206x) is invalid (transposed 852x567 output with default Gaussian anti-aliasing). Area filter: TinyScaler 4.35 s vs OpenCV 8.12 s (about 1.9x), but the area kernel is mis-weighted (weights 1-2, overlapping 3x3 mean at 2x).",
+      "benchmark_url": "https://github.com/222464/TinyScaler/tree/master/examples",
+      "caveats": "Repository moved from Farama-Foundation (404) to the author's github.com/222464/TinyScaler; PyPI 1.2.8 deprecated 2025-08-11. Correctness: the area kernel's second weight term is always 1 (overlapping 3x3 mean at 2x), bilinear reads out of bounds for 1-pixel-wide or -high sources, SIMD builds only with GCC or Clang on x86_64 or 32-bit arm (aarch64, Apple Silicon and MSVC wheels are scalar), and the GIL is held during resize."
+    },
+    "urls_opened": [
+      "https://raw.githubusercontent.com/222464/TinyScaler/master/examples/benchmark_bilinear.py",
+      "https://raw.githubusercontent.com/222464/TinyScaler/master/examples/benchmark_area.py",
+      "https://raw.githubusercontent.com/222464/TinyScaler/master/tinyscaler/scaler.c"
+    ]
+  }
+]

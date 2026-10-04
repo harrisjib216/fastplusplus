@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/brooooooklyn/image",
+  "one_liner": "Rust napi-rs addon for Node.js image resize and WebP/AVIF/JPEG/PNG encoding; edges out sharp on small-thumbnail throughput.",
+  "what_it_does": "A prebuilt Node-API addon (plus a WebAssembly package) that decodes JPEG, PNG, WebP, AVIF, TIFF and other still formats, applies a chained pipeline (EXIF rotate, resize, crop, blur, composite and similar) and encodes to WebP, AVIF, JPEG, PNG or HEIC. The API is `new Transformer(bytes).rotate().resize(w, h, filter).webp(q)`, which returns a Promise<Buffer> run on the libuv thread pool; every encoder has a blocking `*Sync` twin. Standalone optimizers cover `losslessCompressPng` (oxipng), `pngQuantize` (lossy palette) and `compressJpeg` (mozjpeg). It is an alternative to sharp, not a drop-in: method names, defaults and the absence of `.toBuffer()` differ.",
+  "how_it_is_fast": "There is no new codec: each job is one libuv task that decodes with the Rust image crate, runs the image crate's separable Lanczos3 resize, then calls libwebp's simple API (WebPEncodeRGB/RGBA, default method) or libavif with libaom (speed 5, libaom threads set to the core count). The measured edge over sharp comes from low per-call overhead on tiny images and from running many independent jobs side by side when UV_THREADPOOL_SIZE is raised, while sharp runs each job as its own multi-threaded libvips pipeline. Release builds use fat LTO with codegen-units=1, CI enables mozjpeg's NASM SIMD (`with_simd`), libwebp is compiled with its SSE4.1/AVX2/NEON paths, and a separate `fastResize` method uses the SIMD fast_image_resize crate, which the benchmark does not call.",
+  "when_to_use": [
+    "Node.js servers or build scripts that turn many small JPEGs into WebP or AVIF thumbnails and can raise UV_THREADPOOL_SIZE to the core count (the recorded 1.8x is WebP at UV_THREADPOOL_SIZE=10).",
+    "You want one npm package with prebuilt binaries for macOS, Windows (x64, arm64, ia32), Linux glibc and musl, Android arm64 and FreeBSD, with no system libvips.",
+    "In-browser processing through @napi-rs/image-wasm32-wasi when you can serve COOP/COEP headers for cross-origin isolation.",
+    "Combined resize plus PNG/JPEG size optimization in one dependency (oxipng, palette quantization, mozjpeg re-encode).",
+    "HEIC decode or encode on macOS or Windows through the OS codecs (ImageIO, WIC)."
+  ],
+  "when_not_to_use": [
+    "Large images or memory-tight services: every job decodes the whole image into memory and clones it before transforms, with no tiled streaming or JPEG shrink-on-load in the binding's decode path.",
+    "Animated images (no animation pipeline; GIF, OpenEXR and farbfeld are disabled in the published build) or HEIC on Linux, Android, FreeBSD or WASM.",
+    "With the default libuv pool of 4 threads the recorded edge is only 1.20x for WebP and 1.08x for AVIF (derived from page data), within what different encoder settings or images could erase.",
+    "Long-running processes that call `Transformer.fromRgbaPixels(...).png()` in a loop: open issue #128 (v1.4.0, macOS 15.4.1, Node 23.11.0) reports about 16.8 MB retained per call even after GC.",
+    "Migrations that need sharp's exact output: equal numeric quality does not give equal visual quality, and the defaults differ (here WebP quality 90, AVIF quality 80 at 4:4:4)."
+  ],
+  "integration": {
+    "form": "Prebuilt Node-API native addon on npm (Rust cdylib, one optional-dependency package per platform) plus a separate WASM package",
+    "dependencies": "None at runtime beyond Node.js; statically bundles the image crate 0.25, libwebp (libwebp-sys 0.14), libavif 0.14 with libaom, mozjpeg-sys 2, oxipng 10, fast_image_resize 6, resvg 0.48 and lodepng 3; HEIC needs the OS codec (ImageIO on macOS, HEIF/HEVC extensions for WIC on Windows)",
+    "min_toolchain": "Node-API 3 (package.json engines: node >= 10; the README asks for a current Node.js LTS); building from source needs Rust with edition 2024 and @napi-rs/cli 3",
+    "platforms": "macOS x64/arm64; Windows x64/arm64/ia32; Linux glibc x64/arm64/armv7; Linux musl x64/arm64; Android arm64; FreeBSD x64; wasm32-wasip1-threads",
+    "thread_safety": "Async methods run on the libuv thread pool and *Sync methods block the JS thread. A Transformer caches its decoded image behind a raw pointer marked Send and Sync with no lock (ThreadsafeDynamicImage::get hands out &mut from &self), so concurrent async encodes on one Transformer are not documented as safe; use one Transformer per job, as the benchmark does.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README table is from commit a09b74d (April 2022): @napi-rs/image 1.1.0 built on image 0.24 with jpeg-decoder 0.2 (jpeg_rayon), libwebp-sys 0.6 and a libavif-rs 0.10 fork, against sharp 0.30.3 per that commit's yarn.lock. The current 1.15.0 decodes JPEG with zune-jpeg through image 0.25 and has not been re-measured.",
+    "The benchmark input is a single 600x450 4:2:0 JPEG with EXIF orientation 5, resized to 225x300, so per-call overhead and scheduling dominate; output sizes and quality are not compared, and AVIF also oversubscribes the CPU (up to core-count parallel jobs, each with libaom threads set to the core count).",
+    "x86_64 Linux and Windows builds enable libwebp-sys's avx2 and sse41 features, which compile the vendored libwebp with -mavx2 -msse4.1 (libwebp-sys build.rs). Issue #165 reported 'Illegal instruction' on older Xeons from v1.10.0; it is closed and .cargo/config.toml now drops +avx2 rustflags for the quantizer, but whether the libwebp path is safe on pre-AVX2 CPUs is not documented.",
+    "Releases around 1.1.0 linked imagequant 4.0.0, which is GPL-3.0-or-later; the current Cargo.toml no longer depends on imagequant, so pin a recent version if license matters."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are codecs (libjpeg-turbo, zenjpeg, wpd, fpng, oxipng, mozjpeg-rs); pick @napi-rs/image when you are in Node.js and want one prebuilt package for resize plus WebP/AVIF encode plus PNG/JPEG optimization. Pick the codec siblings when you own a native pipeline and need codec-level speed, since this package reuses libwebp, libaom, mozjpeg and oxipng rather than beating them.",
+  "verified_claims_summary": "bench/bench.mjs, run in April 2022 on an Apple M1 Max (macOS 12.3.1) with @napi-rs/image 1.1.0 and sharp 0.30.3, rotated, Lanczos3-resized and encoded one small JPEG: WebP 202 vs 169 ops/s and AVIF 26 vs 24 ops/s with the default libuv pool, and 431 vs 238 and 36 vs 32 ops/s with UV_THREADPOOL_SIZE=10 (1.08x to 1.81x, derived from page data). Node version, compiler and flags were not recorded; both sides encode with libwebp and libaom, so the gap is decode, resize and job scheduling, not a faster encoder.",
+  "status_note": "Actively maintained (release 1.15.0, last commit 2026-09-30, 417 stars, 4 open issues) and MIT-licensed with prebuilt binaries, but the performance table has not been re-run since 2022.",
+  "sources_read": [
+    "https://github.com/Brooooooklyn/Image",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/README.md",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/bench/bench.mjs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/with-exif.jpg",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/Cargo.toml",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/src/transformer.rs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/src/webp.rs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/src/avif.rs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/README.md",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/package.json",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/packages/binding/package.json",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/HEAD/.github/workflows/CI.yml",
+    "https://github.com/Brooooooklyn/Image/commits/main/bench/bench.mjs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/README.md",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/bench/bench.mjs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/package.json",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/yarn.lock",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/packages/binding/package.json",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/packages/binding/Cargo.toml",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/a09b74d/packages/binding/src/avif.rs",
+    "https://raw.githubusercontent.com/Brooooooklyn/Image/7cd00d4/packages/binding/Cargo.toml",
+    "https://github.com/Brooooooklyn/Image/issues?q=is%3Aissue+performance+OR+slow+OR+memory+OR+leak+OR+crash",
+    "https://github.com/Brooooooklyn/Image/issues/128",
+    "https://github.com/Brooooooklyn/Image/issues/165",
+    "https://github.com/Brooooooklyn/Image/pulls?q=is%3Apr+avx2",
+    "https://raw.githubusercontent.com/NoXF/libwebp-sys/master/build.rs",
+    "https://crates.io/api/v1/crates/imagequant/4.0.0"
+  ],
+  "confidence": 0.75
+}

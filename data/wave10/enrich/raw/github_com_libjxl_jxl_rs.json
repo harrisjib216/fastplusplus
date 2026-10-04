@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/libjxl/jxl-rs",
+  "one_liner": "Memory-safe pure-Rust JPEG XL decoder (Chrome, Firefox); roughly libjxl parity single-threaded, faster on lossless, slower on lossy VarDCT.",
+  "what_it_does": "jxl-rs decodes JPEG XL (ISO/IEC 18181) codestreams and containers, including animation, progressive and partial rendering, to 8/16-bit or float buffers; it is developed inside the JPEG XL project and is the decoder Chrome/Chromium and Firefox use. The API is a Rust typestate decoder (JxlDecoder<Initialized>, <WithImageInfo>, <WithFrameInfo>, with process/flush_pixels and an optional caller-supplied JxlParallelRunner), plus an image-crate hook (jxl-image-rs-integration) and a CLI (jxl_cli) that writes PNG/PPM/PGM/APNG/EXR/NPY and has a --speedtest mode. It is decode-only and has no libjxl-compatible C API.",
+  "how_it_is_fast": "SIMD kernels are written once against a SimdDescriptor trait and the simd_function! macro picks AVX-512F+BW, AVX2+FMA+F16C, SSE4.2 or scalar at runtime on x86-64 (NEON on aarch64, simd128 on wasm32). The March 2026 speed-up work re-landed from the closed PR #705 through PRs #707-#723 (tracked in issue #724) added bounds-check elimination, inlining changes, a faster BitReader, allocation removal and specialised modular predictor and MA-tree paths. Rows can be processed in parallel through the runner interface; jxl_cli drives it with a rayon pool.",
+  "when_to_use": [
+    "Rust services, browsers or tools that must decode untrusted JPEG XL input and want to avoid linking the C++ libjxl: the jxl crate denies unsafe code at its root and confines unsafe to SIMD and reviewed hot spots",
+    "Lossless or modular JPEG XL images: in the PR #705 single-thread table jxl-rs was 1.04x to 1.27x libjxl on five of eight images (sunset_logo, green_queen_modular, delta_palette, lz77_flower, patches_lossless)",
+    "Progressive or incremental display where lower memory use and partial rendering matter more than peak MP/s",
+    "Targets libjxl is awkward to build for, such as wasm32 (simd128) or pure-Cargo builds, or projects already using the image crate (register_image_decoding_hook)"
+  ],
+  "when_not_to_use": [
+    "You need an encoder: jxl-rs only decodes (encoder support for the image integration is an open request, issue #959)",
+    "Throughput-critical decoding of lossy VarDCT photos, the common web case: 0.93x and 0.94x libjxl in the PR #705 table, and the edge-preserving filter is called 'very slow' in open issue #950; a WebSearch snippet (page not opened) from the Chromium integration period cites 24-35% slower decode times than libjxl",
+    "Weighted-predictor-heavy modular images such as bicycles (0.81x libjxl in the same table)",
+    "C or C++ code bases that want a drop-in for libjxl's JxlDecoder C API; no C ABI crate ships in the workspace",
+    "You need cropped decoding, LF-only (reduced resolution) decoding, some progressive modes or EXIF/XMP extraction: open issues #933, #857, #730 and #674"
+  ],
+  "integration": {
+    "form": "crate (jxl 0.7.4 on crates.io, plus jxl-image-rs-integration and the jxl_cli binary)",
+    "dependencies": "thiserror, byteorder, num-derive, num-traits, array-init and internal jxl_transforms/jxl_simd/jxl_macros; optional brotli-decompressor (brotli feature) and tracing; jxl_cli adds rayon",
+    "min_toolchain": "Rust 1.89.0 (edition 2024)",
+    "platforms": "any Rust target with scalar fallback; runtime-dispatched SIMD on x86-64 (SSE4.2, AVX2+FMA+F16C, AVX-512F+BW), aarch64 NEON and wasm32 simd128",
+    "thread_safety": "Sharing one decoder across threads is not documented; parallel decode comes from an optional JxlParallelRunner passed to process/flush_pixels (jxl_cli uses a rayon pool), and the project runs Shuttle concurrency tests",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 1.04x total in PR #705 came from a PGO build on an AVX-512 EPYC 9645; the repository's release profile is only lto = \"thin\", panic = \"abort\", debug = true, so a plain cargo build is not that build",
+    "-Ctarget-cpu=native halved modular decode speed in issue #803 (i5-12400, 14.757 to 7.895 MP/s, weighted predictor worst; closed), so test target-cpu flags before shipping them",
+    "jxl_cli --speedtest uses all cores by default (--num-threads 0 means automatic); pass --num-threads 1 and a single-threaded djxl run to compare like for like",
+    "The AVX-512 path the headline numbers ran on is not reliably exercised by CI: open issue #966 shows the 'avx512' job silently falls back to AVX2 on GitHub runners without AVX-512 (AMD EPYC 7763)"
+  ],
+  "pick_this_over_siblings_when": "No other JPEG XL decoder is catalogued: the libjxl fast_lossless (fjxl) entry is an encoder, so the two pair up (fjxl to write, jxl-rs to read in Rust); pick jxl-rs over the PNG/WebP/JPEG siblings (image-png, zune-png, wpd, zenjpeg) only when the format itself is JPEG XL.",
+  "verified_claims_summary": "One first-party single-threaded table from PR #705 (closed unmerged 2026-09-03; description targets libjxl 0.12, but libjxl's build, thread setting and repetitions are not stated) on an AMD EPYC 9645 with a PGO + AVX-512 jxl-rs build: 0.81x to 1.27x libjxl per image, with a 1.04x total that equals the geometric mean of the per-image ratios, while the arithmetic mean of MP/s gives 0.98x (derived from page data). The same PR's CI run on a GitHub x86-64 runner measured patches_lossless at 3.313 MP/s against 14.30 MP/s in the EPYC table, a 4.3x gap where the other seven images differ by 1.14x to 1.51x (derived from page data), so that row may not be the same file or setting; no number has been published for current main against libjxl.",
+  "status_note": "Very active (commits to 2026-10-03, jxl 0.7.0-0.7.4 released in September 2026, 317k crates.io downloads) and BSD-3-Clause; shipped in Chrome and Firefox, but performance parity with libjxl rests on one first-party PGO measurement.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl/Cargo.toml",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl/src/lib.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl/src/api/options.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl/src/api/decoder.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl_simd/Cargo.toml",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl_simd/src/lib.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl_simd/src/x86_64/mod.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl_cli/Cargo.toml",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/jxl_cli/src/main.rs",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/libjxl/jxl-rs/HEAD/.github/workflows/pull_request.yml",
+    "https://github.com/libjxl/jxl-rs/pull/705",
+    "https://github.com/libjxl/jxl-rs/issues/724",
+    "https://github.com/libjxl/jxl-rs/pull/723",
+    "https://github.com/libjxl/jxl-rs/issues/803",
+    "https://github.com/libjxl/jxl-rs/issues/950",
+    "https://github.com/libjxl/jxl-rs/issues/966",
+    "https://github.com/libjxl/jxl-rs/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/libjxl/jxl-rs/issues?q=is%3Aissue+slower",
+    "https://github.com/libjxl/jxl-rs/pulls?q=is%3Apr+author%3Ahjanuschka",
+    "https://github.com/libjxl/bench",
+    "https://crates.io/api/v1/crates/jxl"
+  ],
+  "confidence": 0.7
+}

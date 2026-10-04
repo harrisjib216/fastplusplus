@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/imazen/rav1d-safe",
+  "one_liner": "Memory-safe Rust AV1 decoder (rav1d fork); faster only than upstream rav1d with its assembly disabled, slower than dav1d.",
+  "what_it_does": "Fork of memorysafety/rav1d (itself a Rust port of dav1d) that decodes AV1 (8/10/12-bit, I400 to I444, film grain, HDR metadata) under crate-wide forbid(unsafe_code). All hand-written assembly is replaced by safe Rust SIMD. The native Rust API is Decoder::new()/with_settings(Settings), decode(&[u8]) returning Option<Frame>, and flush(), with zero-copy PlaneView8/PlaneView16 plane views, a Strictness policy and cooperative cancellation through Decoder::set_stop. Input must be raw OBU data (strip IVF/WebM framing, or use zenavif for AVIF) and output is planar YUV only. The optional c-ffi feature exports dav1d_* C symbols but lifts the unsafe-code ban.",
+  "how_it_is_fast": "Against upstream's no-assembly build, the speed comes from having SIMD at all. rav1d-safe ports dav1d's x86 and ARM assembly families to safe Rust SIMD: motion compensation, inverse transforms, intra prediction, CDEF, loop filter, loop restoration, film grain, palette and refmvs, plus an inlined msac entropy decoder. It uses archmage capability-token dispatch (AVX2, some AVX-512, NEON) and safe_unaligned_simd loads. Upstream rav1d with default-features=false falls back to its scalar Rust code. Runtime DisjointMut overlap tracking stays on in the default build; on 4K AVIF it costs about 3.9 of 42.4 ms per frame against dav1d 1.5.3 (docs/SAFE_VS_DAV1D.md).",
+  "when_to_use": [
+    "Decoding untrusted AVIF/AV1 stills in a Rust server where a forbid(unsafe_code) decoder with no assembly is a hard requirement",
+    "As a replacement for upstream rav1d built without assembly (for example, a target or policy that rules out nasm/asm): on 2K-8K photo stills it took 0.51-0.78x the time, and on map stills 0.755-1.002x",
+    "Tiled stills decoded with tile threading (1/4/8 workers, max_frame_delay=1), which works in the default checked build",
+    "Verifying AV1 encoder output: the default Strictness::Strict reports desynchronised symbol streams as errors where dav1d would conceal them",
+    "Cargo-only builds that still need SIMD on x86-64 (AVX2/AVX-512) and aarch64 (NEON)"
+  ],
+  "when_not_to_use": [
+    "When throughput is what matters: dav1d and default (assembly) rav1d are faster. The author's 2026-10-01 profile puts the default build at 1.72-1.74x dav1d 1.5.3's time on 4K stills, and the 2026-09-07 grid at 1.8-8.6x upstream's time (up to 12.8x against upstream frame threading)",
+    "Inter-heavy video playback: on a 480p inter stream the default build took 2.68 ms/frame against dav1d's 0.83, mostly in warp motion compensation, and frame threading in 0.6.0 needs the unchecked feature",
+    "Closed-source products without buying Imazen's commercial licence: the crate is AGPL-3.0-only OR LicenseRef-Imazen-Commercial (the code inherited from dav1d/rav1d is BSD-2-Clause)",
+    "Pre-AVX2 x86 (no SSE tier, so it falls back to scalar) or ARM cores where dav1d's SVE2/dotprod/i8mm paths matter (only baseline NEON is ported)",
+    "Streams that need S-frames, SVC operating-point selection or the argon vectors: 19 of 803 dav1d-test-data vectors are not exercised"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "archmage, safe_unaligned_simd, rav1d-disjoint-mut, enough, whereat, parking_lot, zerocopy, strum, atomig, bitflags, raw-cpuid, aligned and small helpers; build dependencies cc and nasm-rs (assembly is used only by the opt-in asm/partial_asm modes); libc only with c-ffi",
+    "min_toolchain": "Rust 1.89 (edition 2024); the AVIF test and benchmark tooling needs Rust 1.93",
+    "platforms": "x86-64 (AVX2 and partial AVX-512 SIMD; scalar below AVX2), aarch64 (NEON); i686, armv7 and riscv64gc listed as supported targets",
+    "thread_safety": "Internal tile-thread pool set by Settings.threads; Frame is Arc-backed and cloneable; Send/Sync for Decoder not documented",
+    "drop_in_for_baseline": "partial — the native Rust API differs from upstream rav1d's Decoder/Picture API (decode(&[u8]) vs send_data/get_picture); the c-ffi/dav1d-compat features export dav1d_* C symbols but disable forbid(unsafe_code)"
+  },
+  "gotchas": [
+    "Strictness::Strict is the default and rejects non-conforming streams that dav1d conceals; set Strictness::Lenient for dav1d-identical behaviour on corrupt input",
+    "Feature names moved after 0.6.0: the published crate's unchecked feature (frame threading, no overlap tracking) is called untracked on main, which also adds frame threading to tracked builds. The README table still says unchecked",
+    "Published 0.6.0 returns wrong mastering-display values (wrong fixed-point units; a 1000-nit maximum reads as 25.6 nits). The fix is only on main (Unreleased)",
+    "frame_size_limit defaults to 120 megapixels and bounds only declared dimensions, not decode time; use set_stop for cancellation on untrusted input"
+  ],
+  "pick_this_over_siblings_when": "Pick dav1d (catalogued, BSD-2-Clause, beats libaom) whenever speed or permissive licensing matters. Pick rav1d-safe only when a Rust decoder with no assembly and forbid(unsafe_code) is required. rusty-av1-toolkit is catalogued for its rav1e encoder speed; its rav1d-derived decoder has no catalogued decoder benchmark.",
+  "verified_claims_summary": "On an AMD Ryzen 9 7900X with Rust 1.98.1 (LLVM 22.1.8), fat LTO, one codegen unit and identical RUSTFLAGS for both arms, checked rav1d-safe (commit be5b244, staged 0.6.0 with a git-pinned archmage, not the crates.io package that depends on archmage ^0.9.29) decoded 12 single-frame 8-bit 4:2:0 IVF stills in 0.680x (1 worker), 0.821x (4) and 0.813x (8) the time of upstream rav1d d3d1cd6 built with default-features=false. The stills are photo and map at 2K/4K/8K, each with minimum and eight tiles. Figures are geometric means of medians of five paired repetitions, and every run was MD5-checked against upstream and dav1d 1.5.3. The baseline is a non-default scalar build, and compare.py's rotate-then-reverse ordering cancels out for two arms, so upstream always ran first in each pair (the page discloses the fixed order).",
+  "status_note": "Very active (commits on 2026-10-01; 0.6.0 published 2026-09-08 with about 15k total downloads; 451 closed issues, none open), but AGPL-3.0-only or a paid commercial licence and a speed deficit against dav1d make it a memory-safety pick, not a speed upgrade.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/README.md",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/noasm-2026-09-08/README.md",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/noasm-2026-09-08/reproduce.py",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/noasm-2026-09-08/EVIDENCE.json",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/upstream-2026-09-07/README.md",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/upstream-2026-09-07/driver/Cargo.toml",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/upstream-2026-09-07/driver/src/main.rs",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/stills-2026-09-07/compare.py",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/tracker-sharding-2026-09-07/build.py",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/tracker-sharding-2026-09-07/drivers/current/Cargo.toml",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/tracker-sharding-2026-09-07/drivers/current/main.rs",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/release/0.6.0/feature-renames.json",
+    "https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/docs/SAFE_VS_DAV1D.md",
+    "https://crates.io/api/v1/crates/rav1d-safe",
+    "https://crates.io/api/v1/crates/rav1d-safe/0.6.0",
+    "https://crates.io/api/v1/crates/rav1d-safe/0.6.0/dependencies",
+    "https://github.com/imazen/rav1d-safe",
+    "https://github.com/imazen/rav1d-safe/commits/main",
+    "https://github.com/imazen/rav1d-safe/issues",
+    "https://github.com/imazen/rav1d-safe/issues?q=is%3Aissue%20state%3Aclosed"
+  ],
+  "confidence": 0.75
+}

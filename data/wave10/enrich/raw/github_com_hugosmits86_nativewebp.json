@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/hugosmits86/nativewebp",
+  "one_liner": "Pure-Go lossless WebP (VP8L) encoder; README shows it 1.2-2.3x faster than Go's image/png at BestCompression with 14-26% smaller files.",
+  "what_it_does": "A cgo-free Go package that writes lossless WebP (VP8L), optionally inside a VP8X container, plus animated WebP via EncodeAll (ANIM/ANMF frames). The API mirrors image/png: Encode(w, img, *Options) with a CompressionLevel (BestSpeed 0, Default 4, BestCompression 6) and a UseExtendedFormat flag. Decoding is a thin wrapper around golang.org/x/image/webp that also registers the 'webp' format, with a DecodeIgnoreAlphaFlag helper for VP8X files. There is no lossy encoder.",
+  "how_it_is_fast": "It is a deliberately simple VP8L encoder: subtract-green, then a predictor transform that picks one of the 14 VP8L predictors per tile by a Gini-style histogram score, then pixel-granular LZ77 (3-pixel hash, chain depth 128, matches up to 4,096 pixels, VP8L 2-D distance codes) with an 11-bit colour cache, entropy-coded with one set of five Huffman codes for the whole image. Working on 32-bit pixels instead of bytes, with no meta-Huffman image and no cross-colour transform (it is hard-coded off), keeps the work per pixel low compared with Go's compress/flate at level 9 behind png.BestCompression. Paletted inputs (*image.Paletted) take the colour-indexing transform with pixel bundling instead.",
+  "when_to_use": [
+    "Go services that must stay CGO_ENABLED=0 and want lossless WebP output (thumbnails, UI assets, screenshots, LED-matrix frames) without linking libwebp.",
+    "Replacing image/png at png.BestCompression when WebP is an acceptable output format and smaller lossless files matter; the README's five gallery images came out 14-26% smaller.",
+    "Lossless animated WebP from Go (EncodeAll), where image/gif's 256-colour limit is the alternative.",
+    "Small to mid-size images; the published numbers are all on Google's lossless-and-alpha gallery images."
+  ],
+  "when_not_to_use": [
+    "When you need lossy WebP, or the best lossless ratio: there is no lossy mode, no meta-Huffman codes and no cross-colour transform, and nothing in the repo compares it with libwebp (cwebp -lossless) on speed or size.",
+    "When the alternative is image/png at its default level or BestSpeed: only png.BestCompression (flate level 9) was compared, and a third-party report (issue #18, i5-13600KF, Go 1.26.1, March 2026, before the May 2026 revision) measured the default encoder at 400 ms vs 150 ms for png.BestCompression on a large image and 9 vs 7 ms on a small one.",
+    "Images above 16,384 pixels on either side: Encode returns 'invalid image size'.",
+    "Large batches needing parallel encode inside one image: the encoder is single-goroutine and allocates several full-image buffers (an NRGBA copy, a pixel slice, a deltas slice and an int slice of 4 entries per pixel)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/image v0.24.0 (decoder only); no cgo",
+    "min_toolchain": "Go 1.22.2 (go.mod)",
+    "platforms": "any Go target (pure Go, no assembly)",
+    "thread_safety": "not documented; Encode keeps no package-level state, so concurrent calls on different images look safe from the code, but EncodeAll writes clamped values back into the caller's Durations and Disposals slices",
+    "drop_in_for_baseline": "partial — same Encode(w, img, opts) shape as image/png, but it writes WebP, not PNG, so every consumer must accept WebP"
+  },
+  "gotchas": [
+    "CompressionLevel only changes the predictor tile size (transBits); the LZ77 search, colour cache and Huffman coding are identical at every level. From getHistoBits/getTransformBits, Default and BestCompression produce the same tile size, and so the same output, for images between about 204x204 and 816x816 pixels, so 'both at maximum compression' in the README may mean the default encoder for its gallery images (their sizes are not stated).",
+    "Encode and EncodeAll ignore errors from w.Write and return nil on a failed write, despite the doc comment; internal failures surface as panics rather than errors (bitWriter.writeBits panics on overflow; issues #3, #15 and #16 were encoder panics, all closed).",
+    "The 15-bit Huffman depth limit is a weight floor (counts raised to total>>13), not a guaranteed length-limiting algorithm: a simulation of the same rule gives 16-18-bit codes for Fibonacci-shaped histograms of 17-19 symbols, which the writer would emit as code-length symbols 16-18 (repeat codes) and corrupt the stream. Derived from the code; not observed on a real image.",
+    "Tests compare against stored golden bytes and round-trip only through golang.org/x/image/webp; nothing checks output against libwebp's decoder."
+  ],
+  "pick_this_over_siblings_when": "Pick it when the output must be WebP from a cgo-free Go build; no other catalogued image-codecs entry is a Go WebP encoder. If PNG output is fine and native code is acceptable, fpnge and fpng (C/C++) encode PNG one to two orders of magnitude faster than libpng, and libjxl's fast_lossless or QOI give much faster lossless encodes in other formats.",
+  "verified_claims_summary": "A first-party 'quick benchmark' in the README encodes five images from Google's WebP lossless-and-alpha gallery with nativewebp.BestCompression vs Go's image/png at png.BestCompression: 1.21-2.31x less time per image (412.2 ms vs 222.5 ms in total, 1.85x) and 80.5% of the PNG bytes in total, derived from page data. No benchmark code (no Benchmark functions), Go version or CPU is published, the comparison is across formats (VP8L vs PNG/flate-9) rather than two encoders of one format, and a third-party report from March 2026 (issue #18) found the encoder slower than png.BestCompression on its images.",
+  "status_note": "Maintained by one author (MIT, 462 stars; last commits 2026-05-10 added compression levels, the revised README numbers and a 256 MiB decode read limit); feature request #17 is open and issue #18's resolution is not visible on the page, but the code is small (about 1,350 lines of non-test Go) and easy to vendor.",
+  "sources_read": [
+    "https://github.com/HugoSmits86/nativewebp",
+    "https://github.com/HugoSmits86/nativewebp/commits",
+    "https://github.com/HugoSmits86/nativewebp/issues?q=is%3Aissue",
+    "https://github.com/HugoSmits86/nativewebp/issues/18",
+    "https://github.com/HugoSmits86/nativewebp/issues/17",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/README.md",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/go.mod",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/writer.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/reader.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/huffman.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/transform.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/bitwriter.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/writer_test.go",
+    "https://raw.githubusercontent.com/HugoSmits86/nativewebp/HEAD/reader_test.go"
+  ],
+  "confidence": 0.7
+}

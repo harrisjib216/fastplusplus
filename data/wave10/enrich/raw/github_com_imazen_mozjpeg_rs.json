@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/imazen/mozjpeg-rs",
+  "one_liner": "Safe-Rust port of the mozjpeg JPEG encoder; its trellis mode timed 6% faster than C mozjpeg on one synthetic image.",
+  "what_it_does": "Pure-Rust reimplementation of Mozilla's mozjpeg encoder under #![forbid(unsafe_code)]: trellis quantization (AC and DC), two-pass Huffman optimization, progressive scans with optional optimize_scans, overshoot deringing and the ImageMagick/Robidoux quant tables. The API is a Rust builder (Encoder::new(Preset), encode_rgb/encode_rgba/encode_gray/encode_imgref, strided and streaming variants, *_with_stop cancellation, Limits) returning a Vec<u8>; there is no libjpeg-style C API and no decoder. With trellis off and the default colour conversion, its baseline and progressive output is byte-identical to C mozjpeg on the CID22 validation set.",
+  "how_it_is_fast": "The trellis-mode win comes mainly from doing less trellis work than C mozjpeg. The default TrellisMode::Optimized runs trellis inline in the single forward-DCT pass and estimates rates from the standard Huffman tables. C mozjpeg instead gathers statistics, builds optimal tables and then runs extra trellis and Huffman passes per component. TrellisSpeedMode::Adaptive also caps the O(n^2) predecessor search at lookback 8 with 3 candidates for blocks with more than 55 nonzero AC coefficients, and at 16 with 4 above 48; upstream quantize_trellis in jcdctmgr.c searches every predecessor. DCT and colour conversion use safe SIMD (archmage, runtime AVX2/NEON dispatch, autovectorised fallback), but the non-trellis entropy coder is much slower than C's hand-tuned SIMD path.",
+  "when_to_use": [
+    "Rust services that want mozjpeg-style trellis-quantized JPEGs without a C toolchain, cmake or nasm, and with forbid(unsafe_code) across the whole encoder",
+    "Encoding untrusted images on a server: Limits rejects oversized dimensions, allocations and metadata before any pixel work, and *_with_stop variants accept a cancellation or deadline token",
+    "Replacing the C mozjpeg crate while keeping output bytes for non-trellis baseline and progressive configs (byte-exact parity on CID22 at Q75-95)",
+    "Photo encoding at roughly Q75-95 with trellis on, where its measured speed is on par with or slightly ahead of C mozjpeg",
+    "aarch64 or wasm32 targets: CI covers 15 platform configurations, including NEON and wasm32-wasip1 with SIMD128"
+  ],
+  "when_not_to_use": [
+    "Fast encoding without trellis: the no-optimization config timed 42 ms against 9 ms for C mozjpeg at 2048x2048 (4.6x slower), so for speed-first baseline JPEG use libjpeg-turbo or C mozjpeg",
+    "You need decoding: it is encoder-only. The author recommends zenjpeg (encode and decode) for new projects",
+    "Grayscale progressive output: open issue #9 (2026-08-29) reports an index-out-of-bounds panic in the SOS writer for Subsampling::Gray with ProgressiveBalanced or ProgressiveSmallest",
+    "You need byte-identical trellis output to stock C mozjpeg: the default Optimized trellis gives different (usually slightly smaller) files, and TrellisMode::MozjpegExact is slower and is validated against imazen's patched mozjpeg fork",
+    "Arithmetic coding, multipass trellis, a C ABI, or code that has had a human audit: the README says much of the code is AI-generated and not fully human-reviewed"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "archmage, safe_unaligned_simd, wide, bytemuck, enough; default features add zenyuv (fast-yuv), imgref and rgb; optional png, zencodec/zenpixels/garb, and mozjpeg-sys + libc (mozjpeg-sys-config, which lifts forbid(unsafe_code) and builds C)",
+    "min_toolchain": "Rust 1.89 (edition 2024)",
+    "platforms": "x86-64 (AVX2 dispatched at runtime), aarch64 (NEON), wasm32 (SIMD128); other targets use an autovectorised fallback. CI also covers armv7 and i686 under QEMU",
+    "thread_safety": "Each encode is single-threaded (no threading dependency); Send/Sync guarantees for Encoder are not documented; the almost-enough Stopper token is Send + Sync",
+    "drop_in_for_baseline": "partial — a different Rust builder API with no libjpeg-compatible C interface; output matches C mozjpeg byte for byte only for non-trellis baseline/progressive with default colour conversion, and the mozjpeg-sys-config feature can configure a C encoder from the same settings"
+  },
+  "gotchas": [
+    "Encoder::default() is Preset::ProgressiveBalanced (progressive, trellis, deringing), not a baseline JPEG; use Encoder::baseline_optimized() or Preset::BaselineBalanced for sequential output",
+    "The README speed table does not use the shipped defaults: the 6% trellis row has deringing off and runs Adaptive search limiting, and the row labelled 'Baseline (huffman opt)' actually times TestEncoderConfig::baseline() with Huffman optimization off",
+    "Hand-written SIMD intrinsics sit behind the non-default simd-intrinsics feature; default builds use autovectorised DCT/colour code, which Cargo.toml puts at about 87% of the intrinsics speed",
+    "fast_color(true) (zenyuv) is about 40% faster at RGB to YCbCr but changes output bytes by ±1 rounding, so it breaks C parity"
+  ],
+  "pick_this_over_siblings_when": "Pick it over zenjpeg (same author, encoder and decoder, beats libjpeg-turbo) only when you need mozjpeg-compatible settings and output bytes rather than the best size/quality. Pick it over libjpeg-turbo or jpeg-rusturbo when smaller trellis-quantized files from memory-safe Rust matter more than raw baseline encode speed.",
+  "verified_claims_summary": "tests/bench_2k.rs encodes one synthetic 2048x2048 gradient-plus-periodic-noise RGB image at Q85 4:2:0, sequential and single-threaded, 3 warmups then 30 timed runs per side, in the same process as C mozjpeg built by mozjpeg-sys 2.2.3 (default features include nasm_simd). The README reports 197 vs 210 ms with Huffman optimization plus AC/DC trellis and no deringing, and 42 vs 9 ms with no optimizations; CPU, rustc and RUSTFLAGS are not stated, and output sizes for the timed image are discarded. The trellis comparison sets the same encoder parameters on both sides but pits Rust's reduced trellis search (standard-table rates, adaptive lookback and candidate caps added in 0.6.0, when the changelog first claimed 7% faster) against C's full search with gather and requantize passes, so the gain is less work, not a faster implementation of the same search.",
+  "status_note": "Actively maintained (last commit 2026-09-29; 0.10.0 prepared but unreleased, crates.io latest 0.9.2 from 2026-04-17 with about 120k downloads), BSD-3-Clause and easy to add with cargo, but a single-maintainer project with 3 stars whose author now steers new users to zenjpeg.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/tests/bench_2k.rs",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/test_encoder.rs",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/types.rs",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/trellis.rs",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/src/encode.rs",
+    "https://raw.githubusercontent.com/mozilla/mozjpeg/master/jcdctmgr.c",
+    "https://raw.githubusercontent.com/mozilla/mozjpeg/master/jcmaster.c",
+    "https://crates.io/api/v1/crates/mozjpeg-sys/2.2.3",
+    "https://crates.io/api/v1/crates/mozjpeg-rs",
+    "https://github.com/imazen/mozjpeg-rs",
+    "https://github.com/imazen/mozjpeg-rs/issues?q=is%3Aissue",
+    "https://github.com/imazen/mozjpeg-rs/issues/9",
+    "https://github.com/imazen/mozjpeg-rs/pulls?q=is%3Apr"
+  ],
+  "confidence": 0.75
+}

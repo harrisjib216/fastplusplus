@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/farama-foundation/tinyscaler",
+  "one_liner": "Python/Cython float32 RGBA image downscaler with SSE C kernels; beats Pillow by skipping antialiasing, loses to OpenCV bilinear.",
+  "what_it_does": "One function, `tinyscaler.scale(src, (width, height), mode='area'|'bilinear'|'nearest', dst=None)`, resizes a contiguous numpy image. Inputs that are uint8 or have 1 or 3 channels are converted to float32 RGBA before the C kernel runs and converted back afterwards. Farama built it as a lighter dependency than opencv-python for Gymnasium and PettingZoo observation wrappers. It does not replace cv2.resize or PIL.Image.resize as-is: the call signature differs, it only offers three filters, and it works in float32 RGBA.",
+  "how_it_is_fast": "Each output pixel is one 128-bit SSE vector (NEON on 32-bit ARM) holding all four RGBA float channels. Bilinear is a 2x2 point-sampled lerp with no antialiasing, so its filter support does not grow with the scale factor. 'area' sums a box of source pixels with approximate edge weights. The speedup over Pillow comes from doing far fewer taps than Pillow's support-scaled convolution. There is no separable pass, no precomputed coefficient table and no threading, and the plain C file is built with Python's default extension flags.",
+  "when_to_use": [
+    "RL observation preprocessing (Gymnasium/PettingZoo style) where frames are already float32 RGBA and you want to avoid an opencv-python dependency.",
+    "Large non-integer downscale ratios (the benchmark used about 5.8x) where aliasing is acceptable and you need nearest or bilinear speed within about 1.6x of OpenCV.",
+    "Tight loops that reuse a preallocated float32 (h, w, 4) dst buffer; that only avoids allocations when the input is also float32 RGBA.",
+    "Linux or Intel macOS x86_64 builds with GCC or Clang, the only 64-bit targets where the SSE path is compiled."
+  ],
+  "when_not_to_use": [
+    "Quality-sensitive downscaling: bilinear has no antialiasing, and 'area' mis-weights pixels (at exactly 2x it averages a 3x3 block that overlaps the next output's block).",
+    "Raw speed when OpenCV is acceptable: cv2.resize INTER_LINEAR was 1.64x faster in the project's own run. Sibling fast_image_resize reports 3.53 ms (AVX2, u8 RGB, antialiased convolution, different machine) for the same NASA 4928x3279 to 852x567 job, against TinyScaler's 7.97 ms per call.",
+    "uint8 RGB pipelines: every call expands to float32 RGBA (16 bytes per pixel instead of 3) and converts back by truncation.",
+    "Apple Silicon, Linux aarch64 and Windows: the SIMD code is guarded by `__x86_64__` (GCC/Clang only, not MSVC) or `__arm__` (32-bit ARM only), so the arm64 macOS slice, aarch64 builds and win_amd64 wheels run the scalar fallback.",
+    "Anything needing a maintained dependency: it was deprecated on 2025-08-11, the Farama GitHub repo now returns 404, and wheels stop at CPython 3.12."
+  ],
+  "integration": {
+    "form": "Python extension module (Cython wrapper over one C file, src/scaler.c plus scaler.h); the C file can be dropped into a C or C++ project",
+    "dependencies": "numpy>=1.21.0 for the Python package; the C core needs only libc and libm",
+    "min_toolchain": "Python >= 3.8 (wheels for CPython 3.8 to 3.12); building from the sdist needs Cython, setuptools and a C compiler",
+    "platforms": "Wheels for Linux x86_64 (manylinux2014), macOS (universal2 and x86_64) and Windows amd64. SSE path only with GCC/Clang on x86_64, NEON path only on 32-bit ARM (setup.py adds -mfpu=neon there); everything else uses scalar C.",
+    "thread_safety": "The C kernels are pure functions with no shared state, but the Cython wrapper calls them while holding the GIL (no nogil block), so Python threads cannot resize in parallel. Conversions are controlled by the module-global `auto_convert` flag.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Area weights are wrong. In scale_area_4f32 the second weight term tests area_y == src_upper_y, which the loop never reaches, so it is always 1. Every pixel therefore gets weight 1 to 2 instead of its 0 to 1 coverage, and the upper bound includes the pixel at floor(upper)+1. A 1-D simulation of the code gives a uniform 3-tap average per output at 8 to 4 (exact: 2 taps). At the benchmark's 4928 to 852 ratio, an edge pixel with 3.7% coverage gets 9.2% of the weight.",
+    "Bilinear always loads the right and lower neighbours (p01, p10) even when their weight is zero, so a source 1 pixel wide or 1 pixel high is read past the row or the buffer. Since 0 x NaN = NaN, garbage can reach the output. 'area' falls back to this bilinear path whenever either axis is upscaled.",
+    "`size` is (width, height) while arrays are (height, width, channels). uint8 results are truncated by astype rather than rounded. For uint8 input with 1 or 3 channels the wrapper returns a sliced, non-contiguous view, which scale() rejects ('Input image must be contiguous') if you feed it back in.",
+    "Benchmark harness flaws on the baseline side: Pillow received uint8 RGBA and ran its antialiased BILINEAR, and skimage was called as resize(img, (852, 567)). skimage reads that as (rows, cols), so it produced a transposed 852x567x4 output, and its default anti_aliasing (True when downsampling, per the v0.19.3 source) adds a Gaussian prefilter. The 206x skimage ratio is not a valid comparison."
+  ],
+  "pick_this_over_siblings_when": "Pick TinyScaler only when you need a dependency-light Python wheel on float32 RGBA frames and can accept aliasing. OpenCV is faster for bilinear and has a correct INTER_AREA, and Pillow-SIMD and Lycon give antialiased or OpenCV-grade resizing from Python. From C, C++ or Rust, stb-image-resize-opt or fast_image_resize are faster and filter correctly.",
+  "verified_claims_summary": "The project's scripts (examples/benchmark_bilinear.py and benchmark_area.py, reachable in the author's original 222464/TinyScaler repo, whose scaler.c matches the 1.2.8 sdist) convert the NASA 4928x3279 PNG to float32 RGBA and resize it to 852x567 100 times with OpenCV set to one thread, on an AMD 1950X. Bilinear: TinyScaler 0.797 s vs OpenCV INTER_LINEAR 0.487 s (OpenCV 1.64x faster). Area: TinyScaler 4.35 s vs OpenCV INTER_AREA 8.12 s (1.87x, derived from page data), but on a mis-weighted kernel. Pillow (12.67 s) did antialiased resizing of uint8 RGBA, skimage (164.45 s) produced a transposed, Gaussian-prefiltered output, and compiler, flags and library versions are not stated.",
+  "status_note": "Deprecated by Farama on 2025-08-11 (search snippet) and gone from the Farama GitHub org. The last release is 1.2.8 (2024-08-02); the code is MIT and a single 448-line C file that is easy to vendor, but fix the area weights and the edge reads first.",
+  "sources_read": [
+    "https://github.com/Farama-Foundation/TinyScaler",
+    "https://pypi.org/pypi/tinyscaler/json",
+    "https://pypi.org/project/tinyscaler/",
+    "https://files.pythonhosted.org/packages/0d/59/6b6495fe9bb3153306a4bd6dd24c78ff74eaf64f90fc6e545ede0574cfbe/tinyscaler-1.2.8.tar.gz",
+    "https://github.com/222464?tab=repositories&q=scaler",
+    "https://github.com/222464/TinyScaler",
+    "https://github.com/222464/TinyScaler/tree/main/examples",
+    "https://raw.githubusercontent.com/222464/TinyScaler/HEAD/README.md",
+    "https://raw.githubusercontent.com/222464/TinyScaler/HEAD/setup.py",
+    "https://raw.githubusercontent.com/222464/TinyScaler/HEAD/src/scaler.c",
+    "https://raw.githubusercontent.com/222464/TinyScaler/HEAD/examples/benchmark_bilinear.py",
+    "https://raw.githubusercontent.com/222464/TinyScaler/HEAD/examples/benchmark_area.py",
+    "https://raw.githubusercontent.com/scikit-image/scikit-image/v0.19.3/skimage/transform/_warps.py",
+    "https://raw.githubusercontent.com/Cykooz/fast_image_resize/HEAD/README.md",
+    "WebSearch: Farama-Foundation TinyScaler deprecated repository"
+  ],
+  "confidence": 0.8
+}
