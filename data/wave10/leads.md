@@ -29,3 +29,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Retier lead (e56): the wave 9 Wuffs entry should get the same corrections as libspng (doc/benchmarks.md i5-10210U run, ms printed as us%10 in mango, 1.55-3.16x fixes).
 - Enricher leads (e54): aplghl/qoi-asm (x86-64 assembly qoi.h drop-in, claims 1.07-2.16x over gcc -O3 on an i7-14700F; 0 stars, 1 commit); Typr.ts (lTyl) is a port of Typr.js, fold as duplicate if found.
 - Enricher leads (e57, e63): sammycage/plutovg (LunaSVG's rasteriser, FreeType ftgrays lineage) and linebender/resvg (LunaSVG baseline) not catalogued; font-rs lineage without comparative numbers: golang.org/x/image/vector, ab_glyph_rasterizer, FreeType gsoc-anurag-2022-final src/dense.
+- Enricher leads (e58, image-codecs, Rust, first-party vs FFmpeg): Remade-With-Rust/rusty_gif and Remade-With-Rust/rusty_jpeg.
