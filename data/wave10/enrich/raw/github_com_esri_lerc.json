@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/esri/lerc",
+  "one_liner": "Esri's raster codec with a per-pixel error bound for 8- to 64-bit integer and float tiles; encodes far faster than zlib level 9.",
+  "what_it_does": "Compresses one raster tile (any of char, byte, short, ushort, int, uint, float, double; several bands and nDepth values per pixel; optional valid-pixel byte mask or noData values) into a self-describing blob. The caller sets MaxZError, the largest absolute error allowed per pixel; 0 is lossless. It is a C API (lerc_computeCompressedSize, lerc_encode, lerc_getBlobInfo, lerc_getDataRanges, lerc_decode, lerc_decodeToDouble, plus *_4D variants for per-band noData) over a C++17 library, not a drop-in for zlib's byte-stream API. GDAL uses it as a GeoTIFF and MRF compression mode, and there are Python (pylerc), JavaScript/WASM, C# and Rust ports.",
+  "how_it_is_fast": "Lerc2 splits the tile into 8x8 micro-blocks (retrying at 16x16 when that is smaller). For each block it stores min/max, quantizes n = (x - min)/(2*MaxZError) + 0.5 to unsigned ints, and bit-stuffs them with ceil(log2(range+1)) bits, optionally through a lookup table of distinct values; constant and empty blocks cost only a header. That is one scalar pass with no match search, which is why encode is much faster than deflate's level-9 lazy matching. Lossless 8-bit data can switch to delta plus Huffman coding, and lossless float/double (since 4.0) to a delta-delta Huffman path kept only when it is at least 10% smaller. The encoder also detects floats that sit on a decimal grid (multiples of 0.1, 0.01 and so on) and raises MaxZError to half that step for free. There is no SIMD and no threading in the code.",
+  "when_to_use": [
+    "Elevation models, scientific float grids and 11-16-bit multispectral imagery where you can name a tolerable absolute error (e.g. 0.01 m), so lossy encoding gives several times the ratio of lossless deflate at a known bound.",
+    "Tile servers and caches that encode on the fly: the 2016 PDF shows about 10-13x faster encode than zlib level 9 on lossless 16-bit tiles (231 vs 2484 ms per 3601x3601 DTED-2 tile).",
+    "Rasters with void areas: the valid-pixel mask is RLE-coded and masked pixels cost nothing, and lerc_getDataRanges reads per-band min/max without decoding.",
+    "GDAL GeoTIFF/COG or MRF pipelines (COMPRESS=LERC with MAX_Z_ERROR) and ArcGIS-compatible services, where readers already exist in C++, Python, JS and C#."
+  ],
+  "when_not_to_use": [
+    "8-bit RGB or photographic imagery: the README itself says PNG compresses 8-bit lossless better and recommends JPEG where it is good enough.",
+    "Plain lossless speed against a modern compressor: one third-party GDAL test (gpxz.io, 3600x3600 float32 Copernicus DEM, 512x512 blocks; search snippet only, page blocked) measured zstd at 519 MB/s write and 957 MB/s read, against 315 and 473 for LERC at MAX_Z_ERROR 1e-5 (lossy) and 33 and 253 for DEFLATE. LERC's ratio there was 1.9, zstd's 1.5.",
+    "Low-entropy integer tiles with small value ranges: zlib out-compressed lossless LERC on the flat Georgia DTED tiles in the vendor's own PDF (4.9 vs 4.6 and 7.1 vs 5.3).",
+    "Big-endian hosts: Lerc2 encode, decode, header and range calls return failure unless the machine is little-endian with 4-byte int.",
+    "Whole large images in one blob: since 4.2 a blob is capped at 2 GB per band and 4 GB overall, and the API notes say LERC is meant for tiles."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; BUILD_SHARED_LIBS defaults to ON); vcpkg and Conan packages exist",
+    "dependencies": "none",
+    "min_toolchain": "C++17, CMake 3.12 (Visual Studio, Code::Blocks and Xcode project files also provided)",
+    "platforms": "little-endian only (Windows, Linux, macOS; WASM decoder via Emscripten); no SIMD, so any little-endian CPU",
+    "thread_safety": "Not documented. The C API entry points are static and build a local Lerc2 object per call with no global state (by code reading), so concurrent calls on separate buffers look safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "MaxZError is a bound before the float cast: decode computes zMin + n*2*MaxZError in double and casts to T, and the sample program subtracts a 0.0001 'safety margin ... to account for finite floating point accuracy' from the wanted error.",
+    "For integer types MaxZError is floored and clamped to at least 0.5, so 0 means exact and 0.7 behaves like 0.5. A negative MaxZError on integers switches to bit-plane noise compression, and the undocumented value 777 maps to -0.01.",
+    "lerc_encode always runs a full sizing pass first (tiling, Huffman tries and a 16x16 retry) and then writes, so calling lerc_computeCompressedSize beforehand repeats that work; closed issue #197 notes lerc_encode can return fewer bytes than that estimate.",
+    "NaNs are never returned: they are moved into the mask, or in the mixed nDepth case replaced by the noData value (encode fails if none is set). Release 4.1.1 (2026-07-02) 'fixed two security issues' with no published advisory, and 4.2.0 added size and overflow checks, so use 4.2.0 or later on untrusted blobs."
+  ],
+  "pick_this_over_siblings_when": "Pick LERC when the data is float, double or 32-bit integer, or when you need a hard per-pixel error bound with masks. CharLS (JPEG-LS NEAR mode) bounds error only for integer samples up to 16 bits, and OpenJPH or Grok (JPEG 2000) fit 8-16-bit imagery that needs JPEG 2000 interoperability. For exact float storage, meshoptimizer's vertex codec is the catalogued lossless alternative.",
+  "verified_claims_summary": "Esri's own 2016 PDF, which predates LERC 1.0 and runs zlib compress2 level 9 on raw samples without a predictor (mislabelled 'LZW'), reports lossless LERC encodes 16-bit DTED and multispectral tiles about 11-13x faster and decodes them about 2.3-2.6x faster (derived from page data), at a slightly better average ratio. The float rows are lossy only (MaxZError 0.01 and up). No CPU, OS, compiler or flags are given, and the driver and test rasters are not published.",
+  "status_note": "Actively maintained (4.2.0 released 2026-07-23, last commit 2026-09-17), Apache-2.0 and dependency-free, so it is easy to vendor; it ships in Esri ArcGIS and GDAL.",
+  "sources_read": [
+    "https://github.com/Esri/lerc",
+    "https://raw.githubusercontent.com/Esri/lerc/master/README.md",
+    "https://raw.githubusercontent.com/Esri/lerc/master/doc/MORE.md",
+    "https://raw.githubusercontent.com/Esri/lerc/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Esri/lerc/master/doc/LercBenchmarks_Feb_2016.pdf",
+    "https://raw.githubusercontent.com/Esri/lerc/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/include/Lerc_c_api.h",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/include/Lerc_types.h",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Lerc_c_api_impl.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Lerc.h",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Lerc.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Lerc2.h",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Lerc2.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/BitStuffer2.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/Huffman.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/RLE.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercLib/fpl_Lerc2Ext.cpp",
+    "https://raw.githubusercontent.com/Esri/lerc/master/src/LercTest/main.cpp",
+    "https://github.com/Esri/lerc/issues?q=is%3Aissue",
+    "https://github.com/Esri/lerc/issues?q=is%3Aissue&page=2",
+    "https://github.com/Esri/lerc/issues/220",
+    "https://github.com/Esri/lerc/issues/138",
+    "https://github.com/Esri/lerc/security",
+    "https://github.com/kokoalberti/geotiff-benchmark"
+  ],
+  "confidence": 0.8
+}

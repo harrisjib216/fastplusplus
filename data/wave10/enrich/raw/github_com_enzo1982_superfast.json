@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/enzo1982/superfast",
+  "one_liner": "fre:ac encoder drivers that run several Opus/AAC/MP3/Speex encoder instances on overlapping chunks to use multiple cores for one output file.",
+  "what_it_does": "Plug-in encoder components for fre:ac's BoCA framework (Opus, FAAC, FDK-AAC, Core Audio AAC/ALAC, LAME, Speex) that speed up encoding a single file, or fewer files than there are cores, by splitting the PCM stream into blocks and handing them round-robin to worker threads, each with its own codec instance. The main thread collects each worker's packets in order, drops the packets from the overlap region and writes one Ogg, MP4/ADTS or MP3 stream. It is not a library API: each component implements BoCA's EncoderComponent interface (Activate/WriteData/Deactivate) and needs the smooth class library and BoCA to build. The archived repo is frozen; the maintained code is in enzo1982/BoCA under components/encoder/*.",
+  "how_it_is_fast": "High-level data parallelism over encoder instances, the 'split into fragments' approach that LAME MT abandoned because it cannot be bit-identical. Opus blocks are 256 frames with an overlap of max(24, ceil(24*960/frameSize)) frames, FAAC 128 frames with 8, and LAME 128 frames with 4*1152/frameSize; the overlap frames re-adapt encoder state and their packets are discarded. Worker encoders are not reset between blocks (Opus and FAAC reuse one handle per worker; LAME flushes with lame_encode_flush_nogap after each block), so each block starts from stale state left by that worker's previous block. For MP3 a serial repacker unpacks frames, rebuilds the bit reservoir across seams and makes the worker re-encode, after feeding dummy frames to fill the reservoir, when a frame does not fit. Even at one thread, decoding and encoding run on separate threads, which the PDF credits for a small gain.",
+  "when_to_use": [
+    "Encoding one long input (an album joined into one file, an audiobook, a long recording) to Opus or AAC on a 4-16 thread desktop, where stock fre:ac drivers use a single core.",
+    "Batch jobs with fewer output files than cores; mainline fre:ac only engages SuperFast when the number of output files is at most half the logical CPUs.",
+    "48 kHz input to Opus (or input already at the MP3 output rate for LAME), the paths where the chunking runs in parallel without a serial resampler in front.",
+    "As a design template for parallelizing any codec with constant frame sizes and interceptable packets; use the BoCA mainline source, not this archived copy."
+  ],
+  "when_not_to_use": [
+    "You need output bit-identical to a single-threaded encode, or a quality guarantee: seams differ, and the only quality evidence is the author's difference-signal plots, with no listening test or objective metric.",
+    "Many files at once: multi-file mode gains only about 1-10% because per-file parallelism already fills the cores.",
+    "Non-48 kHz Opus input or LAME with resampling: the Opus resampler stays single-threaded, and the LAME driver disables SuperFast when the input rate differs from the MP3 output rate.",
+    "Vorbis, FLAC or WMA: the author says block-size switching or closed packet APIs make the method unworkable for them.",
+    "Code from this archived repo as is: it predates fixes shipped in fre:ac 1.1.1/1.1.2 (a SuperFast crash and several CBR MP3 issues) and has the short-input and mono-MP3 bugs listed under gotchas."
+  ],
+  "integration": {
+    "form": "shared lib (BoCA encoder components loaded by fre:ac)",
+    "dependencies": "smooth class library, BoCA component framework, plus the codec libraries loaded at run time (libopus/libogg, FAAC/mp4v2, FDK-AAC, LAME, Speex, Core Audio on Windows/macOS)",
+    "min_toolchain": "not documented (GNU make with BoCA's Makefile-commands; C++ with the smooth framework)",
+    "platforms": "Windows, macOS, Linux and FreeBSD builds were published (x86-64 and i686; macOS universal binary includes PPC)",
+    "thread_safety": "One encoder object per conversion with its own worker threads. The archived code signals workers through plain Bool flags with 1 ms sleep polling, an unsynchronized pattern that BoCA mainline replaced with semaphores and atomic access.",
+    "drop_in_for_baseline": "partial: inside fre:ac it replaces the regular driver for the same codec and settings, but output is not bit-identical and the components are not usable outside BoCA"
+  },
+  "gotchas": [
+    "Archived LAME driver, mono input: lame_encode_buffer gets samplesBuffer (the block start) as the left channel for every frame, so mono MP3 output repeats each block's first frame. BoCA mainline passes the per-frame offset. Found by code reading, not run.",
+    "Archived Opus, FAAC and LAME drivers advance by framesToProcess - overlap even on the final flush, so an input shorter than the overlap (under about 0.48 s for Opus at 20 ms frames) makes framesProcessed negative and the memmove runs out of bounds. Mainline uses (flush ? 0 : overlap). Found by code reading.",
+    "The Opus overlap formula uses 960 (a 20 ms frame at 48 kHz) at every sample rate, so the overlap is 72/256 frames at 16 kHz and 144/256 at 8 kHz (28% and 56% of the work discarded), and with 5-10 ms frames at 8-16 kHz it exceeds the 256-frame block (e.g. 288 at 8 kHz/10 ms), which drives the block loop backwards with negative offsets. Still present in BoCA mainline; found by code reading.",
+    "The published numbers come from the 2017 proof of concept (128-frame blocks, 8-frame overlap); the repo's Opus driver now uses 256/24 and was not re-measured. Issue #3 reports intermittent 'Could not process file' errors with superopus only (2018 alpha build), closed without a fix when the repo was archived."
+  ],
+  "pick_this_over_siblings_when": "Pick it, through BoCA mainline, when you need multi-core encoding of one stream with the stock libopus, FAAC/FDK-AAC or LAME. SuperLAME is a standalone CLI that ports this LAME driver and repacker and publishes numbers with a named CPU (Ryzen 7 5800X3D), so it is the better-documented choice for MP3 alone. The faster single-threaded codecs (opus-pure, libopus-rs, ruopus) speed up each instance and could be combined with this chunking.",
+  "verified_claims_summary": "In the author's own PDF, fre:ac converts one file in single-file mode about 3x faster with four SuperFast threads than with the regular single-threaded FAAC and Opus drivers (chart readings about 2.9-3.2x at 4 threads and 4.5-4.8x at 8). In multi-file mode the gain is only about 1-10%. Charts have no units, the only machine detail is 'a 6 core CPU', and no compiler, OS, codec version or script is given; LAME, FDK-AAC, Core Audio and Speex have no published numbers here.",
+  "status_note": "Archived 2020-12-11 and superseded by enzo1982/BoCA, where SuperFast is on by default and later fixes landed. GPL-2.0 and tied to the BoCA/smooth frameworks, so it is only copyable as a design or into GPL code.",
+  "sources_read": [
+    "https://github.com/enzo1982/superfast",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/Readme.md",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/doc/SuperFast%20Codecs.pdf",
+    "https://github.com/enzo1982/superfast/tree/master/components",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/opus/opus.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/opus/opus.h",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/opus/worker.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/opus/worker.h",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/opus/Makefile",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/lame/lame.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/lame/worker.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/faac/faac.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/faac/worker.cpp",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/components/Makefile",
+    "https://raw.githubusercontent.com/enzo1982/superfast/master/Makefile",
+    "https://github.com/enzo1982/superfast/issues?q=is%3Aissue",
+    "https://github.com/enzo1982/superfast/issues/3",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/opus/opus.cpp",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/opus/worker.cpp",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/faac/faac.cpp",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/faac/worker.cpp",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/lame/lame.cpp",
+    "https://raw.githubusercontent.com/enzo1982/BoCA/master/components/encoder/lame/worker.cpp",
+    "https://github.com/enzo1982/freac",
+    "https://github.com/enzo1982/freac/releases",
+    "https://github.com/enzo1982/freac/issues?q=is%3Aissue+superfast",
+    "https://github.com/enzo1982/freac/issues/103",
+    "https://sourceforge.net/p/bonkenc/discussion/85470/thread/a930b53f7e/",
+    "https://github.com/MSIVST/SuperLAME"
+  ],
+  "confidence": 0.75
+}
