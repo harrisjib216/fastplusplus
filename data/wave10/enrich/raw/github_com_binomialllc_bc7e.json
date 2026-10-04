@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/binomialllc/bc7e",
+  "one_liner": "ISPC SIMD BC7 encoder; independent tests show its profiles 3-10x faster than ispc_texcomp's like-named profiles at higher PSNR.",
+  "what_it_does": "bc7e compresses RGBA pixels to BC7 (BPTC) blocks on the CPU. It is one .ispc file that you compile with Intel's ISPC into an object file and a generated header. The API is modelled on ispc_texcomp's but differs in detail. Call bc7e_compress_block_init() once, fill a params struct with one of the profile functions (ultrafast, veryfast, fast, basic, slow, veryslow, slowest; each has a perceptual flag), then call bc7e_compress_blocks(n, out, pixels, &params), where each block is 16 contiguous RGBA pixels. Threading is left to the caller, and alpha blocks are detected per block automatically.",
+  "how_it_is_fast": "Each SIMD lane encodes one block through ISPC's SPMD model; the build line targets SSE2, SSE4, AVX and AVX2 in one object. Partitions for modes 0/1/2/3/7 are ranked with a cheap per-subset error estimate (estimate_partition_list), and only the best 1-4 go on to full encoding. Endpoints come from least-squares fits refined over a profile-set number of passes, plus optional p-bit search and 'uber' selector perturbation. Precomputed optimal-endpoint tables handle single-colour subsets. The profiles turn whole modes, rotations and partition counts on or off, which is where most of the speed difference comes from.",
+  "when_to_use": [
+    "Offline or build-time BC7 baking on x86-64 with AVX2, where you want more PSNR per second than ispc_texcomp gives. In Aras's tests every bc7e profile from fast upwards beat every ispc_texcomp profile.",
+    "High-quality BC7 at moderate speed: the slow profile averaged 13.0 Mpix/s at 47.40 dB Luma-PSNR, against ispc_texcomp slow at 1.29 Mpix/s and 46.28 dB on the same 12-thread machine.",
+    "Pipelines that already batch blocks and run their own thread pool (bc7e expects 32-64 or more blocks per call).",
+    "sRGB colour textures where its perceptual (scaled YCbCr) metric can let you drop to a faster profile."
+  ],
+  "when_not_to_use": [
+    "Bit-exact reproducible output across machines or builds from this archived copy. Its estimate_partition_list early-out uses all() across SIMD lanes, so results depend on SIMD width and on which blocks share a gang (issue #2). The fixed version is richgel999/bc7enc_rdo's bc7e.ispc (BC7E_NON_DETERMINISTIC 0).",
+    "Your toolchain cannot run the ISPC compiler, or you need the best speed on ARM. bc7e is tuned for wide AVX2 lanes: single-threaded, Aras found a 2019 Intel MacBook Pro 1.5x faster than an M1 (4-wide NEON) for ISPC compressors including bc7e. Use bc7e_scalar or bc7f in basis_universal instead.",
+    "Real-time or runtime encoding: ultrafast is mode 6 only and was 0.88x the speed of ispc_texcomp ultrafast (harmonic mean, derived), though 2.2 dB better. bc7f claims to be faster still.",
+    "Opaque textures that must decode to alpha exactly 255: open issue #3 reports scattered alpha 254 in fully opaque areas.",
+    "You need maintenance: the repo was archived on 2026-01-28 and bugs are fixed only in bc7enc_rdo."
+  ],
+  "integration": {
+    "form": "source-drop (bc7e.ispc compiled by ISPC to an object file plus a generated C/C++ header)",
+    "dependencies": "ISPC compiler at build time; the example tool also uses lodepng, bc7decomp (detex) and OpenMP",
+    "min_toolchain": "ISPC 1.8.2 or 1.10.0 (README: tested mostly with 'v1.82', bundled ispc.exe 1.10.0); Aras built with ISPC 1.14; example project for Visual Studio 2015-2019",
+    "platforms": "x86/x86-64 via the sse2/sse4/avx/avx2 multi-target build; ISPC NEON builds run on ARM (Aras ran it on Apple M1); tested on Windows, Linux and macOS per README",
+    "thread_safety": "bc7e_compress_blocks and the params init functions are thread safe. bc7e_compress_block_init() writes global tables behind an unsynchronised bool, so call it once before starting threads.",
+    "drop_in_for_baseline": "partial: same style of C API and similar profile names as ispc_texcomp, but different entry points, input layout (16 contiguous pixels per block, not an rgba_surface) and a mandatory init call"
+  },
+  "gotchas": [
+    "Forgetting bc7e_compress_block_init() gives all-zero BC7 blocks in release builds (only an assert in debug).",
+    "Results depend on SIMD width in this archived copy (issue #2, closed 2021-01-08 with the fix landing only in bc7enc_rdo). The README also says to restrict targets to SSE and drop --opt=fast-math if you need identical output on Intel and AMD.",
+    "In perceptual mode the opaque path skips mode 5 and alpha blocks skip mode 4/5 rotations. The archived copy also has no solid-colour shortcut, which bc7enc_rdo added (exact mode 5 encode).",
+    "The bundled bc7enc example times encoding with clock() around an OpenMP loop. On Linux and macOS that is CPU time summed over all threads, not wall time, so its 'Total time' overstates elapsed time when threaded."
+  ],
+  "pick_this_over_siblings_when": "Pick bc7e over bc7enc (bc7enc16): in the same independent run, bc7enc's best preset reached 3.8 Mpix/s at 45.48 dB, while bc7e basic reached 20.6 Mpix/s at 46.75 dB. Pick basis_universal's bc7f instead when you need portable scalar real-time BC7 and can accept lower PSNR, or bc7e_scalar there when ISPC is not available.",
+  "verified_claims_summary": "The README alone (first-party, no data) claims 2-3x over ispc_texcomp at equal quality and about 8x over its slow profile. Independent support comes from Aras Pranckevicius's 'Texture Compression in 2020' (December 2020). He ran 20 Unity textures on a 2018 MacBook Pro (Core i9 2.9 GHz, 6 cores/12 threads) built with Xcode 11.7 (Apple clang 11.0.3) and ISPC 1.14, up to AVX2, multi-threaded, in perceptual mode, scoring Luma-PSNR. Average Mpix/s and dB were: bc7e fast 30.97 at 46.18 vs ISPC fast 10.10 at 45.36 and ISPC basic 4.53 at 46.07; bc7e basic 20.65 at 46.75; bc7e slow 13.04 at 47.40 vs ISPC slow 1.29 at 46.28. That makes bc7e about 3.0x, 4.0x and 10.1x faster than ispc_texcomp's like-named fast, basic and slow profiles, at 0.7-1.1 dB higher PSNR (derived from page data, harmonic means over the 20 images).",
+  "status_note": "Archived on 2026-01-28 (182 stars, Apache-2.0) and copyable, but the maintained bc7e.ispc with the determinism fix lives in richgel999/bc7enc_rdo, with C++ (bc7e_scalar) and successor (bc7f) versions in basis_universal.",
+  "measurement_notes": "Retier lead: C to B. The verifier could not reach aras-p.info, but the post source is public at raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2020/12-texcompr.md. The interactive chart data are at raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2020/texcompr/chart-bc7.html, which holds 260 per-image points plus 13 per-profile averages. The chart's 'Avg' points equal arithmetic means of the per-image Mpix/s values. Per-image ratios (derived from page data): bc7e fast vs ISPC basic 4.7-9.8x (geomean 6.6x), faster on 20/20 images, PSNR delta -3.37 to +1.89 dB (mean +0.11); bc7e slow vs ISPC slow 6.7-17.9x (geomean 10.1x), faster on 20/20, PSNR delta -0.77 to +3.10 dB (mean +1.13); bc7e ultrafast vs ISPC ultrafast 0.63-1.64x (geomean 0.83x), faster on only 4/20, +2.23 dB mean. The measurement is independent and names its hardware, compiler, ISPC version and ISPC determinism patch (GameTechDev PR #20). The testbed code and the Unity texture set are not public, so tier B, not A. Correctness caveat behind the numbers: bc7e was built from October 2020 code, which still had the SIMD-width-dependent all() early-out in estimate_partition_list (issue #2). That early-out lets a whole gang skip the remaining sorted partitions, so the timed build was the faster, non-deterministic variant. The fix removes the shortcut, and its speed effect is not measured anywhere. Its quality effect per block is small (it only stops a partition-ranking loop), so this does not invalidate the ratio. Baseline drift: Traverse-Research/intel-tex-rs-2 PR #50 (merged 2026-09-28) reports its ISPC texture-compressor kernels 2.1-6.2x faster for BC7 (256x256, single thread, Apple M5 Max) with PSNR within 0.0001 dB. Against that fork, bc7e's lead over ispc_texcomp would shrink a lot; the 2020 ratios apply only to upstream GameTechDev ispc_texcomp.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/BinomialLLC/bc7e/HEAD/README",
+    "https://raw.githubusercontent.com/BinomialLLC/bc7e/HEAD/bc7e.ispc",
+    "https://raw.githubusercontent.com/BinomialLLC/bc7e/HEAD/bc7enc.cpp",
+    "https://github.com/BinomialLLC/bc7e",
+    "https://github.com/BinomialLLC/bc7e/issues?q=is%3Aissue",
+    "https://github.com/BinomialLLC/bc7e/issues/2",
+    "https://github.com/BinomialLLC/bc7e/issues/3",
+    "https://raw.githubusercontent.com/richgel999/bc7enc_rdo/HEAD/README.md",
+    "https://raw.githubusercontent.com/richgel999/bc7enc_rdo/HEAD/bc7e.ispc",
+    "https://github.com/aras-p?tab=repositories&q=blog",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content/blog/2020",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2020/12-texcompr.md",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2020/texcompr/chart-bc7.html",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content/blog/2021",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2021/01-m1-texcompr.md",
+    "https://raw.githubusercontent.com/wiki/BinomialLLC/basis_universal/XUBC7-Usage-Guide.md",
+    "https://github.com/Traverse-Research/intel-tex-rs-2/pull/50"
+  ],
+  "confidence": 0.8
+}

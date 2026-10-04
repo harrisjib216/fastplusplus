@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/binomialllc/basis_universal",
+  "one_liner": "Portable scalar C++ real-time BC7 (bc7f) and ETC1 (etc1f) block encoders; claimed several times faster than bc7e.ispc level 1, unmeasured.",
+  "what_it_does": "bc7f and etc1f are one-call-per-4x4-block encoders inside Basis Universal's single-file transcoder (transcoder/basisu_transcoder.cpp). Basis uses them to re-encode ASTC, XUASTC, XUBC7 and DDS content to BC7 or ETC1 on the fly, and they can also be called directly. The API is bc7f::fast_pack_bc7_auto_rgba(out16, pixels16, flags), which checks for alpha and dispatches to the RGB or RGBA path, and etc1f::pack_etc1(out8, pixels16, state). Both are declared in basisu_transcoder_internal.h, which the wiki calls internal and subject to change. Neither is a drop-in for bc7e.ispc's batched bc7e_compress_blocks() or etcpak's image-level API.",
+  "how_it_is_fast": "bc7f predicts instead of searching. From the block's integer covariance, per-channel variances and pairwise Pearson correlations it estimates line-fit error (trace minus the largest eigenvalue) plus closed-form endpoint and weight quantisation error for each mode family (4/5, 0/2, 1/3/7, 6). In fully analytical mode it encodes only the single predicted configuration, with no trial decode. Early exits handle solid blocks (mode 5) and low-variance blocks (a trivial mode 6 path). It does not search partitions per pattern: it estimates 3-subset patterns with popcount over subset bitmasks. etc1f picks the flip orientation from per-half luma and chroma deviations, uses precomputed tables for solid colours, and sends near-grey blocks to a dedicated grayscale packer.",
+  "when_to_use": [
+    "You already ship Basis Universal's transcoder and need BC7 or ETC1 output at load time, for example XUASTC/ASTC to BC7, DDS to ETC1, or BC7 to ASTC 4x4 fallbacks.",
+    "Real-time or per-frame BC7 encoding of runtime-generated textures (render targets, procedural or streamed content) where a bounded cost per block matters more than the last dB.",
+    "Targets without x86 SIMD or ISPC, such as WebAssembly, ARM or consoles: bc7f is plain scalar C++, and its SSE4.1 path is compiled out by default.",
+    "You want the whole BC7 mode set (2/3 subsets, dual plane, all partitions) from a fast encoder instead of a mode-6-only fast path, and can choose flags from fastest (mode 6 only) up to partially or non-analytical."
+  ],
+  "when_not_to_use": [
+    "You need measured throughput: no Mpix/s, hardware or harness is published for bc7f or etc1f. Benchmark them against bc7e, etcpak or Goofy yourself before relying on 'several times faster'.",
+    "Offline asset baking where quality matters: bc7f trades PSNR for speed (the wiki says it behaves like bc7e.ispc level ~0.8), and its fully analytical mode is lower quality than its own partially analytical mode. bc7e_scalar or bc7e.ispc give a higher quality ceiling.",
+    "Perceptual or channel-weighted BC7: the XUBC7 guide says bc7f supports neither channel weights nor perceptual metrics.",
+    "A stable public API: the encoders sit in the internal header, need the whole transcoder translation unit (about 46k lines) with BASISD_SUPPORT_XUASTC enabled, and the wiki says the signatures may change.",
+    "Windows on 32-bit ARM with MSVC: open issue #465 reports unresolved __popcnt/__popcnt16 link errors, one of them in bc7f's pick_3subset_pat_index."
+  ],
+  "integration": {
+    "form": "source-drop (single-file transcoder transcoder/basisu_transcoder.cpp plus headers) or the CMake-built basisu library",
+    "dependencies": "none for bc7f/etc1f; the transcoder optionally uses bundled Zstd for Zstd-based codecs",
+    "min_toolchain": "C++17 (README: newer standards 'not supported by us yet'); compile with -fno-strict-aliasing as the CMakeLists.txt requires",
+    "platforms": "any (scalar C++); native, WASM/WASI and WASM64 builds are provided; MSVC ARM32 currently fails to link (issue #465)",
+    "thread_safety": "Call basist::basisu_transcoder_init() once before starting threads: it fills global tables behind an unsynchronised bool. After that, bc7f calls are stateless and can run in parallel. etc1f needs one pack_etc1_state per thread (it caches the last solid block).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Encoding before basisu_transcoder_init() reads uninitialised tables: bc7f only assert()s, so in release builds the output is silently wrong.",
+    "The default flags (cPackBC7FlagDefault) include cPackBC7FlagPBitOptMode6, whose own comment says opaque blocks may decode with alpha 254. Leave that flag out if exact 255 alpha matters.",
+    "The solid-block checks compare whole RGBA words through uint32_t casts. Use fast_pack_bc7_auto_rgba, or guarantee A=255, before calling the RGB-only entry points.",
+    "etc1f encodes blocks with very low chroma energy (sum of (r-g)^2+(b-g)^2 under 300 and every pixel under 32) as pure grey, which removes faint tints."
+  ],
+  "pick_this_over_siblings_when": "Pick bc7f over bc7e when you need BC7 without ISPC or SIMD (WASM, ARM, inside a transcoder) and can accept slightly lower PSNR. Pick bc7e when quality per second on x86 AVX2 matters and you can use its independently measured profiles. For ETC1, etcpak and Goofy have published throughput (QuickETC2 paper; Goofy's own table), while etc1f has only the claim that it is faster with better quality on smooth blocks.",
+  "verified_claims_summary": "No measurement exists. The wiki, which embeds the January 2026 bc7f blog post, and the v2.0 release notes state without numbers that bc7f is several times faster than bc7e.ispc level 1 at slightly lower average PSNR, and that etc1f beats etcpak and rg_etc1 on speed. No machine, compiler, image set or harness is named. The repo's basisu -benchmark_single/-benchmark_sweep modes can time XUBC7 encoding with bc7f against bc7e_scalar (the C++ port), but not against bc7e.ispc, etcpak or rg_etc1, and no results are checked in.",
+  "status_note": "Actively maintained (v2.5, last commit 2026-09-01, 3.1k stars, 87 open issues) under Apache-2.0 and copyable, but bc7f and etc1f are internal transcoder APIs that are about nine months old (added in v2.0, 2026-01-19).",
+  "measurement_notes": "There is nothing to retier: the claim has no numbers. Code read: bc7f is scalar by default (BASISU_BC7F_USE_SSE41 is 0, and the source comment says that path is 'only very minimally tested' and gains about 10%). Its per-mode SSE estimates are heuristics with fixed thresholds (for example TRIVIAL_BLOCK_THRESH_RGB, MIN_BLOCK_MAX_VAR_3SUBSETS = 500*16 and ORTHO_RATIO thresholds), so quality depends on content. Any speed comparison should state the flags preset used, because cPackBC7FlagDefaultFastest is mode 6 only while partially and non-analytical presets compute real SSEs. No correctness bug was found behind a catalogued number, since none exists. Leads for independent data: none found; WebSearch returned only the first-party wiki and blog copies.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/README.md",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/transcoder/basisu_transcoder.cpp",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/transcoder/basisu_transcoder_internal.h",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/transcoder/basisu_transcoder.h",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/basisu_tool.cpp",
+    "https://raw.githubusercontent.com/BinomialLLC/basis_universal/HEAD/basisu_tool_test_codecs.inl",
+    "https://raw.githubusercontent.com/wiki/BinomialLLC/basis_universal/Transcoder-Internals-Analytical-Real-Time-Encoders-and-Transcoders.md",
+    "https://raw.githubusercontent.com/wiki/BinomialLLC/basis_universal/Release-Notes.md",
+    "https://raw.githubusercontent.com/wiki/BinomialLLC/basis_universal/Home.md",
+    "https://raw.githubusercontent.com/wiki/BinomialLLC/basis_universal/XUBC7-Usage-Guide.md",
+    "https://github.com/BinomialLLC/basis_universal",
+    "https://github.com/BinomialLLC/basis_universal/commits/master",
+    "https://github.com/BinomialLLC/basis_universal/issues?q=bc7f",
+    "https://github.com/BinomialLLC/basis_universal/issues/465",
+    "https://raw.githubusercontent.com/BinomialLLC/bc7e/HEAD/README",
+    "https://raw.githubusercontent.com/richgel999/bc7enc_rdo/HEAD/README.md"
+  ],
+  "confidence": 0.6
+}
