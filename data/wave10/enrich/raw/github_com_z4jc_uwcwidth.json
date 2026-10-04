@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/z4jc/uwcwidth",
+  "one_liner": "Cython wcwidth/wcswidth for Python with Unicode 16 emoji rules; beats pure-Python wcwidth 0.2.13 by 18-42x on short strings.",
+  "what_it_does": "Returns how many terminal cells a code point (wcwidth) or a Python str (wcswidth) occupies, with Unicode 16.0 East Asian Width, zero-width marks and emoji rules: ZWJ sequences, VS15/VS16 and Fitzpatrick skin-tone modifiers. The functions have the same names and return values as jquast's wcwidth 0.2.x (-1 for control characters such as tab or ESC, an optional n prefix length), and the module adds wcwidth_uint32 and is_EMB helpers plus .pxd files for cimport from Cython. It has no unicode_version or ambiguous-width options and no padding, wrapping or escape-sequence helpers.",
+  "how_it_is_fast": "Width comes from musl libc's two-level sparse bitmaps (a 256-entry page index, then 32-byte bit pages) for zero-width and wide code points, recomputed for Unicode 16.0, plus a dense bitmap for Emoji_Modifier_Base; the tables total about 4 KB. Code points below U+00FF take one arithmetic test, and planes 2-3 return 2 without a lookup. The whole loop is a typed Cython function that reads code points straight from the str with no per-character Python objects, while wcwidth 0.2.13 runs a Python while-loop that binary-searches its tables per character behind an lru_cache.",
+  "when_to_use": [
+    "Python TUIs, table printers and log formatters that measure many short, emoji-heavy or CJK strings and still depend on pure-Python wcwidth 0.2.x.",
+    "When ZWJ sequences, flags, keycaps and skin-tone modifiers must count as 2 cells: in this session cwcwidth on glibc 2.39 returned 11 and 6 for the README's edge-case strings, against 8 and 5 from uwcwidth.",
+    "Cython code that can cimport wcswidth and call it without Python-call overhead (ugrapheme does this for ljust, rjust and center).",
+    "Projects that want a tiny, dependency-free MIT module whose widths do not depend on the platform libc or locale."
+  ],
+  "when_not_to_use": [
+    "You already run wcwidth 0.3 or later: 0.9.1 ships a C extension, and in this session it was only 2.1x slower on the README string, 1.9x slower on 1,750 characters of mixed text, and 4.5x faster on 2,250 ASCII characters (about 1.1 us against 5.0 us).",
+    "Plain ASCII or Latin text measured in long strings: the per-character loop runs at about 2.2 ns per character, slower than wcwidth 0.9.1 and cwcwidth.",
+    "Unicode 17 text, or output that must match wcwidth exactly: it has had no commits since 2024-10-28, and widths differ from wcwidth 0.2.13 on 730 single code points and from 0.9.1 on 5,541 (spacing marks such as U+0903 are 1 here and 0 there; wide code points added in Unicode 17, such as Tangut ideographs and new emoji, and lone regional indicators are 1 here and 2 in 0.9.1).",
+    "C or C++ callers: it is a CPython/PyPy extension. Its musl-derived tables and loop are short enough to port, and the catalogued Go siblings displaywidth and uniwidth do the same job in Go.",
+    "Platforms without wheels (CPython 3.14+, Linux aarch64): pip falls back to building the sdist with Cython and a C compiler."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime; Cython, setuptools and a C compiler only when building from source",
+    "min_toolchain": "CPython 3.8+ or PyPy 3.7-3.10 (1.0.0 wheels cp38-cp313 and pp37-pp310 for x86-64/i686 manylinux and musllinux, Windows and macOS arm64); built with -O3 on non-MSVC compilers",
+    "platforms": "any platform with a C compiler; prebuilt wheels as listed, none for Linux aarch64",
+    "thread_safety": "Not documented; the functions keep no state, only read static lookup tables and run while holding the GIL.",
+    "drop_in_for_baseline": "partial — wcwidth(char) and wcswidth(str, n=None) match wcwidth 0.2.x names and the -1 convention, but there is no unicode_version argument, no ambiguous-width option, no width/ljust/wrap helpers from wcwidth 0.3+, and widths differ on hundreds to thousands of code points"
+  },
+  "gotchas": [
+    "Any narrow character followed by VS16 (U+FE0F) becomes width 2, even when it has no emoji presentation: wcswidth('a\\ufe0f') is 2 here and 1 in wcwidth.",
+    "A ZWJ (U+200D) swallows the next code point and one trailing skin-tone modifier or VS16 whatever they are, so '\\u200dabc' measures 2; wcwidth 0.2.13 behaves the same.",
+    "Tabs, newlines, ESC and other controls make wcswidth return -1 for the whole string (closed issue #1), so strip ANSI escapes and expand tabs first. Unicode noncharacters such as U+FFFE also return -1, where wcwidth returns 1.",
+    "wcswidth(s, n) with n greater than len(s) raises IndexError, as wcwidth 0.2.13 did; wcwidth 0.9.1 clamps and returns the width."
+  ],
+  "pick_this_over_siblings_when": "displaywidth and uniwidth are the catalogued Go terminal-width libraries and beat go-runewidth there. uwcwidth is the Python counterpart, worth taking when a CPython or Cython codebase needs emoji-sequence-aware widths without the jquast wcwidth package or a libc-dependent binding such as cwcwidth.",
+  "verified_claims_summary": "The README times wcswidth on one 11-code-point katakana and ASCII string with IPython %%timeit: wcwidth 1.73 us, cwcwidth 211 ns, uwcwidth 41 ns. No CPU, OS or versions are given, but the wcwidth timing fits the pure-Python 0.2.13 of 2024. Re-run in this session on an Intel Xeon 2.1 GHz cloud VM (Linux, glibc 2.39, CPython 3.11.15, best of 7), the numbers were uwcwidth 1.0.0 87-89 ns, wcwidth 0.2.13 1,623 ns (18x, not 42x), wcwidth 0.9.1 183-186 ns (2.1x), and cwcwidth 0.1.9 49-52 ns and 0.1.12 63-67 ns. So on Linux, uwcwidth is about 1.7x slower than cwcwidth, not 5x faster, though cwcwidth gets ZWJ sequences wrong; the README's cwcwidth ratio is presumably specific to the libc of its unstated platform.",
+  "status_note": "Stale since its 1.0.0 release on 2024-10-28 (4 stars, 4 commits, no open issues) and still at Unicode 16.0, but it is about 80 lines of MIT-licensed Cython plus musl-derived tables, so it is easy to vendor or port; its speed advantage now holds mainly against pure-Python wcwidth 0.2.x.",
+  "sources_read": [
+    "https://github.com/Z4JC/uwcwidth",
+    "https://github.com/Z4JC/uwcwidth/issues?q=is%3Aissue",
+    "https://github.com/Z4JC/uwcwidth/issues/1",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/README.md",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/uwcwidth/uwcwidth.pyx",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/uwcwidth/uwcwidth.pxd",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/uwcwidth/tables.pxd",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/uwcwidth/__init__.py",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/uwcwidth/__init__.pxd",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/tests/test_uwcwidth.py",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/setup.py",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/Makefile",
+    "https://raw.githubusercontent.com/Z4JC/uwcwidth/HEAD/LICENSE",
+    "https://pypi.org/pypi/uwcwidth/json",
+    "https://pypi.org/pypi/cwcwidth/json",
+    "https://pypi.org/pypi/wcwidth/json",
+    "https://pypi.org/project/uwcwidth/ (1.0.0 wheel installed into the scratch directory and run in this session)",
+    "https://pypi.org/project/cwcwidth/ (0.1.9 and 0.1.12 wheels installed into the scratch directory and timed)",
+    "https://pypi.org/project/wcwidth/ (0.2.13 and 0.9.1 wheels installed into the scratch directory, timed and diffed over all code points)",
+    "wcwidth 0.2.13 wcwidth/wcwidth.py (from the PyPI wheel installed in the scratch directory)"
+  ],
+  "confidence": 0.8
+}

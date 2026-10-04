@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/wx257osn2/qoixx",
+  "one_liner": "Single-header C++20 QOI codec with an AVX2/NEON/SVE encoder, 1.4-1.8x faster than the reference qoi.h.",
+  "what_it_does": "Encodes and decodes the QOI lossless image format (RGB or RGBA, 8 bits per channel). It is a separate implementation, not a wrapper of qoi.h. The API is two static templates: `qoixx::qoi::encode<Out>(ptr, size, desc)` and `auto [pixels, desc] = qoixx::qoi::decode<Out>(ptr, size, channels = 0)`. `Out` and the input can be std::vector, std::pair<std::unique_ptr<T[]>, size_t> or std::pair<T*, size_t>, and other containers plug in through a container_operator specialisation. Files are interchangeable with qoi.h's, but the C API (qoi_encode/qoi_decode/qoi_read/qoi_write) is not reproduced.",
+  "how_it_is_fast": "The encoder processes 32 pixels per AVX2 iteration (or one NEON/SVE vector). It computes channel deltas against the shifted previous pixels in one pass, skips whole runs of identical pixels with a single test, and builds candidate DIFF and LUMA opcodes plus colour hashes for all lanes before a short serial emit step. The scalar paths avoid qoi.h's per-pixel branching: the hash is a single 64-bit multiply, and 3-byte copies are split into 2+1-byte memcpy calls. On x86 the decoder updates the colour-index hash incrementally from constexpr lookup tables (QOIXX_DECODE_WITH_TABLES), and on AArch64 it writes long runs with 8-pixel NEON stores.",
+  "when_to_use": [
+    "You already store or stream QOI and encoding is the bottleneck, for example screen capture, game frame dumps or webcam streams on x86-64 with AVX2 or on ARMv8 servers and phones",
+    "C++20 code bases that want a dependency-free single header that writes into std::vector or unique_ptr buffers without a malloc/free C API",
+    "AArch64 targets with SVE (for example AWS Graviton3), which get a dedicated SVE encoder that qoi.h lacks",
+    "Batch conversion where output must stay readable by any QOI decoder: CI diffs its decodes against the reference qoiconv on the official test images"
+  ],
+  "when_not_to_use": [
+    "If compression ratio or format reach matters more than speed: QOI stores the benchmark suite at 28.2% of raw size with no effort levels, and few tools read it; siblings fpnge (PNG output) or QOIR (better ratio options) fit that case",
+    "Decode-dominated workloads: the README says the decoder is scalar and 'with some input, original implementation is faster', and the MSVC-built decoder is slow (FAQ: use MinGW-w64)",
+    "Toolchains older than C++20, builds with -fno-exceptions (errors are thrown as std::runtime_error/std::invalid_argument), or 32-bit ARM, where SIMD is disabled (issue #26 open)",
+    "Untrusted input on any commit before 2026-09-29: until PR #32 the decoder's remaining-byte counter included the 14-byte header, so truncated files could read past the end of the input buffer"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library plus immintrin.h, arm_neon.h or arm_sve.h when SIMD is enabled; QOIXX_NO_SIMD removes them)",
+    "min_toolchain": "C++20 (concepts, <bit>, std::endian); CI builds with GCC and Clang on Ubuntu x86-64 and arm64, plus MSYS2 on Windows",
+    "platforms": "x86-64 (AVX2 encoder when compiled with -mavx2 or -march=native, otherwise scalar), AArch64 (NEON, or SVE at any vector length from 128 to 2048 bits), any other target via the scalar paths; SIMD is chosen at compile time with no runtime dispatch",
+    "thread_safety": "not documented; by inspection all state is local to each call (lookup tables are function-local static constexpr), so concurrent calls on separate buffers are safe",
+    "drop_in_for_baseline": "partial: same .qoi bitstream (files are interchangeable with qoi.h), but a C++20 template API instead of qoi.h's C functions, and no qoi_read/qoi_write file helpers"
+  },
+  "gotchas": [
+    "Likely bug (from reading the code, not run): decoding a 4-channel file with channels = 3 drops alpha before computing the colour-index hash, while the QOI spec hashes r*3+g*5+b*7+a*11. Images with any alpha other than 255 can then fetch the wrong colour on QOI_OP_INDEX. CI only decodes at the file's own channel count, so this path is untested. Decode at native channels and strip alpha yourself.",
+    "The SIMD encoder runs only when both input and output containers are contiguous (vector, unique_ptr pair or pointer pair). A custom non-contiguous container silently falls back to the scalar encoder.",
+    "Output bytes differ from qoi.h even though sizes match: a 1-pixel run is written as QOI_OP_INDEX of the previous pixel instead of QOI_OP_RUN. Both are valid and decode identically, but byte-for-byte comparisons against qoi.h output fail.",
+    "Images are capped at 400,000,000 pixels, and width or height 0 throws, the same limits as qoi.h."
+  ],
+  "pick_this_over_siblings_when": "Pick qoixx over the reference qoi.h (phoboslab/qoi) whenever you can compile C++20 and want the same files faster, especially encode on AVX2, NEON or SVE. Pick qoi-rust instead in Rust code (its M1 decode gain over qoi.h, about 1.5x, is similar). Pick fpnge or QOIR when compression ratio or PNG compatibility matters more than staying on QOI.",
+  "verified_claims_summary": "The README runs src/qoibench.cpp, which compiles qoi.h and qoixx into one binary with the same -std=c++2a -O3 -march=native flags and checks round trips with memcmp before timing (20 runs plus a warm-up). On the public QOI benchmark suite qoixx was 1.37-1.66x faster at decoding and 1.47-1.76x faster at encoding on seven CPUs, for example i9-10900 with g++ 11.1.0: 344 vs 207 Mpx/s decode and 304 vs 183 Mpx/s encode. The 'ms' and 'size kb' columns are per-image means, not suite totals (issue #10, wontfix). The numbers date from 2022, before the 2024 encoder and decoder speed-ups (PRs #19 and #25) and before the fix for a decoder bug when the first opcode is QOI_OP_RUN (PR #23). The harness's memcmp check passed, so the timed decodes were correct for those inputs.",
+  "status_note": "Actively maintained by a single author (last commits 2026-09-29: buffer-overrun fix and CI update), MIT and small enough to vendor; use a commit from 2026-09-29 or later.",
+  "sources_read": [
+    "https://github.com/wx257osn2/qoixx",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/README.md",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/Makefile",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/src/qoibench.cpp",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/include/qoixx.hpp",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/src/test.cpp",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/src/qoiconv.cpp",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/.github/workflows/linux.yml",
+    "https://github.com/wx257osn2/qoixx/issues?q=is%3Aissue",
+    "https://github.com/wx257osn2/qoixx/issues/10",
+    "https://github.com/wx257osn2/qoixx/pulls?q=is%3Apr",
+    "https://github.com/wx257osn2/qoixx/pull/23",
+    "https://github.com/wx257osn2/qoixx/pull/30",
+    "https://github.com/wx257osn2/qoixx/pull/30/files",
+    "https://github.com/wx257osn2/qoixx/pull/32",
+    "https://github.com/wx257osn2/qoixx/commit/81c57c9",
+    "https://github.com/wx257osn2/qoixx/commits/master",
+    "https://github.com/ShadowMitia/libqoi/issues/1"
+  ],
+  "confidence": 0.8
+}

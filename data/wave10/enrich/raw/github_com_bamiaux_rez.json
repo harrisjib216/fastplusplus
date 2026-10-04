@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/bamiaux/rez",
+  "one_liner": "Pure-Go image resizer with SSE2 assembly kernels for YCbCr, RGBA and Gray planes; faster than other pure-Go resizers.",
+  "what_it_does": "Resizes Go image.YCbCr (subsampling 4:1:0 to 4:4:4), RGBA, NRGBA and Gray images into a caller-allocated destination of the same type, using bilinear, bicubic (B/C configurable, default B=0, C=0.5) or Lanczos filters. It can also convert YCbCr chroma subsampling (for example 4:2:2 to 4:2:0) and do field-aware resizes of interlaced video. The API is rez.Convert(dst, src, filter) for one-off calls, or PrepareConversion plus NewConverter for a reusable converter; it is a Go library, not a replacement for the ImageMagick command line or the golang.org/x/image/draw Scaler interface.",
+  "how_it_is_fast": "It filters the decoded YCbCr planes directly instead of converting to RGBA first (imaging and gift convert), with a separable two-pass resize (vertical, then horizontal) driven by precomputed 14-bit fixed-point int16 kernels. Hot loops are generated SSE2 assembly per tap count (2 to 12, plus a generic N-tap path) built on PMADDWD multiply-accumulate with PUNPCKLBW/PACKUSWB widening and packing; the tests check that the assembly output is bit-identical to the pure-Go loops. Each plane is split into GOMAXPROCS horizontal slices run as goroutines, and a reusable Converter avoids rebuilding kernels and buffers for repeated geometry.",
+  "when_to_use": [
+    "Go services that make thumbnails or scaled copies from JPEGs decoded with image/jpeg and must stay free of cgo; staying in YCbCr skips a full-resolution RGBA conversion.",
+    "Video or frame pipelines in Go that resize many frames of the same size (reuse one Converter per goroutine), including interlaced material and chroma-subsampling changes.",
+    "amd64 servers, where the SSE2 kernels are used; the filter widens on downscale (support divided by the scale factor), so even the bilinear setting is antialiased rather than point-sampled.",
+    "Vendoring a small, dependency-free MIT resizer into a Go codebase that cannot take new upstream maintenance."
+  ],
+  "when_not_to_use": [
+    "Whenever cgo or an external process is acceptable: in the same i7 table ImageMagick -thumbnail with jpeg:size (0.057 s), the libvips binding (0.070 s), epeg (0.079 s), fastjpeg (0.082 s), OpenCV (0.110 s) and vipsthumbnail (0.115 s) all beat rez (0.349 s).",
+    "Large-reduction JPEG thumbnails: rez needs the full-resolution decode, while DCT-domain downscaling on load (jpeg:size, epeg, fastjpeg) skips most of the decode work.",
+    "arm64 and other non-amd64 targets: only SSE2 amd64 assembly exists (no AVX2, no NEON), so other architectures run the scalar Go loops.",
+    "Colour-accurate work: filtering runs on gamma-encoded 8-bit values (issue #8, open since 2015, unanswered), NRGBA is filtered as packed bytes without premultiplying alpha, and there is no 16-bit or float path.",
+    "Paletted, CMYK, RGBA64 or Gray16 images: anything other than YCbCr, RGBA, NRGBA or Gray returns 'unknown image format' (issue #12 hit this with a PNG)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Go standard library only)",
+    "min_toolchain": "CI was Go 1.5 to 1.8 (issue #9, 'Cannot build with Go >1.7', closed 2016); no go.mod, so modules use a pseudo-version. fawick/speedtest-resize's go.mod (go 1.26.0) still pins rez at the 2017-07-31 commit, which suggests it builds on current Go; not verified here",
+    "platforms": "amd64 with SSE2 assembly; any other Go target through the pure-Go fallback (scalers_gen.go)",
+    "thread_safety": "Convert starts its own goroutines (GOMAXPROCS slices by default, inline when Threads is 1). A Converter keeps its intermediate plane buffers between calls (converterContext.buffer), so one Converter must not be used from several goroutines at once; use one per goroutine.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The destination must be pre-allocated at the target size with the same type and plane layout as the source; YCbCr-to-RGBA or other pack/plane mismatches return an error even though the docs say Convert applies 'any necessary colorspace conversion'.",
+    "One-shot rez.Convert rebuilds kernels and buffers on every call and defaults to GOMAXPROCS goroutines per call; under concurrent request load set ConverterConfig.Threads to 1 and reuse Converters to avoid oversubscription and repeated setup.",
+    "From kernels.go: horizontal kernel offsets are stored as int16 absolute pixel positions, so inputs wider than 32767 px would overflow (slice panic in Go, out-of-range reads in assembly); this was read from the source, not tested.",
+    "Planes smaller than 2 px in either dimension are rejected, and the assembly is disabled for outputs narrower than 16 px (pure-Go path used)."
+  ],
+  "pick_this_over_siblings_when": "Pick rez only when the program must stay pure Go: if cgo or an external process is allowed, libvips, epeg and OpenCV were 3-6x faster in the same shootout, and fast_image_resize is the stronger SIMD choice in Rust (AVX2 and NEON).",
+  "verified_claims_summary": "In fawick/speedtest-resize (third-party, MIT; run by contributor nono on a 3.4GHz Core i7 with Ubuntu 16.10, one pass over the first ten 5616x3744 JPEGs, decode plus resize plus encode timed together), rez_bilinear averaged 0.349 s per file against 0.568 s for ImageMagick `convert -resize 150x150>` and 0.370-0.515 s for the other pure-Go resizers, while ImageMagick's -thumbnail path took 0.057 s. Reading the harness adds three points to the verifier's notes: rez runs on all cores by default (GOMAXPROCS goroutines) and the harness sets no thread limits for any contender; its bilinear kernel widens to about 76 taps at this 37x reduction, so the resize itself is a real antialiased filter, and every pure-Go row also pays for a full Go image/jpeg decode; and the harness ignores decode and convert errors but still counts the file and its time, although rez's 0.140% average output size (other pure-Go rows: 0.146-0.160%) shows no sign that files were skipped.",
+  "status_note": "Abandoned: last commit 2017-07-31 and archived 2024-05-19 (214 stars, one open issue). It is MIT-licensed with no dependencies, and small enough to vendor (a dozen Go files plus two generated assembly files), but it will get no fixes and has no SIMD outside amd64.",
+  "sources_read": [
+    "https://github.com/bamiaux/rez",
+    "https://github.com/bamiaux/rez/commits/master",
+    "https://github.com/bamiaux/rez/issues?q=is%3Aissue",
+    "https://github.com/bamiaux/rez/issues/8",
+    "https://github.com/bamiaux/rez/issues/12",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/README.md",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/image.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/resize.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/filters.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/kernels.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/scalers.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/scalers_amd64.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/scalers_gen.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/fixedscalers.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/hscalers_amd64.s",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/vscalers_amd64.s",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/asm/asm.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/utils.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/bench_test.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/resize_test.go",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/bamiaux/rez/HEAD/mkscalers.sh",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/README.md",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/main.go",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/pure.go",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/exec.go",
+    "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/go.mod"
+  ],
+  "confidence": 0.75
+}
