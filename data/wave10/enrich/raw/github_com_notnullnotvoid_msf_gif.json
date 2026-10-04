@@ -1,0 +1,62 @@
+{
+ "id": "https://github.com/notnullnotvoid/msf_gif",
+ "one_liner": "Single-header C animated-GIF encoder with SSE2 frame quantization; first-party timings 5x to 30x faster than gif.h and jo_gif.",
+ "what_it_does": "Encodes a sequence of RGBA (or BGRA) frames into an animated GIF89a for in-app recording, such as capturing gameplay. The API is msf_gif_begin / msf_gif_frame / msf_gif_end on an MsfGifState handle; the result is one malloc'd buffer freed with msf_gif_free, and *_to_file variants stream each finished frame through an fwrite-compatible callback. It has its own API, so moving from gif.h or jo_gif means rewriting the call sites.",
+ "how_it_is_fast": "There is no palette search: each frame is quantized to a fixed RGB bit split (up to 5-6-5 bits at quality 16) with a 4x4 ordered (Bayer-style) dither, done four pixels at a time with SSE2 integer intrinsics. If 256 or more colors end up in use, it drops one bit of depth and quantizes the frame again. The LZW coder uses a dense 4096 x palette-size int16 child table indexed directly by (prefix code, color) instead of a hash table. Pixels whose quantized value matches the previous frame are emitted as the transparent index 0, which gives long runs for LZW.",
+ "when_to_use": [
+  "Recording GIFs inside a game or tool at interactive speed, where encode time matters more than palette quality.",
+  "Flat-shaded or pixel-art content with mostly static backgrounds, where inter-frame delta coding and ordered dither work well (the author's test set includes clips named diwide and flip, matching the README's examples from his games DIWide and Escher).",
+  "Projects that want a vendorable single header with no dependencies, under public domain or MIT, that compiles as C99 or C++98.",
+  "Memory-limited targets: allocation is bounded by a documented formula, malloc/realloc/free can be replaced through macros, and the to-file API keeps memory to about one frame."
+ ],
+ "when_not_to_use": [
+  "Photographic or gradient-heavy video where palette quality matters: colorful frames often end up with 128 colors (issue #8) at a coarse 2-3-2 bit split, with a visible dither pattern. An adaptive quantizer such as gifski produces better-looking output.",
+  "When you need the smallest file: every frame is written full-size (no sub-rectangle cropping), and delta coding turns off for any frame with transparent pixels or a palette bit-depth change.",
+  "Non-x86 targets that need SIMD speed: there is only an SSE2 path (NEON is a TODO), and SIMDe ports to ARM fail to compile because _mm_srli_epi32 is called with a runtime shift count (issue #11, open since February 2025).",
+  "Multithreaded encoding of one GIF: the shipped v2.4 is single-threaded; the threaded rows in timings.txt come from a variant that was never released (notes.txt).",
+  "High-entropy frames with many colors: from reading the code (not measured), each time the 4096-code LZW table fills it is reset with a memset of 4096 x palette-size x 2 bytes (up to 2 MB), so noisy content pays that cost often."
+ ],
+ "integration": {
+  "form": "header-only",
+  "dependencies": "none (C standard library; emmintrin.h when SSE2 is available)",
+  "min_toolchain": "C99 or C++98 (README); MSVC, GCC and clang paths in the source",
+  "platforms": "any; SSE2 fast path on x86/x86-64 (enabled automatically by __SSE2__ or _M_X64, disabled with MSF_GIF_NO_SSE2); scalar code elsewhere",
+  "thread_safety": "One MsfGifState per thread is safe (all buffers live in the handle), but msf_gif_alpha_threshold and msf_gif_bgra_flag are process-wide globals read during every frame.",
+  "drop_in_for_baseline": "partial: the begin/frame/end shape matches other single-header GIF writers, but the function names, arguments and the in-memory result buffer differ, so call sites must change"
+ },
+ "gotchas": [
+  "Use v2.4 (commit f56d744, May 2025) or later. It fixed a potential heap buffer overflow on small images and added dimension checks (1 to 65535 per side, 1 GB of RGBA at most). The repository history was rewritten in January 2025 ('fresh initial commit'; tag v2.2 deleted, issue #14).",
+  "msf_gif_begin checks only the lzw, frame and header allocations for failure. A failed 64 KB tlb or used allocation is not caught, despite the header's promise that allocation failures come back as return values (found by reading the v2.4 source).",
+  "BGRA input and 1-bit transparency are switched on through the globals msf_gif_bgra_flag and msf_gif_alpha_threshold, not per handle. Set them before msf_gif_frame and do not change them while another thread is encoding.",
+  "The in-memory API holds the whole GIF until msf_gif_end and then copies it into one buffer, so peak memory is about twice the output size. msf_gif_*_to_file avoids this."
+ ],
+ "pick_this_over_siblings_when": "It is the only GIF encoder in this category. gif_load and giflib-turbo are GIF decoders and pair with it rather than compete, while fpng, fpnge and QOI encode still lossless frames. Pick msf_gif when the output has to be an animated GIF and capture speed matters more than palette quality.",
+ "verified_claims_summary": "The comparison rests on first-party, undated timings.txt totals with no CPU, compiler or input set given: scalar msf_gif ~14 s and SSE ~8 s against gif_h ~75 s (undithered) or ~315 s (dithered) and jo_gif ~425 s. The code that timed gif_h and jo_gif is not published, though .gitignore lists gif-h/, gif-h2/, gif-h3/, jo_gif/, jo_gif2/ and alt/ output folders, so such a harness existed. The public test.cpp times only msf_gif (clang -march=native -Os, profiling trace compiled in, 13 clips, quality 16, alpha threshold 128). If the totals cover the 11 clips whose sizes notes.txt logs (about 2.0 GB of RGBA), that works out to roughly 136 MiB/s scalar and 239 MiB/s SSE (derived; the input set behind timings.txt is not stated).",
+ "status_note": "Small and dual MIT / public-domain licensed, so it is easy to vendor. The last commit was 2025-09-10 (a compiler-compatibility PR), issues #8 and #11 are open with no maintainer reply, and the README still says 'actively maintained'; treat it as stable but slow-moving.",
+ "sources_read": [
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif/HEAD/README.md",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif/HEAD/msf_gif.h",
+  "https://github.com/notnullnotvoid/msf_gif/issues?q=is%3Aissue",
+  "https://github.com/notnullnotvoid/msf_gif/pulls?q=is%3Apr",
+  "https://github.com/notnullnotvoid/msf_gif/issues/8",
+  "https://github.com/notnullnotvoid/msf_gif/issues/10",
+  "https://github.com/notnullnotvoid/msf_gif/issues/11",
+  "https://github.com/notnullnotvoid/msf_gif/issues/15",
+  "https://github.com/notnullnotvoid/msf_gif/commits/master",
+  "https://github.com/notnullnotvoid/msf_gif/commit/f56d744e0962fdf66f89a8c2e1188c69579d1845",
+  "https://github.com/notnullnotvoid/msf_gif-testing",
+  "https://github.com/notnullnotvoid/msf_gif-testing/commits/master/timings.txt",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/timings.txt",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/README.md",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/test.cpp",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/build.sh",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/build.bat",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/oldbuild.bat",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/notes.txt",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/msf_gif.cpp",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/msf_gif.c",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/common.hpp",
+  "https://raw.githubusercontent.com/notnullnotvoid/msf_gif-testing/HEAD/.gitignore"
+ ],
+ "confidence": 0.8
+}
