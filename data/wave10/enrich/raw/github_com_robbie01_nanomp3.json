@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/robbie01/nanomp3",
+  "one_liner": "Safe, no_std Rust port of minimp3 (MP3/MP2/MP1 decode), bit-exact, 6-21% faster than minimp3's SIMD build.",
+  "what_it_does": "nanomp3 decodes MPEG-1/2 Layer III (and, with the default layer12 feature, Layer I/II) audio. nanomp3-core is the frame decoder: a no_std, allocation-free Decoder whose decode(bytes, &mut pcm) consumes one frame at a time and returns (bytes consumed, Result<FrameInfo, DecodeError>), writing interleaved f32, i8, u8, i16, u16, i32 or u32. The nanomp3 crate adds a port of minimp3_ex: Reader over Read + Seek and SliceReader over memory with ID3/APE tag skipping, gapless encoder-delay trimming, exact sample seeking, VBR tag parsing and decode_all. It is a Rust API only; C or C++ callers would need their own FFI wrapper.",
+  "how_it_is_fast": "The DSP kernels (IMDCT, polyphase synthesis, stereo processing) are written once over a small Lanes trait and instantiated for wide::f32x4 SIMD bodies and scalar tails; each lane does exactly the scalar arithmetic (no fused multiply-add, no reassociation), so vectorization keeps bit-exactness. Per-frame scratch (grbuf, scf, syn, ist_pos) and the main-data buffer live inside the decoder instead of on the stack, and only scf, ist_pos and grbuf are cleared per frame; the bit reader is bounded to the valid bytes so corrupt-stream over-reads see zeros without clearing the buffer. Both crates are #![forbid(unsafe_code)], so the gains come from data layout and explicit SIMD rather than unchecked indexing.",
+  "when_to_use": [
+    "Rust applications or game/audio engines that need MP3 playback without linking C (no unsafe, no build script, only the optional wide dependency).",
+    "Embedded or no_std targets: nanomp3-core builds for thumbv7em-none-eabihf and riscv32imac-unknown-none-elf in CI on Rust 1.89, with no allocator needed for the frame decoder.",
+    "Projects already using minimp3 or minimp3_ex that want the same output bit for bit (f32 path) plus fixes for minimp3_ex's I/O and APEv2 trimming bugs, with Options::minimp3_compat when exact legacy behavior matters.",
+    "Batch decoding of whole files in memory where a 6-21% throughput gain over minimp3 SIMD (x86-64, first-party) is worth a dependency swap.",
+    "Gapless playback and sample-accurate seeking via Reader/SliceReader instead of writing your own frame-index logic."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: there is no C API, so calling it means writing and maintaining a Rust FFI shim; minimp3 itself is a single header and nearly as fast.",
+    "When you need a broader decoder (AAC, Vorbis, Opus, containers) or a reference-quality float pipeline such as libmpg123 or FFmpeg; nanomp3 is only as accurate as minimp3 and was not benchmarked against either.",
+    "If the speed claim is the deciding factor on ARM or non-Windows hosts: the only numbers are one first-party table on Windows x86-64 with an unnamed CPU and rustc version.",
+    "Maturity-sensitive deployments: 0.2.0 was published 2026-09-30 with breaking API changes from 0.1 (decode signature, generic sample type, non_exhaustive FrameInfo), and the project has one maintainer and 22 stars.",
+    "Streams that need encoding, metadata editing or MPEG-2.5 extensions beyond what minimp3 decodes: not documented."
+  ],
+  "integration": {
+    "form": "crate (nanomp3 reader crate re-exporting nanomp3-core frame decoder)",
+    "dependencies": "none required; optional wide (explicit SIMD, default on). Without wide the same kernels run on plain arrays and rely on LLVM auto-vectorization (README: a few percent slower).",
+    "min_toolchain": "Rust 1.89 (1.80 without the wide feature), edition 2021",
+    "platforms": "any Rust target; CI tests ubuntu x86-64, ubuntu-24.04-arm, windows and macos, builds no_std for thumbv7em-none-eabihf and riscv32imac-unknown-none-elf, and runs Miri and fuzz jobs",
+    "thread_safety": "Decoder is plain owned state with no globals or unsafe, so separate decoders can run on separate threads; a single decoder is used through &mut self. No further statement in the docs.",
+    "drop_in_for_baseline": "partial — same frame-by-frame model and bit-identical f32 output as minimp3's scalar reference build, but a Rust API (Decoder::decode, Reader) rather than mp3dec_decode_frame/mp3dec_ex_*; default i16 rounding deliberately differs unless minimp3_compat is set"
+  },
+  "gotchas": [
+    "Bit-exactness is against minimp3 built with MINIMP3_NO_SIMD and -ffp-contract=off (parity/build.rs). Stock minimp3 SIMD builds, or C builds that contract multiply-adds into FMA (common on ARM64), can differ from nanomp3 in low bits.",
+    "Default i16 output rounds half away from zero (about 0.3% of samples differ from minimp3 on the conformance vectors); use Decoder::new_minimp3_compat() or Options::minimp3_compat for minimp3's exact i16 output.",
+    "The Decoder is about 23 KB by value (overlap and QMF state plus the per-frame scratch and main-data buffers, summed from the struct definitions in minimp3.rs), so placing it on a small embedded stack needs care; nanomp3-core does no buffering, and the README suggests keeping a read-ahead of several frames (16 KiB) yourself.",
+    "0.2.0 split the crate into nanomp3-core plus nanomp3 and changed Decoder::decode to return Result<FrameInfo, DecodeError>; items under __private, __compat and __Raw are not covered by semver."
+  ],
+  "pick_this_over_siblings_when": "Pick it over minimp3 (lieff/minimp3, catalogued in this category) when you are in Rust and want no unsafe, no_std, gapless seeking and slightly higher throughput with identical f32 output; stay with minimp3 from C or C++. Pick it over remade_ffmpeg_rs when you want a small, bit-exact MP3-only decoder rather than a broader FFmpeg-style toolkit.",
+  "verified_claims_summary": "Criterion in-memory decode throughput (MiB/s of MP3 input, f32 output, decoder created per iteration) on Windows x86-64 with an unstated CPU and rustc: nanomp3 76.0 vs minimp3 SIMD 71.9 and scalar 67.8 on 48 kHz 320 kbps stereo, 72.7 vs 60.3 / 53.0 on 22 kHz MPEG-2 mixed bitrates, 52.6 vs 47.5 / 42.5 on mode-switching short blocks. The C baselines were built by parity/build.rs with -ftrivial-auto-var-init=zero, which makes minimp3 zero its whole on-stack mp3dec_scratch_t (about 16 KB, per minimp3.h) on every frame while nanomp3 keeps that scratch in the decoder and clears only scf, ist_pos and grbuf, so the baseline carries extra per-frame work stock minimp3 does not do (unmeasured; likely a few percent at most, smaller than the reported gaps); and on MSVC targets cc-rs caps the requested -O3 to clang-cl -O2.",
+  "status_note": "Active single-maintainer project (last commit 2026-09-28, 0.2.0 on crates.io 2026-09-30, about 27,900 downloads), MIT OR Apache-2.0 and pure safe Rust, so easy to vendor in Rust projects but not directly usable from C++.",
+  "sources_read": [
+    "https://github.com/robbie01/nanomp3/tree/master/parity/src",
+    "https://github.com/robbie01/nanomp3/tree/master/nanomp3-core/src",
+    "https://github.com/robbie01/nanomp3/tree/master/nanomp3-core/src/minimp3",
+    "https://github.com/robbie01/nanomp3/issues?q=is%3Aissue",
+    "https://github.com/robbie01/nanomp3/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/README.md",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/Cargo.toml",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/.gitmodules",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/nanomp3-core/Cargo.toml",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/nanomp3-core/src/lib.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/nanomp3-core/src/minimp3.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/nanomp3-core/src/minimp3/lanes.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/parity/Cargo.toml",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/parity/build.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/parity/src/lib.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/parity/benches/decode.rs",
+    "https://raw.githubusercontent.com/robbie01/nanomp3/master/parity/tests/parity.rs",
+    "https://raw.githubusercontent.com/lieff/minimp3/master/minimp3.h",
+    "https://raw.githubusercontent.com/rust-lang/cc-rs/main/src/lib.rs",
+    "https://crates.io/api/v1/crates/nanomp3",
+    "WebSearch: Symphonia Rust audio decoder benchmark FFmpeg MP3 performance percent (checked for a sibling lead; Symphonia is already in data/wave10)"
+  ],
+  "confidence": 0.75
+}
