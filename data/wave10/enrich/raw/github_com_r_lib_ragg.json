@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/r-lib/ragg",
+  "one_liner": "R raster graphics devices (PNG/JPEG/TIFF/WebP) on AGG 2.4; about 1.3x faster than R's anti-aliased cairo png() on a composite ggplot2.",
+  "what_it_does": "ragg implements R's graphics-device API (R_ext/GraphicsEngine.h) on top of the Anti-Grain Geometry 2.4 rasterizer, writing PNG, JPEG, TIFF, WebP or PPM files, an in-memory capture (agg_capture) or a recording (agg_record). agg_png(), agg_jpeg() and agg_tiff() take arguments that closely match grDevices png(), jpeg() and tiff(), and it plugs into knitr (dev = 'ragg_png'), ggsave and the RStudio/Positron graphics pane. It is not a C++ library: the device class lives behind R's graphics engine and Rinternals, so only R code can drive it.",
+  "how_it_is_fast": "Every primitive goes through AGG's scanline anti-aliasing rasterizer (rasterizer_scanline_aa: exact-area coverage cells, sorted and swept per scanline) and is blended as spans straight into a premultiplied RGB/RGBA buffer by renderer_scanline_aa_solid; fills use packed scanlines (scanline_p8), strokes and dashes are turned into polygons by conv_stroke/conv_dash and rasterized the same way. Text goes through FreeType with a process-wide static agg::font_cache_manager, so repeated glyphs come from a cache; shaping is done by the textshaping package (HarfBuzz/FriBidi). Masks are applied at scanline level through masked-scanline adaptors over an alpha or luminance buffer, whereas R's cairo device pushes and pops a cairo group and calls cairo_mask for every masked primitive (cairoBegin/cairoEnd in grDevices cairoFns.c), which is why the mask and pattern tests show the largest gaps.",
+  "when_to_use": [
+    "You render R plots to raster files (PNG/JPEG/TIFF/WebP) with anti-aliasing and want them faster than png(type = 'cairo'): about 245 ms vs about 320 ms for the vignette's layered ggplot2 composite.",
+    "Text-heavy plots: in the 2026-04-08 build 1000 text strings took about 19 ms with ragg vs about 81 ms with every cairo setting (about 4x, read from the plot).",
+    "Plots using grid masks or pattern fills (R >= 4.1): about 8 ms vs 37 ms for the mask test and about 94 ms vs 410 ms for the pattern test against anti-aliased cairo (read from the plots).",
+    "Headless servers, CI and knitr/pkgdown builds that need system fonts, right-to-left text, emoji and identical output across Linux, macOS and Windows without X11.",
+    "RStudio (>= 1.4) or Positron users who want the AGG backend as the interactive graphics device."
+  ],
+  "when_not_to_use": [
+    "You need a 2D rasterizer callable from C++: ragg's C++ core needs R's graphics engine and Rinternals; use AGG 2.6 or Blend2D directly.",
+    "Plots that clip many primitives with a complex grid clipping path: in the 2026-04-08 build ragg took about 87 ms vs about 55 ms for cairo on the vignette's clip-path test (cairo about 1.6x faster), because ragg re-rasterizes the whole clip path for every primitive.",
+    "Many small, nearly empty images: opening and closing a device costs about 7.3 ms vs about 3 ms for png(type = 'cairo') (mostly PNG encoding and file size, per the vignette).",
+    "Fill-only output where non-anti-aliased edges are acceptable: cairo skips anti-aliasing on fills and wins on filled rectangles (about 0.85 ms vs 1.1 ms per 1000) and other single fill-heavy primitives.",
+    "Vector output (PDF, SVG): ragg is raster-only; use cairo_pdf, svglite or the pdf device."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "R with the systemfonts and textshaping packages (HarfBuzz, FriBidi via textshaping); system FreeType, libpng, libtiff, libjpeg, libwebp and libwebpmux; AGG 2.4 sources are bundled and built as a static library inside the package",
+    "min_toolchain": "Built by R CMD INSTALL with R's configured C/C++ compiler; src/Makevars.in sets no CXX_STD, so R's default C++ standard applies (code uses C++11 features such as unique_ptr and unordered_map). pkg-config is used to find system libraries; Windows builds use Rtools.",
+    "platforms": "Linux, macOS, Windows (Rtools, Arm Windows prepared in 1.2.6); big-endian handled through separate raster pixel formats (WORDS_BIGENDIAN)",
+    "thread_safety": "not documented; R graphics devices are driven from R's main thread, and the FreeType font engine and glyph cache are function-local statics shared by all ragg devices in the process",
+    "drop_in_for_baseline": "partial — agg_png()/agg_jpeg()/agg_tiff() mirror the png()/jpeg()/tiff() arguments and knitr accepts dev = 'ragg_png', but there is no type or antialias argument (ragg always anti-aliases), fonts are resolved through systemfonts, and pixels will not match cairo output"
+  },
+  "gotchas": [
+    "Fills are always anti-aliased, so adjacent filled shapes can show faint seams; open issue #103 (geom_tile banding on Windows) and #131 (striping between spplot polygons) report this, and 1.3.0 added rectangle snapping to the pixel grid (on by default) for fill-only rectangles.",
+    "The vignette prose is older than its plots: it calls ragg 'much better' on clipping paths and only 'slightly faster' on text, while the 2026-04-08 rendered plots show ragg slower on clipping paths and about 4x faster on text.",
+    "Loading the package can be slow when the user's local font directory is large, because systemfonts rescans it on every load (issue #210, open as of 2026-10).",
+    "Gradient stops placed very close together (e.g. 0.0001 apart) lose the flanking colours, while cairo renders them (issue #154, open)."
+  ],
+  "pick_this_over_siblings_when": "Pick ragg when the caller is R code and you want a faster anti-aliased replacement for png(type = 'cairo'); from C++ use the rasterizer underneath it (Anti-Grain Geometry, catalogued as AGG 2.6) or Blend2D, which beats AGG and Cairo in the catalogued third-party thesis and has a JIT pipeline that ragg does not.",
+  "verified_claims_summary": "First-party bench::mark runs (min 10 iterations) in the pkgdown-rendered vignette, built 2026-04-08 on a GitHub Actions ubuntu-24.04 x86_64 runner with R 4.5.3 and ragg 1.5.2 (CPU model and compiler flags not stated), timing agg_png() against png(type = 'cairo') with antialias none, gray and subpixel: the layered ggplot2 composite takes about 245 ms with ragg vs about 320-325 ms with anti-aliased cairo and about 265 ms with non-anti-aliased cairo, where a void_dev() run of the same plot (about 130 ms, single system.time call) marks the non-rendering share, so ragg's rendering part is roughly 1.6x faster (derived from page data, plot readings). R's cairo device turns anti-aliasing off for every solid fill (cairoFill sets CAIRO_ANTIALIAS_NONE), so the anti-aliased cairo settings only anti-alias strokes and text; ragg does more work on fills, not less.",
+  "status_note": "Actively maintained by Posit (ragg 1.5.2 on CRAN, last commit 2026-05-13, 184 stars), MIT-licensed with AGG 2.4 under a BSD licence, and safe to adopt for R graphics; its C++ is not reusable outside R.",
+  "sources_read": [
+    "https://github.com/r-lib/ragg",
+    "https://github.com/r-lib/ragg/commits/main",
+    "https://github.com/r-lib/ragg/issues?q=is%3Aissue+performance+OR+slow+OR+speed",
+    "https://github.com/r-lib/ragg/issues/210",
+    "https://github.com/r-lib/ragg/issues/154",
+    "https://github.com/r-lib/ragg/issues/131",
+    "https://github.com/r-lib/ragg/issues/103",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/README.md",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/DESCRIPTION",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/NEWS.md",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/vignettes/ragg_performance.Rmd",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/vignettes/ragg_quality.Rmd",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/ragg.h",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/AggDevice.h",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/rendering.h",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/text_renderer.h",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/init_device.h",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/Makevars.in",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/src/Makevars.win",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/configure",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/LICENSE.note",
+    "https://raw.githubusercontent.com/r-lib/ragg/main/.Rbuildignore",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance.html",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-3-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-11-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-22-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-24-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-25-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-26-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-27-1.png",
+    "https://raw.githubusercontent.com/r-lib/ragg/gh-pages/articles/ragg_performance_files/figure-html/unnamed-chunk-28-1.png",
+    "https://raw.githubusercontent.com/wch/r-source/trunk/src/library/grDevices/src/cairo/cairoFns.c"
+  ],
+  "confidence": 0.75
+}

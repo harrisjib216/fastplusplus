@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/randy408/libspng",
+  "one_liner": "Small C PNG decoder/encoder with a simpler API than libpng; decodes 1.02-1.07x faster on most images, 1.36x on 32bpp.",
+  "what_it_does": "libspng reads and writes PNG files through an opaque spng_ctx: set a buffer, stream callback or FILE*, ask for the decoded size in a target format (RGBA8, RGBA16, RGB8, G8, GA8, GA16, or the PNG's own layout), then decode the whole image or row by row (progressive and interlaced reads supported). It also encodes from a buffer or row by row and reads/writes all standard chunks. It is a separate API, not a libpng drop-in; it ships as one spng.c/spng.h pair plus zlib (or miniz).",
+  "how_it_is_fast": "It inflates the IDAT stream one scanline at a time into a two-row buffer using whole IDAT chunks per read, then defilters with SSE2 (x86) or NEON (arm64) Sub/Avg/Paeth kernels derived from libpng's own intrinsics, with optional target_clones (AVX2) for the Up filter. Row-level fast paths (memcpy when the output layout matches, a dedicated RGB8 to RGBA8 widening, NEON palette expansion) replace per-pixel transform chains. Inflate itself is whatever zlib it links, so on large images the gain over libpng is small; the biggest win in third-party data is on 32bpp images.",
+  "when_to_use": [
+    "You want a small, embeddable PNG reader/writer (two C files plus zlib or miniz) with a simpler API than libpng and slightly faster decoding.",
+    "Decoding 32bpp RGBA PNGs to RGBA8: 1.36x libpng 1.6.37 with checksum verification in Wuffs' September 2022 run (392 vs 289 MB/s, libspng 0.7.3).",
+    "Untrusted input where you want explicit limits: spng_set_image_limits() and spng_set_chunk_limits() cap dimensions and chunk memory to guard against decompression bombs, and the code is fuzzed on OSS-Fuzz.",
+    "Progressive or row-by-row decoding and encoding of large images with a fixed small working set (two rows, three if interlaced).",
+    "arm64 targets with indexed-colour or truecolour images, where the NEON defilter and palette-expansion paths apply."
+  ],
+  "when_not_to_use": [
+    "Maximum decode speed: on the same Wuffs harness Wuffs decodes at 1.55-3.16x libpng (1.5-2.6x libspng, derived from page data), and image-png and fpng are also faster; libspng is only 1.02-1.07x libpng on 8bpp and 24bpp images.",
+    "Fast encoding at libpng-equivalent settings: open issue #224 (labelled bug, confirmed) shows libspng at 740 ms vs libpng 510 ms with zlib-ng at level 6 on a 2708x2160 RGB image, and #274 reports 64-bit encode 3x slower than 32-bit; fpng, fpnge or mtpng are the fast encoders.",
+    "Animated PNG (APNG): still listed as planned in the README.",
+    "Code that is written against libpng's API or needs libpng's transform set: the APIs are incompatible, and gamma correction is not implemented for SPNG_FMT_PNG, G8, GA8 and GA16 outputs.",
+    "Projects that need an actively developed library: the last code change was v0.7.4 (2023-05-08); 2026 commits only bump the copyright year, with 69 open issues and 18 open PRs."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "zlib (>= 1.2.11 for inflateValidate and Adler-32 control) or miniz via SPNG_USE_MINIZ; libm",
+    "min_toolchain": "C99 (meson c_std=c99); CMake or Meson builds, or compile spng.c directly; SSE2 enabled by default on x86 without extra flags",
+    "platforms": "any platform with 32-bit int and size_t, CHAR_BIT 8 and two's complement (16-bit targets unsupported); SIMD on x86 (SSE2 tested, SSSE3/SSE4.1 selectable) and arm64 NEON (only arm64 builds are tested)",
+    "thread_safety": "not documented; all decoder and encoder state lives in the spng_ctx (spng.c has no mutable globals), so one context per thread is the safe pattern",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "spng_decode_image() returns at end-of-image without reading the rest of the last IDAT chunk, so that chunk's CRC-32 is only checked if you then call spng_decode_chunks() (Wuffs' harness flags this as WUFFS_MIMICLIB_PNG_DOES_NOT_VERIFY_FINAL_IDAT_CHECKSUMS, still defined at Wuffs HEAD).",
+    "spng_set_crc_action(ctx, SPNG_CRC_USE, ...) also turns off Adler-32 checking of the zlib stream, not only chunk CRCs; SPNG_CTX_IGNORE_ADLER32 is silently ignored with miniz or zlib older than 1.2.11.",
+    "Use v0.7.4 or later: older releases do a wild read on a zero-length eXIf chunk (fixed in #248, reported as security notice #285, no CVE), and v0.7.2 fixed an encoder heap overflow.",
+    "The README's 'outperforms the reference implementation' is backed only by a chart image on libspng.org; the repository has no benchmark numbers of its own."
+  ],
+  "pick_this_over_siblings_when": "Pick libspng over image-png or Wuffs when you need a C library that both decodes and encodes, handles every standard chunk and is a two-file drop-in; pick Wuffs for raw decode speed (1.5-2.6x libspng in Wuffs' own run, derived from page data) and fpng, fpnge or mtpng when encode speed matters.",
+  "verified_claims_summary": "Wuffs' doc/benchmarks.md (the benchmark_url; Debian Bullseye, Intel Core i5-10210U, clang 11.0.1 and gcc 10.2.1 at -O3, Wuffs commit 315b2e52, September 2022) measures libspng 0.7.3 against Debian's libpng 1.6.37 at 1.02x, 1.05x, 1.04x and 1.05x on the 19k, 40k, 77k and 4002k images and 1.36x on 552k_32bpp with checksums verified (1.60x when libspng skips checksums, which libpng's simplified API cannot do); the earlier Wuffs blog run on an Intel Core m3-6Y30 gives 1.02-1.07x and 1.33-1.39x. In that harness libspng still skips the final IDAT CRC-32 but also pays a scalar RGBA-to-BGRA swap that libpng does not, while mango's 1.28-1.52x decode figures come from a single cold run with libspng's CRC-32 and Adler-32 checks off.",
+  "status_note": "BSD-2-Clause and easy to vendor, but in maintenance mode: last release v0.7.4 (2023-05-08), no code changes since December 2023, issues and PRs unanswered.",
+  "sources_read": [
+    "https://github.com/randy408/libspng",
+    "https://github.com/randy408/libspng/commits/master",
+    "https://github.com/randy408/libspng/releases",
+    "https://github.com/randy408/libspng/issues",
+    "https://github.com/randy408/libspng/issues/285",
+    "https://github.com/randy408/libspng/issues/224",
+    "https://github.com/randy408/libspng/issues/274",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/README.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/spng/spng.h",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/spng/spng.c",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/meson.build",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/docs/build.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/docs/decode.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/docs/encode.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/docs/context.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/docs/chunk.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/tests/README.md",
+    "https://raw.githubusercontent.com/randy408/libspng/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/doc/benchmarks.md",
+    "https://raw.githubusercontent.com/google/wuffs/v0.3.0-beta.1/test/c/mimiclib/png.c",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/test/c/mimiclib/png.c",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/test/c/std/png.c",
+    "https://raw.githubusercontent.com/t0rakka/mango/main/examples/image/png_benchmark/png_benchmark.cpp"
+  ],
+  "confidence": 0.8
+}
