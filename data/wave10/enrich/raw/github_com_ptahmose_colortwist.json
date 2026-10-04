@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ptahmose/colortwist",
+  "one_liner": "Small BSD-2 C++ library for 3x4 colour-matrix transforms on interleaved RGB24/RGB48; 2.6-4.9x faster than IPP's ColorTwist32f.",
+  "what_it_does": "Applies a 3x4 float 'colour twist' matrix (an affine RGB-to-RGB transform: 3x3 mix plus offset) to interleaved 8-bit (RGB24) or 16-bit (RGB48) images with arbitrary row strides, saturating the results to the integer range. The API is two C-style functions, colorTwistRGB24 and colorTwistRGB48 (src, width, height, strideSrc, dst, strideDst, const float[12]), plus isOperationalRgb24/48 queries; the caller passes an ImplementationType enum (PlainC, X64_AVX, X86_SSE, ARM_NEON, RISCV_VECTOREXTENSIONS, IPP) and gets a StatusCode back. The matrix layout and stride semantics match ippiColorTwist32f_8u_C3R / _16u_C3R, but the function names and signature differ.",
+  "how_it_is_fast": "Each x86 iteration handles 8 pixels: pshufb shuffles and 16-bit blends deinterleave the packed RGB into planar R, G and B vectors, which are widened to int32, converted to float, and run through three FMA chains per channel (_mm256_fmadd_ps). The results are converted with _mm256_cvtps_epi32, saturated with packus, re-interleaved with pshufb plus OR, and written as exactly 48 bytes (RGB48) or 24 bytes (RGB24, via a masked store). The ARM path uses vld3/vst3 structure loads and stores with vmlaq_f32, and the RISC-V path uses vlseg3/vsseg3 segment loads with vfmacc and vnclipu. Nothing is threaded; the gain is purely SIMD width with no per-pixel branches.",
+  "when_to_use": [
+    "You apply a fixed 3x4 colour matrix (white balance, channel mixing, YCbCr-like affine transforms, camera colour correction) to large interleaved RGB24 or RGB48 frames and IPP's ColorTwist or a scalar loop is a hotspot.",
+    "16-bit microscopy or scientific RGB48 images on x86-64 with AVX2+FMA, where the README shows 2.9-4.1x over IPP and roughly 4-5x over the plain C loop on one core.",
+    "You want to drop IPP as a dependency for this one operation and need a BSD-2 source drop of about a dozen files with no third-party runtime dependencies.",
+    "Mixed fleets: the same API has NEON (ARM32/ARM64, including Windows on ARM and Apple M-series), SSE4.1 and RISC-V RVV (rv64gcv) back ends with numbers in the README for each."
+  ],
+  "when_not_to_use": [
+    "Anything beyond an affine matrix: no transfer curves, gamma, ICC profiles, LUTs or chromatic adaptation; use a CMS for those.",
+    "Other pixel layouts or types: no 4-channel (RGBA/AC4), planar, BGR-specific, signed 16-bit or float images, and in-place operation is not documented; IPP covers all of these.",
+    "Multi-core throughput: it is single-threaded, so you must tile the image across threads yourself.",
+    "You need a maintained, widely used dependency: the README calls it a finger exercise in SIMD optimisation, it has 2 stars, no releases, no CI, and every PR is by the author.",
+    "Bit-exact reproducibility with a scalar reference: the SIMD paths round to nearest-even via cvtps (and NEON adds 0.5 then truncates on older GCC), so they can differ from the C path by 1 LSB."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (IPP is optional and used only for the comparison path); the unittests subdirectory fetches googletest v1.12.0 with FetchContent at configure time",
+    "min_toolchain": "C++11, CMake 3.15; MSVC needs /arch:AVX2 on colortwist_avx.cpp (the file #errors without it); GCC/Clang get -mfma -mavx2 / -msse4.1 per file; RISC-V needs a GCC with riscv_vector.h (13.3 and 14.2 shown)",
+    "platforms": "x86 and x86-64 (fast path needs AVX2+FMA, runtime-checked via CPUID; SSE4.1 fallback), ARM32/ARM64 NEON (no runtime detection), RISC-V 64 with V extension (detected via getauxval)",
+    "thread_safety": "not documented; the functions keep no state apart from a lazily cached CPU-feature flag in plain static ints, so concurrent calls on separate buffers look safe",
+    "drop_in_for_baseline": "partial: same matrix layout, stride semantics and saturation as ippiColorTwist32f_8u_C3R/_16u_C3R, but a different signature, only C3 8u/16u, and the caller must pick the implementation enum (there is no automatic best-ISA dispatch)"
+  },
+  "gotchas": [
+    "'AVX3' in the README is the author's third AVX2+FMA variant, not AVX-512. HEAD keeps only one x86 path (X64_AVX, implemented by colorTwistRGB48_AVX3_Generic), so the README's AVX and AVX2 rows cannot be rebuilt.",
+    "No automatic dispatch: you must call isOperationalRgb48/24 and pass the right ImplementationType yourself. CanNeon() always returns true, so an ARM32 build on a core without NEON will fault.",
+    "The SIMD paths convert with cvtps_epi32, which honours the current MXCSR rounding mode, and any result at or above 2^31 (only with absurd coefficients, e.g. above about 10,900 on 16-bit input) becomes the integer-indefinite value and packs to 0 instead of saturating to the maximum the way the C path does.",
+    "The RGB24 remainder handler (widths not divisible by 8) writes each tail pixel with _mm_maskmoveu_si128, a non-temporal masked store that is slow; the benchmark's 2048-wide RGB24 image never exercises it."
+  ],
+  "pick_this_over_siblings_when": "Pick colortwist over moxcms or the Little-CMS fast_float plugin when all you need is a fixed affine 3x4 matrix on 8- or 16-bit RGB with no profiles or curves, and over OpenCV's cv::transform (or the FastOpenCV kernels) when you want a tiny dependency-free BSD-2 kernel rather than a CV framework. For YUV/RGB conversion, yuv2rgb, sparkyuv or libyuv are the right tools instead.",
+  "verified_claims_summary": "In the author's test/testcolortwist.cpp (100 repeats, MB/s counted on source bytes, every output checked within 1 LSB of the float C loop), the single-threaded AVX2+FMA path beat statically linked IPP ippiColorTwist32f_16u_C3R on 2048x2048 RGB48 by 3.0x on an i7-8700K (5176 vs 1721 MB/s, MSVC 19.27), 2.9x with icl 19.1.3.311, 3.0x on a Ryzen 7 4700U, 3.2x on a Core m3-6Y30 and 4.1x on an i9-12900K (9091 vs 2204 MB/s, MSVC 19.31); on RGB24 the margin was 2.6-4.9x (e.g. 2967 vs 893 MB/s on the i7-8700K). Ratios are derived from the page data, and the IPP version is not stated. The missing ippInit() call should not matter for IPP 9.0 or later, which auto-initialises its dispatcher on the first call (Intel documentation, seen as a search snippet). Note that the RGB48 test matrix (rows 1,2,3,4 / 5,6,7,8 / 1.1,1.2,1.3,1.4) on full-range random 16-bit input saturates about 96% of output samples (derived), so the 1-LSB check on RGB48 mostly compares clamped values; this does not change the throughput comparison, since both sides process the same data, but the unsaturated arithmetic is checked on only about 4% of samples (the RGB24 matrix leaves about 57% unsaturated).",
+  "status_note": "One-author hobby project (195 commits, last commit 2025-12-28 adding RISC-V RVV) under BSD-2-Clause; small enough to vendor the two or three source files you need, but there are no releases, no CI, and only Visual Studio build steps in the README.",
+  "sources_read": [
+    "https://github.com/ptahmose/colortwist",
+    "https://github.com/ptahmose/colortwist/commits",
+    "https://github.com/ptahmose/colortwist/issues?q=is%3Aissue",
+    "https://github.com/ptahmose/colortwist/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/README.md",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/test/testcolortwist.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/unittests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/unittests/colortwist_tests.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist.h",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_c.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_c.h",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_ipp.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_avx.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_sse.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_neon.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_riscv.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/colortwist_config.h.in",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/utils.h",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/lib/utils.cpp",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/cmakemodules/FindIPP.cmake",
+    "https://raw.githubusercontent.com/ptahmose/colortwist/HEAD/LICENSE",
+    "https://www.intel.com/content/www/us/en/developer/articles/guide/intel-integrated-performance-primitives-intel-ipp-intel-ipp-linkage-models-quick-reference-guide.html (search snippet only)"
+  ],
+  "confidence": 0.8
+}
