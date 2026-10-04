@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/mochimazui/gpu-scanline-path-rendering",
+  "one_liner": "Research code for the SIGGRAPH Asia 2016 CUDA and OpenGL scanline path renderer; the abstract claims about 2.5x over prior GPU path renderers.",
+  "what_it_does": "This is a Windows demo application, not a library. It loads RVG scenes (from the MPVG test set) or a subset of SVG, then fills paths with 8 or 32 samples per pixel through a CUDA plus OpenGL 4.5 pipeline, in an SDL window or to PNG. All the rendering lives in one VGRasterizer class tied to the app's OpenGL framebuffers, a global CUDA allocator and command-line config (Boost program_options). There is no embeddable API, so using the method elsewhere means porting the kernels.",
+  "how_it_is_fast": "The work runs over boundary fragments (pixels the path outline crosses), not over all covered pixels. Curves are cut into monotonic pieces at pixel rows, and each piece emits fragments with per-sample coverage masks (k_make_intersection_0/1, k_gen_fragment_and_stencil_mask). A segmented sort orders the fragments by (y, x) within each path (Modern GPU segmented sort), and a scan gives winding numbers. Fragments are then merged, and the interior runs between them become horizontal spans, as in a CPU scanline rasterizer. OpenGL finally draws the merged fragments, using gl_SampleMask from a precomputed mask table, and the spans as quads into a 32-sample multisample target. Interior pixels therefore need no per-pixel winding computation, which is where the abstract's speedup at Ultra HD resolution comes from.",
+  "when_to_use": [
+    "Studying or porting a GPU path-filling algorithm. The kernels are a readable reference for the boundary-fragment plus span approach that linebender/vello's sparse-strip work (issue #670) cites as 'boundary fragment merge'.",
+    "Reproducing the paper's GPU timings on the 13 MPVG scenes (boston, car, contour, embrace, hawaii, paper-1/2, paris-30k/50k/70k, tiger, reschart, chord) with working_directory/run.rb on an NVIDIA GPU under Windows.",
+    "High-quality anti-aliasing (32 samples per pixel) of large static vector scenes at high resolution, where per-pixel winding work dominates other GPU methods.",
+    "Scenes animated on the GPU: an --animation mode re-renders perturbed input every frame, the case behind the abstract's 10x claim for animated input."
+  ],
+  "when_not_to_use": [
+    "Any production use. The code is a 4-commit research prototype last changed 2017-07-03, with no tests, no releases and no issue or PR activity.",
+    "Non-NVIDIA, non-Windows or headless targets. It needs CUDA, OpenGL 4.5 and a 32-sample multisample texture, and it times with QueryPerformanceCounter/LARGE_INTEGER. The only build files are a Visual Studio 2013/2015 project importing the CUDA 7.5 build customization.",
+    "General SVG. The README says only a subset of SVG features works (see the paper). The scene model in svg.cpp covers path fills with nonzero/evenodd rules, solid colours, linear and radial gradients, and strokes (with a --stroke-to-fill option).",
+    "As a drop-in for Skia, Cairo or Blend2D. It has no drawing-context API, and none of those CPU renderers is compared in any source opened here.",
+    "Very large scenes or resolutions without tuning. A fixed 256 MB CUDA scratch pool throws 'cuda_cached_allocator: reserved memory exhausted' when it overflows, and the fragment texture is a compile-time 4096x4096."
+  ],
+  "integration": {
+    "form": "source-drop (Visual Studio solution building gpu-scanline.exe; a pre-built x64 binary is described in the README)",
+    "dependencies": "CUDA 7.5/8.0 with Thrust, Modern GPU (vendored), SDL 2.0.3 and Boost 1.60 (the README says to download them with test data from the project site), glm, stb, rapidxml, glLoadGen-generated GL loader",
+    "min_toolchain": "Visual Studio 2013 (v120 toolset; v140 in one configuration), CUDA 7.5 build customization; device code is generated for compute_20/sm_20 and sm_52",
+    "platforms": "64-bit Windows 10 with an NVIDIA GPU (README: CUDA sm_50 and OpenGL 4.5; tested on driver 368.81)",
+    "thread_safety": "Not thread-safe: there is one global rasterizer and one global bump allocator, the vendored allocator comment says it is not thread-safe, and all state is bound to one OpenGL context.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README warns that the behaviour of gl_SampleMask changed around NVIDIA driver 368.22, so drivers on the other side of that change may render incorrectly. Output correctness depends on the driver version.",
+    "The repo's benchmark (vg_main.cpp benchmark()) renders 16 warm-up frames, then reports the minimum and the mean wall-clock time over 256 frames of rasterize(), which ends in glFinish(). Scene data is already resident on the GPU, so parsing and upload are excluded and only the per-frame transform and rasterization are timed. No baseline renderer and no results are committed.",
+    "Shader files are loaded at runtime from ./shader/R_cut_A_stencil/ relative to the working directory, so the exe must run from working_directory.",
+    "Building with a current CUDA toolkit means editing the project's Code Generation setting (compute_20/sm_20 and sm_52); the README itself tells users to match it to their device."
+  ],
+  "pick_this_over_siblings_when": "Pick it over NV_path_rendering (driver extension, hardware MSAA) or vkvg only to study or port the scanline boundary-fragment algorithm on NVIDIA hardware. For shipping code, Vello (which builds its sparse-strip design on this paper) or a CPU renderer such as Blend2D is the practical choice.",
+  "verified_claims_summary": "The only numbers come from search-result text of the abstract (ACM TOG 35(6), 2016): a consistent 2.5x speedup over 'state-of-the-art alternatives' for high-quality rendering at Ultra HD, more than 30x in extreme cases, and 10x on animated input. The compared systems and the GPU were not readable here; search snippets only associate NVpr and MPVG with the paper. The repo can reproduce this renderer's own frame times but contains no baseline to compare against.",
+  "status_note": "Abandoned research code (4 commits, last 2017-07-03) under the MIT licence (Zhejiang University). It is copyable, but it is tied to Windows, NVIDIA and a 2016 CUDA/Visual Studio toolchain, and its value now is mainly as a reference implementation of the algorithm.",
+  "sources_read": [
+    "https://github.com/Mochimazui/gpu-scanline-path-rendering",
+    "https://github.com/Mochimazui/gpu-scanline-path-rendering/tree/master/gpu-scanline",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/README.md",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/working_directory/run.rb",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/working_directory/vg_default.cfg",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/gpu-scanline.vcxproj",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/vg_main.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/vg_config.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/vg_container.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/svg.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/svg_loader.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/timer.h",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/R_cut_A_mask_comb_scanline/ras_cut_mask_comb_scanline.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/R_cut_A_mask_comb_scanline/ras_cut_mask_comb_scanline.cu",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/R_cut_A_mask_comb_scanline/ras_cut_mask_comb_scanline.h",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/shared/ras_base.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/shared/ras_base.h",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/shared/ras_define.h",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/rasterizer/shared/ras_qm_mask.cu",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/cuda/cuda_cached_allocator.cpp",
+    "https://raw.githubusercontent.com/Mochimazui/gpu-scanline-path-rendering/HEAD/gpu-scanline/src/cuda/cuda_cached_allocator.h",
+    "https://github.com/linebender/vello/issues/670",
+    "https://github.com/linebender/vello/issues/49",
+    "WebSearch: \"Efficient GPU path rendering using scanline rasterization\" (result snippets for dl.acm.org/doi/10.1145/2980179.2982434, dblp, kunzhou.net/zjugaps/pathrendering, researchgate)"
+  ],
+  "confidence": 0.6
+}
