@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/bodmer/tft_espi",
+  "one_liner": "Arduino TFT driver plus drawing library for ESP32, RP2040, ESP8266 and STM32; 1.3x to 4.7x faster than Adafruit_GFX on an ILI9341 at 40 MHz.",
+  "what_it_does": "TFT_eSPI drives small SPI and 8/16-bit parallel TFT panels (ILI9341, ST7789, ST7735, ST7796, ILI9488, GC9A01 and about 20 other controllers) and draws primitives, bitmap and anti-aliased fonts, images and off-screen Sprites (1, 4, 8 or 16-bit colour) on them. The API keeps Adafruit_GFX names (drawPixel, drawLine, fillRect, drawCircle, setTextColor, print), so most Adafruit sketches port by swapping the constructor and colour constants, as the benchmark sketches show. Unlike Adafruit_GFX, the panel, pins, SPI clock and fonts are chosen at compile time in User_Setup.h or User_Setup_Select.h inside the library folder (or PlatformIO build flags), not in the sketch.",
+  "how_it_is_fast": "On ESP32 it bypasses the Arduino SPI library and writes the SPI peripheral registers directly (TFT_WRITE_BITS sets the length register, the W0 data register and the SPI_USR start bit), and toggles DC and CS with single GPIO set/clear register writes. Solid fills (pushBlock) load the 64-byte W0-W15 buffer with the colour once and re-trigger 512-bit transfers, so a fill streams at the SPI link rate; fillScreen reached 98% of the 40 MHz link limit in the benchmark versus 78% for Adafruit_GFX (derived from page data). drawPixel caches the last column and row address and skips re-sending CASET or PASET when they are unchanged. drawLine splits Bresenham's line into horizontal or vertical runs drawn with drawFastHLine/drawFastVLine, circles are drawn as runs too, and one bus transaction is held across a whole primitive (inTransaction) instead of one per pixel.",
+  "when_to_use": [
+    "Arduino or PlatformIO firmware on ESP32, ESP32-S2/S3/C3, RP2040, ESP8266 or STM32F/L4 driving a supported SPI panel, where Adafruit_GFX plus a controller driver is too slow for pixel-, line- and text-heavy screens.",
+    "Per-pixel or line-heavy drawing (plots, gauges, wireframes): it had the fastest Pixels (775,781 us) and Lines (264,950 us) rows of the four libraries measured.",
+    "RP2040 with 8- or 16-bit parallel panels driven by PIO, with DMA, which the README reports at 4 ms to clear a 320x480 screen.",
+    "Projects that want a large example set and ecosystem: Sprites for flicker-free updates, vlw smooth fonts from flash arrays or LittleFS, OpenFontRender TrueType add-on, TFT_eWidget GUI widgets, XPT2046 touch.",
+    "Porting an existing Adafruit_GFX sketch with minimal source changes."
+  ],
+  "when_not_to_use": [
+    "Recent ESP32 Arduino cores and new chips: open issues report ESP32-S3 boot crashes on cores newer than 2.0.14 (#3329) and that ESP32-C6/H2 on core 3.0.x need local modifications (#3438). The Feb 2026 commits fix DMA on C3/S3 for 3.x board packages, but the last tagged release, V2.5.43 (6 March), predates them.",
+    "When raw speed on ESP32 SPI is the only criterion: LovyanGFX beat it on 9 of the 13 rows both ran in the same 2021 run (TFT_eSPI won only Text, Pixels, Lines and outline Circles), by up to 17% (Rounded rects outline 13,089 vs 15,371 us), and also ran the Arcs rows that TFT_eSPI lacked then (derived from page data).",
+    "Fill-dominated screens: fills are bound by the SPI clock, so at 40 MHz the gain over Adafruit_GFX is only 1.25x to 1.3x (Screen fill 1.26x, Rectangles filled 1.26x, Rounded rects filled 1.26x); a faster bus, a parallel panel or partial redraws matter more.",
+    "Generic Arduino boards outside the optimised list: the README says they fall back to the slower Arduino SPI calls, and only SPI panels are supported there.",
+    "Projects needing runtime display selection or several different panels in one build: the configuration is compile-time and global to the library folder.",
+    "Desktop or vector-graphics work: it is an embedded panel driver with integer primitives, not a general path rasterizer like the Blend2D, Skia or AGG entries in this category."
+  ],
+  "integration": {
+    "form": "Arduino library compiled from source (TFT_eSPI.cpp plus a per-processor file); also usable as an ESP-IDF component that requires the arduino component",
+    "dependencies": "Arduino core for the target (SPI; FS/SPIFFS or LittleFS for smooth fonts loaded from flash); ESP-IDF spi_master driver for ESP32 DMA; Earle Philhower's arduino-pico core for RP2040 PIO features",
+    "min_toolchain": "Arduino IDE or PlatformIO; ESP32 Arduino board package 2.x.x or later for the ESP32 family (README); arduino-pico core for RP2040 PIO",
+    "platforms": "Optimised: RP2040, ESP32, ESP32-S2/S3/C3, ESP8266, STM32F1/F2/F4/F7 (DMA on ESP32, RP2040 and STM32 SPI); other 32-bit Arduino boards through generic Arduino SPI calls",
+    "thread_safety": "Not documented. The transaction flags (locked, inTransaction, lockTransaction) are plain bools with no RTOS mutex; on ESP32 SUPPORT_TRANSACTIONS is forced so SPI.beginTransaction takes the SPI HAL lock, but object state is unprotected, so drive one TFT_eSPI object from one task.",
+    "drop_in_for_baseline": "partial: drawing calls keep Adafruit_GFX names and signatures, but the constructor takes no pins (they come from User_Setup.h), colour constants are TFT_* rather than ILI9341_*, and init() replaces begin(freq)"
+  },
+  "gotchas": [
+    "Configuration lives inside the library folder (User_Setup.h / User_Setup_Select.h); updating the library overwrites it unless you keep setups in a sibling folder as the README's Tips describe. The shipped default User_Setup.h sets SPI_FREQUENCY to 27 MHz, not the 40 MHz used in the benchmark.",
+    "On ESP32, pushBlock and drawPixel return before the last SPI transfer finishes (the 'Do not wait here' comment and tft_Write_16N); end_tft_write waits, but code that toggles the shared bus inside startWrite()/endWrite() must account for it. Sharing the bus with an SD card requires TFT_MISO/MOSI/SCLK to be defined explicitly (README).",
+    "DMA is used only by pushImageDMA/pushPixelsDMA; fillRect, lines and text always use the blocking register path, and DMA is unavailable for ILI9481/ILI9486/ILI9488 over SPI.",
+    "Smooth (vlw) fonts cannot be scaled with setTextSize, and a later change added the smooth-font background-rendering flag as a new setTextColor parameter, which the README calls breaking for some sketches."
+  ],
+  "pick_this_over_siblings_when": "Pick TFT_eSPI over LovyanGFX when per-pixel and line drawing dominate, you are on RP2040 parallel/PIO panels, or you rely on its Sprite, smooth-font and widget ecosystem; pick LovyanGFX for the fastest fills, shapes and arcs on ESP32 SPI, runtime panel configuration and better tracking of new ESP32 cores. Pick Arduino_GFX when you need its wider range of data-bus classes and panels; it was slower than both on lines, shapes and pixels but fastest on text in the same run.",
+  "verified_claims_summary": "One single-pass run of moononournation's Arduino_graphicstest_PDQ (2021-06-16; Arduino IDE 1.8.15, arduino-esp32 1.0.6, TTGO T8 v1.8 ESP32, PSRAM off, ILI9341 over SPI at 40 MHz, no DMA; compiler flags, CPU clock and TFT_eSPI version not recorded) timed the same test body in each library: TFT_eSPI beat Adafruit_GFX with Adafruit_ILI9341 by 4.7x on outline circles, 4.5x on text, 4.0x on lines, 1.8x on pixels and 1.26-1.3x on fills. Timings stop after end_tft_write's SPI-busy wait, so they include the final transfer; the 2020 run of the same suite gave noticeably different TFT_eSPI numbers, and the README's own '3 to 10 times faster' claim has no benchmark behind it.",
+  "status_note": "Active but slow-moving: after a gap from July 2024 to February 2026, a burst of commits (DMA fix for ESP32 C3/S3 on 3.x board packages, STM32L4 DMA, new setups) ends with a README update on 2026-04-03; master reports version 2.5.44 while the latest tagged release is V2.5.43, with 278 open issues and 75 open pull requests. The licence (FreeBSD two-clause for Bodmer's code plus Adafruit BSD and MIT notices) makes it copyable, and a June 2025 issue (#3770) calling it abandoned recommended LovyanGFX.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/README.md",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/license.txt",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/TFT_eSPI.h",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/TFT_eSPI.cpp",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/Processors/TFT_eSPI_ESP32.h",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/Processors/TFT_eSPI_ESP32.c",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/Processors/TFT_eSPI_Generic.h",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/Processors/TFT_eSPI_Generic.c",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/User_Setup.h",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/User_Setup_Select.h",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/library.json",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/library.properties",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Bodmer/TFT_eSPI/HEAD/examples/320%20x%20240/TFT_graphicstest_PDQ/TFT_graphicstest_PDQ.ino",
+    "https://github.com/Bodmer/TFT_eSPI",
+    "https://github.com/Bodmer/TFT_eSPI/commits/master",
+    "https://github.com/Bodmer/TFT_eSPI/releases",
+    "https://github.com/Bodmer/TFT_eSPI/issues?q=is%3Aissue+is%3Aopen+slow",
+    "https://github.com/Bodmer/TFT_eSPI/issues/3329",
+    "https://github.com/Bodmer/TFT_eSPI/issues/3770",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/result.txt",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/README.md",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/TFT_eSPI_graphicstest_PDQ/TFT_eSPI_graphicstest_PDQ.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_graphicstest_PDQ/HEAD/Adafruit_GFX_graphicstest_PDQ/Adafruit_GFX_graphicstest_PDQ.ino",
+    "https://raw.githubusercontent.com/moononournation/Arduino_GFX/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

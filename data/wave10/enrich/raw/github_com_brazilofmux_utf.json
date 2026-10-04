@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/brazilofmux/utf",
+  "one_liner": "Small malloc-free C11 library for NFC, DUCET collation and grapheme clusters on raw UTF-8; first-party numbers beat ICU on short strings.",
+  "what_it_does": "libutf is a static C library (libutf.a, about 702 KB) extracted from the TinyMUX MUD server that covers a narrow slice of ICU: NFC normalization and NFC checking, DUCET multi-level collation with memcmp-able sort keys and a case-insensitive variant, extended grapheme cluster segmentation, word-character classification, case and display-width tables, plus 60+ string operations that preserve inline Private Use Area color codes. Every function takes UTF-8 byte ranges and writes into caller buffers (for example utf_nfc_normalize(src, n, dst, cap, &out), utf_collate_cmp(a, nA, b, nB), utf_grapheme_next(src, n)). It is not ICU-compatible: different API, Unicode 16.0 data, untailored DUCET only, NFC only (no NFD/NFKC), and no word, sentence or line breaking, bidi or locales.",
+  "how_it_is_fast": "Unicode properties (CCC plus NFC_QC combined, decompositions, compositions, GCB, Extended_Pictographic, DUCET collation elements) are looked up through compressed byte-level DFAs generated from the UCD (state merging, column deduplication, RUN/COPY encoding), so UTF-8 is consumed directly with no UTF-16 conversion and no allocation. NFC copies already-normalized runs through and only decomposes, reorders and recomposes dirty segments, with an ASCII skip and algorithmic Hangul. Collation has a lazily built table for U+0000..U+017F that compares single-collation-element Latin characters inline, computed implicit weights for CJK, and bounded stack buffers for the general path. Grapheme segmentation is a hand-written UAX #29 rule loop that does two DFA property lookups per code point; it is not one fused DFA as the project article describes.",
+  "when_to_use": [
+    "C or C++ code that keeps text as UTF-8 and needs NFC normalization or an is-it-NFC check on short strings (identifiers, user names, keys, chat lines) without linking ICU.",
+    "Root-order (DUCET) comparison or memcmp-able sort keys for short UTF-8 strings, including a case-insensitive comparison, when locale tailoring is not required.",
+    "Footprint-constrained or dependency-free builds: about 702 KB static versus about 42 MB of ICU static libraries with full data (README), no malloc, no runtime dependencies.",
+    "Terminal and MUD-style applications that need grapheme counting for Latin, CJK, Hangul and emoji, display width, and inline PUA color handling in one library."
+  ],
+  "when_not_to_use": [
+    "Indic scripts or any text where grapheme clusters must follow Unicode 15.1+ rule GB9c: libutf has no InCB property, so a conjunct such as Devanagari 'स्ते' in the benchmark's 'नमस्ते' splits into two clusters where UAX #29 (and ICU 78) keeps one (by the rules; the benchmark never compares counts).",
+    "Locale-sensitive sorting (tailorings such as Swedish or German phonebook), word, sentence or line breaking, bidi, NFD/NFKC/NFKD, case folding by locale, or Unicode 17 characters: use ICU.",
+    "Long-document bulk throughput: all published numbers come from 8 to 12 short hand-written strings repeated 100,000 to 500,000 times, and the code is byte-at-a-time with no SIMD, so per-call overhead is what was measured.",
+    "Projects that need a mature, widely reviewed dependency: single author, 0 stars, no CI, and the grapheme, NFC and collation code each received correctness fixes in August and September 2026 after the published numbers.",
+    "Untrusted, possibly malformed UTF-8 for grapheme segmentation: utf_grapheme_next advances by the lead byte without validation, so malformed input is segmented arbitrarily."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime; ICU development headers only for the benchmarks and the tests/test_*_icu.c differential tests; C++, Perl and the UCD files only to regenerate tables; Ragel only to regenerate color_ops.c",
+    "min_toolchain": "C11 (Makefile: gcc -O2 -std=c11); <stdatomic.h> used unless __STDC_NO_ATOMICS__ or UTF_NO_ATOMICS is defined",
+    "platforms": "any (portable C, no SIMD or platform intrinsics); results published only for Apple M5 Max (macOS); Windows dllexport/dllimport macros exist but there is no CI for any platform",
+    "thread_safety": "Functions are reentrant over const tables and caller buffers; the one piece of global state, the Latin collation cache, is initialised once with C11 atomics, but with UTF_NO_ATOMICS or a compiler without <stdatomic.h> it falls back to a plain flag that assumes a single thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "utf_nfc_is_nfc is a quick check: it returns 0 for NFC_QC=Maybe characters, so some text that is already NFC (a base letter plus a combining mark with no precomposed form) reports 'not NFC'; ICU's unorm2_isNormalized, which the benchmark compares against, gives a definitive answer.",
+    "utf_nfc_normalize can expand text up to 3x: size dst with utf_nfc_normalize_bound() and check the returned status (UTF_NFC_TRUNCATED, or UTF_NFC_SEGMENT_TOO_LONG past 1024 code points in one combining sequence, raised with -DUTF_NFC_SEG_MAX).",
+    "utf_collate_sortkey returns at most nKeyMax and gives no required-size answer when the key does not fit; a 16-bit weight that straddles the end is skipped, so the last byte of a truncated key can be left unwritten. Size key buffers generously. The final NFC tiebreak only considers the first 256 input bytes unless rebuilt with -DUTF_NFC_TIEBREAK_MAX.",
+    "Collation is raw DUCET (allkeys.txt, Unicode 16.0) with no variable-weighting (shifted) option; ICU's ucol_open(\"\") is CLDR root, which tailors DUCET, so results match ICU only where the two agree (33 tested pairs do)."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings in font-shaping-text-layout does this job: displaywidth, uniwidth (Go) and uwcwidth (Python) only compute terminal display width, and HarfBuzz-style shapers do not normalize or collate. Pick libutf when a C program needs NFC, root collation and grapheme clusters on UTF-8 without ICU; the category fit is Unicode processing (ICU baseline), not shaping.",
+  "verified_claims_summary": "Author-run microbenchmarks on an Apple M5 Max against ICU 78.3 (gcc -O2 build lines, compiler version unstated) report, with ICU paying u_strFromUTF8 conversion, NFC 2.1x, NFC check 3.8x, collation 1.3x and grapheme counting 1.4x faster; with ICU on pre-converted UTF-16 the margins are NFC 1.4x and graphemes 1.2x for libutf, and ICU wins collation by 1.4x. Each figure is a single wall-clock total, with no warmup or repeats, over 8 to 12 short strings; outputs are never cross-checked between the libraries; the check benchmark pits a quick check against ICU's definitive isNormalized; the grapheme rules omit GB9c; and the numbers (2026-07-30) predate later changes to every measured path, including a rewrite of the NFC segment-boundary scan on 2026-08-13.",
+  "status_note": "Active single-author project (48 commits, last 2026-09-29, issues #1 to #3 all closed), MIT-licensed and small enough to vendor, but young and unreviewed outside its author, so treat it as a compact ICU subset for UTF-8 C code and re-measure on your own strings.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/README.md",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/Makefile",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/articles/beating-icu-at-unicode.md",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/src/collate.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/src/nfc.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/src/grapheme.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/src/classify.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/include/utf/nfc.h",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/include/utf/collate.h",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/include/utf/grapheme.h",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/include/utf/utf_types.h",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/bench/bench_grapheme.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/bench/bench_nfc.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/bench/bench_nfc_quickcheck.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/bench/bench_collate.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/bench/bench_collate_libutf.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/tests/test_nfc_icu.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/tests/test_collate_icu.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/tests/test_color_ops.c",
+    "https://raw.githubusercontent.com/brazilofmux/utf/HEAD/gen/README.md",
+    "https://github.com/brazilofmux/utf",
+    "https://github.com/brazilofmux/utf/commits/main",
+    "https://github.com/brazilofmux/utf/commit/c7537c0",
+    "https://github.com/brazilofmux/utf/issues?q=is%3Aissue",
+    "https://github.com/brazilofmux/utf/tree/main/articles",
+    "https://github.com/brazilofmux/utf/tree/main/tests",
+    "WebSearch: \"Beating ICU at Unicode\" libutf brazilofmux (no independent discussion found)"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/bourgesl/marlin-renderer",
+  "one_liner": "Pure-Java antialiasing shape rasterizer for Java 2D that replaced Pisces and Ductus; OpenJDK's default renderer since JDK 9.",
+  "what_it_does": "Marlin is a Java 2D RenderingEngine: it does the stroking, dashing, clipping and antialiased scan conversion behind Graphics2D.draw(Shape) and fill(Shape), producing per-tile alpha coverage masks that the Java 2D pipeline then composites. It is not a separate drawing API: application code keeps using Graphics2D unchanged. On OpenJDK 9 and later it is already the built-in renderer; this repository ships newer standalone releases (0.9.4.9 for JDK 17+, 0.9.4.8 for JDK 11+, 0.9.4.7 for JDK 8) that replace the bundled copy, and on JDK 8 it replaces Pisces (OpenJDK) or Ductus (Oracle JDK).",
+  "how_it_is_fast": "It is a rewrite of the Pisces scanline rasterizer that avoids garbage: each rendering thread gets a reusable RendererContext (ThreadLocal or ConcurrentLinkedQueue, held by soft/weak/hard references) with pooled array caches, and edge data lives in off-heap memory managed through Unsafe. The scanline loop advances edge crossings with fixed-point DDA, keeps crossings almost sorted between scanlines and finishes with insertion sort, merge sort or a dual-pivot quicksort depending on size, and stores coverage as RLE or raw tiles with tile flags so empty tiles are skipped. Defaults are 256 subpixels in x and 8 in y (quality profile) and 128x64 tiles where large tiles are supported. Because contexts are per thread, it scales across cores where Ductus serialised rasterization through a native singleton.",
+  "when_to_use": [
+    "Server-side Java 2D rendering on many threads (map servers such as GeoServer, chart or report generation): the 0.5.6 MapBench run kept per-op time flat from 1 to 4 threads while Ductus per-op time rose about 4x.",
+    "Applications still on OpenJDK 8 or Oracle JDK 8, where the default Pisces (about 1.9x slower single-threaded in MapBench, derived from page data) or Ductus is in use.",
+    "OpenJDK 11, 17 or 21 deployments that want rasterizer fixes newer than the Marlin copy their JDK bundled (for example JDK 17 ships Marlin 0.9.1.4; the standalone jar is 0.9.4.9 with fixes such as JDK-8341381 and JDK-8277574).",
+    "Workloads dominated by antialiased stroked and filled vector shapes (map layers, polylines, polygons) rather than images or text."
+  ],
+  "when_not_to_use": [
+    "Native C or C++ code: it only runs inside a JVM as a Java 2D RenderingEngine; use a native rasterizer instead.",
+    "If you are on a current OpenJDK and have no rendering bug to fix: you already run Marlin, so swapping in the jar brings fixes, not the historical 1.2x to 4x gains over Pisces or Ductus.",
+    "Text rendering, image scaling or compositing bottlenecks: Marlin only produces shape coverage masks; blending and blits stay in the JDK pipeline.",
+    "Very large stroked curves with cusps: open bug #35 (self-intersections in large stroked curves) and #38 (cubic offset computation) are unresolved.",
+    "Thread-heavy web servers with default ThreadLocal contexts can hold one cached context per thread; the wiki suggests useThreadLocal=false (CLQ mode) to cap memory."
+  ],
+  "integration": {
+    "form": "module (jar patched into the JDK; built into OpenJDK 9+)",
+    "dependencies": "none (Maven build, no third-party runtime dependencies); uses JDK-internal Unsafe and java.desktop internals",
+    "min_toolchain": "JDK 8 (0.9.4.7 jar via -Xbootclasspath/p), JDK 11 to 21 (0.9.4.8 jar), JDK 17 to 26 (0.9.4.9 jar, built with Java 17)",
+    "platforms": "any platform with a HotSpot-style OpenJDK and Java 2D (pure Java; JDK 8 releases also targeted Oracle JDK 8)",
+    "thread_safety": "Concurrent rendering from many threads is supported: one RendererContext per thread via ThreadLocal (default) or a ConcurrentLinkedQueue pool (sun.java2d.renderer.useThreadLocal=false).",
+    "drop_in_for_baseline": "partial — drop-in for Pisces or Ductus with no code changes, but enabled by JVM flags (--patch-module java.desktop=<jar> on JDK 11+, or -Xbootclasspath/p plus -Dsun.java2d.renderer=sun.java2d.marlin.DMarlinRenderingEngine on JDK 8), not by a library dependency"
+  },
+  "gotchas": [
+    "Releases are per JDK line (JDK 8, 11+, 17+); the JDK 8 branch use_Unsafe has not been maintained since 2024-01, and the default master branch still carries an old 0.7.0.1 pom, so take sources from the jdk branch or the release jars.",
+    "Patching java.desktop replaces JDK-internal classes (sun.java2d.marlin); a JDK update can change internals the jar relies on, so match the jar to the supported JDK range in its release notes.",
+    "Many tuning system properties (subpixel counts, tile sizes, profile=quality|speed, pixelWidth/pixelHeight for initial array sizes) change both speed and output; the published benchmarks used non-default settings for their time (tileSize_log2=5, useRef=soft).",
+    "Later fixes have themselves caused regressions (JDK-8341381: random lines introduced by the JDK-8297230 fix, fixed in 0.9.4.9), so test rendering output after upgrading the jar."
+  ],
+  "pick_this_over_siblings_when": "Pick Marlin only when your code draws through Java 2D Graphics2D on a JVM: Blend2D, AGG and Vello CPU are faster native options but need a different API and native integration, and ImageSharp.Drawing is the comparable choice on .NET. For a native C or C++ project, Blend2D is the stronger catalogued pick.",
+  "verified_claims_summary": "MapBench 0.4 (longer shared profile) on an Intel i7 4800 fixed at 2 GHz without HT or turbo, Oracle Java 8u60-ea with CMS and 2 GB heap: Marlin 0.5.6 rendered 9 serialized GeoServer maps with a mean per-test ratio of 2.29x against Oracle JDK 8 Ductus and 2.24x against OpenJDK 8 Pisces across 1, 2 and 4 threads; single-threaded the per-map geometric mean is about 1.18x over Ductus (range 1.00x to 1.42x) and 1.89x over Pisces, rising to about 3.7x over Ductus at 4 threads because Ductus does not scale (derived from page data). The summary Pct95 figures are arithmetic means over maps, so they are weighted toward the largest map (about 750 to 960 ms per op).",
+  "status_note": "Active: release 0.9.4.9 for JDK 17 to 26 in late 2025 and 10 open issues, mostly quality enhancements; GPL-2.0 with Classpath exception, and since Marlin ships inside OpenJDK most users already have it, so the standalone jar matters mainly for JDK 8 and for newer fixes on older JDKs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/HEAD/README.md",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/HEAD/pom.xml",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/pom.xml",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/use_Unsafe/pom.xml",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/Renderer.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/MarlinProperties.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/OffHeapArray.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/MarlinCache.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/MarlinTileGenerator.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/RendererContext.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/DMarlinRenderingEngine.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/MarlinConst.java",
+    "https://raw.githubusercontent.com/bourgesl/marlin-renderer/jdk/src/main/java/sun/java2d/marlin/Version.java",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/Benchmarks.md",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/Home.md",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/Tuning-options.md",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/How-to-build.md",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/History-and-context.md",
+    "https://raw.githubusercontent.com/wiki/bourgesl/marlin-renderer/R&D.md",
+    "https://raw.githubusercontent.com/bourgesl/bourgesl.github.io/master/marlin-0.5.6/longer_shared/perf_summary.htm",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/HEAD/bin/env.sh",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/HEAD/bin/bench_marlin.sh",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/HEAD/bin/bench_pisces.sh",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/master/src/main/java/it/geosolutions/java2d/MapBench.java",
+    "https://raw.githubusercontent.com/bourgesl/mapbench/master/src/main/java/it/geosolutions/java2d/Result.java",
+    "https://github.com/bourgesl/mapbench/tree/master/src/main/java/it/geosolutions/java2d",
+    "https://github.com/bourgesl/marlin-renderer",
+    "https://github.com/bourgesl/marlin-renderer/issues",
+    "https://github.com/bourgesl/marlin-renderer/issues/35",
+    "https://github.com/bourgesl/marlin-renderer/releases",
+    "https://github.com/bourgesl/marlin-renderer/tree/jdk/src/main/java",
+    "https://github.com/bourgesl/marlin-renderer/tree/jdk/src/main/java/sun/java2d/marlin",
+    "WebSearch: Azul 'Performance Rendered Visual' Marlin Ductus Java2D latency (snippet of https://www.azul.com/blog/performance-rendered-visual/ only)"
+  ],
+  "confidence": 0.8
+}

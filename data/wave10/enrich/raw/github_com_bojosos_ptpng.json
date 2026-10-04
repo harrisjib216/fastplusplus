@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/bojosos/ptpng",
+  "one_liner": "Unlicensed C11 PNG decoder and encoder with AVX2/NEON kernels; decodes 1.5-1.8x faster than libpng with zlib-ng on synthetic images.",
+  "what_it_does": "ptpng decodes a complete in-memory PNG (every colour type and bit depth, Adam7, tRNS, ancillary metadata in ptpng_info) into one malloc'd buffer in native, RGB8 or RGBA8 layout, and encodes non-interlaced gray, gray+alpha, RGB or RGBA at 8 or 16 bits. The C API is two calls (ptpng_decode, ptpng_encode) plus ptpng_free and ptpng_info_free; a header-only C++17 wrapper (ptpng.hpp) adds owning image and buffer types, exceptions (ptpng::error) and C++20 std::span overloads. It is not a libpng replacement: there is no streaming or progressive decode, no custom I/O callbacks, no libpng-style transform set and no compression-level or metadata control on encode.",
+  "how_it_is_fast": "The inflater uses a 64-bit bit buffer refilled a word at a time to keep 48-64 bits available, Huffman tables built from pre-reversed codes so each symbol is one masked table lookup, flat root tables (10-bit literal/length, 8-bit distance) whose entries carry precomputed bases and extra-bit counts, a fast path that decodes up to four literals per refill, and 32- or 64-byte block copies for matches. It inflates straight into the final image buffer because the PNG header fixes the output size. Unfiltering and output conversion use runtime-dispatched AVX2/SSE2 or NEON kernels (prefix-sum Sub, SIMD Paeth for 4-byte pixels). Checksums run on hardware: PCLMUL folding for CRC-32 (derived from zlib-ng), ARMv8 CRC instructions, and AVX2 or NEON Adler-32. The encoder scores every byte of each row for adaptive filtering with SIMD and uses a bounded hash-chain matcher with lazy lookahead. It picks stored, fixed or dynamic DEFLATE blocks by bit cost and writes up to six literals per 64-bit store.",
+  "when_to_use": [
+    "Studying or benchmarking a modern single-threaded PNG decode path: the code is compact (one inflate file, one decoder file, per-ISA kernel files), heavily commented, and tested against libpng. Without a licence it is reference material only.",
+    "Single-threaded decoding of large PNGs on x86-64 with AVX2 or on ARM64, where checksum verification must stay on and the baseline is libpng: 1.46x-1.80x geometric mean across 27 cases in the 30 September nightly.",
+    "Palette, flat-graphics and 16-bit RGBA images show the largest decode gains (graphic_pal8 3.46x, graphic_rgba16_paeth 4.50x native output in the 30 September Windows x64 snapshot); noisy images gain little (noise_rgba8 1.02x).",
+    "Encoding 8- or 16-bit gray/RGB/RGBA to roughly zlib level-6 sizes faster than libpng with stock zlib (2.25x-2.98x across platforms), especially graphics, where it beat libpng with zlib-ng level 6 by 1.85x-2.51x in the local i7-1355U table."
+  ],
+  "when_not_to_use": [
+    "Anything you ship: the repository has no LICENSE file and no licence terms, so you have no right to copy or vendor it. The x86 CRC code is also derived from zlib-ng.",
+    "Multithreaded image pipelines: every call must be serialized process-wide. Building each Huffman table writes a file-static scratch array (sym_code in ptpng_inflate.c), and CPU dispatch and fixed-Huffman tables are initialised lazily with no synchronisation. Two concurrent decodes can therefore corrupt each other's tables, not just race at start-up.",
+    "Photo-like RGB encoding, or ARM64 encoding against zlib-ng: libpng with zlib-ng level 6 was faster on photo_rgb8 on all five platforms in the 3 October nightly (ptpng at 0.67x-0.93x). On Linux ARM64 ptpng won only 3 of 9 fixtures there (1.09x geometric mean).",
+    "Workflows needing palette, 1/2/4-bit or interlaced output, ICC/gamma/text chunks on write, a compression-level knob, streaming input or progressive display.",
+    "Risk-averse projects: the repository is ten days old (first commit 2026-09-24), has a single author and 0 stars, and is benchmarked only on generated images. Its nightly ratios move with the runner CPU: on the same commit (9a1dadf), the Windows x64 decode geometric mean was 1.69x, 1.56x and 1.37x in the 1, 2 and 3 October nightlies."
+  ],
+  "integration": {
+    "form": "static lib (CMake target ptpng::ptpng via add_subdirectory) plus a header-only C++ wrapper",
+    "dependencies": "none at runtime; the default build also configures vendored libpng16, zlib (develop) and zlib-ng 2.2.4 for parity tests and benchmarks (turn off with -DPTPNG_WITH_LIBPNG=OFF); the benchmark fixtures need Python with Pillow",
+    "min_toolchain": "C11 compiler and CMake 3.15+; C++17 for ptpng.hpp (C++20 for the std::span overloads); compilers accepting -mavx2/-mpclmul or MSVC /arch:AVX2 for the x86 kernels",
+    "platforms": "x86-64 (runtime-dispatched AVX2, SSE2, PCLMUL with scalar fallbacks) and AArch64 (NEON, CRC instructions); CI covers Linux x64/ARM64, macOS ARM64 and Windows x64/ARM64",
+    "thread_safety": "Not thread-safe: the README and ptpng.h require all decode and encode calls to be serialized across threads; inflate uses a shared static scratch array and lazily built shared dispatch and fixed tables.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Passing NULL encoder options selects adaptive filtering, but a zero-initialised ptpng_encode_opts selects the None filter (filter 0), which gives much larger files.",
+    "RGB8/RGBA8 output keeps the high byte of 16-bit samples (like libpng's png_set_strip_16, not png_set_scale_16 rounding), and RGB8 ignores tRNS.",
+    "The encoder writes pixels only. Metadata such as ICC, gamma and text is dropped, and palette or sub-byte images must be decoded to RGB8/RGBA8 before re-encoding, so they come back larger than the source.",
+    "Each encode allocates about 896 KiB of compression state on top of the image buffers (PERFORMANCE.md)."
+  ],
+  "pick_this_over_siblings_when": "Use ptpng only as a reference for technique, because it has no licence. For a licensed in-memory libpng alternative take libspng (a few percent over libpng in Wuffs' numbers) or the Rust png crate (1.5-1.8x over libpng in Wuffs' 2022 runs). For encode-only speed take fpnge or fpng, which are far faster than libpng but give up compression ratio, whereas ptpng targets zlib level-6 sizes.",
+  "verified_claims_summary": "The author's nightly CI on GitHub-hosted runners (EPYC 7763, Neoverse-N2, Cobalt 100, virtual Apple M1; compiler versions not stated, CMake Release defaults) times ptpng against libpng16 built in the same tree with zlib-ng 2.2.4 (and with stock zlib). Both sides decode from memory with CRC and Adler-32 checks on, and the result is the median of 12 alternating rounds: geometric means of 1.46x-1.80x over 27 cases on 30 September 2026. Encoding against libpng at level 6 with all filters gave 2.25x-2.98x versus stock zlib and 1.14x-1.52x versus zlib-ng, with files at most 2.4% larger. Recomputed from gh-pages bench/data.js, the per-platform encoder means match PERFORMANCE.md exactly. On the same commit, the 3 October run gave 1.37x (Windows x64, now an Intel Xeon Platinum 8573C) to 1.79x for decoding and 1.09x-1.49x versus zlib-ng for encoding. The harness looked fair and no correctness bug was found. Caveats: the fixtures are Python-generated gradients plus small noise, flat rectangles and random bytes, written by an unpinned Pillow on each runner, so the compressed inputs differ by OS (PERFORMANCE.md notes stored versus fixed-Huffman noise streams). The libpng encoder also writes through a realloc-doubling memory callback, a small cost charged to the reference.",
+  "status_note": "Actively developed by one author (43 commits between 2026-09-24 and 2026-09-30, open PR #1 from 3 October, nightly benchmarks still publishing), but with no licence it is reference-only, and the repository was recently renamed, so links may move.",
+  "sources_read": [
+    "https://github.com/bojosos/ptpng",
+    "https://github.com/bojosos/ptpng/commits",
+    "https://github.com/bojosos/ptpng/pulls",
+    "https://github.com/bojosos/ptpng/tree/HEAD/src",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/README.md",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/include/ptpng.h",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/include/ptpng.hpp",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/src/ptpng.c",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/src/ptpng_inflate.c",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/src/ptpng_deflate.c",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/tools/bench_compare.c",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/tools/bench_encode.c",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/tools/bench_metadata.py",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/tests/gen_bench.py",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/tests/gen_bench16.py",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/.github/workflows/nightly.yml",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/.github/workflows/compare.yml",
+    "https://raw.githubusercontent.com/bojosos/ptpng/gh-pages/bench/data.js",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/COPYING",
+    "https://raw.githubusercontent.com/bojosos/ptpng/HEAD/UNLICENSE"
+  ],
+  "confidence": 0.8
+}
