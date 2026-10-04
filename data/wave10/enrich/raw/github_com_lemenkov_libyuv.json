@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/lemenkov/libyuv",
+  "one_liner": "Google's SIMD YUV/RGB conversion, scaling and rotation library; snippet-only reports put it 4-10x ahead of libswscale.",
+  "what_it_does": "A C-callable C++ library (extern \"C\" in namespace libyuv) of one-call converters named after FourCCs: I420ToARGB, NV12ToARGB, ARGBToI420, I420ToRAW, RGB24ToI420, 10/12-bit I010/P010 variants, plus I420Scale/ARGBScale with point, linear, bilinear or box filtering, I420Rotate/ARGBRotate by 90/180/270, ARGB blending and attenuation, and MJPG decode when built with libjpeg. Each call takes plane pointers, strides and dimensions; the letter prefix picks the matrix (I = BT.601 limited, J = BT.601 full, H/F = BT.709 limited/full, U/V = BT.2020), and *Matrix variants take an explicit YuvConstants. It is not a drop-in for libswscale: there is no context object, no arbitrary filter kernels and no dithering, and conversion and scaling are separate calls.",
+  "how_it_is_fast": "Every operation is a loop over rows that calls one row function chosen once per call by runtime CPU detection (TestCpuFlag): hand-written GCC/Clang inline assembly for SSE2/SSSE3/AVX2/AVX-512 (row_gcc.cc), Neon, SVE2 and SME on Arm, RVV, LSX/LASX and MSA, with C fallbacks and '_Any_' wrappers for widths that are not a multiple of the vector size. YUV to RGB uses 6-bit fixed-point coefficients: pmaddubsw on bias-shifted UV, pmulhuw for the Y gain, saturating adds, then shift and pack, all in 16-bit lanes. The scaler has dedicated 2x, 4x, 3/4 and 3/8 down paths, a box filter, 16.16 fixed-point bilinear, and ScaleFilterReduce drops to a cheaper filter when the scale factor allows it.",
+  "when_to_use": [
+    "Real-time camera, WebRTC or video pipelines converting between I420/NV12/NV21/YUY2 and ARGB/RGB24/RAW at 8 bits, where per-frame latency matters more than resampling quality.",
+    "Decoders and image libraries (the libheif report) that need a fast final YUV 4:2:0 to interleaved RGB step on x86 or Arm.",
+    "Downscaling video frames by 2x, 4x, 3/4 or 3/8 with box or bilinear filtering, or rotating mobile camera frames by 90/180/270 degrees.",
+    "Projects that want a permissive (BSD-3-Clause plus Google patent grant), widely shipped library with a C fallback on every platform and bit-exact SIMD versus C output in its unit tests."
+  ],
+  "when_not_to_use": [
+    "High-quality resampling or colour-space work (Lanczos, correct chroma siting, dithering): libyuv offers only point, linear, bilinear and box, its bilinear upsampler is described in docs/filtering.md as 'not technically correct' (the image is slightly magnified), and zimg or libswscale with quality flags fit better.",
+    "Chroma upsampling quality: the plain I420ToARGB/I420ToRGB24 paths replicate each chroma sample over a 2x2 block (nearest neighbour); you must call the *MatrixFilter variants with kFilterBilinear for interpolated chroma.",
+    "Workloads that want the absolute fastest 8-bit kernels on a given path: catalogued siblings yuvutils-rs (NV12 to RGBA 377.59 vs 621.11 us), xxYUV and sparkyuv (8-bit 4:2:0 decode on Apple M3) beat it on some paths, though sparkyuv loses to libyuv on encode.",
+    "Plain MSVC (cl.exe) builds: x86 kernels then come from row_win.cc, a smaller set, and the CMake Arm/SVE/SME/RVV objects are only built when not MSVC; Chromium compiles Windows x64 libyuv with clang to get the inline assembly.",
+    "Multi-core scaling of one large frame: the library spawns no threads, so callers must split the image across threads themselves."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake builds both; GN for Chromium; also Makefile and Bazel files)",
+    "dependencies": "none required; optional libjpeg for MJPG decode (HAVE_JPEG, on by default when found); gtest and pthread only for the unit tests",
+    "min_toolchain": "CMake 3.16; a C++ compiler (no C++ standard pinned in CMakeLists.txt); GCC or Clang for the x86 inline-assembly kernels; Arm SVE2/SME kernels need a compiler accepting -march=armv8.5-a+i8mm+sve2/+sme",
+    "platforms": "x86/x86-64 (SSE2 to AVX-512, runtime dispatch), 32- and 64-bit Arm Neon, SVE2, SME, RISC-V RVV, LoongArch LSX/LASX, MIPS MSA, portable C elsewhere",
+    "thread_safety": "Conversion and scaling functions are stateless and work on caller buffers, so concurrent calls on different buffers are safe (from reading the source; not stated in docs). CPU flags are cached in a global cpu_info_ (relaxed atomic store); MaskCpuFlags is commented 'not thread safe', and sandboxed processes may need SetCpuFlags because detection can read /proc/cpuinfo.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Format names follow register order, not memory order: ARGB is B,G,R,A in memory, RGB24 is B,G,R and RAW is R,G,B, so 'interleaved RGB' output means I420ToRAW, not I420ToRGB24.",
+    "The plain I420ToARGB/I420ToRGB24 entry points assume BT.601 limited range (kYuvI601Constants); full-range or BT.709 content needs the J/H/F-prefixed functions or a *Matrix call, or colours shift silently.",
+    "10/12-bit inputs converted to ARGB are reduced to 8 bits per channel; use the AR30/AB30 or 16-bit paths to keep precision.",
+    "The GitHub repo is an unofficial mirror: issues and patches go to chromium.googlesource.com/libyuv/libyuv, there is no ABI promise (CMake sets no SOVERSION) and the version is a single integer (1974 here) that consumers pin."
+  ],
+  "pick_this_over_siblings_when": "Pick libyuv over yuvutils-rs, xxYUV, sparkyuv or the old descampsa/yuv2rgb when you need one maintained, permissively licensed C/C++ library covering nearly every 8/10/12-bit YUV and RGB layout plus scaling and rotation on every major ISA; pick zimg or FFmpeg's libswscale with quality flags when resampling and colour accuracy matter more than speed, and yuvutils-rs if you are in Rust and want its faster NV12/RGBA paths.",
+  "verified_claims_summary": "No reproducible libyuv-versus-libswscale benchmark exists in reach: the 4-5x (1088x1920 BGR24 to 480x854 YUV420P, 500 runs, about 4.19 s vs 0.93 s, MacBook Pro 2016) and about 10x (RGBA to YUV420P on Apple M1) figures come from search snippets of blocked ffmpeg-devel threads, where FFmpeg developers answered that swscale's defaults run a higher-quality scaler. The one page with numbers, libheif issue #1215 (no hardware, compiler or code), times a whole HEVC multi-tile decode-to-RGB step at 42 ms with libheif's own converter and 30 ms with a 'hacky' libyuv hookup, which is about 1.4x and does not involve libswscale.",
+  "status_note": "Active (mirror last commit 2026-10-02, version 1974, shipped and marked security-critical in Chromium); BSD-3-Clause with a separate patent grant, so copyable, but track upstream on googlesource rather than the mirror.",
+  "sources_read": [
+    "https://github.com/lemenkov/libyuv",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/README.chromium",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/BUILD.gn",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/docs/getting_started.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/docs/formats.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/docs/filtering.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/docs/environment_variables.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/docs/rotation.md",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/version.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/cpu_id.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/convert.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/convert_argb.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/scale.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/include/libyuv/row.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/row_gcc.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/row_common.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/convert_argb.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/scale.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/source/cpu_id.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/unit_test/unit_test.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/unit_test/unit_test.h",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/unit_test/convert_argb_test.cc",
+    "https://raw.githubusercontent.com/lemenkov/libyuv/HEAD/unit_test/scale_test.cc",
+    "https://github.com/strukturag/libheif/issues/1215",
+    "https://raw.githubusercontent.com/strukturag/libheif/HEAD/libheif/api/libheif/heif_color.h",
+    "https://raw.githubusercontent.com/strukturag/libheif/HEAD/libheif/api/libheif/heif_color.cc",
+    "https://raw.githubusercontent.com/strukturag/libheif/HEAD/libheif/api/libheif/heif.h",
+    "https://raw.githubusercontent.com/strukturag/libheif/HEAD/libheif/color-conversion/colorconversion.cc"
+  ],
+  "confidence": 0.7,
+  "measurement_notes": "No correctness bug in libyuv was found, but the one on-page number (libheif #1215, 42 ms vs 30 ms) is probably not equal work. libheif's colour conversion defaults to bilinear chroma upsampling (heif_color_conversion_options_set_defaults in libheif/api/libheif/heif_color.cc: preferred_chroma_upsampling_algorithm = heif_chroma_upsampling_bilinear, only_use_preferred_chroma_algorithm = true at HEAD; the July 2024 default was not checked), and the reporter says libheif decoded to chroma_444 first in decode_image_planar, an extra full-resolution pass. libyuv's plain I420ToRGB24/I420ToRAW (convert_argb.cc I420ToRGB24Matrix) runs one pass that reuses each chroma row for two output rows and each chroma sample for two pixels, i.e. nearest-neighbour chroma. The reporter names neither the libyuv function, matrix nor filter, so part of the 12 ms gap may be less work rather than faster code. The swscale ratios are still snippet-only (developer.arm.com, bugzilla.mozilla.org, mail-archive and narkive blocked or not opened). libyuv's own unittest timings (TESTPLANARTOBI in unit_test/convert_argb_test.cc) print one unrepeated C call next to the mean of LIBYUV_REPEAT optimized calls, which overstates SIMD-over-C ratios such as the Arm case study's 'I420ToARGB 3211 us C vs 372 us OPT' (WebSearch snippet only), although the test does assert byte-exact equality between the C and SIMD outputs. Tier C stands; the caveat that the libheif ratio is not like-for-like should be added. New leads seen but not catalogued: none worth adding (libyuv-node and N22E114/libyuv are a binding and a fork)."
+}

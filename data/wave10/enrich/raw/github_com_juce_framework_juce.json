@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/juce-framework/juce",
+  "one_liner": "JUCE's CPU path rasterizer (EdgeTable + SWAR pixel blending); about 1.7x Skia and 2.9x Cairo single-threaded on M1 Pro.",
+  "what_it_does": "The software renderer behind juce::Graphics when it draws into a juce::Image of juce::SoftwareImageType (LowLevelGraphicsSoftwareRenderer). It fills and strokes juce::Path objects, rectangles and rounded rectangles with solid colours, linear and radial gradients and image fills, with affine transforms and clipping. Its API is JUCE's own Graphics/Path/Image/FillType classes, not a Skia or Cairo replacement, and it ships inside the juce_graphics module of the JUCE application framework.",
+  "how_it_is_fast": "Paths are flattened (PathFlatteningIterator) into an EdgeTable: per-scanline lists of (x in 1/256 pixel, winding step) points, sampled at an adaptive number of sub-scanlines (256 / (1 + |dx/dy|) sub-steps, so steep edges cost one sample per scanline), then sorted and converted to 8-bit coverage spans. Spans are handed to templated per-fill callbacks (SolidColour, Gradient, ImageFill, TransformedImageFill) that write whole runs at once, with full-coverage runs taking a plain replace/blend loop. Pixels are blended SWAR-style, two 8-bit channels per 32-bit word (0x00ff00ff masks); gradients read a precomputed colour lookup table (up to 256 entries per colour stop, capped at 3x the gradient extent) indexed in fixed point. Translation-only transforms take separate fast paths (TranslationOrTransform, ImageFill vs TransformedImageFill).",
+  "when_to_use": [
+    "You already ship a JUCE app or audio plug-in and need CPU rendering (Linux, embedded, offscreen images) that is faster than Skia or Cairo would be.",
+    "Stroke-heavy vector UI and charts: on the M1 Pro run strokes averaged 2.10x Skia (StrokeWorld 3.08x, StrokeFish 2.47x).",
+    "Complex polygon and path fills at 32-256 px (FillPolyNZi40 solid 1.4-2.2x Skia at 32x32 and above) and gradient-filled shapes (linear-gradient cells 1.94x Skia, derived from page data).",
+    "Your project is AGPLv3 or you hold a commercial JUCE licence."
+  ],
+  "when_not_to_use": [
+    "Large solid or image rectangle fills and blits: JUCE 8.0.8 runs FillRectA solid at 0.31x Skia at 128x128 and 256x256, and aligned pattern blits at about 0.71x Skia (derived from page data).",
+    "You want the fastest CPU rasterizer: Blend2D single-threaded is about 2.4x faster (JUCE 0.41x Blend2D) and Vello CPU single-threaded about 1.5x faster (JUCE 0.68x, faster in only 20% of cells), both derived from the same M1 Pro file.",
+    "You need pixel parity with Skia or Cairo: coverage is approximate, 8.0.8 blends with a divide-by-256 shortcut, radial gradients in 8.0.8 have no focal point, and drawRect draws inside the bounds.",
+    "Closed-source products without a commercial JUCE licence, or projects that want a small standalone library: juce_graphics pulls in juce_events and juce_core, plus freetype2 and fontconfig on Linux.",
+    "Multi-threaded rendering: the renderer is single-threaded with no tiling or worker pool."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "juce_events and juce_core (JUCE modules); freetype2 and fontconfig on Linux; Cocoa and QuartzCore frameworks on macOS",
+    "min_toolchain": "C++17, CMake 3.22+; Xcode 12.4, Visual Studio 2019, g++ 7 or Clang 6",
+    "platforms": "macOS, Windows, Linux, iOS, Android (x86_64, x86, arm64; 32-bit Arm not regularly tested); portable C++ with no ISA requirement",
+    "thread_safety": "Not documented in juce_GraphicsContext.h; the renderer is single-threaded, so use one Graphics context per thread and image.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Graphics::drawRect fills four rectangles inside the shape bounds instead of stroking a centred path, so stroked rectangles look and cost differently from Skia or Cairo strokes (StrokeRectU measured 3.44x Skia for this reason).",
+    "JUCE 8.0.8 PixelARGB::blend uses (0x100 - alpha) and >> 8 with clamping, a divide-by-256 approximation; JUCE 9 (HEAD) switched to a rounded divide-by-255 SWAR blend, so 8.0.8 output and speed are not those of the current release.",
+    "The benchmark forces juce::SoftwareImageType and builds with USE_COREGRAPHICS_RENDERING=0; JUCE's native image types and window peers can use CoreGraphics or Direct2D instead, so in a normal macOS or Windows app you get this renderer only if you ask for it.",
+    "EdgeTable sampling cost grows as edges get flatter (up to 256 sub-scanline samples per scanline for near-horizontal edges, since the step is clamped to 1-256), and coverage within a scanline is taken from one x sample per sub-step, not exact area."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Blend2D or Vello CPU only when you are already inside JUCE: both are faster on the same M1 Pro harness and are standalone, permissively licensed libraries. Against AGG (1.43x AGG, derived from page data) and Skia or Cairo it is the faster option for strokes and complex paths, but it loses to Skia on large rectangle and image fills.",
+  "verified_claims_summary": "An independent run (Vello CPU author) of the Blend2D bl_bench harness on an Apple M1 Pro, single-threaded, SrcOver, 29 shape tests x 5 paint styles x 6 sizes (8x8 to 256x256), gives JUCE 8.0.8 a geometric-mean 1.68x Skia (1.64x without the non-equivalent StrokeRect tests) and 2.93x Cairo 1.18.4; my recomputation of the 2026-06-08 file matches (per style vs Skia: solid 1.48x, linear 1.94x, radial 1.78x, patterns 1.61-1.63x). Compiler, flags and the Skia version are not recorded, there is no x86 run, and output equivalence is not checked.",
+  "status_note": "Actively developed (JUCE 9.0.3, last commit 2026-09-28, 8.9k stars); JUCE 9.0.0 lists 'Improved the performance of the software renderer' and, per search-result text from the JUCE 9 forum announcement (forum page not opened), refactored PixelARGB for vectorised fills with 2-4x faster image fills, so the 8.0.8 numbers, especially the losing image and rectangle fills, are likely out of date; copyable under AGPLv3 or the commercial JUCE licence.",
+  "measurement_notes": "No correctness bug found behind the catalogued numbers; in the rectangle tests compared, backend_juce.cpp draws from the same random rectangle and colour streams as backend_skia.cpp. Beyond the known non-equivalent StrokeRect and centred-radial tests, JUCE 8.0.8 takes precision shortcuts the baselines do not: SrcOver blending divides by 256 ((0x100 - alpha) then >> 8, with clamping) instead of rounding by 255, gradients are read from a per-fill colour lookup table of at most 256 entries per stop interval, and EdgeTable coverage is sampled rather than exact area. These make the comparison not output-equivalent and plausibly flatter JUCE somewhat, but output is not checked by the harness, so the effect is unmeasured. Aligned image-pattern rectangles go through Graphics::drawImageAt (a blit) while Skia draws them as a shader-filled rectangle, which is a fair use of each API. The measured version is stale: JUCE 9.0.0 reworked PixelARGB (rounded divide-by-255 blend, vectorised fills), so current JUCE may differ in both directions.",
+  "sources_read": [
+    "https://github.com/juce-framework/JUCE",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/README.md",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/CHANGE_LIST.md",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/BREAKING_CHANGES.md",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/juce_graphics.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/contexts/juce_GraphicsContext.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/native/juce_RenderingHelpers.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/geometry/juce_EdgeTable.cpp",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/geometry/juce_EdgeTable.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/colour/juce_PixelFormats.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/8.0.8/modules/juce_graphics/colour/juce_PixelFormats.h",
+    "https://raw.githubusercontent.com/juce-framework/JUCE/HEAD/modules/juce_graphics/colour/juce_ColourGradient.cpp",
+    "https://github.com/juce-framework/JUCE/issues?q=is%3Aissue%20software%20renderer",
+    "https://github.com/juce-framework/JUCE/issues?q=is%3Aissue%20EdgeTable%20OR%20antialiasing%20OR%20fillPath",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/backend_juce.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/backend_skia.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/backend_blend2d.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/bl_bench/app.cpp",
+    "https://raw.githubusercontent.com/LaurenzV/blend2d-apps/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/LaurenzV/vello_chart/HEAD/data/arm/2026-06-08.json",
+    "WebSearch: JUCE 9 \"software renderer\" performance improved EdgeTable forum (snippets from forum.juce.com/t/juce-9-is-available-now/69175, not opened)"
+  ],
+  "confidence": 0.75
+}
