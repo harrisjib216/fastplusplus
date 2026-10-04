@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/saucecontrol/photosauce",
+  "one_liner": ".NET image resizing pipeline (MagicScaler) that makes JPEG thumbnails 5-9x faster than Magick.NET in its author's runs.",
+  "what_it_does": "MagicScaler is a C# library that decodes, resizes, colour-manages, sharpens and re-encodes images in one call: MagicImageProcessor.ProcessImage(input, output, new ProcessImageSettings { Width = 400 }). It also exposes a pull-based pipeline (ProcessingPipeline / IPixelSource) for custom sources, sinks and filters. Codecs come from Windows WIC by default or from separate PhotoSauce.NativeCodecs.* NuGet plugins (libjpeg-turbo, libpng, libwebp, libheif, libjxl, giflib), which Linux requires. It is a different API from Magick.NET, ImageSharp or System.Drawing, not a drop-in.",
+  "how_it_is_fast": "Hybrid scaling: for large reductions it asks libjpeg-turbo for a DCT-domain scaled decode (scale_denom) or box-averages by a power of two (HybridScaleTransform), then runs the high-quality filter only for the remaining ratio. JPEGs are processed planar: Y is resampled (in approximate linear light) and Cb/Cr at chroma resolution, then handed straight to the encoder, so no full-size YCbCr-to-RGB conversion happens. Resampling is a separable convolution with precomputed kernel maps, hand-written SSE/AVX2/FMA convolvers on x86 (System.Numerics.Vector fallbacks elsewhere), fixed-point UQ15 or float paths, and lookup-table gamma conversion. The pipeline streams lines through sliding and windowed buffers from a pool instead of materialising whole images, which keeps peak memory low.",
+  "when_to_use": [
+    ".NET server code (CMS, e-commerce, upload handlers) that turns large JPEGs into thumbnails or web-size renditions at high throughput on Windows or Linux.",
+    "You want good-quality defaults (linear-light blending, automatic filter choice, post-resize unsharp mask, colour-profile normalisation) without writing filter or ICC code.",
+    "Memory-constrained parallel batch resizing: in the author's 351-image Bee Heads run MagicScaler peaked at 420 MB and 37,153 ms CPU against ImageMagick's 878 MB and 277,780 ms.",
+    "Strong reductions (roughly 3x and up) of JPEG input, where decode-time DCT scaling and planar processing give the biggest gains."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: it is C# only; libvips, fast_image_resize or Skia are the native options in this category.",
+    "macOS: the README says it runs on Windows and Linux, and the native codec packages ship Windows and glibc Linux binaries only.",
+    "Many small images through an encode step: issue #180 (2025) reports 144 images of 256x256 resized to about 144x144 taking 360 ms against 130 ms with GDI+, even with nearest-neighbour; no maintainer reply was visible.",
+    "BMP or TIFF input on Linux: the README lists them as the notable formats the cross-platform codec plugins do not support.",
+    "Bit-exact or reference-filter output: hybrid mode trades a little quality for speed, and the defaults pick filter, sharpening and JPEG quality for you; set HybridMode=Off and explicit Interpolation and Sharpen values if you need control."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "None on Windows (WIC codecs); on Linux one or more PhotoSauce.NativeCodecs.* NuGet plugins with bundled native libraries (libjpeg-turbo built from a custom psjpeg vcpkg port, libpng, libwebp, libheif, libjxl, giflib).",
+    "min_toolchain": "Library targets net8.0 and net472, with net462, netstandard2.0 and netstandard2.1 added in the Dist build (MagicScaler.csproj); hardware-intrinsic paths only on .NET Core 3.0+ targets.",
+    "platforms": "Windows x86, x64 and ARM64; Linux glibc x64 and ARM64. Hand-written intrinsics on x86 SSE2/AVX/AVX2 only; other architectures use Vector<T> or scalar paths.",
+    "thread_safety": "Not documented; ProcessImage is static and the README's own parallel benchmark calls it concurrently from Parallel.ForEach, one image per call.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default HybridMode=FavorQuality changes the work done: for about 1 MP to 150 px it decodes at half size and then uses Catmull-Rom on the rest (SettingUtil.GetDefaultInterpolation), while the Magick.NET harness decodes full size and applies ImageMagick's default Lanczos (MagickCore/resize.c), roughly 17 against 51 filter taps per output pixel per axis (derived from code).",
+    "In planar JPEG mode only luma is linearised, with the sRGB curve forced when the source profile is not sRGB (MagicTransforms.AddInternalFormatConverter); chroma is resampled gamma-encoded and only luma is sharpened.",
+    "Gamma lookup tables are 256 entries (to linear) and 1024 entries (from linear, interpolated), which issue #183 says is too coarse for float or 16-bit HDR pipelines.",
+    "The 1.0 version has not shipped: the latest NuGet release is 0.15.0 (Dec 2024), and the README says APIs are not yet stable."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ImageSharp when you are on .NET for Windows or Linux and want the fastest JPEG thumbnailing (46.85 ms against ImageSharp's 115.90 ms in the same Windows x64 run). Pick ImageSharp for pure-managed portability including macOS, and libvips (NetVips) or Skia when you need native, cross-language or macOS support; NetVips was 2.2x slower here on Windows x64 and 3.8x on WSL2 Linux (derived from page data).",
+  "verified_claims_summary": "The author ran a locally modified copy of bleroy/core-imaging-playground in Nov 2022 (BenchmarkDotNet ShortRun, .NET 6.0.10, MagicScaler 0.13.2 with libjpeg-turbo, Magick.NET-Q8 12.2.0): loading, resizing to 150 px and saving 12 JPEGs of about 1 MP took 46.85 ms against 345.99 ms for ImageMagick on a Xeon W-11855M under Windows 10, about 7.4x, and 65.72 against 588.63 ms on a Snapdragon ARM64 dev kit. The 'Linux x64' table (99.8 against 522.6 ms) is labelled WSL2, so it ran in a VM on the same Windows laptop, not on bare-metal Linux.",
+  "status_note": "Active: dependency and native-codec updates landed in Sep-Oct 2026 after a gap since Apr 2025, but the last NuGet release is 0.15.0 (Dec 2024); MIT licensed, so the code can be copied, but it is C# and of no direct use to C++ code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/readme.md",
+    "https://raw.githubusercontent.com/bleroy/core-imaging-playground/master/NetCore/LoadResizeSave.cs",
+    "https://github.com/saucecontrol/PhotoSauce/tree/master/src/MagicScaler/Magic",
+    "https://github.com/saucecontrol/PhotoSauce/tree/master/src",
+    "https://github.com/saucecontrol/PhotoSauce/tree/master/src/MagicScaler/Utilities",
+    "https://github.com/saucecontrol/PhotoSauce/tree/master/src/NativeCodecs/Libjpeg",
+    "https://github.com/saucecontrol/PhotoSauce/tree/master/build/vcpkg/ports/psjpeg",
+    "https://github.com/saucecontrol/PhotoSauce/commits/master",
+    "https://github.com/saucecontrol/PhotoSauce/issues?q=is%3Aissue+performance",
+    "https://github.com/saucecontrol/PhotoSauce/issues/180",
+    "https://github.com/saucecontrol/PhotoSauce/issues/183",
+    "https://github.com/saucecontrol/PhotoSauce/issues/45",
+    "https://github.com/saucecontrol/PhotoSauce/issues/27",
+    "https://github.com/saucecontrol/PhotoSauce/issues/82",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Magic/ConvolutionTransform.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Magic/HybridScaleTransform.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Magic/MagicTransforms.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Magic/MagicImageProcessor.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Core/ProcessImageSettings.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Core/PipelineContext.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Utilities/SettingUtil.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Utilities/HWIntrinsics.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/MagicScaler.csproj",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/Directory.Build.props",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/MagicScaler/Docs/Remarks.xml",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/NativeCodecs/Libjpeg/JpegDecoder.cs",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/src/NativeCodecs/Libjpeg/readme.md",
+    "https://raw.githubusercontent.com/saucecontrol/PhotoSauce/HEAD/build/vcpkg/ports/psjpeg/portfile.cmake",
+    "https://api.nuget.org/v3-flatcontainer/photosauce.magicscaler/index.json",
+    "https://raw.githubusercontent.com/ImageMagick/ImageMagick/main/MagickCore/resize.c"
+  ],
+  "confidence": 0.8
+}
