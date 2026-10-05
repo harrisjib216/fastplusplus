@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/zanazakaryaie/fastgaussianblur",
+  "one_liner": "Unlicensed three-step tutorial for a fixed 5x5 float Gaussian blur; it beats OpenCV only on a Raspberry Pi 3B+, and only when using 4 threads.",
+  "what_it_does": "A teaching repository (folders memory_management, simd and parallel_processing, meant to be read in that order) that hand-optimises one 5x5, sigma 1.0, BORDER_REPLICATE Gaussian blur of a single-channel float image. Each stage is a free function `Gaussian_blur_refN(const Matrixf&, Matrixf&)` over the repo's own row-pointer `matrix<float>` class, which copies the pixels out of a `cv::Mat`. A main.cpp per folder times the stages against `cv::GaussianBlur`. It is not a library: there is no packaging, no API for other kernels or sigmas, and no license.",
+  "how_it_is_fast": "Stage 1 runs the separable filter in a single pass per output row. A vertical 5-tap sum goes into a one-row stack buffer, then a horizontal 5-tap pass writes the output row. This avoids a full-size intermediate image, and the symmetric weights are folded as (a+e)*w2 + (b+d)*w1 + c*w0. Stage 2 vectorises only the vertical pass, four floats at a time, with OpenCV universal intrinsics (cv::v_float32x4); the horizontal pass stays scalar. Stage 3 adds `#pragma omp parallel for` over the middle rows. Its win over OpenCV comes from spreading those rows across the Pi's four cores: in the author's chart both single-thread stages are slower than OpenCV at every size.",
+  "when_to_use": [
+    "As reading material on row-buffer separable convolution, symmetric-kernel folding, universal intrinsics and OpenMP row splitting, for a small ARM board.",
+    "As a starting point for a hand-written fixed-kernel 5x5 float blur on a 4-core ARM board, where OpenCV's float Gaussian runs on one thread and you can spend all cores on this one filter.",
+    "When you will rewrite the code anyway: there is no license, so it can only be studied, not copied."
+  ],
+  "when_not_to_use": [
+    "On x86 desktops: a third-party report (issue #3, 2024-09-09, Ryzen 7 5800H, OpenCV 4.8, 720x720) measured OpenCV at 0.23 ms against 0.63 ms for the best tutorial stage (SIMD) and 0.74 ms for the OpenMP stage. That makes OpenCV about 2.7x faster than the tutorial's best stage (derived from page data), and the parallel stage was slower than the single-thread SIMD stage. The author has not replied.",
+    "For any kernel other than 5x5 at sigma 1.0 with replicate borders, or any input other than one-channel 32-bit float: the weights are hard-coded constants.",
+    "For image widths that are not a multiple of 4 in the SIMD and OpenMP stages: the vector loops run `for (; j<cols; j+=4)` with no tail guard, so they write up to 3 floats past the stack row buffer and read past the last image row. The scalar 'leftovers' loop then never runs. The benchmarked widths (720, 1080, 1440) are all multiples of 4.",
+    "With current OpenCV: the SIMD and OpenMP stages use `+` and `*` on cv::v_float32x4, and OpenCV's own intrin_legacy_ops.h says these operators were removed in 4.11, so the code needs an older OpenCV or that header included by hand. Issue #2 (OpenCV 3.3.0) reports a CV_CPU_HAS_SUPPORT_SSE2 / CV_CPU_HAS_SUPPORT_NEON compile error at the other end of the version range.",
+    "In shipping code: no license file, no tests, no output check against OpenCV, and no commits since 2021-03-25."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenCV (core universal intrinsics; imgcodecs/highgui for the demo harness), OpenMP for the parallel stage",
+    "min_toolchain": "GCC with C++11 plus GNU extensions (variable-length stack array `float buffer[cols]` with __attribute__((aligned(16))), privatised in an OpenMP clause); author used GCC 6.3 on 32-bit Raspbian; OpenCV newer than 3.3 (issue #2) and older than 4.11, or 4.11+ with intrin_legacy_ops.h included",
+    "platforms": "measured only on a Raspberry Pi 3B+ (32-bit OS); the intrinsics compile for x86 SSE2 and ARM NEON, and fall back to OpenCV's scalar C++ emulation when neither is enabled",
+    "thread_safety": "not documented; the functions use no globals, and the stage-3 function starts its own OpenMP team",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unequal threading behind the headline: the final stage uses the OpenMP default thread count (all 4 cores on a Pi 3B+). In current OpenCV 4.x source, a 32F GaussianBlur without IPP goes through the HAL hook and then sepFilter2D, and filter.dispatch.cpp has no parallel_for_. So the roughly 2.5x chart win is most likely 4 threads against 1. The OpenCV version the author used is not stated.",
+    "The CMakeLists add -O3 -Ofast -funroll-loops but no -mfpu=neon. OpenCV's cv_cpu_dispatch.h sets CV_NEON only when the compiler defines __ARM_NEON; otherwise the universal intrinsics compile to the scalar emulation in intrin_cpp.hpp, whose v_load_aligned asserts 16-byte alignment. The repo never says whether its 'SIMD' stage ran as NEON, and it was only about 14% faster than the scalar stage on the chart. Matrix.h allocates rows with plain malloc and requests no alignment, yet every vector load and store uses the aligned variants.",
+    "The top-row vector loop computes row 1 with the wrong replicated neighbour (row 1 instead of row 0). A scalar loop that redeclares j and recomputes the whole row overwrites the result, so the output is right but the vector work is wasted.",
+    "Every call does output.resize(), which frees and mallocs the output matrix, and cv::Mat input is first copied element by element into Matrixf. Images with fewer than 4 rows or columns underflow the unsigned `rows-2`/`cols-2` bounds."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to learn the three optimisation steps. For production Gaussian blur faster than OpenCV, the catalogued siblings are better choices: libblur (arbitrary kernels, multithreaded), bfraboni/FastGaussianBlur (box-blur approximation for large sigma) and LibGaussianBlur (FFT); for box filters there is FastBoxBlur. All of them carry licenses and take more than one fixed kernel.",
+  "verified_claims_summary": "Comparison.jpg (bar chart, values read by eye) times 100 back-to-back calls on a Raspberry Pi 3B+ (32-bit OS, GCC 6.3, OpenCV version unstated): cv::GaussianBlur about 8.9/19.8/35 ms against the 4-thread OpenMP stage at about 3.4/7.9/13.7 ms for 720/1080/1440-pixel squares, roughly 2.5x. The best single-thread stage (about 10.0/23.3/41.5 ms) is about 1.12-1.19x slower than OpenCV (derived from page data). A third-party x86 run (issue #3, Ryzen 7 5800H, OpenCV 4.8) reverses the result: OpenCV 0.23 ms against 0.63 ms for the best tutorial stage.",
+  "status_note": "Abandoned since 2021-03-25, with issues #1 and #3 unanswered. It has no license, so it is reference-only, and the SIMD stages need an OpenCV from before 4.11 (or the legacy-operators header) to compile.",
+  "sources_read": [
+    "https://github.com/zanazakaryaie/fastGaussianBlur/issues?q=is%3Aissue",
+    "https://github.com/zanazakaryaie/fastGaussianBlur/issues/1",
+    "https://github.com/zanazakaryaie/fastGaussianBlur/issues/2",
+    "https://github.com/zanazakaryaie/fastGaussianBlur/issues/3",
+    "https://github.com/zanazakaryaie/fastGaussianBlur/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/README.md",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/Comparison.jpg",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/Matrix.h",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/memory_management/main.cpp",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/memory_management/CMakeLists.txt",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/memory_management/Gaussian_refinement3.hpp",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/simd/main.cpp",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/simd/CMakeLists.txt",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/simd/Gaussian_refinement4.hpp",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/parallel_processing/main.cpp",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/parallel_processing/CMakeLists.txt",
+    "https://raw.githubusercontent.com/zanazakaryaie/fastGaussianBlur/HEAD/parallel_processing/Gaussian_refinement5.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/smooth.dispatch.cpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/filter.dispatch.cpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/cv_cpu_dispatch.h",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/hal/intrin.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/hal/intrin_cpp.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/hal/intrin_neon.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/core/include/opencv2/core/hal/intrin_legacy_ops.h",
+    "WebSearch snippets for http://imrid.net/?p=4173 and http://imrid.net/?p=4192 (blog pages themselves not opened)"
+  ],
+  "confidence": 0.8
+}
