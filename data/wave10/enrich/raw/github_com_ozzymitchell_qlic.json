@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/ozzymitchell/qlic",
+  "one_liner": "Lossless image codec reaching JPEG XL effort-9 file sizes at about one-ninth of cjxl's single-thread encode time.",
+  "what_it_does": "QLIC defines a new lossless file format (.qlic) for Gray/RGB/RGBA8 stills, RGBA animation, exact 9-24-bit integer samples and integer PQ/HLG HDR, keeping ICC, EXIF, XMP and other metadata. It ships a C17 library (static or DLL, qlic_encode_rgba / qlic_decode_rgba and friends), a pack/unpack/info/verify CLI, a Windows GUI and WIC codec, a pure safe-Rust decoder and a WebAssembly decoder. There is one automatic encode policy and no effort or quality knob. It is not a drop-in for libjxl or libwebp: nothing else reads the format.",
+  "how_it_is_fast": "The encoder runs a bounded tournament instead of an exhaustive search. Cheap image facts (palette cardinality, block repetition, transform score, alpha shape) produce an early candidate and gate specialist representations such as palettes, filtered bytes with LZMS and horizontal bands; each specialist gets the current size as a cutoff, and the smallest completed file wins. The native QST1 stream applies reversible integer colour transforms, per-plane spatial prediction with predictor maps scored by AVX2 kernels, and adaptive binary range coding of residuals with context models (mode 52 is the main photographic path). Decode is a serial scalar range-decoding chain; the project's own architecture guide puts about 98% of hot decode time in plane entropy decoding.",
+  "when_to_use": [
+    "Archiving lossless images you would otherwise compress with cjxl -e 8 or -e 9, when single-thread encode CPU matters: similar total size for about 9x less encode time on the author's corpus.",
+    "Mixed asset sets of UI screenshots, game textures, icons and structured graphics, where the author reports QLIC is often smaller than both JPEG XL and WebP.",
+    "Closed pipelines where you control both ends (game assets, internal datasets, a desktop app) and can ship the C, Rust or Wasm decoder.",
+    "Exact storage of 9-24-bit integer samples or PQ/HLG code values together with their metadata, without wrapping another image format."
+  ],
+  "when_not_to_use": [
+    "Decode-latency-bound serving: WebP lossless decoded this corpus about 2x faster in wall time, and the architecture guide says QLIC's entropy decode is about 6.75x slower than WebP and 11.7x slower than WIC PNG.",
+    "Interchange with browsers, operating systems or other tools: the format is not standardised and only QLIC's own WIC plugin and Wasm package read it.",
+    "Fast encoding: about 3.2 MP/s single-threaded; JPEG XL efforts 1-4, WebP presets 1-6, fjxl or fpnge encode much faster at 10-33% larger output.",
+    "Photographic and alpha-heavy content where JPEG XL e9 stays smaller, and corpora unlike the author's: on the wider 10,628-image qualification set QLIC's total is 0.45% larger than e9.",
+    "Platforms outside Windows x64 and Linux x86-64 (untested), float/half HDR (unsupported), or needs for true streaming or cheap region decode (region decode still pays the full entropy decode)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (C17, CMake targets qlic::qlic_static and qlic::qlic, pkg-config) plus CLI; separate safe-Rust decoder crate and Wasm build",
+    "dependencies": "none for the codec core (LZMS is a bundled clean-room decoder); the CLI's input loaders use libpng, libwebp, libjxl, libavif and libtiff on Linux (libwim-dev also listed) and WIC on Windows",
+    "min_toolchain": "C17, CMake 3.25+, Visual Studio 2022+ or Clang on Windows (published binary built with Clang 22.1.4), GCC or Clang on Ubuntu 24.04; Rust 1.85 for the Rust decoder",
+    "platforms": "Windows x64 and Linux x86-64 tested; portable x86-64 build with one AVX2 encoder-analysis source (map_avx2.c); wasm32 decoder; other architectures untested",
+    "thread_safety": "sdk.md: separate threads can call the SDK at the same time; qlic_last_error is per thread. Encode and decode default to one thread, with opt-in workers for candidate trials and bands",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline size win is measured on the 3,167-image development corpus that the encoder's routes were built against; the architecture guide calls it 'a development gate, not a universal ranking'. On the wider 10,628-image qualification line QLIC totals 4,606,862,554 bytes vs JPEG XL e9 4,586,294,329 (0.45% larger, derived) and e8 4,607,544,830, while still encoding about 9x faster than e9.",
+    "Decode figures are per-process wall time including start-up and writing a PNG. QLIC's CLI writes that PNG through the Windows WIC encoder at default settings, while djxl and dwebp use their own writers, so the published 1.30x lead over djxl is a whole-tool number and may not hold for in-process decode.",
+    "QLIC 1.0.0 could write an invalid 32-byte file and report success for some large images with small, noisy palettes. Version 1.0.1 (2026-09-12) fixed it, so re-encode affected files and run qlic verify on stored archives.",
+    "For untrusted files, set limits tighter than the 512 MiB / 67,108,864-pixel defaults and add an external time budget: the docs say limits cap allocation, not CPU time."
+  ],
+  "pick_this_over_siblings_when": "Pick QLIC over HALIC or fNBLI when JPEG XL e9-level density matters more than raw speed and you want a maintained C library with Rust and Wasm decoders plus alpha, animation, wide-integer and metadata support. Pick libjxl fast_lossless, QOIR or fpnge when encode or decode throughput comes first and 15-30% larger files are acceptable.",
+  "verified_claims_summary": "First-party run on a Ryzen 9 9950X3D under Windows 11, one pinned logical processor, wall time including process start and file I/O, 3,167 images (1.96 Gpx), byte-exact round trip on every file. The QLIC 1.0 portable Clang 22.1.4 build took 618.7 s for 1,160,913,984 bytes, against cjxl -d 0 -e 9 at 5,674.2 s for 1,164,424,898 bytes (about 9.2x faster and 0.30% smaller) and cwebp -lossless -z 6 at 586.0 s for 1,289,518,274 bytes. Decode took 236.9 s for QLIC, 307.6 s for djxl and 117.9 s for dwebp. Baseline versions are not on the current page (the 0.5 run used cjxl 0.12.0 and cwebp 1.6.0), and per-file rows stay in a private workspace.",
+  "status_note": "Active single-author project (first commit 2026-07-29, 1.0.1 on 2026-09-12, last commit 2026-10-02, 23 stars). The Apache-2.0 C library is vendorable, but the format is new and non-standard, so pin the decoder and keep a PNG or JPEG XL fallback.",
+  "measurement_notes": "No correctness bug behind the published totals: every file passes ImageMagick compare -metric AE = 0, and the 1.0.1 empty-file encoder bug would have stopped the run. Scope and method limits beyond the verifier's caveats: (1) the corpus is the development corpus the encoder routes were designed against ('a development gate, not a universal ranking'); the wider 10,628-image qualification line in docs/architecture.md puts QLIC 0.45% larger than JPEG XL e9 and about level with e8 (0.015% smaller), with the encode-speed lead intact (8.99x vs e9, 5.28x vs e8 on that line). (2) Decode timing is whole-process wall time including start-up and PNG output; QLIC writes PNG via WIC (codec/src/qlic.c), and the architecture guide's own sweep puts QLIC entropy decode about 6.75x slower than WebP and 11.7x slower than WIC PNG, so the decode table understates QLIC's core decode deficit and the 1.30x lead over djxl is not a core-decoder ratio. (3) Only QLIC, JPEG XL e9 and WebP z6 were re-timed together in the final campaign; the other effort and preset rows (and the OxiPNG row, which has no public script) come from earlier same-machine runs. (4) Processor affinity is applied after Process.Start in the PowerShell harness, so the first moments of each process are unpinned (minor). Tier A is defensible for the encode matrix (public harness, compiler, flags, CPU, pinned corpus hashes), but baseline versions for the current run and the per-file rows are not public.",
+  "sources_read": [
+    "https://github.com/OzzyMitchell/QLIC",
+    "https://github.com/OzzyMitchell/QLIC/releases",
+    "https://github.com/OzzyMitchell/QLIC/issues",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/README.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/docs/benchmark-current.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/docs/benchmark-0.5-historical.json",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/docs/architecture.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/docs/format.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/docs/sdk.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/SUPPORT.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/gradient-topology-replay.md",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/run-large-matrix.ps1",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/run-jxl-efforts.ps1",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/quick-benchmark.ps1",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/benchmark/summarize-results.ps1",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/build.ps1",
+    "https://raw.githubusercontent.com/OzzyMitchell/QLIC/HEAD/codec/src/qlic.c"
+  ],
+  "confidence": 0.75
+}

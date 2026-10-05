@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/nevermindnilas/nelux",
+  "one_liner": "FFmpeg-backed Python video reader returning PyTorch tensors; parallel RGB conversion outruns torchcodec and ffmpeg-CLI rgb24 pipes.",
+  "what_it_does": "A pybind11 C++20 extension that links FFmpeg's libavformat, libavcodec and libswscale in-process and hands back each decoded frame as an HWC uint8 torch.Tensor (uint16 for >8-bit sources), via iteration, frame_at, get_batch and slicing, with frame/time ranges, motion-vector export, NVDEC decode into CUDA tensors and a VideoEncoder (libx264, NVENC and others) with audio passthrough. It is its own API (VideoReader/VideoEncoder), not a drop-in for torchcodec's VideoDecoder or for an ffmpeg subprocess pipe, though it uses the same HWC layout and its CPU RGB output is byte-identical to ffmpeg -vf format=rgb24 on most 8-bit formats.",
+  "how_it_is_fast": "Decoding is stock libavcodec with frame threading (num_threads=0 lets FFmpeg pick), so no codec work is faster than FFmpeg. The gain is a pool of convert worker threads that run the per-frame libswscale YUV-to-RGB conversion in parallel, with a sequence-keyed reorder map and bounded in-flight backpressure so conversion no longer serialises behind decode; current code also recycles 64-byte-aligned output buffers wrapped with from_blob instead of allocating a tensor per frame. On NVDEC, a CUDA NV12/P010-to-RGB kernel converts on the GPU and the tensor never leaves the device. The README itself says that with convert_workers=0 fps, CPU and RSS land within about 2% of torchcodec.",
+  "when_to_use": [
+    "Feeding a PyTorch training or inference loop from H.264/HEVC files at 1080p or above, where single-threaded RGB conversion is the bottleneck and the machine has idle cores (first-party: 1.6x torchcodec at 1080p, 1.47x at 4K).",
+    "NVDEC decode straight into cuda:0 tensors with the colour conversion done on the GPU, avoiding a host round-trip.",
+    "Replacing ffmpeg subprocess pipes in Python (decode, process, NVENC or x264 encode, audio passthrough) with an in-process library, especially for many short clips where process start-up dominates; reconfigure() reuses a reader across files.",
+    "ML work that needs per-block motion vectors from FFmpeg's decoder side data (CPU path only)."
+  ],
+  "when_not_to_use": [
+    "CPU-limited hosts or multi-worker DataLoaders: the default mode used 874-1656% CPU against torchcodec's 344-502% for the published gains, and with convert_workers=0 it is only torchcodec-speed.",
+    "When raw decode speed is the problem: every CPU row is FFmpeg's libavcodec, so it cannot beat ffmpeg's own decoder; the ffmpeg -f null decode-only run was faster than nelux at 4K (735 vs 539 fps).",
+    "Closed-source or hosted products: NeLux is AGPL-3.0 and the bundled FFmpeg is GPL-2.0-or-later (libx264, libx265 linked).",
+    "Environments off its narrow matrix: Python 3.13+, a wheel built per PyTorch minor (currently 2.14), CUDA 13 wheels need compute capability 7.5+ (Pascal/Volta need a source build), macOS is CPU-only.",
+    "Versions before 0.12.5 on long CPU runs: the default convert pool leaked roughly one decoded frame of host RAM per frame."
+  ],
+  "integration": {
+    "form": "Python wheel: pybind11 C++20 extension (shared lib) with FFmpeg shared libraries bundled",
+    "dependencies": "PyTorch (must be imported first; wheel tied to one torch minor), numpy, bundled TAS-FFMPEG 9.0.2 (GPL); CUDA 13 runtime from the CUDA torch wheel for NVDEC/NVENC. Source builds: scikit-build-core, CMake, Ninja, vcpkg, MSVC 18 on Windows",
+    "min_toolchain": "Python 3.13+, C++20 (MSVC 18 on Windows), CMake + Ninja; CUDA 13 for published GPU wheels",
+    "platforms": "Windows x64 and Linux x86_64 (manylinux_2_28+) with CPU + NVDEC/NVENC; macOS arm64 14+ CPU only",
+    "thread_safety": "not documented for a shared reader; each reader runs its own producer and convert threads, and the changelog records a fixed race where decode_batch and the prefetch producer shared formatCtx",
+    "drop_in_for_baseline": "partial — different API from torchcodec's VideoDecoder and not a CLI replacement for ffmpeg, but same HWC uint8 convention and RGB bytes identical to ffmpeg -vf format=rgb24 on 12 of 14 tested pixel-format/colourspace combos (yuv420p10le differs, PSNR about 48 dB)"
+  },
+  "gotchas": [
+    "The README's 'RSS is essentially identical' line is not supported by its own data. In the in-process comprehensive run every decoder shares one Python process and RSS climbs down the rows (601 MB to 2597 MB at 720p, 4864 MB to 9264 MB at 4K), so it is a running high-water mark, not per-decoder. The per-subprocess thread_modes.json shows nelux default at 1532 / 3769 / 7353 MB against torchcodec 673 / 732 / 1095 MB, which matches the convert-pool host-RAM leak (about one decoded frame retained per frame) that the changelog fixed in 0.12.5, after the published numbers were taken.",
+    "Defaults have drifted from the docs and the benchmark: README and changelog say convert_workers=None means min(hw, 16), but current Decoder.cpp uses clamp(hw - decode threads, 1, 8) (8 on a 24-thread CPU) with an in-flight cap of clamp(64 MB / frame, 4, 16), and FFmpeg is now 9.0.2; the published fps were never re-measured on these.",
+    "import torch must come before import nelux; on Windows another package's avcodec DLL of the same soname can win the load, so check nelux.__ffmpeg_version__ reports '9.0.2-tas'.",
+    "Several wrong-output bugs were fixed in 2026 (decode_batch used BT.601 regardless of colour space, #58; NVDEC set_range returned frames offset from the keyframe, #57; set_range with start>0 aborted the process, #60; unchecked CUDA launches gave silent black frames, #69), so pin a recent release."
+  ],
+  "pick_this_over_siblings_when": "Pick NeLux over video_reader-rs when the consumer is PyTorch (including CUDA tensors from NVDEC) and spare cores can absorb the parallel RGB conversion. It does not decode H.264 faster than libavcodec, so if decode itself is the bottleneck, edge264 or rivet-h26x (faster H.264/H.265 decoders than libavcodec in their own benchmarks) are the relevant siblings.",
+  "verified_claims_summary": "First-party, Windows 11 on an i9-13900K + RTX 3090, nelux 0.10.1/0.11.0 build (compiler and flags not recorded) over FFmpeg 8.x, H.264 to RGB uint8, 600 frames (300 at 4K): default reader 3393 / 2563 / 539 fps at 720p / synthetic 1080p / synthetic 4K vs torchcodec 2924 / 1589 / 367 and an ffmpeg -vf format=rgb24 subprocess 2273 / 1102 / 254. The ffmpeg rows include process start-up while nelux is timed after reader construction, convert_workers=0 brings nelux to torchcodec parity, and the rows are single 0.18-0.6 s runs taken on a build that still had the convert-pool RAM leak.",
+  "status_note": "Very active (0.20.0 in pyproject.toml, last commit 2026-09-28, releases every few weeks), installable with pip on Windows, Linux and macOS, but AGPL-3.0 with GPL FFmpeg inside, and the benchmark tables date from 0.11.0 (May 2026) while the decode pipeline and defaults have changed since.",
+  "measurement_notes": "Flaws behind the catalogued numbers, beyond the verifier's notes: (1) the benchmarked 0.10.1/0.11.0 build had the default convert-pool host-RAM leak documented and fixed in CHANGELOG 0.12.5 (workers allocated torch tensors on their own threads; freed blocks were never reclaimed); thread_modes.json RSS (nelux default 1532/3769/7353 MB vs nelux convert_workers=0 598/659/1022 MB and torchcodec 673/732/1095 MB) shows it in the published data, and the README's equal-RSS claim comes from a cumulative in-process high-water mark. The leak fix originally added one memcpy per frame on the consumer thread and current code uses pooled from_blob buffers; neither was re-benchmarked. (2) The 1080p and 4K clips are synthetic testsrc2 encodes, which decode unusually fast (ffmpeg -f null 2638 fps at 1080p vs 2906 at real 720p) and so favour the conversion-bound comparison. (3) With prefetch=True the producer thread is started inside the VideoReader constructor (Decoder::initialize), before the timer, though the head start is small. (4) Current default convert-worker count (clamp(hw - decode threads, 1, 8)) differs from the min(hw, 16) used for the published numbers and still documented in README. Tier C stands; the numbers describe an older build than the one pip installs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/README.md",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/docs/CHANGELOG.md",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/comprehensive_bench.py",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/bench_thread_modes.py",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/utils/bench_harness.py",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/output/perf_findings.md",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/output/comprehensive/REPORT.md",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/output/thread_modes.json",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tests/output/comprehensive/final/results.json",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/tools/ffmpeg.lock",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/src/Nelux/backends/Decoder.cpp",
+    "https://raw.githubusercontent.com/NevermindNilas/Nelux/HEAD/include/Nelux/backends/Decoder.hpp",
+    "https://github.com/NevermindNilas/NeLux/commits/master/tests/output/comprehensive/final/results.json",
+    "https://github.com/NevermindNilas/NeLux/issues?q=is%3Aissue",
+    "https://github.com/NevermindNilas/python-decoders-benchmarks",
+    "https://github.com/NevermindNilas/python-decoders-benchmarks/tree/main",
+    "https://raw.githubusercontent.com/NevermindNilas/python-decoders-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/NevermindNilas/python-decoders-benchmarks/HEAD/1280x720_results_frame_count_comparison.md"
+  ],
+  "confidence": 0.75
+}
