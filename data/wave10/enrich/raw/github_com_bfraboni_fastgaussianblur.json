@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/bfraboni/fastgaussianblur",
+  "one_liner": "Header-only C++17 template approximating Gaussian blur with repeated box passes and blocked transposes; beats only a naive 2D convolution.",
+  "what_it_does": "Approximates a Gaussian blur of a tightly packed, interleaved image (1 to 4 channels, any arithmetic type) with N box-filter passes per axis (N from 1 to 10, default 3), at a cost per pixel that does not grow with sigma. The public call is fast_gaussian_blur<T>(T*& in, T*& out, w, h, c, sigma, n = 3, border = kExtend), with kExtend, kMirror (reflect-101), kKernelCrop and kWrap borders. It takes two caller-allocated, mutable buffers by pointer reference, overwrites both and swaps the pointers so that `out` holds the result. It is not a drop-in for cv::GaussianBlur: there is no kernel-size, stride or ROI argument, and the achieved sigma only approximates the requested one (for example 2 becomes 1.83 and 5 becomes 4.83 with 3 passes).",
+  "how_it_is_fast": "Sigma is converted to box widths with Kovesi's 'Fast Almost-Gaussian Filtering' formula (sigma_to_box_radius). Each 1D box pass is a sliding running sum (one add, one subtract and one multiply per sample), so the cost is O(1) per pixel whatever the radius. Vertical passes run as horizontal passes over a transposed copy: N row passes, a cache-blocked transpose (flip_block, 256/C-element tiles), N more row passes and a transpose back, so every filter loop walks memory row-major. Rows and tiles are split across cores with OpenMP parallel for; channel count, pass count, border policy and kernel-size regime are template parameters so the inner loops are specialised; integer images accumulate in int (issue #5 measured int about 15% faster than float on a 6000x8000 horizontal pass). There is no explicit SIMD, and the README says an ISPC port did not beat it.",
+  "when_to_use": [
+    "Medium to large sigma (roughly 5 and up) on 8-bit RGB or RGBA frames where the cost must not grow with radius: UI backdrop blur, bloom, depth-of-field previews, video at FHD to 4K.",
+    "You want one dependency-free header and can accept an approximate Gaussian (box passes, approximate sigma, inexact borders).",
+    "Multi-core CPUs with OpenMP available: every pass is an embarrassingly parallel loop over rows.",
+    "As a readable starting point to fork; michelerenzullo/FastBoxBlur was derived from this code."
+  ],
+  "when_not_to_use": [
+    "Small sigma: the README says a separable Gaussian is as fast and more accurate at sigma <= 2, and with 3 passes any sigma below about 0.58 yields zero-radius boxes, so the output equals the input.",
+    "You need a true Gaussian (scale-space features, scientific or medical imaging, golden-image tests): the sigma oscillates around the target and the borders lose signal because no padding is added between passes.",
+    "You already link OpenCV or a SIMD library: nothing in the repo measures this against cv::GaussianBlur, cv::blur or IPP, and the only published baseline is a naive O(sigma^2) 2D convolution.",
+    "More than 4 channels, more than 10 passes, planar or strided layouts, const or in-place input (it needs two full-size scratch-able buffers), or buffers above 2^31-1 elements (all indexing is int).",
+    "Tiny images, or sigma comparable to the image size, with the mirror border: see the edge-case memory bugs under gotchas."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none at run time; OpenMP is optional (without -fopenmp the pragmas are ignored and it runs on one core). The header has no #include lines of its own, so the includer must first include <algorithm>, <cmath>, <cstdio>, <cstdint>, <cstdlib> and <type_traits> (the demo gets them through <iostream> and the bundled stb_image/stb_image_write).",
+    "min_toolchain": "C++17 (if constexpr, std::is_integral_v, std::conditional_t); the Makefile builds with g++ -O3 -fopenmp -std=c++17. Clang and MSVC are not documented; issue #9 says OpenMP linking is awkward on WebAssembly, Android and macOS.",
+    "platforms": "any (portable scalar C++, no intrinsics); timings exist only for a Ryzen 7 2700X",
+    "thread_safety": "Not documented. There is no global state, so concurrent calls on distinct buffers are safe, but each call opens its own OpenMP parallel regions (one per pass and per transpose), so calling it from several threads at once oversubscribes the cores.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Both buffers are overwritten and the pointer variables are swapped: after the call, `out` may point at the memory you passed as `in`. Pass pointer variables, not array names or pointers you must keep. The 8-argument overload defaults to kExtend, while the README demo defaults to mirror.",
+    "Unsupported arguments do not fail: c > 4 or n = 0 or n > 10 only printf a message and return, leaving `out` as the untouched input (the 3-pass path still swaps pointers) or as whatever the buffer held before.",
+    "Edge-case memory bugs in the current code (commit 49f0128, read and checked with a Python port of the index arithmetic): with the mirror border, a box radius of exactly w-1 takes the kMid branch, which reads one element past the row, and past the allocation on the last row of the buffer. The value is added and then subtracted, so integer results are unaffected, but a NaN or Inf in that garbage would poison a float row. Also with the mirror border, a 1-pixel-wide or 1-pixel-tall image divides by zero in remap_index (slength = 0). Issue #3 (2022, before the 2023 rework) reported an access violation at sigma 250.",
+    "Type handling: every integral T accumulates in int (uint32 or int64 data can overflow; negative signed results are truncated toward zero after the +0.5 rounding), and double data accumulates in float. Float running sums drift slightly along long rows."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you want a single dependency-free C++ header with four border policies and a cost that stays flat as sigma grows, and an approximate Gaussian is acceptable. libblur has published multithreaded numbers against OpenCV's Gaussian blur, zanazakaryaie/fastGaussianBlur and LibGaussianBlur (FFT) aim at an exact Gaussian, and FastBoxBlur (derived from this code) is the better fit when you want an accurate mirrored box blur with a cv::blur comparison.",
+  "verified_claims_summary": "The only numbers are the project's own absolute times for 8-bit RGB, 3 passes, all cores of a Ryzen 7 2700X with OpenMP (Makefile: g++ -O3 -fopenmp): about 7 ms for FHD (2 MP), about 50 ms at 4K and about 200 ms at 8K, from a plot last updated 2021-02-09 (commit 84e5f2d). That plot predates the 2023-2024 rewrites (v1.0 to v1.2), the README's own TODO says 'redo timings', and its harness and sigma are not in the repo. The plot's 'true Gaussian blur' baseline, as it existed in the repo's 2021 header (gaussian_blur in fast_gaussian_blur.h, since removed), is a naive non-separable 2D convolution with (2k+1)^2 taps per pixel (k = ceil(2.57 sigma)) and a bounds check per tap, so the roughly 100x gap is against a straw man, not against a separable or library Gaussian such as OpenCV's.",
+  "status_note": "Stale since 2024-08-18 (v1.2), with 3 open issues; MIT, a single 865-line header that is easy to vendor. The open AVX2 PR #12 (April 2026, unreviewed, claiming 1.5x to 2x on an unstated CPU) should not be merged as is: its int16 row sums overflow for box radius 64 and up on 8-bit data, its 3-pass loop leaves main.cpp reading the second-pass buffer, and its t.sh test runs at sigma 0.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/README.md",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/fast_gaussian_blur_template.h",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/HEAD/data/time.pdf",
+    "https://github.com/bfraboni/FastGaussianBlur",
+    "https://github.com/bfraboni/FastGaussianBlur/tree/main/data",
+    "https://github.com/bfraboni/FastGaussianBlur/commits/main",
+    "https://github.com/bfraboni/FastGaussianBlur/commits/main/data/time.png",
+    "https://github.com/bfraboni/FastGaussianBlur/commit/183b015",
+    "https://github.com/bfraboni/FastGaussianBlur/tree/84e5f2d/",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/fast_gaussian_blur.h",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/fast_gaussian_blur_template.h",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/blur_uchar_rgb.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/blur_float.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/blur_float_rgb.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/blur_int.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/blur_int_rgb.cpp",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/Makefile",
+    "https://raw.githubusercontent.com/bfraboni/FastGaussianBlur/84e5f2db75af3da8b9068c7f551e88feec67d5fb/README.md",
+    "https://github.com/bfraboni/FastGaussianBlur/issues?q=is%3Aissue",
+    "https://github.com/bfraboni/FastGaussianBlur/issues/3",
+    "https://github.com/bfraboni/FastGaussianBlur/issues/5",
+    "https://github.com/bfraboni/FastGaussianBlur/issues/9",
+    "https://github.com/bfraboni/FastGaussianBlur/pulls?q=is%3Apr",
+    "https://github.com/bfraboni/FastGaussianBlur/pull/12",
+    "https://github.com/bfraboni/FastGaussianBlur/pull/12/files",
+    "https://github.com/bfraboni/FastGaussianBlur/pull/12/commits",
+    "https://raw.githubusercontent.com/Toiabzahoor/FastGaussianBlur/main/t.sh",
+    "https://raw.githubusercontent.com/Toiabzahoor/FastGaussianBlur/main/main.cpp",
+    "https://raw.githubusercontent.com/Toiabzahoor/FastGaussianBlur/main/Makefile",
+    "https://raw.githubusercontent.com/Toiabzahoor/FastGaussianBlur/main/avx2_blur.h",
+    "https://raw.githubusercontent.com/michelerenzullo/FastBoxBlur/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
