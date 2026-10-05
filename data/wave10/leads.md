@@ -49,3 +49,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Getreuer, IPOL 2013 "A Survey of Gaussian Convolution Algorithms" (C code with box/ebox/SII/Deriche/Young-van Vliet benchmarks): not catalogued; ipol.im likely blocked here. Lead from FastGaussianBlur enricher (e101).
 - ermig1979/Simd (C++ SIMD image library, uncatalogued, unverified) and BoofCV (Java; its Performance:OpenCV:BoofCV page has numbers). Leads from libblur enricher (e100).
 - imazen/zenquant (Rust palette quantizer, AGPL-3.0/commercial; compares against imagequant and quantette) and Vship (GPU CVVDP/SSIMULACRA2/Butteraugli; moved from Line-fr/Vship to Codeberg). Neither catalogued. Leads from fcvvdp/quantette enricher (e108).
+- soypat/lefevre (Go rewrite of kb v2.14, BSD-3, 13 stars, no numbers): would be a duplicate of kb. Lead from kb enricher (e110).
+- tintbox (pure-Rust lcms port on crates.io; pdf_oxide #749): parallel run about equal to single-thread lcms2, so not faster. Lead from skcms enricher (e107).

@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/google/skcms",
+  "one_liner": "Skia's small ICC colour-management library (parse profiles, SIMD pixel transforms); no published speed comparison against Little CMS.",
+  "what_it_does": "skcms parses ICC profiles (TRC plus matrix, A2B/B2A LUTs, CICP with PQ and HLG) and converts pixel buffers between profiles and pixel formats (8-bit, 565, 4444, 1010102, 16-bit LE/BE, half and single float, 10-bit XR). The API is a plain C interface in skcms.h: skcms_Parse() fills an skcms_ICCProfile that points into your buffer, and skcms_Transform(src, srcFmt, srcAlpha, srcProfile, dst, dstFmt, dstAlpha, dstProfile, npixels) does the conversion in one call. It is not a drop-in for lcms2: there is no cmsHTRANSFORM object, no rendering-intent or black-point-compensation parameters, and destinations must be parametric-TRC or B2A profiles.",
+  "how_it_is_fast": "Each skcms_Transform call compiles a short program of at most 32 ops (load, curves, matrix or CLUT, clamp, premul, store) and runs it over float vectors of 4 (SSE/NEON/LSX/WASM), 8 (AVX2+F16C, 'hsw') or 16 (AVX-512, 'skx') lanes, picked by a one-time cpuid/xgetbv check. Stages are chained with [[clang::musttail]] tail calls where the compiler supports it, transfer functions use approximate log2/exp2 (approx_pow) instead of powf, the source and destination gamut matrices are concatenated into one 3x3, an identical gamut skips the matrix, and LUT/CLUT lookups use AVX2/AVX-512 gathers and hardware half-float conversion.",
+  "when_to_use": [
+    "You already build Skia or Chromium-style code and want the same colour conversions they ship, with no new dependency.",
+    "Decoding images (JPEG, PNG, WebP, AVIF, JPEG XL) whose embedded ICC or CICP profile must be converted to sRGB or a display profile, row by row.",
+    "HDR pipelines that need PQ and HLG transfer functions, including the HLG OOTF, plus half-float and 10-bit XR output formats.",
+    "Many pixel formats in one library without writing per-format packing code; 255-pixel or larger batches, so the per-call planning cost is amortised.",
+    "Untrusted ICC input: the repo carries libFuzzer targets (fuzz/fuzz_iccprofile_info.c, fuzz/fuzz_iccprofile_transform.c), and skcms.cc never calls malloc, so parsing does not allocate or copy."
+  ],
+  "when_not_to_use": [
+    "You need lcms2 features: rendering intents beyond the A2B0/A2B1 preference, black point compensation, proofing, device links, named colours or multi-profile chains.",
+    "Destination profiles with tabulated TRCs: they must be rewritten by skcms_MakeUsableAsDestination(), which fits a parametric curve and fails or approximates badly on some profiles (tests.c lists several).",
+    "You need bit-exact or lcms2-identical output: transfer functions run through approx_pow, and the repo's own A2B round-trip test tolerates 1/255 error (9/255 at zero).",
+    "You picked it for speed: no benchmark against Little CMS, its fast_float plugin, qcms or moxcms is published, and bench.c only times skcms itself.",
+    "General CMYK workflows: CMYK is handled as Photoshop-style inverted CMYK only (the code says those are the only CMYK profiles it has seen)."
+  ],
+  "integration": {
+    "form": "source-drop (skcms.cc plus src/*.cc and headers); ninja and Bazel builds produce a static library",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "C++ with lambdas and constexpr (C++11 level; the exact standard is not documented); Clang or GCC vector extensions for the SIMD paths, otherwise SKCMS_PORTABLE scalar code (for example MSVC without clang-cl)",
+    "platforms": "x86-64 with runtime dispatch to SSE baseline, AVX2+F16C or AVX-512 (AVX2/AVX-512 paths disabled on Android); aarch64 and armv7 NEON; LoongArch LSX; WebAssembly SIMD via Emscripten; ppc64le and RISC-V without musttail; Windows without musttail",
+    "thread_safety": "not documented; from the code, skcms_Transform keeps no shared mutable state apart from a one-time CPU-detection static, so concurrent calls with read-only profiles look safe, and parsed profiles borrow the caller's ICC buffer",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "skcms_Transform has no cached transform object: every call re-plans the pipeline (including inverting the destination transfer functions), so very small calls pay setup each time.",
+    "Passing the same profile pointer as source and destination skips the colour conversion entirely (only format conversion runs); any benchmark against lcms2 that does this is not like for like.",
+    "skcms_ICCProfile points into the ICC buffer passed to skcms_Parse(); the buffer must outlive the profile.",
+    "bench.c times skcms on static float buffers that are never filled (all-zero pixels) and rotates pixel formats each iteration, so its ns-per-pixel figure is a profiling aid, not a throughput number for real images."
+  ],
+  "pick_this_over_siblings_when": "Pick skcms over the Little-CMS fast_float plugin when you want a small, dependency-free, fuzzed C/C++ library matching Skia and Chromium output and can live without lcms2's intents and device links; pick moxcms instead in Rust code, where it at least publishes timings against lcms2. Keep lcms2 plus fast_float when you need the full ICC feature set or measured speed.",
+  "verified_claims_summary": "Nothing comparative has been measured: neither README makes a speed claim, and bench.c (mirror branch) only prints skcms's own ns per pixel for 255-pixel batches of sRGB to a Display P3 matrix, which its header calls 'mostly to run in a profiler'. imazen/cms-bench has a zenbench harness timing moxcms, skcms and lcms2 on 8-bit, 16-bit, float and LUT profiles but commits no results; in its identity group skcms gets the same profile pointer twice (no colour math), and only the skcms rows include per-call setup.",
+  "status_note": "The GitHub repo is a read-only mirror whose last sync is 2025-09-16 ('Disable must_tail on GCC when compiling for RISC-V'), so it reads as stale even though upstream on skia.googlesource.com is likely still used by Skia and Chromium; BSD-3-Clause and small enough to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/google/skcms/mirror/README.md",
+    "https://raw.githubusercontent.com/google/skcms/mirror/bench.c",
+    "https://raw.githubusercontent.com/google/skcms/mirror/skcms.h",
+    "https://raw.githubusercontent.com/google/skcms/mirror/skcms.cc",
+    "https://raw.githubusercontent.com/google/skcms/mirror/BUILD.bazel",
+    "https://raw.githubusercontent.com/google/skcms/mirror/BAZEL.md",
+    "https://raw.githubusercontent.com/google/skcms/mirror/build.ninja",
+    "https://raw.githubusercontent.com/google/skcms/mirror/LICENSE",
+    "https://raw.githubusercontent.com/google/skcms/mirror/tests.c",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_public.h",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_internals.h",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_Transform.h",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/Transform_inl.h",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_TransformBaseline.cc",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_TransformHsw.cc",
+    "https://raw.githubusercontent.com/google/skcms/mirror/src/skcms_TransformSkx.cc",
+    "https://github.com/google/skcms/commits/mirror",
+    "https://github.com/imazen/cms-bench",
+    "https://github.com/imazen/cms-bench/tree/main/benches",
+    "https://raw.githubusercontent.com/imazen/cms-bench/main/benches/transform.rs",
+    "https://raw.githubusercontent.com/awxkee/moxcms/HEAD/README.md",
+    "https://github.com/yfedoseev/pdf_oxide/issues/749",
+    "https://raw.githubusercontent.com/google/skcms/mirror/fuzz/fuzz_iccprofile_transform.c",
+    "https://raw.githubusercontent.com/google/skcms/mirror/fuzz/fuzz_iccprofile_info.c"
+  ],
+  "confidence": 0.6
+}

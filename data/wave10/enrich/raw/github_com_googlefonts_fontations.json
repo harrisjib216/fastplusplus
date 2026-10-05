@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/googlefonts/fontations",
+  "one_liner": "Google's memory-safe Rust OpenType stack (read-fonts, skrifa); mostly 1.1-1.6x slower than HarfBuzz's own OT font functions.",
+  "what_it_does": "Fontations is a set of Rust crates for OpenType fonts: font-types (spec types), read-fonts (zero-copy, no-allocation table parsing, plus a newer read_fonts::model API for cmap, metrics and variations), skrifa (metadata, outline loading with variations, TrueType/CFF/CFF2 hinting and an autohinter, COLRv0/v1), and write-fonts (building fonts). Skrifa's stated purpose is to replace FreeType in Google applications. C and C++ code reaches it only through HarfBuzz's 'fontations' font-funcs backend (hb_fontations_font_set_funcs, HarfBuzz 11.0.0+) or Skia's experimental Fontations SkTypeface, not through a native C API.",
+  "how_it_is_fast": "Tables are newtype wrappers over the font's byte slice with codegen'd accessors: minimal validation at parse time, big-endian records cast in place, and no allocation or copying. The current optimisation round (PR #2197, split into #2199-#2206) adds HarfBuzz-style lazily filled per-instance scalar caches for HVAR, VVAR and gvar (128 entries), skips scalar evaluation for zero deltas, reuses supplied gvar scalars for outlines and drawing, inlines cmap dispatch and CFF charstring opcode decoding, and skips unused Private DICT entries for unhinted CFF. None of this makes it faster than HarfBuzz OT except on a few varied-instance rows.",
+  "when_to_use": [
+    "Rendering untrusted or web fonts where memory safety matters more than the last 30-60% of font-funcs speed: both read-fonts and skrifa use #![forbid(unsafe_code)] and are fuzzed on OSS-Fuzz.",
+    "Rust programs that need FreeType-equivalent outlines and hinting (TrueType, CFF, CFF2, autohinter) and full variable-font support without linking FreeType.",
+    "Heavily varied instances of glyf/gvar fonts queried for extents or vertical origins: on varied Roboto Flex (wght=500) the issue measures 0.63-0.64x HarfBuzz OT's time.",
+    "Glyph extents on CFF2 variable fonts (Adobe VF Prototype 0.92-0.93x of OT time) or nominal-glyph lookup on simple cmaps (about 0.98-0.99x).",
+    "Projects that already pull the Rust font stack in through HarfBuzz -Dfontations, Skia or Chromium and want one implementation for shaping metrics and rasterisation."
+  ],
+  "when_not_to_use": [
+    "As a speed upgrade over HarfBuzz's built-in OT font functions: across the 96 benchmark rows only 10 are faster; unvaried glyf extents and vertical origins are about 1.7-1.8x slower, unhinted drawing 1.17-1.94x slower, and Adobe VF Prototype nominal glyphs 3.5x slower.",
+    "Fast CFF outline extraction in Rust: issue #1551 (July 2025) reports skrifa about 4x slower than ttf-parser on CFF outlining, about half of it from reparsing the Private DICT per glyph; only part of that has been fixed (PR #2204).",
+    "C or C++ projects without a Rust toolchain: there is no C API, and HarfBuzz's meson rules for the backend use bindgen and cargo with -Z flags, so a nightly Rust is needed.",
+    "Code that needs a stable API: all crates are pre-1.0 and bump the minor version for breaking changes roughly monthly (read-fonts 0.43.0 Aug 12, 0.44.0 Sep 8, 0.45.0 Oct 3, 2026)."
+  ],
+  "integration": {
+    "form": "crate (read-fonts, skrifa, font-types, write-fonts); from C/C++ via HarfBuzz built with -Dfontations=enabled, which links a Rust staticlib",
+    "dependencies": "read-fonts: font-types, yoke, bytemuck, once_cell (core_maths with the libm feature, serde optional); skrifa: read-fonts, bytemuck; HarfBuzz backend: cargo, bindgen, meson's unstable-rust module",
+    "min_toolchain": "Rust 1.85 (workspace rust-version, edition 2021); HarfBuzz's backend needs a nightly cargo for its -Z build-std and -Z unstable-options arguments",
+    "platforms": "any Rust target; std is a default feature and the libm feature exists for builds without std",
+    "thread_safety": "not documented; the crates read immutable byte slices with no unsafe code, and HarfBuzz's glue serialises instance updates with a Mutex",
+    "drop_in_for_baseline": "partial — inside HarfBuzz it swaps in for the OT font functions with one call (hb_font_set_funcs_using(font, \"fontations\")), but it is a different, Rust-only API everywhere else"
+  },
+  "gotchas": [
+    "read-fonts returns a default value (0, None or an empty array) when a field of malformed table data cannot be read, instead of an error, so corrupt fonts degrade silently.",
+    "Unhinted CFF drawing without a reusable HintingInstance reparses the Private DICT for every glyph (issue #1551); keep one instance per size if you draw many CFF glyphs.",
+    "Through HarfBuzz, metric calls (cmap, advances, extents, origins) run HarfBuzz's own Rust glue (src/rust/font.rs, about 1,570 lines) over read_fonts::model; skrifa is used only for drawing, painting and bitmaps, so the benchmark is as much a test of that glue as of skrifa.",
+    "HarfBuzz's backend build compiles Rust std with -Z build-std-features=optimize_for_size and -C force-frame-pointers=yes, and links it as a staticlib with no cross-language LTO, while the C++ side gets -O3 and LTO; the comparison is somewhat tilted against Fontations."
+  ],
+  "pick_this_over_siblings_when": "Pick Fontations over ttf-parser when you need hinting, an autohinter, COLRv1 painting and FreeType-matching output (the repo's fauntlet tool compares against FreeType), and accept slower CFF outlining; ttf-parser is the faster parser for raw outline extraction. For rasterising, ab_glyph or fontdue are complete small rasterisers, while skrifa only produces outlines for a separate rasteriser such as Skia.",
+  "verified_claims_summary": "HarfBuzz maintainer behdad's issue #2196 runs HarfBuzz's perf/benchmark-font with the 'fontations' and 'ot' backends doing the same hb_font calls on eight test fonts (default and wght=500), Clang 21.1.7 -O3 LTO and Rust 1.94.0-nightly fat LTO, pinned to one core of a Ryzen 9 5900X, CPU medians of seven runs. The page was revised on 2026-10-04 and now cites HarfBuzz 692a0aa30e and Fontations 08bfef45 rather than the eff2d6b9/ec902bd2 commits in the record; its numbers give Fontations/OT geometric means of 1.52x nominal glyphs, 1.39x horizontal advances, 1.10x vertical advances, 1.62x vertical origins, 1.33x extents, 1.56x drawing, 1.16x paint and 1.06x load-and-shape (derived from page data; above 1 means slower).",
+  "status_note": "Very active: read-fonts 0.45.0 and skrifa 0.48.0 shipped 2026-10-03, four of the eight split optimisation PRs merged 2026-10-04 (#2199, #2203, #2204, #2205) while #2200, #2201, #2202 and #2206 were still open on 2026-10-05, so the measured code is not all released; dual Apache-2.0/MIT, and skrifa has about 31 million crates.io downloads.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/README.md",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/Cargo.toml",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/skrifa/README.md",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/skrifa/Cargo.toml",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/read-fonts/README.md",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/read-fonts/Cargo.toml",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/font-types/Cargo.toml",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/read-fonts/src/lib.rs",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/read-fonts/src/model.rs",
+    "https://raw.githubusercontent.com/googlefonts/fontations/main/read-fonts/src/model/metrics.rs",
+    "https://github.com/googlefonts/fontations/issues/2196",
+    "https://github.com/googlefonts/fontations/pull/2197",
+    "https://github.com/googlefonts/fontations/pull/2199",
+    "https://github.com/googlefonts/fontations/commit/08bfef45",
+    "https://github.com/googlefonts/fontations/pulls?q=is%3Apr+author%3Abehdad",
+    "https://github.com/googlefonts/fontations/issues?q=is%3Aissue+performance+OR+slow+OR+panic",
+    "https://github.com/googlefonts/fontations/issues/1551",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/perf/benchmark-font.cc",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/main/perf/README.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/hb-fontations.h",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/meson_options.txt",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/meson.build",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/rust/meson.build",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/rust/lib.rs",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/692a0aa30e5962c6665f9f093519bb3f0cfff1ff/src/rust/font.rs",
+    "https://crates.io/api/v1/crates/read-fonts",
+    "https://crates.io/api/v1/crates/skrifa"
+  ],
+  "confidence": 0.75
+}
