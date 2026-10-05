@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/vstroebel/jpeg-encoder",
+  "one_liner": "Pure-Rust baseline/progressive JPEG encoder with optional AVX2 DCT and color conversion; informally about 2x the image crate's encoder on x86.",
+  "what_it_does": "Encodes 8-bit Luma, RGB(A), BGR(A), YCbCr, CMYK and YCCK pixel buffers to baseline or progressive JPEG, with chroma subsampling (including box-average downsampling at HEAD), optimized Huffman tables, restart intervals, custom quantization tables, ICC/EXIF/APP segments and pixel density. The API is its own: Encoder::new(writer, quality) or Encoder::new_file(path, quality), setters, then encode(&data, width, height, ColorType) or encode_image() with a user type implementing the ImageBuffer trait, which fills one row of component buffers at a time. It is not a drop-in for the image crate's JpegEncoder, but it is already the JPEG encoder behind zune-image, pdf-writer, kornia-io and about 80 other crates.",
+  "how_it_is_fast": "The forward DCT is a Rust port of the libjpeg/mozjpeg jpeg_fdct_islow integer DCT (Loeffler-Ligtenberg-Moschytz, 12 multiplies, 13-bit fixed point), and with the 'simd' feature a port of libjpeg-turbo's jfdctint-avx2.asm plus an AVX2 RGB/BGR(A) to YCbCr converter, both chosen at run time with is_x86_feature_detected!(\"avx2\"). Coefficient blocks are 32-byte aligned (PR #28) so loads vectorize, and the default interleaved baseline path streams one MCU row at a time instead of buffering the image. At HEAD only, an unreleased 'use_wide' feature (PR #25) computes the DCT with the portable wide crate (SSE2, NEON, WASM SIMD); its author reported about 50% faster DCT on SSE2 and about 20% slower than the hand-written AVX2 path.",
+  "when_to_use": [
+    "You need a JPEG encoder in pure Rust (no C toolchain, no libjpeg-turbo/mozjpeg linking), including no_std + alloc targets.",
+    "x86-64 servers or desktops with AVX2, where the 'simd' feature enables the AVX2 DCT and color conversion and the issue #35 reporter saw roughly twice the image crate's encode speed.",
+    "Default build must contain no unsafe code: without 'simd' the crate is #![forbid(unsafe_code)].",
+    "You need CMYK/YCCK output, ICC or EXIF embedding, restart markers or custom quantization tables, which the image crate's encoder does not all expose.",
+    "Streaming encode of large baseline images: the interleaved path keeps only one MCU row of samples in memory."
+  ],
+  "when_not_to_use": [
+    "ARM (Raspberry Pi 5, Apple silicon, Graviton) with the released crate: 0.7.1 has no NEON path at all, and issue #35 (open) reports it slower than the image crate's encoder at higher qualities on a Cortex-A76; the wide-based DCT is only on unreleased HEAD and does not cover color conversion.",
+    "You want smallest files at a given quality: no trellis quantization, and progressive mode does only spectral selection (no successive approximation), so mozjpeg-rs, mozjpeg or zenjpeg/jpegli produce smaller output.",
+    "You need a published speed claim to rely on: there is no benchmark against libjpeg-turbo, mozjpeg or the image crate anywhere in the repo; the only outside comparison is one informal issue comment with no figures.",
+    "Images wider or taller than 65,535 pixels (width and height are u16), or input with 12-bit samples (extended JPEG is open request #32).",
+    "Multi-core throughput on a single image: encoding is single-threaded with no rayon option, unlike zenjpeg's rayon-based parallel feature."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none by default; optional wide 1.0 + bytemuck 1.24 for the HEAD-only 'use_wide' feature; jpeg-decoder 0.3 as a dev-dependency for tests",
+    "min_toolchain": "Rust 1.87 for crates.io 0.7.1 (edition 2024); Rust 1.89 at HEAD (0.8.0)",
+    "platforms": "any (scalar, no_std + alloc); AVX2 acceleration on x86/x86-64 with the 'simd' feature (runtime-detected, scalar fallback); wide-crate DCT for SSE2/NEON/WASM only on unreleased HEAD",
+    "thread_safety": "not documented; Encoder consumes itself on encode, holds no global state and spawns no threads, so separate encoders can run on separate threads",
+    "drop_in_for_baseline": "partial: different API from image's JpegEncoder (own Encoder/ColorType/ImageBuffer types), but takes the same raw 8-bit pixel slices; image's ImageBuffer types need a small adapter shown in the docs"
+  },
+  "gotchas": [
+    "The 'simd' feature only accelerates x86 AVX2; on other CPUs, or x86 without AVX2, it silently runs the scalar code, and it switches off the forbid(unsafe_code) guarantee.",
+    "use_wide (portable SIMD DCT for ARM64/WASM/SSE2) is merged on main but missing from crates.io 0.7.1, which was published from the commit just before PR #25 merged; the README does not document it either.",
+    "Turning on optimized Huffman tables, progressive mode or a sampling factor that cannot be interleaved switches to a path that buffers every component plane plus every quantized 8x8 block (roughly 3 bytes of samples plus 6 bytes of coefficients per pixel for RGB) before writing anything.",
+    "The repo's criterion/benches/fdct.rs was last changed in October 2024 and still passes a [i16; 64] to fdct(), which PR #28 changed to take the crate-private AlignedBlock; reading the source, that bench no longer compiles at HEAD (not built here). The encode and ycbcr benches only time jpeg-encoder against itself.",
+    "The forward-DCT code is IJG-licensed: binary distributions must state they are based in part on the work of the Independent JPEG Group (LICENSE-IJG, added July 2026)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over jpeg-rusturbo when you need progressive mode, 4:4:4/4:2:2 and other sampling factors, CMYK or no_std, since jpeg-rusturbo's measured 5x win over the image crate covers only its 4:2:0 path; pick mozjpeg-rs or zenjpeg instead when file size per quality matters more than encode speed, and libjpeg-turbo when a C dependency is acceptable and you need fast encoding on ARM too.",
+  "verified_claims_summary": "No measured speedup exists: the only comparison is issue #35, where a user said that inside their own app the crate is 'like twice as fast as image' on an unnamed x86 CPU and slower than the image crate at higher qualities on a Raspberry Pi 5, with no harness, flags or figures. The repo's criterion benches compare its scalar and AVX2 paths only (PR #22 reported 0.1-4.5% end-to-end gains on Zen 4 from AVX2 color-conversion changes), so the D tier stands.",
+  "status_note": "Actively maintained (several PRs merged 2026-07-27, crates.io 0.7.1 the same day, 8.0M downloads and 83 reverse dependencies); dual MIT/Apache-2.0 plus IJG for the DCT, small, dependency-free and easy to vendor.",
+  "sources_read": [
+    "https://github.com/vstroebel/jpeg-encoder",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/README.md",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/encoder.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/fdct.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/writer.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/image_buffer.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/huffman.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/quantization.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/avx2.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/avx2/fdct.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/src/avx2/ycbcr.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/criterion/Cargo.toml",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/criterion/benches/encode.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/criterion/benches/fdct.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/criterion/benches/ycbcr.rs",
+    "https://raw.githubusercontent.com/vstroebel/jpeg-encoder/HEAD/.github/workflows/rust.yml",
+    "https://github.com/vstroebel/jpeg-encoder/issues?q=is%3Aissue",
+    "https://github.com/vstroebel/jpeg-encoder/pulls?q=is%3Apr",
+    "https://github.com/vstroebel/jpeg-encoder/issues/35",
+    "https://github.com/vstroebel/jpeg-encoder/issues/16",
+    "https://github.com/vstroebel/jpeg-encoder/pull/22",
+    "https://github.com/vstroebel/jpeg-encoder/pull/24",
+    "https://github.com/vstroebel/jpeg-encoder/pull/25",
+    "https://github.com/vstroebel/jpeg-encoder/pull/28",
+    "https://github.com/vstroebel/jpeg-encoder/commits/main",
+    "https://github.com/vstroebel/jpeg-encoder/commits/main/criterion/benches/fdct.rs",
+    "https://crates.io/api/v1/crates/jpeg-encoder",
+    "https://crates.io/api/v1/crates/jpegli-rs",
+    "https://raw.githubusercontent.com/imazen/zenjpeg/HEAD/README.md",
+    "https://raw.githubusercontent.com/imazen/mozjpeg-rs/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

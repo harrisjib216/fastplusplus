@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/vtlmks/ffpng",
+  "one_liner": "Single-header C PNG decoder for x86-64-v3 (AVX2) that decodes 1.12-1.20x faster than image-png, the Rust png crate.",
+  "what_it_does": "Decodes a complete in-memory PNG (every color type, bit depths 1-16, Adam7 interlacing) into a malloc'd 8-bit buffer with image-png's EXPAND | STRIP_16 semantics: palette to RGB(A), tRNS to alpha, sub-8-bit gray widened, 16-bit truncated to the high byte, channel count left native (1-4). The API is three C functions: pd_decode(data, len, &pd_image) returning 0 on success, pd_free, and pd_free_thread_cache. It is decode only and whole-image only: no row/streaming API, no encoder, no metadata output (gAMA, iCCP, sRGB, text and APNG chunks are not handled in ffpng.h), and it is not API-compatible with libpng or the png crate.",
+  "how_it_is_fast": "A custom inflate modeled on fdeflate (image-png's backend): a 64-bit refill bit reader, a 12-bit combined Huffman table where one load yields one or two literals or a length, and a four-deep speculative literal cascade in which each lookup already carries the next shift (one shrx plus one L1 load per symbol); streams under 4 KB get a separate compact-table path, and match copies use 32-byte AVX2, 16-byte SSE or overlap-propagating stores over padded buffers. CRC-32 folds four PCLMULQDQ accumulators, unfiltering is SSE/AVX2 (Up as a flat 32-byte add, Sub/Average in 8-bit lanes, Paeth in 16-bit lanes), and for filtered data above 16 MB inflate, unfilter and pixel expansion are fused so each row is processed while still in cache once it is 32 KB behind the inflate frontier. The large intermediate buffer is a thread-local scratch reused across calls.",
+  "when_to_use": [
+    "C or C++ code on x86-64-v3 machines (Intel Haswell and later, AMD Zen and later) that decodes many PNGs and is bound by decode throughput.",
+    "Screenshot, UI, icon and texture-heavy workloads: the README shows 1.57-1.83x over image-png on screenshot_web, 1.14x on screenshot_game and 1.10-1.31x on texture sets.",
+    "You want one vendorable header with no zlib or libpng dependency and pluggable FFPNG_MALLOC/REALLOC/FREE allocator hooks.",
+    "Long-lived worker threads decoding batches, where the thread-local scratch buffer is reused instead of reallocated.",
+    "You build with gcc, which is what the published numbers use."
+  ],
+  "when_not_to_use": [
+    "ARM, RISC-V or pre-AVX2 x86: the header targets x86-64-v3 with AVX2, BMI2 and PCLMUL intrinsics and has no runtime CPU detection or scalar fallback.",
+    "MSVC builds (it relies on __builtin_add_overflow, __builtin_expect, __attribute__ and _Thread_local), or clang builds, which the README says run about 10% slower; that would cut the 7950X margin to roughly 1.01x (derived from page data).",
+    "Untrusted input without sandboxing: no fuzzing or malformed-file test suite is documented, there is no caller-set memory or dimension limit (IHDR sizes up to 2^31-1 per side drive the output and raw allocations before any inflate), and palette indices are not checked against the PLTE length.",
+    "You need 16-bit output, color management, metadata, APNG frames, progressive row-by-row display, or an encoder.",
+    "Memory-tight decoding of very large images: it holds a copy of all IDAT data, the whole filtered raw image and the output at once, and the raw scratch buffer stays allocated per thread until pd_free_thread_cache."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libc and immintrin.h); the benchmark suite additionally needs libpng, zlib, libdeflate, libspng and nightly Rust",
+    "min_toolchain": "C99 plus GCC/Clang extensions (gcc 16.1 and 16.2 tested); compile with -march=x86-64-v3 and -mpclmul",
+    "platforms": "x86-64 only, x86-64-v3 required (AVX2, BMI2, PCLMUL)",
+    "thread_safety": "Concurrent pd_decode calls are documented as safe; decode scratch is _Thread_local, so short-lived threads should call pd_free_thread_cache before exiting",
+    "drop_in_for_baseline": "partial: output bytes match image-png's EXPAND | STRIP_16 on all 2848 corpus images, but the interface is a C function (pd_decode), not the png crate's Rust API; Rust callers would need FFI"
+  },
+  "gotchas": [
+    "Security bug: in 8-bit palette images, pal32 is filled from all 256 entries of an uninitialized 768-byte stack array (plte[256*3]), and the sub-8-bit path indexes plte directly, so a pixel index at or beyond the PLTE entry count copies uninitialized stack bytes into the output instead of failing. It is not an out-of-bounds read, and it cannot occur on conforming files such as the benchmark corpus.",
+    "Output layout varies with color type (1-4 channels, read pd_image.channels), and 16-bit samples are truncated, not rounded; there is no option for RGBA-always or 16-bit output.",
+    "Validation is image-png-like but partial: critical-chunk CRCs are checked, ancillary CRC failures are ignored, Adler-32 is not verified, non-consecutive IDAT chunks are concatenated, and a truncated stream fails outright with no partial image.",
+    "Public symbols are pd_decode/pd_free/pd_free_thread_cache (not ffpng_-prefixed). The benchmarked build turns off stack protector, _FORTIFY_SOURCE and CET (-fcf-protection=none), so a distro-hardened build is unmeasured."
+  ],
+  "pick_this_over_siblings_when": "Pick ffpng over image-png only when you are in C/C++ on x86-64-v3 and the extra 12-20% decode throughput matters; image-png stays the better choice for Rust, ARM, memory safety, streaming and metadata. Over libspng or libpng it trades portability and features for speed (its libpng numbers are unpublished), and ptpng is the pick when you also need an encoder or ARM support.",
+  "verified_claims_summary": "bench.c times ffpng and unmodified image-png v0.18.1 (commit 4ab5484, nightly, unstable feature, x86-64-v3, LTO) in one process on the 2848-image QOI benchmark suite, on one isolated core with boost off, taking the per-image median and checking every output with memcmp. Geomean results are 356.3 vs 319.5 MP/s (1.115x) on a Ryzen 9 7950X with gcc 16.1, and 352.6 vs 292.8 MP/s (1.204x) on a Ryzen 9 9950X3D with gcc 16.2.1; the README ties only the 9950X3D run to the current header (2026-09-25). The timed region is not symmetric: image-png's shim zero-fills its output buffer (vec![0u8; size]) on every decode, while ffpng mallocs its output uninitialized and reuses a thread-local raw buffer (it does pay for copying all IDAT data). That cost is not measured separately, but it could be a sizeable part of the 2-4% margin on the dense photo sets; it is too small to account for the 1.115x/1.204x overall result.",
+  "status_note": "Active single-author project (27 commits from 2026-06-23 to 2026-09-25, 0 stars, no releases or tags); every file carries an SPDX MIT tag but there is no LICENSE file. It is one easily vendored header, but it is young and unfuzzed.",
+  "sources_read": [
+    "https://github.com/vtlmks/ffpng",
+    "https://github.com/vtlmks/ffpng/commits",
+    "https://github.com/vtlmks/ffpng/commits/main",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/README.md",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/ffpng.h",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/bench.c",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/build.sh",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/analyze.py",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/ext/shim/Cargo.toml",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/ext/shim/.cargo/config.toml",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/ext/shim/src/lib.rs",
+    "https://raw.githubusercontent.com/vtlmks/ffpng/HEAD/LICENSE"
+  ],
+  "confidence": 0.85
+}
