@@ -1,0 +1,62 @@
+{
+ "id": "https://github.com/symplenz/rkvdec-vdpu383-h264-hevc",
+ "one_liner": "Linux kernel patch that turns on the RK3576 VDPU383 decoder's read caches, cutting mainline HEVC/H.264 hardware decode time several-fold.",
+ "what_it_does": "A patch for the mainline rkvdec driver (rkvdec.c, rkvdec-vdpu383-hevc.c, rkvdec-vdpu383-h264.c). It maps the decoder's 'cache' MMIO window at probe and writes the read-cache configuration before each HEVC or H.264 decode kick. Nothing changes for userspace: GStreamer or FFmpeg V4L2 stateless decoding keeps working as before. The module parameter hevc_cache (default 1, writable at runtime) switches it off for A/B tests, and it gates H.264 as well despite its name. The repo holds only a README and a hunk sketch. The buildable driver is the out-of-tree module in the sibling rkvdec-vdpu383-av1 and rkvdec-vdpu383-vp9 repos.",
+ "how_it_is_fast": "The VDPU383 has three reference read caches (CACHE0/1/2) in a dedicated register window at 0x27b00600 on RK3576. Mainline Linux (torvalds master, checked 2026-10-05) maps only the 'link' and 'function' windows, so these caches are never configured and every reference read goes to DRAM. The patch writes CACHEABLE|READ_ALLOC|LINE_64 (0x13) to each cache's config register, clears all three, and sets MAX_READS to 0x1c before setting DEC_E. These are the values the author captured from a register-write trace of the vendor MPP driver. It only changes how the hardware fetches memory: the README reports HEVC output byte-identical with the cache off and on.",
+ "when_to_use": [
+  "You decode HEVC or H.264 on an RK3576 board (Radxa ROCK 4D, Armbian edge kernels) through mainline V4L2 stateless decoding and hardware decode time limits frame rate or power.",
+  "You maintain a downstream kernel built on Collabora's merged VDPU383 support and want the cheapest throughput gain before tackling AFBC or link-mode pipelining.",
+  "You are comparing mainline against the vendor BSP/MPP stack on the same silicon and need to remove a known non-silicon gap first.",
+  "You want a tiny, auditable change: seven register writes plus one optional ioremap, gated by a runtime module parameter."
+ ],
+ "when_not_to_use": [
+  "Any SoC other than RK3576: the patch touches only the VDPU383 backends. RK3588 (VDPU381) also has a 'cache' window in the upstream DT and its upstream backend does not configure it either, but nobody has tested or measured a port.",
+  "You need a fix that git am can apply: the patch file uses elided paths ('drivers/.../rkvdec.c') and tells you in prose to add a struct field, so you must port it by hand or take the much larger experimental sibling driver.",
+  "You need vendor-stack throughput: the README itself reports a ~1.9x residual against MPP after the fix, attributed to missing AFBC reference compression and link-mode pipelining.",
+  "You need upstream-supported code: the patch has not been accepted into mainline. A search found no linux-media submission of the cache fix, only the merged VDPU381/383 series and a May 2026 H.264 deblocking bug thread.",
+  "You need CPU or software decoding, or another codec: VP9/AV1 on this chip live in the sibling out-of-tree driver."
+ ],
+ "integration": {
+  "form": "source-drop (kernel patch sketch); buildable as the out-of-tree rockchip-vdec.ko module from the sibling rkvdec-vdpu383-av1 repo",
+  "dependencies": "Linux kernel with Collabora's rkvdec VDPU383 HEVC/H.264 backends (merged early 2026); DT node exposing reg-name 'cache' (upstream rk3576.dtsi already does)",
+  "min_toolchain": "Kernel build tree; developed against Armbian 7.0.1-edge-rockchip64 (kernel headers, KBUILD_MODPOST_WARN=1 for the out-of-tree build)",
+  "platforms": "Rockchip RK3576 (VDPU383) only, aarch64",
+  "thread_safety": "Kernel driver; the cache writes sit in the per-job device_run path serialized by v4l2-m2m; hevc_cache is a plain int module parameter (0644) read without locking",
+  "drop_in_for_baseline": "partial: the V4L2 API is unchanged, but the patch must be hand-ported into the mainline rkvdec sources or the whole experimental sibling module must be substituted"
+ },
+ "gotchas": [
+  "Mapping is optional: if the DT lacks reg-name 'cache', the driver silently keeps the old cache-off behaviour. The sibling module logs 'rkvdec: cache window mapped/ABSENT' at probe, so check dmesg. Upstream rk3576.dtsi already lists 'link', 'function', 'cache' (0x27b00600, size 0x100), so the verifier's DT caveat matters only for older or downstream DTs.",
+  "The author's own numbers disagree. README and patch: HEVC ~12 ms to 1.70 ms (~7x, '= vendor MPP'), H.264 8.7 to 3.6 ms. The sibling driver's 2026-06-27 code comment: HEVC 4.6 ms cache-off vs MPP 1.15 ms (~4x). Module help text: '~5x throughput fix'. The H.264 comment: '~5x pure-HW-decode-time gap vs MPP'.",
+  "The sibling driver that carries the fix is a heavily instrumented development module, about 167 KB of rkvdec.c against 51 KB upstream, with dozens of A/B module parameters. Its AV1 backend has a documented non-deterministic decode bug (docs/NONDETERMINISM_BUG.md: about half of runs wrong). Lift only the cache hunk into production kernels.",
+  "Stale comment in the sibling rkvdec.c: it says 'Default off for the A/B', but the code sets hevc_cache = 1."
+ ],
+ "pick_this_over_siblings_when": "Every catalogued sibling decoder (edge264, rivet-h26x, rusty_h265, dav1d) is a CPU decoder racing libavcodec. Pick this patch only when you already use the RK3576 hardware decoder through mainline V4L2 and want it to run at closer to its real speed. On any other platform, or for portable software decoding, use edge264 (H.264) or rivet-h26x/rusty_h265 (HEVC).",
+ "verified_claims_summary": "These are first-party numbers on an RK3576 running Armbian 7.0.1-edge-rockchip64, decoding one unnamed 1080p clip. Measured time per frame runs from the decode kick to the hardirq: HEVC ~12 ms cache-off vs 1.70 ms cache-on (~7x), H.264 8.7 ms vs 3.6 ms (~2.4x). The timer is published as the sibling driver's vp9_time module parameter (ktime_get at the kick, hardirq timestamp, mean printed every 100 frames), so the values are per-frame means, not per-clip totals. The kick timestamp is taken before the cache writes, so the cache-on time also includes seven MMIO writes. The clip, frame count and run count are not published. The author's own code comments give different figures for the same comparison (HEVC 4.6 ms cache-off vs MPP 1.15 ms, '~4x'/'~5x'), so read the ratio as roughly 2-7x, not as a precise number.",
+ "status_note": "A one-off GPL-2.0 drop (three commits, all 2026-06-28, 1 star, no issues or PRs) that has not been submitted or accepted upstream. The change is small enough to port by hand into any kernel carrying the merged VDPU383 backends.",
+ "sources_read": [
+  "https://github.com/SympleNZ/rkvdec-vdpu383-h264-hevc",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-h264-hevc/HEAD/README.md",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-h264-hevc/HEAD/patches/0001-vdpu383-hevc-h264-read-cache.patch",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/rkvdec.c",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/rkvdec.h",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/rkvdec-vdpu383-hevc.c",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/rkvdec-vdpu383-h264.c",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/rkvdec-vdpu383-regs.h",
+  "https://raw.githubusercontent.com/torvalds/linux/master/drivers/media/platform/rockchip/rkvdec/Makefile",
+  "https://raw.githubusercontent.com/torvalds/linux/master/arch/arm64/boot/dts/rockchip/rk3576.dtsi",
+  "https://raw.githubusercontent.com/torvalds/linux/master/arch/arm64/boot/dts/rockchip/rk3588-base.dtsi",
+  "https://raw.githubusercontent.com/torvalds/linux/master/Documentation/devicetree/bindings/media/rockchip,vdec.yaml",
+  "https://github.com/SympleNZ/rkvdec-vdpu383-av1",
+  "https://github.com/SympleNZ/rkvdec-vdpu383-av1/tree/main/src",
+  "https://github.com/SympleNZ/rkvdec-vdpu383-av1/tree/main/docs",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec.h",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec-vdpu383-hevc.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec-vdpu383-h264.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec-vdpu383-av1.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec-vdpu383-vp9.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/src/rkvdec-link.c",
+  "https://raw.githubusercontent.com/SympleNZ/rkvdec-vdpu383-av1/HEAD/docs/BUILD_AND_TEST.md"
+ ],
+ "confidence": 0.6
+}

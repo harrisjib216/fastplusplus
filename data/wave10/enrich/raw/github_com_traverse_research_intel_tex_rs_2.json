@@ -1,0 +1,68 @@
+{
+ "id": "https://github.com/traverse-research/intel-tex-rs-2",
+ "one_liner": "Rust bindings over a maintained fork of Intel's ISPC texture compressor; BC6H/BC7/ETC1 encode 2-6x faster than Intel's kernels on Apple Silicon.",
+ "what_it_does": "A Rust crate (intel_tex_2) that block-compresses images to BC1, BC3, BC4, BC5, BC6H, BC7 and ETC1. Each format has a module with preset constructors (bc7::opaque_basic_settings() and so on) and compress_blocks / compress_blocks_into over a borrowed Surface {data, width, height, stride}. The kernels are ISPC code in Traverse-Research/ISPCTextureCompressor, a fork of Intel's archived GameTechDev repo that keeps Intel's CompressBlocks*_ispc entry points, so C or C++ users can take the kernels directly. The Rust API matches intel_tex_2 0.5.0, so existing users only swap the dependency source.",
+ "how_it_is_fast": "The fork's 27 kernel commits remove per-lane gathers from the BC6H/BC7 hot loops. NEON has no gather, so each gather had become 8 scalar loads; the fork computes unquantization weights arithmetically and picks subsets with vector selects. It also inlines every helper, hoists per-subset setup out of the pixel loop, shares PCA work between modes 1/3 and 4/5, and skips the RGB-only modes 0-3 on blocks with alpha. ETC1 builds its 165-candidate list once per (flip, half) instead of 8 times, scores candidates with prefix sums and sorting networks, and uses exact integer lower bounds to skip candidates and tables that cannot win (branch and bound). PR #51 adds bc7e-style bounding-box partition ranking for modes 0-3.",
+ "when_to_use": [
+  "Offline or build-time texture baking on Apple Silicon (or other aarch64) that needs BC7, BC6H or ETC1 at ispc_texcomp quality in a fraction of the time.",
+  "Rust asset pipelines already on intel_tex_2 that want the speedup without changing calling code.",
+  "One dependency covering desktop BCn (including HDR BC6H from half-float RGBA) and mobile ETC1, with prebuilt kernels so neither ISPC nor libclang is needed at build time.",
+  "Pipelines that parallelize by splitting the image into horizontal strips on threads: each call is single-threaded over caller-owned buffers, and the repo's own threaded_strips benchmark does exactly this.",
+  "C/C++ projects that today vendor Intel's ispc_texcomp: the Traverse-Research kernel fork is the drop-in upgrade with the same entry points."
+ ],
+ "when_not_to_use": [
+  "You need the speedup from a crates.io release: 0.5.0 (2025-07-02, latest as of 2026-10-05) ships Intel's old kernels. The faster code sits on the arm64-perf branch behind open PR #48 (opened 2026-09-24), so you must use a git dependency.",
+  "x86-64 is your main build host: only an Apple M5 Max was benchmarked. The PR says removing gathers 'matters less on AVX2/AVX-512', so the x86 gain is unmeasured and may be much smaller.",
+  "Real-time or very high-volume ETC1/BC1 encoding: etcpak, Goofy or Basis Universal's etc1f/bc7f trade quality for far higher throughput.",
+  "Byte-reproducible output against Intel's ispc_texcomp, for example asset caches keyed on encoder output: ETC1 tie-breaking changed (about 10% of blocks differ), PR #51 retuned BC7 presets under the same names, and BC6H moved slightly with the ISPC version.",
+  "ASTC: the README lists it as pending, and the PR #48 tests mark ASTC compression unimplemented."
+ ],
+ "integration": {
+  "form": "crate (static ISPC kernel libraries prebuilt and checked into src/ispc; the kernel fork is also usable from C/C++)",
+  "dependencies": "ispc_rt 2; ISPC 1.31 + libclang + cc only with --features ispc to regenerate kernels",
+  "min_toolchain": "Rust 2021 edition; rust-version not declared (library code uses usize::div_ceil, stable since Rust 1.73); ISPC 1.31 (LLVM 23) to rebuild kernels",
+  "platforms": "x86/x86-64 (ISPC multi-target SSE2, SSE4, AVX1, AVX2, AVX-512 SKX); aarch64 NEON (neon-i32x8; macOS pinned to apple-a14, so M1 or later; iOS apple-a7); prebuilt for macOS, iOS, Linux, Windows, Android; only Apple M5 Max benchmarked",
+  "thread_safety": "Not documented. Each call is a pure single-threaded kernel over caller buffers with no visible global state; the repo's threaded_strips benchmark runs concurrent calls on disjoint strips.",
+  "drop_in_for_baseline": "partial: same API and entry points as Intel's ispc_texcomp kernels and intel_tex_2 0.5.0, but output bytes differ for ETC1 and the retuned BC7 presets, and the code is unreleased (git branch only)"
+ },
+ "gotchas": [
+  "Widths that are not a multiple of 4 give a skewed block layout. The kernels' store_data advances output rows by width*block_words bytes, not by (width/4) blocks, and edge blocks are dropped. calc_output_size sizes the buffer from the texel count, not a padded block grid. The bug is inherited from Intel and recorded as an ignored test (unaligned_width_encodes_full_blocks). Pad images to multiples of 4 yourself.",
+  "BC6H encodes unsigned half floats, so negative inputs decode as 65504.0 instead of 0.0. This is a known bug, also recorded as an ignored test (bc6h_negative_values_clamp_to_zero); clamp HDR input to non-negative values before encoding.",
+  "Intel's upstream ETC1 kernel, which crates.io 0.5.0 still ships, reads uninitialized colors[q][7..10] for empty clusters; the resulting NaNs can abort encoding. The fork fixes it in commit 6ddb057, which on its own is a reason to switch.",
+  "bc7_alpha speedups (5.2-6.2x) come from a test image whose alpha varies in every block, where skipping the RGB-only modes pays off most. On a fully opaque 4K texture the PR reports about 2.3x for the alpha presets."
+ ],
+ "pick_this_over_siblings_when": "Against bc7e (catalogued, B): pick this for one Rust dependency covering BC6H, ETC1 and BC1-BC5 as well as BC7. On Apple Silicon, PR #51's first-party numbers have it beating bc7e on a 4K texture (very_fast 1.05 s vs 2.38 s at 51.27 dB), but on x86 bc7e's independent lead over ispc_texcomp has not been re-checked against this fork. Against etcpak, Goofy and Basis Universal etc1f/bc7f: pick this when quality matters more than raw throughput.",
+ "verified_claims_summary": "Criterion (benches/compress.rs on the tests-and-benches and arm64-perf branches), Apple M5 Max, 1 thread, synthetic 256x256 'natural' image, kernels prebuilt with ISPC opt_level 2 and neon-i32x8. The cleanest baseline is the PR #49 column: Intel's unmodified kernels rebuilt with the same ISPC 1.31 and apple-a14 pin. Against it, PR #50 is 1.99-6.08x faster on BC7 (opaque basic 49.37 to 20.14 ms) and 5.91x on ETC1 (60.40 to 10.21 ms); BC1-BC5 are unchanged. Quality matches, checked with independent decoders (texture2ddecoder, bcdec_rs): BC7 within 0.0001 dB. The 'main' column (ISPC 1.20, built on CI via Rosetta without CPU pinning, and with the NaN-prone ETC1 kernel) overstates the ratios slightly. The 4K and bc7e numbers have no runner in the repo.",
+ "status_note": "Actively developed by Traverse Research (MIT OR Apache-2.0, kernels MIT); the speedups were merged 2026-09-28 into a stacked branch chain waiting on open PR #48, and the kernel commits are AI-co-authored, so pin a commit and keep the round-trip quality tests on.",
+ "sources_read": [
+  "https://github.com/Traverse-Research/intel-tex-rs-2/pull/50",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/pull/49",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/pull/51",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/pull/48",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/tree/arm64-perf",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/tree/arm64-perf/tests",
+  "https://github.com/Traverse-Research/intel-tex-rs-2/issues?q=is%3Aissue",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/benches/compress.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/build.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/tests/common/mod.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/tests/api.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/tests/formats.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/tests/quality.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/Cargo.toml",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/src/lib.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/src/bc7.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/src/etc1.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/src/bc1.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/README.md",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/arm64-perf/.gitmodules",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/main/build.rs",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/main/Cargo.toml",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/main/README.md",
+  "https://raw.githubusercontent.com/Traverse-Research/intel-tex-rs-2/main/.gitmodules",
+  "https://github.com/Traverse-Research/ISPCTextureCompressor/commits/master",
+  "https://raw.githubusercontent.com/Traverse-Research/ISPCTextureCompressor/d80d4a7af5f63940f479bc0ebe6469cdb32150cc/ispc_texcomp/kernel.ispc",
+  "https://raw.githubusercontent.com/GameTechDev/ISPCTextureCompressor/master/ispc_texcomp/kernel.ispc",
+  "https://crates.io/api/v1/crates/intel_tex_2"
+ ],
+ "confidence": 0.75
+}
