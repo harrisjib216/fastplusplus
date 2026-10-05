@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/aplghl/stb-image-opt",
+  "one_liner": "Drop-in stb_image.h v2.30 fork with AVX2 JPEG kernels and leaner PNG decode; about 1.10x upstream, partly from flags and PGO.",
+  "what_it_does": "A single-header replacement for stb_image.h v2.30 (nothings/stb at 2c980bb) that keeps the public API, structs, ABI and decoded bytes; only src/stb_image.h changes (+539/-10 lines). You either swap the header and keep STB_IMAGE_IMPLEMENTATION, or link a static library built with scripts/build_opt.sh (optionally PGO=1) or zig build. Decode side only; the write side is the separate stb-image-write-opt fork.",
+  "how_it_is_fast": "For JPEG it adds a 16-pixel AVX2 YCbCr-to-RGBA kernel and a two-block AVX2 integer IDCT (two 8x8 blocks, one per 128-bit lane, a lane-wise widening of stb's SSE2 IDCT), picked at runtime with CPUID plus XGETBV; the non-interleaved, interleaved and progressive finish loops pair adjacent or same-stride blocks to feed it. For PNG, 8-bit rows with img_n == out_n are unfiltered directly into the output buffer (no scratch row and copy), and the inflate LZ77 copy uses memset for dist 1 and memcpy chunks for dist >= 8 instead of a byte loop. A large part of the headline comes from building the fork at -O3 -march=x86-64-v2 with profile-guided optimization against upstream at -O2: the unchanged GIF decoder gains 1.21x at req_comp=0 and 1.35x at req_comp=4 (derived from up4.csv and fork4.csv).",
+  "when_to_use": [
+    "You already vendor stb_image.h and decode JPEG on x86-64 CPUs with AVX2, especially to RGBA (req_comp=4; JPEG rows geomean 1.128x) or progressive JPEG (1.19x row at req_comp=0).",
+    "You need byte-identical output to upstream so existing goldens stay valid: the repo's differential harness compares about 12,300 decodes against the pristine upstream oracle on every dispatch path with clang, gcc and zig cc.",
+    "You decode palette or 8-bit PNGs at their native channel count (req_comp=0), where the direct-to-output unfilter and chunked LZ77 copy apply (palette PNG row 1.29x, which also includes flags and PGO).",
+    "You are willing to build the library yourself with -O3 -march=x86-64-v2 and PGO (scripts/build_opt.sh with PGO=1), which is the configuration that was measured."
+  ],
+  "when_not_to_use": [
+    "Raw decode speed is the goal: the baseline is stb_image, and no source compares this fork with libjpeg-turbo, libpng, libspng or Wuffs, so the 10% says nothing about those decoders.",
+    "You only swap the header and keep -O2, or use the prebuilt release tarballs: release.yml builds them with zig build -Doptimize=ReleaseFast -Dtarget=<triple>, with no PGO and no -march=x86-64-v2, so the roughly 6% PGO share and the flag share are absent.",
+    "Your build uses -march=x86-64-v3 or native: NOTES.md measured that flag slowing JPEG decode (2.53 vs 2.37 ns/px), and the recommended -march=x86-64-v2 itself needs SSE4.2-class CPUs.",
+    "MSVC or non-x86 targets: the AVX2 path is compiled only for GCC or Clang on x86 (STBI_AVX2 guard), so MSVC and aarch64 builds get only the portable PNG changes.",
+    "Untrusted input: outside the JPEG IDCT/color and PNG row code it runs upstream's v2.30 loaders unchanged, and the GHSL reports CVE-2023-45661..45667 (filed against v2.28, GIF and other loaders) are partly still open; the Debian tracker lists CVE-2023-45664 (GIF double free) as unfixed (search snippet only)."
+  ],
+  "integration": {
+    "form": "header-only (single-header drop-in), or static lib via scripts/build_opt.sh or build.zig",
+    "dependencies": "none beyond libc and libm; the AVX2 path includes immintrin.h and cpuid.h",
+    "min_toolchain": "Same C dialect as upstream stb_image (compiles as C and C++ per README); AVX2 path needs GCC or Clang target attributes; tested with clang 23.1.2, gcc 13.3 and zig 0.16 zig cc",
+    "platforms": "x86-64 with AVX2 runtime dispatch and SSE2 or scalar fallback; aarch64 Linux and macOS and x86_64 Windows (MinGW) cross-compile without new SIMD",
+    "thread_safety": "Same as upstream: each decode call is independent, and the failure reason and flip flag are thread-local where STBI_THREAD_LOCAL is available; the fork adds a static cached CPUID result written without synchronization (always the same value).",
+    "drop_in_for_baseline": "partial — API, ABI and decoded bytes match upstream stb_image, but the measured speed needs -O3 -march=x86-64-v2 plus PGO; a plain header swap at -O2 gets only the source-change share"
+  },
+  "gotchas": [
+    "The 'held-out' PGO set excludes only the measured file names: corpus/gen_corpus.py also emits the same plasma_512 and grad_640_480 images at other JPEG quality and subsampling settings plus RGBA, gray, BMP and TGA variants, and static.gif is frame 0 of the timed anim.gif, so the profile was trained on near-identical content (NOTES.md: in-sample +7% vs held-out +6.3%).",
+    "The PNG gains apply only when img_n == out_n; asking for RGBA from RGB or 16-bit PNGs can be slower (req_comp=4: plasma_512.png 0.992x, basn0g16.png 0.937x).",
+    "STBI_FORCE_AVX2 makes stbi__avx2_available() return 1 without a CPUID check, so a build with it crashes on CPUs without AVX2; keep it for testing only. The rejected AVX2 PNG unfilter is still in the header behind STBI_AVX2_PNG_FILTER and measured 0.44x-0.99x.",
+    "Kernel figures (AVX2 YCbCr 1.63x, IDCT pair 1.68x in kernels.csv, rounded to 1.70x in the README) are against the fork's own SSE2 path built at -march=x86-64-v3, not end-to-end decode."
+  ],
+  "pick_this_over_siblings_when": "Choose it over libspng, zune-png, ffpng or libjpeg-turbo only when you are tied to the stb_image API, a single-header build and upstream-identical output; those siblings are measured against libpng, image-png or libjpeg-turbo and none is compared with this fork, so benchmark them first if decode speed is what matters. Its encode-side counterpart from the same author is stb-image-write-opt.",
+  "verified_claims_summary": "On an Intel i7-14700F under WSL2 with clang 23.1.2, the fork built at -O3 -march=x86-64-v2 -ffp-contract=off with PGO decoded a 14-file, mostly small synthetic suite 1.101x faster (geomean) than upstream stb_image v2.30 at -O2 (0.986x HDR to 1.289x palette PNG; JPEG rows 1.139x, PNG rows 1.097x), and 1.090x at req_comp=4. Unchanged decoders gain too (GIF 1.21x, 1.35x at req_comp=4), so flags and PGO carry a large share; the same-flag source-only gains (PNG +8.6%, IDCT +7.7% and +13.7%) exist only as NOTES.md text.",
+  "status_note": "Active but brand new: one author, 18 commits all on 2026-09-28, releases v1.0.0 to v1.3.0, 0 stars and no issues or PRs; MIT OR Unlicense like upstream, so the single header is easy to vendor, but it is an unofficial fork not endorsed by the stb author.",
+  "sources_read": [
+    "https://github.com/aplghl/stb-image-opt",
+    "https://github.com/aplghl/stb-image-opt/tree/main/corpus",
+    "https://github.com/aplghl/stb-image-opt/tree/main/.github/workflows",
+    "https://github.com/aplghl/stb-image-opt/releases",
+    "https://github.com/aplghl/stb-image-opt/issues?q=is%3Aissue",
+    "https://github.com/aplghl/stb-image-opt/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/README.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/NOTES.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/Makefile",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/build.zig",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/lib/stb_image.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/scripts/build_opt.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/harness/bench_vs_upstream.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/harness/bench.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/harness/kernbench.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/harness/diff.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/bench/bench.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/bench/kernbench.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/corpus/gen_corpus.py",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/README.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/summary.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/upstream_o2.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/fork_pgo.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/up4.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/fork4.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/results/kernels.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/src/stb_image.h",
+    "https://raw.githubusercontent.com/aplghl/stb-image-opt/HEAD/upstream/stb_image.h",
+    "https://security-tracker.debian.org/tracker/CVE-2023-45664 (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

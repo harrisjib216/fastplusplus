@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/bitbank2/pngenc",
+  "one_liner": "Line-by-line, no-malloc PNG encoder for microcontrollers; a low-RAM libpng substitute with no speed claim or measurement.",
+  "what_it_does": "Encodes grayscale, indexed, truecolor or truecolor+alpha images (up to 8 bits per channel) into PNG one scan line at a time, writing to a caller-supplied RAM buffer or through open/read/write/seek/close callbacks (for example an SD card). The API is an Arduino-style C++ class (open, encodeBegin, addLine or addRGB565Line, close) with C entry points in png.inl; it is not libpng's API. It targets MCUs with about 45K of free RAM and uses a fixed internal memory pool instead of malloc.",
+  "how_it_is_fast": "It is not built for speed: compression is a vendored copy of zlib 1.2.11 deflate (the same codec libpng normally calls) fed from a static pool, so throughput should track libpng at the same level. Each row gets a per-line adaptive filter chosen by minimum sum of absolute differences across None/Sub/Up/Average/Paeth (libpng's classic heuristic); 1/2/4-bpp rows are left unfiltered. On MCUs the deflate window and hash memory are cut eightfold (windowBits 12, memLevel 5) to fit RAM, and output is batched into a 2 KB buffer to reduce write() calls.",
+  "when_to_use": [
+    "Saving screenshots or sensor images to PNG on an ESP32, RP2040, Teensy or similar board with no heap and roughly 45K of RAM to spare.",
+    "Streaming a frame buffer straight to an SD card line by line, including RGB565 display buffers via addRGB565Line.",
+    "Small images (the default line buffer holds 2,560 bytes: 640 RGBA, 853 RGB or 2,560 8-bit pixels) where encoding speed is irrelevant next to SD-card write time.",
+    "Projects that already use the author's PNGdec and want a matching, dependency-free encoder (the 2025 'simultaneous use with PNGdec' change)."
+  ],
+  "when_not_to_use": [
+    "Any desktop or server workload that needs speed: nothing shows it beating libpng, and fpnge, fpng or mtpng are measured to be many times faster.",
+    "Lines wider than 2,560 bytes unless you raise PNG_MAX_BUFFERED_PIXELS: encodeBegin accepts widths up to 32,767, and nothing checks row size against the fixed line buffers (PNG_TOO_BIG is defined but never returned), so wide rows overflow into the live deflate output buffer and past the encoder struct.",
+    "Grayscale or truecolor images that need a transparent color: setTransparentColor() returns success, but the tRNS chunk is only written inside the indexed-palette branch of PNGStartFile, so the transparency is silently dropped.",
+    "16-bit-per-channel images, gray+alpha, interlacing or metadata chunks: encodeBegin rejects 16 bpp, so gray+alpha cannot be encoded correctly, and only IHDR/PLTE/tRNS/IDAT/IEND are written.",
+    "Code that needs strong memory safety: header and trailer writes are not bounds-checked against the caller's RAM output buffer, and the vendored zlib 1.2.11 deflate predates the CVE-2018-25032 fix (its trigger is mostly Z_FIXED, which PNGenc does not use)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none external; vendors zlib 1.2.11 deflate.c, trees.c, crc32.c, adler32.c and zutil.c (zlib license) in src/. Arduino.h is included unless __LINUX__, __MACH__ or __MCUXPRESSO is defined.",
+    "min_toolchain": "C++ compiler for the class (GCC/Clang, since addRGB565Line uses __builtin_bswap16); linux/Makefile builds libpngenc.a at -O2. The README says it can be built as plain C, but the header's C prototypes name an undefined PNGIMAGE type and give PNG_addRGB565Line the wrong arity, so a C build likely needs header fixes.",
+    "platforms": "Any 32-bit MCU with about 45K free RAM (Arduino architectures=*), plus Linux and macOS, where MEM_SHRINK 0 makes each PNGENC object about 270 KB. Windows needs -D__LINUX__ and a compiler with __builtin_bswap16.",
+    "thread_safety": "not documented; state is per PNGENC instance, but the CRC table is a function-static lazily built on first use with no synchronization.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The bpp argument to encodeBegin is bits per pixel and is not checked against the pixel type: TRUECOLOR_ALPHA with bpp 8 is accepted and writes width-byte rows under an RGBA IHDR (a malformed PNG). examples/function_test Test 1 does exactly this and still passes, because it checks only the output size (127 bytes) and the magic bytes.",
+    "Palettes are read in B,G,R order (PNGStartFile writes ucPalette[i*3+2] as red); see closed issue #19.",
+    "addRGB565Line issues Z_PARTIAL_FLUSH after every row, which costs compression ratio and time compared with addLine's Z_NO_FLUSH.",
+    "The issue history is mostly about corrupt output (#2 IDAT CRC errors at 256x256, #14 missing data, #16 addLine corruption, #18 wrong IDAT length on about 25% of files with getLastError() returning 0). All are closed, but no regression test decodes the output."
+  ],
+  "pick_this_over_siblings_when": "Pick PNGenc only when RAM and no-malloc constraints decide the choice. For any throughput goal, fpnge (about 57x libpng encode in the QOIR benchmark), fpng (about 23x per its README) or the multi-threaded GregorBudweiser pngenc are the encoders with measured wins over libpng.",
+  "verified_claims_summary": "No speed claim and no measurement exist: the README's 'How fast is it?' only points to examples/PNGenc_Test, which times one generated 128x128 8-bpp indexed image at compression level 3 with micros(), by default including the SD-card open and writes, and prints a single time with no baseline. linux/main.cpp prints only the output size. Because the compressor is stock zlib 1.2.11 deflate driven row by row, with libpng-style adaptive filtering, it should not beat libpng on throughput, and the reduced MCU window (4 KB, memLevel 5) probably costs compression ratio (not measured).",
+  "status_note": "Maintained at low intensity (last commit 2025-11-17, v1.4.0, NLnet NGI Zero Core funded, 18 issues all closed); Apache-2.0 plus zlib-licensed vendored files, small enough to vendor, but treat it as a convenience encoder for small embedded images and validate its output.",
+  "sources_read": [
+    "https://github.com/bitbank2/PNGenc/commits",
+    "https://github.com/bitbank2/PNGenc/wiki",
+    "https://github.com/bitbank2/PNGenc/issues?q=is%3Aissue",
+    "https://github.com/bitbank2/PNGenc/issues/2",
+    "https://github.com/bitbank2/PNGenc/issues/16",
+    "https://github.com/bitbank2/PNGenc/issues/18",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/library.properties",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/src/PNGenc.h",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/src/PNGenc.cpp",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/src/png.inl",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/src/deflate.c",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/src/deflate.h",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/linux/main.cpp",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/linux/Makefile",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/examples/PNGenc_Test/PNGenc_Test.ino",
+    "https://raw.githubusercontent.com/bitbank2/PNGenc/HEAD/examples/function_test/function_test.ino"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/aplghl/qoi-asm",
+  "one_liner": "Hand-written x86-64 assembly QOI codec, bit-identical to qoi.h and 1.07x-2.16x faster than its gcc -O3 build.",
+  "what_it_does": "qoi-asm reimplements the four public functions of phoboslab's qoi.h (qoi_encode, qoi_decode, qoi_write, qoi_read) in one GNU as file with the same prototypes and System V AMD64 ABI. Consumers keep including the unmodified qoi.h without QOI_IMPLEMENTATION and link build/qoi_asm.o or build/libqoi.a instead; streams and decoded pixels are byte-for-byte what qoi.h produces, so the file format and compression ratio do not change.",
+  "how_it_is_fast": "The loops keep px, px_prev, run and the input/output cursors in registers instead of stack slots, and dispatch once on channels==3 or channels==4 into two specialised loops, removing qoi.h's per-pixel channel test. The QOI index hash (r*3+g*5+b*7+a*11)&63 becomes one 64-bit multiply of the byte-spread pixel by 0x0C001C0014002C00 and a shift by 58, which is exact because lower partial products stay below 2^58. Encode computes the three channel deltas with SSE4.1 psubb/pmovsxbd and folds the three DIFF range tests into one unsigned compare; decode applies DIFF/LUMA deltas with pinsrb/paddb; the trailing-run flush is moved out of the hot run loop.",
+  "when_to_use": [
+    "You already use qoi.h on x86-64 Linux and want faster encode/decode without changing a line of calling code or the output bytes.",
+    "Encode-heavy pipelines (screenshots, frame dumps, texture caches): the published encode gains are 1.10x-1.99x over gcc -O3 -march=x86-64-v3, with 1.83x on the 1080p photo-like RGBA row.",
+    "High-entropy or RGBA-op-heavy content, where gains are largest (about 2x encode and decode on the random rows).",
+    "Projects that need a single reviewed object file with no dependencies beyond libc and an exact behavioural match to qoi.h, verified by in-process differential tests."
+  ],
+  "when_not_to_use": [
+    "Non-x86 targets (ARM, RISC-V, WebAssembly), Windows x64 calling convention, or MSVC/MASM/NASM toolchains: there is only a GNU as, System V object.",
+    "You rely on qoi.h compile-time options: QOI_MALLOC/QOI_FREE overrides and QOI_NO_STDIO cannot apply to the prebuilt object, which always calls libc malloc and stdio.",
+    "Photo-like decode is the bottleneck: the gain there is only 1.07x-1.22x over gcc -O3, and on the run-heavy 1080p RGBA decode the ASM is slower than the plain -O2 C build (0.88x).",
+    "You want independent or real-image evidence: all inputs are synthetic, the numbers come from one WSL2 host, and the repo is a single LLM-generated commit with no users yet.",
+    "You need CET-hardened binaries: the object carries no GNU property note or endbr64, so linking it strips IBT/shadow-stack marking from the final executable."
+  ],
+  "integration": {
+    "form": "static lib (build/libqoi.a) or a single object (build/qoi_asm.o) used with the unmodified qoi.h header",
+    "dependencies": "none beyond libc (malloc, memset, free, fopen, fread, fwrite, fseek, ftell, fflush, ferror, fclose); building needs GNU binutils as",
+    "min_toolchain": "GNU as (binutils) with Intel-syntax support; any C compiler for the consumer; tested with gcc 13.3.0 on Ubuntu 24.04",
+    "platforms": "x86-64 Linux/System V only. Documented requirement is x86-64-v3 (Haswell or newer), but the file uses no AVX, AVX2, BMI or FMA instructions; the highest ISA extension it uses is SSE4.1 (pinsrb, pextrd, pmovsxbd)",
+    "thread_safety": "Reentrant like qoi.h: all state (including the 64-entry index) lives on the stack or in registers; only read-only constants are global",
+    "drop_in_for_baseline": "partial — same header, symbols, ABI and output bytes as qoi.h, but you must remove QOI_IMPLEMENTATION and link the object, and the build is x86-64 System V only"
+  },
+  "gotchas": [
+    "If any translation unit still defines QOI_IMPLEMENTATION, linking qoi_asm.o gives duplicate symbols, while linking libqoi.a silently keeps the C code because the archive member is never pulled in. The README's first snippet still shows #define QOI_IMPLEMENTATION.",
+    "The ISA baseline is overstated: the README says x86-64-v3 and warns of SIGILL on older CPUs, but only SSE4.1 is actually needed. There is no CPUID check, so a CPU without SSE4.1 faults at the first SIMD instruction.",
+    "Like qoi.h, qoi_decode can read a few bytes past size on a truncated stream; the port reproduces this exactly, so validate or pad untrusted input.",
+    "The bench's 'cycles/op' are invariant-TSC ticks (about 2.07 GHz on the host), not core cycles; use the ratios or ns/op."
+  ],
+  "pick_this_over_siblings_when": "Pick qoi-asm over the reference QOI (qoi.h) when you are on x86-64 Linux and want the same symbols and bytes, only faster. Pick qoixx (C++), rapid-qoi or the qoi Rust crate when you need ARM or Windows support or a source-level library; none of those was measured against qoi-asm, so no ranking among them exists.",
+  "verified_claims_summary": "tests/bench.c links qoi.h (byte-identical to upstream, sha256 checked in CI) at gcc -O2 and at -O3 -march=x86-64-v3 into one binary with the assembly, checks every output bit for bit, then reports median TSC ticks over 11 or 31 single-call reps after 3 warm-ups. On an i7-14700F under WSL2 (gcc 13.3.0, taskset -c 3) the ASM was 1.07x-2.16x faster than -O3 on all 18 rows of 7 synthetic 512x512 and 1080p inputs; against -O2 the range is 0.88x-2.92x (derived from page data). The unchanged C rows agree within about 1-2% (worst about 7%) across the three committed result files, bench_after_M1, E2 and D1 (derived from page data).",
+  "status_note": "Published 2026-09-26 as a single commit with 0 stars and no issues, produced by a multi-agent LLM workflow (the same author also publishes stb-image-opt and stb-image-write-opt). It is MIT-licensed, one roughly 1,000-line assembly file, and CI runs the differential, ASan/UBSan and benchmark-correctness suites on ubuntu-latest.",
+  "sources_read": [
+    "https://github.com/aplghl/qoi-asm",
+    "https://github.com/aplghl/qoi-asm/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/README.md",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/docs/CHANGES_VS_UPSTREAM.md",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/docs/PORTING.md",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/Makefile",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/asm/qoi.asm",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/tests/bench.c",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/tests/bench_after_D1.txt",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/tests/bench_after_E2.txt",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/tests/bench_after_M1.txt",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/c/qoi.c",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/c/qoi.h",
+    "https://raw.githubusercontent.com/aplghl/qoi-asm/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/frign/libgrapheme",
+  "one_liner": "Tiny freestanding C99 Unicode segmentation and case-mapping library; claims to beat libutf8proc, ICU and libunistring, with no published numbers.",
+  "what_it_does": "Finds grapheme cluster, word, sentence and line-break boundaries, detects and converts case, and (via an API not mentioned in the README) runs the bidirectional algorithm, on UTF-8 or UTF-32 codepoint arrays, optionally NUL-terminated. The API is a flat set of functions such as grapheme_next_character_break_utf8(str, len) returning the length of the next segment, plus the pairwise grapheme_is_character_break(cp0, cp1, &state) that mirrors utf8proc_grapheme_break_stateful. It does no normalization, collation, shaping or locale tailoring.",
+  "how_it_is_fast": "Property lookup is a two-stage table generated from the Unicode data (major[cp >> 8] + (cp & 0xFF) into a byte-sized minor table), and the UAX #29 pair rules are precomputed bitmask tables, so a break decision is a couple of loads and AND tests instead of utf8proc's branch chain over a larger property struct. The stateful break call caches the right-hand codepoint's property inside a 16-bit caller-held state, so a scan does one table lookup per codepoint where utf8proc_grapheme_break_stateful looks up both codepoints on every call. There is no SIMD and no ASCII fast path; the UTF-8 decoder is a scalar per-codepoint loop.",
+  "when_to_use": [
+    "C or C++ code that needs correct grapheme-cluster counting or cursor movement (terminals, text editors, TUI widgets) without pulling in ICU.",
+    "Bare-metal or libc-free builds: the library is freestanding and the shared object links with -nostdlib.",
+    "Word and sentence segmentation or Unicode case conversion of short strings where a small ISC-licensed dependency matters more than measured peak throughput.",
+    "Replacing utf8proc only for grapheme breaking and UTF-8 decoding, where the bundled benchmarks give you a ready comparison to run on your own hardware."
+  ],
+  "when_not_to_use": [
+    "Line breaking or bidirectional layout on Unicode 16/17 text: the author's own 17.0.0 data-update commit says line-segmentation and bidi conformance tests fail, and src/line.c has no LB15a-d, LB19a, LB20a or LB28a rules.",
+    "You need normalization (NFC/NFD), case folding for comparison, collation or locale-tailored breaking: use ICU, utf8proc or a sibling with those features.",
+    "You need demonstrated speed: no benchmark result has ever been published, so measure with make benchmark before relying on the 'much faster' claim.",
+    "Bulk UTF-8 validation or transcoding throughput: the decoder is scalar per codepoint with no SIMD, so SIMD validators in this category are far faster for that job."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (one POSIX Makefile plus ./configure; installs grapheme.h, man pages and a pkg-config file)",
+    "dependencies": "none at run time (freestanding); benchmarks link -lutf8proc",
+    "min_toolchain": "any C99 compiler and POSIX make",
+    "platforms": "any (portable C99, no architecture-specific code)",
+    "thread_safety": "Not documented; the code read keeps all state in caller-held variables (uint_least16_t for grapheme breaks) and only const lookup tables, so the functions are reentrant in practice.",
+    "drop_in_for_baseline": "partial — grapheme_is_character_break and grapheme_decode_utf8 map one-to-one onto utf8proc_grapheme_break_stateful and utf8proc_iterate, but with different state and error conventions, and there is no equivalent of utf8proc's normalization or case folding"
+  },
+  "gotchas": [
+    "Once the state has been used, grapheme_is_character_break ignores cp0 and reuses the property cached from the previous call's cp1; reset the state to 0 for each new string or after skipping codepoints.",
+    "grapheme_decode_utf8 maps invalid sequences to U+FFFD and returns the bytes consumed, but returns a value larger than len for a truncated trailing sequence; callers must check ret > len.",
+    "The default config.mk builds with -Os and strips binaries (LDFLAGS -s); set CFLAGS to -O2 or -O3 for speed-sensitive builds, and expect make test to report failures for line and bidi on the shipped 17.0.0 data.",
+    "src/character.c starts with a stray #include <stdio.h> ahead of the license header, which can break a truly libc-less freestanding toolchain despite the freestanding claim."
+  ],
+  "pick_this_over_siblings_when": "Pick libgrapheme over uni-algo or libutf when you want plain C99, zero dependencies, an ISC license and grapheme, word and sentence segmentation plus case mapping in a few hundred KB; pick uni-algo (C++) or libutf when you need normalization or collation or want numbers measured against ICU, which libgrapheme lacks.",
+  "verified_claims_summary": "Nothing was measured on the record: the README says 'way smaller and much faster' than ICU, libunistring and libutf8proc with no numbers, and the repo's character and utf8-decode benchmarks (clock() CPU time, 100,000 passes over the GraphemeBreakTest codepoints, libgrapheme static at -Os against a dynamically linked libutf8proc) print run-time ratios that were never published. The benchmark's label that libutf8proc's decoder is 'unsafe (does not detect overlong encodings)' is stale: current utf8proc_iterate rejects overlong 2-, 3- and 4-byte forms and surrogates, and the generated input is valid UTF-8 anyway, so the decode comparison is like-for-like on validation.",
+  "status_note": "Single-maintainer suckless project, version 3.0.0 released 2025-12-24 after a year without commits, ISC-licensed and small enough to vendor; the half-finished move to a new table generator (gen2, wired only into a generator and not into src/) leaves line breaking and bidi below Unicode 17.0.0 conformance.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/README",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/grapheme.h",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/config.mk",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/Makefile",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/benchmark/util.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/benchmark/util.h",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/benchmark/character.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/benchmark/utf8-decode.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/character.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/utf8.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/util.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/util.h",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/word.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/case.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/line.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/src/bidirectional.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/gen/line.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/gen/line-test.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/gen/util.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/test/line.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/test/util.c",
+    "https://raw.githubusercontent.com/FRIGN/libgrapheme/HEAD/data/LineBreakTest.txt",
+    "https://github.com/FRIGN/libgrapheme/commits",
+    "https://github.com/FRIGN/libgrapheme/commit/2f5fb9740e29dd344ec8fbbcde966b71fcd3ffcf",
+    "https://github.com/FRIGN/libgrapheme/commit/5c252ef6a4a7f82364bc59c2733d858c3c7927e0",
+    "https://github.com/FRIGN/libgrapheme/commit/40bc7dffb7a0ae319dba093809fc2f27a59ed8d1",
+    "https://raw.githubusercontent.com/JuliaStrings/utf8proc/HEAD/utf8proc.c"
+  ],
+  "confidence": 0.75
+}

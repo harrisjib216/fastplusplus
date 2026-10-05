@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/fraunhoferhhi/vvdec",
+  "one_liner": "Fraunhofer's optimized H.266/VVC Main10 software decoder; claims to outrun FFmpeg's native VVC decoder, with no published ratio.",
+  "what_it_does": "A complete software decoder for the VVC Main10 profile, derived from the VTM reference decoder but rewritten for speed. It exposes a small C API (vvdec_decoder_open, vvdec_decode per access unit, vvdec_flush, vvdec_frame_unref) with an optional caller-supplied picture allocator, and ships the vvdecapp command-line tool. FFmpeg and mpv can use it only through a community libvvdec patch documented on the wiki, so it is not a drop-in for FFmpeg's built-in decoder.",
+  "how_it_is_fast": "Hand-written SIMD intrinsics for interpolation, inter/intra prediction, transforms, deblocking, SAO and ALF, compiled once per ISA (SSE4.1, SSE4.2, AVX, AVX2 on x86; NEON, NEON-RDM, SVE, SVE2 on Arm since 3.2.0; LoongArch LSX) and chosen at run time through function pointers; other targets get the x86 kernels through SIMD Everywhere. Reconstruction runs as a per-CTU task state machine (motion derivation, inter, intra, LMCS reshaping, vertical and horizontal deblocking, SAO, ALF) on a shared thread pool, with neighbour-dependency checks so different CTUs of a picture, and several pictures, are in different stages at once; parsing of later pictures overlaps reconstruction (parseDelay, default about 1.5x the thread count). Release builds use LTO by default.",
+  "when_to_use": [
+    "You need to decode VVC/H.266 Main10 in software today (players, transcoders, HEIF/VVC image paths) and want a decoder that covers every Main10 tool, including RPR, subpictures and film grain synthesis.",
+    "Real-time 1080p and 4K playback on a multi-core x86-64 or AArch64 machine: the first-party chart shows roughly 299 fps random-access 1080p and 79 fps random-access 4K with 20 threads on a Xeon W-2155.",
+    "Arm targets (Android, Apple Silicon, Linux aarch64), where 3.x adds native NEON, SVE and SVE2 kernels with runtime CPU feature detection.",
+    "Browser playback in Chrome, Firefox or Edge through the WebAssembly build.",
+    "Integrating into a C or C++ application through a stable, plain-C API with a custom frame allocator to avoid copies."
+  ],
+  "when_not_to_use": [
+    "You want something that ships inside stock FFmpeg: the native FFmpeg VVC decoder is built in, while libvvdec needs an unmerged patch that the wiki itself says the VVdeC team has not checked.",
+    "Untrusted input in a security-sensitive process without sandboxing: use-after-free bugs (issues 390, 391, 403) and fuzzer-found crashes were still being fixed in 2026, and SECURITY.md was only added on 2026-09-29.",
+    "Safari or other WebKit browsers: the WASM build does not run there, and the -msimd128 build breaks running in Node.js.",
+    "Profiles beyond Main10 (for example 4:4:4 or 12-bit range extensions); the README claims Main10 only.",
+    "Memory-tight devices: several pictures are in flight because of parse delay and frame-level overlap; an OpenVVC paper (snippet only) reports about half of VVdeC's memory for OpenVVC."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (CMake, plus a convenience Makefile; optional vvdecapp tool)",
+    "dependencies": "none at run time (SIMD Everywhere headers are bundled for non-x86 builds)",
+    "min_toolchain": "C++14; CMake 3.12 per CMakeLists.txt (wiki says 3.13); GCC 5+, Visual Studio 2017+, Xcode clang",
+    "platforms": "x86 and x86-64 (SSE4.1 baseline, AVX2 dispatched at run time; no AVX-512 kernels), armv7 and aarch64 (NEON, SVE, SVE2), LoongArch64, WASM; tested on Windows, Linux, macOS arm64 and Android, while macOS x64 and iOS are marked 'needs testing'; powerpc and riscv64 reported to build by outside testers",
+    "thread_safety": "not documented for concurrent calls on one decoder instance; each instance owns its own thread pool (threads parameter, default -1 meaning all cores)",
+    "drop_in_for_baseline": "partial — usable inside FFmpeg as -c:v libvvdec only through the community patch (v9 for FFmpeg master, v8 for 8.x); otherwise a separate C API"
+  },
+  "gotchas": [
+    "On x86 Unix builds every source file is compiled with -msse4.1, and issue 182 (closed 2024-06-24) showed SSE4.1 instructions reached even when scalar mode was forced, crashing pre-SSE4.1 CPUs; treat SSE4.1 as a hard requirement.",
+    "VVDEC_ENABLE_WERROR defaults to ON, so newer compilers can fail the build on new warnings; pass -DVVDEC_ENABLE_WERROR=OFF when packaging.",
+    "3.0.0 broke API and ABI compatibility with 1.x and 2.x and moved output upscaling from the library into vvdecapp, so applications that relied on library-side upscaling must scale pictures themselves.",
+    "The Clear BSD license explicitly grants no patent rights; VVC patent licensing is left to the user."
+  ],
+  "pick_this_over_siblings_when": "Pick VVdeC over OpenVVC when you want full Main10 conformance, ongoing fixes and Arm SVE kernels from an active Fraunhofer project; OpenVVC's claimed edge in thread scaling and memory over VVdeC rests on a paper abstract seen only as a search snippet. The other decoders in this category (dav1d, edge264, rivet-h26x, rusty_h265) handle AV1, H.264 or HEVC, not VVC.",
+  "verified_claims_summary": "The only numbers are first-party: a wiki chart of VVdeC against its own earlier releases, read off the plot at about 299 fps (RA and LDP, ClassB 1080p), 131 fps (AI ClassB), 79 fps (RA ClassA 4K) and 44 fps (AI ClassA) for v2.2 on a Xeon W-2155 with 20 threads decoding VTM-10.0 JVET test streams, with compiler and flags not stated. Against FFmpeg's native decoder there is only the wiki sentence that VVdeC is 'still faster and realtime capable'; a FOSDEM 2024 handout by the FFmpeg VVC author (snippet only, blocked here) put VVdeC with SIMD about 90% faster single-threaded and 75% faster multi-threaded than FFmpeg's C-only decoder, before FFmpeg added its AVX2 VVC assembly, so the current gap is unmeasured.",
+  "status_note": "Very active (several merges a day in late September 2026, latest 2026-10-02, release 3.2.0 adding Arm SVE/SVE2 and libFuzzer); Clear BSD licensed and copyable, but no patent grant and a recent run of memory-safety fixes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/README.md",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/include/vvdec/vvdec.h.in",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/source/Lib/CommonLib/x86/InitX86.cpp",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/source/Lib/CommonLib/x86/CommonDefX86.cpp",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/source/Lib/DecoderLib/DecLibRecon.cpp",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/source/Lib/vvdec/vvdecimpl.cpp",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/source/Lib/Utilities/ThreadPool.h",
+    "https://github.com/fraunhoferhhi/vvdec/tree/master/source/Lib/CommonLib/x86",
+    "https://github.com/fraunhoferhhi/vvdec/wiki",
+    "https://github.com/fraunhoferhhi/vvdec/wiki/Integration-in-FFmpeg",
+    "https://github.com/fraunhoferhhi/vvdec/wiki/Changelog",
+    "https://github.com/fraunhoferhhi/vvdec/wiki/Build",
+    "https://github.com/fraunhoferhhi/vvdec/releases",
+    "https://github.com/fraunhoferhhi/vvdec/commits/master",
+    "https://github.com/fraunhoferhhi/vvdec/issues?q=is%3Aissue+crash+OR+performance+OR+slow",
+    "https://github.com/fraunhoferhhi/vvdec/issues/182",
+    "https://github.com/fraunhoferhhi/vvdec/issues/132",
+    "https://github.com/ffvvc/FFmpeg/wiki"
+  ],
+  "confidence": 0.65
+}

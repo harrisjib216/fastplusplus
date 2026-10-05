@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/ammarkov/pzp",
+  "one_liner": "Zstd-compressed PNM container in a single C header; loads palette-friendly label maps about 2.3x faster than PNG via cv2.imread.",
+  "what_it_does": "PZP stores raw PNM pixels behind a 40-byte header and compresses the payload with zstd (or LZ4, or optionally OpenZL), with an optional left-delta filter, per-channel palette indexing, inter-frame deltas and a multi-frame container that can carry audio and metadata. It is a new file format, not a PNG decoder: you convert your dataset to .pzp once and then read it with pzp_decompress_combined()/pzp_decompress_combined_from_memory() in C, or PZP.read() (ctypes over libpzp.so) in Python, which returns a numpy array. A CLI (pzp compress/decompress/info) and a freedesktop thumbnailer are included.",
+  "how_it_is_fast": "Decoding is one zstd (or LZ4) call into a single buffer, using a per-thread reused ZSTD_DCtx, followed by an in-place left-delta prefix sum and a palette table lookup; there is no chunk parsing, no per-row filter selection and no zlib inflate. Under -DINTEL_OPTIMIZATIONS the prefix sum is an AVX2 Kogge-Stone scan with explicit cross-lane carry; since the 2026-03-29 commit 3-channel images are de-interleaved with SSSE3 shuffles, scanned per plane and re-interleaved (doc/performance.md still says 3-channel falls back to scalar, which was true of the code that produced the published numbers). Palette mode is compressed at zstd level 19, so label maps with few distinct values per channel shrink well and decode fast.",
+  "when_to_use": [
+    "Training-data pipelines that re-read the same images many times (segmentation label maps, masks, depth maps) and can afford a one-time conversion from PNG.",
+    "8-bit or 16-bit grayscale/RGB images with few distinct values per channel, where USE_PALETTE plus USE_RLE gives both a smaller file and a faster load than PNG.",
+    "Python data loaders on Linux x86-64 with AVX2 that today call cv2.imread on PNG and are bound by decode time; PZP.read returns a numpy array directly.",
+    "Storing short image sequences or depth streams where the inter-frame delta and multi-frame container (with delays, metadata and audio) are useful.",
+    "When LZ4 is acceptable for larger files in exchange for faster decode on a ramdisk or NVMe."
+  ],
+  "when_not_to_use": [
+    "You need interoperability: no browser, image editor or standard library reads .pzp, and the format is at v0.03 with a layout change in 2026 (PZP0 to PZP1 frames).",
+    "Photographs or high-entropy images: the only published number is for COCO panoptic label maps, the README's own best case; no photo, fpng, libspng, Wuffs or QOI comparison exists.",
+    "Large frames: the decoder rejects any frame whose uncompressed payload exceeds 100,000,000 bytes (for example 16-bit RGB above about 16.7 megapixels or 8-bit RGB above about 33 megapixels), while the encoder has no such limit, so such files write but do not read back.",
+    "Untrusted input with integrity needs: read-time checksum verification is off by default (PZP_VERIFY_CHECKSUM=0) and zstd frames are written without a content checksum, whereas PNG checks CRC32 and Adler-32.",
+    "GPL-3.0 is incompatible with your product, or you need a portable prebuilt library: libpzp.so is built with -march=native and AVX2 with no runtime dispatch."
+  ],
+  "integration": {
+    "form": "header-only (pzp.h, all functions static) plus an optional shared lib (libpzp.so) and a pip-installable Python ctypes package",
+    "dependencies": "libzstd and liblz4 (system packages); optional OpenZL v0.3.0 built from source with PZP_USE_OPENZL=1; Python bindings work without numpy (raw bytes) and return numpy arrays when it is installed; the CLI reads only binary PNM (P5/P6) input",
+    "min_toolchain": "C11 (uses _Thread_local); built and documented with gcc only; toolchain version not documented",
+    "platforms": "Header: any little-endian target with zstd and lz4 (multi-byte header fields are copied in native byte order). libpzp.so as built by the Makefile: x86-64 with AVX2 and the build machine's -march=native; setup.py names .dylib/.dll but the Makefile only builds libpzp.so",
+    "thread_safety": "Decoding is reentrant; each thread lazily gets its own _Thread_local ZSTD_DCtx (pzp_thread_init/pzp_thread_cleanup free it explicitly). Encoders modify the caller's planar buffers in place.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 2.28x figure was published in the README by 2026-03-21 (commit bc7a2b8) and measured on that code, which verified a checksum on every read, created a fresh zstd context per call, ran 3-channel delta reconstruction as a scalar loop and did not bounds-check header fields; current code differs in all four respects, so the number is unmeasured for today's build (likely conservative for speed).",
+    "Palette mode always compresses at zstd level 19 (non-palette at level 1), so encoding label maps is slow; plan for a write-once, read-many workflow.",
+    "The palette is per channel (up to 256 values each), not per colour, so an RGB map with many distinct colours but few values per channel still benefits, while one with near-full channel ranges does not.",
+    "doc/c-api.md lists pzp_compress_combined as returning void; it now returns int (1 on success, 0 on failure) and no longer exits the process on write errors."
+  ],
+  "pick_this_over_siblings_when": "Pick PZP over Zpng or QOI when your data is palette-like label maps or 16-bit depth and you want a Python numpy reader, palette and inter-frame modes in one container; pick fpng, libspng or the PNG-compatible siblings when files must stay PNG, and QOI or QOIR when you want a permissively licensed format with third-party benchmark numbers.",
+  "verified_claims_summary": "First-party scripts/compare_load_speed.py run on 500 COCO val2017 panoptic label maps (3-channel uint8, files encoded with USE_COMPRESSION, USE_RLE and USE_PALETTE): best of 3 passes after one warm-up, PNG through cv2.imread (OpenCV's libpng, version unstated) took 1141.2 ms against PZP through ctypes and libpzp.so at 500.6 ms (2.28x), with files 4.1 MB versus 2.0 MB; libpzp.so used gcc -O3 -mavx2 -march=native, and no CPU model, OpenCV, libpng, zstd or gcc version is recorded.",
+  "status_note": "Active single-author project (initial commit February 2025, burst of work since March 2026, last commit 2026-09-29, 2 stars, 132 commits, one closed issue about the license); GPL-3.0, small enough to vendor, and the author vendors it into the DataLoader of the RGBToPoseDetect2D project.",
+  "sources_read": [
+    "https://github.com/AmmarkoV/PZP",
+    "https://github.com/AmmarkoV/PZP/commits",
+    "https://github.com/AmmarkoV/PZP/commits/main/doc/performance.md",
+    "https://github.com/AmmarkoV/PZP/commits/main/README.md",
+    "https://github.com/AmmarkoV/PZP/issues?q=is%3Aissue",
+    "https://github.com/AmmarkoV/PZP/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/README.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/doc/performance.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/doc/scripts.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/doc/c-api.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/doc/file-format.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/doc/python-api.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/scripts/compare_load_speed.py",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/scripts/benchmark.py",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/scripts/vendorIntoDataLoader.sh",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/Makefile",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/setup.py",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/PZP.py",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/pzp.h",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/pzp_lib.c",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/pzp.c",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/bc7a2b8/README.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/8bc3e6a/README.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/8cc0f44/README.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/b8911e9/README.md",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/bc7a2b8/pzp.h",
+    "https://raw.githubusercontent.com/AmmarkoV/PZP/bc7a2b8/scripts/compare_load_speed.py"
+  ],
+  "confidence": 0.72
+}

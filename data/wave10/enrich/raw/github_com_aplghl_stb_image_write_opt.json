@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/aplghl/stb-image-write-opt",
+  "one_liner": "Byte-identical stb_image_write.h v1.16 fork with an SSE2 deflate match scan; PNG encode about 1.7-1.9x upstream -O2.",
+  "what_it_does": "A drop-in replacement for stb_image_write.h v1.16 (nothings/stb at 2c980bb) that keeps the API, the 16 exported symbols and the output bytes. Only src/stb_image_write.h changes, and only inside the builtin zlib compressor that the PNG writer uses. You swap the header (keeping STB_IMAGE_WRITE_IMPLEMENTATION) or link a static library from scripts/build_opt.sh or zig build. Encode side only; the decode-side sibling is stb-image-opt.",
+  "how_it_is_fast": "The DEFLATE match-length scan (stbiw__zlib_countm), which the author profiled at about 30% of PNG encode time, compares 16 bytes per step with baseline SSE2 and finds the first mismatch with movemask plus count-trailing-zeros. Fixed-Huffman codes come from precomputed, already bit-reversed tables instead of a per-symbol bit-reverse loop, and length and distance codes are found by binary search instead of linear scans. Nothing else in the writer changes, so the JPEG, BMP, TGA and HDR gains in the headline come only from building at -O3 -march=x86-64-v2 with PGO against upstream at -O2 (docs/REJECTED.md: -march=x86-64-v3 alone takes plasma_512 JPEG from 5.47 to 4.06 ns/px).",
+  "when_to_use": [
+    "You vendor stb_image_write and write PNGs with its builtin compressor (screenshots, debug dumps, tools) and want faster encodes with unchanged files: PNG rows 1.62x-2.15x, and 1.90x in the downstream consumer test.",
+    "Smooth or highly compressible images such as gradients, UI captures and flat regions, where long matches make the SSE2 scan pay off (gradient PNG rows 1.89x-2.15x against 1.07x on incompressible random data).",
+    "You rely on byte-for-byte identical output with upstream, for golden-file tests or content hashes: the differential matrix runs about 9,600 checks, and a non-vacuous test confirms that corrupted output fails it.",
+    "x86-64 builds with GCC or Clang, where the SSE2 kernel is on by default with no runtime dispatch."
+  ],
+  "when_not_to_use": [
+    "You need fast or small PNGs in absolute terms: the fork still spends about 50-70 ns per pixel on plasma_512 PNG (results/fork.csv), and upstream says its PNGs are 20-50% larger than an optimizing encoder's; fpng, fpnge or a better compressor plugged in through STBIW_ZLIB_COMPRESS are the tools for that (none is compared here).",
+    "You already define STBIW_ZLIB_COMPRESS: every source change is in the builtin compressor, so only compiler flags would differ.",
+    "JPEG, BMP, TGA or HDR output: that code is byte-identical to upstream; the bench's 1.63x-2.04x JPEG rows dropped to 1.17x in the downstream consumer test, and compiling upstream with the same flags would give the same effect.",
+    "MSVC or non-x86 targets: the SSE2 kernel needs __SSE2__ with GCC or Clang, so MSVC and aarch64 builds use the scalar loop and get only the table changes, which docs/REJECTED.md measured as roughly neutral overall.",
+    "Prebuilt release tarballs on older x86 CPUs: build.zig hard-codes -march=x86-64-v2 for x86-64, so they need SSE4.2-class CPUs, and release.yml builds them without PGO."
+  ],
+  "integration": {
+    "form": "header-only (single-header drop-in), or static lib via scripts/build_opt.sh or build.zig",
+    "dependencies": "none beyond libc and libm (emmintrin.h on x86-64)",
+    "min_toolchain": "Same C dialect as upstream stb_image_write (compiles as C and C++ per README); the SSE2 kernel needs GCC or Clang (__builtin_ctz); verified with clang 23.1.2, gcc 13.3 and zig cc",
+    "platforms": "x86-64 with baseline SSE2 and no runtime dispatch; aarch64 and other targets use the scalar fallback; cross-compiles to aarch64-linux-musl, x86_64-windows-gnu and aarch64-macos",
+    "thread_safety": "Unchanged from upstream: each encode call keeps its own state, but stbi_write_png_compression_level, stbi_write_force_png_filter, stbi_write_tga_with_rle and the flip-on-write flag are process-wide globals.",
+    "drop_in_for_baseline": "partial — API, ABI and output bytes match upstream; only the builtin PNG/zlib path is faster at any flags, while the JPEG, BMP and TGA gains need -O3 -march=x86-64-v2 (and PGO) and would apply equally to upstream built that way"
+  },
+  "gotchas": [
+    "The 1.627x headline mixes source and flags, and the JPEG rows probably overstate real use: the bench compiles the writer, a no-op sink callback and the timing loop into one translation unit at -O3 with PGO, and the JPEG writer emits every byte through the s->func callback (stbiw__putc), which that setup can devirtualize or inline. JPEG rows reach 1.80x geomean there (derived from page data) but only 1.17x in results/consumer.csv, where the encoder is a separately built PGO library; no committed run isolates the cause.",
+    "The countm ~3.3x (1.41 vs 4.6 ns/call) is not evidence: kernbench calls the inlinable kernel on constant static buffers with limit 2048, the SSE2 time is flat from a 3-byte to a 258-byte match, and the scalar 258-byte call (3.54 ns) beats its own 3-byte call. The deflate kernel 3.4x (0.43 vs 1.47 ns/byte) is a valid same-flag comparison, but on a synthetic input that compresses 82:1 (3192 bytes from 256 KiB), a best case for long matches.",
+    "The 'held-out' PGO set is not fully disjoint: HELDOUT trains on corpus/grad_640_480.png and grad_640_480_gray.png, which are also measured (with other channel counts or formats), and docs/MEASUREMENT.md reports held-out +62.7% above in-sample +58.5%, so the PGO share is within run-to-run noise.",
+    "BMP, TGA and HDR rows are plumbing-bound and layout-sensitive (the same build measured 1.19 and 1.76 ns/px for BMP), so their 0.948x-1.74x ratios are noise, yet they stay in the geomean."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you need stb_image_write's API and upstream-identical bytes; for PNG encode speed, fpnge (QOIR: 312.59 MPixels/s) and fpng are in another class from this fork's 16.78 MPixels/s on plasma_512 (results/fork.csv; different machines and images, so only indicative), at the cost of different output bytes. Pair it with stb-image-opt, the decode-side fork by the same author.",
+  "verified_claims_summary": "On an Intel i7-14700F under WSL2 with clang 23.1.2, the fork at -O3 -march=x86-64-v2 -ffp-contract=off with held-out PGO encoded 17 synthetic rows 1.627x faster (geomean) than upstream stb_image_write v1.16 at -O2. The 9 PNG rows, the only ones that touch changed code, give 1.725x (1.07x on random data, up to 2.15x on gradients), the 8 JPEG, BMP, TGA and HDR rows give 1.524x from flags and PGO alone, and a separate consumer program linking the PGO library measured PNG 1.90x and JPEG 1.17x.",
+  "status_note": "Active but new: one author, 2 commits on 2026-09-29, release v1.0.0, 0 stars and no issues or PRs; MIT OR Unlicense and a single header, so easy to vendor, but an unofficial fork not endorsed by the stb author.",
+  "sources_read": [
+    "https://github.com/aplghl/stb-image-write-opt",
+    "https://github.com/aplghl/stb-image-write-opt/issues?q=is%3Aissue",
+    "https://github.com/aplghl/stb-image-write-opt/releases",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/README.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/Makefile",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/build.zig",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/docs/MEASUREMENT.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/docs/REJECTED.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/harness/bench_vs_upstream.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/harness/bench.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/harness/kernbench.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/harness/consumer/run.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/harness/consumer/consumer.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/scripts/build_opt.sh",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/bench/bench.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/bench/kernbench.c",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/README.md",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/summary.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/upstream_o2.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/fork.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/kernels.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/results/consumer.csv",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/src/stb_image_write.h",
+    "https://raw.githubusercontent.com/aplghl/stb-image-write-opt/HEAD/upstream/stb_image_write.h"
+  ],
+  "confidence": 0.8
+}
