@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/mindbrix/rasterizer",
+  "one_liner": "Metal GPU 2D vector renderer (paths, strokes, gradients, clips, SVG/PDF) for macOS and iOS; claims 'up to 60x faster than the CPU', unmeasured.",
+  "what_it_does": "Rasterizer draws PostScript-model vector scenes (move/line/quad/cubic paths with non-zero or even-odd fills, strokes with butt/round/square caps and round joins, dashes, linear and radial gradients, images, rectangle and path clips) on Apple GPUs through Metal. The core is a C++11 header (Rasterizer.hpp: Path, Scene, SceneList, Context, Buffer) plus Shaders.metal; an Objective-C layer (RasterizerLayer, RasterizerView, RAPath/RAPaint/RASceneList) and a Swift wrapper sit on top. You build Scenes of paths with per-path colour, transform, stroke width and flags, group them into a SceneList each frame, and the view's delegate hands that list to RasterizerRenderer::renderList. It is its own retained-scene API, not a drop-in for Core Graphics, Skia or any CPU renderer.",
+  "how_it_is_fast": "Each frame the CPU transforms and clips path geometry in parallel (dispatch_apply over one Ra::Context per online core, split by edge-count weight) and memcpys it into a page-aligned shared buffer that Metal wraps with newBufferWithBytesNoCopy; the GPU holds no per-path state. Small fills such as glyphs ('molecules') are uploaded as 16-bit fixed-point points relative to the path bounds and drawn as instanced quads, while larger fills use 'fat scanlines' (16-px bands): edges are binned per band, x-sorted (radix sort), interior spans become solid opaque or blended cells and only edge cells run the coverage shader. Coverage accumulates additively into an R32Float mask texture using the author's 'windowed inverse lerp' (awinding in Shaders.metal: an inverse lerp of signed corner areas, then a slope-dependent filter) and monotone quadratic Beziers are solved per pixel on the GPU, so curves need little CPU flattening. Opaque interiors are drawn front to back with a depth test so hidden pixels are skipped, and strokes are triangulated on the GPU straight into the colour buffer.",
+  "when_to_use": [
+    "macOS 12+ or iOS 13+ app that redraws animated vector UI or large SVG/PDF scenes every frame (zoom, pan, rotate) and is CPU-bound in Core Graphics.",
+    "Text-heavy or glyph-heavy scenes: CoreText glyph outlines go into the small-fill 'molecule' path, which uploads compact 16-bit geometry and draws one instanced quad per glyph.",
+    "You need fuller path semantics than SDF UI renderers offer (non-zero and even-odd fills, cubics, strokes with caps and round joins, dashes, gradients, path clipping) on an Apple GPU.",
+    "Personal, research or evaluation use, or a commercial product whose owner will negotiate a licence with the author."
+  ],
+  "when_not_to_use": [
+    "Commercial use without a separate licence: LICENSE.txt grants permission for personal use only; it is not an OSI licence.",
+    "Any non-Apple target: rendering is Metal-only and the ObjC/Swift layers depend on QuartzCore, CoreGraphics and CoreText. The README's claim that it would work on any GPU with instancing and float render targets is not backed by a port.",
+    "When you need a measured speedup before adopting: there is no benchmark harness, frame timer or result file in the repo, so the 60x figure cannot be checked; profile it on your own scenes against Core Graphics, vger or Vello.",
+    "Complex-script text: issue #1 (open since 2025-09-04) reports that Arabic text in PDFs and SVGs renders nothing, and the demo uses a single font.",
+    "Miter joins or exact-area anti-aliasing: the Scene flags expose only round or default joins and butt/round/square caps, and coverage comes from a filtered inverse-lerp approximation, not an exact area integral."
+  ],
+  "integration": {
+    "form": "Swift package (Package/Package.swift: RasterizerCpp headers, RasterizerObjC Metal layer and view, RasterizerSwift) or source-drop of the C++ headers plus Shaders.metal into an Xcode project",
+    "dependencies": "Apple Metal, QuartzCore, CoreGraphics, CoreText; bundled xxhash.h and nanosvg.h; the demo app also bundles pdfium.xcframework and credits stb_truetype",
+    "min_toolchain": "Swift tools 6.0 and C++11 (cxxLanguageStandard .cxx11 in Package.swift); Xcode with the Metal compiler",
+    "platforms": "macOS 12+ and iOS 13+ (Package.swift) on Metal GPUs only; the README still says an iOS port is 'in the pipeline', but a RasterizeriOS project was added in January 2026",
+    "thread_safety": "Not documented. RasterizerRenderer::renderList fans work out internally with dispatch_apply over per-core Ra::Context objects and is not reentrant. Path, Scene and other Ref<> handles use plain non-atomic size_t reference counts, so do not copy or release shared handles from several threads at once.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Possible curvature-estimate bug: Geometry::quadTo assigns x0/y0 = (x2, y2) before computing 'ax = x2 + x0 - x1 - x1', so maxCurve stores 4|p2-p1|^2 instead of the second difference |p0-2p1+p2|^2. For quadratics whose first control leg is much longer than the second this underestimates curvature, and the 'fast' route (maxCurve*det < 4 for large fills, < 16 for molecules) then draws large-fill quadratics as straight chords (CurveIndexer::Quadratic writes only x0,y0 to x2,y2), which can exceed the intended sub-pixel error at small zoom scales. Cubics are computed correctly.",
+    "Path building drops near-flat curves in user space: quadTo and cubicTo turn a curve into a line when its control points sit within 1% of the chord length from the chord (err = 1e-2), so very long, shallow arcs can lose up to about 0.5% of chord length of sag, which becomes visible when zoomed far in.",
+    "No guard on scene size: the per-frame path index lives in the low 20 bits of each instance word (kPathIndexMask 0xFFFFF, flags in bits 21-31) and neither Scene::addPath nor RasterizerRenderer::renderList checks the total, so keep a frame under about 1.05 million paths.",
+    "Frames are rebuilt from scratch every frame (CPU transform, clip and memcpy of all visible geometry), and RasterizerLayer::display skips a frame when both in-flight buffers are busy rather than blocking."
+  ],
+  "pick_this_over_siblings_when": "Pick it over vger when you need real PostScript paths (cubics, non-zero fill, joins, dashes, clips, SVG/PDF content) rather than SDF UI primitives, and over Pathfinder 3 or Vello when you only ship on Apple GPUs and can accept a personal-use licence. Pick vger (MIT), Pathfinder, Vello or the Rive Renderer for open-source licensing, other platforms or published numbers, and Blend2D or Blaze when a CPU renderer with measured results is enough.",
+  "verified_claims_summary": "No measurement backs the README's 'up to 60x faster than the CPU': the repo has no benchmark code, frame timer or result file, and the demo's 'T' key toggles an animated clock scene (Concentrichron), not a timer. The only CPU renderer in the repo is the demo's '0' key toggle to Core Graphics (RaCG::renderListToBitmap drawing every path into one CGContext through CALayer drawLayer:inContext:), so the implied baseline is probably single-threaded Core Graphics versus Rasterizer's multi-core CPU preparation plus Metal GPU, with scene, hardware and method unstated; HN-thread claims (50,000 glyphs at 60 fps, Vello 'very competitive') were seen only as search snippets.",
+  "status_note": "Active (last commit 2026-05-02, iOS target and Swift API added in 2026, 7,346 commits, single maintainer) but licensed for personal use only, so it is a reference design for commercial projects unless the author grants a licence.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/README.md",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/LICENSE.txt",
+    "https://github.com/mindbrix/Rasterizer",
+    "https://github.com/mindbrix/Rasterizer/commits",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Rasterizer",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Package",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Package.swift",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Package/Sources/RasterizerCpp/include",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Package/Sources/RasterizerObjC",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Package/Sources/RasterizerObjC/private",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Package/Sources/RasterizerObjC/include",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/Rasterizer.h",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/Rasterizer.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/RasterizerRenderer.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/RasterizerWinding.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/Shaders.metal",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/RasterizerCG.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/RasterizerSVG.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerCpp/include/RasterizerCoreText.hpp",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerObjC/RasterizerAPI.mm",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerObjC/RasterizerLayer.mm",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerObjC/RasterizerView.mm",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerObjC/include/RasterizerAPI.h",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Package/Sources/RasterizerObjC/include/RasterizerView.h",
+    "https://github.com/mindbrix/Rasterizer/tree/master/Rasterizer/Demo",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Rasterizer/Demo/DemoView.mm",
+    "https://raw.githubusercontent.com/mindbrix/Rasterizer/HEAD/Rasterizer/Demo/RasterizerDemo.hpp",
+    "https://github.com/mindbrix/Rasterizer/issues?q=is%3Aissue",
+    "https://github.com/mindbrix/Rasterizer/issues/1",
+    "https://github.com/mindbrix/Rasterizer/issues/5",
+    "https://github.com/mindbrix/Rasterizer/pulls?q=is%3Apr"
+  ],
+  "confidence": 0.7
+}

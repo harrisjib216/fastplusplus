@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/morousg/cvgpuspeedup",
+  "one_liner": "Header-only CUDA C++20 wrapper that fuses chains of OpenCV-CUDA-style preprocessing calls into one kernel; first-party 38x over OpenCV-CUDA.",
+  "what_it_does": "cvGPUSpeedup mirrors a subset of the OpenCV-CUDA API (resize, convertTo, multiply, subtract, divide, add, cvtColor, split, crop, warp, plus a CircularTensor for temporal batches) on top of the Fused Kernel Library (FKL, a mandatory git submodule). Each cvGS:: call takes OpenCV types (cv::cuda::GpuMat, cv::Scalar, cv::Size) but returns an operation descriptor instead of launching anything; you pass the whole chain to cvGS::executeOperations(stream, op1, op2, ...) and nvcc compiles it into a single kernel. It targets deep-learning pre- and post-processing, e.g. cropping N detections, resizing them, normalising and writing a planar (NCHW-style) tensor.",
+  "how_it_is_fast": "Vertical kernel fusion: the whole operation list becomes one templated CUDA kernel, so intermediates stay in registers, the input is read once and the output written once, and there is one launch instead of one per operation and per crop. Horizontal fusion batches all crops of a std::array<GpuMat, BATCH> into the same grid (batch resize with a usedPlanes count), and executeOperations enables 'thread fusion' by default, where each thread processes several elements. The gain therefore comes mostly from removing launch overhead, idle GPU gaps and global-memory round trips between many tiny OpenCV-CUDA kernels, not from a faster resize algorithm.",
+  "when_to_use": [
+    "Images already live in cv::cuda::GpuMat on an NVIDIA GPU and an Nsight Systems trace shows long chains of tiny OpenCV-CUDA kernels (convertTo, resize, arithmetic, cvtColor, split) before a neural network.",
+    "Crop-and-resize of many small detections per frame (tens to hundreds of crops of about 60x120 into 64x128, as in the batchresize test) followed by normalisation and channel split into a planar float tensor.",
+    "Latency-bound real-time video pipelines where launch overhead and intermediate GpuMat allocations dominate preprocessing, including updating a temporal tensor of recent frames in one kernel.",
+    "Projects already compiling .cu files with nvcc in C++20 that can accept template-heavy headers."
+  ],
+  "when_not_to_use": [
+    "One large, bandwidth-bound operation (a single 4K resize or colour conversion): there is little launch overhead to remove, and the README itself says the speedup grows with the number and smallness of fused kernels.",
+    "Interpolations other than bilinear or colour conversions beyond channel reorders and to-gray: cvGS restricts resize to cv::INTER_LINEAR and cvtColor to RGB/BGR/RGBA/BGRA swaps and *2GRAY at compile time (no cubic, area, Lanczos, YUV or HSV in the wrapper).",
+    "CPU-only, AMD, Intel or Apple GPUs: it is CUDA-only.",
+    "Toolchains on CUDA 12.4 to 12.6, which the README says cannot compile it (an nvcc template-deduction bug), or codebases limited to C++17.",
+    "Teams that need documentation or a stable API: the README says there is no documentation (read the tests) and that FKL is 'less than 1% complete'; the API is still changing (e.g. resize and warp overloads without an input GpuMat added in August 2026)."
+  ],
+  "integration": {
+    "form": "header-only (include/*.cuh plus the FKL headers in the fkl submodule), compiled into your own .cu translation units by nvcc",
+    "dependencies": "CUDA toolkit; OpenCV 4.x built with the CUDA modules (the tests link core, cudaarithm, imgproc, cudafilters, cudaimgproc, cudawarping, imgcodecs); Fused Kernel Library submodule (header-only; the repo's CMake asks find_package(FKL 0.1.8))",
+    "min_toolchain": "C++20 with nvcc from CUDA 11.8, 12.1, 12.3 or 12.8 (12.4 to 12.6 unsupported); MSVC v14.39 to v14.43 on Windows; CMake 3.24 for the repo's tests and benchmarks; OpenCV 4.8, 4.9 or 4.11 tested (CI moved to OpenCV 4.14.0 in 2026)",
+    "platforms": "NVIDIA GPUs (tested on compute capability 7.5, 8.6 and 8.9) on x86-64 and ARM64 (Jetson Orin), Windows 11 and Ubuntu 22.04/24.04 including WSL2",
+    "thread_safety": "Not documented. Operation descriptors are plain value structs and executeOperations launches on the cv::cuda::Stream you pass; no global state was seen in the cvGS headers, so separate streams per thread should be safe, but this is not stated.",
+    "drop_in_for_baseline": "partial: function names and argument types follow OpenCV-CUDA, but each call returns a descriptor that must be chained inside one cvGS::executeOperations call, BATCH and cv types are template parameters, outputs are written to a caller-provided tensor GpuMat, and only a subset of OpenCV-CUDA functionality exists"
+  },
+  "gotchas": [
+    "Benchmark CSV flaw: in ENABLE_BENCHMARK builds the warm-up pass (warmup = true, loop breaks after one iteration) still calls processExecution, so each CSV starts with rows whose means are one cold iteration divided by 100 and whose variance and 'Mean Speedup' are averaged over 99 uninitialised std::array slots. Only the second block of rows (the real 100-iteration run) is meaningful; discard the first when reading your own results.",
+    "The batch-resize tests that double as benchmarks fill the 3840x2160 input with a constant value, so the check against OpenCV-CUDA (absolute tolerance 1e-4 for float) validates the arithmetic chain but cannot catch wrong resize sampling coordinates; validate on your own images.",
+    "Variable batch sizes were broken until PR #184 (merged 2025-11-11): cvGS::resize on a std::array of GpuMats did not forward usedPlanes and backgroundValue to fk::Resize, so code like the README's activeDetections example needs a version from after that fix.",
+    "Batch size, OpenCV types and interpolation are compile-time template arguments, and thread fusion is on by default (executeOperations<true>); every new combination instantiates a new kernel, so expect long nvcc compile times and code growth."
+  ],
+  "pick_this_over_siblings_when": "The other color-and-resampling entries are mostly CPU libraries (fast_image_resize, libvips, CompV, kornia-rs, stb-image-resize-opt) or a stand-alone GPU kernel (CUDARGB2Y). Pick cvGPUSpeedup when your frames are already on an NVIDIA GPU in OpenCV-CUDA and the cost is a chain of small calls. Pick those CPU libraries when there is no NVIDIA GPU or the job is one large resize, where cvGPUSpeedup's fusion has little to remove.",
+  "verified_claims_summary": "First-party only: the README states 38x kernel execution for 50 crops on an RTX A2000 12GB, 1/167th of the time in a user's Nsight timeline, and 2x to 10000x from unit tests run as benchmarks; no result files are committed, and the host CPU, OS/driver model, OpenCV build and build type are unstated. The public harness (tests/batchresize/test_batchresize_x_split3D.cu) times OpenCV-CUDA's per-crop chain (seven launches per crop, or a partly batched variant) against one fused kernel with cudaEvents on the same stream over 100 iterations, BATCH 10 to 300, with inputs already on the GPU. Because the OpenCV side is dominated by host launch rate, the ratio depends heavily on the unstated CPU and driver, and the CSV's first block is corrupted by the warm-up rows described above. The README's OpenCV and cvGS snippets are illustrative and not identical (different divide values; alpha folded into convertTo on one side and a separate multiply on the other).",
+  "status_note": "Active (last commit 2026-08-27; CI moving to CUDA 13.4, CMake 4.4 and OpenCV 4.14), Apache-2.0 and header-only, so it is copyable. It is undocumented, its authors call it a demonstration platform, and the repo moved to Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV (the old morousg URL redirects).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/README.md",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/main.h",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/main.cpp",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/testsCommon.cuh",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/tests/batchresize/test_batchresize_x_split3D.cu",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/benchmarks/verticalfusion/vertical_fusion_static_loop.cuh",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/cmake/discover_tests.cmake",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/cmake/archflags.cmake",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/cmake/cuda_init.cmake",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/cmake/libs/fkl.cmake",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/cmake/libs/opencv.cmake",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/include/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/include/cvGPUSpeedup.cuh",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/include/cvGPUSpeedupHelpers.cuh",
+    "https://raw.githubusercontent.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/HEAD/include/cv2cuda_types.cuh",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/tree/main/include",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/tree/main/benchmarks/verticalfusion",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/issues?q=is%3Aissue",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/issues/183",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/issues/169",
+    "https://github.com/Libraries-Openly-Fused/cvGPUSpeedup-FastOpenCV/pull/184"
+  ],
+  "confidence": 0.75
+}
