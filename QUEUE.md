@@ -1,6 +1,6 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-03 night)
+## Unfinished work (resume here first; updated 2026-10-05)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
 extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
@@ -34,14 +34,24 @@ all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFEREN
    2606.18900) and a retier of Chromium zlib C to B via simonis/zlib-chromium; seed leads not yet
    run: tsl::htrie_map, NeaTS, intel/zlib-accel, iaa-plugin-rocksdb, DeLZSA, Apple LZMESH,
    richox/orz done, c-blosc2 done.
-5. **Waves 10-12** are set up but not launched: 114 assignments across 15 categories
-   (wave 10 media: color-and-resampling, font-shaping-text-layout, image-codecs, rasterizers-2d,
-   video-audio; wave 11 runtime: allocators-gcs, coroutines-fibers, filesystems-and-io,
-   logging-tracing, profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
+5. **Wave 10 closed 2026-10-05** (254 verified, all enriched; see CLAUDE.md Status). Open
+   wave 10 follow-ups in `data/wave10/leads.md` (57 leads, none seeded yet): seed candidates
+   such as ConvectionKernels, honeydiff, zenquant, Vship, Simd (ermig1979), BoofCV, JPEGDEC,
+   Canvas-Txt v5, rusty_webp, nssfactory, scany, clownresampler, Getreuer's IPOL Gaussian survey;
+   paper-access retiers (FOSDEM 2024 vvdec handout, Hydrogenaudio Helix threads, IPOL, PCS2025
+   jpegli paper, groups.google.com libjpeg-turbo thread); retier candidates from the aras-p
+   2022 BCn charts (etcpak and bc7enc_rdo decoder evidence) and a re-run of bcn_decoder_tester on
+   current bcdec (would make it A). Harness re-runs that would settle disputes: HarfBuzz
+   benchmark-shape with -Dkbts=enabled on kb v2.28, pillow-lunasvg against a release-profile
+   resvg, libblur and kornia-rs against a pinned OpenCV build.
+6. **Waves 11-12** are set up but not launched: 76 assignments across 10 categories (wave 11
+   runtime: allocators-gcs, coroutines-fibers, filesystems-and-io, logging-tracing,
+   profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
    bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters). Re-render b1/b2 before
    launching so each known list is current. In a cloud session give every agent
    `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
-   Algolia and arXiv.
+   Algolia and arXiv. Weekly usage limit: ten Opus agents at once were killed on 2026-10-04
+   (reset 15:00 UTC); the wave finished the next day at ten agents without a kill.
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 

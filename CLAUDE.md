@@ -146,12 +146,50 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   (keep-and-document rule); only invalid or fabricated evidence stays rejected.
 - A user interrupt in the main session can kill running background agents silently; if an agent
   never reports and its raw file is missing or stale, relaunch it.
+- Decision ids must match merged ids exactly (lowercase canonical URL): a shortcoming recorded under
+  `https://github.com/DAddYE/trez` did not fold `https://github.com/daddye/trez`; check with
+  `verify.py render` output and re-record under the merged id.
+- Long agent prompts go in a scratchpad file; the Agent call then says only "Your full
+  instructions are in <path>. Read that file first..." plus the caveman final-reply rule. The
+  scratchpad gen_enrich.py (pinned pair order in enrich_order.json, skips slugs that already have
+  enrich/raw/<slug>.json) made relaunches after kills idempotent.
+- A weekly usage-limit kill (2026-10-04, ten Opus enrichers) left complete output files behind:
+  check each untracked enrich/raw file for the full key set and a sensible confidence before
+  deleting or relaunching; 13 of 13 were usable and only their reports were lost (shortcomings
+  were then taken from the files' gotchas and status_note fields).
+- Enricher findings that change a record (baseline, numbers, caveats) go in a retier file even
+  when the tier stays; add_decisions.py only applies the override fields.
 
-## Status (2026-10-03, night)
+## Status (2026-10-05)
 
-- Waves 1-9 are finished. Lists after the 2026-10-03 night session: COPYABLE 1313,
-  REFERENCE 150, REJECTED 24. The next open work is in QUEUE.md "Unfinished work" (paper-access
-  retiers need an environment that reaches arXiv/ACM/IEEE; then waves 10-12).
+- Waves 1-10 are finished. Lists after the 2026-10-05 session: COPYABLE 1545, REFERENCE 174,
+  REJECTED 29. The next open work is in QUEUE.md "Unfinished work" (wave 10 seed leads and
+  paper-access retiers in data/wave10/leads.md; then waves 11-12).
+- Wave 10 (media-and-graphics) closed 2026-10-05 across three cloud sessions (2026-10-03 to
+  2026-10-05): searches b1-b8 for all 5 categories (40 raw files; b7/b8 on WebSearch snippets plus
+  github.com, HN and blogs blocked) plus seed-a..d (32 lead projects); 276 merged, 103 verify
+  batches with 269 verdicts (confirm 223, downgrade 41, reject 3, duplicate 2), 254 verified
+  (A 28, B 22, C 174, D 30; copyable 230, reference 19, mixed 5; image-codecs 72, video-audio 58,
+  color-and-resampling 57, rasterizers-2d 33, font-shaping-text-layout 23, plus 9 unicode-utf8,
+  1 general-lossless and 1 websocket-grpc-rpc filed by category override), every verified entry
+  enriched (128 enricher pairs). Rejected for invalid evidence: Imageflow (bench.sh backgrounds
+  the tool with an unquoted '&', so hyperfine timed job launch; MQF precedent), fast_resize (NEON
+  bilinear path wraps int16 and outputs 0 for channels at or above 128; stb-zip precedent),
+  ucstrcase (self-comparison hits the s == t early return), zenwebp (numbers from an incomplete
+  encoder, own parity report shows it slower) and av2-turbo (no encoder in the repo, disabled
+  CPU-only perf test). 17 duplicates (wrappers and ports: sharp, net-vips, jpeg4py, pyspng,
+  python-soxr, skia-canvas, @napi-rs/canvas, resvg-js, agg-rust, edge264-mvc, rusty_png, trez,
+  nvavif-py, gamut, soundkit, savonet/shine, bc7enc_rdo tables identical to bc7enc). Retiers are
+  in data/wave10/verify/raw/retier-{01..38}.json; tier moves: bc7e C to B and NV_path_rendering
+  C to B (papers and independent runs reached), libspng B to A (wuffs doc/benchmarks.md),
+  giflib-turbo D to C, pngencoder C to B (FPNG-Java JMH), bcdec D to C (aras-p harness, capped by
+  the later-fixed-bug rule), muSkia D to B (camera-ready OOPSLA2 paper in bhargavkulk/skia-paper:
+  1.12x geomean, not 18.7%); down: yuv2rgb A to C and libjxl fjxl A to C (numbers from code later
+  fixed), uniwidth A to C (bug in hot path), FFmpeg swscale B to C, LunaSVG B to C (resvg-py
+  baseline built at opt-level z), Smolscale, lodepng-turbo, RGB2Y, TGFX and libqoi to D. Many
+  entries kept with harness flaws documented (opencodecs PackBits row an artifact, imgdiff claim
+  obsolete, kb and fastGaussianBlur flagged not faster, sst-basic-blocks timed copy reads its
+  table out of bounds).
 - Wave 9 (compression-and-encoding) closed 2026-10-03: searches b1-b8 for all 4 categories
   (34 raw files, b7/b8 thin: blogs and HN blocked, 17 records) plus seed-a/b (13 lead projects);
   150 merged, 61 verify batches with 148 verdicts (confirm 123, downgrade 21, reject 4), 136
