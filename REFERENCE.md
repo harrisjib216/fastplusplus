@@ -562,6 +562,240 @@ Research AVX2/AVX-512 Round 3 Dilithium code using PSPM-TEE sparse c·s multipli
 
 [repo](https://github.com/xurq5953/Optimizing-Dilithium-Implementation-with-AVX2-512) · [benchmark](https://arxiv.org/abs/2306.01989)
 
+### media-and-graphics
+
+#### color-and-resampling
+
+##### ImageSharp (SixLabors)  `C#`  `Six Labors Split License 1.0 (not an SPDX id, non-OSI): Apache-2.0 for open-source or source-available use, transitive dependency use, for-profit under 1M USD annual gross revenue and non-profits; paid Six Labors Commercial License otherwise`  `active`  `Tier A`
+
+Fully managed C# image library; 4.4x faster than Magick.NET and 3.2x faster than System.Drawing on a load-resize-sharpen-save JPEG pipeline.
+
+**Beats:** Magick.NET (ImageMagick) and System.Drawing — Third-party BenchmarkDotNet suite by the NetVips author (.NET 10.0.1 NativeAOT, x86-64-v4, AMD Ryzen 9 7900 with 24 threads, Windows 11): load a 5000x5000 JPEG or tiled TIFF, crop 100 px, shrink to 90% with a Triangle filter, 3x3 sharpen, save at quality 75. ImageSharp 3.1.12 took 366.95 ms against Magick.NET-Q8-AnyCPU 14.10.1 at 1,626.85 ms (about 4.4x, derived from page data) and System.Drawing at 1,185.58 ms (about 3.2x, no sharpen); on TIFF 186.51 ms against 1,533.49 ms (8.2x) and 985.05 ms (5.3x). Magick.NET ran single-threaded (non-OpenMP package) while ImageSharp's sharpen step used up to 24 threads.
+
+**Known shortcoming:** Six Labors Split License 1.0 (not OSI approved), so reference only. In the NetVips Benchmark.cs run (Triangle filter and quality 75 on both sides, Magick.NET-Q8, OpenCL off, .NET 10.0.1 NativeAOT, Ryzen 9 7900, library-default thread counts) NetVips beats ImageSharp in the same table; ImageSharp's own LoadResizeSave bench against Magick.NET is different work (decode-to-target-size versus Q16 full decode).
+
+**Known shortcoming:** Threading asymmetry: Magick.NET-Q8-AnyCPU is built without OpenMP (docs/Readme.md), so the ImageMagick side is single-threaded, while ImageSharp's convolution runs ParallelRowIterator on 24 threads (resize's single ResizeWorker and the JPEG code are single-threaded). 3.1.12 is affected by GHSA-jj3q-cwqj-842r (3.0.0 and later, fixed only in 4.1.1); v4 needs a build-time licence key per a search snippet; the internal ConvolutionProcessor is reached via reflection.
+
+**How:** Hot codec paths use .NET hardware intrinsics picked at run time: the JPEG float DCT has an AVX Vector256 path (FloatingPointDCT.Intrinsic.cs) and colour conversion has AVX, Arm and Vector<T> converters (JpegColorConverterBase). Resize is a separable two-pass filter with precomputed ResizeKernelMap weights run by a sliding-window ResizeWorker over a transposed Vector4 first-pass buffer sized to Configuration.WorkingBufferSizeHintInBytes, which keeps the working set in cache; in 3.1.12 and on main it is one sequential worker per image. Convolution-type processors are row-parallel through ParallelRowIterator with MaxDegreeOfParallelism defaulting to Environment.ProcessorCount. Much of the gap to Magick.NET also reflects the baseline: the Magick.NET-Q8-AnyCPU package is built without OpenMP, so ImageMagick runs every step on one thread.
+
+**Use it when:**
+- A .NET service or app that needs in-process decode, resize and encode with no native dependency (containers, ARM64, trimmed builds; the benchmark itself ran under NativeAOT) and currently uses Magick.NET or System.Drawing: 4.4x faster than Magick.NET-Q8-AnyCPU on the JPEG pipeline and 8.2x on TIFF in the NetVips table.
+- Replacing System.Drawing for thumbnail-style work: 3.2x faster on JPEG and 5.3x on TIFF even though the System.Drawing path skipped the sharpen step.
+- Your use qualifies for the Apache-2.0 side of the Six Labors Split License: transitive dependency, open-source or source-available use, a for-profit under 1M USD annual gross revenue, or a non-profit.
+- Pipelines dominated by convolution-type filters on large images, which ImageSharp spreads over every core by default.
+
+**Skip it when:**
+- You want the fastest option in .NET: NetVips (libvips) is 4.93x faster on JPEG and 3.75x on TIFF in the same table, and NetVips (806.8 ms) and MagicScaler (888.0 ms) beat ImageSharp (1,098.4 ms) in Six Labors' own LoadResizeSave stress benchmark.
+- A for-profit direct dependency above 1M USD revenue without a paid Six Labors Commercial License; version 4 enforces a build-time licence key (a third-party issue seen as a search snippet says it is an error in Release builds), and the net-vips project pins 3.1.12 for that reason.
+- Staying on 3.1.12 to avoid the key while decoding untrusted files: GHSA-jj3q-cwqj-842r (heap out-of-bounds write in TIFF CCITT T4/Modified Huffman decompression, CVSS 7.5) affects >= 3.0.0 and is patched only in 4.1.1, and eight more advisories followed in August-September 2026 (TIFF, ICC, EXR, HistogramEqualization).
+- One very large resize where you expect all cores to help: the resampling pass runs as a single worker (the source comments that parallelism would need multiple workers), so parallelise across images instead.
+- JPEG decode-bound workloads where Huffman decoding dominates: issue #1607 'JpegDecoder: Optimize HuffmanScanDecoder' has been open since 2021.
+
+**Vs siblings:** Among .NET options, pick ImageSharp over NetVips/libvips or MagicScaler when a fully managed library with no native binaries matters more than raw speed, since both are faster in the same benchmarks; against Magick.NET and System.Drawing it is the faster managed choice, provided the Six Labors licence terms fit.
+
+**Gotchas:**
+- MaxDegreeOfParallelism defaults to the processor count; a server that already processes many images concurrently should lower it (Six Labors' own Resize benchmark sets it to 1) to avoid oversubscription.
+- In 3.1.12 the general 2D ConvolutionProcessor<TPixel> is internal; the NetVips benchmark reaches it through reflection (Type.GetType plus MakeGenericType), which is fragile under trimming, NativeAOT and version upgrades.
+- Convolution kernels are applied exactly as given, with no divisor parameter: the benchmark's sharpen kernel sums to 8, so ImageSharp's output is brighter and clipped compared with libvips and ImageMagick, which divide by 8.
+- Processors work on rows converted to Vector4 floats (ToVector4 and FromVector4Destructive per row), so 8-bit pipelines pay a conversion each step; chaining many cheap operations costs more than the per-operation numbers suggest.
+
+**Status:** Actively maintained (v4.1.2 released 2026-09-14, 8.0k stars, 14,518 commits); usability stays reference because of the non-OSI Six Labors Split License and v4's build-time key, and the benchmarked 3.1.12 is the latest 3.x release on the releases page, so it does not carry the fix for GHSA-jj3q-cwqj-842r (patched only in 4.1.1).
+
+[repo](https://github.com/SixLabors/ImageSharp) · [benchmark](https://github.com/kleisauke/net-vips/tree/master/tests/NetVips.Benchmarks)
+
+#### image-codecs
+
+##### HALIC (High Availability Lossless Image Compression)  `unknown (binaries only; README says built with GCC and Clang)`  `MIT`  `stale`  `Tier B`
+
+Closed-source lossless RGB/gray image codec (CLI binaries) that encodes about 15-32x faster than Pillow PNG and WebP lossless at smaller size.
+
+**Beats:** libwebp lossless (Pillow 10.1.0, method 1) and PNG (Pillow 10.1.0, optimize=False) — In WangXuan95's Image-Compression-Benchmark (Intel Core i7-12700H, Windows 10, every codec single-threaded, timed with time.time() over the whole set), HALIC 0.7.2 .exe compressed CLIC2021 (585 RGB images, 4.1 GB) to 1,473,481,803 bytes in 22.187 s and decompressed it in 28.447 s, versus Pillow 10.1.0 WebP lossless method 1 at 1,496,478,650 bytes, 720.160 s and 37.044 s, and Pillow PNG optimize=False (zlib default level; Pillow 10.1.0's Windows build script pins libwebp 1.3.2 and zlib 1.3) at 2,003,016,524 bytes, 334.791 s and 33.677 s; on GDCC2020 it took 4.780 s and 5.426 s versus PNG at 152.321 s and 11.545 s. The WebP baseline ran at quality=100, which in libwebp lossless mode means maximum compression effort, so the 32x encode gap is against a slow WebP setting, while HALIC's times include one process launch per image and the Pillow codecs ran in-process.
+
+**Known shortcoming:** Reference only: binaries, no source in any author repo; last release 2024-05-24 (stale). Tier B on WangXuan95's Image-Compression-Benchmark (i7-12700H, Windows 10, single thread; CLIC2021 and GDCC2020 numbers match).
+
+**How:** Per the README: simple prediction without context modelling or error correction, so many residuals remain, followed by an ANS entropy coder (FSE) over completely independent blocks and per-channel sub-streams; the measured build runs on one thread. Skipping context mixing is what keeps it near QOI-class speed while compressing close to WebP lossless. The predictor, block size and any SIMD use are not documented: the README says no SIMD or assembly, yet the 0.7.2 assets are labelled AVX and AVX2 builds (compiler target flags, presumably).
+
+**Use it when:**
+- Batch archiving of large 24-bit photographs (multi-megapixel PPM/PNM) where encode time dominates: on CLIC2021 it encoded 4.1 GB in 22.2 s versus 334.8 s for Pillow PNG and 720.2 s for Pillow WebP lossless m1, with output 26% smaller than that PNG.
+- Research or comparison work that needs a fast-symmetric reference point between QOI/QOIR-class speed and WebP-lossless-class size.
+- Closed environments (offline tools, internal storage) on x86-64 Windows or Linux where running a third-party binary is acceptable and interoperability with other software is not needed.
+
+**Skip it when:**
+- Anything that must be built, audited, fuzzed or embedded: there is no source in the repo, releases or the author's HALIC-Image-Converter, despite the MIT LICENSE file.
+- Interchange or long-term storage: .halic is undocumented, single-vendor, and the project has had no release since 0.7.2 (March 2024) or commit since May 2024.
+- Small images: process start-up per file dominates, and on UCID (1338 small images) HALIC decoded in 27.2 s versus 15.0 s for WebP lossless m1 and 15.2 s for Pillow PNG; on Kodak Pillow PNG decoded faster too (0.484 s versus 0.615 s).
+- Best ratio: JPEG XL e3 and up, fNBLI, BMF, EMMA and other context-mixing codecs are 5-17% smaller on CLIC2021.
+- Alpha channels, 16-bit samples, PNG input or other non-PNM formats: not supported or not documented.
+
+**Vs siblings:** Pick HALIC over fNBLI (GPL-3.0 source, 9% smaller and about as fast to decode on CLIC2021, but 43.2 s versus 22.2 s to encode) only when encode speed matters more than having code; pick Zpng (BSD-3-Clause) or QOIR (Apache-2.0) when you need embeddable source at similar speed and can accept 19-45% larger files than HALIC.
+
+**Gotchas:**
+- The 'FAST' variant (HALIC072fe/fd) is labelled trial in the 0.7.2 notes and failed to decompress zone_plate.pnm in the ImgInfoGray set of the benchmark.
+- The benchmark's published RunBenchmark.py has CHECK_DISTORTION = False, so the run as published does not compare decoded pixels with the input; only non-zero exit codes are caught, which is how the FAST failure surfaced.
+- The GitHub 'Source code' archives on each release are only the README-only tree; the codec itself is closed.
+- The format has no spec or version-compatibility statement; keep the exact decoder binary that wrote your files.
+
+**Status:** Stale since 2024-05-24 (LICENSE added; last binaries 0.7.2 from 2024-03-13, no issues filed) and reference-only: the MIT licence covers a README, not inspectable code, so treat it as a benchmark point rather than something to ship.
+
+[repo](https://github.com/Hakan-Abbas/HALIC-High-Availability-Lossless-Image-Compression-) · [benchmark](https://raw.githubusercontent.com/WangXuan95/Image-Compression-Benchmark/HEAD/README.md)
+
+#### rasterizers-2d
+
+##### Anti-Grain Geometry (AGG 2.6)  `C++`  `BSD-3-Clause`  `abandoned`  `Tier B`
+
+Classic scalar C++ template 2D rasterizer; an independent bl_bench run puts it ~1.2x Skia and ~2.3x Cairo single-threaded.
+
+**Beats:** Skia (CPU pipeline) and Cairo 1.18.4 — LaurenzV's independent run of the Blend2D bl_bench harness on an Apple M1 Pro (2026-06-08, macOS, 512x600 PRGB32 target, SrcOver, single thread, options.repeat 15; compiler and flags unrecorded, Skia from vcpkg's unofficial-skia, Cairo 1.18.4 from pkg-config) gives AGG a 1.21x geometric-mean speedup over Skia and 2.29x over Cairo across the 522 cells they share (29 tests x Solid/Linear/Radial x 6 sizes), which I recomputed from the rcpms values; the same file puts AGG at 0.30x Blend2D ST, 0.48x Vello CPU ST, 0.70x JUCE 8.0.8, 1.10x raqote and 2.42x tiny-skia. The measured code is blend2d-apps' bundled AGG 2.4-line copy with its own modified Agg2D wrapper, whose core rasterizer headers match this repository.
+
+**Known shortcoming:** Tier B on the Vello CPU author's vello_chart data (arm 2026-06-08, Apple M1 Pro: 1.21x Skia winning 66% of cells, 2.29x Cairo 1.18.4; x86 2026-01-22: 1.87x Cairo 1.18.2; compiler, flags and Skia version unrecorded): wins polygon and path fills and strokes, loses simple rectangle, round and triangle fills and StrokeRectA (0.52x). The measured code is blend2d-apps/3rdparty/agg plus Agg2D, whose hot-path headers match ghaerr/agg-2.6 except std:: qualifiers and cell_block_limit. AGG's radial gradient is centred while Skia's is focal two-point. ghaerr/agg-2.6 is not the canonical tree: the SourceForge SVN is ahead (r145, 2024-09-28; GPC moved to MIT), and this copy still carries the non-commercial GPC clipper, so usability is mixed.
+
+**Known shortcoming:** Recomputed from the vello_chart data over 522 cells: 1.206x Skia and 2.286x Cairo, but 0.70x JUCE, 0.30x Blend2D single-threaded and 0.48x Vello CPU single-threaded. The measured Agg2D is the blend2d-apps modified wrapper (fillRectangleI, 3-colour gradients), not code in the ghaerr copy. CVE-2019-6245 and CVE-2019-6247 (AGG 2.4 via svgpp); the default integer clipper overflows beyond about 8.4M px; the cell limit drops cells silently; line() splitting of 16384+ px segments has no return; issues #13 (GCC 14 build failure) and #14 (pixfmt_custom_blend_rgba compile error) open; SourceForge r145 is ahead of this copy.
+
+**How:** The core is an exact-area-coverage scanline rasterizer in the lineage of FreeType's gray rasterizer: edges are converted to 24.8 fixed point and walked into per-pixel cells holding signed area and cover, the cells are bucketed by row and sorted by x (qsort_cells), and sweep_scanline accumulates cover into 8-bit coverage spans with an optional gamma table and non-zero or even-odd fill. Every stage (vertex converters, span generators, blenders, pixel formats) is a template, so the whole pipeline inlines into one specialised loop with no virtual calls or per-pixel dispatch, and cell blocks (4096 cells each) and scanline buffers are reused between paths. It is plain scalar C++ with no SIMD and no threading; its lead over Skia in this benchmark comes from polygon, path and stroke work at 32 px and larger, while Skia wins simple rectangle and rounded-rect fills.
+
+**Use it when:**
+- Single-threaded CPU rendering of complex anti-aliased paths and strokes (charts, maps, plotting backends) where Cairo is the incumbent: 2.29x Cairo 1.18.4 by geometric mean on an M1 Pro, faster in 94% of cells.
+- Stroke-heavy scenes: 1.39x Skia on strokes overall (StrokeWorld 1.92x, StrokeFish 1.82x, StrokeButterfly 1.67x).
+- Portable or embedded targets where Skia's build or a SIMD- or JIT-dependent renderer is not an option: scalar C++, no dependencies for the core, renders into any custom pixel format.
+- When you want a small, permissively licensed (Modified BSD or AGG Public License) renderer you can vendor and modify, or you already maintain an AGG-based stack.
+
+**Skip it when:**
+- When raw CPU throughput is the goal: in the same M1 Pro dataset Blend2D 0.12.0 is about 3.3x faster single-threaded and scales with threads, Vello CPU is about 2.1x faster single-threaded and JUCE 8.0.8's software renderer about 1.43x faster (derived from page data).
+- Many small simple shapes: at 8x8 and 16x16 it is only at parity with Skia, and it loses FillRectA (0.84x except solid), FillRoundU (0.80x) and StrokeRectA (0.52x).
+- Untrusted vector input without hardening: CVE-2019-6245 (unbounded recursion in the cell rasterizer) and CVE-2019-6247 (heap overflow via blend_hline) were filed against AGG 2.4 as used in svgpp, and the default integer clipper overflows on huge coordinates.
+- When you need a maintained dependency: this GitHub copy last changed 2023-08-21 and has open build failures (issue #13: GCC 14.2.1 with FreeType 2.13.3 in agg_font_freetype.cpp); the SourceForge SVN fixed that and C++23 warnings in r140-r145 (2024).
+- When you need modern features out of the box: no text shaping, colour management, GPU backend or multi-threading; the bench backend only supports Solid, Linear and Radial paints, with Agg2D's gradients limited to pad linear and centred radial (core AGG has gradient_radial_focus and repeat/reflect adaptors in agg_span_gradient.h).
+
+**Vs siblings:** Pick Blend2D (about 3.3x faster single-threaded, multi-threaded) or JUCE's software renderer (about 1.43x faster) when speed is the main goal; pick AGG over them when you want a dependency-free, portable scalar renderer with a fully pluggable template pipeline (custom pixel formats, gamma, subpixel-accurate strokes) or already run on an AGG-based stack. Against tiny-skia and raqote AGG is faster in the same data (2.42x and 1.10x geomean, derived).
+
+**Gotchas:**
+- The default rasterizer_scanline_aa<> uses rasterizer_sl_clip_int, which converts coordinates with a plain iround(v * 256) to 24.8 fixed point before clipping, so coordinates beyond about +/-8.4 million px overflow; use rasterizer_sl_clip_int_sat or rasterizer_sl_clip_dbl and a clip box for untrusted input.
+- Cell storage is capped (cell_block_limit, default 1024 blocks x 4096 cells = 4,194,304 cells) and add_curr_cell() simply returns once the cap is hit, so a huge or very detailed path renders incomplete with no error; raise the limit through the rasterizer constructor.
+- As read in this copy, rasterizer_cells_aa::line() splits a segment spanning 16384 px or more horizontally into two recursive calls but has no return afterwards, so such a segment is also rasterized whole; keep geometry clipped to the canvas so segments never get that long.
+- The benchmarked Agg2D is blend2d-apps' modified copy (fillRectangleI fast path for integer solid rectangles, three-colour gradients), which this repo's agg-src/agg2d lacks; this repo's Agg2D instantiates pixfmt_custom_blend_rgba, whose copy_pixel() does not compile when used (issue #14: pixel_type* passed to make_pix(int8u*)). Do not copy agg-src/gpc (non-commercial licence here; SourceForge r144 has it under MIT).
+
+**Status:** This GitHub mirror (367 stars, 92 forks, 6 open issues, 2 stale PRs) has been unchanged since 2023-08-21 while the upstream SourceForge SVN reached r145 on 2024-09-28 with C++23, FreeType 2.13.3 and fallthrough fixes and MIT-licensed GPC, so vendor from SourceForge; the core is BSD-3-Clause or AGG Public License and copyable, and usability is mixed only because of agg-src/gpc here (issue #10 also flags a GPL-licensed SDL2 demo platform file).
+
+[repo](https://github.com/ghaerr/agg-2.6) · [benchmark](https://raw.githubusercontent.com/LaurenzV/vello_chart/HEAD/data/arm/2026-06-08.json)
+
+##### muSkia Skia optimizer (Semantics for 2D Rasterization)  `Lean (formal semantics); implementation language unknown`  `no license`  `unknown`  `Tier B`
+
+Lean-verified peephole optimizer for Skia command streams; 1.12x geomean raster speedup over Skia Graphite on Chrome-generated pictures.
+
+**Beats:** Skia (its most modern GPU backend) — Peer-reviewed first-party measurement (PACMPL OOPSLA2 2026, article 339), read from the camera-ready LaTeX in the first author's public skia-paper repo. On an 8-core Apple M2 (16 GB) with Skia f931a2e built by Clang 17.0.0 -O3 -flto=thin, Graphite/Metal nanobench playback of 139 SaveLayer-bearing pictures from Chrome on the top 100 sites (median of 25 runs, bootstrap 95% CI) gives a 1.12x geomean (max 3.04x). The other runs: Ganesh on the M2 1.08x; Intel i7-8700K with CoffeeLake-S GT2 (Clang 18.1.3) 1.14x Graphite and 1.07x Ganesh on 143 recaptured pictures; the next 100 sites 1.18x on 144 pictures with the passes frozen.
+
+**Known shortcoming:** Paper-only entry (OOPSLA2 2026, ACM DOI 10.1145/3839471; arXiv 2603.23696) with no code found; arXiv, alphaXiv, the ACM DOI and Zenodo are all blocked here, so the 18.7% figure is snippet-only and the tier is D; reference only.
+
+**Known shortcoming:** Enricher (e127, 2026-10-05): the camera-ready paper (bhargavkulk/skia-paper, OOPSLA2 2026 article 339) supersedes the arXiv v1 abstract: 1.12x geomean on 139 SaveLayer-bearing Skia pictures (Graphite/Metal, Apple M2, Clang 17.0.0 -O3 -flto=thin, Skia f931a2e, nanobench median of 25 runs), Ganesh 1.08x, i7-8700K 1.14x/1.07x, next 100 sites 1.18x, max 3.04x, optimisation at most 0.03 ms; retiered D to B (retier-37). Only 51 of 139 pictures are rewritten (38 with CI above 1x) so the geomean includes unrewritten noise; per-layer skp playback, not page frame time; 25 of 139 pixel diffs above 1%; four significant slowdowns on Intel. Code only on Zenodo 21386615 (blocked); Skia fork not on GitHub and not upstreamed.
+
+**Independent measurement:** peer-reviewed first-party (OOPSLA2 2026)
+
+**How:** It removes or cheapens SaveLayer/Restore pairs, each of which costs an offscreen GPU surface plus a blend. The four rewrites are: drop opaque SrcOver SaveLayers that contain only SrcOver draws; turn a DstIn mask layer into a Clip; fold a luminance or colour filter into the draws it covers; and delete opaque gradient masks used by one Russian web framework (mail.ru, dzen.ru, yandex.ru). Each rewrite is a single linear pass driven by a stack of small state machines, one per open SaveLayer (SkOptPass<MatchState>, with an inline STArray<8> frame stack). Removed commands become NoOps, and insertions are buffered and merged in one scan, a technique the paper credits to WebKit B3's InsertionSet. Optimization took at most 0.03 ms per picture on the M2.
+
+**Use it when:**
+- Skia clients that record SkPictures/SkRecords before playback (browser engines, compositors, picture-replay tools) and whose command streams nest SaveLayers for opacity, masks or filters.
+- Web-content rendering where Chrome-style output uses SrcOver or DstIn layers for clipping and masking: the paper's largest gains were 3.04x on a vimeo.com layer (three rewrites chained) and 2.41x on dzen.ru (gradient-mask rewrite).
+- Research or tooling that needs a machine-checked definition of Skia's layer, blend and clip semantics to prove a draw-list rewrite correct before shipping it.
+- GPU backends, Graphite in particular: measured gains were higher there (1.12x on Apple M2 Metal, 1.14x on an Intel CoffeeLake-S GT2 integrated GPU) than on legacy Ganesh (1.08x and 1.07x).
+
+**Skip it when:**
+- As a faster rasterizer: it does not touch Skia's path filling, shaders or GPU pipeline, so pictures without SaveLayers gain nothing and pay the optimizer pass (the RQ3 total-time CDF shows more slowdowns for exactly those).
+- Pixel-exact pipelines: the rewrites are proved over real-valued colours, so anti-aliasing and rounding may change. 25 of 139 benchmark pictures had pixels differing by more than 1% in a channel (judged anti-aliasing by eye).
+- Programs that use mask filters, blurs, image filters, SkSL shaders or bitmap features: muSkia does not formalize these, the passes give up on unmodelled commands, and only 41 of 139 pictures could be converted for translation validation.
+- Legacy Ganesh with complex clip paths: the DstIn-to-Clip rewrite slowed avast.com layer 0 significantly on Ganesh/Intel; Graphite/Intel showed three statistically significant slowdowns (intuit.com layer 15, two gravatar.com layers).
+- Production use today: the code is a research fork of Skia (commit f931a2e, between milestones 143 and 144) shipped only as a Zenodo artifact, and per the first author Chrome and Skia had not agreed to upstream it as of June 2026.
+
+**Vs siblings:** Pick it only when you are already on Skia and want fewer offscreen layers in recorded pictures without changing the rasterizer. Blend2D, ThorVG or Vello CPU replace the rasterizer and are the siblings to look at if raw fill speed is the problem, and the two approaches can stack.
+
+**Gotchas:**
+- The catalogued 18.7% (99 programs, 32 us) is the March 2026 arXiv v1 abstract. The camera-ready paper re-ran with 25 nanobench runs per picture and reports a 1.12x geomean on 139 pictures, at most 0.03 ms to optimize, and up to 3.04x.
+- The benchmark set keeps only Chrome layer pictures that contain SaveLayer. Only 51 of the 139 are rewritten at all, and 38 of those have 95% confidence intervals entirely above 1x. The geomean includes unrewritten pictures whose ratios (0.96x-1.09x) are noise.
+- The numbers are per-layer .skp playback times in Skia's nanobench, with the optimization applied offline. They are not whole-page frame times inside Chrome, and Chrome's layer split differs by hardware, so each machine got its own capture.
+- The SrcOver-SaveLayer rewrite requires the layer to be opaque, a side condition the Lean model tracks but the paper's simplified rules omit; removing a layer can also defeat Graphite's own first-draw clear optimization (intuit.com regression).
+
+**Status:** Research artifact (Zenodo record 21386615, not opened here because zenodo is blocked) accepted at OOPSLA 2026; no public GitHub repository for the Skia fork or the Lean code was found, and it is not upstreamed in Skia or Chrome, so treat it as a reference design rather than a library.
+
+[benchmark](https://github.com/bhargavkulk/skia-paper/blob/main/evaluation.tex)
+
+##### NV_path_rendering (NVpr)  `C (OpenGL extension in the NVIDIA driver)`  `no license`  `unknown`  `Tier B`
+
+NVIDIA OpenGL extension for GPU path rendering; its peer-reviewed figure shows about 2-40x over Cairo and Skia's CPU rasterizer.
+
+**Beats:** Cairo 1.9.6, Skia (circa May 2010, CPU raster backend), Qt 4.5.x, Direct2D and the OpenVG 1.1 reference implementation (the nvpr_svg comparison backends in the NVprSDK) — The paper's performance figure was read from the authors' LaTeX source and its vector EPS on github.com/markkilgard/gpupathrender; the values are derived from the chart's vector data, so they are approximate. Setup: NV_path_rendering at 16 samples per pixel on a GeForce 650 with an unnamed 'fast Core i7', 12 SVG scenes, windows from 100x100 to 1100x1100. NVPR beats Cairo by 2.7x (Spikes, 100x100) to 40x (Cougar, 200x200), Skia's CPU raster by 2.1x to 34x, Skia Ganesh (GPU) by 1.6x to 78x, Direct2D hardware by 0.95x to 29x, and Direct2D WARP by 4.4x to 31x. Most ratios fall as the window grows: Tiger versus Cairo goes from 17x at 200x200 to 6.3x at 1100x1100. The 105x clipping showcase (8.69 ms versus Cairo's 909 ms at 1000x1000) is a separate figure from a Core i7 with a GeForce 560M laptop GPU; the chart's own clipped-tiger scene shows 6.3x to 22x versus Cairo.
+
+**Known shortcoming:** Reference only: the NV_path_rendering driver is closed source; the nvpr_svg comparison harness (Cairo, Qt, Skia, Direct2D, OpenVG backends) survives only in SDK mirrors. The TOG 31(6) 2012 paper PDF is blocked here, so the numbers (GeForce 650 + Core i7, 8.69 ms vs Cairo 909 ms on the clipping scene) are snippet-only; Skia has since dropped its NVPR backend, so the comparison is historical.
+
+**Known shortcoming:** Retiered C to B (retier-27) on the paper's LaTeX and chart data in markkilgard/gpupathrender. The 105x clipping figure is a separate GeForce 560M showcase; the chart's clipped scene is 6.3-22x versus Cairo; the chart has no Qt row and OpenVG was compiled out of -xbenchmark. The nvpr_svg.cpp harness times CPU backends without the blit while the GPU time includes swap plus glFinish (vsync off); benchmark.bat is stale (runs gs_bezier.exe); Cairo 1.9.6 had a path-clipping bug per the SDK ReadMe; Qt 5.12 deprecated and Qt 6 removed the NvprRenderer; the renderer lives in NVIDIA's proprietary driver.
+
+**Independent measurement:** paper tables (blocked)
+
+**How:** The technique is 'stencil, then cover'. Each path is baked once into resolution-independent GPU geometry: triangle-fan anchor geometry, Loop-Blinn quadratic and cubic discard triangles (cubics are subdivided into convex hulls), and conservative cover geometry. The stencil step accumulates per-sample winding numbers in the stencil buffer. The cover step rasterizes the cover geometry, shades the samples whose stencil value is non-zero and resets the stencil as it goes. Strokes use a quadratic Bezier stroke discard shader. Antialiasing comes from multisampling (16 samples per pixel in the benchmarks), and each sample keeps its own colour, which avoids conflation artifacts. The paper credits three hardware features: coarse stencil culling that rejects hundreds of pixels per clock, 8-bit stencil traffic that runs near memory-bus saturation, and a GPU front-end processor that switches between stencil and cover without driver revalidation, so many small paths stay GPU-bound.
+
+**Use it when:**
+- Static or retained vector content (SVG art, maps, UI, glyph runs) redrawn many times under changing transforms (zoom, rotation, projective warps) on NVIDIA GPUs, so the one-time bake is amortised
+- Compositing 2D paths with 3D: depth-tested paths, paths in perspective, stencil-clipping 3D against paths, or custom fragment shaders on fills
+- Content with exactly shared edges (Flash-style art) where coverage-to-alpha renderers show background bleeding: per-sample colour avoids conflation
+- Desktop Windows or Linux apps that already own a compatibility-profile OpenGL context and target NVIDIA hardware only
+
+**Skip it when:**
+- Anything that must run on AMD, Intel, Apple or mobile GPUs, or under Vulkan, Direct3D or Metal: this is an NVIDIA OpenGL extension (the 2011 SDK deck lists no Mac support)
+- Immediate-mode drawing that re-specifies paths every frame (browser canvas, dynamic charts): baking time is linear in path commands and is excluded from the benchmark loops, and the paper itself notes that browsers re-specify paths on every redraw
+- Simple line-segment scenes at large window sizes against Direct2D hardware: in the paper's figure the Spikes scene falls to about 0.95x at 1100x1100 (Direct2D slightly faster), and on the GeForce 650 most ratios shrink as the window grows
+- Memory-tight GPUs: quality depends on a multisampled colour plus stencil framebuffer. The 2011 deck calls 4 samples the bare minimum and 16x 'extremely memory intensive', and the paper's future work targets the memory footprint.
+- New projects that need ecosystem support: Qt deprecated Shape.NvprRenderer in 5.12 and Qt 6 has no NVPR backend; Skia has dropped its NVPR backend (per the verifier)
+
+**Vs siblings:** Choose it only for an NVIDIA-only OpenGL application that needs paths composited with 3D, depth or custom shaders. For portable CPU rendering Blend2D wins nearly all configurations in the ETH thesis comparison, and Vello or Pathfinder are portable GPU options. NVPR's speedups were measured against 2010-2012 Cairo and Skia builds and a 2012 GPU, so they say little about today's Blend2D, Vello CPU or Skia Graphite.
+
+**Gotchas:**
+- The comparisons are not at identical output: NVPR runs at 16 samples per pixel while Cairo, Skia, Qt and Direct2D use coverage-to-alpha antialiasing, and the 2011 deck's numbers pit the GPU against a single CPU core
+- The SDK sample code is under NVIDIA's SDK agreement (derivatives allowed with an attribution statement; NVIDIA may terminate the licence), not an OSI licence, and the renderer itself is closed
+- The spec copy in the SDK (version 1, June 2011) is written against the OpenGL 3.2 compatibility profile and requires ARB_compatibility on 3.x; core-profile use relies on later spec revisions not read here
+- nvpr_svg's benchmark.bat is stale (it runs gs_bezier.exe). The paper's 12-scene, 11-resolution sweep is the undocumented -xbenchmark mode in nvpr_svg.cpp, where OpenVG is compiled out as 'too slow to benchmark'.
+
+**Status:** Shipped in NVIDIA drivers since 275.33 (June 2011); NVprSDK's last commit was February 2020. Qt deprecated its NVPR backend in 5.12 and removed it in Qt 6, and Skia dropped its backend, so treat it as a vendor-locked historical reference, not a dependency.
+
+[benchmark](https://github.com/markkilgard/gpupathrender)
+
+#### video-audio
+
+##### rav1d-safe  `Rust`  `AGPL-3.0-only OR LicenseRef-Imazen-Commercial (Cargo.toml, LICENSE-AGPL3, LICENSE-COMMERCIAL); code inherited from dav1d/rav1d is BSD-2-Clause (COPYING)`  `active`  `Tier A`
+
+Memory-safe Rust AV1 decoder (rav1d fork); faster only than upstream rav1d with its assembly disabled, slower than dav1d.
+
+**Beats:** upstream memorysafety/rav1d commit d3d1cd6 (package 1.1.0) built with default-features=false (bitdepth_8, bitdepth_16 only), i.e. with its hand-written assembly disabled; not dav1d and not rav1d's default assembly build, both of which are faster — On an AMD Ryzen 9 7900X with Rust 1.98.1 (LLVM 22.1.8), fat LTO, one codegen unit and identical RUSTFLAGS for both arms, checked rav1d-safe (commit be5b244, staged 0.6.0 with a git-pinned archmage, not the crates.io package that depends on archmage ^0.9.29) decoded 12 single-frame 8-bit 4:2:0 IVF stills in 0.680x (1 worker), 0.821x (4) and 0.813x (8) the time of upstream rav1d d3d1cd6 built with default-features=false. The stills are photo and map at 2K/4K/8K, each with minimum and eight tiles. Figures are geometric means of medians of five paired repetitions, and every run was MD5-checked against upstream and dav1d 1.5.3. The baseline is a non-default scalar build, and compare.py's rotate-then-reverse ordering cancels out for two arms, so upstream always ran first in each pair (the page discloses the fixed order).
+
+**Known shortcoming:** The win is only against upstream rav1d d3d1cd6 built without assembly; against dav1d or rav1d with assembly it is slower. The 1.77-8.62x figures come from a separate 2026-09-07 page with different inputs and an older revision (up to 12.8x against frame threading). Licence is AGPL-3.0-only or commercial, plus BSD-2-Clause inherited code; crates.io 0.6.0 is published. Usability mixed.
+
+**Known shortcoming:** The timed be5b244 used a git-pinned archmage while crates.io 0.6.0 uses archmage ^0.9.29; compare.py's rotate-then-reverse cancels for two arms with upstream always first (disclosed). 0.6.0's mastering-display metadata is wrong (1000 nit reads as 25.6), fixed only on main; unchecked was renamed untracked after 0.6.0. The 2026-10-01 docs put the default build at 1.72-1.74x dav1d 1.5.3's time on 4K stills (480p inter 2.68 vs 0.83 ms), so it stays slower than dav1d with assembly.
+
+**How:** Against upstream's no-assembly build, the speed comes from having SIMD at all. rav1d-safe ports dav1d's x86 and ARM assembly families to safe Rust SIMD: motion compensation, inverse transforms, intra prediction, CDEF, loop filter, loop restoration, film grain, palette and refmvs, plus an inlined msac entropy decoder. It uses archmage capability-token dispatch (AVX2, some AVX-512, NEON) and safe_unaligned_simd loads. Upstream rav1d with default-features=false falls back to its scalar Rust code. Runtime DisjointMut overlap tracking stays on in the default build; on 4K AVIF it costs about 3.9 of 42.4 ms per frame against dav1d 1.5.3 (docs/SAFE_VS_DAV1D.md).
+
+**Use it when:**
+- Decoding untrusted AVIF/AV1 stills in a Rust server where a forbid(unsafe_code) decoder with no assembly is a hard requirement
+- As a replacement for upstream rav1d built without assembly (for example, a target or policy that rules out nasm/asm): on 2K-8K photo stills it took 0.51-0.78x the time, and on map stills 0.755-1.002x
+- Tiled stills decoded with tile threading (1/4/8 workers, max_frame_delay=1), which works in the default checked build
+- Verifying AV1 encoder output: the default Strictness::Strict reports desynchronised symbol streams as errors where dav1d would conceal them
+- Cargo-only builds that still need SIMD on x86-64 (AVX2/AVX-512) and aarch64 (NEON)
+
+**Skip it when:**
+- When throughput is what matters: dav1d and default (assembly) rav1d are faster. The author's 2026-10-01 profile puts the default build at 1.72-1.74x dav1d 1.5.3's time on 4K stills, and the 2026-09-07 grid at 1.8-8.6x upstream's time (up to 12.8x against upstream frame threading)
+- Inter-heavy video playback: on a 480p inter stream the default build took 2.68 ms/frame against dav1d's 0.83, mostly in warp motion compensation, and frame threading in 0.6.0 needs the unchecked feature
+- Closed-source products without buying Imazen's commercial licence: the crate is AGPL-3.0-only OR LicenseRef-Imazen-Commercial (the code inherited from dav1d/rav1d is BSD-2-Clause)
+- Pre-AVX2 x86 (no SSE tier, so it falls back to scalar) or ARM cores where dav1d's SVE2/dotprod/i8mm paths matter (only baseline NEON is ported)
+- Streams that need S-frames, SVC operating-point selection or the argon vectors: 19 of 803 dav1d-test-data vectors are not exercised
+
+**Vs siblings:** Pick dav1d (catalogued, BSD-2-Clause, beats libaom) whenever speed or permissive licensing matters. Pick rav1d-safe only when a Rust decoder with no assembly and forbid(unsafe_code) is required. rusty-av1-toolkit is catalogued for its rav1e encoder speed; its rav1d-derived decoder has no catalogued decoder benchmark.
+
+**Gotchas:**
+- Strictness::Strict is the default and rejects non-conforming streams that dav1d conceals; set Strictness::Lenient for dav1d-identical behaviour on corrupt input
+- Feature names moved after 0.6.0: the published crate's unchecked feature (frame threading, no overlap tracking) is called untracked on main, which also adds frame threading to tracked builds. The README table still says unchecked
+- Published 0.6.0 returns wrong mastering-display values (wrong fixed-point units; a 1000-nit maximum reads as 25.6 nits). The fix is only on main (Unreleased)
+- frame_size_limit defaults to 120 megapixels and bounds only declared dimensions, not decode time; use set_stop for cancellation on untrusted input
+
+**Status:** Very active (commits on 2026-10-01; 0.6.0 published 2026-09-08 with about 15k total downloads; 451 closed issues, none open), but AGPL-3.0-only or a paid commercial licence and a speed deficit against dav1d make it a memory-safety pick, not a speed upgrade.
+
+[repo](https://github.com/imazen/rav1d-safe) · [benchmark](https://raw.githubusercontent.com/imazen/rav1d-safe/HEAD/benchmarks/noasm-2026-09-08/README.md)
+
 ### networking-and-servers
 
 #### dns-quic-http3
@@ -2638,6 +2872,690 @@ Rust modular-arithmetic/NTT crate whose NEON ML-KEM-512 example edges out liboqs
 **Status:** One developer, 11 commits (the burst of 2026-08-11 changes delivered the FIPS 203 fixes and the speedups, and the last commit was 2026-09-03), no issues filed, not on crates.io, and noncommercial-licensed, so treat it as reference code to read, not a dependency.
 
 [repo](https://github.com/crabnebula-dev/moduletto) · [benchmark](https://github.com/crabnebula-dev/moduletto/blob/main/BENCHMARKS.md)
+
+### media-and-graphics
+
+#### color-and-resampling
+
+##### epeg  `C`  `MIT-enna (Enlightenment MIT variant: COPYING requires publicly documented acknowledgment when the source is not published; COPYING-PLAIN is a non-binding plain-English note). Not OSI-approved.`  `abandoned`  `Tier C`
+
+Small C library and CLI for JPEG-to-JPEG thumbnails via libjpeg scaled decode; beats plain 'convert -resize', loses to ImageMagick -thumbnail and libvips.
+
+**Beats:** ImageMagick convert -resize 150x150> (plain resize mode); ImageMagick's own -thumbnail mode with the jpeg:size hint is faster than epeg in the same table — In one contributor run of fawick/speedtest-resize (nono; 3.4 GHz Intel Core i7, model unstated, Ubuntu 16.10; first 10 JPEGs of 5616x3744 to 150x100; process start-up included; one pass; epeg, libjpeg and ImageMagick versions not stated), 'epeg -m 150' averaged 0.079 s per file against 0.568 s for 'convert -resize 150x150>' (7.2x, derived from page data), but that ImageMagick command decodes at full resolution and filters while epeg decodes at 1/8 scale and point-samples; ImageMagick's own '-define jpeg:size=300x300 -thumbnail 150x150>' (0.057 s, 1.39x faster than epeg) and the vips binding (0.070 s) beat it. The harness times each external command without checking its output, and epeg's CLI exits 0 even on failure; the non-zero average output size (0.207% of the input) shows thumbnails were written but per-file success is unverified.
+
+**Known shortcoming:** Not faster than the incumbent's fast path: in the same fawick/speedtest-resize table ImageMagick's own -define jpeg:size=300x300 -thumbnail beats epeg (0.057 s vs 0.079 s; vips 0.070 s also faster; unnamed i7 3.4 GHz, Ubuntu 16.10, no versions). The 7.2x is only against plain convert -resize, which decodes the full 5616x3744 image and runs a convolution filter, while epeg does a 1/8 DCT-scaled decode (JDCT_IFAST) plus nearest neighbour. Licence MIT-enna (not OSI approved), usability reference.
+
+**Known shortcoming:** speedtest-resize times failed runs without checking output and the epeg CLI always exits 0 (the return of epeg_encode is ignored). Code bugs not behind the numbers: an uninitialised buf APP7 marker on memory input; a static exif_byte_order thread race; an unchecked 32-bit malloc size product (possible wrap past 1.4 gigapixels at scale 1, untested); the default colourspace is RGB8 although the docs say YUV8 (two needless conversions). The CLI embeds a Thumb::URI file path plus mtime in every thumbnail; ICC profiles are dropped (#26); thumbnails larger than half the source get a full decode.
+
+**How:** All the speed comes from libjpeg's scaled decoding: _epeg_decode sets scale_denom to min(floor(in_w/out_w), floor(in_h/out_h)) clamped to 1..8, with JDCT_IFAST, do_fancy_upsampling = FALSE and do_block_smoothing = FALSE, so a 5616x3744 photo is decoded straight to 702x468 in the DCT domain. _epeg_scale then point-samples (nearest neighbour, in place) to the exact thumbnail size and libjpeg re-encodes it. There is no SIMD or filtering of its own; the gain is bounded by libjpeg's entropy decoding, which is why the measured 7.2x over a full-resolution ImageMagick resize is far below the 1,402x pixel-count ratio the README's 'speedup proportional to the size difference' would imply (derived from page data).
+
+**Use it when:**
+- Bulk JPEG-to-JPEG thumbnails at 1/8 linear size or smaller (gallery previews from camera files), where nearest-neighbour quality is acceptable and you want an in-process C call rather than spawning a tool.
+- Embedding in a C or C++ program that cannot take on ImageMagick or libvips: the library is one 1,450-line C file depending only on libjpeg, libexif and libm.
+- Replacing an existing 'convert -resize' thumbnail step that lacks the jpeg:size hint: 0.079 s vs 0.568 s per 21-megapixel file in the one recorded run.
+- Feeding reduced-size YUV or grey pixels into your own pipeline via epeg_pixels_get after setting EPEG_YUV8 or EPEG_GRAY8, which skips colour conversion.
+
+**Skip it when:**
+- When ImageMagick or libvips is available: in the same table 'convert -define jpeg:size=300x300 -thumbnail 150x150>' took 0.057 s and the vips binding 0.070 s per file against epeg's 0.079 s, and both resample with a filter instead of point sampling.
+- Quality-sensitive thumbnails: JDCT_IFAST, no fancy upsampling and nearest-neighbour sampling give aliasing on fine detail; vipsthumbnail, ImageMagick -thumbnail or the filtered resizers in this category (fast_image_resize, Pillow-SIMD, MagicScaler) look better.
+- Thumbnails larger than half the source on either axis: the scale factor falls to 1, so it decodes at full resolution and then point-samples, with no speed advantage.
+- Colour-managed or metadata-preserving workflows: ICC profiles are not copied (open issue #26), EXIF other than Orientation is dropped, and pixels are not rotated (only the Orientation tag is carried over).
+- Untrusted input at scale: there is no test suite, the project has been idle since April 2023, and _epeg_decode computes the pixel buffer size as a 32-bit unsigned product (output_width * output_height * output_components) with no overflow check, which a JPEG of more than about 1.4 gigapixels decoded at scale 1 could wrap (found by code reading, not tested).
+
+**Vs siblings:** Pick epeg over libvips or ImageMagick only when you need a tiny C dependency for JPEG-only thumbnails and accept point-sampled quality; libvips (in-process binding 0.070 s per file) and ImageMagick's -thumbnail with jpeg:size (0.057 s) were faster in the same run and filter properly. Against fast_image_resize, Pillow-SIMD or MagicScaler it trades quality for not decoding at full resolution, so it only wins when the source is far larger than the thumbnail.
+
+**Gotchas:**
+- The CLI ignores epeg_encode's return value and always exits 0, so scripts (and the speedtest-resize harness, which also counts the time of failed runs) cannot detect a failed thumbnail.
+- The CLI always enables thumbnail comments, so every output carries APP7 markers with 'Thumb::URI file://<input path>' and the source mtime, plus an EXIF APP1 block; strip them before publishing if paths are sensitive. With memory input and thumbnail comments enabled, _epeg_encode writes the uninitialised stack buffer buf as the first APP7 marker (bug).
+- The decode colour space defaults to EPEG_RGB8 (EPEG_GRAY8 or EPEG_CMYK for those sources), although the epeg_decode_colorspace_set comment says the default is EPEG_YUV8; the CLI therefore converts YCbCr to RGB and back. Call epeg_decode_colorspace_set(im, EPEG_YUV8) to avoid both conversions.
+- epeg_encode tears down the decoder and closes the input (issue #20), so a handle produces one output; the library default quality is 75, the CLI's is 85, and quality 90 or higher switches the output to 4:4:4 sampling.
+
+**Status:** Abandoned: the last commits (2023-03-30 to 2023-04-05) added CMake and Windows builds, orientation get/set and a memory-leak fix in epeg_close; 6 issues and 2 pull requests (one from 2015) are open and there are no releases beyond Enlightenment's v0.9.1.042. The Enlightenment MIT variant requires public acknowledgment when source is not shipped, which keeps it a reference entry, though the single C file is easy to read or vendor if that licence is acceptable.
+
+[repo](https://github.com/mattes/epeg) · [benchmark](https://github.com/fawick/speedtest-resize)
+
+##### zanazakaryaie/fastGaussianBlur (step-by-step optimised Gaussian blur)  `C++`  `no license`  `abandoned`  `Tier C`
+
+Unlicensed three-step tutorial for a fixed 5x5 float Gaussian blur; it beats OpenCV only on a Raspberry Pi 3B+, and only when using 4 threads.
+
+**Beats:** OpenCV cv::GaussianBlur — Comparison.jpg (bar chart, values read by eye) times 100 back-to-back calls on a Raspberry Pi 3B+ (32-bit OS, GCC 6.3, OpenCV version unstated): cv::GaussianBlur about 8.9/19.8/35 ms against the 4-thread OpenMP stage at about 3.4/7.9/13.7 ms for 720/1080/1440-pixel squares, roughly 2.5x. The best single-thread stage (about 10.0/23.3/41.5 ms) is about 1.12-1.19x slower than OpenCV (derived from page data). A third-party x86 run (issue #3, Ryzen 7 5800H, OpenCV 4.8) reverses the result: OpenCV 0.23 ms against 0.63 ms for the best tutorial stage.
+
+**Known shortcoming:** Chart-only numbers from a Raspberry Pi 3B+: the final OpenMP stage is about 2.5x OpenCV while the single-thread SIMD stage is slower than OpenCV at every size; OpenCV version, build and thread count unstated, no output check, no -mfpu=neon. No licence file (reference). Weak category fit (a filter tutorial, not resampling).
+
+**Known shortcoming:** Enricher (e126, 2026-10-05): the win is 4 OpenMP threads against OpenCV's 32F GaussianBlur (current 4.x non-IPP path is sepFilter2D without parallel_for_; author's OpenCV version unstated), so threads are unequal; the independent issue #3 (Ryzen 7 5800H, OpenCV 4.8, 720x720) has OpenCV 0.23 ms vs the project's best stage 0.63 ms, about 2.7x in OpenCV's favour. Flagged not faster (retier-38, C). Bugs: SIMD and OpenMP loops lack a tail guard and overrun a stack buffer when width % 4 != 0 (benchmarked widths fine); no -mfpu=neon, so NEON use unproven; uses operators removed in OpenCV 4.11, so it will not compile against current OpenCV; issue #2 compile error on OpenCV 3.3.
+
+**Independent measurement:** independent user measurement (issue #3)
+
+**How:** Stage 1 runs the separable filter in a single pass per output row. A vertical 5-tap sum goes into a one-row stack buffer, then a horizontal 5-tap pass writes the output row. This avoids a full-size intermediate image, and the symmetric weights are folded as (a+e)*w2 + (b+d)*w1 + c*w0. Stage 2 vectorises only the vertical pass, four floats at a time, with OpenCV universal intrinsics (cv::v_float32x4); the horizontal pass stays scalar. Stage 3 adds `#pragma omp parallel for` over the middle rows. Its win over OpenCV comes from spreading those rows across the Pi's four cores: in the author's chart both single-thread stages are slower than OpenCV at every size.
+
+**Use it when:**
+- As reading material on row-buffer separable convolution, symmetric-kernel folding, universal intrinsics and OpenMP row splitting, for a small ARM board.
+- As a starting point for a hand-written fixed-kernel 5x5 float blur on a 4-core ARM board, where OpenCV's float Gaussian runs on one thread and you can spend all cores on this one filter.
+- When you will rewrite the code anyway: there is no license, so it can only be studied, not copied.
+
+**Skip it when:**
+- On x86 desktops: a third-party report (issue #3, 2024-09-09, Ryzen 7 5800H, OpenCV 4.8, 720x720) measured OpenCV at 0.23 ms against 0.63 ms for the best tutorial stage (SIMD) and 0.74 ms for the OpenMP stage. That makes OpenCV about 2.7x faster than the tutorial's best stage (derived from page data), and the parallel stage was slower than the single-thread SIMD stage. The author has not replied.
+- For any kernel other than 5x5 at sigma 1.0 with replicate borders, or any input other than one-channel 32-bit float: the weights are hard-coded constants.
+- For image widths that are not a multiple of 4 in the SIMD and OpenMP stages: the vector loops run `for (; j<cols; j+=4)` with no tail guard, so they write up to 3 floats past the stack row buffer and read past the last image row. The scalar 'leftovers' loop then never runs. The benchmarked widths (720, 1080, 1440) are all multiples of 4.
+- With current OpenCV: the SIMD and OpenMP stages use `+` and `*` on cv::v_float32x4, and OpenCV's own intrin_legacy_ops.h says these operators were removed in 4.11, so the code needs an older OpenCV or that header included by hand. Issue #2 (OpenCV 3.3.0) reports a CV_CPU_HAS_SUPPORT_SSE2 / CV_CPU_HAS_SUPPORT_NEON compile error at the other end of the version range.
+- In shipping code: no license file, no tests, no output check against OpenCV, and no commits since 2021-03-25.
+
+**Vs siblings:** Pick it only to learn the three optimisation steps. For production Gaussian blur faster than OpenCV, the catalogued siblings are better choices: libblur (arbitrary kernels, multithreaded), bfraboni/FastGaussianBlur (box-blur approximation for large sigma) and LibGaussianBlur (FFT); for box filters there is FastBoxBlur. All of them carry licenses and take more than one fixed kernel.
+
+**Gotchas:**
+- Unequal threading behind the headline: the final stage uses the OpenMP default thread count (all 4 cores on a Pi 3B+). In current OpenCV 4.x source, a 32F GaussianBlur without IPP goes through the HAL hook and then sepFilter2D, and filter.dispatch.cpp has no parallel_for_. So the roughly 2.5x chart win is most likely 4 threads against 1. The OpenCV version the author used is not stated.
+- The CMakeLists add -O3 -Ofast -funroll-loops but no -mfpu=neon. OpenCV's cv_cpu_dispatch.h sets CV_NEON only when the compiler defines __ARM_NEON; otherwise the universal intrinsics compile to the scalar emulation in intrin_cpp.hpp, whose v_load_aligned asserts 16-byte alignment. The repo never says whether its 'SIMD' stage ran as NEON, and it was only about 14% faster than the scalar stage on the chart. Matrix.h allocates rows with plain malloc and requests no alignment, yet every vector load and store uses the aligned variants.
+- The top-row vector loop computes row 1 with the wrong replicated neighbour (row 1 instead of row 0). A scalar loop that redeclares j and recomputes the whole row overwrites the result, so the output is right but the vector work is wasted.
+- Every call does output.resize(), which frees and mallocs the output matrix, and cv::Mat input is first copied element by element into Matrixf. Images with fewer than 4 rows or columns underflow the unsigned `rows-2`/`cols-2` bounds.
+
+**Status:** Abandoned since 2021-03-25, with issues #1 and #3 unanswered. It has no license, so it is reference-only, and the SIMD stages need an OpenCV from before 4.11 (or the legacy-operators header) to compile.
+
+[repo](https://github.com/zanazakaryaie/fastGaussianBlur) · [benchmark](https://github.com/zanazakaryaie/fastGaussianBlur)
+
+#### font-shaping-text-layout
+
+##### rustybuzz-wasm  `Rust (compiled to WebAssembly, driven from NodeJS)`  `unclear: Cargo.toml declares 'MIT/Apache-2.0' (left from the wasm-pack template, authors 'Your Name <you@example.com>'), but the LICENSE file only says 'the liecense goes here'`  `abandoned`  `Tier C`
+
+Abandoned wasm-bindgen wrapper around rustybuzz 0.4 for Node.js; claims about 1.5x harfbuzzjs 0.1.5 on Latin text shaping.
+
+**Beats:** harfbuzzjs (HarfBuzz compiled to WebAssembly, driven from NodeJS); also the HarfBuzz command-line tools spawned per line, opentype.js and fontkit — These are the author's own Node.js runs on an unnamed 2015 laptop (Node.js version and build flags unstated). 100 lines x 100 French dictionary words (65,732 UTF-16 code units) in EB Garamond 12 Italic, 3 shuffled repetitions averaged. The 'rusty' string format reached 218,840 Hz vs harfbuzzjs 0.1.5 at 176,392 Hz in one run (about 1.24x) and 220,399 vs 143,434 Hz in another (about 1.54x). The JSON format, the closest to harfbuzzjs's per-glyph output, was 1.01x and 1.26x in those runs (derived from page data). The 12x-17.7x figures are against hb-shape spawned as a child process per line.
+
+**Known shortcoming:** WASM-vs-WASM comparison (1.24x-1.54x over harfbuzzjs, the official HarfBuzz WASM build) from the hengist bench with no CPU, Node version or flags; the harfbuzzjs row is now commented out of the source and rustybuzz-wasm ran with no OpenType features while the harfbuzzjs wrapper was not found, so work parity is unconfirmed. Licence unclear (Cargo.toml MIT/Apache-2.0 from a template, LICENSE placeholder): reference. Native rustybuzz is 1.5-2x slower than HarfBuzz.
+
+**Known shortcoming:** Not faster once the harness asymmetry is removed (retier-17): the harfbuzzjs timed loop includes the font load on every run, WASM initialisation on the first run and a per-line buffer leak plus validation, while rustybuzz-wasm's setup is outside the timing; on the JSON format rustybuzz-wasm is 1.01x and 1.26x of harfbuzzjs. The README's '280,000 glyphs per second, 20x opentype.js' contradicts the harness (counts UTF-16 units) and its own table (4.6x). Hard-coded LTR English with no features; placeholder LICENSE.
+
+**How:** There is no novel technique. Shaping is rustybuzz 0.4's port of HarfBuzz's algorithm, compiled to WASM by wasm-pack in release mode. The measured edge comes from crossing the JS/WASM boundary once per line and returning one string, where harfbuzzjs's buffer.json() builds a JS object per glyph. The author's own to-do list says he does not know why the 'rusty' format is faster than the minimal 'short' one.
+
+**Use it when:**
+- Prototyping Node.js typesetting of Latin-script text where you want shaping, SVG glyph outlines and hyphenated line wrapping from one WASM package, and can parse the returned strings yourself.
+- Batch-shaping many short left-to-right lines with a font's default features, where per-call overhead dominates. The benchmark shaped 100 lines of 100 random French dictionary words in EB Garamond 12 Italic.
+- As a small worked example of wrapping rustybuzz with wasm-bindgen (the whole API is in one src/lib.rs).
+
+**Skip it when:**
+- Anything needing maintenance or a clear licence: last commit 2022-02-08, 4 stars, and LICENSE contains only 'the liecense goes here'. Cargo.toml's 'MIT/Apache-2.0' line comes from the wasm-pack template.
+- Right-to-left or complex scripts, or language-specific shaping: shape_text hard-codes Direction::LeftToRight and language 'English', leaves script unset and uses BufferClusterLevel::Characters. Script, language and face selection are on the to-do list.
+- OpenType feature control (dlig, smcp, ss01 and so on): the features list is always empty, so you get only the font's default features.
+- Current shaping correctness: it pins rustybuzz 0.4 (2021) and ttf-parser 0.11, while rustybuzz itself reached 0.20.1 and has been succeeded by HarfRust.
+- C/C++ or native code: use HarfBuzz directly. The benchmark never measures native HarfBuzz, only harfbuzzjs (WASM) and the hb-shape CLI spawned once per line.
+
+**Vs siblings:** Rarely. text-shaper (wiedymi) is the catalogued JS shaper that beats a much newer harfbuzzjs (^0.4.13) across Latin, Arabic, Hebrew, Indic and CJK and is maintained, and Parley or HarfRust-based stacks cover Rust. Pick rustybuzz-wasm only to study or salvage its rustybuzz-plus-textwrap typesetting glue.
+
+**Gotchas:**
+- The committed pkg/ artefacts may be debug builds. The README warns they can be 'orders of magnitude slower' and says to rebuild with `wasm-pack build --target nodejs` before measuring anything.
+- Fonts must be sent as hex strings (twice the byte size, then hex-decoded in WASM) into slots 0-15. An unregistered slot calls alert and then panics, and a malformed font hits .unwrap() on Face::from_slice. Both trap the WASM instance.
+- Each shape_text call parses the font twice (rustybuzz::Face and ttf_parser::Face) and deserialises the config with into_serde, so per-call cost grows with call count, not only with text length.
+- Outputs are strings: 'rusty' is HarfBuzz's serialized text with glyph names and flags, and 'json' is a JSON string. Callers pay JSON.parse or custom parsing, which the published benchmark does not time.
+
+**Status:** Abandoned since 2022-02-08 (the README says the code is under development and will probably be incorporated into InterText) and has a placeholder LICENSE, so it stays reference-only; nothing here is safe to vendor without the author's licence.
+
+[repo](https://github.com/loveencounterflow/rustybuzz-wasm) · [benchmark](https://github.com/loveencounterflow/rustybuzz-wasm)
+
+##### SixLabors.Fonts  `C#`  `Six Labors Split License 1.0 (non-OSI: Apache-2.0 only for open-source or source-available use, transitive dependencies, non-profits and for-profits under 1M USD annual revenue; commercial license otherwise)`  `active`  `Tier C`
+
+Pure managed C# OpenType shaper and text layout engine; on .NET 10 it is within about 8% of native HarfBuzz overall, beating it on four of ten scripts.
+
+**Beats:** HarfBuzz via HarfBuzzSharp 14.2.1.1 (native HarfBuzz called from .NET, single-run text shaping) — First-party PR #550 (merged 2026-07-30, shipped in 3.1.0) runs the public ShapeTextBenchmark under the BenchmarkDotNet Gate job (3 launches, 5 warmup, 15 iterations); BenchmarkDotNet 0.15.8 is pinned in tests/Directory.Build.targets at the v3.1.0 tag, though the PR prints no version, CPU or OS. Each iteration shapes one short run per script (25 to 60 characters) from the same font file bytes with Fonts' ShapeRun versus HarfBuzzSharp 14.2.1.1 (Reset, AddUtf16, GuessSegmentProperties, Shape), summing advances. On .NET 10.0.10 Fonts takes 0.83x to 1.64x HarfBuzz's time, faster on Devanagari, Balinese, Zawgyi and Hebrew (barely). On .NET 8.0.29 only Balinese is faster. The HarfBuzz side pays about five managed-to-native calls per shape, which weighs most on the sub-microsecond Hangul and Zawgyi rows; the same string is reshaped every iteration, so both sides' glyph caches stay hot.
+
+**Known shortcoming:** C# (language-filter mismatch); Six Labors Split License 1.0 (not OSI approved), reference only. Not faster overall: the full table (PR #550) shows .NET 10 wins on only 4 of 10 scripts (Devanagari 0.83x, Balinese 0.88x, Zawgyi 0.95x, Hebrew 0.98x) and losses on 6 (Hangul 1.64x slower); on .NET 8 it wins only Balinese. No CPU model; the HarfBuzzSharp side pays P/Invoke and GuessSegmentProperties.
+
+**Known shortcoming:** Not faster: on its own fair BenchmarkDotNet 0.15.8 harness (pinned at v3.1.0) SixLabors.Fonts is 1.08x slower than HarfBuzzSharp on .NET 10 and 1.27x slower on .NET 8 (geometric means, derived from page data); CPU and OS are unstated. The measured 3.1.0 had a GPOS cursor bug (contextual lookups reapplied to consumed glyphs, seen with Segoe UI Emoji; fixed in 3.1.3 by PR #565), not shown to touch the benchmark fonts. Main is now net10-only while NuGet 3.1.x targets net8.0; AAT shaping unsupported (#551).
+
+**How:** Shaping runs on a pooled ShapingScratch (borrowed per call from a scratch pool) and a caller-reused TextShapingBuffer, so the steady state allocates zero managed bytes. The internal ShapingBuffer keeps glyph records, a metrics stream and a positioning stream as parallel arrays, so the GSUB walks touch only narrow records. A 256-slot direct-mapped cache serves cmap glyph-id lookups and another serves glyph metrics. A glyph-set digest, an approximate membership filter like HarfBuzz's set digest, lets lookups that cannot match be skipped. PR #550 also lists per-lookup feature masks, streaming substitution in place of tail shifts on length changes, plan features collected once per plan, a cached USE decomposition table and direct lookup probes in the Indic shaper. The JIT matters a lot: the same code is 1.13x to 1.36x faster on .NET 10.0.10 than on .NET 8.0.29, while the HarfBuzzSharp rows gain only 1.04x to 1.12x (derived from page data).
+
+**Use it when:**
+- .NET 8+ services or tools that must shape text with no native dependency: a pure managed assembly that is marked trimmable and needs no per-platform native assets.
+- Complex-script text on .NET 10, where the vendor's run puts it ahead of HarfBuzzSharp: Devanagari 1.20x faster, Balinese 1.13x, Myanmar Zawgyi 1.06x, Hebrew at parity (1.02x).
+- When you need more than shaping (bidi, line breaking, wrapping, measurement, hit testing, caret and selection geometry) from one library, rather than HarfBuzz plus ICU or FriBidi plus your own layout.
+- High-volume shaping of many short runs, where you can keep one TextShapingBuffer per thread and want no GC pressure.
+- Text rendering in the SixLabors ImageSharp.Drawing stack, which uses it as its text engine.
+
+**Skip it when:**
+- Native C or C++ code: it is a .NET library, not callable from C++ without hosting the CLR. Use HarfBuzz directly.
+- Latin, Arabic or Hangul-heavy workloads where raw shaping latency matters: on .NET 10 it is 1.17x (Latin), 1.27x (Arabic) and 1.64x (Hangul) slower than HarfBuzzSharp, and about 1.08x slower across all ten scripts (geometric mean, derived from page data).
+- On .NET 8 it wins only Balinese (0.96x) and is 1.01x to 1.97x slower on the rest (about 1.27x slower geometric mean, derived from page data).
+- Fonts that depend on Apple AAT tables (morx, kerx): AAT shaping is not supported (issue #551, open).
+- Companies with 1M USD or more annual revenue using it as a direct dependency in closed-source software: the Six Labors Split License then requires a paid commercial license.
+
+**Vs siblings:** No other .NET shaper is catalogued. Pick this when you are on .NET and want no native HarfBuzz. In Rust, Parley (layout on HarfRust) or sigilbuzz cover the same ground, and in JavaScript text-shaper or rustybuzz-wasm compare against harfbuzzjs rather than native HarfBuzz.
+
+**Gotchas:**
+- Units differ from HarfBuzz: ShapedGlyph advances and offsets are floats scaled by Font.Size / UnitsPerEm (point size, no DPI) in a Y-up system, while HarfBuzzSharp returns integer positions in the font's scale units. ShapeRun returns glyphs in reading order, while HarfBuzz emits right-to-left runs in visual order.
+- The script is inferred from the text unless you set TextShapingBuffer.Script; Zawgyi text must be forced with ScriptClass.MyanmarZawgyi, just as HarfBuzz needs the Qaag script tag.
+- The measured 3.1.0 code walked GPOS one glyph after every lookup instead of following the buffer cursor, so contextual positioning lookups could be reapplied to glyphs already consumed (seen with Segoe UI Emoji 1.70). PR #565 fixed this in 3.1.3 (2026-09-17). Use 3.1.3 or later; the fix was not re-benchmarked.
+- Robustness against malformed fonts is recent: 2026 fixes cover IndexOutOfRangeException in cmap format 4 and GSUB lookup type 2 (#510, #514), OverflowException loading a collection (#534), and stack overflows on self-referential composite glyphs (#537) and cyclic COLRv1 paint graphs (#560). Treat untrusted fonts with care.
+
+**Status:** Active (3.0.0 on 2026-05-12, then 3.1.0 to 3.1.3 between 2026-08-11 and 2026-09-17 on NuGet; last commit 2026-09-17). It is reference only, because it is C# and under the non-OSI Six Labors Split License (Apache-2.0 only for open-source use, transitive use, non-profits and companies under 1M USD annual revenue).
+
+[repo](https://github.com/SixLabors/Fonts) · [benchmark](https://github.com/SixLabors/Fonts/pull/550)
+
+#### image-codecs
+
+##### Accelerating JPEG Decompression on GPUs (Weissenberger and Schmidt, HiPC 2021)  `None`  `no license`  `unknown`  `Tier C`
+
+HiPC 2021 CUDA JPEG decoder design; claims up to 51x over libjpeg-turbo and 8x over nvJPEG on A100; no code.
+
+**Beats:** libjpeg-turbo (CPU) and NVIDIA nvJPEG (GPU) — Two search-result snippets of the arXiv abstract (2111.09219; the paper itself is blocked here) report up to 51x over libjpeg-turbo and 8.0x over nvJPEG on an A100, 34x and 5.7x on a V100, and up to 3.4x over nvJPEG using the A100's hardware JPEG decoder. Neither snippet names the CPU model, thread count, CUDA or nvJPEG version, the images, or whether transfers are timed.
+
+**Known shortcoming:** Reference only: peer-reviewed HiPC 2021 paper (pp. 121-130) with no public code (the author's GitHub holds no JPEG repo). Numbers are snippet-only (A100 51x/8.0x; V100 figures unconfirmed) because arXiv 2111.09219 and every mirror are blocked here. GPU decoder, a different machine class from libjpeg-turbo on CPU.
+
+**Known shortcoming:** The paper remains blocked (arXiv, arxiv-vanity, paperswithcode, x-mol), so the V100 34x and 5.7x figures and the 3.4x over the A100 hardware decoder are confirmed only by search snippets; no code is published, and CPU thread count, nvJPEG version and transfer timing are unknown. The technique is documented from the authors' gpuhd cuhd_gpu_decoder.cu.
+
+**How:** It applies the authors' self-synchronising Huffman decoding (ICPP 2018, code in weissenberger/gpuhd) to the JPEG bitstream. Each thread starts decoding a fixed-size bit window at an arbitrary offset. Prefix codes tend to resynchronise, so a guessed start converges on the true codeword boundaries after a few codewords. In gpuhd this runs as an intra-block sync pass (phase1_decode_subseq), inter-block passes repeated from the host until every block agrees (phase2_synchronise_blocks), a thrust::exclusive_scan over per-chunk symbol counts that gives output offsets, and a final decode-and-write pass. The data-parallel stages after that (dequantisation, IDCT, colour conversion) map to the GPU directly. The JPEG-specific handling of DC/AC run-length symbols is described in the paper, which was not readable here.
+
+**Use it when:**
+- As a design reference when building a GPU JPEG decoder that must parallelise baseline Huffman decoding of files without restart markers (camera, web or dataset JPEGs)
+- Batch decoding of many large JPEGs on NVIDIA datacenter GPUs (A100, V100) where CPU libjpeg-turbo or nvJPEG's hybrid path is the bottleneck, for example ML data loading, provided you reimplement it
+- Comparing against nvJPEG and the A100 hardware JPEG decoder: the abstract reports up to 3.4x over nvJPEG with that decoder
+- Starting a prototype from the authors' gpuhd Huffman stage (LGPL-3.0, CUDA 8+, compute capability 3.0+)
+
+**Skip it when:**
+- You need something to link today: no code, binary or artifact was published with the paper
+- Files that need features outside the paper's subset (the abstract says it implements 'an important subset of the JPEG standard'; which features are left out is not documented in any source readable here)
+- Small images or low-latency single-image decode: PCIe transfers, kernel launches and gpuhd-style host round-trips for the sync loop are fixed costs, and whether the paper's timings include host-device transfers is not documented
+- Non-NVIDIA GPUs or CPU-only deployments; use libjpeg-turbo or a multithreaded CPU decoder instead
+- Pathological Huffman tables or streams that resynchronise slowly: gpuhd repeats its inter-block pass until all blocks agree, and no worst-case bound is documented
+
+**Vs siblings:** The catalogued siblings (libjpeg-turbo, jpeg-nitro, zenjpeg, libjpeg-turbo-rs, MANGO) are all CPU decoders you can install; this is the only GPU JPEG decode design in the category, but with no code it is a reference for building a decoder, not a choice. For a working GPU path use nvJPEG (proprietary) or CESNET GPUJPEG (BSD-2-Clause, not catalogued, parallel Huffman only with restart markers); for CPU decoding use libjpeg-turbo or jpeg-nitro.
+
+**Gotchas:**
+- CPU baseline setup is unknown: if libjpeg-turbo ran on one thread, the 51x headline compares a whole A100 with one CPU core, and a multithreaded CPU decode of a batch would shrink the gap
+- nvJPEG version, CUDA version, image set, chroma subsampling and whether transfers are timed are not documented in any readable source, so the 8.0x and 3.4x nvJPEG ratios cannot be checked
+- The speedups are 'up to' figures; median or per-image results were not readable
+- CESNET GPUJPEG, the common open-source alternative, decodes Huffman on the GPU only when the file has restart markers and otherwise falls back to the CPU (per its README). This paper's selling point is not needing restart markers.
+
+**Status:** Peer-reviewed 2021 paper with no released code and nothing to maintain; it stays a research reference, and the authors' related gpuhd repository was last touched in February 2019 (8 commits, LGPL-3.0, no issues filed).
+
+[benchmark](https://arxiv.org/pdf/2111.09219)
+
+##### ptpng  `C`  `None stated: no LICENSE file (raw LICENSE, LICENSE.md, LICENSE.txt and COPYING all return 404), the GitHub page shows no license, and README.md, include/ptpng.h and CMakeLists.txt give no terms`  `active`  `Tier C`
+
+Unlicensed C11 PNG decoder and encoder with AVX2/NEON kernels; decodes 1.5-1.8x faster than libpng with zlib-ng on synthetic images.
+
+**Beats:** Decoder: libpng 1.6 (vendored libpng16 branch) with zlib-ng 2.2.4 in ZLIB_COMPAT mode. Encoder: libpng with the vendored stock zlib (develop branch) at level 6 and libpng with zlib-ng 2.2.4 at level 6, both with PNG_ALL_FILTERS adaptive filtering. — The author's nightly CI on GitHub-hosted runners (EPYC 7763, Neoverse-N2, Cobalt 100, virtual Apple M1; compiler versions not stated, CMake Release defaults) times ptpng against libpng16 built in the same tree with zlib-ng 2.2.4 (and with stock zlib). Both sides decode from memory with CRC and Adler-32 checks on, and the result is the median of 12 alternating rounds: geometric means of 1.46x-1.80x over 27 cases on 30 September 2026. Encoding against libpng at level 6 with all filters gave 2.25x-2.98x versus stock zlib and 1.14x-1.52x versus zlib-ng, with files at most 2.4% larger. Recomputed from gh-pages bench/data.js, the per-platform encoder means match PERFORMANCE.md exactly. On the same commit, the 3 October run gave 1.37x (Windows x64, now an Intel Xeon Platinum 8573C) to 1.79x for decoding and 1.09x-1.49x versus zlib-ng for encoding. The harness looked fair and no correctness bug was found. Caveats: the fixtures are Python-generated gradients plus small noise, flat rectangles and random bytes, written by an unpinned Pillow on each runner, so the compressed inputs differ by OS (PERFORMANCE.md notes stored versus fixed-Huffman noise streams). The libpng encoder also writes through a realloc-doubling memory callback, a small cost charged to the reference.
+
+**Known shortcoming:** No licence (LICENSE, LICENSE.md, LICENSE.txt and COPYING absent, no terms in README or header): reference only. Benchmark code is public (tools/bench_compare.c, tools/bench_encode.c; runner CPUs logged in gh-pages bench/data.js) but compiler versions are never stated, so C. Encoder subset only (no palette, packed-sample, interlace or metadata output); files up to 2.4% larger than zlib-ng level 6, and zlib-ng is faster on 3-5 of 9 fixtures per platform; calls are not thread-safe.
+
+**Known shortcoming:** Not thread-safe beyond init: a file-static sym_code scratch buffer is written by every Huffman table build, so concurrent calls can corrupt tables. Benchmark fixtures are generated per CI runner by an unpinned Pillow, so inputs differ by OS; the libpng encode reference uses a realloc-doubling buffer (a minor cost charged to libpng). The 3 October nightly (run 37111068455, commit 9a1dadf) gives decode 1.37x (Windows x64, Xeon Platinum 8573C) to 1.79x and encode 1.09-1.49x against zlib-ng, with photo_rgb8 encode slower than zlib-ng on all 5 platforms (0.67-0.93x). No licence; repository recently renamed; open PR #1.
+
+**How:** The inflater uses a 64-bit bit buffer refilled a word at a time to keep 48-64 bits available, Huffman tables built from pre-reversed codes so each symbol is one masked table lookup, flat root tables (10-bit literal/length, 8-bit distance) whose entries carry precomputed bases and extra-bit counts, a fast path that decodes up to four literals per refill, and 32- or 64-byte block copies for matches. It inflates straight into the final image buffer because the PNG header fixes the output size. Unfiltering and output conversion use runtime-dispatched AVX2/SSE2 or NEON kernels (prefix-sum Sub, SIMD Paeth for 4-byte pixels). Checksums run on hardware: PCLMUL folding for CRC-32 (derived from zlib-ng), ARMv8 CRC instructions, and AVX2 or NEON Adler-32. The encoder scores every byte of each row for adaptive filtering with SIMD and uses a bounded hash-chain matcher with lazy lookahead. It picks stored, fixed or dynamic DEFLATE blocks by bit cost and writes up to six literals per 64-bit store.
+
+**Use it when:**
+- Studying or benchmarking a modern single-threaded PNG decode path: the code is compact (one inflate file, one decoder file, per-ISA kernel files), heavily commented, and tested against libpng. Without a licence it is reference material only.
+- Single-threaded decoding of large PNGs on x86-64 with AVX2 or on ARM64, where checksum verification must stay on and the baseline is libpng: 1.46x-1.80x geometric mean across 27 cases in the 30 September nightly.
+- Palette, flat-graphics and 16-bit RGBA images show the largest decode gains (graphic_pal8 3.46x, graphic_rgba16_paeth 4.50x native output in the 30 September Windows x64 snapshot); noisy images gain little (noise_rgba8 1.02x).
+- Encoding 8- or 16-bit gray/RGB/RGBA to roughly zlib level-6 sizes faster than libpng with stock zlib (2.25x-2.98x across platforms), especially graphics, where it beat libpng with zlib-ng level 6 by 1.85x-2.51x in the local i7-1355U table.
+
+**Skip it when:**
+- Anything you ship: the repository has no LICENSE file and no licence terms, so you have no right to copy or vendor it. The x86 CRC code is also derived from zlib-ng.
+- Multithreaded image pipelines: every call must be serialized process-wide. Building each Huffman table writes a file-static scratch array (sym_code in ptpng_inflate.c), and CPU dispatch and fixed-Huffman tables are initialised lazily with no synchronisation. Two concurrent decodes can therefore corrupt each other's tables, not just race at start-up.
+- Photo-like RGB encoding, or ARM64 encoding against zlib-ng: libpng with zlib-ng level 6 was faster on photo_rgb8 on all five platforms in the 3 October nightly (ptpng at 0.67x-0.93x). On Linux ARM64 ptpng won only 3 of 9 fixtures there (1.09x geometric mean).
+- Workflows needing palette, 1/2/4-bit or interlaced output, ICC/gamma/text chunks on write, a compression-level knob, streaming input or progressive display.
+- Risk-averse projects: the repository is ten days old (first commit 2026-09-24), has a single author and 0 stars, and is benchmarked only on generated images. Its nightly ratios move with the runner CPU: on the same commit (9a1dadf), the Windows x64 decode geometric mean was 1.69x, 1.56x and 1.37x in the 1, 2 and 3 October nightlies.
+
+**Vs siblings:** Use ptpng only as a reference for technique, because it has no licence. For a licensed in-memory libpng alternative take libspng (a few percent over libpng in Wuffs' numbers) or the Rust png crate (1.5-1.8x over libpng in Wuffs' 2022 runs). For encode-only speed take fpnge or fpng, which are far faster than libpng but give up compression ratio, whereas ptpng targets zlib level-6 sizes.
+
+**Gotchas:**
+- Passing NULL encoder options selects adaptive filtering, but a zero-initialised ptpng_encode_opts selects the None filter (filter 0), which gives much larger files.
+- RGB8/RGBA8 output keeps the high byte of 16-bit samples (like libpng's png_set_strip_16, not png_set_scale_16 rounding), and RGB8 ignores tRNS.
+- The encoder writes pixels only. Metadata such as ICC, gamma and text is dropped, and palette or sub-byte images must be decoded to RGB8/RGBA8 before re-encoding, so they come back larger than the source.
+- Each encode allocates about 896 KiB of compression state on top of the image buffers (PERFORMANCE.md).
+
+**Status:** Actively developed by one author (43 commits between 2026-09-24 and 2026-09-30, open PR #1 from 3 October, nightly benchmarks still publishing), but with no licence it is reference-only, and the repository was recently renamed, so links may move.
+
+[repo](https://github.com/bojosos/ptpng) · [benchmark](https://raw.githubusercontent.com/bojosos/ptpng/HEAD/README.md)
+
+##### refreshed-astc-encoder  `C++`  `ARM End User Licence Agreement for the Mali ASTC Specification and Software Codec, version 1.3 (license.txt): non-OSI, use limited to the 'Authorised Purpose' of ASTC compression tools, no right to develop hardware; not Apache-2.0`  `abandoned`  `Tier C`
+
+2016 fork of ARM's 2015 astcenc 1.x CLI that reuses scratch buffers per thread; 1.2x-2.2x faster on one image, superseded.
+
+**Beats:** Mali GPU Texture Compression Tool astcenc binary (32-bit) and ARM astc-encoder official repo build (64-bit, 2015 era) — One first-party table: wall-clock seconds to compress turret_diffuse_map.png on an Intel Core i5 760, at each 1.x preset. Against the official 64-bit astcenc of the time the fork is 2.05x (veryfast), 2.15x (fast), 1.36x (medium), 1.30x (thorough) and 1.23x (exhaustive) faster; against the 32-bit Mali TCT binary it is 1.91x-2.60x (derived from page data). Block size, thread count (the i5 760 has 4 cores, and the default is autodetect), compiler, flags and output PSNR are not given.
+
+**Known shortcoming:** Licence is the ARM Mali ASTC codec EULA v1.3, not Apache-2.0: reference only. 1.23x-2.15x vs the official astcenc (slow presets 1.23-1.36x) with quality not matched (commit 00f9f3d's bug fix changes output; no PSNR); block size, thread count and compiler unstated. 2016 code.
+
+**Known shortcoming:** The speedup comes only from per-thread scratch-buffer reuse, 128-block batches and compiled-out diagnostics (no SIMD or algorithm change); only commit 00f9f3d changes output (dual-plane partition pick). The baseline is the October 2015 upstream code with build and compiler unstated; ARM's own astc-encoder 2.0 is roughly 2-4x over 1.7 at near-equal PSNR (changelog charts), so the incumbent has moved. Builds need C++11 despite the README's GCC 4.6.
+
+**How:** There are no algorithmic or SIMD changes; the gains come from housekeeping in ARM's reference encoder. Commit b5a2d16 removed the new/delete of large scratch structures that compress_symbolic_block_fixed_partition_1_plane/2_planes did on every call, for every partition candidate of every block. Each thread now allocates these buffers once. Commit 4766689 wraps them in a SymbolicBatchCompressor, and each thread encodes runs of 128 consecutive blocks instead of ARM's one-block round-robin; compress_symbolic_batch is just a loop over compress_symbolic_block. Commit 991edf8 compiles out the DEBUG_PRINT_DIAGNOSTICS code that upstream enabled by default, removing runtime print_diagnostics branches from the hot path.
+
+**Use it when:**
+- Reproducing or patching a 2015-2016 Mali TCT / astcenc 1.x pipeline whose command line and output format you must keep, where a 1.2x-2x faster drop-in binary is the only change allowed.
+- Studying how much of the old ARM reference encoder's time went to heap churn: the diff is small, and readable as a case study.
+
+**Skip it when:**
+- Any new ASTC work. ARM's own astcenc 2.0 (August 2020) changelog charts show astcenc-avx2 2.0 at roughly 2x-3x the speed of astcenc 1.7 at -thorough and roughly 1.3x-4x at -fast/-medium, with PSNR mostly within about 0.2 dB. That was measured on a Core i5-9600K with 6 threads (chart readings approximate), and the 3.x-5.x releases are faster still. ARM's current encoder is also a library, has SIMD paths and is Apache-2.0.
+- Bit-exact reproduction of the original astcenc. Commit 00f9f3d moves 'separate_errors[best_partition] = 1e30f' ahead of the partition_sequence remapping in find_best_partitionings. That changes which dual-plane partition candidates are tried, so output can differ from the binary it claims to replace, and no PSNR comparison is published.
+- Commercial or redistributed tooling without legal review. The code is under ARM's Mali ASTC EULA v1.3: use only for the 'Authorised Purpose' of ASTC compression and decompression tools, no hardware development, non-transferable, and the licence must be shipped with any distribution.
+- Small textures on many cores. Work is handed out in 128-block batches per thread, so an image with fewer than threads x 128 blocks leaves threads idle unless you lower -batchsize (derived from encode_astc_image_threadfunc).
+
+**Vs siblings:** No other ASTC encoder is catalogued yet. The texture-codec siblings (bc7e, bc7enc, etcpak, Goofy, ICBC, Basis Universal) target BC1/BC7/ETC, not ASTC. For ASTC, current ARM astcenc 4.x/5.x beats this fork on speed, quality evidence, licence and API, so pick this fork only when you must stay on the 1.x CLI.
+
+**Gotchas:**
+- The speed numbers are not at matched quality. The README claims 'some quality improvement' but reports no PSNR, even though the tool's own -t -showpsnr mode would have produced it.
+- -diag is gone. It prints '-diag switch is unsupported in this version', and defining DEBUG_PRINT_DIAGNOSTICS now trips a static_assert because diagnostics are 'broken in batch mode'.
+- The 'official astcenc (64-bit)' column is the October 2015 upstream code, not ARM's last 1.x release (1.7) and not 2.x or later. Its build (ARM's checked-in Win64 binary or the author's own) and compiler are not stated.
+
+**Status:** Abandoned since 2016-06-12 (18 commits, 8 by the fork author; 1 star; one downstream fork, abusenius, with no extra commits; no PRs). Reference only: ARM's custom EULA, not Apache-2.0, and the code is the pre-2.0 reference encoder.
+
+[repo](https://github.com/Kirpich30000/refreshed-astc-encoder) · [benchmark](https://github.com/Kirpich30000/refreshed-astc-encoder)
+
+#### rasterizers-2d
+
+##### ImageSharp.Drawing  `C#`  `Six Labors Split License 1.0 (not an SPDX id): Apache-2.0 for open-source use, transitive dependency use, for-profit under 1M USD annual revenue and non-profits; paid Six Labors Commercial License otherwise`  `active`  `Tier C`
+
+Managed C# 2D vector drawing on ImageSharp with a band-parallel CPU rasterizer and an optional WebGPU backend; the vendor reports 2.4x faster than single-threaded SkiaSharp 2.88.
+
+**Beats:** Skia via SkiaSharp (BenchmarkDotNet Baseline=true), and System.Drawing (GDI+) — The numbers come from the vendor's 3.1.0 release post, known only from search snippets because sixlabors.com is blocked. FillParis is the repo's paris-30k.svg: 50,620 path elements counted in the 14.0 MB file, a 1096x1060 map, fill-only with opacity. It ran on an AMD Ryzen AI Max+ 395 with Radeon 8060S under Windows 11 and .NET 10, using BenchmarkDotNet with Server GC (0.15.8 is pinned at v3.1.0). Results: SkiaSharp 103.4 ms, System.Drawing 147.3 ms, ImageSharp CPU 43.0 ms (2.4x), CPU retained 11.9 ms (8.7x), WebGPU 20.0 ms (5.2x), WebGPU retained 5.6 ms (18.5x); ratios are derived from page data. The baseline is SkiaSharp 2.88.9 drawing single-threaded into a CPU raster SKSurface, while ImageSharp uses every hardware thread, reuses cached flattened curves even in the immediate row, and in the WebGPU rows runs on the integrated GPU with non-blocking submits. No pixel comparison is made: VerifyOutput only saves PNGs.
+
+**Known shortcoming:** C# (language-filter mismatch); Six Labors Split License (not OSI approved), reference only. Numbers (103.4/43.0/11.9 ms in 3.1.0; 5.476 ms WebGPU retained in 3.0.0) are snippets of the blocked vendor post; FillParis.cs runs single-threaded SkiaSharp SKSurface against ImageSharp's CPU Parallel.For over 16-pixel row bands on all cores, retained rows reuse set-up geometry, and the WebGPU row is GPU against Skia CPU. Hardware unconfirmed.
+
+**Known shortcoming:** Harness asymmetry: even the 'immediate' CPU row (43.0 ms) reuses the per-IPath flattening cache (Path and ComplexPolygon ToLinearGeometry cached per scale) while Skia rebuilds edges on every draw of the 50,620-path, 79,353-cubic SVG; the SkiaSharp baseline is 2.88.9 (old line; the Fonts repo pins 4.150.1); the WebGPU flush never waits for the GPU (up to 8 submits pending), so the WebGPU rows are pipelined submits rather than latency; VerifyOutput only saves PNGs with no pixel diff; FillParis has no single-thread row and FillTiger's ImageSharp_SingleThreaded result is unpublished. Hardware per a search snippet: Ryzen AI Max+ 395 with Radeon 8060S, Windows 11, .NET 10, Server GC.
+
+**How:** The CPU backend is a flush executor, not a command-at-a-time painter. A batch of drawing commands becomes a retained, row-oriented plan (FlushScene), built in parallel over contiguous command partitions. Paths are flattened once per (path, scale) and cached on the IPath, with rotation and translation carried as a residual matrix. Execution runs a Parallel.For over 16-pixel row bands with worker-local scratch. Each band uses a Blaze-derived 24.8 fixed-point area/cover scan converter (DEFAULT_RASTERIZER.md credits aurimasg/blaze) with bit-vector sparse cell tracking and precomputed start-cover seeds for winding entering from the left. Retained scenes keep the band-local line data and row plan, so a replay skips geometry work entirely. The WebGPU backend is a Vello-derived staged compute pipeline: path-tag prefix scans, binning, tile allocation, coarse and fine passes, with GPU bump-allocated scratch that grows on retry.
+
+**Use it when:**
+- .NET services or tools already using ImageSharp that render large fill-heavy vector scenes (maps, charts, SVG-like content) to bitmaps, where one render may use every core.
+- Static or slowly changing scenes rendered many times (map tiles at a fixed zoom, dashboards): the retained-scene path took FillParis from 43.0 ms to 11.9 ms in the vendor's run.
+- Managed-only deployments: the CPU backend needs no native library, unlike SkiaSharp, whose Linux use needs a separate native-assets package (the benchmark project adds SkiaSharp.NativeAssets.Linux.NoDependencies).
+- .NET apps that want GPU drawing into WebGPU windows or offscreen targets with the same canvas code as the CPU path.
+- Drawing shaped, bidirectional or complex-script text into images through SixLabors.Fonts.
+
+**Skip it when:**
+- C or C++ code: this is a .NET library. Blend2D, Skia or Blaze are the native options.
+- Throughput per core, or many images rendered concurrently: the 2.4x CPU win sets every hardware thread against single-threaded SkiaSharp, and FillParis publishes no single-threaded ImageSharp row. FillTiger has an ImageSharp_SingleThreaded benchmark, but no published result was found.
+- Judging against current Skia: the benchmarks pin SkiaSharp 2.88.9 (at the v3.0.0 and v3.1.0 tags and on main), an older line than the SkiaSharp 4.150.1 pinned by the sister Fonts repo.
+- Untrusted SVG path data or geometry without limits: crashes on malformed SVG path input (#385, labelled security) and a StackOverflow in DefaultRasterizer.AddContainedLineF24Dot8 (#403) were fixed only in 2026.
+- Companies with 1M USD or more annual revenue using it directly in closed-source software, unless they buy the Six Labors commercial license.
+
+**Vs siblings:** Its CPU rasterizer is derived from Blaze and its GPU pipeline from Vello, so the reason to pick it is the platform: in .NET it gives you those designs plus a full 2D API (strokes, gradients, text, clipping, layers), which fill-only Blaze lacks. In C or C++, pick Blend2D (maintained, with its own multi-threaded context) or Blaze for fill throughput. In Rust, pick Vello CPU.
+
+**Gotchas:**
+- The CPU backend fans out across all cores by default (Parallel.For over row bands, with partitions capped at Environment.ProcessorCount). Cap it with Configuration.MaxDegreeOfParallelism, as FillTiger's single-threaded variant does, when rendering many images concurrently.
+- Immediate mode is partly retained: Path and ComplexPolygon cache their flattened LinearGeometry per scale, so redrawing the same IPath objects skips curve subdivision. FillParis reuses one IPath list every iteration (its SVG has 79,353 relative cubic commands), while SkiaSharp rebuilds edges from each SKPath on every draw.
+- WebGPU flushes do not wait for the GPU. Scratch-overflow status is read back later (up to 8 pending flushes before a blocking resolve), and offscreen overflows are repaired by a corrective re-render, so call ReadbackImage when you need finished pixels. Timings of WebGPU flushes measure pipelined submission, not per-frame latency.
+- The released 3.1.x CPU rasterizer had small edge-accuracy errors, fixed on main by PR #417 (2026-09-11): band-boundary X drift of up to a few hundredths of a pixel on long slanted edges, coverage quantized to 1/256 before blending, and DDA walkers that floored rather than rounded.
+
+**Status:** Active: 3.0.0 on 2026-05-12, 3.1.0 on 2026-08-12 and 3.1.2 on 2026-09-17 on NuGet, last commit 2026-09-17, and main already retargeted to net10/net11. It is reference only, because it is C# and under the non-OSI Six Labors Split License (paid licence for direct use by companies with 1M USD or more revenue outside open-source software).
+
+[repo](https://github.com/SixLabors/ImageSharp.Drawing) · [benchmark](https://sixlabors.com/posts/announcing-imagesharp-drawing-310/)
+
+##### scanx  `Go`  `FTL OR GPL-2.0-or-later on scan.go only (header inherited from freetype-go, which points to a LICENSE file the repo does not have); span.go and the repo carry no license`  `abandoned`  `Tier C`
+
+Pure-Go anti-aliasing scanner for rasterx/oksvg that writes spans straight into image.RGBA; 1.7-3.2x faster than scanFT on the author's icon benchmark.
+
+**Beats:** golang.org/x/image/vector rasterizer via rasterx scanGV (GVScanner) and rasterx-family scanFT (FTScanner) — The README's go test -bench results (linux/amd64, GOMAXPROCS 16, CPU and Go version not stated) draw the 8 landscape icons (beach, cape, iceberg, island, mountains, sea, trees, village) through oksvg and the rasterx Dasher into one image.RGBA at 0.5x to 15x. ImgSpanner beats scanFT by 1.67x at 0.5x, 2.15x at 1x, 3.20x at 5x and 2.59x at 15x (derived from page data), and LinkListSpanner by 7.2x at 5x and 8.0x at 15x; most 5x and 15x rows ran only once. Reading the code adds two points. The scanFT comparison is like-for-like: same coverage algorithm and harness, different span writer. The x/image/vector column is not representative: rasterx's ScannerGV.Draw calls vector.Rasterizer.Draw over the whole destination bounds for every path, and Clear calls Reset(w, h) on the full-canvas accumulator, so each path costs time in proportion to image area (not profiled here). The 15x to 74x gap therefore measures that adapter, not x/image/vector used with a path-sized rasterizer.
+
+**Known shortcoming:** README ns/op figures match scanx_benchmark_test.go but no CPU or Go version is stated; usability is mixed because scan.go keeps the freetype-go header (FTL or GPL-2.0+) while span.go and the repo carry no licence; the README calls it beta software with known bugs; last commit 2019.
+
+**Known shortcoming:** Enricher (e121, 2026-10-05): ImgSpanner vs scanFT is like for like (same freetype coverage algorithm, faster span writer). The GV column measures rasterx ScannerGV, which runs vector.Rasterizer.Draw over the whole destination bounds per path and Reset(w, h) per Clear, so the 15x-74x gap is not representative of x/image/vector; caveat level, C unchanged. Bugs: LinkListSpanner.spansToImage calls img.Set(y, x) with swapped arguments (transposed output on a generic draw.Image; still present in the Cogent Core copy); ImgSpanner panics on non-RGBA or xgraphics targets (nil pix) despite the README; LinkListSpanner turns gradients transparent; open issue #1 claims an infinite loop, with no guard at HEAD. cogentcore.org/core/paint/renderers/rasterx/scan is a maintained copy (duplicate).
+
+**Independent measurement:** first-party go test -bench
+
+**How:** Coverage uses the same FreeType / CL-AA area-and-cover cell accumulation as scanFT (scan.go is the freetype-go algorithm on 26.6 fixed point). The gain is in the span writer. GetSpanFunc picks one of four specialised functions per path (solid colour or colour function, Over or Src), and each writes directly into Pix, hoists the blend factor out of the pixel loop, and handles fully covered opaque spans as plain stores. scanFT instead buffers 64 Spans, calls Painter.Paint through an interface, and recomputes the blend factor for every pixel. LinkListSpanner resolves overdraw in the per-row span lists, merging neighbouring spans of the same colour, so each pixel is written once at the end. That is why it pulls ahead at 5x and 15x, where overlapping paths cover many pixels.
+
+**Use it when:**
+- Go programs that already render SVG icons with oksvg and rasterx into image.RGBA and want about 2-3x over ScannerFT without cgo.
+- Large or hi-DPI renders of solid-colour, heavily overlapping icon art: LinkListSpanner was 7-8x faster than scanFT at 5x and 15x scale in the README, but it was slower than ImgSpanner at 0.5x.
+- X11 tools built on xgbutil that draw into *xgraphics.Image (BGRA): ImgSpanner swaps the R and B channels itself.
+- As the rasteriser behind tdewolff/canvas, which pins this module at a 2019 commit (per the record's verification).
+
+**Skip it when:**
+- Anything that needs a clean licence: span.go and the repository have no licence, and scan.go carries the freetype-go FreeType License or GPL-2.0+ header.
+- Gradients with LinkListSpanner: SetColor runs every input through getColorRGBA, which returns zero (transparent) for a rasterx.ColorFunc, so gradient fills silently disappear rather than failing.
+- Destinations other than *image.RGBA or *xgraphics.Image with ImgSpanner. SetImage ignores other types and leaves pix nil, so the first span panics with an index error, despite the README saying it 'draw[s] into any image that supports the draw.Image interface'.
+- Generic draw.Image targets with LinkListSpanner: spansToImage calls img.Set(y, x, clr) with the arguments swapped, so output is transposed, and on non-square images pixels land in the wrong place or are dropped. The same line is still in Cogent Core's copy.
+- Production use where unexpected output is costly: the README calls it 'beta software' with 'known bugs', advises scanFT or ScannerGV unless every SVG is tested, and notes that line-heavy files such as rl.svg are slow with LinkListSpanner.
+
+**Vs siblings:** Pick scanx (or the copy inside tdewolff/canvas or Cogent Core) when you are already on oksvg and rasterx in pure Go and want 2-3x over scanFT. Pick stilus for a standalone, licensed replacement for x/image/vector. Pick Blend2D or another C/C++ renderer when cgo is acceptable and raw speed matters more than staying pure Go.
+
+**Gotchas:**
+- LinkListSpanner blends new spans against its BgColor (default transparent), not against the pixels already in the image, and DrawToImage overwrites every covered pixel. You cannot layer it over existing content, you must call Clear() between images, and it allocated 93 MB per op at 15x in the README.
+- Open issue #1 (rcoreilly, 2021-03-03) reports an infinite loop in Scanner.Line when dx and dy are both zero and proposes an early return. HEAD has no such guard. Reading the code, a zero-length segment takes the single-scanline branch, so the loop could not be confirmed from source alone. Line walks every row and cell of a segment, including parts off the canvas, so huge coordinates cost time in proportion to their extent.
+- Output is not bit-identical to scanFT: the README reports differences of up to 4 in a channel on randspot.svg, and more with several stacked semi-transparent layers.
+- A maintained copy lives in Cogent Core (cogentcore.org/core/paint/renderers/rasterx/scan). It drops the xgbutil dependency and adds a BSD header to span.go, but scan.go keeps the FreeType/GPL notice, and the transposed img.Set call is unchanged.
+
+**Status:** Abandoned since 2019-03-09 (2 stars, one open issue from 2021) and effectively unlicensed for its fast part (span.go). Its live users are vendored or pinned copies (tdewolff/canvas, Cogent Core); the same author's later srwiley/scany (MIT, adds a multi-threaded ScanT) is the cleaner-licensed successor to evaluate.
+
+[repo](https://github.com/srwiley/scanx) · [benchmark](https://github.com/srwiley/scanx)
+
+##### plutovg  `C`  `MIT`  `active`  `Tier D`
+
+Small MIT C 2D vector library with a Cairo-like canvas API; no published speed comparison against Cairo, Skia or Blend2D.
+
+**Beats:** Cairo, Skia, Blend2D (category baselines; no comparison found) — No speed claim exists to verify: the README, release notes and issue tracker carry no numbers, and the only independent suite that includes plutovg (mfabbri77/VGCPU-Benchmark, with Cairo 1.18.2, Skia m124 and Blend2D) commits its harness but no results.
+
+**Known shortcoming:** Tier D: no number anywhere (README, releases v0.0.11 to v1.3.3, issues #65 and #43); VGCPU-Benchmark lists a plutovg backend labelled 0.0.4 but commits no results, and the listed LunaSVG entry's pipeline bench gives no render-only Cairo figure. Three vendored FreeType files (plutovg-ft-raster.c, plutovg-ft-stroker.c, plutovg-ft-math.c) carry the FTL header, so usability is mixed.
+
+**Known shortcoming:** Enricher (e120, 2026-10-05): still no speed numbers, D stands. The code is FreeType's ftgrays rasterizer plus stroker with Qt-style scalar blending; the only SIMD is an SSE2 memfill. Transformed plain images are sampled nearest-neighbour (PR #72 open); strokes use uniform width under non-uniform scale or skew; a scanline overflowing the 8 KB pool restarts the whole path with a doubled heap pool and the path is silently left partly drawn past 8 MB; Porter-Duff operators only; text has no shaping or kerning; the font mutex becomes a no-op without threads.h. Issue #50 is a false alarm. VGCPU-Benchmark still has no committed results.
+
+**Independent measurement:** none
+
+**How:** Nothing in the repository claims or measures speed; the design is simply lean. Coverage comes from a vendored copy of FreeType's ftgrays cell/area scanline rasteriser (8-bit anti-aliased spans, 8 KB stack pool with band splitting) and FreeType's stroker, clipping is done by intersecting span lists, and compositing uses Qt-style SWAR pixel arithmetic (BYTE_MUL, INTERPOLATE_PIXEL_255 on two channels per 32-bit word) with 1024-entry gradient lookup tables. The only SIMD is an SSE2 memfill for opaque solid spans; there is no JIT, tiling, sparse-strip or multithreaded pipeline of the kind Blend2D or Vello CPU use.
+
+**Use it when:**
+- You need a dependency-free C library (vendored stb_truetype, stb_image, stb_image_write) to draw anti-aliased paths, gradients and text into an ARGB32 buffer, for example on embedded, homebrew or game targets.
+- You want Cairo-like drawing semantics without pulling in Cairo, pixman, FreeType and fontconfig, and footprint matters more than peak throughput.
+- You already render SVG with LunaSVG or PlutoSVG and want direct access to the same backend.
+- MIT licensing with a small codebase (about a dozen C files) that is easy to audit or vendor.
+
+**Skip it when:**
+- You need proven speed over Cairo or Skia: no benchmark exists, and VGCPU-Benchmark wires up a plutovg backend (labelled 0.0.4) but commits no results.
+- Throughput-critical rendering of large or complex scenes: compositing is scalar apart from an SSE2 fill and rendering is single-threaded; Blend2D, Vello CPU and ThorVG are the measured options in this catalog.
+- You need separable blend modes (multiply, screen, overlay and so on): only the 12 Porter-Duff operators exist.
+- Real text layout: glyphs come from stb_truetype outlines with no shaping, kerning or hinting.
+- Pixel formats other than premultiplied ARGB32 (RGB565 and similar were requested in issues #33 and #41).
+
+**Vs siblings:** Pick it over Blend2D, ThorVG or tiny-skia when a small, dependency-free C library with a Cairo-like API matters more than measured speed; for throughput Blend2D (and Vello CPU) have independent numbers beating Skia and Cairo, while plutovg has none.
+
+**Gotchas:**
+- Transformed non-tiled images are sampled nearest-neighbour (blend_transformed_argb); bilinear sampling exists only for tiled textures under rotation or shear, and PR #72 to extend it is still open.
+- Strokes are built after the transform with one width scaled by hypot(sx, sy)/sqrt(2), so non-uniform scale or skew gives a uniform-width stroke instead of the elliptical pen Cairo produces.
+- If a single scanline needs more cells than the 8 KB stack pool, PVG_FT_Raster_Render restarts the whole path with a doubled heap pool (up to 8 MB), skipping spans already emitted; beyond 8 MB the path is silently left partly drawn, since the call returns void.
+- Vendored FreeType-derived files (plutovg-ft-raster.c, plutovg-ft-stroker.c, plutovg-ft-math.c) carry the FreeType Project License, which asks for credit in documentation; the rest is MIT.
+
+**Status:** Actively maintained (last commit 2026-07-16, v1.3.3 released 2026-05-18; May 2026 fixes for allocation-failure handling and surface-size overflow); MIT plus FreeType-licensed rasteriser files, so usability is mixed but practical to vendor.
+
+[repo](https://github.com/sammycage/plutovg)
+
+##### Rasterizer (mindbrix)  `C++`  `Custom 'personal use zlib license' (LICENSE.txt): zlib terms, but permission is granted only for personal use, and commercial use needs a licence from the author. Not OSI-approved.`  `active`  `Tier D`
+
+Metal GPU 2D vector renderer (paths, strokes, gradients, clips, SVG/PDF) for macOS and iOS; claims 'up to 60x faster than the CPU', unmeasured.
+
+**Beats:** unnamed CPU path rasterization ('the CPU'); the README names no CPU renderer. HN thread snippets (seen through search only) say the author used CoreGraphics as the quality reference and called performance against Vello 'very competitive', with no numbers. — No measurement backs the README's 'up to 60x faster than the CPU': the repo has no benchmark code, frame timer or result file, and the demo's 'T' key toggles an animated clock scene (Concentrichron), not a timer. The only CPU renderer in the repo is the demo's '0' key toggle to Core Graphics (RaCG::renderListToBitmap drawing every path into one CGContext through CALayer drawLayer:inContext:), so the implied baseline is probably single-threaded Core Graphics versus Rasterizer's multi-core CPU preparation plus Metal GPU, with scene, hardware and method unstated; HN-thread claims (50,000 glyphs at 60 fps, Vello 'very competitive') were seen only as search snippets.
+
+**Known shortcoming:** The only number is the README's 'up to 60x faster than the CPU' with no named baseline, scene, hardware or benchmark code (tier D); TestFiles/ holds SVG and PDF scenes only, and the HN thread (45090553) is snippet-only (50,000 glyphs at 60 fps, Vello 'very competitive', no numbers). Custom personal-use zlib-style licence, not OSI approved, so usability reference.
+
+**Known shortcoming:** Enricher (e115, 2026-10-05): tier D stands, the 60x has no harness. The only CPU path in the repo is the demo's '0' toggle to single-threaded Core Graphics (RaCG::renderListToBitmap) and there is no frame timer ('T' is an animated clock). Quality bug, not behind any number: Rasterizer.hpp lines 304-305, Geometry::quadTo sets x0 = x2 before computing curvature, so maxCurve stores 4|p2-p1|^2 instead of |p0-2p1+p2|^2 and asymmetric quadratics can take the chord-only fast path at small scales. Personal-use licence; Arabic text broken (open issue #1); no guard on the 20-bit path index (about 1.05M paths per frame).
+
+**Independent measurement:** none
+
+**How:** Each frame the CPU transforms and clips path geometry in parallel (dispatch_apply over one Ra::Context per online core, split by edge-count weight) and memcpys it into a page-aligned shared buffer that Metal wraps with newBufferWithBytesNoCopy; the GPU holds no per-path state. Small fills such as glyphs ('molecules') are uploaded as 16-bit fixed-point points relative to the path bounds and drawn as instanced quads, while larger fills use 'fat scanlines' (16-px bands): edges are binned per band, x-sorted (radix sort), interior spans become solid opaque or blended cells and only edge cells run the coverage shader. Coverage accumulates additively into an R32Float mask texture using the author's 'windowed inverse lerp' (awinding in Shaders.metal: an inverse lerp of signed corner areas, then a slope-dependent filter) and monotone quadratic Beziers are solved per pixel on the GPU, so curves need little CPU flattening. Opaque interiors are drawn front to back with a depth test so hidden pixels are skipped, and strokes are triangulated on the GPU straight into the colour buffer.
+
+**Use it when:**
+- macOS 12+ or iOS 13+ app that redraws animated vector UI or large SVG/PDF scenes every frame (zoom, pan, rotate) and is CPU-bound in Core Graphics.
+- Text-heavy or glyph-heavy scenes: CoreText glyph outlines go into the small-fill 'molecule' path, which uploads compact 16-bit geometry and draws one instanced quad per glyph.
+- You need fuller path semantics than SDF UI renderers offer (non-zero and even-odd fills, cubics, strokes with caps and round joins, dashes, gradients, path clipping) on an Apple GPU.
+- Personal, research or evaluation use, or a commercial product whose owner will negotiate a licence with the author.
+
+**Skip it when:**
+- Commercial use without a separate licence: LICENSE.txt grants permission for personal use only; it is not an OSI licence.
+- Any non-Apple target: rendering is Metal-only and the ObjC/Swift layers depend on QuartzCore, CoreGraphics and CoreText. The README's claim that it would work on any GPU with instancing and float render targets is not backed by a port.
+- When you need a measured speedup before adopting: there is no benchmark harness, frame timer or result file in the repo, so the 60x figure cannot be checked; profile it on your own scenes against Core Graphics, vger or Vello.
+- Complex-script text: issue #1 (open since 2025-09-04) reports that Arabic text in PDFs and SVGs renders nothing, and the demo uses a single font.
+- Miter joins or exact-area anti-aliasing: the Scene flags expose only round or default joins and butt/round/square caps, and coverage comes from a filtered inverse-lerp approximation, not an exact area integral.
+
+**Vs siblings:** Pick it over vger when you need real PostScript paths (cubics, non-zero fill, joins, dashes, clips, SVG/PDF content) rather than SDF UI primitives, and over Pathfinder 3 or Vello when you only ship on Apple GPUs and can accept a personal-use licence. Pick vger (MIT), Pathfinder, Vello or the Rive Renderer for open-source licensing, other platforms or published numbers, and Blend2D or Blaze when a CPU renderer with measured results is enough.
+
+**Gotchas:**
+- Possible curvature-estimate bug: Geometry::quadTo assigns x0/y0 = (x2, y2) before computing 'ax = x2 + x0 - x1 - x1', so maxCurve stores 4|p2-p1|^2 instead of the second difference |p0-2p1+p2|^2. For quadratics whose first control leg is much longer than the second this underestimates curvature, and the 'fast' route (maxCurve*det < 4 for large fills, < 16 for molecules) then draws large-fill quadratics as straight chords (CurveIndexer::Quadratic writes only x0,y0 to x2,y2), which can exceed the intended sub-pixel error at small zoom scales. Cubics are computed correctly.
+- Path building drops near-flat curves in user space: quadTo and cubicTo turn a curve into a line when its control points sit within 1% of the chord length from the chord (err = 1e-2), so very long, shallow arcs can lose up to about 0.5% of chord length of sag, which becomes visible when zoomed far in.
+- No guard on scene size: the per-frame path index lives in the low 20 bits of each instance word (kPathIndexMask 0xFFFFF, flags in bits 21-31) and neither Scene::addPath nor RasterizerRenderer::renderList checks the total, so keep a frame under about 1.05 million paths.
+- Frames are rebuilt from scratch every frame (CPU transform, clip and memcpy of all visible geometry), and RasterizerLayer::display skips a frame when both in-flight buffers are busy rather than blocking.
+
+**Status:** Active (last commit 2026-05-02, iOS target and Swift API added in 2026, 7,346 commits, single maintainer) but licensed for personal use only, so it is a reference design for commercial projects unless the author grants a licence.
+
+[repo](https://github.com/mindbrix/Rasterizer) · [benchmark](https://github.com/mindbrix/Rasterizer/blob/master/README.md)
+
+#### video-audio
+
+##### HALAC (High Availability Lossless Audio Compression)  `C++`  `MIT`  `active`  `Tier C`
+
+Fast lossless audio codec, closed Windows binaries plus an early MIT source; encodes 2.2-4.4x faster than FLAC 1.5.0 at similar size.
+
+**Beats:** FLAC 1.5.0 (flac CLI) at -8 and -5. The 0.5.4 notes also list WavPack 5.9.0 -h and HALAC 0.5.1. Monkey's Audio, WavPack and OptimFROG (versions not stated) appear only in the 0.4.8 notes for the 32-bit float set. — The author's 0.5.4 notes time single-threaded encode and decode of six albums (5.88 GB, 24-bit/44.1 kHz stereo, about 6.2 hours) on an AMD Ryzen 9600X: HALAC -plus 11.578 s / 13.201 s vs FLAC 1.5.0 -8 50.802 s / 14.357 s at 0.25% smaller output, and -normal 7.200 s / 9.353 s vs FLAC -5 15.857 s / 13.451 s at 0.07% larger output. OS, compilers, FLAC build and options, timing method and the audio are not given. The FLAC and WavPack rows are copied unchanged from the 0.5.1 notes of March 4 rather than re-run with 0.5.4.
+
+**Known shortcoming:** Reference only: the measured HALAC 0.5.4 is a closed Windows executable (release notes: AMD Ryzen 9 9600X, single thread; -plus vs FLAC -8 4.4x encode, -normal vs -5 2.2x encode with output 0.07% larger; no script, OS, compiler or AVX build named). The published source is v0.1.9, 16-bit stereo only, which cannot encode the 24-bit test set and computes no MD5 or CRC while FLAC does by default, so the integrity work differs.
+
+**Known shortcoming:** Usability set to reference (retier-12): the catalogued 0.5.4 numbers come from closed binaries, and the public v0.1.9 decoder silently corrupts output past 256 escapes per channel block (u8 counter against a u16 count) with no checksum, plus an unsigned underflow on PCM under 24,576 bytes and a METADATA[16384] overflow. The 0.5.4 table's FLAC and WavPack rows are copied unchanged from the 0.5.1 table; FLAC's MD5 verification likely accounts for part of the decode gap (inference). Not ANS-only (0.4.9 notes mention Rice coding).
+
+**How:** In the public v0.1.9 code each 24 KiB block is split into channels, mid/side transformed (X = L - R, Y = R + X/2), and delta coded. An order-8 Levinson-Durbin LPC (double precision, coefficients stored as float) then predicts each sample. Each zigzagged residual is split into a high byte, coded with Yann Collet's FSE (tANS), and a low byte, coded with his Huff0, with an escape list for values at or above 65535. One fixed-order predictor per block plus table-driven ANS/Huffman decoding is far cheaper than FLAC -8's search over orders, apodizations and Rice partitions. The faster 0.4.x-0.6.x builds add AVX2/AVX-512, multithreading, compression levels and 'Rice coding overflow control' (0.4.9 notes), so the shipped codec also uses Rice coding somewhere. Its internals are not public.
+
+**Use it when:**
+- You control both encoder and decoder (archive or cache on Windows x64) and encode speed matters more than format interoperability: the first-party run shows about 1,900x realtime for -plus and 3,100x for -normal on one core for 24-bit/44.1 kHz stereo (derived from page data).
+- Bulk re-encoding of large 24-bit stereo or multichannel libraries where FLAC -8's encode time is the bottleneck and the size target is about FLAC -8 (-plus was 0.25% smaller in the author's set).
+- 32-bit float stereo (0.4.8 notes) or many-channel float audio (0.6.6 adds 128 channels for float), which FLAC does not support at all.
+- As a reference design for a low-complexity lossless audio coder that pairs a fixed LPC with FSE/Huff0 entropy coding (v0.1.9 source, MIT).
+
+**Skip it when:**
+- Anything that needs a published, stable format or players and tools that understand it: .halac has no spec, no FLAC-style ecosystem or tagging, and is versioned only by a closed binary that changes every few weeks.
+- Linux, macOS, ARM, or embedding as a library: releases are Windows x64 .exe files only, and the source is a 16-bit-stereo CLI from 2024-2025 that cannot reproduce any published 24-bit or float result.
+- Archival where silent corruption matters: the public v0.1.9 format stores no MD5 or CRC, and integrity checks in 0.5.4+ are not documented. FLAC verifies a whole-stream MD5 and per-frame CRCs.
+- Maximum compression: in the 0.4.8 float set OptimFROG fast was 2.5% smaller, and at -normal HALAC matches FLAC -5 size, not -8.
+- Building from the repository source for real use: see gotchas. v0.1.9 has a decoder overflow-index bug and unchecked WAV header parsing.
+
+**Vs siblings:** Choose HALAC over flacenc-rs or go-flac only when FLAC compatibility does not matter and you run Windows x64. flacenc-rs beats flac -8 by about 1.44x but loses to -5, while HALAC's first-party numbers beat both presets, but its output is readable only by HALAC. For anything that must decode in standard players, or a library you can build and audit, stay with libFLAC or flacenc-rs; libfoxenflac and Symphonia cover fast FLAC decoding.
+
+**Gotchas:**
+- v0.1.9 decoder bug: escape values are indexed with `u8 counter`, while the encoder's escape count is a u16 (up to 6,144 per channel block). With more than 256 escaped residuals (|residual| of about 32768 or more) in one channel block, the counter wraps and the decoder silently adds the wrong overflow values. Loud, noisy or wide-stereo 16-bit material (for example full-scale white noise) would not round-trip, and with no checksum nothing reports it.
+- v0.1.9 input handling: `block_count = INPUT_SIZE / BLOCK_SIZE - 1` is unsigned, so PCM shorter than 24,576 bytes (about 0.14 s of CD audio) underflows to 4,294,967,295 iterations. A WAV with a non-'data' chunk larger than 16 KiB overflows the global METADATA[16384] buffer, in the encoder and, through crafted .halac files, the decoder. WAVE_FORMAT_EXTENSIBLE or fmt chunks other than 16 bytes are misparsed.
+- The predictor is floating point (double accumulation of float coefficients, truncated with (int)), so encoder and decoder must round identically. The 0.5.4 release pairs three ISA-specific encoders (AVX/AVX2/AVX-512) with one decoder. If the closed builds keep this predictor and the compiler contracts multiply-adds into FMA differently, cross-build output could differ by one LSB. This is an unverified inference, and no cross-build test is published.
+- v0.1.9 keeps a 1 MiB output buffer plus VLAs on the stack, so it needs more than a 1 MiB thread stack.
+
+**Status:** Releases are active (0.6.6 on 2026-09-26, adding 128-channel float), but the repository source has not moved past v0.1.9 (last commit 2025-11-17, 13 commits, every release's 'Source code' archive is that snapshot). The MIT code is an early 16-bit prototype with a lossless-roundtrip bug, so 'reference' fits better than 'mixed'.
+
+[repo](https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression) · [benchmark](https://github.com/Hakan-Abbas/HALAC-High-Availability-Lossless-Audio-Compression/releases/tag/0.5.4)
+
+##### NonIntegerSRC (Holters-Parker resampler)  `C++`  `GPL-3.0`  `abandoned`  `Tier C`
+
+SSE Holters-Parker IIR resampler, timed 17-40x faster than libsamplerate SINC_FASTEST at far lower, unmatched quality.
+
+**Beats:** libsamplerate (SRC_SINC_FASTEST) — The only numbers are a spreadsheet screenshot (doc/speed_chart.png) of single std::chrono passes of src/src_test.cpp, with no warm-up or repeats, on an unnamed Intel i7 Linux machine with compiler and flags unrecorded. It shows the HP resampler 39.8x (48k to 96k), 16.9x (96k to 48k), 21.2x (44.1k to 48k) and 21.8x (48k to 44.1k) faster than libsamplerate 0.2.1 SRC_SINC_FASTEST, resampling a 1,000,000-sample mono 100 Hz sine in 2048-sample blocks. The documented build ('cmake -Bbuild; cmake --build build --config Release') applies no optimisation flags with a single-config Linux generator, because neither the top-level CMakeLists.txt nor the pinned libsamplerate 0.2.1 (aae58e2) or libsndfile 1.0.31 (949c891) sets a default CMAKE_BUILD_TYPE, so the published Linux ratios may come from -O0 builds of both sides (not recorded either way).
+
+**Known shortcoming:** C++17 plus SSE. Chart numbers (39.8/16.9/21.2/21.8x) come from one timed pass of src/src_test.cpp on a 1M-sample 100 Hz sine against libsamplerate SRC_SINC_FASTEST (97 dB SNR, 80% bandwidth) built in-tree; not quality-matched: the Holters-Parker side is a single 4th-order IIR (JUNO-60 BBD poles) whose own doc/HP_compare.png shows spurs at about -47 dB, and the cutoff sits at the input Nyquist so a 96k to 48k conversion is barely anti-aliased. Machine 'Intel i7' only (doc/writeup.md), no compiler, and the documented cmake build sets no build type.
+
+**Known shortcoming:** Usability set to reference (retier-14): by code reading, tn/delta in seconds is used as the exponent of a per-sample pole, so the sub-sample weight is near constant (within 1e-4) and the output behaves as a filtered sample-and-hold, matching the spurs in the repo's HP_compare.png; the timed code is not a working Holters-Parker resampler although the operation count and ratios are unaffected (the chowdsp BBDDelayLine default mode shares the convention; its ALIEN mode normalises by Ts). process() over-reads input[num_samples] at the 0.919 ratio; the pinned libsamplerate 0.2.1 and libsndfile 1.0.31 builds set no CMAKE_BUILD_TYPE, so the documented Linux build is probably -O0 on both sides.
+
+**How:** Instead of a windowed-sinc FIR evaluated at each output instant, the converter runs a 4th-order analog filter expanded into four complex one-pole sections whose state is updated once per output sample, with all four sections packed into one SSE register (SSEComplex, from Surge), so a 4th-order filter costs about the same as a first-order one. Each input sample adds only a complex multiply-accumulate of its step (y - y_old) weighted by a per-sample coefficient that is advanced by a precomputed complex rotation (calcG), and sin/cos come from polynomial approximations (FastMath::fastsinSSE/fastcosSSE). libsamplerate SINC_FASTEST, by contrast, evaluates a sinc filter rated at 97 dB SNR and 80% bandwidth, so most of the gap comes from doing far less filtering work.
+
+**Use it when:**
+- Fixed-ratio mono float conversion on x86 (SSE2) inside a plugin or synth where CPU matters far more than fidelity, such as internal modulation paths, previews or effects that low-pass the signal anyway.
+- Upsampling, where the filter cutoff at the input Nyquist does act as an anti-imaging filter (the 48k to 96k case is also the largest timed win, 39.8x).
+- As a starting point for your own Holters-Parker resampler: the four-poles-per-SSE-register layout is the reusable idea, provided you fix the time units and cutoff (see gotchas) and measure quality yourself.
+- Comparing SRC approaches: the harness (src/src_test.cpp) times libsamplerate, the HP resampler and Surge's Lanczos resampler on the same input, and src_sndfile converts WAV files for listening tests.
+
+**Skip it when:**
+- Any path where the output is listened to critically or distributed: the author's own plot (doc/HP_compare.png) shows spurious components up to about -47 dB against a smooth libsamplerate spectrum, and the writeup says the author was 'primarily interested in speed rather than quality'.
+- Downsampling: the filter cutoff is fixed at the input Nyquist for every ratio, so 96k to 48k has no effective anti-aliasing filter below the 24 kHz output Nyquist.
+- ARM or Apple Silicon builds: the code uses SSE2 intrinsics (emmintrin.h) with no NEON or scalar fallback.
+- Variable-ratio, multichannel or library-style use: the ratio is fixed in prepare(), audio is mono, there is no build target for the resampler itself, and the repo has been inactive since 2021-07-12 with three unanswered issues.
+- Projects that cannot accept GPL-3.0: the SSE helpers and Lanczos code come from the GPL-3.0 Surge Synthesizer.
+
+**Vs siblings:** Pick libsoxr (about 11x libsamplerate MEDIUM at the ~120 dB tier), r8brain-free-src, LibFResample, SampleRateTap or zita-resampler whenever the output is audible, since their speedups over libsamplerate are quality-matched. NonIntegerSRC only makes sense when a crude 4th-order IIR result is acceptable for minimum x86 CPU, or as research code on the Holters-Parker approach.
+
+**Gotchas:**
+- From code reading (not executed): HPResampler keeps its sub-sample clock tn and the per-step advance in seconds (Ts = 1/fs, Ts_out = ratio/fs, about 1e-5), but OutputFilterBank::set_time and set_delta use them as exponents of a per-output-sample pole (pow(pole, 1 - tn); fast_complex_pow also keeps only the pole's angle). The timing-dependent weight therefore stays within about 1e-4 of constant, so every input step gets almost the same weight wherever it falls between output samples, and the output behaves like a filtered sample-and-hold rather than a Holters-Parker resampler. That is consistent with the spurs in doc/HP_compare.png. chowdsp_utils' BBDDelayLine uses the same seconds-based convention in its default mode and normalises tn by Ts only in its 'ALIEN' mode. The operation count does not depend on this, so the speed ratios are not inflated by it, but the measured code does not deliver the method's intended quality.
+- process() does not bounds-check its inner loop: for non-integer downsampling (the 0.919 case) it can read input[num_samples], one sample past the block, and the next call then consumes that sample again. It also writes outputs with no capacity argument, so the caller must size the output for about n*ratio+1 samples.
+- The filter cutoff is hard-wired to sample_rate*0.5 (the input Nyquist) for both directions, and the 44.1k/48k ratios in the harness are rounded to 1.088 and 0.919.
+- Only the output-filter ('rectangular') variant is compiled; the input-filter ('Dirac') variant sits behind #if 0, and issue #2 (2024, unanswered) asks whether cascading both would reduce aliasing. prepare() still allocates both filter banks and an unused 'middle' buffer.
+
+**Status:** Abandoned research code (15 commits, last 2021-07-12, 38 stars, 3 open unanswered issues) under GPL-3.0 with Surge-derived SSE code. It is small enough to copy, but treat it as a sketch: fix the time units, cutoff and bounds check and measure quality before using it.
+
+[repo](https://github.com/jatinchowdhury18/NonIntegerSRC) · [benchmark](https://raw.githubusercontent.com/jatinchowdhury18/NonIntegerSRC/HEAD/doc/speed_chart.png)
+
+##### rivet-h26x (rivet-h26x-codecs)  `Rust`  `Open Encoding Attribution License v1.0 (source-available, royalty-free with commercial attribution; not OSI-approved; no SPDX id confirmed)`  `active`  `Tier C`
+
+Pure-Rust H.264/H.265 decoders, conformance bit-exact; beats libavcodec only on all-thread WPP HEVC, at parity or behind elsewhere.
+
+**Beats:** libavcodec (FFmpeg) native H.264 and H.265 decoders — First-party tables from tools/benchmark.py at cc9195a on an AMD Ryzen 9 9950X (32 threads, Windows, AVX-512 rung, machine 17% busy): the ffmpeg CLI of unstated version decoding to rawvideo on NUL against the h26xdec example, best of 5, process-tree CPU seconds and frames per wall second, on unpublished 720p Big Buck Bunny x264/x265 clips. Only the all-thread wpp10.265 cell is ahead (1963 vs 1774 fps, +10.7%), with 32 rivet threads and 1.75x the CPU seconds against libavcodec's frame-only auto threading; single-threaded rivet takes 1.02x and 1.12x libavcodec's CPU time on H.265 and 1.46-1.55x on H.264.
+
+**Known shortcoming:** Open Encoding Attribution License v1.0 (not OSI approved), so reference only. The single win (wpp10 clip, all threads, +10.7%) used 32 threads and 1.75x the CPU seconds against libavcodec's auto threads capped at 16 (MAX_AUTO_THREADS); FFmpeg version and flags unstated, clips unpublished; not on crates.io; repository moved to the safewords organisation.
+
+**Known shortcoming:** The single wpp10.265 all-thread win is weak: the harness since df463da prints a same-binary control per table but the README omits the H.265 controls and borrows the 4% noise floor from the H.264 pair; ladder inversions within the same fps column reach 6.3% (SSE4.1 1913 against AVX 1799) and 5.4% (cavlc3 SSE2 2985 against SSSE3 2831), and the +10.7% is about 65 ms of wall time on 0.6 s runs that include ffmpeg start-up and possibly a scoop shim; libavcodec ran frame-only threading. rust-version 1.99 with edition 2024; not on crates.io; no fuzzing documented; lib.rs and h26xdec docs stale.
+
+**How:** Two threading layers on one FIFO worker pool: frame threading with per-row progress (motion compensation waits only on the reference rows it needs, deblocking and SAO trail the decode row by row) and, for H.265, wavefront (WPP) rows, tiles and slice segments run as separate tasks inside a picture. libavcodec picks frame threading exclusively whenever a codec supports it (validate_thread_parameters in libavcodec/pthread.c), so on a WPP stream rivet exploits intra-picture parallelism that ffmpeg's default does not, which is where its one win comes from. Pixel kernels are Rust intrinsics behind a run-time function table that climbs SSE2, SSSE3, SSE4.1, AVX, AVX2 with an AVX-512 (F+BW+VL) supplement for wide H.265 shapes, and NEON plus sdot on AArch64; per the README, SSE2 alone is 2.4-2.9x over scalar and everything above it adds only 1-2% on H.264 and 15-18% on H.265. Output buffers come from a pool, so steady-state decoding allocates nothing per frame.
+
+**Use it when:**
+- You need an H.264 or H.265 software decoder in a pure-Rust build: no C toolchain, no system FFmpeg, no build script (cross-compiles, sandboxed CI, wasm32 probing).
+- Correctness and coverage matter more than CPU cost: 204/204 JVT AVC streams plus 38 professional-profile streams against JM, 147/147 HEVC_v1 and 49/49 RExt streams against the suite MD5s, identical output on 1 and 12 threads.
+- Throughput per wall second on a many-core box decoding x265 streams encoded with WPP (or tiles), with spare CPU to burn: the one measured cell ahead of libavcodec (1963 vs 1774 fps on a 32-thread Ryzen 9 9950X).
+- Unusual formats that matter to you: H.264 MBAFF, FMO/ASO, SP/SI, High 4:4:4 up to 14-bit, HEVC RExt up to 16-bit with extended precision.
+
+**Skip it when:**
+- CPU cost, battery or density matters: single-threaded it costs 1.46-1.55x libavcodec's CPU time on H.264 and 1.02-1.12x on H.265, and its all-thread runs spend 1.02-1.75x libavcodec's CPU seconds (4.656 vs 2.656 s on the winning WPP clip).
+- HEVC streams without WPP or tiles on many threads: 7.1% fewer frames per second than libavcodec on hevc6.265; H.264 all-thread gains (+1.7%, +2.4%) are inside the noise.
+- You need an OSI licence, GPL compatibility or no attribution duty: the Open Encoding Attribution License v1.0 requires a visible credit in commercial products and for-profit services and states it is not open source.
+- You want a published, versioned dependency: crates.io has no rivet-h26x crate (checked 2026-10-04) despite the README badge, rust-version is 1.99 with edition 2024, and the project is one author with 0 stars.
+- You decode untrusted streams and need documented hardening: no fuzzing harness or security policy is documented, and the SIMD kernels are unsafe intrinsics (plus an asm! sdot wrapper on AArch64).
+
+**Vs siblings:** Against edge264 (an H.264 decoder that beats libavcodec single-threaded in its own chart) and rusty_h265 (Rust HEVC, about 1.05x FFmpeg 8.1.2 single-core on one stream), pick rivet-h26x when you want both codecs in one pure-Rust crate with full JVT and JCT-VC conformance including RExt and MBAFF, not when you want the fastest single-thread decode; for raw speed on H.264 libavcodec itself or edge264 stays ahead.
+
+**Gotchas:**
+- Thread count, in-flight depth and SIMD caps are environment variables (H26X_THREADS, H26X_INFLIGHT, H26X_MAX_SIMD, H26X_NO_SIMD) per the README, and the default grabs every core up to 32, far more than libavcodec's auto setting (capped at 16); cap it on a shared machine.
+- A dropped Picture returns its packed buffer to the decoder's OutputPool (bounded at 32 buffers); Picture::into_packed takes the buffer for good, so keeping frames that way costs a fresh allocation per frame.
+- Picture data is already packed Y, Cb, Cr in one buffer (8-bit as bytes, 9-16-bit as little-endian 16-bit words, every plane at the wider depth when luma and chroma depths differ), not strided planes you can decode into.
+- Some docs are stale: src/lib.rs still says verification uses MD5s against libavcodec while the README says none of it involves FFmpeg any more, and the h26xdec comment says H26XDEC_NOMD5 skips packing, although packing happens inside the decoder (picture.rs), so the benchmarked binary did materialise every frame.
+
+**Status:** Actively developed by one author (515 commits, last 2026-10-03, moved from rivet-transcoder to safewords), 0 stars and no crates.io release; source-available Open Encoding Attribution License, so reference only, and the libavcodec comparison can no longer be regenerated by the current tooling.
+
+[repo](https://github.com/rivet-transcoder/rivet-h26x-codecs) · [benchmark](https://raw.githubusercontent.com/safewords/rivet-h26x-codecs/HEAD/README.md)
+
+##### uavs3e  `C`  `BSD-4-Clause`  `abandoned`  `Tier C`
+
+Open-source AVS3 (China's AVS3-P2 baseline) encoder with SIMD and fast mode decisions, far faster than the HPM reference encoder.
+
+**Beats:** HPM 4.0 (the AVS3 reference software) for encoding speed; x265 veryslow for compression at a roughly similar speed — Snippet only (the paper PDF on jdl.link is blocked): in 'An Efficient and Open Source Encoder Uavs3e for Video Compression', speed level 3 encodes 51.8 times faster than the AVS3 reference encoder HPM 4.0 at a 4.2% coding loss, and against x265 veryslow (HEVC, a different codec) it has a small speed gap while saving 22.7% luma and 46.1%/46.2% chroma BD-rate. A search snippet adds the test conditions: Intel Xeon Gold 6154 (18 cores, 3.0 GHz), intra period 1 s, fixed QP at four QP points, encoders run single- and multi-threaded; compiler, sequences and which thread setting produced the 51.8x were not seen, and the repository has no benchmark scripts or results.
+
+**Known shortcoming:** Snippet-only numbers (jdl.link paper PDF blocked): the 51.8x speed claim is over HPM 4.0, the AVS3 reference encoder, not x265; the paper says the speed gap against x265 veryslow is small with about 27% better coding efficiency. Licence BSD-4-Clause (not OSI approved), usability set to reference. Last commit 2023-08-03, abandoned.
+
+**Known shortcoming:** The CLI's 'Total encoding time' and 'Average encoding speed' use clock(), which on Linux sums CPU time across threads (issue #28: 450.6 s reported against 80.2 s wall with 40 WPP plus 40 frame threads); only the 'Actual' lines are wall time. The paper stays blocked; a snippet gives Xeon Gold 6154 (18 cores, 3.0 GHz), 1 s intra period and 4 fixed QP points, with the thread setting behind the 51.8x unseen. Open 10-bit AVX2 segfault #53; the HPM decoder fails on uavs3e streams (#43); ipf_flag is forced to 0 in refine_input_cfg; an unprefixed calculate_histogram clashes when linking into FFmpeg (PR #38); the RealTime branch has crashes, leaks and nondeterministic output; 40 of 42 issues open.
+
+**How:** speed_level gates a stack of encoder-side shortcuts: history-based reuse of split costs at the same CU position, early depth termination, restricted binary/extended-quadtree and DT partition sizes, a coarse intra rough-mode decision on 10 of the angular modes by SATD before refinement, SATD-based pruning of inter and skip candidates, and SAD instead of SATD for sub-pel motion cost. Motion search is TZ-style raster plus diamond search. Rows are encoded in parallel with WPP threads and pictures with a frame-thread pool, and the hot kernels (interpolation, intra prediction, transforms, SAO, ALF, cost functions) have SSE4.2, AVX2 and ARMv8 NEON versions.
+
+**Use it when:**
+- You must produce AVS3 bitstreams (for example for a Chinese broadcast or UHD delivery chain) and HPM is too slow for anything beyond conformance testing.
+- Research on AVS3 encoder speed-up algorithms, where a readable C encoder with switchable fast-decision flags is a better base than HPM.
+- 8-bit 4:2:0 offline encoding on x86-64 with AVX2 or on ARMv8 (the README recommends Kunpeng), where WPP plus frame threads can use many cores.
+
+**Skip it when:**
+- You need HEVC, AVC, AV1 or VVC output: it is not a drop-in for x265 or any FFmpeg encoder, and players and containers with AVS3 support are scarce.
+- 10-bit production encoding: bit depth is a compile-time switch, and issue #53 (open, uavs3e 1.3.2, Clang 18.1.8) reports a segfault in uavs3e_if_hor_ver_chroma_w4_avx2 as soon as encoding starts in a 10-bit AVX2 build.
+- Projects that need an OSI-approved license: BSD 4-clause with an advertising clause (which names uAVS3d, the decoder).
+- Anything that needs ongoing fixes: master's last commit is 2023-08-03, about 40 of 42 issues are open with few replies, and later work went to a separate RealTime branch (uAVS3lib, last updated 2024-10-31) whose own issues report crashes, memory leaks and non-deterministic output.
+- Interop-critical pipelines without your own conformance check: issue #43 (open) reports a uavs3e stream that the HPM decoder fails on.
+
+**Vs siblings:** Pick it only when the output must be AVS3; for HEVC use Kvazaar (or x265), for VVC use VVenC and for AV1 use SVT-AV1, all of which are maintained and target formats with broad decoder support.
+
+**Gotchas:**
+- The CLI's 'Total encoding time' and 'Average encoding speed' lines use clock(), which on Linux is CPU time summed over all threads: issue #28 shows 450.6 s reported against 80.2 s wall time with 40 WPP and 40 frame threads. Use the 'Actual encoding time/speed' lines (wall clock, added in PR #17) when timing.
+- The pel type in the installed header com_api.h depends on COMPILE_10BIT, so an application must be built with the same macro as the library; 8-bit and 10-bit need separate builds.
+- refine_input_cfg() always sets ipf_flag = 0 (intra prediction filter off) whatever the config says, and writes the speed-level partition limits back into the caller's cfg struct.
+- The global symbol calculate_histogram is not prefixed and collides when linked into FFmpeg (open PR #38 renames it); the CLI's kbps figure uses integer fps_num / fps_den, so it under-reports bitrate for fractional frame rates such as 24000/1001.
+
+**Status:** Abandoned on master since 2023-08-03 and licensed BSD 4-clause (not OSI-approved), so treat it as a reference AVS3 encoder to study or fork rather than a dependency.
+
+[repo](https://github.com/uavs3/uavs3e) · [benchmark](https://www.jdl.link/doc/2011/20220113_An_Efficient_and_Open_Source_Encoder_Uavs3e_for_Video_Compression.pdf)
+
+##### VVenC  `C++`  `BSD-3-Clause-Clear`  `active`  `Tier C`
+
+Fraunhofer's open H.266/VVC encoder; with 8 threads it runs 19x to 2400x faster than the single-threaded VTM reference encoder.
+
+**Beats:** VTM-19.2 (JVET VVC reference encoder) and HM-17.0 (HEVC reference encoder); x265 v3.5 is also plotted but only in figures — First-party Fraunhofer wiki Table III (VVenC v1.14.0, 8 threads, AMD EPYC 7502P, JVET CTC random access at QP 22-37; compiler and flags not stated; VTM-19.2 and HM-17.0 single-threaded with MCTF) gives HD4K speedups over VTM of 2400x (faster, -13.3% BD-rate versus HM), 330x (medium, -35.1%) and 19x (slower, -42.1%, about VTM's efficiency). Only the slower row is quality-matched to VTM, and even if 8 threads scaled perfectly it still implies at least about 2.4x per thread (derived from page data); no x265 or x264 speed numbers are tabulated.
+
+**Known shortcoming:** Not faster than the listed baselines: VVenC is compared only against the single-threaded VTM-19.2 and HM-17.0 reference encoders (v1.14.0 wiki Table III, 8 threads, AMD EPYC 7502P), with no timing harness, compiler or flags published; quality-matched speedup over VTM is 15x HD, 22x UHD, 19x HD4K, and every preset except slower gives up compression. Against x265 3.5 (figure only, CRF vs constant QP) VVenC sits at similar runtime with better compression, and third-party snippets put vvenc medium far slower than x265 medium. Page prose (over 20x, 2300x, 280x/45x) disagrees with its own table. Licence BSD-3-Clause-Clear (no patent grant; SPDX marks it not OSI approved), so usability set to reference.
+
+**Known shortcoming:** The speed win is only against VTM and HM; the one quality-matched row (slower preset, HD/4K, 8 threads) is 19x, at least 2.4x per thread (derived from page data), and the project's own Figure 2 plus search snippets show VVenC slower than x265. Wiki prose is stale against Table III. Open issues #369 (QPA detail loss) and #489 (blocking artefacts); no lossless mode (#59, wontfix) and no multi-slice (#635); the default floating-point contraction breaks bit-exactness across platforms. Clear BSD licence with no patent grant (reference).
+
+**How:** It started from the VTM reference code and was restructured around SIMD kernels (x86 SSE4.1/SSE4.2/AVX/AVX2 with runtime selection, Arm NEON/SVE/SVE2, LoongArch LSX, SIMDe for other targets) and Pareto-tuned presets that prune the VVC search space: 64x64 CTUs and no multi-type-tree splits in inter slices for faster/fast, fast diamond motion search, early CU termination, fewer intra modes in full RD and tool subsets per preset. Encoding runs as CTU tasks in a no-malloc thread pool with wavefront dependencies (top and top-right CTU), plus inter-frame parallelization (IFP), tiles and parallel GOPs; dependent quantization uses trellis pruning and vectorization per the authors' EUSIPCO 2024 paper listed on the wiki.
+
+**Use it when:**
+- You must produce H.266/VVC bitstreams (VOD archives, DASH, VVC test content) with an open encoder; the wiki puts the medium preset at -35.1% PSNR-YUV BD-rate versus HM-17.0 on HD/UHD test sequences.
+- Research or conformance work that would otherwise run VTM: the slower preset reaches roughly VTM-19.2's compression (-42.1% versus HM) in 1/19 of VTM's HD4K encode time on 8 threads.
+- Offline encoding where bitrate matters more than encoder time and a multi-core server is available (default 8 threads at 720p and above).
+- Arm servers: the library carries Neon and SVE/SVE2 kernels, and 1.13 and 1.14 added many Arm SIMD paths.
+
+**Skip it when:**
+- Speed-critical or live encoding where H.264/HEVC/AV1 output is acceptable: Fraunhofer's own Figure 2 puts x265 3.5 presets at about 0.4% to 6% of HM's runtime versus 0.26% to 33% for VVenC (read from the figure), and unopened third-party snippets describe vvenc medium as roughly 15x slower than x265 medium; the speedups are only versus the VVC and HEVC reference encoders.
+- Players or hardware without VVC decode support; output is a raw .266 elementary stream that needs a VVC decoder such as VVdeC.
+- Projects that need an OSI-approved license or a patent grant: the Clear BSD license explicitly grants no patent rights, and VVC itself is covered by patent pools.
+- Lossless coding (issue #59, labelled wontfix) or multiple slices per picture (issue #635, open); vvencapp documents only 4:2:0 8- and 10-bit input.
+- Content where fine static detail matters with default settings: open issue #369 (bug label) reports QPA removing detail in static regions, and #489 reports visible blocking on slow-moving objects.
+
+**Vs siblings:** Pick VVenC when you need VVC/H.266 output or the highest PSNR-per-bit of the catalogued encoders and can spend encode time; pick SVT-AV1 for royalty-free AV1 with much faster production presets, Kvazaar or x265 for fast HEVC, and uavs3e only for AVS3. OpenVVC and VVdeC are VVC decoders that pair with it rather than compete.
+
+**Gotchas:**
+- Floating-point contraction is on by default, so bitstreams can differ across platforms and compiler versions; build with VVENC_FFP_CONTRACT_OFF=On for bit-exact output (README).
+- The two apps have different defaults: vvencapp turns perceptual QPA on (--qpa 1) while vvencFFapp's PerceptQPA defaults to 0, so the same preset gives different PSNR and bitrate results.
+- VVENC_ENABLE_WERROR defaults to On, so a newer compiler that emits a new warning breaks the build until the option is turned off; VVENC_ENABLE_UNSTABLE_API breaks ABI compatibility with other 1.x releases.
+- The benchmark is for the v1.14.0 tag while master reports 1.15.0-dev, and the wiki prose (e.g. 'more than 2300x', 'around 370x', 280x for medium) disagrees with its own v1.14.0 Table III, so quote the table, not the prose.
+
+**Status:** Actively developed by Fraunhofer HHI (last commit 2026-10-02, latest tag 1.14.0, master at 1.15.0-dev) with unit tests for SIMD kernels; filed as reference because the Clear BSD license is not OSI-approved and grants no patent rights, and VVC patent licensing is separate.
+
+[repo](https://github.com/fraunhoferhhi/vvenc) · [benchmark](https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Encoder-Performance.md)
+
+##### Xin26x  `C`  `AGPL-3.0`  `active`  `Tier C`
+
+Low-delay HEVC/VVC encoder framework in C; README shows 2.4-4.7x x265 fast fps single-threaded, HEVC core binary-only.
+
+**Beats:** x265 (--preset fast, single thread, build dated 2020-12-25) — README low-delay tables (added 28 Dec 2020), first-party, single thread, IPPP with ABR: xin26x 20.68 vs x265 7.96 fps on 1080p BasketballDrive (xin26x preset 3, 500 frames), 39.203 vs 8.35 on 1080p pedestrian_area, 103.68 vs 23.56 on 720p KristenAndSara (preset 0) and 39.48 vs 16.83 on 1080p sc_desktop (preset 0 plus screen-content mode, PSNR 40.08 vs 29.82 dB), i.e. 2.60x, 4.69x, 4.40x and 2.35x (derived from page data), against x265 --preset fast --tune psnr --pools 1 --no-wpp --frame-threads 0 --bframes 0. No CPU, compiler, flags, achieved bitrate or x265 version is given for these runs (the 2020/12/25 x265 build is named only for the offline table), FPS comes from different clients (xin26x_test divides frames by wall-clock time, including file I/O), and in current x265 source --pools 1 still creates a one-worker pool next to the frame-encoder thread, so neither run is strictly one core; CPU utilisation is not reported.
+
+**Known shortcoming:** CPU, compiler and flags unstated; xin26x presets 0 and 3 are compared with x265 fast with PSNR within 0.04 dB on 3 natural clips, but the sc_desktop clip is not like-for-like. The HEVC encoder and h26x_core ship only as prebuilt Windows .lib files with no source, so usability is mixed.
+
+**Known shortcoming:** Enricher (e118, 2026-10-05): measurement flaws, no proven correctness bug. The low-delay rows date from 2020-12-28 (README blame) while the HEVC .lib has since been replaced ('update libs to fix bugs', July 2026) and testbin has no encoder executable; the published commands omit PSNR switches on both sides (calcPsnr off by default, x265 --tune psnr does not enable --psnr) and the achieved bitrate is not reported; preset 0 ('superfast') is compared with x265 fast. API: Xin26xEncoderReconfig calls a never-assigned NULL function pointer; a failed Create returns a handle that crashes Delete. License conflict: LICENSE is AGPL-3.0, SPDX headers say GPL-3.0-or-later, app files say 'All rights reserved'. Linux build impossible (no .a, issue #12).
+
+**Independent measurement:** first-party README table
+
+**How:** Not documented, and the HEVC encoder source is not in the repository, so the technique cannot be confirmed. The open option parser shows what the measured presets switch off: preset 0 (labelled 'superfast' in the CLI help) uses one reference frame, motion search mode 1, no RDOQ, no MCTF and no SMP, while preset 3 ('medium', used for BasketballDrive) raises references to 3 and turns MCTF on; a 48-frame lookahead and unit-tree (the cu-tree analogue) stay on by default. The README requires AVX2 and 2026 commits mention an 'intel optimized subroutine', so hand-vectorised kernels are likely part of it, but which kernels and how much they contribute is not visible.
+
+**Use it when:**
+- Evaluating single-core, low-delay (IPPP, no B-frames) HEVC encoding on Windows x86-64 with AVX2, where the README shows 20.7-103.7 fps against 8.0-23.6 fps for x265 --preset fast at PSNR within 0.04 dB on natural 720p/1080p clips.
+- Screen-sharing style content in HEVC: the -s 1 mode turns on transform skip and 4x4 intra/inter partitions, and on sc_desktop it reached 40.08 dB against x265's 29.82 dB at the same 2 Mbit/s target (x265 ran without any screen-content tools).
+- Studying or extending an open VVC encoder: since June-July 2026 h266_core and h266_encoder build from source, and the offline table claims xin266 preset 6 at -41.5% BD-rate against x265 veryslow (no speed given).
+- Real-time pipelines that need run-time control of bitrate, frame rate, IDR insertion and temporal layers (up to 3) through Xin26xControlOption.
+
+**Skip it when:**
+- When the encoder must be auditable, rebuilt or run off Windows: h26x_core.lib, h265_core.lib and h265_enc.lib are prebuilt MSVC libraries, CMake's Linux and macOS branches look for .a files that do not exist (issue #12, 'cannot find -lxin26x', open since 2022), issue #15 (a Visual Studio build that 'does nothing') has been open since 2023, and the pre-built win64 encoder the README mentions is gone from testbin, which now holds only VvcDecoderApp.exe.
+- Non-x86 or pre-AVX2 CPUs: the README lists only Intel x86 with AVX2, ARM support (issue #11) has been open since 2021, and CMake's USE_INTRINSICS branch tests PROC_ARCH_ARM, which nothing sets, so even an ARM_PLATFORM build defines _X86_OPT_.
+- Closed-source or SaaS products: the LICENSE file is AGPL-3.0, 2026 source headers say GPL-3.0-or-later and the app files still say '(c) 2020, shennung ... All rights reserved', so the terms need clarifying before shipping.
+- Offline/VOD or multi-threaded encoding decisions: there are no multi-thread speed numbers, the offline table gives no speeds, and its fastest listed HEVC preset (xin265 p1) is 22.8% worse in BD-rate than x265 veryslow.
+- 10-bit or non-4:2:0 sources, resolutions above the README's 3860x2160 limit, or more than 3 temporal layers; the sample client reads 8-bit 4:2:0 raw YUV only.
+
+**Vs siblings:** Pick Xin26x over Kvazaar only when single-core low-delay HEVC speed on Windows/AVX2 matters more than having source and portability, since Kvazaar is the open, cross-platform HEVC encoder in this category that also claims to beat x265. For VVC, VVenC has a published speed table against VTM; Xin26x's VVC encoder has quality claims only.
+
+**Gotchas:**
+- Xin26xEncoderReconfig is exported, but the API layer never assigns pfXinEncoderReconfig, so calling it jumps through a NULL function pointer. When Xin26xEncoderCreate fails (for example, a codec disabled at build time) it still returns a handle whose function pointers are NULL, so Xin26xEncoderDelete on it crashes and skipping it leaks.
+- The published low-delay commands omit the PSNR switches on both sides (xin26x's -P/--psnr leaves calcPsnr off by default; x265 needs --psnr, which --tune psnr does not set), and the achieved bitrates are not reported, so 'equal PSNR at equal ABR target' cannot be re-derived from the README commands.
+- Presets are not matched by name: xin26x preset 0 is its 'superfast' (preset 3 'medium' for BasketballDrive) against x265 --preset fast. The low-delay rows date from 28 Dec 2020 (README blame) and the HEVC .lib files have been replaced since ('update libs to fix bugs', Jul 2026), so the current binaries are not the ones measured.
+- -f means frame rate in xin26x_test but frame count in x265 (the BasketballDrive commands use -n 500 and -f 500 respectively); -r is rate-control mode, and the offline commands use -r 5, a value the CLI help (0-3) does not document.
+
+**Status:** Single-author project, active (last commit 2026-08-26) and opening more source during 2026 (API in April, AV1-intra in May, VVC in June-July), but the HEVC encoder behind the speed table is still binary-only Windows libraries with conflicting licence headers, so treat it as an evaluation binary rather than a library to vendor.
+
+[repo](https://github.com/pigpeppa/xin26x) · [benchmark](https://github.com/pigpeppa/xin26x)
+
+##### SVT-AV1  `C`  `BSD-3-Clause-Clear`  `active`  `Tier D`
+
+AOM's production AV1 encoder in C, built to be much faster than libaom at similar efficiency; no published speed numbers.
+
+**Beats:** libaom (AV1 reference encoder); the changelog also positions presets against x265 medium and x264 veryfast — Nothing was measured on a reachable page. The CHANGELOG pairs SVT-AV1 presets with x265 medium (M8, v0.8.7) and x264 veryfast (M12, v0.9) at 'similar speed', with no clips, machine or method. The libaom comparison ('similar compression efficiency, significantly lower latency on multi-core', and the 10-50x figures in third-party guides) is known only from search snippets of blocked pages.
+
+**Known shortcoming:** Downgraded to D: Docs/, README and CHANGELOG carry no measured libaom or x265 comparison (CHANGELOG only says preset 8 has 'similar speed' to x265 medium and M12 'similar complexity' to x264 veryfast, at different quality levels); the 10-50x over libaom exists only in search snippets of blocked SPIE 2020/2024 papers and the AOM CTC results. Paper-access retier could reach B. Licence BSD-3-Clause-Clear (no patent grant; SPDX marks it not OSI approved), usability set to reference. Canonical repo is gitlab.com/AOMediaCodec/SVT-AV1 (305 stars, last commit 2026-10-01).
+
+**Known shortcoming:** The in-repo harness test/benchmarking (Meta 2025, libaom against SVT-AV1, CPU time via /usr/bin/time -p) has no committed results and its libaom command lines carry --psnr while the svtav1 command does not, tilting timing toward SVT-AV1. The CHANGELOG's x265 and x264 preset equivalences are stale (presets remapped in v1.7.0 and v3.0.0); the decoder was removed in v2.1.1; open issues #2186 (multi-instance hang), #2263 (low-delay latency 4-5 s) and #2356 (AVX2 crash). Papers remain blocked (arXiv 2307.05208, arXiv 2401.16067, SPIE, AOM CTC PDF); tune forks psy-ex/svt-av1-psy, juliobbv-p/SVT-AV1-HDR and 5fish/SVT-AV1 are quality tunes (duplicates if found).
+
+**How:** The encoder runs as a pipeline of stateless 'processes' (picture analysis, motion estimation, rate control, mode decision, loop filters, entropy coding, packetization) that pass work through FIFO-based system resource managers. That gives parallelism at three levels: different stages at once, several pictures at once, and several segments of one picture at once. It does this without tiles, so in default CRF mode --lp 1 and --lp n produce the same output. Presets switch AV1 tools on or off along a documented curve; from M7 up, for example, it uses 64x64 superblocks, turns off filter intra, global motion (already off from M5), wedge and distance-weighted compound prediction (from M3), and the self-guided restoration filter (from M4). The hot kernels are hand-written SIMD: NASM and intrinsics from SSE2 to AVX2/AVX-512 on x86 (AVX-512 on by default since v2.3.0), and Neon, SVE and SVE2 on AArch64. The build scripts offer LTO and PGO.
+
+**Use it when:**
+- You need AV1 output and libaom's encode time is the bottleneck: VOD or archival encodes at presets 4-6 on a many-core x86-64 server (the docs say about 16 cores are used fairly efficiently for 1080p at those presets).
+- Live, low-latency or RTC encoding with --rtc (CBR rate control, low-delay prediction structure, presets M7-M12 in RTC mode as of v3.1/v4.2).
+- FFmpeg-based transcoding pipelines through libsvtav1, including 10-bit and HDR (BT.2020/PQ/HLG metadata) and film-grain synthesis.
+- AVIF and still-image encoding with --avif (lower memory) and the still-image IQ tune added in v4.0.0.
+- Large-scale batch encoding where you can split the source into scene chunks and run several instances pinned to core sets (--pin, taskset, with a lower --lp per instance), as the parameter docs suggest.
+
+**Skip it when:**
+- You need measured evidence that it is faster than libaom, x265 or x264 on your workload: the repository publishes no numbers, only qualitative CHANGELOG lines, and its own comparison harness ships without results.
+- Decoding AV1: there is no decoder in current releases. Use dav1d.
+- Very high core counts on one 1080p stream: the docs say scaling drops off past about 16 cores at presets 4-6, and presets 0-3 parallelize worse. Chunk the video instead.
+- Sub-second-latency live encoding pinned to an old preset map: issue #2263 reports low-delay latency rising from 150-250 ms (v2.1.0, presets 11-12) to 4-5 s after the v3.0.0 preset remapping. Re-validate latency after every upgrade.
+- Projects whose license policy needs an OSI-approved license with a patent grant: the code is BSD-3-Clause-Clear (FSF-free but not OSI-approved, and it explicitly grants no patent rights), and patents come separately under the AOM Patent License 1.0, which has a defensive-termination clause.
+
+**Vs siblings:** It is the only C AV1 encoder catalogued for speed (rusty-av1-toolkit is a tuned rav1e), so pick it whenever the target format is AV1 and libaom is too slow; VVenC, Kvazaar and uavs3e serve VVC, HEVC and AVS3 instead. Pair it with the catalogued dav1d for decoding, since SVT-AV1 no longer ships a decoder.
+
+**Gotchas:**
+- Preset numbers are not stable across releases: v1.7.0 shifted M2-M6 by one preset, v3.0.0 'repositioned the presets and removed one preset resulting in a max preset of M10', and v3.1.0 re-enabled M11/M12 for RTC. The CHANGELOG's 'M8 about x265 medium' (v0.8.7, 2021) and 'M12 about x264 veryfast' (v0.9, 2022) refer to old preset maps.
+- Public API breaks at major versions: v3.0.0 (issue 2217) and v4.0.0 removed fields, macros and deprecated structs. Pin the version and recheck callers on upgrade.
+- It never inserts keyframes at scene changes, whatever the scd setting (CommonQuestions.md); use an external scene splitter if you need them.
+- Open crash reports to check against your configuration: #2356 (SIGSEGV in svt_aom_blend_a64_mask_avx2 on v3.1.2 with GCC 13), #2395 (--hbd-mds 1 at preset 2 with 10-bit input) and #2396 (deblocking not signalled for non-reference frames when CDEF and restoration are off).
+
+**Status:** Very active (v4.2.0 released 2026-07-14, last activity 2026-10-03, 305 stars and 177 forks on GitLab, maintained by the AOM Software Implementation Working Group and used through FFmpeg), but the evidence is D-tier and the BSD-3-Clause-Clear license (not OSI-approved, patents via the separate AOM Patent License) is why the record is marked reference rather than copyable.
+
+[repo](https://gitlab.com/AOMediaCodec/SVT-AV1) · [benchmark](https://gitlab.com/AOMediaCodec/SVT-AV1/-/blob/master/CHANGELOG.md)
 
 ### networking-and-servers
 

@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1315 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 150 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 24 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 1545 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 174 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 29 candidates that failed verification.
 
-Tiers across both lists: A 361, B 291, C 772, D 41.
+Tiers across both lists: A 389, B 313, C 946, D 71.
 
 ## Evidence tiers
 
@@ -29,7 +29,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | Domain | Category | Entries | A | B | C | D |
 |---|---|---|---|---|---|---|
 | compression-and-encoding | entropy-coders | 26 | 2 | 5 | 19 | 0 |
-| compression-and-encoding | general-lossless | 61 | 22 | 10 | 26 | 3 |
+| compression-and-encoding | general-lossless | 62 | 22 | 10 | 27 | 3 |
 | compression-and-encoding | integer-bitpacking | 24 | 2 | 2 | 19 | 1 |
 | compression-and-encoding | succinct-structures | 30 | 8 | 7 | 11 | 4 |
 | crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
@@ -37,12 +37,18 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
 | crypto-and-hashing | non-crypto-hashes | 30 | 6 | 17 | 7 | 0 |
 | crypto-and-hashing | signatures-kem | 20 | 7 | 5 | 8 | 0 |
+| media-and-graphics | color-and-resampling | 57 | 4 | 5 | 42 | 6 |
+| media-and-graphics | font-shaping-text-layout | 23 | 1 | 2 | 18 | 2 |
+| media-and-graphics | image-codecs | 72 | 17 | 6 | 40 | 9 |
+| media-and-graphics | rasterizers-2d | 33 | 2 | 6 | 20 | 5 |
+| media-and-graphics | unicode-utf8 | 3 | 0 | 0 | 2 | 1 |
+| media-and-graphics | video-audio | 58 | 3 | 3 | 45 | 7 |
 | networking-and-servers | dns-quic-http3 | 16 | 0 | 6 | 10 | 0 |
 | networking-and-servers | event-loops-io | 36 | 6 | 7 | 23 | 0 |
 | networking-and-servers | http-parsers | 23 | 5 | 1 | 17 | 0 |
 | networking-and-servers | http-servers-frameworks | 36 | 4 | 20 | 12 | 0 |
 | networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
-| networking-and-servers | websocket-grpc-rpc | 21 | 5 | 2 | 14 | 0 |
+| networking-and-servers | websocket-grpc-rpc | 22 | 5 | 2 | 15 | 0 |
 | numerics-and-science | autodiff-and-ml-kernels | 81 | 12 | 16 | 52 | 1 |
 | numerics-and-science | big-integer-arbitrary-precision | 41 | 10 | 3 | 25 | 3 |
 | numerics-and-science | blas-lapack | 55 | 14 | 12 | 23 | 6 |
@@ -56,7 +62,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | parser-generators-and-combinators | 8 | 3 | 0 | 5 | 0 |
 | parsing-and-text | regex-engines | 9 | 2 | 3 | 4 | 0 |
 | parsing-and-text | text-search-and-indexing | 9 | 3 | 0 | 6 | 0 |
-| parsing-and-text | unicode-utf8 | 10 | 5 | 0 | 5 | 0 |
+| parsing-and-text | unicode-utf8 | 16 | 6 | 0 | 10 | 0 |
 | runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
 | serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |
 | serialization-and-formats | json | 51 | 21 | 3 | 26 | 1 |
