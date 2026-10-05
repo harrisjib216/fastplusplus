@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/n7olkachev/imgdiff",
+  "one_liner": "Multi-threaded Go pixel-diff CLI and package with pixelmatch-style YIQ threshold; README says 3-4.5x faster than 2020 odiff, but odiff v2 matched it.",
+  "what_it_does": "Compares two images pixel by pixel and writes a diff PNG, for screenshot visual-regression tests. The CLI is `imgdiff [-t THRESHOLD] [--diff-image] [--fail-on-layout] BASE COMPARE OUTPUT`: exit 0 if equal (no file is written), 1 if different, 2 on a size mismatch with --fail-on-layout. The Go package call is imgdiff.Diff(image1, image2 image.Image, *Options) and returns Equal, DiffPixelsCount and an NRGBA mask. Differing pixels are red on transparent, or on the base image with --diff-image. Its flags and output are not odiff's: there is no anti-aliasing detection, ignore regions, WebP/TIFF input, Node binding or server mode, despite the README's 'can do everything odiff can'.",
+  "how_it_is_fast": "Mostly by using all cores. cmd/main.go decodes both images in parallel goroutines with Go's standard image/png and image/jpeg. Diff() then interleaves rows over runtime.NumCPU() goroutines (row y goes to goroutine y mod NumCPU) and counts with an atomic add. Per pixel it compares the two color.Color interface values and runs the pixelmatch YIQ delta (0.5053 y^2 + 0.299 i^2 + 0.1957 q^2 against 35215 * threshold^2) only when they differ. The mostly transparent mask is written with png.BestSpeed. Nothing is SIMD: pixels go through the generic image.At interface, and the author writes that it 'isn't as fast as a tool like this should be' and that image decoding and encoding take most of the time.",
+  "when_to_use": [
+    "Go test suites that want a small MIT, pure-Go image comparison (about 70 lines in pkg/imgdiff plus a 40-line YIQ helper) instead of shelling out to a native binary.",
+    "Opaque 8-bit PNG screenshots of identical size (the case it handles correctly), when you need only a differing-pixel count and a red mask.",
+    "Multi-core CI runners diffing very large screenshots, where spreading rows across cores lowers wall time compared with a one-thread tool."
+  ],
+  "when_not_to_use": [
+    "Picking it as faster than odiff: in imgdiff PR #5 (January 2021), odiff's author timed odiff v2 at 1.194 s and imgdiff at 1.146 s on the same cypress pair (parity). With imgdiff limited to one thread, it took 2.616 s, so odiff was 2.19x faster per core. odiff has since been rewritten in Zig with SSE2/AVX2/AVX512/NEON.",
+    "JPEG, 16-bit PNG or semi-transparent images: the color delta reads the wrong byte of Go's 16-bit RGBA() values (see gotchas), so differences there are miscounted.",
+    "Images that can differ in size: it only iterates image1's bounds. A larger compare image with an identical overlap reports 'equal' unless --fail-on-layout is passed (issue #13, open since 2024-12-06).",
+    "Anti-aliasing-tolerant comparisons, ignore regions, or diffs rendered over the base image the way odiff and pixelmatch do: none of these are implemented.",
+    "Single-core containers or anything needing a maintained dependency: the speed comes from goroutines, and the project has been dormant since 2021-03-25 with 2024 bug reports unanswered."
+  ],
+  "integration": {
+    "form": "module (Go package github.com/n7olkachev/imgdiff/pkg/imgdiff) plus a CLI binary (prebuilt binaries on GitHub releases)",
+    "dependencies": "Go standard library (image, image/png, image/jpeg) for the package; the CLI adds alexflint/go-arg v1.3.0 and logrusorgru/aurora v2.0.3",
+    "min_toolchain": "Go 1.14 per go.mod; the Go toolchain used for the README benchmark is not stated",
+    "platforms": "any Go target; scripts/build.sh cross-compiles windows, linux and darwin for amd64 and 386 only (no arm64 builds)",
+    "thread_safety": "not documented; each Diff call starts its own NumCPU goroutines, writes to disjoint rows of a fresh output image and shares no package state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Color bug: pkg/yiq/delta.go normalize() turns color.RGBA()'s 16-bit channels into bytes with uint8(r), which keeps the low byte instead of r >> 8. The result is right only for opaque 8-bit pixels, where RGBA() returns v*0x101. It is wrong for JPEG: Go's own ycbcr.go comment shows YCbCr{0x7f,0x7f,0x7f}.RGBA() = 0x7e18 0x808d 0x7db9, so imgdiff sees 0x18, 0x8d, 0xb9 instead of 0x7e, 0x80, 0x7d. It is also wrong for 16-bit PNGs and for partially transparent pixels, whose values come back premultiplied.",
+    "The README's Download link points to v1.0.0. In that build main.go defers writer.Flush() and f.Close() and then calls os.Exit(1), which skips deferred calls. Diff PNGs therefore came out truncated, or zero bytes when the whole file fit in bufio's buffer (issue #8: about 1-2 in 100 diffs). The fix is in v1.0.2 (commit 3eef05c, 2021-03-25). os.Create and png.Encode errors are still ignored, so a bad output path gives exit 1 and no file.",
+    "--diff-image copies base pixels only where the two pixel values are exactly equal. Pixels that differ but fall under the threshold stay transparent, so the 'diff image' has holes.",
+    "The loops use <= on Bounds().Max, so they run one row and one column past the image (issue #12, open). It is harmless today because image.At returns zero outside the bounds, but it adds an extra out-of-range row of work to every goroutine pass."
+  ],
+  "pick_this_over_siblings_when": "Against odiff, the only catalogued sibling doing the same job, pick imgdiff only if you need an in-process pure-Go call on opaque 8-bit PNGs and can use several cores. odiff matched it in v2, has anti-aliasing detection, ignore regions and cross-format input, and is maintained, so it is the default choice.",
+  "verified_claims_summary": "The README's hyperfine runs on a Linux Core i7-4700HQ (4 cores, 8 threads) time multi-threaded imgdiff against an unversioned late-2020 odiff (v1). On the 3446x10728 cypress pair imgdiff took 1.442 s against odiff's 6.475 s (4.49x); on the 8400x4725 water pair, 1.908 s against 6.016 s (3.15x). The Go version, flags and harness are not given, the two tools did different output work, and the benchmark-era binary wrote truncated PNGs. All four odiff test PNGs are 8-bit RGBA and fully opaque (alpha channels decoded during enrichment: minimum alpha 255), so the color bug does not change these counts. The gap did not last: odiff's author re-ran the cypress pair in PR #5 after odiff v2 removed a dependency's 'massive data copying' and measured odiff 1.194 s against imgdiff 1.146 s, with imgdiff at 2.616 s when single-threaded.",
+  "status_note": "Abandoned: 7 commits, last release v1.0.2 on 2021-03-25, and 2024 bug reports (#12, #13) unanswered. It is MIT-licensed and small enough to vendor, but fix the low-byte color conversion, the size check and the loop bounds first, and do not rely on its speed claim.",
+  "sources_read": [
+    "https://github.com/n7olkachev/imgdiff",
+    "https://github.com/n7olkachev/imgdiff/commits",
+    "https://github.com/n7olkachev/imgdiff/releases",
+    "https://github.com/n7olkachev/imgdiff/tree/master/pkg",
+    "https://github.com/n7olkachev/imgdiff/tree/master/pkg/yiq",
+    "https://github.com/n7olkachev/imgdiff/issues?q=is%3Aissue",
+    "https://github.com/n7olkachev/imgdiff/issues/8",
+    "https://github.com/n7olkachev/imgdiff/issues/9",
+    "https://github.com/n7olkachev/imgdiff/issues/12",
+    "https://github.com/n7olkachev/imgdiff/issues/13",
+    "https://github.com/n7olkachev/imgdiff/pulls?q=is%3Apr",
+    "https://github.com/n7olkachev/imgdiff/pull/5",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/readme.md",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/go.mod",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/go.sum",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/pkg/imgdiff/imgdiff.go",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/pkg/yiq/delta.go",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/cmd/main.go",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/HEAD/scripts/build.sh",
+    "https://raw.githubusercontent.com/n7olkachev/imgdiff/1be7ce7/cmd/main.go",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/HEAD/README.md",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/main/images/www.cypress.io.png",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/main/images/www.cypress.io-1.png",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/main/images/water-4k.png",
+    "https://raw.githubusercontent.com/dmtrKovalenko/odiff/main/images/water-4k-2.png",
+    "https://raw.githubusercontent.com/golang/go/master/src/image/color/ycbcr.go"
+  ],
+  "confidence": 0.85
+}
