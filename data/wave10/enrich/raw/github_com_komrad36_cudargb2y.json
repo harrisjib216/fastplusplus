@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/komrad36/cudargb2y",
+  "one_liner": "20-line CUDA kernel converting packed BGR8 already on the GPU to 8-bit gray; claims 5-30x over OpenCV's CPU cvtColor.",
+  "what_it_does": "CUDARGB2Y converts a packed 3-byte-per-pixel BGR image held in GPU memory to an 8-bit grayscale image, also in GPU memory. The whole library is one host function, CUDARGB2Y(bool weight, cudaTextureObject_t tex_img, int pixels, uint8_t* d_newimg), declared in CUDARGB2Y.h and defined in CUDARGB2Y.cu. The caller creates a linear 8-bit texture object over the device buffer and passes the pixel count. With weight=true it applies luma weights meant to match OpenCV's BGR2GRAY; with false it takes the plain average of the three channels. It is not a drop-in for cv::cvtColor: there is no cv::Mat or GpuMat interface, no stream argument, no row pitch and no error return.",
+  "how_it_is_fast": "There is no algorithmic trick; the gain is GPU memory bandwidth against a CPU. One thread handles one pixel (256-thread blocks). It reads its three bytes with three tex1Dfetch calls through the texture cache, computes a 6-bit fixed-point sum ((7*B + 38*G + 19*R) >> 6, clamped to 255) and writes one byte. The kernel is memory-bound, moving 3 bytes in and 1 byte out per pixel, so newer cards with more bandwidth give the larger end of the claimed range.",
+  "when_to_use": [
+    "BGR8 frames that already sit in contiguous (unpitched) CUDA device memory and must stay there, where you need 8-bit luma as one step of a GPU pipeline.",
+    "Batch or video workloads that already pay the host-to-device copy for other GPU stages, so the conversion adds only a sub-millisecond kernel per 1080p frame (no measured figure is recorded).",
+    "Applications that tolerate small luma differences from OpenCV (display, thresholding, feature detection) rather than needing bit-exact cvtColor output.",
+    "As a minimal, MIT-licensed template for a per-pixel CUDA kernel driven by texture objects, small enough to paste and adapt."
+  ],
+  "when_not_to_use": [
+    "Images that live in host memory: the harness times the kernel with the input already uploaded and the result left on the device. A host caller also pays the copy of 3 bytes per pixel up (6.2 MB for the repo's 1920x1080 test.jpg) and 1 byte per pixel down, which is likely to cost more than OpenCV's whole CPU conversion; this end-to-end case is not measured.",
+    "Pipelines that need OpenCV-identical gray values. The 6-bit truncated weights differ from OpenCV's 15-bit rounded coefficients by up to 3 levels: 7.5% of all 24-bit colours differ by 2 or more (enricher brute force), e.g. BGR (218, 0, 243) gives 95 against OpenCV's 98.",
+    "Pitched GPU buffers (cudaMallocPitch, cv::cuda::GpuMat with row padding), RGB-ordered data or 4-channel BGRA input: it assumes tightly packed BGR rows, and RGB input swaps the R and B weights.",
+    "Multi-stream or latency-sensitive GPU code: every call launches on the default stream and then runs cudaDeviceSynchronize, which waits for all device work, not just this kernel, and no CUDA error is checked or returned.",
+    "Current toolchains without edits: the Makefile targets sm_30, which current CUDA toolkits cannot build for (per the verification record), and main.cpp uses OpenCV 2.x/3.x C-API constants (CV_BGR2GRAY, CV_WINDOW_NORMAL). The code has not changed since October 2016."
+  ],
+  "integration": {
+    "form": "source-drop (CUDARGB2Y.h plus CUDARGB2Y.cu; main.cpp is only the demo and harness)",
+    "dependencies": "CUDA runtime (texture objects). OpenCV (core, imgproc, imgcodecs, highgui, features2d) only for the demo harness.",
+    "min_toolchain": "nvcc with -std=c++11 for the .cu file; the Makefile's ARCH=sm_30 must be raised for current CUDA. The harness needs a C++17 host compiler (-std=gnu++17) and OpenCV 2.x/3.x-era constants.",
+    "platforms": "NVIDIA GPUs only (CUDA texture objects, so compute capability 3.0 or newer).",
+    "thread_safety": "not documented. The kernel itself is stateless, but each call ends in cudaDeviceSynchronize, which blocks the calling host thread until all outstanding work on the device has finished.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README says custom weights are set in CUDARGB2Y.h, but the B_WEIGHT/G_WEIGHT/R_WEIGHT constants live in CUDARGB2Y.cu. Any weight is rounded to a multiple of 1/64 (0.114 becomes 7/64 = 0.109) and the sum is truncated, not rounded.",
+    "The input must be bound as a single linear 1D texture, so it is bounded by the device's maxTexture1DLinear limit. main.cpp never checks cudaCreateTextureObject, cudaMalloc or the kernel launch, so a failed setup would time an empty synchronize loop, and only the later pixel check would notice.",
+    "The harness's pixel check only prints an error and breaks out of the comparison loop. It still prints both timings, so a run with wrong output can still report a speedup.",
+    "main.cpp sets display_image = true and blocks on cv::waitKey(0) after opening HighGUI windows, so it hangs or fails on a headless machine unless that flag is changed."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the BGR frame is already on an NVIDIA GPU and you want a tiny standalone kernel to paste. If the image is on the CPU, the author's own RGB2Y (AVX2), CompV (about 7x over OpenCV for RGB24 to gray in its result file) or OpenCV itself avoid the PCIe round trip. If you chain OpenCV-CUDA operations, fusing the conversion into neighbouring steps, as cvGPUSpeedup does, saves more than a faster standalone kernel.",
+  "verified_claims_summary": "The only performance figure is the README and source-header sentence 'Roughly 5x to 30x faster than OpenCV's implementation, depending on your card'; no run output, GPU, CPU or OpenCV version is recorded. main.cpp times the kernel launch plus cudaDeviceSynchronize with a host clock, averaging 2000 calls after 100 warm-ups, on the repo's test.jpg (1920x1080, decoded in this session), with the input already resident as a texture and the output left on the device. It compares this with cv::cvtColor(CV_BGR2GRAY) on the CPU over the same number of calls; OpenCV's own CUDA path (cv::cuda::cvtColor) is never measured, so the ratio is GPU against CPU without transfers. The harness then requires every pixel to be within 1 of OpenCV. An enricher brute force over all 16.7 million BGR colours shows the kernel's 6-bit weights (7, 38, 19 over 64, truncated) differ from OpenCV 4.x's 15-bit rounded coefficients (3735, 19235, 9798 over 32768) by up to 3: 49.9% of colours by 1, 7.5% by 2 and 1,438 by 3. On test.jpg the maximum difference is 1 (44% of pixels off by one), so the harness passes on its own image. Its claim that the default weights 'match OpenCV's default' holds only to about 1/64 precision.",
+  "status_note": "Abandoned: three commits, code last changed 2016-10-30 and an MIT LICENSE added 2021-03-23, 16 stars and 6 forks. Small enough to vendor, but it needs the sm_30 target and the OpenCV 2.x/3.x constants in the demo updated.",
+  "sources_read": [
+    "https://github.com/komrad36/CUDARGB2Y",
+    "https://github.com/komrad36/CUDARGB2Y/commits",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/Makefile",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/CUDARGB2Y.cu",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/CUDARGB2Y.h",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/komrad36/CUDARGB2Y/HEAD/test.jpg",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color_rgb.simd.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color.simd_helpers.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/3.4/modules/imgproc/src/color.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/imgproc/src/color.hpp"
+  ],
+  "confidence": 0.8
+}
