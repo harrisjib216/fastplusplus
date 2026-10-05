@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/shadowmitia/libqoi",
+  "one_liner": "Small C++14 port of the QOI reference codec; a single informal user report says faster than qoixx, which the code does not support.",
+  "what_it_does": "Encodes and decodes QOI v1.0 images in memory: qoi::encode(pixels, width, height, channels) returns a std::vector<unsigned char> QOI file, and qoi::decode(bytes) returns interleaved RGB or RGBA bytes in the channel count stored in the header. It also has qoi::is_valid (magic and end-padding check), qoi::get_header and two file helpers. It is a different API from qoi.h (no desired-channels conversion, no colorspace argument, no streaming), so it is not a drop-in replacement.",
+  "how_it_is_fast": "There is no speed technique beyond QOI itself: it is a line-by-line scalar port of phoboslab's qoi.h (64-entry colour hash, run, diff, luma and literal ops). It adds overhead the reference avoids: encode zero-fills a worst-case (channels+1) bytes-per-pixel std::vector, then calls shrink_to_fit (a second allocation and copy), and both loops branch on the channel count for every pixel. Nothing in it compares with qoixx's AVX2/NEON/SVE encoder or table-driven decoder.",
+  "when_to_use": [
+    "Practically never over the alternatives: the reference qoi.h is equally simple, works from C++ and is maintained; qoixx is measurably faster.",
+    "Only if you need a std::vector-based QOI API under C++14 (qoixx requires C++20) and will vendor and harden the two source files yourself.",
+    "Trusted, in-process image data of normal size (well under about 859 million pixels), where malformed input cannot occur."
+  ],
+  "when_not_to_use": [
+    "Decoding untrusted input (network streams, as in the ROS transport it was proposed for): decode() does not check run length against the output size, so a crafted run chunk writes up to 61 pixels past the heap buffer, and headers with 1 or 2 channels overrun it by up to 2 bytes.",
+    "Anything speed-critical: no benchmark in the repository backs a speed claim, and qoixx's README shows qoixx 1.4-1.7x faster than qoi.h on the QOI benchmark suite, while this library is a slower-than-reference port of qoi.h.",
+    "Huge images: width*height is computed in 32-bit unsigned arithmetic with no pixel limit (qoi.h caps at 400 million pixels), so sizes wrap and the encode output buffer is undersized for RGBA images above about 859 million pixels.",
+    "Projects that need a maintained dependency: README says work in progress with API breaks expected; 5 commits, last 2022-09-07."
+  ],
+  "integration": {
+    "form": "static lib (CMake) or source-drop of include/qoi/qoi.hpp and src/qoi.cpp",
+    "dependencies": "none for the two library files; the CMake project requires Conan packages fmt 8.0.1, libpng 1.6.37, catch2 2.13.7 and stb at configure time for its tests",
+    "min_toolchain": "C++14 (CMAKE_CXX_STANDARD 14); CMake 3.4+ for the project build",
+    "platforms": "any (portable scalar C++)",
+    "thread_safety": "Not documented; the functions keep no global state, so separate calls on separate buffers are independent (from reading the code).",
+    "drop_in_for_baseline": "partial: same QOI bitstream as qoixx and qoi.h (the test encodes dice.png byte-identically to the reference dice.qoi), but a different C++ API"
+  },
+  "gotchas": [
+    "decode() does not call is_valid() and does not check the header: inputs shorter than 14 bytes are read out of bounds in get_header, and inputs shorter than 8 bytes make size() - 8 wrap and read past the buffer. Call is_valid() first, but it checks only the magic and the 8-byte end marker, not channels or dimensions.",
+    "The QOI_HEADER_ONLY switch includes qoi.cpp inside namespace qoi, and qoi.cpp reopens namespace qoi and includes <iostream> there, so the header-only mode looks unusable as written (definitions land in qoi::qoi); compile src/qoi.cpp as a normal source (from code reading, not built).",
+    "The only fuzz target (tests/qoi_fuzz.cpp) fuzzes get_header alone, accepting inputs from 4 bytes, and ASAN is off in Config.cmake; decode() has never been fuzzed.",
+    "tests/benchmark.cpp, commented out of the build, is a Catch2 template (Fibonacci cases) whose only codec case passes dice.png, a PNG file, to qoi::decode; its PNG signature parses as width 218,765,834, height 13 and 73 channels, so it would request about 207.6 GB and throw. No working benchmark exists in the repo."
+  ],
+  "pick_this_over_siblings_when": "Hard to justify: pick qoixx (C++20, SIMD encoder, published 1.4-1.7x over qoi.h) for speed, phoboslab/qoi (qoi.h) for portability, maintenance and input validation, or qoi-rust/rapid-qoi in Rust; libqoi only if C++14 plus a std::vector API is a hard requirement and inputs are trusted.",
+  "verified_claims_summary": "The only number is a third-party issue comment (2022-07-24): 'about 20% faster to encode and about 30% faster to decode' than qoixx on a 640x480 30 fps webcam stream inside ROS on an i7-10875H, with no harness, qoixx version, build type or flags. The same user's ROS PRs report QOI at 28%/13% CPU against PNG over 100% CPU (30 vs 3 fps), which is a property of the format. Read against the code, the qoixx claim is implausible: libqoi is a scalar qoi.h port with extra allocation and zero-fill work, while qoixx publishes 1.4-1.7x over qoi.h, so the gap more likely comes from how each library was wired into the ROS node than from the codec.",
+  "status_note": "Abandoned since 2022-09-07 (5 commits, README says work in progress); MIT and tiny enough to vendor, but the decoder needs bounds checks before it can be used on untrusted data.",
+  "sources_read": [
+    "https://github.com/ShadowMitia/libqoi",
+    "https://github.com/ShadowMitia/libqoi/tree/main/include/qoi",
+    "https://github.com/ShadowMitia/libqoi/tree/main/src",
+    "https://github.com/ShadowMitia/libqoi/tree/main/tests",
+    "https://github.com/ShadowMitia/libqoi/issues/1",
+    "https://github.com/ShadowMitia/libqoi/issues?q=is%3Aissue+OR+is%3Apr",
+    "https://github.com/ShadowMitia/libqoi/commits/main",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/README.md",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/Config.cmake",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/build.sh",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/unix_compile.config",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/cmake/flags.cmake",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/cmake/load_config.cmake",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/include/qoi/qoi.hpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/src/qoi.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/tests/benchmark.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/tests/qoi_tests.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/tests/qoi_fuzz.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/tests/catch.cpp",
+    "https://raw.githubusercontent.com/ShadowMitia/libqoi/HEAD/tests/qoi_test_images/dice.png",
+    "https://github.com/ros-perception/image_transport_plugins/pull/104",
+    "https://raw.githubusercontent.com/wx257osn2/qoixx/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

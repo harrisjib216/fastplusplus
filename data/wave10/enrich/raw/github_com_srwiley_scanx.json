@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/srwiley/scanx",
+  "one_liner": "Pure-Go anti-aliasing scanner for rasterx/oksvg that writes spans straight into image.RGBA; 1.7-3.2x faster than scanFT on the author's icon benchmark.",
+  "what_it_does": "scanx implements the rasterx Scanner interface, so it plugs into rasterx.NewDasher and the oksvg icon renderer in place of ScannerFT or ScannerGV. scanx.NewScanner(spanner, w, h) accumulates path coverage and hands finished spans to a Spanner. ImgSpanner composites each span immediately into a *image.RGBA or *xgraphics.Image. LinkListSpanner collects solid-colour spans in one linked list per row and writes them out only when you call DrawToImage. It is a component for SVG and vector rendering pipelines in Go, not a general 2D canvas API.",
+  "how_it_is_fast": "Coverage uses the same FreeType / CL-AA area-and-cover cell accumulation as scanFT (scan.go is the freetype-go algorithm on 26.6 fixed point). The gain is in the span writer. GetSpanFunc picks one of four specialised functions per path (solid colour or colour function, Over or Src), and each writes directly into Pix, hoists the blend factor out of the pixel loop, and handles fully covered opaque spans as plain stores. scanFT instead buffers 64 Spans, calls Painter.Paint through an interface, and recomputes the blend factor for every pixel. LinkListSpanner resolves overdraw in the per-row span lists, merging neighbouring spans of the same colour, so each pixel is written once at the end. That is why it pulls ahead at 5x and 15x, where overlapping paths cover many pixels.",
+  "when_to_use": [
+    "Go programs that already render SVG icons with oksvg and rasterx into image.RGBA and want about 2-3x over ScannerFT without cgo.",
+    "Large or hi-DPI renders of solid-colour, heavily overlapping icon art: LinkListSpanner was 7-8x faster than scanFT at 5x and 15x scale in the README, but it was slower than ImgSpanner at 0.5x.",
+    "X11 tools built on xgbutil that draw into *xgraphics.Image (BGRA): ImgSpanner swaps the R and B channels itself.",
+    "As the rasteriser behind tdewolff/canvas, which pins this module at a 2019 commit (per the record's verification)."
+  ],
+  "when_not_to_use": [
+    "Anything that needs a clean licence: span.go and the repository have no licence, and scan.go carries the freetype-go FreeType License or GPL-2.0+ header.",
+    "Gradients with LinkListSpanner: SetColor runs every input through getColorRGBA, which returns zero (transparent) for a rasterx.ColorFunc, so gradient fills silently disappear rather than failing.",
+    "Destinations other than *image.RGBA or *xgraphics.Image with ImgSpanner. SetImage ignores other types and leaves pix nil, so the first span panics with an index error, despite the README saying it 'draw[s] into any image that supports the draw.Image interface'.",
+    "Generic draw.Image targets with LinkListSpanner: spansToImage calls img.Set(y, x, clr) with the arguments swapped, so output is transposed, and on non-square images pixels land in the wrong place or are dropped. The same line is still in Cogent Core's copy.",
+    "Production use where unexpected output is costly: the README calls it 'beta software' with 'known bugs', advises scanFT or ScannerGV unless every SVG is tested, and notes that line-heavy files such as rl.svg are slow with LinkListSpanner."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/srwiley/rasterx, golang.org/x/image/math/fixed, github.com/BurntSushi/xgbutil/xgraphics (always imported by span.go); the tests also use github.com/srwiley/oksvg and github.com/srwiley/scanFT",
+    "min_toolchain": "not documented; the repository predates Go modules (no go.mod), so consumers pin a pseudo-version",
+    "platforms": "any Go target (pure Go, no assembly)",
+    "thread_safety": "not documented; Scanner, ImgSpanner and LinkListSpanner all keep mutable per-render state (cell lists, span lists, lastY/lastP), so use one set per goroutine",
+    "drop_in_for_baseline": "partial: it implements rasterx's Scanner interface, so it swaps in for ScannerFT or ScannerGV inside a rasterx Dasher, but it is not a replacement for the golang.org/x/image/vector Rasterizer API"
+  },
+  "gotchas": [
+    "LinkListSpanner blends new spans against its BgColor (default transparent), not against the pixels already in the image, and DrawToImage overwrites every covered pixel. You cannot layer it over existing content, you must call Clear() between images, and it allocated 93 MB per op at 15x in the README.",
+    "Open issue #1 (rcoreilly, 2021-03-03) reports an infinite loop in Scanner.Line when dx and dy are both zero and proposes an early return. HEAD has no such guard. Reading the code, a zero-length segment takes the single-scanline branch, so the loop could not be confirmed from source alone. Line walks every row and cell of a segment, including parts off the canvas, so huge coordinates cost time in proportion to their extent.",
+    "Output is not bit-identical to scanFT: the README reports differences of up to 4 in a channel on randspot.svg, and more with several stacked semi-transparent layers.",
+    "A maintained copy lives in Cogent Core (cogentcore.org/core/paint/renderers/rasterx/scan). It drops the xgbutil dependency and adds a BSD header to span.go, but scan.go keeps the FreeType/GPL notice, and the transposed img.Set call is unchanged."
+  ],
+  "pick_this_over_siblings_when": "Pick scanx (or the copy inside tdewolff/canvas or Cogent Core) when you are already on oksvg and rasterx in pure Go and want 2-3x over scanFT. Pick stilus for a standalone, licensed replacement for x/image/vector. Pick Blend2D or another C/C++ renderer when cgo is acceptable and raw speed matters more than staying pure Go.",
+  "verified_claims_summary": "The README's go test -bench results (linux/amd64, GOMAXPROCS 16, CPU and Go version not stated) draw the 8 landscape icons (beach, cape, iceberg, island, mountains, sea, trees, village) through oksvg and the rasterx Dasher into one image.RGBA at 0.5x to 15x. ImgSpanner beats scanFT by 1.67x at 0.5x, 2.15x at 1x, 3.20x at 5x and 2.59x at 15x (derived from page data), and LinkListSpanner by 7.2x at 5x and 8.0x at 15x; most 5x and 15x rows ran only once. Reading the code adds two points. The scanFT comparison is like-for-like: same coverage algorithm and harness, different span writer. The x/image/vector column is not representative: rasterx's ScannerGV.Draw calls vector.Rasterizer.Draw over the whole destination bounds for every path, and Clear calls Reset(w, h) on the full-canvas accumulator, so each path costs time in proportion to image area (not profiled here). The 15x to 74x gap therefore measures that adapter, not x/image/vector used with a path-sized rasterizer.",
+  "status_note": "Abandoned since 2019-03-09 (2 stars, one open issue from 2021) and effectively unlicensed for its fast part (span.go). Its live users are vendored or pinned copies (tdewolff/canvas, Cogent Core); the same author's later srwiley/scany (MIT, adds a multi-threaded ScanT) is the cleaner-licensed successor to evaluate.",
+  "sources_read": [
+    "https://github.com/srwiley/scanx/tree/master/testdata/svg/landscapeIcons",
+    "https://github.com/srwiley/scanx/issues?q=is%3Aissue",
+    "https://github.com/srwiley/scanx/issues/1",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/scan.go",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/span.go",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/scanx_benchmark_test.go",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/go.mod",
+    "https://raw.githubusercontent.com/srwiley/scanx/HEAD/LICENSE",
+    "https://github.com/srwiley/rasterx",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/scan.go",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/fill.go",
+    "https://github.com/srwiley/scanFT",
+    "https://raw.githubusercontent.com/srwiley/scanFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/scanFT/HEAD/painter.go",
+    "https://raw.githubusercontent.com/srwiley/scanFT/HEAD/scan.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/README.md",
+    "https://raw.githubusercontent.com/cogentcore/core/HEAD/paint/renderers/rasterx/scan/README.md",
+    "https://raw.githubusercontent.com/cogentcore/core/HEAD/paint/renderers/rasterx/scan/scan.go",
+    "https://raw.githubusercontent.com/cogentcore/core/HEAD/paint/renderers/rasterx/scan/span.go"
+  ],
+  "confidence": 0.75
+}

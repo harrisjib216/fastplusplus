@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/phoboslab/qoa",
+  "one_liner": "Single-header C codec for fixed 3.2-bit/sample lossy audio; author's run encodes 12x and decodes 7x faster than ffmpeg Opus.",
+  "what_it_does": "QOA is a lossy codec and file format for 16-bit PCM: every 20 samples of one channel are packed into a 64-bit slice, so the output is always 3.2 bits per sample (about 278 kbit/s for 44.1 kHz stereo) and every 5120-sample frame has a size computable from the channel count, which makes seeking an offset calculation. The API is one STB-style header: qoa_encode/qoa_decode work on whole in-memory buffers, qoa_encode_frame/qoa_decode_frame work one frame at a time (qoaplay uses them for streaming playback and seeking), and qoa_read/qoa_write wrap stdio. It is a new format, not a drop-in for libopus or an MP3 encoder: files are roughly 3x the size of Opus at ffmpeg's default bitrate and the player needs a QOA decoder.",
+  "how_it_is_fast": "It is a pure time-domain coder: a 4-tap sign-sign LMS predictor in fixed point predicts each sample, and the residual is quantized to 3 bits against one of 16 per-slice scalefactors, with a lookup table for dequantization. Decoding is one 4-term dot product, one table lookup, one 16-bit clamp (with a rarely taken branch) and four weight updates per sample; there is no transform, psychoacoustic model, entropy coding or bit reservoir. The encoder brute-forces all 16 scalefactors per 20-sample slice, but starts with the previous slice's winner, abandons a candidate as soon as its accumulated squared error exceeds the best so far, and replaces the division by a .16 fixed-point reciprocal multiply. There is no SIMD and no threading; the speed comes from doing very little work per sample.",
+  "when_to_use": [
+    "Games and engines that play many sound effects or music streams and want near-zero decode CPU; Godot 4.3 (WAV-to-QOA import), raylib's raudio and SerenityOS already ship it.",
+    "Microcontrollers or small embedded players where an Opus or MP3 decoder is too large or too slow: the decoder keeps 8 ints of LMS state per channel and needs one frame buffer (4136 bytes for a stereo frame by QOA_FRAME_SIZE).",
+    "Assets that need cheap random access: frame size is fixed by the channel count, so seek offsets are computed rather than searched (qoaplay seeks this way).",
+    "Fast batch conversion of 16-bit PCM where a fixed 5x size reduction is enough and the quality target is 'often not audible' rather than perceptually optimised."
+  ],
+  "when_not_to_use": [
+    "Bandwidth- or storage-bound delivery: in the author's own run QOA produced 333 MB against 116 MB for Opus and 149 MB for MP3 at ffmpeg defaults, and the format has no bitrate control.",
+    "Untrusted input: the README says the implementation has not been fuzzed; 2026 commits fixed a heap overflow from malformed frame lengths (issue #82), out-of-bounds reads on bad slices, an unchecked QOA_MAX_CHANNELS in decode and a buffer-size wrap-around, and crafted frame weights can still push the int32 LMS predictor into signed overflow (weights grow by up to 896 per sample with no clamp; read from source).",
+    "Material where encoder artefacts are unacceptable without checking: open issue #69 (Aug 2025) reports a 5120-sample mono file whose samples 74-240 all encode to -32768, and the third-party brute-force encoder ETDAW (issue #79) exists because qoaconv's greedy per-slice choice leaves audible high-frequency noise on some audio.",
+    "24-bit, float or more-than-8-channel sources: input is 16-bit only, this implementation caps channels at QOA_MAX_CHANNELS 8 (the spec was clarified to 31 in Sep 2026), and it only handles files with a known total sample count, not the streaming header with samples = 0."
+  ],
+  "integration": {
+    "form": "header-only (qoa.h, STB style: define QOA_IMPLEMENTATION in one translation unit)",
+    "dependencies": "none beyond libc: malloc/free (overridable through QOA_MALLOC/QOA_FREE) and stdio for qoa_read/qoa_write unless QOA_NO_STDIO; the qoaconv tool optionally uses dr_mp3.h/dr_flac.h and qoaplay uses sokol_audio.h",
+    "min_toolchain": "C99 (Makefile: -std=c99 -O3 for qoaconv, -std=gnu99 for qoaplay); callable from C++ through extern \"C\"; a GCC 15 build failure (issue #73) was closed in Dec 2025",
+    "platforms": "any: portable scalar C with byte-wise big-endian I/O, no SIMD or intrinsics; qoaplay is marked 'not yet tested on Windows/macOS' in the Makefile",
+    "thread_safety": "not documented; the source has no mutable globals (only const tables), so separate qoa_desc instances can run concurrently, but one qoa_desc must not be shared",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "qoa_decode allocates whole 5120-sample frames for the entire file and returns NULL when frames x 5120 x channels exceeds 0x7fffffff samples (about 6.7 h of 44.1 kHz stereo); qoa_read sizes the file with int/ftell, so files over 2 GB fail. Long material should go through qoa_decode_frame.",
+    "qoa_encode computes the output size in unsigned int and does not check the malloc result: with 3 or more channels and more than about 1.07e10 total samples the size wraps and the encoder writes past the buffer. The decoder got the equivalent wrap-around guard in June 2026 (PR #80); the encoder did not.",
+    "The encoder keeps 32-bit LMS weights but stores them in each frame header masked to 16 bits; if a weight leaves the int16 range at a frame boundary the decoder restarts from different weights than the encoder assumed. Open issue #56 asks whether this overflow is intended; the weights penalty in the encoder is what normally keeps them small.",
+    "Driving qoa_encode_frame yourself (streaming encode) means initialising qoa->lms to weights {0, 0, -8192, 16384} and zero history as qoa_encode does, and only the last frame may be short (since the #82 fix the decoder stops at the first short frame). QOA_FREE is defined only inside the implementation, so callers cannot portably free qoa_decode's buffer with the matching allocator (open issue #64), and defining QOA_MALLOC without QOA_FREE breaks the stdio helpers."
+  ],
+  "pick_this_over_siblings_when": "Pick QOA over minimp3, nanomp3, Falcon or the libopus ports (opus-rs, ruopus, opuspp) when decode cost, code size and instant seeking matter more than file size and you control both the encoder and the player; pick an Opus implementation for bandwidth-bound delivery and minimp3/nanomp3 when the files are already MP3.",
+  "verified_claims_summary": "Seen only through search snippets of the author's April 2023 post (blocked here): qoaconv encoded a 2 h 43 min 44.1 kHz stereo WAV (Blade Runner 2049 soundtrack, 1650 MB) in 25.752 s and decoded it in 2.996 s on one thread of an i7-6700K, against 315.232 s / 20.410 s for Opus and 146.223 s / 9.631 s for MP3 through the ffmpeg CLI at default settings, about 12.2x/6.8x versus Opus and 5.7x/3.2x versus MP3 and about 3,270x real-time decode (derived from snippet data). The codecs ran at very different bitrates (QOA 333 MB vs Opus 116 MB), the ffmpeg runs carry CLI overhead, and neither QOA build flags nor the timing method were published; qoaconv only gained its own timing printout in Sep 2024, and it defines QOA_RECORD_TOTAL_ERROR and chooses output format by file extension, so it cannot have written to /dev/null as the ffmpeg runs did (both effects add work on QOA's side, not ffmpeg's).",
+  "status_note": "Actively maintained (last commit 2026-09-27; most 2026 commits harden the decoder against malformed files after outside reports), MIT-licensed and a single 759-line header that is trivial to vendor, but still unfuzzed by the author's own README.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/README.md",
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/qoa.h",
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/qoaconv.c",
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/qoaplay.c",
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/Makefile",
+    "https://raw.githubusercontent.com/phoboslab/qoa/HEAD/LICENSE",
+    "https://github.com/phoboslab/qoa/commits",
+    "https://github.com/phoboslab/qoa/issues?q=is%3Aissue",
+    "https://github.com/phoboslab/qoa/issues/87",
+    "https://github.com/phoboslab/qoa/issues/69",
+    "https://github.com/phoboslab/qoa/issues/79",
+    "https://github.com/phoboslab/qoa/issues/56",
+    "https://github.com/phoboslab/qoa/issues/82",
+    "WebSearch snippet of https://phoboslab.org/log/2023/04/qoa-specification (page itself blocked)"
+  ],
+  "confidence": 0.7
+}

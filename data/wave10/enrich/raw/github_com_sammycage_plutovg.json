@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/sammycage/plutovg",
+  "one_liner": "Small MIT C 2D vector library with a Cairo-like canvas API; no published speed comparison against Cairo, Skia or Blend2D.",
+  "what_it_does": "A standalone C11 software renderer that draws paths (fill, stroke, dash), solid, linear/radial gradient and image paints, text from TrueType fonts, clips and Porter-Duff compositing into a 32-bit premultiplied ARGB surface, and can read and write PNG/JPG. The API is a Cairo-style immediate-mode canvas (save/restore, move_to/arc, set_rgb, fill_preserve, stroke) rather than a source-compatible Cairo replacement. It is the rasteriser behind LunaSVG and PlutoSVG.",
+  "how_it_is_fast": "Nothing in the repository claims or measures speed; the design is simply lean. Coverage comes from a vendored copy of FreeType's ftgrays cell/area scanline rasteriser (8-bit anti-aliased spans, 8 KB stack pool with band splitting) and FreeType's stroker, clipping is done by intersecting span lists, and compositing uses Qt-style SWAR pixel arithmetic (BYTE_MUL, INTERPOLATE_PIXEL_255 on two channels per 32-bit word) with 1024-entry gradient lookup tables. The only SIMD is an SSE2 memfill for opaque solid spans; there is no JIT, tiling, sparse-strip or multithreaded pipeline of the kind Blend2D or Vello CPU use.",
+  "when_to_use": [
+    "You need a dependency-free C library (vendored stb_truetype, stb_image, stb_image_write) to draw anti-aliased paths, gradients and text into an ARGB32 buffer, for example on embedded, homebrew or game targets.",
+    "You want Cairo-like drawing semantics without pulling in Cairo, pixman, FreeType and fontconfig, and footprint matters more than peak throughput.",
+    "You already render SVG with LunaSVG or PlutoSVG and want direct access to the same backend.",
+    "MIT licensing with a small codebase (about a dozen C files) that is easy to audit or vendor."
+  ],
+  "when_not_to_use": [
+    "You need proven speed over Cairo or Skia: no benchmark exists, and VGCPU-Benchmark wires up a plutovg backend (labelled 0.0.4) but commits no results.",
+    "Throughput-critical rendering of large or complex scenes: compositing is scalar apart from an SSE2 fill and rendering is single-threaded; Blend2D, Vello CPU and ThorVG are the measured options in this catalog.",
+    "You need separable blend modes (multiply, screen, overlay and so on): only the 12 Porter-Duff operators exist.",
+    "Real text layout: glyphs come from stb_truetype outlines with no shaping, kerning or hinting.",
+    "Pixel formats other than premultiplied ARGB32 (RGB565 and similar were requested in issues #33 and #41)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Meson or CMake), or source-drop of the source/ directory",
+    "dependencies": "libm; optional C11 threads.h or pthreads for font-cache locks; stb_truetype, stb_image and stb_image_write are vendored",
+    "min_toolchain": "C11 compiler (Meson default gnu11; CMake C_STANDARD 11); Meson 1.0+ or CMake 3.15+",
+    "platforms": "Portable C; CI builds on Linux, macOS and Windows; SSE2 path only for memfill, scalar elsewhere",
+    "thread_safety": "Canvas and surface objects are not synchronised (one thread per canvas). Reference counts are atomic (C11 stdatomic or Interlocked). Font faces and the font-face cache lock a mutex, but that mutex compiles to a no-op when neither Win32 nor C11 threads.h is available.",
+    "drop_in_for_baseline": "partial: Cairo-like concepts and the same premultiplied ARGB32 layout as CAIRO_FORMAT_ARGB32, but a different API (plutovg_canvas_*), no PDF/SVG/PS backends and no blend modes beyond Porter-Duff"
+  },
+  "gotchas": [
+    "Transformed non-tiled images are sampled nearest-neighbour (blend_transformed_argb); bilinear sampling exists only for tiled textures under rotation or shear, and PR #72 to extend it is still open.",
+    "Strokes are built after the transform with one width scaled by hypot(sx, sy)/sqrt(2), so non-uniform scale or skew gives a uniform-width stroke instead of the elliptical pen Cairo produces.",
+    "If a single scanline needs more cells than the 8 KB stack pool, PVG_FT_Raster_Render restarts the whole path with a doubled heap pool (up to 8 MB), skipping spans already emitted; beyond 8 MB the path is silently left partly drawn, since the call returns void.",
+    "Vendored FreeType-derived files (plutovg-ft-raster.c, plutovg-ft-stroker.c, plutovg-ft-math.c) carry the FreeType Project License, which asks for credit in documentation; the rest is MIT."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Blend2D, ThorVG or tiny-skia when a small, dependency-free C library with a Cairo-like API matters more than measured speed; for throughput Blend2D (and Vello CPU) have independent numbers beating Skia and Cairo, while plutovg has none.",
+  "verified_claims_summary": "No speed claim exists to verify: the README, release notes and issue tracker carry no numbers, and the only independent suite that includes plutovg (mfabbri77/VGCPU-Benchmark, with Cairo 1.18.2, Skia m124 and Blend2D) commits its harness but no results.",
+  "status_note": "Actively maintained (last commit 2026-07-16, v1.3.3 released 2026-05-18; May 2026 fixes for allocation-failure handling and surface-size overflow); MIT plus FreeType-licensed rasteriser files, so usability is mixed but practical to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/README.md",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/meson.build",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/.github/workflows/main.yml",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/include/plutovg.h",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-private.h",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-utils.h",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-rasterize.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-blend.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-canvas.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-path.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-font.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-paint.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-surface.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-matrix.c",
+    "https://raw.githubusercontent.com/sammycage/plutovg/HEAD/source/plutovg-ft-raster.c",
+    "https://github.com/sammycage/plutovg/issues?q=is%3Aissue",
+    "https://github.com/sammycage/plutovg/issues/86",
+    "https://github.com/sammycage/plutovg/issues/50",
+    "https://github.com/sammycage/plutovg/commits/main",
+    "https://github.com/sammycage/plutovg/pulls?q=is%3Apr",
+    "https://github.com/mfabbri77/VGCPU-Benchmark"
+  ],
+  "confidence": 0.75
+}

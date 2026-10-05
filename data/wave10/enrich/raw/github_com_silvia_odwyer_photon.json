@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/silvia-odwyer/photon",
+  "one_liner": "Pure-Rust image-effects library that also ships as WebAssembly for browsers and Node; one mixed first-party result against the libvips CLI.",
+  "what_it_does": "Photon wraps an image as a PhotonImage (a flat RGBA8 Vec<u8> plus width and height) and offers about 96 in-place functions: channel tweaks, colour-space adjustments (HSL, LCh, HSV), convolutions, preset filters, blending, watermarking, text, crop, rotate and resize. Natively you call open_image/save_image (backed by the image crate); in JavaScript you use the npm packages, which load pixels from a canvas, base64 string, byte array or Blob. It is a different API from libvips (no lazy pipeline and no CLI), so it is not a drop-in replacement.",
+  "how_it_is_fast": "There is no special technique: the effects are scalar, single-threaded loops over the RGBA byte buffer (for example, invert is a step_by(4) loop computing 255 - v), with no SIMD intrinsics, no threading (no rayon) and no unsafe code. Decoding, encoding, resize (image::imageops::resize, a separable filter) and the 90-degree rotation steps come from the image crate 0.24.8, and gaussian_blur is a three-pass box-blur approximation. In the browser the gain is compiling these loops to WebAssembly rather than running them in JavaScript; the README says it 'run[s] at near-native speed' but publishes no WASM numbers.",
+  "when_to_use": [
+    "Browser or Node.js apps that need client-side photo filters, tints, channel edits or simple resizes without a native addon (no libvips or sharp binary to install).",
+    "Rust apps that want a large catalogue of ready-made Instagram-style effects and colour adjustments on 8-bit RGBA images, where the code to write matters more than raw throughput.",
+    "Serverless or edge runtimes that accept WASM but not native modules (issue #138 discusses Cloudflare Workers).",
+    "Single-image, interactive edits where per-call cost is tens to hundreds of milliseconds and a lazy streaming pipeline is not needed."
+  ],
+  "when_not_to_use": [
+    "High-throughput server pipelines (thumbnails, batch conversion): libvips is threaded and streams; Photon decodes the whole image to RGBA8 in memory and runs one thread. Its own wiki shows libvips faster on the JPG case (84.2 ms vs 117.26 ms).",
+    "Quality or speed-critical resampling: resize is the image crate's generic imageops::resize. fast_image_resize (catalogued) uses SIMD and beats libvips on Lanczos3.",
+    "16-bit, HDR, float or colour-managed work: everything is converted to 8-bit RGBA on load (issue #155 asks for 16-bit grayscale and is open), there is no ICC handling, and blend() treats sRGB bytes as linear (it calls LinSrgba::new(...).into_linear(), which is a no-op), so blending happens on gamma-encoded values.",
+    "Code that must not panic on bad input: many public functions unwrap() decode and encode results (new_from_byteslice, get_bytes, get_bytes_jpeg), and in WASM a panic shows up as 'RuntimeError: unreachable' (issues #45, #134 and #175 are open).",
+    "Projects that need fixes on a release: crates.io's latest is 0.3.3 (2025-05-10), and the 2026 adjustments module and memory-copy fixes are only on master."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "image 0.24.8 (gif, jpeg, png, tiff, webp, bmp and other codecs), palette 0.6.1, imageproc 0.23, rusttype 0.9.2, rand 0.7, base64 0.13, serde, thiserror, time, perlin2d, instant; the default enable_wasm feature also pulls in wasm-bindgen, web-sys, js-sys, node-sys and console_error_panic_hook (turn it off with default-features = false for native builds)",
+    "min_toolchain": "Rust 2021 edition (Rust 1.56 or later); no rust-version is declared, and CI runs on stable",
+    "platforms": "any Rust target (pure Rust, scalar code), plus wasm32 builds for browsers and Node",
+    "thread_safety": "not documented; PhotonImage is a plain owned struct (Vec<u8>, width, height) and functions take &mut or &, with no internal threads or shared state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The native get_raw_pixels_slice() (no copy) exists only when enable_wasm is off. With the default features you get get_raw_pixels(), which clones the whole buffer.",
+    "blend() panics unless the first image is no larger than the second, but it then indexes the second image at the same linear byte offset. If the second image is wider, rows misalign and the wrong pixels are blended. It also lowercases the blend-mode string inside the per-pixel loop, which allocates once per pixel.",
+    "Open issue #119: some filters skip the last pixel. The loop bound 'len() - 4' is still present in primary, inc_brightness and dec_brightness in effects.rs (monochrome.rs has been fixed). rotate() truncates the angle to an integer, and issues #170 and #198 report noise and bugs on rotation.",
+    "In JavaScript, PhotonImage objects live in WASM linear memory. Issue #175 hit an out-of-memory error after about 174 new_from_base64 calls in Node 20. PR #227 (2026-09) reduced copies, but callers should still free images explicitly."
+  ],
+  "pick_this_over_siblings_when": "Pick Photon when you need a ready-made effects catalogue that runs unchanged in the browser, Node and native Rust. For resizing, pick fast_image_resize (SIMD, measured faster than libvips). For OpenCV-style kernels, pick kornia-rs. For server throughput, use libvips itself.",
+  "verified_claims_summary": "One first-party wiki page (2020-06-04, photon-rs 0.2.0 with image 0.21.1) timed open, invert and save inside a criterion loop (10 samples) against libvips's Windows vips.exe under hyperfine, which includes process start-up. Photon won the PNG case (244.87 ms vs 915.1 ms) and lost the JPG case (117.26 ms vs 84.2 ms). No CPU, OS, image size or encoder settings are given, and the PNG bench code was never committed. Reading the code adds that the timed work is dominated by image-crate decode and encode: Photon's own step is a scalar invert loop, and save_image always writes RGBA8 with image-crate defaults, while vips used its own encoder defaults. So the PNG gap most likely reflects codecs, settings and process start-up rather than Photon's pixel code.",
+  "status_note": "Actively maintained (Apache-2.0, 3.9k stars, last commit 2026-09-18, with community bug and memory fixes through 2026), but releases lag master and no benchmark has been published since 2020.",
+  "sources_read": [
+    "https://github.com/silvia-odwyer/photon/wiki/Benchmarks",
+    "https://github.com/silvia-odwyer/photon/commits/master",
+    "https://github.com/silvia-odwyer/photon/issues?q=is%3Aissue+performance",
+    "https://github.com/silvia-odwyer/photon/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/silvia-odwyer/photon/issues/13",
+    "https://github.com/silvia-odwyer/photon/issues/36",
+    "https://github.com/silvia-odwyer/photon/issues/119",
+    "https://github.com/silvia-odwyer/photon/issues/131",
+    "https://github.com/silvia-odwyer/photon/issues/144",
+    "https://github.com/silvia-odwyer/photon/issues/175",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/README.md",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/Cargo.toml",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/benches/photon_benchmark.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/lib.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/native.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/channels.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/transform.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/effects.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/helpers.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/multiple.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/iter.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/conv.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/filters.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/colour_spaces.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/crate/src/monochrome.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/b802192/crate/benches/photon_benchmark.rs",
+    "https://raw.githubusercontent.com/silvia-odwyer/photon/b802192/crate/Cargo.toml",
+    "https://crates.io/api/v1/crates/photon-rs"
+  ],
+  "confidence": 0.75
+}
