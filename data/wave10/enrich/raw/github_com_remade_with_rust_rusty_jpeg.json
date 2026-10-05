@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty_jpeg",
+  "one_liner": "Pure-Rust JPEG/MJPEG decoder and encoder with AVX2/NEON kernels; by its own measurement at parity with FFmpeg's native MJPEG codec, not faster.",
+  "what_it_does": "rusty_jpeg 0.4.1 merges image-rs jpeg-decoder 0.3.2 and vstroebel jpeg-encoder 0.7.0 into one crate, and it is the JPEG engine of the rff ffmpeg-style CLI. Decoding is Decoder::new(reader).decode() for interleaved pixels, or decode_planar() for the YCbCr planes (skipping upsampling and colour conversion), with scale() at 1/2, 1/4 and 1/8 and output-plane recycling. Encoding is Encoder::new(writer, quality).encode(pixels, w, h, ColorType), plus PlanarYcbcrImage (yuv420p/422p/444p) and packed YUYV input, progressive mode, optimized Huffman tables and opt-in trellis. The API is that of the two upstream Rust crates, not libjpeg's or FFmpeg's; a no_std + alloc build decodes from a slice and encodes into a caller buffer.",
+  "how_it_is_fast": "Decode: an AVX2 IDCT that runs two 8x8 blocks per instruction stream, one per 128-bit lane, and is byte-identical to the SSSE3 kernel run twice; entropy decode fused with the IDCT on baseline interleaved scans, which removes a write-zero-read round trip of about 18.8 MB per 1080p frame through the coefficient row buffer; a devirtualised per-MCU call into the synchronous worker; a shared buffered reader instead of per-symbol read_exact; a DC-only fill. rayon stays off because it measured slower at every size. Encode: hand-written AVX2 quantize, AVX2 forward DCT and colour conversion, a 64-bit non-zero mask from one AVX2 compare stepped with trailing_zeros (1.28x same-binary), and SIMD block extraction using maddubs for the 4:2:0 chroma box filter (1.25x same-binary), feeding a libjpeg-turbo-style 64-bit bit accumulator with bulk 8-byte flushes. These are wins against the crate's own earlier builds; against FFmpeg the result is parity.",
+  "when_to_use": [
+    "You need a JPEG encoder and decoder with no C or FFI in a Rust media pipeline (MJPEG, camera frames) and single-core speed roughly level with FFmpeg's native MJPEG codec is enough.",
+    "Planar or camera input and output: encode yuv420p/422p/444p planes or packed YUYV without an RGB round trip, and decode_planar() when the consumer wants YCbCr.",
+    "no_std + alloc targets: the RISC-V ESP32-C6/P4 classes are built in CI (the S3 via espup); decode from a slice with 1/2-1/8 scaling, and encode into a caller buffer that returns BufferTooSmall instead of a truncated file.",
+    "Chroma quality on encode: chroma is box-averaged on downsampling rather than point-sampled (first-party -17.12% BD-rate on chroma-detailed content).",
+    "Host and chip must emit identical bytes, provided both use the scalar kernels (no_std, platform_independent, or std without simd)."
+  ],
+  "when_not_to_use": [
+    "You want to beat libjpeg-turbo: it has never been measured against libjpeg-turbo, only FFmpeg's native MJPEG codec, and its own log puts the entropy decoder at about 14 cycles per symbol with nothing left to gain without hand-written assembly.",
+    "You need a reliable speed figure: the project's own encode-versus-FFmpeg readings for one comparison range from 1.45x faster to 4% slower (see measurement notes).",
+    "You want small files cheaply: optimized Huffman tables save 7.4% for 2.09x encode time, and trellis costs +144% encode time with a BD-rate gain measured only on a synthetic corpus whose cost figure was 46x off.",
+    "Default x86 builds must match other targets byte for byte: the AVX2 forward DCT and SSSE3 inverse DCT round differently from the scalar kernels (plus or minus 1 LSB).",
+    "You need a long track record: it is single-maintainer with 1 star, and recent releases fixed a panic on every progressive file in a 960-file libjpeg corpus (0.2.1/0.2.2), an 8 GiB allocation from a small malformed progressive header (0.2.2), and corrupt streams from optimized Huffman tables with restart intervals (0.4.0)."
+  ],
+  "integration": {
+    "form": "crate (rusty_jpeg 0.4.1 on crates.io)",
+    "dependencies": "none by default; optional rayon behind the off-by-default rayon feature; dev-dependency rusty_alloc-api 0.4 used as the examples' global allocator",
+    "min_toolchain": "Rust 1.85 (rust-version), edition 2021",
+    "platforms": "any target via the scalar kernels; x86-64 AVX2/SSE4.1/SSSE3 kernels with runtime detection (simd feature, default); aarch64 NEON quantize and forward DCT; no_std RISC-V ESP32 targets in CI; the platform_independent feature drops arch code and forbids unsafe",
+    "thread_safety": "the default decoder hands rows to a worker thread for larger images; set_single_threaded(true) decodes on the calling thread (about 38% less CPU per WHYS.md); RUSTY_JPEG_* environment knobs are read once and cached in a OnceLock under std; otherwise not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decoding is multithreaded by default, and the inherited upstream jpeg-decoder heuristic that picks the worker multiplies width by width (select_worker reads output_size.width twice), so any image wider than 128 px starts a thread whatever its height; call set_single_threaded(true) for one-core use. Before 0.1.2 that flag did nothing on baseline JPEGs.",
+    "The GitHub repo description still says 'Encodes 1.19x faster than FFmpeg ... decodes 1.05x faster', and WHYS.md has a 'FINAL STANDING' table (1.19x encode, 1.04x decode) that a later section supersedes; only the README and CHANGES.md 0.3.0 parity figures are current.",
+    "SIMD and scalar kernels differ by plus or minus 1 LSB, so tests/no_std_surface.rs pins two golden rows; use the scalar build as the oracle for an embedded target.",
+    "Downstream packagers: issue #6 (open since 2026-09-11) asks for the provenance and redistribution terms of tests/fixtures/progressive_libjpeg.jpg, and the licence is (MIT OR Apache-2.0) AND IJG, which requires IJG attribution for the forward-DCT files."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libjpeg-turbo-rs and zenjpeg, which publish numbers against libjpeg-turbo, only when you need no_std/ESP32 builds, planar or YUYV input and output, and both directions in one pure-Rust crate. Over jpeg-encoder (vstroebel), the upstream of its encoder half, it adds the AVX2/NEON encode kernels and box-averaged chroma. For raw speed, libjpeg-turbo (or a crate measured against it) remains the pick.",
+  "verified_claims_summary": "First-party, on an unnamed Windows machine (PowerShell harness), one pinned core, CPU time, against FFmpeg 8.1.2's native MJPEG codec at -threads 1. Encoding a 40-frame 1080p 4:2:0 clip at matched output size (ours 3.1% smaller, fixed Huffman tables on both sides) gave a median ratio of 0.96 (ours about 4% slower, 9 of 41 pairs won), and decoding one still stream-copied to 300 frames gave a median of 1.02 (15 of 31, inside noise). CPU model, rustc flags and the harness scripts are not published, so this is parity, not a speedup.",
+  "measurement_notes": "Points found in this pass, beyond the verifier's caveats. (1) The project's encode figures cannot all hold at once. CHANGES.md 0.2.3 reports 781 ms against FFmpeg's 953 ms (1.22x faster). 0.3.0 then adds two same-binary whole-encode wins, 1.28x and 1.25x, which compound to about 1.6x and would put the encoder near 1.95x faster than FFmpeg (derived from page data), yet the cross-binary paired ratio published in the same release is 0.96x. (2) WHYS.md D5i lists the 'same comparison, same clip, matched size' as 12/15 pairs won (z +2.32, median 1.4510), then 12/21 (z 0.65), then 9/41 (z -3.59). Pairs drawn from one stable process cannot be significant in opposite directions; the file's explanation that 'the estimator itself trends with N' does not describe a paired sign test. It points to drift or a change in arm setup between runs, so the 0.96x parity figure is no more reliable than the retracted 1.45x. The decoder shows the same pattern: four paired runs of near-identical code gave z +3.05, -0.54, +2.69 and +0.90 (D3e-BUILT). (3) The README decode figure uses 300-frame arms (about 2 s), which WHYS.md D1-FINAL says broke the project's own rule of at least about 15 s per arm and produced 1.25-1.50x spreads. The 3000-frame arms that fixed this were used for the 1.04x claim later withdrawn, and the FFmpeg arm there is 'net of 437.5 ms demux', a constant subtracted from the reference. (4) examples/decode_bench.rs decodes one in-memory JPEG repeatedly to planar YCbCr, recycling output planes, and uses the threaded worker unless a fourth 'st' argument is passed, while FFmpeg demuxes an AVI. There is no encode benchmark in the repo; per WHYS.md the encode arm was the rff CLI. (5) CHANGES.md 0.3.0 gives the AC-mask win as '25 pairs, z 3.36', but z 3.36 is the 14/15 result recorded in WHYS.md D4h (no whole number of wins out of 25 gives 3.36), so the CHANGES pair count is a transcription error. (6) pinned.ps1, paired.ps1 and paired2.ps1 are in neither this repo nor remade_ffmpeg_rs, whose tools/bench holds only codec-bench.ps1 (a decode harness with ffprobe frame-count parity) and pinab.py. scripts/sync-rusty-jpeg-mirror.sh still names crates/rusty_jpeg as the source of truth, but the crates/ directory has no rusty_jpeg and the 0.4.x commits went straight to this repo. No correctness bug sits behind the published numbers: both decode arms decode the same bitstream, and the encode arms are matched on size only. Tier C stands, but the cross-binary ratio should be recorded as unresolved, ranging from 0.96x to 1.45x on the same encode comparison.",
+  "status_note": "Young and single-maintainer: 18 crates.io versions between 2026-07-31 and 2026-09-03, with no code change since v0.4.1 (2026-09-03) beyond README banner edits whose '2,784 active installs' tracks the crates.io download total (2,875 on 2026-10-05); a release-v0.4.2 PR has been open since 2026-09-03. It is copyable under (MIT OR Apache-2.0) AND IJG.",
+  "sources_read": [
+    "https://github.com/Remade-With-Rust/rusty_jpeg",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/commits",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/issues",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/issues/6",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/pulls?q=is%3Apr",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/tree/main/src",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/tree/main/src/decode",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/tree/main/src/encode",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/tree/main/tests",
+    "https://github.com/Remade-With-Rust/rusty_jpeg/tree/main/examples",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/WHYS.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/CHANGES.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/src/decode/decoder.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/src/decode/upsampler.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/src/decode/worker/mod.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/src/encode/encoder.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_jpeg/HEAD/examples/decode_bench.rs",
+    "https://raw.githubusercontent.com/image-rs/jpeg-decoder/master/src/decoder.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/remade_ffmpeg_rs/main/scripts/sync-rusty-jpeg-mirror.sh",
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs",
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs/tree/main/crates",
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs/tree/main/crates/rusty_jpeg",
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs/tree/main/scripts",
+    "https://github.com/Remade-With-Rust/remade_ffmpeg_rs/tree/main/tools/bench",
+    "https://raw.githubusercontent.com/Remade-With-Rust/remade_ffmpeg_rs/main/tools/bench/codec-bench.ps1",
+    "https://raw.githubusercontent.com/Remade-With-Rust/remade_ffmpeg_rs/main/tools/bench/pinab.py",
+    "https://crates.io/api/v1/crates/rusty_jpeg"
+  ],
+  "confidence": 0.75
+}

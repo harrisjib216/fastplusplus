@@ -56,3 +56,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - bitbank2/JPEGDEC (progressive JPEG decode at 1/8 scale in about 18 KB constant memory): not catalogued. Lead from lowzag enricher (e114).
 - srwiley/scany (MIT, multi-threaded ScanT, same author as scanx): not catalogued. cogentcore.org/core/paint/renderers/rasterx/scan is a maintained scanx copy (duplicate). Leads from scanx enricher (e121).
 - Clownacy/clownresampler (single-header integer windowed-sinc) and igankevich/lanczos-resampler: search snippets only, not opened. iPlug2 Extras LanczosResampler.h and chowdsp_utils LanczosResampler are ports of the sst/Surge code (duplicates). Leads from sst-basic-blocks enricher (e122).
+- remade_ffmpeg_rs crates/rusty_webp: not catalogued, claims unchecked. Lead from rusty_gif/rusty_jpeg enricher (e119).
