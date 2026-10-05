@@ -53,3 +53,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - tintbox (pure-Rust lcms port on crates.io; pdf_oxide #749): parallel run about equal to single-thread lcms2, so not faster. Lead from skcms enricher (e107).
 - elasota/ConvectionKernels: fastest BC6H decoder in aras-p's 2022 charts, not catalogued. The same charts (aras-p/aras-p.hugo static/img/blog/2022/bcn-decode-*.png, harness aras-p/bcn_decoder_tester) give independent decoder evidence for the catalogued etcpak and bc7enc_rdo (possible retiers). Lead from bcdec enricher (e109).
 - geongeorge/Canvas-Txt v5 (bench/compare.mjs, issue #13): 51.3 vs 566.2 us/op against canvas-hypertxt standard mode on never-repeating 600-char strings, about 11x (node-canvas, Apple Silicon). Lead from canvas-hypertxt enricher (e105).
+- bitbank2/JPEGDEC (progressive JPEG decode at 1/8 scale in about 18 KB constant memory): not catalogued. Lead from lowzag enricher (e114).

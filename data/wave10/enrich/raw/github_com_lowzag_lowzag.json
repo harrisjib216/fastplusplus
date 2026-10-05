@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/lowzag/lowzag",
+  "one_liner": "Progressive-JPEG decoder in C99 that decodes at 1/2-1/8 scale in a fraction of libjpeg-turbo's coefficient memory.",
+  "what_it_does": "lowzag decodes progressive (SOF2, Huffman) JPEG at 1/1, 1/2, 1/4 or 1/8 scale in one forward pass, without seeking or buffering the file, so a 12 MP photo can be thumbnailed on an ESP32-S3 with PSRAM. It is not a drop-in for libjpeg: the API is three calls (lowzag_probe, lowzag_estimate, lowzag_decode) taking a lowzag_cfg_t with read, row, alloc, free, cancel and marker callbacks, plus lowzag_decode_mem() for an in-memory file. lowzag_estimate() reads only the frame header and returns the exact peak allocation the decode will make, and cfg.mem_limit makes the decoder give up chroma sharpness and then one scale step rather than fail. Baseline JPEG is refused with LOWZAG_ERR_NOT_PROGRESSIVE; you route it to another decoder.",
+  "how_it_is_fast": "The win is memory, not speed. A reduced-scale IDCT reads only the low-frequency bs x bs corner of each 8x8 block, so lowzag stores just that corner (64, 16, 4 or 1 coefficients, row-major since 2.3.0, written through a 64-entry zigzag-to-slot map) plus an 8-byte nonzero bitmap per block. The bitmap carries the T.81 G.1.2.3 nonzero history that AC successive-approximation refinement scans need to consume the right number of correction bits for the discarded coefficients, so every scan is still entropy-decoded in full. Dequantization, the 1/2/4/8-point Loeffler IDCT (Q13, int32 only), upsampling and color conversion run only on the kept corner, which is also why it overtakes ROM TJpgDec at 1/4 on large files.",
+  "when_to_use": [
+    "Showing camera-size progressive JPEGs (several MP) on an ESP32-S3 or similar MCU with PSRAM, at 1/2 to 1/8 scale for a small panel",
+    "Host-side thumbnailing of large progressive JPEGs where peak memory per decode matters more than throughput (at 1/4, 6.8 MB against libjpeg-turbo's 36.1 MB coefficient array for 12 MP 4:2:0)",
+    "When you must refuse or size a decode before allocating: lowzag_estimate() returns the exact peak_alloc from the header alone, and mem_limit degrades instead of failing",
+    "Streaming input (socket, SD card) that cannot be seeked or held in RAM, including partial files via cfg.allow_partial",
+    "Cropping a region out of a big progressive frame: an 800x480 window of 12 MP costs 3.4 MB at 1/1"
+  ],
+  "when_not_to_use": [
+    "Baseline JPEG, arithmetic coding, 12-bit, CMYK/Adobe, lossless JPEG or 4:1:1 sampling: all refused",
+    "Throughput on a host: no speed comparison against libjpeg-turbo exists, there is no SIMD, and progressive input costs a full entropy decode of every scan",
+    "Full-scale (1/1) decodes: lowzag stores exactly what libjpeg stores (128.5 vs 128 bytes per block), so there is no memory saving",
+    "Memory budgets in the tens of kilobytes: storage is still proportional to the source (8-byte map per source block, 2.26 MB floor at 12 MP); bitbank2/JPEGDEC decodes progressive at 1/8 in about 18 KB constant, per the lowzag README",
+    "Byte-identical thumbnails to libjpeg's scaled IDCT or fancy upsampling: reduced scales use coefficient truncation and chroma replication"
+  ],
+  "integration": {
+    "form": "source-drop (two files: src/lowzag.c and include/lowzag.h, plus optional src/lowzag_mem.c), or static/shared lib via CMake, or ESP-IDF component defensiblelogic/lowzag",
+    "dependencies": "none (the core object references only memcpy and memset; lowzag_decode_mem() adds malloc/free)",
+    "min_toolchain": "C99; CMake 3.15+ for the CMake build; ESP-IDF 5.4.1 tested for the component",
+    "platforms": "any (portable C99, no SIMD, no 64-bit multiply); tested on x86-64 and aarch64 hosts and an ESP32-S3 board",
+    "thread_safety": "No static or global mutable state, so concurrent decodes on separate threads are safe (ThreadSanitizer target in CI); a single decode is not reentrant and callbacks must not call back into lowzag",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every public struct needs struct_size set (use LOWZAG_CFG_INIT / LOWZAG_INFO_INIT / LOWZAG_ESTIMATE_INIT); a zero or stack-garbage value returns LOWZAG_ERR_VERSION or worse",
+    "mem_limit is opt-in (0 means unlimited) and under automatic scale selection a tight limit silently lowers chroma resolution and then scale; check info.chroma_steps as well as info.scale",
+    "Memory follows the source dimensions, not the output: a 48 MP source decoded to 1000x750 costs 13.5 MB against 6.8 MB from 12 MP",
+    "A crop covering more than about 93% of a 12 MP frame costs more than no crop at 1/1, because it forces the 2.26 MB nonzero map"
+  ],
+  "pick_this_over_siblings_when": "Pick lowzag over libjpeg-turbo (or jpeg-nitro and zenjpeg, which target host decode speed) only when the input is progressive and peak memory at reduced scale is the binding constraint, typically on an MCU with PSRAM; for decode speed on a host, libjpeg-turbo remains the choice and lowzag publishes no comparison against it.",
+  "verified_claims_summary": "On a generated 12 MP 4:2:0 progressive file, lowzag 2.3.0's own peak_alloc is 36.2 / 19.6 / 6.8 / 3.4 MB at 1/1, 1/2, 1/4 and 1/8 (pinned in CI by test/check_docs.py), against 36.1 MB computed for libjpeg-turbo's coefficient array (282,000 blocks x 128-byte JBLOCK); a separate process-RSS table (lowzag CLI vs djpeg -nosmooth, libjpeg-turbo 3.0.4, unnamed aarch64 machine) was measured on the first release (pjpeg 1.0.0, peak_alloc 36.2 / 23.0 / 8.9 / 3.6 MB) and never re-run, so it understates the current gap at 1/2 and 1/4. The ESP32-S3 at 240 MHz times (lowzag on a progressive file vs the ROM TJpgDec, which is fixed at JD_FASTDECODE=0, on a jpegtran baseline copy) are single 1.0.0-era runs: lowzag slower at 800x480 1/1 (0.63 vs 0.46 s) and faster at 4000x3000 1/4 (5.7 vs 9.1 s).",
+  "status_note": "Active (31 commits, 2.3.0 on 2026-08-11, every commit co-authored with Claude, 1 star, developed on a self-hosted GitLab with GitHub as mirror and no issues or PRs yet); MIT, two files, unusually thorough tests (differential vs djpeg, ASan/UBSan/TSan/MSan, libFuzzer) and an explicit SECURITY.md threat model.",
+  "sources_read": [
+    "https://github.com/lowzag/lowzag",
+    "https://github.com/lowzag/lowzag/commits/main",
+    "https://github.com/lowzag/lowzag/commits/main/docs/ALGORITHM.md",
+    "https://github.com/lowzag/lowzag/issues?q=is%3Aissue",
+    "https://github.com/lowzag/lowzag/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/README.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/docs/ALGORITHM.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/docs/PRIOR-ART.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/idf_component.yml",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/include/lowzag.h",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/src/lowzag.c",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/src/lowzag_mem.c",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/test/check_docs.py",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/test/run_tests.py",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/test/Makefile",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/examples/README.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/examples/decode_to_ppm.c",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/examples/esp32/README.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/HEAD/examples/esp32/main/main.c",
+    "https://raw.githubusercontent.com/lowzag/lowzag/e4d11e4/docs/ALGORITHM.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/e4d11e4/README.md",
+    "https://raw.githubusercontent.com/lowzag/lowzag/a5e78f1/docs/ALGORITHM.md",
+    "https://raw.githubusercontent.com/espressif/idf-extra-components/master/esp_jpeg/README.md"
+  ],
+  "measurement_notes": "No correctness bug found behind the numbers (AC first-scan and refinement loops in src/lowzag.c follow libjpeg-turbo's decode_mcu_AC_refine logic, and the output is differential-tested against djpeg). Two staleness issues, neither inflating the claim: (1) the process peak-RSS table in docs/ALGORITHM.md is byte-identical to the one in the first commit e4d11e4 (pjpeg 1.0.0, 2026-08-04), when peak_alloc was 36.2 / 23.0 / 8.9 / 3.6 MB; the RSS values sit a constant ~1.2 MB above those 1.0.0 figures, so the table was not re-measured after 2.3.0's corner packing (19.6 / 6.8 / 3.4 MB) and the record's '7.9x less RSS at 1/8' pairs a 1.0.0 measurement with a 2.3.0 allocation table. (2) The ESP32-S3 timing table is also unchanged since e4d11e4, so it predates the 2.3.0 change that the project measured at 3.3-5.0% faster on a host (gcc 11.4 -O2, aarch64 Jetson, 2.2.1 vs 2.3.0 only). The ROM TJpgDec baseline is the fixed basic build (JD_FASTDECODE=0, RGB888, 512-byte buffer per Espressif's esp_jpeg README), whose own table shows JD_FASTDECODE=2 only about 12% faster at 320x180, so the baseline is the slowest TJpgDec configuration but not by a wide margin. The GitHub repository description still quotes the 1.0.0 figure (3.6 MB at 1/8). Tier C stands. Lead: bitbank2/JPEGDEC (progressive JPEG at 1/8 in about 18 KB constant memory, MCU decoder) is not catalogued.",
+  "confidence": 0.8
+}
