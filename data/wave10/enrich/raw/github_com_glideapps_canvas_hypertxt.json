@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/glideapps/canvas-hypertxt",
+  "one_liner": "Zero-dependency JavaScript line breaker for HTML5 canvas text; up to 9.8x faster than canvas-txt 3.x (19x with HyperWrapping).",
+  "what_it_does": "Splits a string into lines that fit a pixel width on a CanvasRenderingContext2D: split(ctx, value, fontStyle, width, hyperWrappingAllowed, getBreakOpportunities?) returns an array of strings, and the caller draws them with fillText and handles line height and alignment. It breaks at spaces by default, or at caller-supplied break opportunities (the repo's correctness story passes UAX #14 breaks from the linebreak package), honours explicit newlines, and keeps module-level caches that clearCache() resets. It is the wrapping layer inside glide-data-grid and, per its README, not a drop-in replacement for canvas-txt (no managed rendering, justify, vertical alignment or debug boxes).",
+  "how_it_is_fast": "canvas-txt 3.x finds wrap points by calling ctx.measureText once per added character (and sets ctx.font inside every drawText call); canvas-hypertxt guesses the split point from a running per-font average character width, measures only a window of about 1.5 average line lengths, then steps the guess forward or jumps back to the previous space, so it needs a handful of measureText calls per line. Results are memoised in a 500-entry map keyed by text, font key and width. Optional HyperWrapping learns a per-character width table by gradient-style back-propagation against real measureText results (after 20,000 measured characters for that font key) and, once 500,000 characters have been seen, estimates widths with a 1% safety margin without calling measureText at all.",
+  "when_to_use": [
+    "Canvas-rendered UIs (data grids, charts, canvas editors) that wrap many short-to-medium Latin strings per frame and draw them themselves, as glide-data-grid does (its core package 6.0.4-alpha25 still depends on canvas-hypertxt ^1.0.3).",
+    "Re-layout of the same strings at the same width (scrolling, redraws): repeated calls return the memoised line array.",
+    "Long-running pages with a large volume of text in one font where HyperWrapping can train, and an occasional line that wraps one word early is acceptable.",
+    "Wrapping at non-space break points (CJK, hyphens) when you can supply break opportunities from a UAX #14 implementation through the optional callback."
+  ],
+  "when_not_to_use": [
+    "Text that contains blank lines (consecutive, leading or trailing newlines) or calls with a width narrower than about two thirds of one glyph: open issues #12 and #11, reproduced here with a mock canvas, show the per-font average width becoming NaN, after which every later split() for that font key returns lines unwrapped until clearCache().",
+    "Lines whose characters are much narrower than the font key's learned average (below about two thirds of it, e.g. runs of 'i', 'l', '.' after training on ordinary prose): split() measures only the first 1.5 average line lengths, so such lines are returned unwrapped and overflow (code reading plus mock-canvas reproduction).",
+    "Never-repeating text without HyperWrapping against current alternatives: the canvas-txt maintainer's node-canvas benchmark (issue #13) gives 566.2 µs/op for canvas-hypertxt standard mode vs 51.3 µs/op for canvas-txt v5 on 600-char strings (about 11x slower, derived from page data), and uWrap reports 770 ms for canvas-hypertxt vs 82 ms for itself in Chrome 135.",
+    "Layouts that need justify, vertical alignment, managed line heights or preserved leading spaces (every wrapped line after the first is trimmed; issue #7).",
+    "Projects that need a maintained dependency: last commit and npm release 1.0.3 on 2023-11-25, six open issues with no maintainer replies."
+  ],
+  "integration": {
+    "form": "module (npm package canvas-hypertxt 1.0.3, ESM and CommonJS builds with TypeScript types; the logic is one ~240-line source file that is easy to vendor)",
+    "dependencies": "none",
+    "min_toolchain": "Any JavaScript runtime with Map, for...of and a CanvasRenderingContext2D (browsers; node-canvas works per the canvas-txt maintainer's benchmark); not documented beyond that",
+    "platforms": "any JavaScript environment with a 2D canvas context",
+    "thread_safety": "not documented; all caches (results, per-font metrics, HyperWrapping tables) are module-level globals shared by every caller in a realm, and each web worker gets its own copy",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "fontStyle is only a cache key: the caller must set ctx.font to the matching font before calling split(), use a distinct key per font, and call clearCache() once web fonts finish loading (document.fonts.ready), or the learned widths belong to the fallback font.",
+    "The result memo key is text, font key and width but not hyperWrappingAllowed, and eviction past 500 entries drops the oldest inserted key rather than the least recently used one.",
+    "HyperWrapping estimates are deliberately inflated by 1%, so a minority of lines wrap one word early, and the model is only as good as the text it trained on for that font key.",
+    "Width <= 0 returns an empty array; first lines are right-trimmed and later lines fully trimmed."
+  ],
+  "pick_this_over_siblings_when": "uWrap, the only like-for-like sibling, reports about 9x lower time than canvas-hypertxt in Chrome 135 (about 18x in Firefox 137, derived from page data) and better accuracy but documents Latin-only accuracy, no \\r\\n handling and only pre-line wrapping; pick canvas-hypertxt only when you need its pluggable break-opportunity callback or you already depend on glide-data-grid. Pretext targets DOM-free measurement in general and Parley or text-shaper do real shaping, so none of them replace a canvas line splitter directly.",
+  "verified_claims_summary": "First-party Storybook benchmark in an unnamed browser and machine: 5000 iterations of wrapping a song-lyric string (iteration number prepended, so results are not memo hits) into a 450 px box at 20px sans-serif and drawing it, 1000 chars 11.19 s for canvas-txt 3.x vs 1.43 s for canvas-hypertxt and 0.77 s with HyperWrapping (about 7.8x and 14.5x, derived from page data). The canvas-txt timing includes setting ctx.font on every call, canvas-hypertxt stops drawing below 500 px, and HyperWrapping trains and is measured on the same text.",
+  "status_note": "Stale since 2023-11-25 (npm 1.0.3) with an open NaN bug that silently disables wrapping, though MIT, dependency-free and small enough to vendor and patch (skip measureText for empty strings); the baseline it beat has since been rewritten (canvas-txt v5).",
+  "measurement_notes": "Correctness bugs found, neither behind the catalogued numbers (the benchmark text has no newlines and a fixed 450 px width): (1) measureText computes avg = width / text.length, so measuring an empty string (a blank line from consecutive newlines, or a prefix of zero characters when the width is below about two thirds of the average glyph width) yields NaN, and while the font key has fewer than 20,000 sampled characters that NaN is folded into the stored average; every later call then computes a NaN measurement window, measures the empty string, sees 0 <= width and returns each source line unwrapped. Reported upstream as issue #12 (open since 2024-08-17) and probably #11 (open since 2024-05-20); reproduced in node with a mock 10 px-per-glyph canvas (first call 17 lines, next call 1 line instead of about 15; clearCache() restores 11 lines). (2) Only the first 1.5 average line lengths of each line are measured, so a line of glyphs narrower than about two thirds of the learned average is pushed whole (mock: a 480 px run of 'i' and a 710 px 'ii ' line returned as single lines at width 200). Measurement points beyond the verifier's caveats: the harness runs canvas-txt first and canvas-hypertxt last in one page, so canvas-hypertxt may benefit from warmed JIT and glyph caches (inference, not measured); the HyperWrapping column trains on the same lyric text it is timed on. Newer third-party evidence: the canvas-txt maintainer's compare.mjs (issue #13, 2026-08-10; node-canvas on Apple Silicon, 16px Arial, 400 px, 5000 iterations, identical line counts) shows canvas-txt v5.0.0 at 51.3 µs/op vs 566.2 standard and 38.8 HyperWrapping for canvas-hypertxt 1.0.3 on never-repeating 600-char strings, so the advantage holds only against canvas-txt 3.x. The compare.mjs comment says the README harness repeats identical text; it does not (each iteration prepends its index). Tier C stands.",
+  "sources_read": [
+    "https://github.com/glideapps/canvas-hypertxt",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/README.md",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/package.json",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/src/index.ts",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/src/multi-line.ts",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/src/stories/benchmark.stories.tsx",
+    "https://github.com/glideapps/canvas-hypertxt/tree/main/test",
+    "https://github.com/glideapps/canvas-hypertxt/issues?q=is%3Aissue",
+    "https://github.com/glideapps/canvas-hypertxt/pulls?q=is%3Apr",
+    "https://github.com/glideapps/canvas-hypertxt/issues/11",
+    "https://github.com/glideapps/canvas-hypertxt/issues/12",
+    "https://github.com/glideapps/canvas-hypertxt/issues/13",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/master/packages/canvas-txt/bench/compare.mjs",
+    "https://raw.githubusercontent.com/glideapps/glide-data-grid/main/packages/core/package.json",
+    "https://registry.npmjs.org/canvas-hypertxt",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

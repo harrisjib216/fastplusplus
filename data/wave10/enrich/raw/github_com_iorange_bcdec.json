@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/iorange/bcdec",
+  "one_liner": "Single-header C BC1-BC7 block decoder; 1.3-11x DirectXTex's single-thread throughput in aras-p's 2022 decoder comparison.",
+  "what_it_does": "bcdec decodes one 4x4 block of any BCn (DXT/S3TC, RGTC, BPTC) format per call: bcdec_bc1 through bcdec_bc5, bcdec_bc6h_float or bcdec_bc6h_half, and bcdec_bc7. Each call takes a pointer to the compressed block, a destination pointer and a row pitch. You loop over blocks yourself, and nothing is allocated, loaded or parsed (no DDS reader, no image API). BC1/2/3/7 output RGBA8, BC4/BC5 output R8/RG8 (or float and signed with BCDEC_BC4BC5_PRECISE), and BC6H outputs RGB float32 or half. It is not an API drop-in for DirectXTex: DirectXTex's D3DXDecodeBCn returns 16 XMVECTOR floats per block, and its Decompress works on whole ScratchImages.",
+  "how_it_is_fast": "It is plain scalar C with no SIMD. The speed comes from doing the work at word level instead of byte level (aras-p's PR #1): each block is loaded as 16/32/64-bit little-endian words, BC1 builds a 4-entry 32-bit RGBA palette and writes each pixel with one 32-bit store, and BC4/BC5 alpha indices are pulled from a 64-bit word 3 bits at a time. BC6H and BC7 use a two-word (128-bit) bitstream reader instead of per-bit extraction, plus hard-coded partition and fix-up tables. BC6H endpoint unquantization was moved out of the per-pixel loop (PR #8). BC1 palette interpolation uses multiply-shift 'magic' constants on the 5/6-bit endpoints instead of division (issue #15). DirectXTex, by contrast, decodes every texel through float XMVECTOR math and then packs back to 8-bit.",
+  "when_to_use": [
+    "CPU-side decoding of BCn textures (asset pipelines, texture viewers, compression-quality evaluation, software fallbacks for GPUs without BCn support) where you want every format, including BC6H signed and unsigned, from one 1,500-line header.",
+    "Replacing DirectXTex's decoders outside Windows: no DirectXMath, DirectX-Headers or sal.h stubs needed, and it ran 4.85-11.4x faster on BC1 and 1.3-1.6x faster on BC7 in the 2022 single-thread comparison.",
+    "Embedding in C or C++ projects with strict dependency or licence rules: one header, no runtime library calls, MIT or Unlicense.",
+    "Multi-threaded decoding where you split the image into block ranges yourself: the functions keep no state between calls."
+  ],
+  "when_not_to_use": [
+    "BC7-heavy workloads where decode speed matters: bc7enc_rdo's bc7decomp was 2.3-4.4x faster than bcdec on BC7 in the same 2022 charts (517 vs 220 Mpix/s on M1 Max, 621 vs 142 on a 5950X with VS2022).",
+    "Maximum BC1/BC3 throughput: etcpak's decoder was 1.16-1.7x faster on BC1 and BC3 in the same charts. It is harder to extract, though.",
+    "BC6H on Apple Silicon: in the 2022 M1 Max chart, bcdec (79 Mpix/s) trailed ConvectionKernels (149), SwiftShader (143) and Mesa (84). PR #8 (Sep 2022) sped BC6H up after those charts, and that change was not re-measured.",
+    "When you need bit-exact agreement with an older bcdec build or with a float reference. BC1 interpolation was off by up to 1 per channel until the June 2024 fix (issue #15). BC3/BC4/BC5 alpha rounding was changed in November 2024 (issue #12): BC3 alpha now truncates, and float-matching rounding needs BCDEC_BC4BC5_PRECISE.",
+    "Big-endian hosts, or when you need whole-image or DDS handling: the output stores pack 0xAABBGGRR as native 32-bit words, and edge blocks and padding are the caller's job."
+  ],
+  "integration": {
+    "form": "header-only (stb style: define BCDEC_IMPLEMENTATION in one translation unit; BCDEC_STATIC or BCDECDEF control linkage)",
+    "dependencies": "none (no C runtime calls)",
+    "min_toolchain": "C with 64-bit unsigned long long (C99 or C++11 era compilers); built by MSVC 2022, clang 13/14 and GCC in the public harnesses",
+    "platforms": "any little-endian target; scalar code, no SIMD or intrinsics; since 2026-09-02 input blocks may be unaligned",
+    "thread_safety": "Not documented. Functions keep no state; the static tables (partition sets, weights) are only read, so concurrent calls on different blocks are safe in practice.",
+    "drop_in_for_baseline": "partial — same per-block job as DirectXTex's D3DXDecodeBC1..BC7, but different signatures (raw bytes out with a row pitch instead of 16 XMVECTOR floats), so call sites need small rewrites"
+  },
+  "gotchas": [
+    "Pitch units differ by function: bytes for the 8-bit formats, but float or half elements for bcdec_bc6h_float and bcdec_bc6h_half (and for the BC4/BC5 float variants). The bcn_decoder_tester call passes width * 3 for BC6H float.",
+    "BCDEC_*_COMPRESSED_SIZE(w, h) computes (w>>2)*(h>>2) blocks, so it returns 0 for a 256x1 image and undercounts any size that is not a multiple of 4. Round dimensions up yourself. Issues #7 (tiny images) and #18 (256x1 BC3 crash) were in this area.",
+    "Output pixels are written through unsigned int, unsigned short and float pointers, so destination rows should be naturally aligned. Unaligned input reads were only fixed on 2026-09-02 (commit 80859ed, prompted by PR #23): DX10-header DDS payloads start at byte 148 and are never 8-byte aligned. Older copies are formally undefined behaviour there and fault on strict-alignment CPUs.",
+    "The maintainer rejects LLM-generated contributions (README; PR #23 was declined for that reason), so plan to carry local patches yourself if needed."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued image-codecs siblings (ffpng, fpng, QOI, libspng and others) decodes GPU block formats. Among block-texture entries, pick bcdec over etcpak or bc7enc_rdo's decoders when you want every BCn format, including BC2, BC4/BC5 signed and BC6H, in one header, and use those two only for peak BC1/BC3 (etcpak) or BC7 (bc7decomp) speed.",
+  "verified_claims_summary": "aras-p's 'Comparing BCn texture decoders' (2022-06-23) is a third-party, single-threaded Mpix/s comparison; the post's source and chart PNGs are readable in the public aras-p/aras-p.hugo repo. The harness is public (aras-p/bcn_decoder_tester: 20 runs per DDS file, pinned submodules, test_images in the repo; Windows preset RelWithDebInfo plus /Ob2 with cl or clang-cl). Against DirectXTex (679538e), bcdec (e3ca0) measured BC1 1319 vs 272 (4.85x), BC3 704 vs 254 (2.77x), BC6H unsigned 85 vs 25 (3.40x) and BC7 142 vs 93 (1.53x) on a Ryzen 9 5950X with VS2022. With clang 14 on the same CPU: BC1 1449 vs 223 (6.50x), BC3 621 vs 207 (3.00x), BC7 169 vs 127 (1.33x). On an M1 Max with clang 13: BC1 2088 vs 183 (11.4x), BC3 1093 vs 185 (5.91x), BC7 220 vs 140 (1.57x). All ratios are derived from page data. Two caveats: the harness only warns on output-hash mismatch, and the measured bcdec had small rounding differences (BC1 off by up to 1 per channel; alpha bias +1) that were fixed in 2024 with integer operations of the same cost. The Mac build flags are not given in the presets.",
+  "status_note": "Active (last commit 2026-09-02, alignment fix); single-header and MIT OR Unlicense, so it is trivially vendorable. Pin a version, because decoded values changed slightly in the 2024 rounding fixes.",
+  "sources_read": [
+    "https://github.com/iOrange/bcdec",
+    "https://raw.githubusercontent.com/iOrange/bcdec/HEAD/README.md",
+    "https://raw.githubusercontent.com/iOrange/bcdec/HEAD/bcdec.h",
+    "https://raw.githubusercontent.com/iOrange/bcdec/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/iOrange/bcdec/e3ca0/bcdec.h",
+    "https://raw.githubusercontent.com/iOrange/bcdec/026acf9/bcdec.h",
+    "https://github.com/iOrange/bcdec/commits",
+    "https://github.com/iOrange/bcdec/issues?q=is%3Aissue",
+    "https://github.com/iOrange/bcdec/pulls?q=is%3Apr",
+    "https://github.com/iOrange/bcdec/pull/1",
+    "https://github.com/iOrange/bcdec/pull/16",
+    "https://github.com/iOrange/bcdec/pull/23",
+    "https://github.com/iOrange/bcdec/issues/12",
+    "https://github.com/iOrange/bcdec/issues/15",
+    "https://github.com/iOrange/bcdec/issues/18",
+    "https://github.com/iOrange/bcdec/issues/19",
+    "https://github.com/aras-p/bcn_decoder_tester",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/readme.md",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/src/main.cpp",
+    "https://github.com/aras-p?tab=repositories&q=blog",
+    "https://github.com/aras-p/aras-p.hugo",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content/blog",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content/blog/2022",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2022/06-bcn-decode-libraries.md",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2022/bcn-decode-mac.png",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2022/bcn-decode-win-vs2022.png",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2022/bcn-decode-win-clang14.png"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/leeoniya/uwrap",
+  "one_liner": "Sub-2KB TypeScript Canvas2D line-wrap counter for virtualized lists; 7.7-18x faster than canvas-hypertxt in the author's browser runs.",
+  "what_it_does": "uWrap predicts how many lines a string wraps to, and where it breaks, in a box of a given pixel width, using the font settings of a Canvas2D context. Virtualized lists and grids can then size rows without measuring the DOM. varPreLine(ctx) returns four functions: count(text, width) gives the line count, test(text, width) says whether the text wraps, split(text, width, limit) returns the line strings, and each(text, width, cb) reports index ranges and widths per line. It emulates CSS white-space: pre-line: runs of spaces collapse, \\n is honoured, and lines break at spaces and after hyphens. It is not a drop-in for canvas-hypertxt's split(ctx, text, font, width, hyper) call.",
+  "how_it_is_fast": "Setup measures each of the ~95 printable ASCII characters, plus every uppercase-led pair (26x95), with ctx.measureText once, filling a width table and a kerning table; that was 2,594 calls in the enricher's run. After that, wrapping is one linear pass over charCodeAt with table lookups and greedy tracking of break points. The hot loop calls measureText only for unseen non-ASCII characters (then cached), and count/test allocate no strings. canvas-hypertxt does far more per call: it builds a string cache key and re-measures growing prefixes one character at a time in getSplitPoint, which is quadratic in line length. In hyper mode it switches to trained per-character estimates times 1.01 after 500k measured characters.",
+  "when_to_use": [
+    "Virtualized lists and data grids in the browser that need row heights for thousands to hundreds of thousands of Latin-text cells without DOM reflow.",
+    "UI text in one font and size per context (for example 14px Inter) with letterSpacing or wordSpacing and pre-line semantics: explicit newlines plus wrapping at spaces and hyphens.",
+    "Only a line count or a 'does it wrap' test is needed: count() and test() allocate nothing per call, and test() stops after the second line.",
+    "Bundle-size-sensitive front ends: under 2KB minified, no runtime dependencies, ESM and IIFE builds."
+  ],
+  "when_not_to_use": [
+    "Text without spaces between words, such as CJK or Thai: a 32-character Chinese string came back as one overflowing line in the enricher's test. Breaks happen only at the ASCII space and after '-'. There is no UAX #14 line breaking and no shaping or ligature handling, and characters outside the BMP are measured one UTF-16 code unit at a time.",
+    "Text with tabs or Windows line endings: tabs are not break points (CSS pre-line turns them into spaces, so browsers wrap there), and '\\r' stays inside the line ('first line\\r\\nsecond line' gave 'line\\r' as a line). The README says \\r\\n is not handled.",
+    "Long words or URLs that need overflow-wrap or word-break: they are not split and overflow one line (issue #1 is the open TODO).",
+    "white-space normal, pre-wrap or break-spaces, mixed fonts or rich text: only the pre-line strategy exists, with one font per context.",
+    "Node or server-side use without a Canvas2D implementation: it needs a CanvasRenderingContext2D (the tests use skia-canvas)."
+  ],
+  "integration": {
+    "form": "module (npm uwrap: ESM dist/uWrap.mjs, IIFE dist/uWrap.iife.min.js, TypeScript .d.ts)",
+    "dependencies": "none at run time; needs a CanvasRenderingContext2D (browser canvas, or skia-canvas in Node as the tests do)",
+    "min_toolchain": "Any JS runtime with ES modules or a script tag and Canvas2D measureText; Canvas letterSpacing is optional (a faux fallback adds it manually)",
+    "platforms": "Browsers (README timings for Chrome 135, Firefox 137, Safari 18.1); Node with a canvas implementation",
+    "thread_safety": "Not documented. JavaScript is single-threaded per realm, but the closures share one ctx and add unseen characters to a shared width cache, so build one varPreLine per font/context.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The width tables are built from ctx.font when varPreLine() runs. Changing ctx.font afterwards, or building before a web font has loaded, leaves stale widths, so rebuild after the font is ready.",
+    "Accuracy bug in the faux letter-spacing path, used when the canvas ignores letterSpacing (Safari before 18.4 per the source comment, which includes the README's Safari 18.1 run): an uppercase letter followed by an ASCII character loses its letter spacing, because the pair width subtracts the next character's spacing and adds back only one. In a Node test with 2px spacing, 'ABCDEF' came out 10px (5 x 2px) narrower than expected and 'Hello World' 4px narrower. This affects predicted widths, not timing.",
+    "Widths are sums of per-character advances measured in isolation, with kerning only for uppercase-plus-ASCII pairs. The README's accuracy claim is backed only by the visual overlays on the demo page.",
+    "A trailing newline produces an extra empty line: split('abc\\n') returns ['abc', ''] and count gives 2, so check this case against how your renderer sizes rows."
+  ],
+  "pick_this_over_siblings_when": "Pick uWrap over canvas-hypertxt for predicting Latin pre-line row heights. Its pass is linear, needs no per-call cache key, and in the enricher's synthetic-font test it matched an exact greedy wrap on 99.5% of 100k inputs (the rest were hyphen breaks the reference ignored), against 65.7% for hyper-mode canvas-hypertxt, which over-counted lines on 34%. Pretext is the broader DOM-free measurement and layout sibling; look at it when you need more than Latin pre-line line counting.",
+  "verified_claims_summary": "First-party README numbers: 100k random txtgen sentences at random widths of 50-250px, 14px Inter with 0.15px letterSpacing. uWrap setup plus count() took 82, 90 and 185 ms, against 770, 1660 and 1430 ms for canvas-hypertxt split(hyper=true), in Chrome 135, Firefox 137 and Safari 18.1 (9.4x, 18.4x, 7.7x, derived from page data), one console.time run each, machine unstated. The enricher reran the same loops in Node 22 with a synthetic measureText (4-vCPU Xeon 2.80GHz container, 3 reps, identical inputs for both libraries): uWrap count 122-133 ms, uWrap split 139-142 ms, canvas-hypertxt 909-989 ms. Timing count() instead of split() therefore flatters uWrap by only 7-14%, and the gap stays 6.4-7.1x like for like, mostly algorithmic. No flaw was found in the timed code beyond the count-vs-split mismatch and the single unrepeated runs.",
+  "status_note": "Stale since 2025-08-01: 17 commits, npm uwrap 0.1.2 published 2025-07-28, MIT, 319 stars, 5 forks, one open issue (word-break TODO). It is small enough to vendor and patch.",
+  "sources_read": [
+    "https://github.com/leeoniya/uWrap",
+    "https://github.com/leeoniya/uWrap/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/README.md",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/package.json",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/src/uWrap.ts",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/dist/uWrap.mjs",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/dist/uWrap.d.ts",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/test/uWrap.test.mjs",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/demo/index.html",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/demo/canvas-hypertxt.mjs",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/demo/txtgen.mjs",
+    "https://registry.npmjs.org/uwrap"
+  ],
+  "confidence": 0.8
+}
