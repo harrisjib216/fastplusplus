@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ianmanske/quantette",
+  "one_liner": "Rust palette quantizer (Wu and Oklab k-means); author's 4-thread runs show 3-14x faster than libimagequant on large opaque photos.",
+  "what_it_does": "Generates palettes of up to 256 colours and remaps opaque RGB images or pixel slices to them (indexed or RGB output), with optional Floyd-Steinberg dithering. The high-level API is a Pipeline builder (quantize method Wu, k-means or a custom palette; palette size; ditherer; dedup; parallel) fed an image or slice; lower-level Wu, Kmeans, dedup, dither and colour-space modules can be composed directly. It is a Rust crate with no C API, so it does not replace libimagequant's liq_* interface.",
+  "how_it_is_fast": "Pixels are converted to Oklab with wide-crate f32x8 SIMD. Wu's greedy orthogonal bipartitioning builds the palette, optionally refined by k-means: online (MacQueen) k-means when serial and mini-batch k-means (batch 4096) on rayon when parallel, sampling at most 262,144 pixels by default, so k-means cost is nearly flat in image size. For images of 2048x2048 pixels or more with dithering off, the pipeline automatically radix-deduplicates pixels into an indexed image with counts, so colour conversion, Wu and nearest-palette mapping run on unique colours only. That explains why the gap to imagequant is largest on the 17-30 MP photos and smallest with dithering.",
+  "when_to_use": [
+    "Rust services or tools making PNG8/GIF palettes from large opaque photos: no-dither k-means took 53-97 ms against imagequant's 253-1044 ms on 17-30 MP photos (4 threads) at similar DSSIM.",
+    "Palette extraction only (output_srgb8_palette), e.g. theme or LUT generation and terminal image display; crates.io reverse dependencies include okolors, lutgen-cli, icy_sixel and yazi-adapter.",
+    "Projects that cannot take libimagequant's GPL-3.0-or-later or commercial terms: quantette is MIT OR Apache-2.0.",
+    "no_std (alloc) or wasm32 builds: with the threads and image features off the crate is no_std, and CI runs clippy for wasm32-unknown-unknown.",
+    "Quick previews where palette quality matters less: Wu in sRGB took 21-34 ms on the large photos, but its DSSIM was 1.6-3.1x imagequant's (derived from page data)."
+  ],
+  "when_not_to_use": [
+    "Images with transparency: there is no alpha support (README benchmark doc; issue #28, opened 2025-12-18, still open without a reply).",
+    "C or C++ codebases without Rust in the build: there is no C API or header, so you would write your own FFI shim; libimagequant ships a C API.",
+    "Dithered output on images where imagequant is already quick: with dithering, auto-dedup is off and the gap falls to 1.13x on Futuristic (318 vs 360 ms).",
+    "When you need dithered output that is identical across machines: parallel Floyd-Steinberg splits the image into min(rayon threads, ceil(height/256)) bands, so results depend on thread count.",
+    "When perceived quality or file size matters more than DSSIM: zenquant's README finds quantette best on DSSIM and SSIMULACRA2 but says imagequant 'consistently looks best to the human eye', and its own PNG/GIF outputs are smaller."
+  ],
+  "integration": {
+    "form": "crate (quantette on crates.io, v0.6.0)",
+    "dependencies": "palette, wide, bytemuck, bitvec, num-traits, libm, ordered-float, ref-cast; optional (all on by default) rayon for threads, image 0.25 for image integration, rand + rand_xoshiro for kmeans",
+    "min_toolchain": "Rust 1.90 (rust-version), edition 2024",
+    "platforms": "any Rust target; no_std with alloc when threads and image are disabled; SIMD through the wide crate, with AVX2 used only when enabled at compile time",
+    "thread_safety": "Safe Rust API (unsafe confined to the dedup module); parallel paths run on the current rayon pool, so install a ThreadPool to bound threads; k-means RNG is seeded (default seed 0)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The published times used rustc -C target-feature=+avx2. The code relies on wide's f32x8 and has cfg(target_feature = \"avx2\") branches (for example the dedup threshold for custom palettes), so a default x86-64 build without AVX2 is a different, unbenchmarked configuration.",
+    "Pipeline::new() defaults to Wu (not k-means), Floyd-Steinberg dithering on (7/8 error diffusion) and parallel off. To get the benchmarked k-means no-dither numbers you must set quantize_method(QuantizeMethod::kmeans()), ditherer(None) and parallel(true) yourself.",
+    "The speedups depend on two size-dependent shortcuts: auto-dedup only at 2048x2048 pixels or more and only without dithering, and k-means sampling capped at 262,144 pixels (max_samples). Smaller images, dithered runs or dedup(false) lose part of the advantage.",
+    "The benchmark doc was last edited 2025-12-23, before v0.6.0 (2026-05-15). The harness times one quantize+remap per process with Instant::elapsed().as_millis(), which truncates to whole milliseconds, so the 3 ms Wu figures at 1920 px are coarse. Its imagequant runs use only the library defaults (speed 4, quality target 100) because the harness has no speed option."
+  ],
+  "pick_this_over_siblings_when": "Against pngquant/libimagequant, the only quantizer among the siblings: pick quantette for opaque RGB images in Rust when you want MIT/Apache licensing instead of GPL-3.0-or-later/commercial and k-means quality in a fraction of imagequant's default-speed time on large photos. Keep libimagequant for alpha, a C API or its speed and quality knobs. The other siblings (fast_image_resize, libvips, moxcms, libyuv) are resizers and colour converters, not quantizers.",
+  "verified_claims_summary": "Author's harness (examples/cli.rs, 30 runs averaged, quantize+remap timed, rustc -C target-feature=+avx2, CPU and rustc version unstated), 256 colours, 4 threads for quantette and imagequant 4.4.1 at defaults. Without dithering, k-means took 53-97 ms vs 253-1044 ms on eleven 17-30 MP photos (3.3-14.1x) and 28-32 vs 93-266 ms at 1920 px wide (2.9-8.6x) with DSSIM close to imagequant's (worse on some 1920 px images, e.g. Futuristic 0.000846 vs 0.000545); with dithering 1.13-5.1x and 3.3-8.4x, with lower DSSIM than imagequant in 21 of 22 rows (derived from page data). imazen/zenquant's approximate, competitor-run table puts quantette at about 1.2x imagequant speed 4.",
+  "status_note": "Active single-maintainer crate (v0.6.0 on 2026-05-15; since then dependency and lint maintenance, last commit 2026-08-02), MIT OR Apache-2.0, about 1.42M crates.io downloads and 16 reverse dependencies.",
+  "sources_read": [
+    "https://github.com/IanManske/quantette",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/README.md",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/docs/Benchmarks%20and%20Accuracy.md",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/examples/cli.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/Cargo.toml",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/justfile",
+    "https://github.com/IanManske/quantette/tree/main/quantette/src",
+    "https://github.com/IanManske/quantette/tree/main/quantette/src/quantize",
+    "https://github.com/IanManske/quantette/tree/main/quantette/src/api",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/lib.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/dither.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/color_space.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/deps.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/quantize/kmeans.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/quantize/dedup.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/quantize/mod.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/api/pipeline.rs",
+    "https://raw.githubusercontent.com/IanManske/quantette/HEAD/quantette/src/api/quantize_method.rs",
+    "https://github.com/IanManske/quantette/commits/main",
+    "https://github.com/IanManske/quantette/issues?q=is%3Aissue",
+    "https://github.com/IanManske/quantette/issues/28",
+    "https://crates.io/api/v1/crates/quantette",
+    "https://crates.io/api/v1/crates/quantette/reverse_dependencies?per_page=20",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

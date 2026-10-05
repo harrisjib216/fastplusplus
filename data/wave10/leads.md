@@ -48,3 +48,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - vizzly-testing/honeydiff (Rust, MIT, 14 stars): pixel-diff rival to odiff; repo page shows only JS loader files, may be binary-only. Lead from odiff enricher (e103).
 - Getreuer, IPOL 2013 "A Survey of Gaussian Convolution Algorithms" (C code with box/ebox/SII/Deriche/Young-van Vliet benchmarks): not catalogued; ipol.im likely blocked here. Lead from FastGaussianBlur enricher (e101).
 - ermig1979/Simd (C++ SIMD image library, uncatalogued, unverified) and BoofCV (Java; its Performance:OpenCV:BoofCV page has numbers). Leads from libblur enricher (e100).
+- imazen/zenquant (Rust palette quantizer, AGPL-3.0/commercial; compares against imagequant and quantette) and Vship (GPU CVVDP/SSIMULACRA2/Butteraugli; moved from Line-fr/Vship to Codeberg). Neither catalogued. Leads from fcvvdp/quantette enricher (e108).

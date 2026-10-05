@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/halidecx/fcvvdp",
+  "one_liner": "C reimplementation of the CVVDP video-quality metric; first-party 1.28x (1 thread) and 3.22x (8 threads) faster than Python cvvdp.",
+  "what_it_does": "Computes the ColorVideoVDP (CVVDP) Just-Objectionable-Difference score between a reference and a distorted image or video; the code is derived from Vship (MIT). The C API is an opaque FcvvdpCtx: cvvdp_create(width, height, fps, display_model, threads, custom_params), then cvvdp_process_frame() per frame pair, which returns the running JOD and raw quality (cvvdp_compare_images() wraps this for stills). Inputs are RGB float/u8/u16 in sRGB, linear, PQ or HLG with 27 display presets or custom display parameters. A CLI reads PNG, PNM/PAM, QOI and Y4M, and a patch adds an fcvvdp filter to FFmpeg n8.0.",
+  "how_it_is_fast": "It runs the whole CVVDP pipeline (display model, RGB to XYZ to DKL, FIR temporal filtering over a ring buffer of about 0.25 s of frames, Gaussian/Laplacian pyramid, CSF LUT weighting, cross-channel masking, Minkowski pooling) as float32 C instead of PyTorch, with preallocated, reused pyramid scratch buffers, which is where the roughly 90 MB vs 1.03 GB RSS comes from. A pthread pool splits each stage into chunks within a frame (intra-frame data parallelism; frames stay sequential). Current code adds hand-written AVX2+FMA kernels chosen at run time by cpuid and NEON kernels on aarch64, built with -O3 -ffast-math. The README benchmark (commit 6ce3696, 2026-03-10) predates those SIMD kernels (PR #14, merged 2026-05-22), so the published speedup came from the plain C pipeline plus task threading.",
+  "when_to_use": [
+    "Batch CVVDP scoring of encoder sweeps on CPU-only servers, where the Python reference's PyTorch dependency and about 1 GB RSS per process (at 360p in the README run) limit how many jobs fit on a machine.",
+    "Embedding CVVDP in a C or C++ encoder, tuner or test harness: static libcvvdp.a plus cvvdp.h with extern \"C\", fed one frame pair at a time through cvvdp_process_frame.",
+    "FFmpeg-based pipelines that can carry a patched FFmpeg n8.0 build (-lavfi fcvvdp, per-frame stats_file output).",
+    "Still-image comparisons (PNG, QOI, PNM/PAM) across many display models, including HDR PQ/HLG presets and custom display parameters.",
+    "Apple Silicon and other aarch64 machines, where the NEON kernels are always used (the PR #19 timings were taken on an Apple M5 Pro)."
+  ],
+  "when_not_to_use": [
+    "When your numbers must match the official Python ColorVideoVDP release: the repo validates score parity only against Vship/FFVship (PR #19: 0.000001-0.000002 JOD after the fix); no comparison against the Python package is published.",
+    "Windows builds: README lists macOS, Linux and Unix-like systems, the code uses pthreads and sysconf, and issue #6 (Windows build fails) was closed as not planned.",
+    "High-resolution, high-frame-rate video on memory-tight machines: each context keeps two float RGB ring buffers of 2*ceil(fps/8)+1 frames, roughly 3.4 GB at 4K60 versus about 50 MB at 360p30 (derived from cvvdp.c), so the 91% memory saving measured at 360p is not a general figure.",
+    "When you need difference heatmaps or other per-pixel output: cvvdp.h returns only a scalar JOD and raw quality value.",
+    "When GPU throughput matters: there is no GPU path; Vship (GPU CVVDP, SSIMULACRA2, Butteraugli, now moved from GitHub to Codeberg) is the project fcvvdp was derived from."
+  ],
+  "integration": {
+    "form": "static lib (libcvvdp.a + cvvdp.h) plus fcvvdp CLI; optional FFmpeg n8.0 filter patch",
+    "dependencies": "library: libc and pthreads only; CLI: libspng and simpleimgio fetched as Zig packages (build.zig.zon)",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon); C sources compiled -std=c23 -O3 -ffast-math by Zig's bundled clang. No CMake or Makefile is provided.",
+    "platforms": "x86-64 (AVX2+FMA kernels selected at run time, portable C fallback), aarch64 (NEON); macOS, Linux and Unix-like systems; Windows unsupported",
+    "thread_safety": "not documented; each FcvvdpCtx owns its ring buffers, scratch buffers and worker pool (up to 32 threads), so use one context per concurrent stream; SIMD dispatch is initialized once via pthread_once",
+    "drop_in_for_baseline": "partial — same metric, display presets and JOD scale, but a different CLI (-m fhd instead of --display standard_fhd) and a C API instead of the Python package; scalar JOD only, and parity is checked against Vship/FFVship, not the Python reference"
+  },
+  "gotchas": [
+    "The README timings (commit 6ce3696, 2026-03-10) ran code with scoring bugs fixed later: plain gamma 2.4 instead of the piecewise sRGB curve (commit e123ffe, 2026-06-21, 'Incurs a small speed penalty (~3-4% worst-case)'), and PR #19 (2026-09-22) fixes for an inverse-RFFT bug that erased half of each temporal kernel, reversed CSF interpolation weights, an inaccurate log approximation, RGB-to-XYZ coefficients and Y4M range handling (errors of 0.155 and 0.221 JOD against FFVship before). The same commit also predates AVX2/NEON, runtime dispatch and the 2026-07-13 '~20% faster' CSF change, so the current speed against Python cvvdp has not been measured by anyone.",
+    "build.zig passes no -mavx2/-mfma for cvvdp_avx2.c and cvvdp_avx2.h has no per-function target attributes, so the AVX2 kernels compile because Zig targets the native CPU by default; that also compiles the C fallback for the build host, so runtime cpuid dispatch does not by itself make a natively built binary portable, and a -Dcpu=baseline distribution build is not documented.",
+    "Everything is built with -ffast-math, and cvvdp_compute_norm sums per-thread partials when a pool is active, so low-order digits of the score can differ between -t 1 and -t N or across compilers.",
+    "The CLI decodes Y4M and converts YUV to RGB on the main thread between frames (threading covers only the metric stages), requires equal frame counts and dimensions, and reads no other video container; doc/cvvdp.md still describes the sRGB decode as 'approx. 2.4 power'."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued video-audio siblings is a quality metric: dav1d, Kvazaar, VVenC, SVT-AV1 and the resamplers are codecs and filters. Use fcvvdp to score their output on CPU (for example preset or bitrate sweeps) when CVVDP is the target metric and a Python/PyTorch stack is unwanted.",
+  "verified_claims_summary": "One first-party poop run (3 runs each) on Linux with a Core i7-13700K scoring a 302-frame 360p clip against its x264 encode (fhd display): Python cvvdp (multithreaded, PyTorch version and device unstated, start-up and decoding included) took 19.1 s at 1.03 GB RSS, fcvvdp -t 1 14.9 s (1.28x) and -t 8 5.94 s (3.22x) at about 90 MB. The Zig/clang version and flags at the time are unstated, the clip is not shipped, and the measured commit predates the sRGB and PR #19 scoring fixes.",
+  "status_note": "Active (82 commits, v0.4.0, last commit 2026-09-22) single-company project (Halide Compression) under Apache-2.0; the core is one 2,069-line cvvdp.c plus SIMD headers, small enough to vendor into a C/C++ build if you replace the Zig build.",
+  "sources_read": [
+    "https://github.com/halidecx/fcvvdp",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/README.md",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/doc/cvvdp.md",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/build.zig",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/cvvdp.h",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/cvvdp.c",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/internal.h",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/util.h",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/cvvdp_avx2.c",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/cvvdp_avx2.h",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/cvvdp_c.h",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/halidecx/fcvvdp/HEAD/patches/0001-feat-fcvvdp-support.patch",
+    "https://github.com/halidecx/fcvvdp/tree/main/src",
+    "https://github.com/halidecx/fcvvdp/pull/19",
+    "https://github.com/halidecx/fcvvdp/commits/main",
+    "https://github.com/halidecx/fcvvdp/commits/main?after=98bd21a7a876be29ba06a29325b03624047ee850+34",
+    "https://github.com/halidecx/fcvvdp/commit/e123ffe",
+    "https://github.com/halidecx/fcvvdp/commit/e123ffe.patch",
+    "https://github.com/halidecx/fcvvdp/issues?q=is%3Aissue",
+    "https://github.com/halidecx/fcvvdp/issues/16",
+    "https://github.com/halidecx/fcvvdp/issues/6",
+    "https://github.com/halidecx/fcvvdp/pulls?q=is%3Apr",
+    "https://github.com/Line-fr/Vship"
+  ],
+  "confidence": 0.72
+}
