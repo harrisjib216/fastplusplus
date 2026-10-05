@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/linebender/resvg",
+  "one_liner": "Pure-Rust static-SVG renderer with a C API; benchmarks faster than librsvg on icon sets, much slower on clip-path-heavy files.",
+  "what_it_does": "Renders static SVG (no scripting or animation) to RGBA pixmaps, as a Rust crate, a C library (crates/c-api builds cdylib and staticlib with resvg.h) and a CLI. Parsing and rendering are separate: usvg turns the SVG into a simplified tree, then resvg draws that tree with tiny-skia. It is not API-compatible with librsvg (no RsvgHandle or cairo context); C++ callers parse with resvg_parse_tree_from_data/file and render into a caller-owned premultiplied RGBA8888 buffer with resvg_render.",
+  "how_it_is_fast": "usvg resolves CSS, units, use/symbol references and shapes into plain paths and groups before rendering, so the renderer is a simple tree walk over pre-resolved paths. Rasterization goes through tiny-skia, a Rust port of a subset of Skia's CPU raster pipeline with SSE/AVX and AArch64 NEON paths. Since 0.33 each isolated group gets a layer sized to its computed bounding box instead of the whole canvas (the changelog reports paris-30k going from about 33.8 s to 0.29 s on an M1 Pro). Gaussian blur uses a 5-pass box blur for sigma of 2 or more and an Alvarez-Mazorra IIR cascade below that. Rendering is single-threaded.",
+  "when_to_use": [
+    "Batch SVG-to-PNG of icon sets, maps and other static artwork where you want one self-contained binary with no cairo, pango or GLib dependency.",
+    "Rendering untrusted SVG: the resvg crate forbids unsafe code, and the project guards against endless loops and deep recursion.",
+    "Output that must be pixel-identical across platforms (x86 Windows and ARM macOS give the same bytes per the README), e.g. golden-image tests or reproducible thumbnails.",
+    "C or C++ programs that want an SVG renderer through a small C API with static linking.",
+    "WASM or embedded targets where Rust compiles but system graphics libraries are unavailable."
+  ],
+  "when_not_to_use": [
+    "Files with many clip paths, such as Illustrator exports: issue #1146 (2026-10-01, open) measured upstream resvg at 960 ms versus librsvg 42 ms at 1000 px and 31.7 s versus 537 ms at 4000 px; each clip path allocates and masks a full layer-sized pixmap.",
+    "Documents that reuse large raster images through <use>: issue #1147 (open) shows the image decoded again for every use (30 uses of one 4000x3000 JPEG: 1374 ms, 257 ms with a proposed patch).",
+    "Filter-heavy documents: issue #857 reports over 4 s for a document with 10 filters and was closed as not planned; the 0.8.0 README also notes librsvg's faster blur on the Oxygen theme.",
+    "Animated or scripted SVG, SVG Tiny 1.2, or GPU rendering: none are supported.",
+    "Text that must match the platform's native hinting: text is shaped and filled as paths, and needs fonts loaded explicitly."
+  ],
+  "integration": {
+    "form": "crate (resvg, usvg) plus C API as shared or static library (resvg.h), and CLI",
+    "dependencies": "pure Rust crates only (tiny-skia, usvg, svgtypes; optional zune-jpeg, gif, image-webp, fontdb/skrifa/harfrust for text); no system libraries",
+    "min_toolchain": "Rust 1.85 (MSRV of 0.48.1, edition 2024); any C/C++ compiler for the C API",
+    "platforms": "anywhere Rust compiles, including WASM; SIMD in tiny-skia on x86-64 and AArch64",
+    "thread_safety": "not documented in resvg.h; the renderer itself is single-threaded",
+    "drop_in_for_baseline": "partial — the CLI does the same job as rsvg-convert with its own flags, but the C API is not librsvg's RsvgHandle/cairo interface"
+  },
+  "gotchas": [
+    "resvg_render expects a width*height*4 buffer of premultiplied RGBA8888; convert before handing pixels to straight-alpha code.",
+    "Text renders only if fonts are loaded (for example resvg_options_load_system_fonts or the system-fonts feature); 0.48 moved text to skrifa and harfrust, so glyph output can differ slightly from 0.47.",
+    "Cost scales with layer and clip area, not with element count: large output sizes with clip paths, masks or filters can be tens of times slower than small ones.",
+    "Release builds should use the repository's production profile (opt-level 3, LTO, one codegen unit); bindings built otherwise (resvg-py 0.5.0 builds resvg with opt-level 'z') will be slower."
+  ],
+  "pick_this_over_siblings_when": "Pick resvg over LunaSVG when SVG coverage and memory safety on untrusted input matter more than raw speed: LunaSVG wins the pillow-lunasvg end-to-end timing, but resvg-py in that harness builds resvg with opt-level 'z', and resvg passes more of the resvg test suite. Use ThorVG for Lottie or animation, and tiny-skia directly (resvg's backend) when you draw your own vector content rather than SVG files.",
+  "verified_claims_summary": "Only first-party numbers are reachable: the resvg 0.8.0 README (2019, no hardware, compiler or harness stated; that tag's testing-tools folder holds only regression and test-runner scripts) rendered the Elementary icon theme in 19 s against librsvg 2.45.5's 24 s (about 1.26x), but the Oxygen theme in 175-205 s against librsvg's 163 s (slower), using cairo, raqote, Skia and Qt backends that current resvg no longer has. The independent Wikimedia 2021 comparison (resvg 0.14.0 at 1m04s CPU time against librsvg 2.50 at 1m47s over W3C test files) is search-snippet only, and an open third-party issue (#1146) measures current resvg 23-59x slower than librsvg on a clip-path-heavy file.",
+  "status_note": "Actively maintained by Linebender (0.48.1 released 2026-08-02, commits to 2026-10-03), Apache-2.0 OR MIT, about 28.4 million crates.io downloads, so safe to depend on; the C API is versioned with the crate and has no stable ABI promise documented.",
+  "sources_read": [
+    "https://github.com/linebender/resvg/tree/v0.8.0",
+    "https://github.com/linebender/resvg/tree/v0.8.0/testing-tools",
+    "https://github.com/linebender/resvg/issues?q=is%3Aissue+performance+OR+slow",
+    "https://github.com/linebender/resvg/issues/1146",
+    "https://github.com/linebender/resvg/issues/1147",
+    "https://github.com/linebender/resvg/issues/857",
+    "https://github.com/linebender/resvg/issues/765",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/README.md",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/lib.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/clip.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/mask.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/render.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/filter/mod.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/filter/box_blur.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/resvg/src/filter/iir_blur.rs",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/c-api/Cargo.toml",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/c-api/resvg.h",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/crates/c-api/README.md",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/linebender/resvg/HEAD/docs/unsupported.md",
+    "https://raw.githubusercontent.com/linebender/resvg/v0.8.0/README.md",
+    "https://raw.githubusercontent.com/linebender/resvg/v0.8.0/.github/perf-elementary.svg",
+    "https://raw.githubusercontent.com/linebender/resvg/v0.8.0/.github/perf-oxygen.svg",
+    "https://raw.githubusercontent.com/linebender/resvg/v0.9.1/benches/README.md",
+    "https://raw.githubusercontent.com/baseplate-admin/resvg-py/HEAD/Cargo.toml",
+    "https://crates.io/api/v1/crates/resvg",
+    "https://pypi.org/pypi/resvg-py/0.5.0/json",
+    "https://www.mediawiki.org/wiki/SVG_benchmarks (search snippet only)"
+  ],
+  "confidence": 0.75
+}

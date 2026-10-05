@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/libraz/libsonare",
+  "one_liner": "Dependency-free C++17 audio analysis and DSP engine with librosa-matching features; 1.25-27x faster than librosa per feature.",
+  "what_it_does": "A C++17 audio engine that covers librosa-style feature extraction (STFT, Mel, MFCC, chroma, onset strength, HPSS, pYIN, beat tracking) and a one-call analyze() that returns BPM, key, chords, beats and sections. The same library also does mastering, mixing, MIDI synthesis and a headless DAW runtime. It is not a drop-in for librosa: the C++ API is sonare::Spectrogram::compute, sonare::hpss, sonare::pyin and so on, and there are hand-written Python (pip install libsonare), Node.js and WASM bindings whose surfaces differ from each other.",
+  "how_it_is_fast": "Native float32 code with a vendored SIMD FFT (PFFFT, falling back to KissFFT for lengths PFFFT cannot factor) and Eigen array expressions for masks and filterbanks. HPSS uses a sorted-array sliding median (binary search plus memmove) instead of scipy's per-window selection, and splits the horizontal and vertical median filters across up to hardware_concurrency std::async workers. pYIN is single-threaded but computes the YIN difference by FFT cross-correlation with reused per-frame buffers and runs the Viterbi decode over log transition weights precomputed once. analyze() runs its spectrogram/mel/onset group and its HPSS+chroma group concurrently and shares one spectrogram across features.",
+  "when_to_use": [
+    "C++ or Python services that run librosa-style analysis (BPM, key, chords, pitch) on many tracks and want to drop the Python/NumPy/numba stack.",
+    "pYIN pitch tracking at scale: the measured 15.77x over librosa comes from a single-threaded C++ path, so it should hold per core.",
+    "HPSS on multi-core servers, where the threaded median filters gave 26.64x over librosa on an 18-thread Apple M5 Max.",
+    "Browser or Node.js audio analysis that has to match librosa defaults (WASM build, single-threaded).",
+    "Pipelines that compute several features from one STFT: the cached path drops onset strength to 0.47 ms and MFCC to 0.89 ms once the spectrogram exists."
+  ],
+  "when_not_to_use": [
+    "Beat tracking alone: libsonare's detect_beats was slower than librosa.beat.beat_track (44.44 vs 34.69 ms).",
+    "Windows: the README says it is not supported (use WSL2); PyPI 1.8.1 ships wheels only for macOS arm64 and manylinux x86-64/aarch64, Python 3.11+.",
+    "Codec work (decode/encode, resampling for playback): it is an analysis/DSP engine, not a replacement for FFmpeg, libopus or a dedicated resampler.",
+    "Workloads that need librosa's exact output everywhere: chroma uses a fixed A440 tuning by default instead of librosa's auto-estimated tuning, and the HPSS median filter shrinks its window at the edges rather than reflect-padding.",
+    "Single-core or WASM deployments expecting the headline HPSS and full-pipeline ratios: those come partly from multithreading, and the WASM build is single-threaded."
+  ],
+  "integration": {
+    "form": "static lib (CMake package find_package(sonare); shared optional via BUILD_SHARED) plus Python wheel, npm WASM package and an unpublished Node native addon",
+    "dependencies": "Eigen 3.3+ headers at build time (system or fetched 3.4.x via FetchContent); vendored dr_libs, minimp3, KissFFT, PFFFT and r8brain; optional FFmpeg for more input formats; Python binding needs NumPy",
+    "min_toolchain": "C++17, CMake; compiler versions not documented",
+    "platforms": "Linux and macOS (x86-64, aarch64), WebAssembly; Windows unsupported (WSL2)",
+    "thread_safety": "not documented; HPSS and analyze() spawn their own std::async workers internally",
+    "drop_in_for_baseline": "partial — defaults mirror librosa (n_fft 2048, hop 512, 128 Slaney mels, HPSS kernels 31, pYIN constants) and CI checks reference values, but the API is new C++/Python/JS and chroma tuning is not auto-estimated"
+  },
+  "gotchas": [
+    "Chroma::compute defaults to tuning 0 (A440); librosa.feature.chroma_stft estimates tuning when none is given, so pass an estimate_tuning() result for detuned material.",
+    "HPSS and analyze() take every core they can get; the benchmark README warns that a busy machine inflates these timings several-fold, and the library offers no thread-count knob in the HPSS config.",
+    "Very broad scope (92 mastering processors, synths, DAW runtime) in one library; turn off BUILD_MASTERING/BUILD_MIXING/BUILD_FX and friends if only analysis is needed.",
+    "The Python, Node and WASM bindings are hand-written and not identical; check the repository's binding parity matrix before porting code between runtimes."
+  ],
+  "pick_this_over_siblings_when": "Pick libsonare over audioFlux when you need the higher-level music-information pipeline (pYIN, HPSS, beats, key, chords) with librosa-matching defaults in C++, Python or the browser; audioFlux is the broader transform toolkit with OpenMP and pedalboard is the choice for audio I/O and effects rather than analysis.",
+  "verified_claims_summary": "Author-run: on an 18-thread Apple M5 Max (compiler not stated, CMake Release, PFFFT on) libsonare beat librosa 0.11.0 on a synthetic 73 s clip resampled to 22.05 kHz, median of 3 runs: STFT 1.85x, Mel 1.25x, MFCC 1.26x, onset 1.25x, centroid 2.04x, Chroma 5.07x, pYIN 15.77x (single-threaded C++), HPSS 26.64x (multithreaded C++ against single-threaded scipy), beat tracking 0.78x (slower). The Chroma ratio is inflated: run_bench.py calls librosa.feature.chroma_stft without tuning, so librosa also runs an estimate_tuning (piptrack) pass that libsonare's default skips; the 71.94x full-pipeline figure is against bpm-detector run as a subprocess (Python start-up, imports, decoding and resampling inside its timing, none of them inside libsonare's).",
+  "status_note": "Very active (3,069 commits, v1.8.1 on PyPI, last commit 2026-10-03), Apache-2.0, single maintainer with 26 stars and no public issue history, so expect fast change and little outside review.",
+  "sources_read": [
+    "https://github.com/libraz/libsonare",
+    "https://github.com/libraz/libsonare/commits",
+    "https://github.com/libraz/libsonare/issues?q=is%3Aissue",
+    "https://github.com/libraz/libsonare/pulls?q=is%3Apr",
+    "https://github.com/libraz/libsonare/tree/main/third_party",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/README.md",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/results.json",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/results_cpp.json",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/bench_cpp.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/run_bench.py",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/pyproject.toml",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/effects/hpss.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/effects/hpss.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/pitch.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/pitch.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/mel_spectrogram.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/mel_spectrogram.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/onset.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/feature/chroma.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/core/spectrum.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/core/resample.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/core/fft.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/analysis/beat_analyzer.h",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/analysis/beat_analyzer.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/analysis/music_analyzer.cpp",
+    "https://raw.githubusercontent.com/libraz/libsonare/HEAD/src/quick.h",
+    "https://pypi.org/pypi/libsonare/json"
+  ],
+  "confidence": 0.75
+}
