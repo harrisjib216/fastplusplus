@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/stolk/hsvbench",
+  "one_liner": "Branchless, expression-only HSV-to-RGB float function in a public-domain C header, about 5.7x faster than the textbook 6-way switch on random input.",
+  "what_it_does": "A tiny benchmark repo whose reusable part is hsv.h: fast_hsv_to_rgb(h, s, v, float* rgb) converts one HSV triple (all components in [0,1]) to float RGB with the same signature as the classic switch-based hsv_to_rgb in the same header. The header also carries the switch version, an implied-value hs_to_rgb, hsl_to_rgb and scalar sRGB/linear transfer functions. hsvbench.c times the switch, the branchless expression and a 17x17 bilinear lookup table over 1M random pixels, 300 passes each.",
+  "how_it_is_fast": "Each channel is a piecewise-linear 'tent' of the hue: r = |6h-3|-1, g = 2-|6h-2|, b = 2-|6h-4|, each clamped to [0,1] and blended with saturation and value, so there is no sector index, no floor() and no switch. fabsf and the ternary clamp compile to andps and min/max instructions, so the loop body is straight-line float code with no data-dependent branches and is a candidate for compiler auto-vectorisation (not confirmed by disassembly in the repo). The baseline it beats branches six ways on the hue sector and calls double-precision floor() per pixel, which at -O2 without -march (no SSE4.1 round instruction on baseline x86-64) is typically a libm call (inference from the Makefile flags, not measured).",
+  "when_to_use": [
+    "Per-pixel or per-vertex HSV-to-RGB in C or C++ code (colour pickers, procedural palettes, particle and heat-map colouring) where pulling in OpenCV or a colour library is overkill.",
+    "Hot loops over float HSV data whose hues vary unpredictably from one element to the next, where the switch version mispredicts most.",
+    "Code you want to auto-vectorise or port to SIMD intrinsics or shaders: the function is branch-free and uses only abs, min/max, multiply and add.",
+    "Projects that need public-domain (Unlicense) code to paste in without attribution."
+  ],
+  "when_not_to_use": [
+    "Whole-image 8-bit conversions: OpenCV cvtColor (COLOR_HSV2RGB) or a SIMD colour converter works on packed u8 buffers and threads; hsvbench never compares against any library.",
+    "When you need bit-identical output with an existing switch implementation: 396 of 65,536 test pixels differ by 1 LSB in 8-bit (README ppmhist), partly because the bundled switch version scales hue by 5.9999 rather than 6.",
+    "Hue values outside [0,1] or in degrees: the expression does not wrap (h = 1.2 clamps to pure red instead of hue 0.2), so wrap and normalise before calling.",
+    "Spatially coherent real images, where the switch's branches predict well; the 5.7x was measured on uniformly random hues, the worst case for the baseline, so expect a smaller gain.",
+    "Anyone wanting a maintained library: 7 commits on one day (2020-12-08), no tests, no issues or releases."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "libm (<math.h> must be included before hsv.h; the header uses fabsf, floor and powf without including it)",
+    "min_toolchain": "C99 with the GNU __inline__ keyword (GCC or Clang); the Makefile uses clang-10 -std=c99 -O2. MSVC needs a #define for __inline__ (not documented).",
+    "platforms": "any (portable scalar float code; no intrinsics)",
+    "thread_safety": "Not documented; the header functions are pure and stateless, so they are reentrant (from reading hsv.h).",
+    "drop_in_for_baseline": "partial: same signature as the header's switch-based hsv_to_rgb(h, s, v, rgb), but outputs differ by up to 1 LSB in 8-bit and there is no image-level or integer API"
+  },
+  "gotchas": [
+    "CLAMP01 is an unprefixed function-like macro that evaluates its argument up to three times and does not parenthesise the second use of x; it can collide with or misbehave beside other macros.",
+    "hsv.h is not self-contained: include <math.h> first, and it defines generic names (hsv_to_rgb, hsl_to_rgb, linear_to_srgb) that may clash with other colour code.",
+    "The benchmark times whole processes with time(1), including identical setup (3M rand() calls and table init) in each run; the fast run moves about 7.5 GB of array traffic in 0.655 s (about 11.5 GB/s, derived from page data), so it may be near single-core memory bandwidth and the compute-only ratio is not isolated.",
+    "Building hsvbench.c at -O0 is likely to fail to link: hue_sat_val_lookup is a non-static C99 inline definition with no external definition; the -O2 Makefile build inlines it. The table benchmark also maps byte hue to h/256 while the reference uses h/255, so part of the table's visible error is a mapping mismatch."
+  ],
+  "pick_this_over_siblings_when": "Pick this over OpenCV, CompV or DeltaCV when you need a single-pixel float HSV-to-RGB function to paste into C code rather than an image-wide cvtColor call; like fast-srgb8 it is a scalar per-value transform measured only against a naive reference, so for bulk 8-bit image conversion the library siblings remain the better-evidenced choice.",
+  "verified_claims_summary": "On the author's unnamed CPU, with clang-10 -O2 (no -march), 300 passes over 1,048,576 random float HSV pixels took 3.745 s for the switch formula, 0.655 s for the branchless expression and 1.865 s for the lookup table, measured as whole-process wall time (about 5.7x and 2.0x, derived from page data). The baseline is the repo's own textbook switch, not a library, and no CPU model or repeat count is given.",
+  "status_note": "Abandoned since 2020-12-08 (all 7 commits on one day, no issues or PRs), but Unlicense and only a 20-line function, so it is trivial to vendor.",
+  "sources_read": [
+    "https://github.com/stolk/hsvbench",
+    "https://github.com/stolk/hsvbench/commits",
+    "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/hsvbench.c",
+    "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/hsv.h",
+    "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/stolk/hsvbench/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}
