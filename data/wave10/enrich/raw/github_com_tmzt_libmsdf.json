@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/tmzt/libmsdf",
+  "one_liner": "Rust/wgpu SDF and MSDF text renderer whose WGSL compute shader generates MSDF glyphs at runtime; no speed data versus msdfgen.",
+  "what_it_does": "A wgpu UI and text rendering crate extracted from the author's matter-stream and highbay projects. GpuSdfRenderer draws a DrawList of SDF primitives (box, rounded box, circle, line, Bezier stroke) and MSDF text from an atlas texture array on a caller-owned wgpu device; TextShaper wraps rustybuzz; FontAtlasBuilder bakes atlases with msdfgen (cpu-bake feature, native only); MsdfCompute::generate_into_texture_layer builds one glyph cell on the GPU from a ttf-parser outline; AtlasManager does shelf packing with eviction. It is not a drop-in for msdfgen's API: output goes into the crate's own atlas format (hbfa magic, v3/v4 layout) and render pipeline.",
+  "how_it_is_fast": "No performance claim is made, so there is no speedup technique to credit. The runtime generator extracts and colours edges on the CPU (msdfgen edgeColoringSimple scheme, 3.0 angle threshold), then a WGSL kernel runs one thread per texel in 8x8 workgroups and loops over every edge: quadratics are flattened into 8 segments and cubics into 16, each channel takes the pseudo-distance of its nearest edge by true distance, and the sign comes from a nonzero-winding ray test. That is brute force, O(texels x edges x segments), with no spatial acceleration and no error-correction pass. Its value is where it runs (on the GPU, including wasm32/WebGPU where the msdfgen C++ FFI cannot build), not a measured speed advantage.",
+  "when_to_use": [
+    "Rust apps on wgpu that target wasm32/WebGPU and want MSDF text, where the msdfgen C++ FFI cannot be built.",
+    "Generating glyph cells on demand in a browser instead of downloading baked atlases (a code comment puts a style's baked cells at about 290 KiB gzipped against a 13 KiB face).",
+    "Small UI scenes, such as highbay's node graph, that mix SDF shapes and text and fit in one full-screen pass.",
+    "As a reference: the 221-line, MIT/Apache-licensed msdf_compute.wgsl is self-contained enough to port to another engine."
+  ],
+  "when_not_to_use": [
+    "When you need a measured speedup over msdfgen: none exists; msdfgl publishes numbers, this crate does not.",
+    "Corner-heavy glyphs that need fields close to msdfgen's: the parity test allows a mean channel-median deviation up to 0.13 and up to 35% of near-outline texels off by more than 0.125, and the code comments record 0.114 for '#'.",
+    "Large scenes: the fragment shader loops over every draw command (MAX_DRAW_CMDS 4096) for every pixel, with only a vertical-band reject for text and no tiling or binning.",
+    "Production dependencies: Cargo.toml has publish = false (git dependency only), the repo has 0 stars and first commits from August 2026, the public API carries highbay-specific items (HIGHBAY_ICONS, PHASE_STATUS), and the README still says wgpu 29 although Cargo.toml uses 30.0.1.",
+    "Shaping-heavy text: TextShaper wraps rustybuzz 0.20 (the archived HarfBuzz port, per the sigilbuzz sibling entry) and re-parses the face with rustybuzz::Face::from_slice on every shape call."
+  ],
+  "integration": {
+    "form": "crate (unpublished; Cargo git dependency)",
+    "dependencies": "wgpu 30.0.1, bytemuck, log, rustybuzz 0.20, ttf-parser 0.25, unicode-segmentation 1.13; build-time naga 30.0.1 (validates the three WGSL shaders); optional cpu-bake adds msdfgen 0.2 (C++ FFI) and ttf-parser 0.18",
+    "min_toolchain": "Rust edition 2024 (rustc 1.85 or newer); cpu-bake needs a C++ toolchain, and on macOS the LLVM codegen backend because the Cranelift dev profile fails to link msdfgen symbols",
+    "platforms": "native wgpu backends (GPU tests documented only on headless Metal) and wasm32 WebGPU; the CPU msdfgen bake is native only",
+    "thread_safety": "not documented; renderers borrow a caller-owned wgpu Device and Queue, and AtlasManager stores boxed FnMut eviction hooks without a Send bound, so it cannot move across threads. The crate is #![forbid(unsafe_code)].",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "'Matches the CPU msdfgen baseline' means median-of-channels within loose tolerances on five Roboto glyphs at 48 px. Edge colouring differs from msdfgen, so individual channels are not comparable, and corners diverge because the compute path extrapolates pseudo-distance from a flattened polyline.",
+    "A plain cargo test does not exercise the compute path: GPU tests need --features gpu-tests (plus cpu-bake for the msdfgen comparison) and the LLVM backend, and they print 'SKIP: no GPU adapter' and pass when no adapter is found.",
+    "Each generate_cell or generate_into_texture call creates three new buffers and a bind group and submits its own command buffer, so bulk atlas generation is not batched.",
+    "Fixed caps: 4096 draw commands, 4096 glyph-table entries and 8 texture layers per renderer; glyph ids are u16, and styled faces are addressed through a prefixed glyph id."
+  ],
+  "pick_this_over_siblings_when": "Pick it over msdfgl (OpenGL compute MSDF, with published timings against msdfgen) only when you are on wgpu or WebGPU in Rust and need runtime MSDF on wasm32. Pick fontdue or ab_glyph instead for CPU coverage rasterisation, where this crate offers nothing measured.",
+  "verified_claims_summary": "No speed was measured. The only comparison is the output-parity test compute_matches_cpu_baseline: Roboto 'A', 'o', 'g', '5' and '#' at 48 px cells with a 6.0 px range, compute shader versus msdfgen via the msdfgen crate, scored on channel medians in the near-outline band. Recorded mean deviations are 0.0009 ('o'), 0.030 ('g'), 0.033 ('5'), 0.066 ('A') and 0.114 ('#'); pass thresholds are mean at most 0.13, at most 35% of texels beyond 0.125 and coverage IoU at least 0.98, on headless Metal with no GPU model given.",
+  "status_note": "Active (last commit 2026-09-26, 60 commits since August 2026) and MIT OR Apache-2.0, but unpublished, single-author and tied to highbay, so vendoring the WGSL shader is safer than depending on the crate.",
+  "sources_read": [
+    "https://github.com/tmzt/libmsdf",
+    "https://github.com/tmzt/libmsdf/commits/main",
+    "https://github.com/tmzt/libmsdf/tree/main/src/gpu",
+    "https://github.com/tmzt/libmsdf/tree/main/src/font",
+    "https://github.com/tmzt/libmsdf/tree/main/tests",
+    "https://github.com/tmzt/libmsdf/tree/main/examples",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/README.md",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/build.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/gpu/mod.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/gpu/compute.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/gpu/msdf_compute.wgsl",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/gpu/sdf_render.wgsl",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/font/outline.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/font/atlas.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/font/shaper.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/src/font/manager.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/tests/compute_msdf.rs",
+    "https://raw.githubusercontent.com/tmzt/libmsdf/HEAD/examples/bake_atlas.rs"
+  ],
+  "confidence": 0.7
+}
