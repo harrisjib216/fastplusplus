@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/eunomia-bpf/bpftime",
+  "one_liner": "Userspace eBPF runtime that runs unmodified libbpf/bpftrace uprobe programs with about 13-16x lower per-hit cost than kernel uprobes.",
+  "what_it_does": "bpftime loads ordinary eBPF objects built with clang and libbpf (or bpftrace scripts) and runs them inside the target process instead of the kernel. A syscall-server library (LD_PRELOAD on the loader, e.g. `bpftime load`) intercepts the bpf() calls and puts programs and maps in shared memory; an agent library is injected into the target with `bpftime start` (LD_PRELOAD) or `bpftime attach <pid>` (ptrace injection) and attaches uprobes, uretprobes, syscall tracepoints and, experimentally, GPU and XDP hooks. It can also run alongside kernel eBPF through a daemon and share kernel maps; the VM (llvmbpf or ubpf) can be embedded as a library.",
+  "how_it_is_fast": "Kernel uprobes plant an int3 breakpoint, so every hit costs a trap into the kernel and back; bpftime instead rewrites the function prologue with a frida-gum inline hook that jumps to a trampoline running JIT-compiled eBPF (LLVM-based llvmbpf, or ubpf) in the same address space, with no mode switch. Syscall hooks use zpoline/syscall_intercept-style binary rewriting of the text segment. bpf_probe_read/write_user become plain memory accesses (in the benchmark build the safety checks are compiled out), and maps live in Boost.Interprocess shared memory.",
+  "when_to_use": [
+    "Tracing hot userspace functions (malloc, SSL_read/SSL_write, request handlers) at rates where kernel uprobe cost of about 2.5-3 us per hit distorts the workload; bpftime measured about 190 ns per hit.",
+    "Reusing an existing libbpf or bpftrace uprobe tool unchanged, but with lower overhead, on Linux x86-64.",
+    "Environments without root or a modern eBPF-capable kernel (containers, older kernels), using the userspace PREVAIL verifier instead of the kernel one.",
+    "Embedding a sandboxed eBPF extension mechanism into your own process (nginx plugin, Redis tuning examples), where the OSDI '25 paper reports about 2% overhead for an nginx extension (search snippet)."
+  ],
+  "when_not_to_use": [
+    "System-wide observability: it only sees processes it was injected into, and it cannot read kernel data structures such as task_struct or use kernel-only helpers and kfuncs.",
+    "Map-heavy programs: in the same 2025 table userspace hash_map_lookup is 22152.81 ns vs 12375.69 ns kernel per 1000-op probe, and per-CPU hash and array maps are 1.3x to 4x slower; the older 2024 run shows syscall tracepoints slower in userspace (232.6 ns vs 151.8 ns).",
+    "Untrusted or adversarial targets: the eBPF code shares the target's address space (MPK isolation is an optional build), and the measured read/write speedups were built with ENABLE_PROBE_READ_CHECK=0 and ENABLE_PROBE_WRITE_CHECK=0.",
+    "Multi-threaded event streaming where loss matters: open bugs report ring-buffer data loss with multi-threaded apps (#429) and concurrent map access races on delete (#320).",
+    "As a sampling profiler replacement for perf: it is an instrumentation runtime, not a profiler."
+  ],
+  "integration": {
+    "form": "shared lib (LD_PRELOAD agent and syscall-server .so) plus CLI tools; VM also as a static library",
+    "dependencies": "libelf, zlib, libssl, Boost (1.74 recommended), yaml-cpp, binutils-dev, LLVM (15 in the benchmark build) for the LLVM JIT, frida-gum, libbpf, spdlog, optional PREVAIL verifier",
+    "min_toolchain": "C++20 (CMAKE_CXX_STANDARD 20), CMake 3.15+, gcc 12+ or clang 16+ recommended; tested on Ubuntu 23.04",
+    "platforms": "Linux (x86-64 is the benchmarked and documented target; CMake has arm32 handling and frida is unavailable on riscv64); macOS userspace-only build with libbpf disabled; no Windows",
+    "thread_safety": "Probes fire on any thread of the target; maps are in shared memory with locking, but open issues report races on map element delete (#320) and ring-buffer loss with multi-threaded apps (#429).",
+    "drop_in_for_baseline": "partial — the same eBPF objects and libbpf/bpftrace front ends run unmodified, but targets must be launched or attached via bpftime and kernel-only helpers are unavailable"
+  },
+  "gotchas": [
+    "Run `bpftime load` before `bpftime start`, or the probe is not attached; stale shared memory gives 'boost::interprocess::interprocess_exception: File exists' and needs bpftimetool cleanup or sudo.",
+    "Plain `cmake` defaults to a Debug build (CMAKE_BUILD_TYPE Debug, ubsan) and `make build` is Debug too; use `make release` or the benchmark target (RelWithDebInfo, LLVM JIT, LTO) before measuring.",
+    "The headline microbenchmark times an empty noinline function called 100,000 times with CLOCK_MONOTONIC_RAW (benchmark/test.c, gcc -O3), averaged over 10 runs; the unhooked call costs about 2.4 ns, so these are pure probe-dispatch costs, not application overhead.",
+    "LTO can strip symbols defined in inline assembly (open issue #83)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over funtrace or magic-trace when you want programmable eBPF probes (filters, maps, existing bcc/libbpf tools) on uninstrumented binaries without recompiling; pick funtrace for lowest per-call cost (under 10 ns) when you can recompile with instrumentation, and E9Patch when you need static binary rewriting rather than runtime injection.",
+  "verified_claims_summary": "On an Intel Core Ultra 7 258V running Linux 6.11 (results generated 2025-04-30), an empty probed function costs 2561.57 ns per call with a kernel uprobe vs 190.02 ns under bpftime (13.48x), and 3019.45 vs 187.10 ns for uretprobe (16.14x); older runs on an i7-11800H (kernel 6.2) show 3224 vs 315 ns. The benchmark build is RelWithDebInfo with LLVM 15 JIT and LTO and the harness is gcc -O3, but compiler versions are not stated; the OSDI '25 paper (not opened, egress blocked; search snippet only) reports sslsniff overhead on nginx falling from 28% with kernel eBPF to 7.4%.",
+  "status_note": "Actively developed (last commit 2026-10-03, 1.6k stars, MIT) with a peer-reviewed OSDI '25 paper, though about 98 open issues including 15 labelled bug.",
+  "sources_read": [
+    "https://github.com/eunomia-bpf/bpftime",
+    "https://github.com/eunomia-bpf/bpftime/tree/master/attach",
+    "https://github.com/eunomia-bpf/bpftime/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/README.md",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/benchmark/uprobe/README.md",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/benchmark/uprobe/benchmark.py",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/benchmark/test.c",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/benchmark/Makefile",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/Makefile",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eunomia-bpf/bpftime/HEAD/installation.md",
+    "WebSearch snippet: https://www.usenix.org/system/files/osdi25-zheng-yusheng.pdf and https://eunomia.dev/others/miscellaneous/osdi-talk/ (pages not opened; people.cs.vt.edu PDF fetch returned 403)"
+  ],
+  "confidence": 0.8
+}
