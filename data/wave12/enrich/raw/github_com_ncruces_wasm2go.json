@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/ncruces/wasm2go",
+  "one_liner": "Ahead-of-time Wasm-to-Go source translator; cgo-free, runtime-free alternative to embedding wazero, faster on most trie queries.",
+  "what_it_does": "A command-line tool (wasm2go < in.wasm > out.go) that turns a trusted Wasm module into one self-contained Go source file that depends only on the standard library. The generated package exports a Module struct and a New constructor; Wasm exports become Go methods and Wasm imports become Go interfaces that New consumes, so the host supplies imports as ordinary Go types. It is not a drop-in for wazero's API: bindings must be rewritten against the generated methods, as go-sqlite3 and go-marisa did.",
+  "how_it_is_fast": "Static translation: each Wasm function becomes a Go function (control flow lowered to goto and labels, linear memory a Go []byte), so the Go compiler's optimizer and register allocator produce the native code and there is no runtime compile step and no Go-to-Wasm call trampoline. Its own passes (internal/passes: opt, gotos, switch, checks) clean up the generated code, issue #49 (closed 2026-08-20) covered eliding bounds checks for constant addresses within the memory minimum, and the optional -unsafe flag replaces encoding/binary loads and stores with unaligned pointer loads that keep an explicit bounds check. The output is still fully bounds-checked Go, so speed depends on what the Go compiler makes of goto-heavy code.",
+  "when_to_use": [
+    "A fixed C/C++/Rust library compiled once to Wasm that you want to ship inside a Go module without cgo (the go-sqlite3, go-re2, go-marisa and libavif/jpegli bindings listed in USERS.md follow this pattern).",
+    "Query-heavy calls into the module: in pgaskin's go-marisa run, lookups were 11-27% faster and reverse lookups up to 40% faster than the same library under wazero v1.10.1 (Intel Core Ultra 7 258V, Go 1.26.0).",
+    "Platforms where wazero runs as an interpreter: generated Go is compiled by the Go toolchain for whatever GOARCH you build, and discussion #361 names 'slow performance on interpreter targets, and slow startup on compiler targets' as the reasons go-sqlite3 left wazero.",
+    "Programs that care about startup: there is no per-process Wasm compilation (wazero must compile the module at first use, which this benchmark excluded from timing)."
+  ],
+  "when_not_to_use": [
+    "Modules that use SIMD128: code.go rejects every 0xFD opcode with 'unsupported opcode (SIMD)' (issue #16 closed wontfix, #50 still open), so you must rebuild without -msimd128 and lose vectorized paths; go-marisa's SIMD-heavy trie Build ran 16-35% slower for that reason.",
+    "Loading arbitrary Wasm at run time or running untrusted modules: it is a build-time translator that assumes trusted input (README says to run a verifier first); keep wazero for plugins.",
+    "Very large modules: compiling the generated SQLite source took about 40 s and 4 GiB RAM (discussion #361), and issue #41 (open) reports transpiled libraries with extremely large functions (LightningCSS) that the Go compiler cannot build without -gcflags='-N -l', producing multi-gigabyte binaries.",
+    "Build, serialize and deserialize-heavy workloads: the same benchmark showed UnmarshalBinary 96% slower and Build 16-35% slower, and the go-marisa README for the released wasm2go bindings says they are about 50% slower at building/reading/writing tries than the old wazero bindings.",
+    "Modules that need GC or exception-handling proposals beyond what clang emits (0xFB GC opcodes are rejected); the supported target is the clang/Lime1 subset."
+  ],
+  "integration": {
+    "form": "code generator (CLI) emitting a single Go source file per module, vendored as a package",
+    "dependencies": "generated code: Go standard library only (sync, sync/atomic, unsafe with -unsafe); the translator itself needs golang.org/x/tools",
+    "min_toolchain": "Go 1.26.0 (go.mod of the translator); no tags or releases, pin a commit",
+    "platforms": "any GOARCH Go supports; -unsafe fast loads and -nanbox NaN canonicalization are tested on amd64 and arm64 only (README says nanbox is broken on most other architectures)",
+    "thread_safety": "not documented for a generated Module; threads/atomics are supported as a Wasm feature, and go-sqlite3 uses one isolated instance per connection",
+    "drop_in_for_baseline": "partial: replaces wazero only for modules known at build time; the host API changes from wazero's api.Module calls to generated Go methods and import interfaces"
+  },
+  "gotchas": [
+    "Benchmark scope: go-marisa's BenchmarkTrie calls marisa.Initialize() before the timers, so wazero's module compilation is excluded and only steady-state calls are compared; the benchmark code is byte-identical at both go-marisa commits, but the two sides ran different bindings (wazero side 37cde21 with a SIMD-built blob; wasm2go side 075b64a 'mmap wip' with a non-SIMD blob and imported memory), and the -77.68% WriteTo result did not survive into the released bindings (README: about 50% slower at building/reading/writing).",
+    "Correctness history: issue #31 (optimization introduced in 428ad44 on 2026-05-26 corrupted memory, fixed in 227474f) and issue #61 (memory.fill/copy/init and table ops did not trap past the end after memory.grow/table.grow, fixed 2026-10-04); the March 2026 benchmark predates both. README advises retrying with -noopt before reporting a suspected miscompile.",
+    "memory.grow is implemented with Go append on the []byte linear memory, so growth can reallocate and copy the whole memory, and each instance is capped at 4 GB (no mmap_size in go-sqlite3 for that reason).",
+    "Generated code is deliberately unreadable (goto, mangled names, conversions) and float operations need explicit conversions to keep Wasm semantics; tail calls are accepted but tail behavior is not guaranteed."
+  ],
+  "pick_this_over_siblings_when": "Pick it over wazero-family runtimes (wazy) when the Wasm module is fixed at build time and you want pure Go with no runtime compile or interpreter fallback; it is the Go-target counterpart of wasm2c (WABT) and w2c2, which emit C and therefore need cgo from Go. goccy/wasm2go is a separate project with the same name and its own wazero comparison (cold compile 8.4x); prefer ncruces/wasm2go when you want the translator that go-sqlite3, go-re2 and the gen2brain image bindings already depend on.",
+  "verified_claims_summary": "pgaskin ran go-marisa's BenchmarkTrie (MARISA trie built to Wasm, called from Go) six times per side on an Intel Core Ultra 7 258V with Go 1.26.0: wasm2go-translated bindings against wazero v1.10.1 bindings (compiler mode by default, compile excluded); ncruces's benchstat gives a -15.45% geomean in sec/op, with lookups 11-40% faster and WriteTo 78% faster but Build 16-35% and UnmarshalBinary 96% slower, and the two sides used different Wasm blobs (SIMD only on the wazero side).",
+  "status_note": "Very active single-maintainer project (commits through 2026-10-06, no tagged releases, two open issues), MIT-licensed and copyable, already the engine behind ncruces/go-sqlite3; pin a recent commit because miscompile and trap bugs were fixed as late as October 2026.",
+  "sources_read": [
+    "https://github.com/ncruces/wasm2go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/README.md",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/go.mod",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/USERS.md",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/main.go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/translate.go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/module.go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/code.go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/helpers/helpers.go",
+    "https://raw.githubusercontent.com/ncruces/wasm2go/HEAD/helpers/helpers_unsafe.go",
+    "https://github.com/ncruces/wasm2go/tree/main/internal",
+    "https://github.com/ncruces/wasm2go/tree/main/internal/passes",
+    "https://github.com/ncruces/wasm2go/issues?q=is%3Aissue",
+    "https://github.com/ncruces/wasm2go/issues/16",
+    "https://github.com/ncruces/wasm2go/issues/31",
+    "https://github.com/ncruces/wasm2go/issues/41",
+    "https://github.com/ncruces/wasm2go/issues/50",
+    "https://github.com/ncruces/wasm2go/commits",
+    "https://github.com/ncruces/go-sqlite3/discussions/361",
+    "https://raw.githubusercontent.com/ncruces/go-sqlite3/HEAD/README.md",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/HEAD/README.md",
+    "https://github.com/pgaskin/go-marisa/tree/075b64a04783d6c188ac9f66ea52688bc71edb9e",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/075b64a04783d6c188ac9f66ea52688bc71edb9e/trie_test.go",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/37cde21a937175ff0928e5e6035b00a08be91daa/trie_test.go",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/075b64a04783d6c188ac9f66ea52688bc71edb9e/trie.go",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/37cde21a937175ff0928e5e6035b00a08be91daa/trie.go",
+    "https://github.com/pgaskin/go-marisa/tree/37cde21a937175ff0928e5e6035b00a08be91daa/internal",
+    "https://raw.githubusercontent.com/pgaskin/go-marisa/37cde21a937175ff0928e5e6035b00a08be91daa/internal/flags.go"
+  ],
+  "confidence": 0.75
+}
