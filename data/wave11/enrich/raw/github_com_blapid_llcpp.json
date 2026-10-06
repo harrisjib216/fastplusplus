@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/blapid/llcpp",
+  "one_liner": "Header-only C++17 synchronous binary logger: writes format string plus raw argument bytes, about 4x lower median latency than spdlog.",
+  "what_it_does": "llcpp logs printf-style lines without formatting them to text: each call writes the null-terminated format string followed by the in-memory bytes of each argument, and a Python script (scripts/llcpp_parse.py) turns the file back into text. The API is a logger object with info()/warn()/err() etc. taking a \"...\"_log user-defined literal and arguments; it is not a drop-in for spdlog's fmt-style interface. Prefixes (level, date/time, nanosecond timestamp) are composed as a std::tuple template parameter, and new sinks, prefixes and format terminators are added by CRTP and config types.",
+  "how_it_is_fast": "The format string is captured at compile time through a GNU string-literal operator template, parsed by constexpr template metaprogramming into a tuple of per-argument serializers, and type-checked statically, so the call site does no parsing, no allocation and no number-to-text conversion. Each call memcpy's the format bytes and argument bytes into a 4 KB thread_local buffer in file_logger and only calls fwrite when that buffer fills. The speed is mostly from skipping text formatting (binary vs text comparison) and from batching writes.",
+  "when_to_use": [
+    "Linux/macOS service where logs are shipped through a pipeline anyway and a post-processing decode step is acceptable.",
+    "Single-threaded hot paths that log a few integers and short strings per line and want sub-200 ns median call cost without a background thread.",
+    "Embedded or constrained code that needs zero allocation per log call and compile-time format/argument type checking.",
+    "As a small reference design for compile-time format parsing with UDL templates, to copy and harden."
+  ],
+  "when_not_to_use": [
+    "Multi-threaded logging to one file: the per-thread 4 KB buffer is flushed mid-line when the next part does not fit, so pieces of a line from different threads can interleave in the shared FILE*, which breaks the sequential binary stream the parser expects (from reading logging.hpp; not run).",
+    "When tail latency matters: its own table shows 99th percentile 2058 ns vs spdlog 973 ns (1 thread) and 7501 vs 1373 ns (4 threads), because the thread that fills the buffer pays the fwrite.",
+    "When you need human-readable logs on disk, floating-point or %p/%c specifiers (only %d, %u, %x, %s), log-level filtering, rotation, or async sinks.",
+    "MSVC or any compiler without the GNU string-literal operator template extension; prefix code also uses POSIX localtime_r/gmtime_r.",
+    "Production use in general: README says proof-of-concept, last commit 2017-11-03, error handling is marked TODO."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (Python for the decoder script)",
+    "min_toolchain": "C++17; tested on Clang 5.0.1 (Ubuntu) and Apple Clang 900; needs GNU UDL template extension",
+    "platforms": "Linux, macOS (POSIX time functions); little-endian assumed by the binary format",
+    "thread_safety": "Not documented. Buffers are static thread_local per logger type, so writes do not race, but lines from different threads can be split across fwrite calls and interleave; caches of threads other than the one destroying the logger are never flushed.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 4 KB cache is a static thread_local member per file_logger template instantiation, so two loggers of the same type on one thread share one buffer and a flush goes to whichever logger's file triggered it.",
+    "Only the destroying thread's buffer is flushed in ~file_logger; up to 4 KB of each other thread's last lines is lost at exit unless that thread logs enough to trigger a flush.",
+    "The full format string is written for every line (no string-table id), so files are larger than NanoLog-style dictionary logs; %s writes a 4-byte length plus bytes, %Ns pads or truncates to N bytes.",
+    "%ld/%lld widths are derived from the count of 'l' (4 bytes per 'l'), which assumes LP64 long; the decoder must match the writer's platform."
+  ],
+  "pick_this_over_siblings_when": "Pick it only if you want a tiny, synchronous, allocation-free header to study or fork; for real use, Quill, fmtlog, PlatformLab NanoLog or binlog are maintained, thread-safe, async, and report far lower call-site latency (single-digit to tens of ns) on the same spdlog comparison.",
+  "verified_claims_summary": "Author's README, Ubuntu 16.04.03, Clang 5.0.1 with --std=c++1z -flto -O3, logging to /tmp on an SSD, CPU not stated: median per-call 165 ns vs spdlog 729 ns at 1 thread and 173 vs 1100 ns at 4 threads, total 0.42 s vs 0.95 s (1 thread) and 1.61 s vs 1.91 s (4 threads), while spdlog has the better 99th percentile; spdlog wrote formatted text and llcpp wrote binary, and the harness lives only in a blog post that is blocked here.",
+  "status_note": "Abandoned proof-of-concept (last commit 2017-11-03, 2 open feature-request issues) but MIT-licensed and about ten small headers, so easy to vendor and fix if the binary-log model fits.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/README.md",
+    "https://github.com/blapid/llcpp/tree/master/include/llcpp",
+    "https://github.com/blapid/llcpp/tree/master/include/llcpp/detail",
+    "https://github.com/blapid/llcpp/tree/master/scripts",
+    "https://github.com/blapid/llcpp/issues",
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/include/llcpp/llcpp.hpp",
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/include/llcpp/detail/logging.hpp",
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/include/llcpp/detail/log_line.hpp",
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/include/llcpp/detail/terminators.hpp",
+    "https://raw.githubusercontent.com/blapid/llcpp/HEAD/include/llcpp/detail/prefix.hpp"
+  ],
+  "confidence": 0.75
+}
