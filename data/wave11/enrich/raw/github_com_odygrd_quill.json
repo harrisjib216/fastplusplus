@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/odygrd/quill",
+  "one_liner": "Asynchronous C++17 logger whose LOG_INFO call site costs single-digit nanoseconds, about 45x below async spdlog at p50.",
+  "what_it_does": "Quill is an asynchronous logging (and metrics) library: the calling thread binary-serializes the log arguments into a per-thread queue and a single backend worker thread formats them with a bundled {fmt} and writes them to sinks (console, rotating files, JSON, Android, custom). The API is macro-based (LOG_INFO(logger, \"fmt {}\", x), LOGV_* for named variables, rate-limited LOG_*_LIMIT) with an optional slower macro-free function API; it is not a drop-in for spdlog, though the {fmt} format strings carry over. Loggers and sinks are created through quill::Frontend and the worker is started with quill::Backend::start().",
+  "how_it_is_fast": "Each producer thread owns a lock-free single-producer/single-consumer queue, so there is no shared state or contention between logging threads. The call site stores only a timestamp (rdtsc by default), a pointer to static constexpr metadata (format string, source location), a logger pointer, a pointer to a templated decode function and a raw binary copy of the arguments; all {fmt} formatting, pattern formatting and I/O is deferred to the backend thread, which merges the per-thread queues in timestamp order. spdlog's async logger, by contrast, formats the message on the caller before queueing it.",
+  "when_to_use": [
+    "Latency-critical hot paths (trading, real-time control, game servers) where the caller thread must spend under ~20 ns per log call with ints, doubles and short strings.",
+    "Multi-threaded producers: per-thread SPSC queues keep p99.9 at 17-18 ns with 4 threads in the author's harness, where async spdlog reaches 1106 ns.",
+    "Logging STL containers and large strings on the hot path: vector<string> of 16 strings costs 53 ns p50 versus 6906 ns for spdlog and about 750 ns for fmtlog/XTR.",
+    "Projects that want human-readable text logs plus a broad feature set (rotation, JSON, backtrace ring buffer, MDC, filters, Prometheus metrics) rather than a binary log format.",
+    "Linux, macOS, Windows, BSD or Android targets with a C++17 compiler and packaging through vcpkg, Conan, Homebrew, Meson, Bazel or Conda."
+  ],
+  "when_not_to_use": [
+    "Raw text throughput is the goal: in the same harness XTR writes 7.73M msg/s versus Quill's 6.44M, and MS BinLog (61.79M) and BqLog (12.86M) binary modes are far ahead if you accept offline decoding.",
+    "Memory-constrained processes with many logging threads: every thread gets its own queue (131,072 bytes default, growing in unbounded mode), and a third-party BqLog benchmark reported multi-GB peak use at 10 threads.",
+    "You need every message delivered under overload without blocking: the bounded dropping queue (used for the headline numbers) discards messages when full, and the unbounded queue trades that for memory growth.",
+    "Programs that log from static/global destructors or fork() after starting the backend: the README documents both as unsafe.",
+    "Synchronous logging where the message must be on disk before the call returns; Quill is built around a background worker and an explicit flush_log()."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none external (bundles {fmt} as the fmtquill namespace; links Threads; stdc++fs on GCC < 9)",
+    "min_toolchain": "C++17, CMake 3.12+ (experimental C++20 named module optional)",
+    "platforms": "Linux, macOS, Windows, FreeBSD/BSD, Android; rdtsc clock on x86 with chrono/system clock alternatives",
+    "thread_safety": "Logging from any thread is safe; each thread gets its own SPSC queue and one backend thread consumes them all.",
+    "drop_in_for_baseline": "partial — same {fmt} format-string syntax as spdlog, but a different setup API (Frontend/Backend, sinks) and LOG_* macros taking a logger pointer; user-defined types need codecs or the quill/std/*.h headers for STL types."
+  },
+  "gotchas": [
+    "Arguments are copied at the call site and formatted later on the backend thread, so user-defined types need a codec (or must be formatted to a string first) and STL types need their quill/std/*.h include.",
+    "Queue type and capacity are compile-time FrontendOptions; the README benchmark ran the bounded dropping queue at 262,144 bytes, twice the default, and benchmark builds use the macro API, which is faster than the function API (11 versus 6 ns p50).",
+    "Quill's own singletons are function-local statics: logging from destructors of static objects can touch destroyed state, and calling Backend::start() before fork() breaks the child.",
+    "Messages from different threads are reordered by timestamp on the backend with a configurable grace window, so late producers can appear out of strict order unless that window is tuned."
+  ],
+  "pick_this_over_siblings_when": "Pick Quill over fmtlog or XTR when you log containers or long strings (53 ns vs about 750 ns for vector<string>) or want rotation, JSON, MDC and metrics in one maintained package; pick MS BinLog or BqLog binary mode instead for maximum throughput if offline decoding is acceptable, and PlatformLab NanoLog only if you can live with its binary log and preprocessor.",
+  "verified_claims_summary": "In the author's public logger_benchmarks harness (GCC 14.2, Release, -march=x86-64-v3, Intel Core i5-12600 on a tuned RHEL 9.4 with isolcpus and mitigations=off), a LOG_INFO with two ints and a double costs 6/9 ns (p50/p99.9) on one thread with Quill's bounded dropping queue versus 271/360 ns for spdlog's async_logger (8M-slot thread pool, block overflow policy, basic_file_sink_st), and 8/18 versus 557/1106 ns with 4 threads; each observation averages 20 back-to-back calls timed with serialized rdtsc. Backend throughput writing 4M messages to a file was 6.44M msg/s versus spdlog's 2.57M.",
+  "status_note": "Actively maintained (v13 line, 3.0k stars, last commit 2026-10-04, CI on Linux/macOS/Windows/BSD with sanitizers and fuzzing), MIT-licensed and header-only, so it is easy to adopt through any major package manager.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/CMakeLists.txt",
+    "https://github.com/odygrd/quill",
+    "https://github.com/odygrd/quill/issues?q=is%3Aissue+label%3Abug",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/README.md",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks/call_site_latency",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/benchmarks/call_site_latency/benchmark_spdlog_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/benchmarks/call_site_latency/benchmark_quill_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/benchmarks/call_site_latency/benchmark_quill_frontend_options.h",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/benchmarks/call_site_latency/call_site_latency_bench.h"
+  ],
+  "confidence": 0.88
+}
