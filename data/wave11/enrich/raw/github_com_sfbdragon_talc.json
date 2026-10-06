@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/sfbdragon/talc",
+  "one_liner": "Rust no_std and WebAssembly heap allocator; about 2x DLmalloc's throughput on wasm at under a third of its code size.",
+  "what_it_does": "Talc is a general-purpose dynamic memory allocator for no_std targets (embedded, kernels) and WebAssembly, where it is a drop-in #[global_allocator] replacement for Rust's default wasm allocator, DLmalloc. The core Talc type is wrapped by TalcCell (lockless, !Sync, single-threaded) or TalcLock (any lock_api RawMutex, e.g. spinning_top) to implement GlobalAlloc and the allocator-api2 / nightly Allocator traits. Heaps come from a pluggable Source: manual claim, Claim of a static array, GlobalAllocSource/AllocatorSource backed by another allocator, or WasmGrowAndExtend/WasmGrowAndClaim using memory.grow.",
+  "how_it_is_fast": "It is a dlmalloc-style segregated free-list allocator with boundary tags and configurable size binning, which the author describes as close to TLSF (Two-Level Segregated Fit). Allocation is O(n) worst case but near-constant in practice; deallocation and in-place grow/shrink are O(1). v5 added a WasmBinning configuration tuned for wasm and cut code size, and in-place realloc can be turned off by feature to trade speed for module bytes.",
+  "when_to_use": [
+    "Single-threaded wasm32 modules (no atomics) currently using the default DLmalloc, where both allocation throughput and .wasm size matter",
+    "no_std embedded firmware or OS kernels that need a general malloc/realloc over one or more fixed memory regions, including adding or resizing heaps at runtime",
+    "Per-subsystem arenas in Rust via TalcCell plus allocator-api2 collections, where a lock-free !Sync allocator is enough",
+    "Workloads dominated by small-to-medium allocations (tens of bytes to tens of KB) with pointer-sized alignment, which is the distribution the benchmarks and design target"
+  ],
+  "when_not_to_use": [
+    "Hosted, allocation-heavy multithreaded programs: the author says jemalloc, mimalloc or the system allocator are better there, and TalcLock serializes all threads on one lock",
+    "Large over-aligned allocations (size much smaller than alignment): issue #44 measured 1-byte allocations at 4096-byte alignment about 1,650x slower than dlmalloc (1.22 s vs 739 us)",
+    "wasm heaps that can grow past 2 GiB: open issue #56 (2026-09-24, v5.1.1) reports fit checks that compare wrapped 32-bit addresses and can hand out overlapping memory",
+    "When minimum module size is the only goal: the author recommends lol_alloc (and RLSF SmallGlobalTlsf is comparably small)",
+    "Memory-tight wasm: the default wasm configuration is tuned for speed and the author estimates 10-15% higher runtime memory than alternatives"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "allocator-api2 0.4, lock_api 0.4 (no default features); spinning_top or another RawMutex for TalcLock",
+    "min_toolchain": "Rust 1.64 (stable by default since v5; nightly feature for core::alloc::Allocator)",
+    "platforms": "any no_std target; WebAssembly sources for wasm32; benchmarks run on Linux x86_64",
+    "thread_safety": "TalcCell is !Sync (single-threaded); TalcLock is thread-safe through a lock_api mutex, with no per-thread caching",
+    "drop_in_for_baseline": "partial — on wasm it replaces DLmalloc with a two-line #[global_allocator] static; on no_std you must supply a heap Source and, for threads, a lock type"
+  },
+  "gotchas": [
+    "Open issue #56: on wasm with heap addresses near 4 GiB, full_search_bin and try_grow_in_place compare wrapped addresses and can return overlapping allocations; the reported workaround is capping linear memory at 2 GiB",
+    "Default wasm source changed in v5.1.0 to WasmGrowAndExtend; WasmGrowAndClaim (issue #51) can use 2-10x more linear memory on repeatedly grown vectors but saves about 97 bytes of code",
+    "v5.0.4 fixed a chunk-tagging bug for huge chunks and an infinite-recursion bug in WasmGrowAndClaim, and raised per-allocation metadata from a u8 to a usize for allocations over 24 bytes",
+    "Earlier soundness bugs (Span From<&[T]> UB #33, unaligned Tag read #27, free-list corruption #53, non-Send sources #54) are closed; the crate is tested with MIRI and fuzzing but has a history of unsafe-code bugs"
+  ],
+  "pick_this_over_siblings_when": "Pick Talc over rlsf when you want the fastest wasm/no_std allocator in the author's plots (Talc leads RLSF by about 10% single-threaded and about 1.5x on wasm alloc+dealloc) and can spend roughly 500 more bytes than rlsf's small config; neither belongs on a hosted multithreaded server, where mimalloc-class allocators or v8malloc-style designs from the catalog fit better.",
+  "verified_claims_summary": "First-party plots only: on WebAssembly random actions Talc (Dynamic) does about 28 alloc+dealloc actions per microsecond vs about 12 for DLmalloc and about 19.5 for RLSF, and about 12 vs 6.3 with realloc (about 2x, read off the plot), with module size about 1.6 KB vs 5.5 KB for DLmalloc. On Linux x86_64 single-threaded random actions Talc scores 1.0 relative vs RLSF 0.87-0.93 and DLmalloc 0.55-0.75, but in the multithreaded run Galloc and RLSF score above Talc at most sizes; no compiler version, flags, CPU or wasm runtime are stated.",
+  "status_note": "Actively maintained (v5.1.1, last commit 2026-09-09, 562 stars) and MIT-licensed, but an unaddressed overlapping-allocation bug (#56) above 2 GiB is open as of 2026-09-24.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/README.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/BENCHMARKS_WASM.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/talc/README.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/talc/README_WASM.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/talc/Cargo.toml",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/talc/CHANGELOG.md",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/plots/random-actions.png",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/plots/random-actions-multi.png",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/plots/wasm-perf.png",
+    "https://raw.githubusercontent.com/SFBdragon/talc/HEAD/plots/wasm-size.png",
+    "https://github.com/SFBdragon/talc/issues?q=is%3Aissue",
+    "https://github.com/SFBdragon/talc/issues/56",
+    "https://github.com/SFBdragon/talc/issues/44"
+  ],
+  "confidence": 0.7
+}

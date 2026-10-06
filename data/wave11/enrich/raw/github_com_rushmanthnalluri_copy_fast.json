@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/rushmanthnalluri/copy-fast",
+  "one_liner": "Student C11 Linux file-copy tool with threaded pipeline and io_uring backends, compared only against its own naive read/write loop.",
+  "what_it_does": "A cp-like CLI (copyfast [OPTIONS] SRC DST) that copies files or directory trees with a selectable engine (naive, pipeline, uring), optional SHA-256 or xxHash64 verification, sparse-hole preservation, metadata preservation and a resumable CRC32-checked journal. There is no library API: the backends are internal functions behind copy_file_dispatch(). It is not command-line compatible with GNU cp.",
+  "how_it_is_fast": "The pipeline backend runs a reader pthread (pread) and a writer pthread (pwrite) over a bounded pool of 4 KB-aligned 1 MB slots, so reads and writes overlap. The io_uring backend submits up to queue_depth reads via liburing and chains a write SQE on each read completion. Directory copies use a bounded work queue drained by -j N worker threads. Sparse files are walked with lseek(SEEK_HOLE/SEEK_DATA) and holes are skipped. It does not use copy_file_range, sendfile or reflinks (FICLONE), which are what make modern cp fast.",
+  "when_to_use": [
+    "Reading a compact, readable example of a reader/writer bounded-buffer copy pipeline in C11 with pthreads",
+    "Studying a minimal liburing read-then-write copy loop with fixed slot buffers",
+    "Teaching SEEK_HOLE/SEEK_DATA sparse copying and a resume journal design",
+    "Linux-only experiments on page-cache-resident files where you want to compare overlap strategies yourself"
+  ],
+  "when_not_to_use": [
+    "As a production replacement for GNU cp, rsync, fcp or wcp: no license, 7 commits, 0 stars, and it was never benchmarked against cp",
+    "On filesystems where cp would reflink or use copy_file_range (Btrfs, XFS, NFS server-side copy): copyfast always moves bytes through user space",
+    "When you need durability: no backend fsyncs the destination unless -v or an interrupt triggers fdatasync, so timings and 'done' mean data is only in the page cache",
+    "Non-Linux platforms: requires liburing and Linux syscalls",
+    "Trees of many small files with -j 1: each file takes the pipeline path, which spawns two threads and allocates 8 x 1 MB buffers per file"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "pthreads, liburing (liburing-dev)",
+    "min_toolchain": "C11 (GCC or Clang, -std=c11 -D_GNU_SOURCE); compiler versions not documented",
+    "platforms": "Linux only (io_uring needs a 5.x+ kernel; README results on Linux 6.18 x86_64)",
+    "thread_safety": "not applicable as a library; internal stats use C11 atomics, and the work queue and buffer pool use mutex plus condition variables",
+    "drop_in_for_baseline": "partial — a cp-style CLI with different flags (-R, -j, -b, -S, -p); not a GNU cp drop-in"
+  },
+  "gotchas": [
+    "Multi-file benchmark confound: copy_file_dispatch sends files under 512 KB to the naive backend only when jobs > 1, so the -j 1 'baseline' copies each 32 KB file via the pipeline backend (two pthread_create calls plus 8 MB of posix_memalign per file) while -j 4/-j 8 use the naive loop. The 10.49x 4-worker figure therefore mixes a backend change with parallelism, which also explains why it is super-linear and why 8 workers (3.45x) is slower than 4.",
+    "The io_uring backend ignores short writes (a completion with res smaller than the requested length is counted and the slot freed with no resubmission), and its SQ-full fallback discards the pwrite return value, so a partial write could silently truncate data; none of this affects the published numbers on a local filesystem but it is a correctness gap.",
+    "bench/benchmark.c times one run per backend, in a fixed order, on a 100 MB file just written to /tmp and still page-cache resident, with no destination fsync; results measure memory-to-page-cache copy, not NVMe throughput (and /tmp may be tmpfs). The dense test also runs with sparse_aware=true.",
+    "posix_fadvise is called with POSIX_FADV_SEQUENTIAL | POSIX_FADV_WILLNEED; these are enum values, not flags, so the OR evaluates to WILLNEED only."
+  ],
+  "pick_this_over_siblings_when": "Only for reading the code: for real copies prefer fcp or wcp (both measured against GNU cp, the latter with an io_uring design) or uring-sync for many small files, all of which beat cp itself rather than a self-written naive loop.",
+  "verified_claims_summary": "The README's single-run table, produced by bench/benchmark.c and bench/run_benchmarks.sh, shows a 100 MB page-cache-resident file copied in 0.0376 s by the threaded pipeline vs 0.0869 s by the project's own sequential read/write loop (2.31x) and 0.0487 s by io_uring, on Linux 6.18 x86_64 with -O3 and an unstated CPU and compiler; GNU cp was never measured. The 1,000-file 10.49x figure compares 4 workers on the naive path against 1 worker on the heavier per-file pipeline path, so it is not a clean parallelism measurement.",
+  "status_note": "Seven-commit OS-course project (Week 12 viva checklist, syllabus matrix) last updated 2026-10-04 with no license file, so it is reference-only and cannot legally be copied.",
+  "sources_read": [
+    "https://github.com/rushmanthnalluri/copy-fast",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/README.md",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/Makefile",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/bench/benchmark.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/bench/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/backend_naive.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/backend_pipeline.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/backend_uring.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/backends.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/work_queue.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/buffer_pool.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/src/sparse.c",
+    "https://raw.githubusercontent.com/rushmanthnalluri/copy-fast/HEAD/include/copyfast.h"
+  ],
+  "confidence": 0.8
+}

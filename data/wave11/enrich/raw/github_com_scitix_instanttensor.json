@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/scitix/instanttensor",
+  "one_liner": "C++/Python safetensors-to-GPU loader using O_DIRECT io_uring/AIO plus NCCL all-gather; beats the safetensors loader on cold loads.",
+  "what_it_does": "Loads safetensors checkpoints straight into GPU memory for PyTorch (CUDA or ROCm). The API mirrors safetensors: instanttensor.safe_open(file_or_list, framework='pt', device=..., process_group=...) and an iterator f.tensors() yielding (name, tensor). It is not a full drop-in: tensors() is a one-shot streaming iterator rather than random-access get_tensor(), and copy=False yields views into an internal GPU ring buffer. vLLM ships it as an optional weight loader.",
+  "how_it_is_fast": "Reads bypass the page cache with Direct I/O (O_DIRECT) through io_uring (registered fixed files and fixed buffers, io_uring_prep_read_fixed) or libaio, with chunk size and queue depth tuned per backend, into a cudaHostRegister-pinned staging buffer. Chunks are pipelined: host read, cudaMemcpyAsync to the device on one stream, and on multi-GPU loads each rank reads only its 1/world_size slice of a chunk and ncclAllGather assembles the rest on a second stream, so 8 GPUs share the storage bandwidth instead of each reading the full model. tmpfs files use an mmap backend with worker threads.",
+  "when_to_use": [
+    "Cold-start loading of large LLM checkpoints (tens to hundreds of GB) onto GPUs from storage of 5 GB/s or more (README's own threshold)",
+    "Multi-GPU tensor/expert-parallel serving (e.g. TP=8) where every rank would otherwise read the whole checkpoint",
+    "Hosts whose RAM is reserved for KV-cache offload or that switch models often, so the page cache cannot hold the model",
+    "Loading from tmpfs to GPU, where its mmap path measured 10.1x over safetensors for a 61 GB model on one H200",
+    "vLLM deployments, via its documented InstantTensor loader integration"
+  ],
+  "when_not_to_use": [
+    "Warm page cache and repeated reloads of the same model: Direct I/O ignores cached pages; switch to BackendPolicy.BUFFERED or keep the default loader",
+    "Slow storage (single SATA SSD, network disk under ~5 GB/s): the gap shrinks; issue #1 reported small gains for Qwen3-8B/32B on an H20",
+    "CPU-only loading, Windows or macOS: GPU (CUDA/ROCm), Linux and PyTorch >= 2.8 are required; io_uring backends need kernel 5.6+",
+    "Code that needs random-access get_tensor(name) or collects tensors before use with copy=False",
+    "Tight GPU memory: the device ring buffer may take up to INSTANTTENSOR_MAX_FREE_MEM_USAGE (default 0.5) of free GPU memory; issue #13 reports a draft-model load failing on allocation"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch >= 2.8, CUDA or ROCm runtime, NCCL (via torch.distributed); vendored static liburing, libaio, pybind11, dlpack and atomic_queue; optional cuFile (GPUDirect Storage)",
+    "min_toolchain": "C++17 extension built by setuptools; Python >= 3.9; Linux kernel 5.6+ for io_uring (5.15+ recommended)",
+    "platforms": "Linux x86-64 with NVIDIA (CUDA) or AMD (ROCm) GPUs",
+    "thread_safety": "not documented; one safe_open context per process or process group, with internal loader threads",
+    "drop_in_for_baseline": "partial — same safe_open(...) entry point and framework='pt' as safetensors, but streaming tensors() iteration instead of keys()/get_tensor(), and different lifetime rules"
+  },
+  "gotchas": [
+    "With copy=False, tensors are views into a ring buffer: consume each before the next is yielded and do not keep references after the with block; list(f.tensors()) silently corrupts data when buffer_size < total_tensor_size (issue #9, now warned about at runtime). The default is copy=True.",
+    "Default backend order for disk files is [URING, AIO] with O_DIRECT; buffered mode must be requested explicitly with backend=BackendPolicy.BUFFERED or INSTANTTENSOR_BACKEND=BUFFERED.",
+    "Pinned staging memory scales as round_up(chunk_size, page_size) * io_depth * world_size; INSTANTTENSOR_CACHE_BUFFER=1 keeps it pinned for the life of the process.",
+    "In tests/test.py the safetensors baseline loads each tensor to CPU and copies it to the GPU, and every rank reads the full checkpoint; the harness does not drop the page cache itself, so cold-cache conditions depend on the operator."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fastsafetensors or Run:ai Model Streamer when loading large checkpoints on 1-8 GPUs from very fast storage or tmpfs: its own table shows 1.77 s vs 22.2 s (fastsafetensors) and 9.29 s (Model Streamer) for Qwen3-30B-A3B. Model Streamer remains the choice for S3/object-storage sources, which InstantTensor does not support yet (issue #15).",
+  "verified_claims_summary": "First-party docs/benchmark.md (instanttensor 0.1.4 vs safetensors 0.7.0, fastsafetensors 0.2.2, Run:ai Model Streamer 0.15.6) on H200 GPUs: from 50 GB/s storage, Qwen3-30B-A3B (61 GB, 1 GPU) loads in 1.77 s vs 57.4 s (32.4x) and DeepSeek-R1 (689 GB, 8 GPUs, TP=8/EP=8, time to slowest rank) in 15.3 s vs 160 s (10.5x); on tmpfs, 1.26 s vs 12.7 s (10.1x) and 12.1 s vs 22.6 s (1.87x). The CPU model, compiler flags and cache-drop procedure are not stated; tests/test.py is the harness.",
+  "status_note": "Active (version 0.2.1 on PyPI, last commit 2026-10-05, 83 stars, used by vLLM), Apache-2.0 and copyable, though the package is marked Development Status Alpha and several closed issues were silent-corruption and lifetime bugs.",
+  "sources_read": [
+    "https://github.com/scitix/InstantTensor",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/README.md",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/docs/benchmark.md",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/setup.py",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/tests/test.py",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/csrc/loader_io_uring.cpp",
+    "https://raw.githubusercontent.com/scitix/InstantTensor/HEAD/csrc/loader_common.cpp",
+    "https://github.com/scitix/InstantTensor/issues?q=is%3Aissue",
+    "https://github.com/scitix/InstantTensor/issues/9",
+    "https://github.com/scitix/InstantTensor/issues/1"
+  ],
+  "confidence": 0.8
+}

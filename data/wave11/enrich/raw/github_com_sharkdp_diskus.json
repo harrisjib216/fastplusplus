@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/sharkdp/diskus",
+  "one_liner": "Parallel Rust replacement for du -sh that prints one directory total; author measured 10x faster cold-cache, 2.2x warm.",
+  "what_it_does": "diskus walks one or more directory trees and prints only their combined size, like du -sh (disk usage, st_blocks x 512) or du -sb with -b (apparent size). It is a CLI plus a small Rust library (DiskUsage::new(paths).apparent_size().count(), returning a size and a list of traversal errors). There is no per-directory breakdown, no depth option, and no exclude patterns.",
+  "how_it_is_fast": "It runs symlink_metadata (lstat) and read_dir calls in parallel on a rayon thread pool sized at 3x the CPU count (capped at 64), recursing with into_par_iter over each directory's children, and sends sizes over a crossbeam channel to one summing thread. Oversubscribing threads keeps many metadata requests in flight so the kernel I/O scheduler can reorder them on a cold cache; GNU du issues them one at a time. Hard links are counted once through a (device, inode) HashSet, but only for files with nlink > 1.",
+  "when_to_use": [
+    "Getting one total size for a large tree (hundreds of thousands of files) on SSD/NVMe with a cold page cache, where serial du stalls on metadata latency",
+    "Scripts and prompts that only need a byte count: output switches to a bare number when piped",
+    "Multi-core machines; the default 3x-cores worker count was tuned for both cold and warm caches",
+    "Embedding a fast parallel du-style total in a Rust program through the library API"
+  ],
+  "when_not_to_use": [
+    "Small trees: issue #38 reports diskus 115.8 ms vs du -sch 22.8 ms on a ~4.5 GB build directory, because thread-pool startup dominates",
+    "Very deep directory nesting: open issue #27 (since 2019) reports a stack overflow from the recursive walk",
+    "When you need a per-subdirectory breakdown, depth limits, excludes or interactive browsing (use pdu, gdu, dust or ncdu)",
+    "When you need to stay on one filesystem or follow symlinks: no -x / one-file-system option, and following symlinks is an open request (#44)",
+    "Windows totals that must not double count: hard links and junctions are counted multiple times there by design"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon 1.11, crossbeam-channel 0.5; clap, humansize, num-format for the CLI feature",
+    "min_toolchain": "Rust 1.80 per Cargo.toml rust-version (README still says 1.76)",
+    "platforms": "Linux, macOS, Windows, Haiku and other Unix (packages for Debian, Arch, Void, Homebrew, MacPorts, NixOS)",
+    "thread_safety": "Library call spawns its own rayon pool and receiver thread per count(); no shared global state documented",
+    "drop_in_for_baseline": "partial — matches du -sh / du -sb totals for a path, but supports none of du's other flags"
+  },
+  "gotchas": [
+    "Default count is disk usage (since v0.6); -b switches to apparent size, and v0.9.0 changed whether directory entries are counted to match du, so totals from older versions differ",
+    "Errors (unreadable directories, missing metadata) are hidden unless --verbose is passed, so a permission problem silently shrinks the total",
+    "Spawns up to 64 threads by default; on shared or throttled hosts pass --threads (-j) explicitly",
+    "Hard-link deduplication keeps a HashSet of every multi-link inode in memory"
+  ],
+  "pick_this_over_siblings_when": "Pick diskus over pdu, gdu or zdu when you want only a single total from the smallest tool; the gdu README itself notes diskus is faster at that, while pdu and gdu give per-directory trees and zdu reports faster runs than dust on its own trees.",
+  "verified_claims_summary": "First-party hyperfine runs on the author's unnamed 8-core laptop over a private 15 GB folder (100k directories, 400k files): cold cache (drop_caches before each run) diskus 1.746 s vs du -sh 17.776 s (10.18x), warm cache 500.3 ms vs 1098.3 ms (2.20x, despite the prose saying more than 3x); CPU model, disk, filesystem, du version and diskus version are not stated.",
+  "status_note": "Maintained by the author of fd and hyperfine (v0.9.0, last commit 2026-02-14, 1.3k stars), dual MIT/Apache-2.0 and widely packaged; the deep-tree stack overflow (#27) is still open.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/README.md",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/src/walk.rs",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/src/filesize.rs",
+    "https://raw.githubusercontent.com/sharkdp/diskus/HEAD/src/unique_id.rs",
+    "https://github.com/sharkdp/diskus/issues?q=is%3Aissue",
+    "https://github.com/sharkdp/diskus/issues/38",
+    "https://github.com/sharkdp/diskus/issues/27"
+  ],
+  "confidence": 0.75
+}

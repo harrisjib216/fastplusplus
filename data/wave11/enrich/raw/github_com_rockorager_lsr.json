@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/rockorager/lsr",
+  "one_liner": "Zig ls(1) clone that batches directory open, statx and passwd/group/localtime reads through io_uring; beats GNU ls -al.",
+  "what_it_does": "A command-line replacement for ls with its own option set (-1, -a, -A, -C, -l, -r, -t, --tree, --color, --icons, --hyperlinks, --group-directories-first). It is a program, not a library: there is no C or C++ API to call, so the useful takeaway for a C++ project is the technique, or using it as a shell tool.",
+  "how_it_is_fast": "It submits the directory open, one statx per entry and the opens/reads of /etc/localtime, /etc/passwd and /etc/group as io_uring requests through the author's ourio library (256-entry ring), so thousands of stat calls become a few io_uring_enter syscalls (848 syscalls vs 30,396 for GNU ls at 10,000 files). It parses /etc/passwd and /etc/group itself instead of calling getpwuid/getgrgid per entry (libc lookup is only a fallback for uids not in the file), sorts a small name+kind struct before stat results arrive, and uses an arena with a 1 MiB stack-fallback buffer in release builds.",
+  "when_to_use": [
+    "Interactive long listings (-l) on Linux with a kernel that has io_uring statx support, where startup and per-entry syscall cost dominate",
+    "Small directories (tens to hundreds of files), where the README shows the largest gap: 372.6 us vs 1.4 ms for GNU ls at n=10",
+    "As a reference design for batching many stat-like metadata calls through io_uring in your own C/C++ tool (see liburing for the C API)"
+  ],
+  "when_not_to_use": [
+    "Scripts that depend on exact GNU ls flags or output format; the option set is smaller and output differs (icons, colors, sizes)",
+    "macOS/BSD: it builds and runs but gets no syscall batching, so the speed claim does not apply",
+    "Environments that disable io_uring (many container runtimes and hardened kernels restrict it; the HN discussion raised its security record)",
+    "Code that needs a library API; nothing here is callable from C++",
+    "Versions before the 2026-09-19 commit on directories with more than about 252 entries: entries could get dropped stat tasks and wrong metadata (issue #5)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "ourio (author's io_uring/kqueue library), zeit (time zones), zzdoc (man page generation); all pinned in build.zig.zon; links libc",
+    "min_toolchain": "Zig 0.15.1",
+    "platforms": "Linux (io_uring path); macOS and BSD build without the batching benefit",
+    "thread_safety": "not applicable (single-threaded command-line program)",
+    "drop_in_for_baseline": "partial — common flags (-a, -A, -l, -r, -t, -1, -C) match ls, but many GNU ls options are missing and the output format differs"
+  },
+  "gotchas": [
+    "The benchmark table was produced with lsr 0.1.0; at n=1,000 and 10,000 that version overflowed the 256-slot ring and dropped stat tasks, so some entries showed undefined metadata (issue #5: a file printed as root/root, 0 B, 31 Dec 1969). The fix landed on 2026-09-19 ('io: keep stat batches within the ring capacity'), after the published numbers.",
+    "/etc/passwd is read in a single 16 KiB read and /etc/group in a single 8 KiB read; larger files are truncated, and the parser unwraps the third field of each line, so a line cut before its second colon could abort the program (read from src/main.zig; not reported as an issue).",
+    "Symlink targets are resolved with a blocking readlink per link (the code notes io_uring cannot do readlink), so link-heavy directories lose part of the benefit.",
+    "Open issue #7 reports that --help does not work as expected; a 2025-12-28 commit moved --help output to stdout."
+  ],
+  "pick_this_over_siblings_when": "Pick lsr when you want a faster ls -l specifically; for recursive traversal (find-style listing) bfs or al-dente are the catalogued choices, and for building your own batched-metadata code in C/C++ use liburing directly, since lsr exposes no library.",
+  "verified_claims_summary": "First-party hyperfine runs on Linux on directories of n plain files with -al: lsr 0.1.0 took 22.1 ms vs 38.0 ms for GNU ls 9.7 at n=10,000 (1.72x, derived from page data) and 372.6 us vs 1.4 ms at n=10, with busybox 1.36.1 close at every size (32.5 ms at n=10,000); strace -c counted 848 vs 30,396 syscalls. CPU, kernel, filesystem, cache state and lsr's build mode are not stated, and the large-n runs used the version that dropped some stat tasks.",
+  "status_note": "Actively maintained (last commit 2026-09-19, fixing a ring-overflow metadata bug), MIT-licensed, about 1,400 lines of Zig; useful as a tool or as a design to copy, not as a linkable library.",
+  "sources_read": [
+    "https://github.com/rockorager/lsr",
+    "https://raw.githubusercontent.com/rockorager/lsr/HEAD/README.md",
+    "https://raw.githubusercontent.com/rockorager/lsr/HEAD/build.zig",
+    "https://raw.githubusercontent.com/rockorager/lsr/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/rockorager/lsr/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/rockorager/lsr/HEAD/src/main.zig",
+    "https://github.com/rockorager/lsr/issues?q=is%3Aissue",
+    "https://github.com/rockorager/lsr/issues/5",
+    "https://github.com/rockorager/lsr/commits/main",
+    "https://github.com/rockorager/lsr/commit/HEAD"
+  ],
+  "confidence": 0.7
+}
