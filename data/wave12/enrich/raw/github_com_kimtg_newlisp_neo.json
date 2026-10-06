@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/kimtg/newlisp-neo",
+  "one_liner": "newLISP 10.7.6 rebuilt with a computed-goto bytecode VM, tail calls and a nursery GC; beats CPython 3.14 on fib(30).",
+  "what_it_does": "A fork of Lutz Mueller's newLISP interpreter (a small Lisp dialect for scripting) that adds a bytecode compiler and VM (nl-vm.c) and a generational allocator to the original tree-walking evaluator. You run the same newlisp executable on .lsp scripts; lambdas are compiled to bytecode on define or first call, and anything the compiler refuses (macros, default parameters, a blacklist of special forms such as letn, dolist, for, catch, eval) silently runs on the old tree-walker. It is a different language from Python, so the CPython comparison only tells you how fast the interpreter is, not that it can replace Python code.",
+  "how_it_is_fast": "Direct-threaded dispatch with GCC/Clang computed gotos, specialised opcodes (LOAD_LOCAL_0..3, CONST_0..2, ADD_1, SUB_1, SUB_2) and an unboxed-integer fast path for + - * / on two longs. Parameters and let/local variables live in flat VM stack slots instead of being bound to symbols, self-recursion becomes OP_CALL_SELF without a symbol lookup or C recursion, and tail calls reuse the frame (OP_TAIL_CALL_SELF, OP_TAIL_CALL). All cells come from a 64 MB bump-pointer nursery that is copied (Cheney-style) into the old newLISP cell pool when it fills.",
+  "when_to_use": [
+    "You already run newLISP scripts and their hot paths are small integer-recursive or counting-loop functions over parameters and let/local variables (fib(30) 42.6 ms vs 592.5 ms on newLISP 10.7.6).",
+    "Deep self- or mutual tail recursion that overflows the stack on newLISP 10.7.6 (README: 100M self-tail steps in 1,023 ms, 10M mutual steps in 167 ms).",
+    "Single-process scripting on Windows x86-64 (MinGW-w64), the only platform the numbers come from.",
+    "Experiments or teaching on a small, readable bytecode VM bolted onto an existing Lisp interpreter."
+  ],
+  "when_not_to_use": [
+    "Code that relies on newLISP's dynamic scoping: compiled functions keep parameters and let/local variables in VM stack slots, so callees, eval-string or spawn/sync that read or set those names see the global symbol instead (open issue #4: the qa-cilk spawn/sync fibo test fails).",
+    "Programs that allocate millions of cells inside one primitive call or mutate long-lived lists heavily: by code reading the moving nursery has no write barrier and no roots for C-local pointers (see gotchas); not stress-tested by anything in the repo.",
+    "Memory-constrained or embedded deployments: a fixed 64 MB nursery is allocated at startup, against newLISP's traditional small footprint.",
+    "As a Python replacement: different language, and the only comparisons are fib(30) and a 1M-iteration counting loop.",
+    "Production use generally: the VM and GC landed 2026-09-05 to 2026-09-17 from one author, 16 stars, two open issues without replies."
+  ],
+  "integration": {
+    "form": "standalone interpreter executable built with make (static C sources, bundled PCRE)",
+    "dependencies": "libm, libdl and readline on Linux (makefile_linuxLP64_utf8); ws2_32 on Windows; bundled pcre.c",
+    "min_toolchain": "GCC or Clang (GNU C extensions: computed goto, __builtin_expect used unguarded in newlisp.h); MinGW-w64 on Windows",
+    "platforms": "Windows x86-64 (MinGW, benchmarked), Linux LP64, macOS and BSD makefiles (macOS and Linux makefiles were missing nl-vm.o until issues #1 and #2, closed 2026-09-07)",
+    "thread_safety": "Single-threaded; VM stack, frame stack and nursery are process-global. newLISP concurrency is process-based (spawn/fork), and spawn inside compiled functions is broken per issue #4.",
+    "drop_in_for_baseline": "false — different language from CPython; partial for newLISP 10.7.6 scripts (qa-dot passes per the README, but qa-cilk fails per issues #2 and #4)"
+  },
+  "gotchas": [
+    "Dynamic-scope break (code reading of compileLambda and OP_CALL in nl-vm.c): parameters and let/local bindings are compiled to stack slots and never written to the symbol, so (define (f x) (g)) (define (g) x) makes g see the global x, and primitives the blacklist misses that evaluate their arguments lazily (spawn has flag 0 in primes.h) get eagerly evaluated arguments; issue #4 shows the qa-cilk test failing with 'ERR: value expected in function set : nil called from user function (fibo 5)'.",
+    "GC soundness (code reading, not run): collectGen0 roots are only the symbol trees, env/result/lambda stacks and the VM stack; gcEvacuate returns at the first tenured cell without a remembered set, so a fresh nursery cell linked into a tenured list by p_push is not moved, and p_sequence builds its list in C locals while stuffInteger may trigger a collection, so (sequence 1 3000000), longer than the 2M-cell nursery, looks exposed to overwritten cells.",
+    "Errors raised inside compiled code (for example ERR_MATH on integer division by zero) longjmp out of executeBytecode without resetting vm_sp or vm_frame_count; nothing in newlisp.c restores them.",
+    "Recursion in a compiled body is bound to the lambda at compile time (OP_CALL_SELF), so redefining the function's symbol later does not change already-compiled recursive calls; part of why fib(30) is fast, since CPython looks up the global fib on each call."
+  ],
+  "pick_this_over_siblings_when": "Pick it only if you already have newLISP code and want it faster; for a new embedded Lisp-like language Janet is more mature and MIT-licensed, and for Python-syntax scripting pocketpy (MIT) or CPython 3.14 itself avoid the semantic and GC risks above.",
+  "verified_claims_summary": "One in-process timing per script on an unnamed Windows x86-64 machine (no repeats, GCC version not stated; Windows makefile is gcc -O3): fib(30) 42.6 ms vs 86.0 ms on CPython 3.14.4 (2.02x) and 592.5 ms on newLISP 10.7.6, and a 1M-iteration while loop 31.3 ms vs 37.2 ms (1.19x). The 17.3 ms tail-recursive row compares a different program with CPython's while loop, and the TCO rows have no baseline because CPython and newLISP 10.7.6 overflow.",
+  "status_note": "Active one-author fork (VM and GC added 2026-09-05 to 2026-09-17, last commit 2026-09-17, two open issues without replies), GPL-3.0; experimental, and the dynamic-scope and GC concerns above make it unsuitable for existing newLISP code without testing.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/README.md",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/bench.py",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/bench_fib.lsp",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/bench_loop.lsp",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/bench_tco.lsp",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/makefile_linuxLP64_utf8",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/makefile_mingw64_utf8",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/make.bat",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/doc/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/doc/CHANGES.txt",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-vm.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-vm.h",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/newlisp.h",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/newlisp.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-list.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-liststr.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-symbol.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/nl-math.c",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/primes.h",
+    "https://raw.githubusercontent.com/kimtg/newlisp-neo/HEAD/qa-specific-tests/qa-cilk",
+    "https://github.com/kimtg/newlisp-neo/issues?q=is%3Aissue",
+    "https://github.com/kimtg/newlisp-neo/issues/4",
+    "https://github.com/kimtg/newlisp-neo/issues/2",
+    "https://github.com/kimtg/newlisp-neo/commits"
+  ],
+  "confidence": 0.6
+}
