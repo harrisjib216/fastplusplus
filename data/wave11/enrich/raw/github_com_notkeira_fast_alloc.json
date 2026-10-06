@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/notkeira/fast-alloc",
+  "one_liner": "Small C++20 pool, stack and free-list arenas for game code; beats new/delete and malloc only on fixed-size or frame-scoped patterns.",
+  "what_it_does": "A static library of four allocators (PoolAllocator, ThreadSafePoolAllocator, StackAllocator, FreeListAllocator) that each reserve one backing buffer at construction and hand out raw storage from it. The interface is not malloc-compatible: you call pool.allocate()/deallocate(p), stack.allocate(size, align) plus reset() or reset(marker), and construct and destroy objects yourself with placement new. Requests that do not fit return nullptr; there is no std::allocator adapter.",
+  "how_it_is_fast": "The pool is an intrusive singly linked free list threaded through the unused fixed-stride blocks, so allocate and deallocate are an O(1) pointer pop and push with no size-class lookup or headers. The stack allocator is a bump pointer with alignment rounding, and a whole frame is released by resetting one pointer instead of 1,000 free calls. The free-list allocator is a classic address-sorted first-fit/best-fit list with block headers and coalescing on free, which is O(n) in free-list length and only ties glibc malloc on Linux. The thread-safe pool wraps the same pool in a std::mutex.",
+  "when_to_use": [
+    "Many same-size objects (particles, entities, nodes) with a known upper count, where O(1) pop/push from a preallocated pool beats a general allocator's ~6 ns new/delete pair on glibc.",
+    "Per-frame or per-request scratch memory that is released all at once: bump allocation plus a single reset() replaces thousands of individual free() calls.",
+    "Windows MSVC or macOS builds, where the system allocator measured much slower (34.9 ns and 18.5 ns per 64-byte new/delete pair in CI) so even the free-list allocator came out ahead.",
+    "As a readable, MIT-licensed reference or starting point for writing your own game-engine arena; the core files are a few hundred lines each."
+  ],
+  "when_not_to_use": [
+    "As a general malloc replacement: there is no global operator new hook, no size classes and fixed capacity; use mimalloc, jemalloc or another listed general allocator instead.",
+    "Multithreaded allocation hot paths: the thread-safe pool is a single global mutex and was slower than new/delete even uncontended on Linux (9.98 ns vs 6.03 ns, 0.60x); contention results are not published.",
+    "Variable-size allocation on Linux: the free list matched glibc malloc with first-fit (4.66 vs 4.67 ns) and lost with best-fit (0.76x), and that was its best case with a one-block free list; search cost grows linearly with fragmentation.",
+    "Code that needs destructors run on reset or pool teardown, or debug-checked ownership in Release: double frees and foreign pointers are caught only by Debug asserts.",
+    "Projects wanting a mature dependency: 0 stars, single author, no tagged ecosystem users."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (Threads::Threads); Catch2 3.5.0 and Google Benchmark 1.9.1 fetched by CMake only for tests and benchmarks",
+    "min_toolchain": "C++20, CMake 3.20; CI covers GCC, Clang, Apple Clang 21 and MSVC 19.51",
+    "platforms": "any (CI on Linux, macOS arm64, Windows); -march=native is opt-in via FAST_ALLOC_NATIVE_ARCH",
+    "thread_safety": "Only ThreadSafePoolAllocator synchronises (std::mutex); Pool, Stack and FreeList need external locking.",
+    "drop_in_for_baseline": "partial — explicit allocator objects with their own allocate/deallocate API; no operator new/malloc replacement and no std::allocator adapter"
+  },
+  "gotchas": [
+    "Allocators return raw storage: deallocate() and reset() never run destructors, and stack allocations cannot be freed individually.",
+    "Invalid sizes or non-power-of-two alignments throw std::invalid_argument (also in Release), while exhaustion returns nullptr, so callers must handle both.",
+    "Pool and free-list deallocate validate ownership only with assert, so a pointer from the wrong pool silently corrupts the free list in Release builds.",
+    "The recorded frame benchmark's malloc side also allocated and released a std::vector of pointers inside the timed loop (README note; benchmarks since changed), so the 11.9x Linux frame ratio overstates the gap and new runs are not comparable."
+  ],
+  "pick_this_over_siblings_when": "Pick it over general allocators like mimalloc, v8malloc or FastAlloc only when you control the allocation pattern and want an explicit fixed-size pool or frame arena; versus similar small arenas such as obstack (cleeus) or ArenaAllocator (privateMwb), it is the one with a pinned, repeated Linux benchmark, sanitizer CI on three platforms and configurable alignment.",
+  "verified_claims_summary": "Google Benchmark 1.9.1, 64-byte blocks, GCC 14.2.0 -O3 -march=native on an AMD Ryzen 7 PRO 8700GE (Debian 13, pinned core, median of 7): pool allocate/free 2.00 ns vs 6.03 ns operator new/delete (3.0x), stack allocate/reset 1.99 vs 4.77 ns malloc/free (2.4x), 1,000-allocation frame 1205 vs 14385 ns (11.9x, inflated by the baseline's pointer-array allocation); free list ties or loses, thread-safe pool 0.60x. The bigger 4-24x ratios come from single 0.1 s CI runs against the macOS and MSVC system allocators on hosted runners.",
+  "status_note": "Actively maintained (v1.2.0, 75 commits, last commit 2026-10-04) and MIT-licensed, small enough to vendor, but unproven in production with 0 stars and 0 issues.",
+  "sources_read": [
+    "https://github.com/NotKeira/fast-alloc",
+    "https://github.com/NotKeira/fast-alloc/issues",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/benchmarks/bench_pool.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/benchmarks/bench_stack.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/benchmarks/bench_freelist.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/benchmarks/bench_threadsafe_pool.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/src/pool_allocator.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/src/stack_allocator.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/src/freelist_allocator.cpp",
+    "https://raw.githubusercontent.com/NotKeira/fast-alloc/HEAD/src/threadsafe_pool_allocator.cpp"
+  ],
+  "confidence": 0.75
+}
