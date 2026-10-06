@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/oracle/graalpython",
+  "one_liner": "Python 3.13 runtime on GraalVM Truffle; JIT-compiled pure Python runs many times faster than CPython, but mostly behind PyPy.",
+  "what_it_does": "GraalPy is a Python 3.13-compatible implementation written in Java and Python on GraalVM's Truffle framework. It ships as a standalone graalpy launcher (pyenv, GitHub releases; Native Image build) that can replace python for pure-Python code, and as Maven artifacts (org.graalvm.polyglot:python) for embedding Python in Java with direct Java interop. CPython C extensions are supported experimentally at the C-API level only, so they must be rebuilt for GraalPy.",
+  "how_it_is_fast": "Python is executed by a Truffle interpreter whose hot code is compiled by the Graal JIT through partial evaluation of the interpreter with type speculation and deoptimization, so tight loops, object allocation and float arithmetic compile to machine code instead of being dispatched opcode by opcode as in CPython. The speedup needs the Graal compiler and warmup: without JIT compilation the project says GraalPy runs pure Python about 4x slower than CPython. C extensions run through an emulation of CPython internals and gain little.",
+  "when_to_use": [
+    "Long-running, CPU-bound pure-Python loops where warmup is amortised: in kostya/jit-benchmarks GraalPy 22.3.1 (JVM mode) ran mandelbrot in 0.84 s vs 37.52 s, nbody 3.19 vs 53.72 s and binarytrees 2.02 vs 73.15 s on CPython 3.10.7.",
+    "Embedding Python inside a Java application (Maven/Gradle artifacts, polyglot Context API, Java interop, file-system and OS access mediated by Java), including migrating Jython code with --python.EmulateJython.",
+    "Shipping a Python application as a single standalone binary through GraalVM Native Image.",
+    "Polyglot services that already run on GraalVM and want Python next to Java, JavaScript or Ruby with one compiler and shared tooling."
+  ],
+  "when_not_to_use": [
+    "When PyPy is an option for standalone pure-Python speed: in the same independent run PyPy3 7.3.11 beat GraalPy on 9 of 13 programs (e.g. matmul 0.36 vs 1.4 s, regexdna 2.38 vs 9.04 s) at about 60-270 MB max RSS on most programs vs 1.1-3.3 GB for GraalPy in JVM mode.",
+    "Short scripts, CLIs and serverless cold starts: time before the first benchmark line was 2.79-6.55 s in JVM mode (0.27-4.27 s native) vs 0.19-1.07 s for CPython, and without the JIT GraalPy is about 4x slower than CPython; a user measured the 24.1.2 standalone about 5x slower than CPython on a pyperformance fork (issue #480).",
+    "C-extension-heavy code (NumPy, pandas, ML stacks): extensions are API- but not ABI-compatible, CPython wheels from PyPI cannot be used, packages must be built with GraalPy's patched pip, and the docs say such code benefits little from the JIT (issue #334 reported pandas performance as terrible).",
+    "Regex, bignum and bulk string or I/O work: regexdna 9.04 vs 5.2 s, pidigits 9.78 vs 6.17 s and revcomp 4.36 vs 2.45 s against CPython 3.10.7; issue #445 (open) reports the re module about 4x slower than CPython 3.12.6.",
+    "Memory-limited hosts, Windows or macOS (documented as less tested, Windows with more limitations), or untrusted code (SECURITY.md: execution of untrusted or adversarial code is not supported)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "GraalVM polyglot SDK and Truffle runtime (Maven org.graalvm.polyglot:polyglot plus python); the Graal JIT compiler (GraalVM JDK or a Graal-enabled JDK) for compiled speed; a C toolchain to build native extension packages; the standalone launcher bundles the runtime",
+    "min_toolchain": "Python 3.13 language level (25.3.x, stdlib 3.13.14); minimum JDK for embedding not stated in the pages read",
+    "platforms": "Linux amd64 and aarch64 (recommended; Oracle Linux is the primary test platform), macOS aarch64, Windows amd64 (more limitations)",
+    "thread_safety": "Has a global interpreter lock like CPython; the GIL is released by default during interop with other languages (polyglot.gil_locked_during_interop keeps it held)",
+    "drop_in_for_baseline": "partial — runs pure Python 3.13 code with pip and venv (the CPython test suite passes about 85%), but C extensions must be rebuilt from source with GraalPy's pip, CPython binary wheels do not work, and replacing pip or using uv is discouraged"
+  },
+  "gotchas": [
+    "Harness detail behind the A-tier numbers: kostya/jit-benchmarks times each iteration inside the process after a 'started' marker and reports the best of up to 5 in-process iterations, so JVM startup is excluded (reported separately as 'Compile T', 2.79-6.55 s for GraalPy JVM) and later iterations are warmed; the record's 'whole-process times, startup included' description is wrong, and only knucleotide, regexdna and revcomp (one iteration each) include warmup.",
+    "Harness asymmetry against PyPy: PyPy's fannkuchredux (0.71 s) and nbody (4.44 s) rows show Runs 1 although five iterations fit well inside the 60 s and 80 s timeouts, and the runner records at most one time(...) match per 1024-byte stderr read, so 2 of GraalPy's 4 wins over PyPy compare a single recorded PyPy iteration with GraalPy's best of 5.",
+    "The independent numbers are JVM mode ('graalpython --jvm', GraalVM CE 22.3.1, Python 3.8.5), but standalone JVM distributions stopped in 25.1; the native launcher was slower in the same run (binarytrees 3.41 vs 2.02 s, matmul 2.26 vs 1.4 s, revcomp 10.98 vs 4.36 s), now defaults to -X jit=1 (one compiler thread, higher thresholds) and on Linux to a lower-footprint GC that the docs say can slow some workloads; use -X jit=2 for throughput.",
+    "The first-party 4.30x pyperformance geomean (GraalPy 25.1.3 vs CPython 3.12.8) covers only the pair-wise intersection of benchmarks that run on both and states no hardware, JDK, JIT preset or flags."
+  ],
+  "pick_this_over_siblings_when": "Pick GraalPy over PyPy when Python has to run inside a JVM application with Java interop or be packaged as a Native Image binary; for standalone pure-Python throughput PyPy won 9 of 13 kostya benchmarks with a fraction of the memory, and Cython or Codon beat both on hot loops if you can compile the code.",
+  "verified_claims_summary": "Independent kostya/jit-benchmarks round 1 (2023-02-28, AMD Ryzen 7 3800X, Docker on Ubuntu 22.10): GraalPy 22.3.1 in JVM mode beat CPython 3.10.7 on 10 of 13 single-threaded programs by about 1.7x (knucleotide) to 45x (mandelbrot) (derived from page data, best of up to 5 in-process iterations, startup excluded), lost on pidigits, regexdna and revcomp, and lost 9 of 13 to PyPy3 7.3.11. The project's own chart reports GraalPy 25.1.3 at a 4.30x pyperformance geomean over CPython 3.12.8 with no hardware stated.",
+  "status_note": "Actively developed by Oracle (last commit 2026-10-06, release 25.3.4.1 with the 3.13.14 standard library, UPL-1.0) and usable as a CPython replacement for pure-Python code or as Java-embedded Python, but the independent evidence is a 2023 JVM-mode run of 22.3.1 (JVM standalones discontinued in 25.1) whose harness gives PyPy only one recorded iteration on two of GraalPy's four wins over it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/README.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Performance.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/assets/performance.svg",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/README.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Native-Extensions.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Python-Runtime.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Standalone-Getting-Started.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Embedding-Getting-Started.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Python-on-JVM.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Tooling.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Troubleshooting.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/docs/user/Test-Tiers.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/oracle/graalpython/HEAD/SECURITY.md",
+    "https://github.com/oracle/graalpython/issues?q=is%3Aissue+slower+than+cpython",
+    "https://github.com/oracle/graalpython/issues/480",
+    "https://github.com/oracle/graalpython/issues/445",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/cli.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/graalvm",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/nbody/test.py",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/brainfuck/test.py"
+  ],
+  "confidence": 0.75
+}

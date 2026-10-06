@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/oracle/graaljs",
+  "one_liner": "Oracle's JavaScript and Node.js engine in Java on Truffle/Graal; beat Node.js 6 on 2016 peak benchmarks, loses to current V8.",
+  "what_it_does": "GraalJS is an ECMAScript 2026-compatible JavaScript engine written in Java on the Truffle framework, shipped as Maven artifacts (org.graalvm.polyglot:js or js-community) for embedding in Java, and as standalone js and node launchers (Native Image or JVM builds). The node standalone runs Node.js applications (based on Node.js 24.18.1 as of 25.3.4) with GraalJS in place of V8, including native addons through a V8 API shim in graal-nodejs/deps/v8/src/graal. It is the successor to Nashorn and Rhino for Java hosts and adds Java and WebAssembly interop.",
+  "how_it_is_fast": "JavaScript is executed by a self-specializing AST interpreter built with Truffle; hot functions are compiled to machine code by the Graal compiler through partial evaluation of the specialized interpreter, with deoptimization back to the interpreter when speculation fails. Peak speed therefore depends on having the Graal JIT available (GraalVM JDK, Oracle JDK or OpenJDK with Graal via JVMCI) and on giving it enough warmup; on a stock JVM without Graal it runs interpreter-only.",
+  "when_to_use": [
+    "A Java application that must embed modern JavaScript (ECMAScript 2026) with direct Java interop, for example replacing Nashorn or Rhino.",
+    "Long-running, warmed-up, object-oriented JavaScript where the 2016 Are We Fast Yet peak numbers put Graal.js ahead of Node.js 6.2 (DeltaBlue 2.10 vs 3.93, Richards 2.91 vs 4.12, Storage 0.98 vs 2.03 runtime factor over Java).",
+    "Polyglot processes that mix JavaScript with other Truffle languages (Python, Ruby, WebAssembly) and want one compiler and shared tooling (--cpusampler, --memtracer).",
+    "Numeric kernels where the 2023 kostya run shows it close to Node.js 19.7.0 in JVM mode: mandelbrot 0.48 vs 0.46 s, matmul 0.30 vs 0.26 s, spectralnorm 0.13 vs 0.11 s."
+  ],
+  "when_not_to_use": [
+    "As a faster replacement for current V8/Node.js: in kostya/jit-benchmarks round 1 (2023) GraalJS 22.3.1 lost all 13 benchmarks to Node.js 19.7.0, e.g. brainfuck 52.08 s (JVM) and 76.16 s (native) vs 5.88 s, nbody 5.59/4.82 vs 0.82 s.",
+    "Short-lived scripts and CLIs: in the kostya run the time before the first benchmark line ('Compile T') was 1.99-4.8 s in JVM mode and 0.47-3.27 s native vs 0.17-0.64 s for Node.js, and the FAQ warns the first iterations are slower than on other engines.",
+    "Memory-constrained deployments: max RSS in the same suite was 0.73-2.3 GB (JVM) and 0.33-1.2 GB (native) vs 45-625 MB for Node.js.",
+    "Regex- and string-heavy work: regexdna 6.68-10.0 s vs 1.06 s, revcomp 7.28-8.31 vs 3.15 s, knucleotide 9.7-13.67 vs 5.21 s; issue #290 reports simple character-set regexes slower than Node 20.1.",
+    "C++ hosts that want a V8-style embedding API, or code from untrusted sources (SECURITY.md: execution of untrusted or adversarial code is not supported)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "GraalVM polyglot SDK and Truffle runtime (Maven org.graalvm.polyglot:polyglot plus js or js-community); the Graal JIT compiler (GraalVM JDK, or Oracle JDK/OpenJDK with Graal on the module path) for compiled performance; standalone builds bundle everything",
+    "min_toolchain": "JDK 21 or later (per the FAQ); GraalVM JDK recommended",
+    "platforms": "Binaries for Linux x64 and AArch64, macOS AArch64, Windows x64 (macOS x86-64 builds removed in 25.1.3); the Java engine runs on any compatible JVM, interpreter-only without Graal",
+    "thread_safety": "Share-nothing: a JavaScript Context and its objects may be used by only one thread at a time (synchronised hand-off allowed); Java objects can be shared across threads; Node.js Worker threads supported",
+    "drop_in_for_baseline": "partial — the node standalone runs unmodified Node.js applications and most npm packages, but binary addons built for V8 may need recompiling, and Java embedders use the polyglot Context API rather than any V8 API"
+  },
+  "gotchas": [
+    "Benchmark artefacts on both sides of the evidence: the 2016 AWFY geomean edge rests mostly on Bounce (Node.js 12.25 vs Graal.js 1.26), whose June 2016 JavaScript hot loop was balls.forEach(closure) mutating a captured counter (rewritten to for-of in 2022), an engine-version-specific weakness of Node.js 6 rather than a general Graal.js advantage; without Bounce the geomean gap is 2.33 vs 2.58.",
+    "kostya/jit-benchmarks reports the best of up to 5 in-process iterations timed in-language after a 'started' marker, so JVM startup is excluded (shown as 'Compile T'), but GraalJS completed only 2 (native) and 3 (JVM) brainfuck iterations before the 190 s timeout, knucleotide/regexdna/revcomp run a single iteration (warmup included), it used GraalVM CE 22.3.1 rather than Oracle GraalVM, and the JS mandelbrot program is marked expected_check_failed for node, graalnode and graalnode_jvm.",
+    "The default standalone is a Native Image build, which the FAQ says may have lower peak throughput than the -jvm build; on a stock JDK without the Graal compiler it silently drops to interpreter-only mode (with a WarnInterpreterOnly warning) and is far slower.",
+    "Creating a new Context per request is slow unless one Engine is shared and Source objects cached; and Oracle's default artifacts (Maven js, standalones without -community) are under the GraalVM Free Terms and Conditions, only the -community builds and source are UPL-1.0."
+  ],
+  "pick_this_over_siblings_when": "Pick GraalJS only when the code must stay JavaScript inside a JVM process with Java interop; the catalogued JIT siblings that beat Node.js on kostya/benchmarks (Chez Scheme, Julia, .NET RyuJIT, Dart VM) require switching languages, while GraalJS keeps JavaScript but runs slower than Node.js/V8 in current measurements.",
+  "verified_claims_summary": "The only measured win is the Are We Fast Yet report of 2016-06-20: peak performance after warmup, runtime normalised to Java 1.8.0_91, Graal.js geomean 2.23 vs Node.js 2.89 (Node.js 6.2 per the DLS'16 paper snippet; CPU and flags not stated), faster on 8 of 14 benchmarks. The independent, reproducible kostya/jit-benchmarks round 1 (AMD Ryzen 7 3800X, Docker on Ubuntu 22.10, GraalVM CE 22.3.1 graalnode vs Node.js 19.7.0) has GraalJS slower on all 13 programs in both native and JVM modes.",
+  "status_note": "Actively developed by Oracle (last commit 2026-10-05, Node.js base 24.18.1 in 25.3.4, UPL-1.0 for community builds) and usable today as a Java-embedded JavaScript engine, but the speed claim against V8 is a 2016 peak-performance result driven by one Node.js 6 outlier, and the 2023 independent run shows it 1.1x to 13x slower than Node.js.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/README.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/FAQ.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/Multithreading.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/RunOnJDK.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/JavaScriptCompatibility.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/Options.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/docs/user/README.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/oracle/graaljs/HEAD/SECURITY.md",
+    "https://github.com/oracle/graaljs/issues?q=is%3Aissue+performance+slower+than+node",
+    "https://github.com/oracle/graaljs/issues/74",
+    "https://github.com/oracle/graaljs/issues/360",
+    "https://github.com/oracle/graaljs/tree/master/graal-nodejs/deps/v8/src",
+    "https://raw.githubusercontent.com/smarr/are-we-fast-yet/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/smarr/are-we-fast-yet/HEAD/README.md",
+    "https://raw.githubusercontent.com/smarr/are-we-fast-yet/HEAD/benchmarks/JavaScript/bounce.js",
+    "https://raw.githubusercontent.com/smarr/are-we-fast-yet/HEAD/benchmarks/JavaScript/som.js",
+    "https://github.com/smarr/are-we-fast-yet/commits/master/benchmarks/JavaScript/bounce.js",
+    "https://raw.githubusercontent.com/smarr/are-we-fast-yet/9e533ca/benchmarks/JavaScript/bounce.js",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/cli.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/dc",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/graalvm",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/graalnode",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/nodejs",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/nbody/test.js",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/brainfuck/test.js"
+  ],
+  "confidence": 0.75
+}

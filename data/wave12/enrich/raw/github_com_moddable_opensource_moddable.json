@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/moddable-opensource/moddable",
+  "one_liner": "XS, Moddable's ROM-friendly C JavaScript engine for microcontrollers; beat Duktape 2.3.0 by about 1.6x on bench-v8 in 2019, not in 2026 CI.",
+  "what_it_does": "XS is the JavaScript engine at the centre of the Moddable SDK: a C interpreter that aims at full ECMAScript conformance (the README claims better than 99% for the 2026 standard) on microcontrollers with about 45 KB free RAM and 1 MB flash, and it also runs on macOS, Linux and Windows. Hosts embed it through the 'XS in C' API: xsCreateMachine with an xsCreation block that sizes the chunk heap, slot heap, stack and key tables, then macros that work on opaque slots through an implicit machine parameter 'the'. Errors cross into C through setjmp/longjmp (xsTry/xsCatch). The API shape differs from Duktape's duk_push_* value stack, so moving an embedding means rewriting the binding layer.",
+  "how_it_is_fast": "XS moves work off the device: the xsc compiler turns modules into bytecode on the development machine, and the XS linker builds the built-ins and preloaded modules into a prepared virtual machine stored in ROM. Bytecode and objects run in place from flash, boot is close to instant, and RAM holds only what scripts change. Objects that are modified get cloned through an alias table, and frozen objects skip it. The linker can also dead-strip unused built-ins and colour ROM properties for faster lookup. At run time it is a bytecode interpreter with GCC computed-goto dispatch (a label table in xsRun.c, used when compiled with optimisation), an integer slot type that skips floating point, in-place ROM strings (stringx), and a mark-and-sweep collector that compacts the chunk heap.",
+  "when_to_use": [
+    "JavaScript on ESP32/ESP8266-class microcontrollers with tens of KB of RAM, where a ROM-prepared VM and precompiled bytecode matter more than raw interpreter speed.",
+    "You need modern ECMAScript on a device: Moddable reports 98.88% of test262 language tests and 88.94% of built-ins passing on macOS (XS Conformance, revised 2026-01-31).",
+    "You want a whole embedded JavaScript platform (build tools, drivers, graphics and UI frameworks, debugger xsbug, precompiled 'mods') rather than only an engine, with a commercial licence available if LGPL-3.0 does not fit.",
+    "Locked-down, frozen-realm style deployments where the linker can freeze built-ins and strip eval/Function to drop the parser from the image."
+  ],
+  "when_not_to_use": [
+    "Choosing an engine for interpreter throughput: in the 2026-10-05 ahaoboy/js-engine-benchmark CI run of the same bench-v8 v7 suite, XS 17.9.3 (Moddable's prebuilt xst) scored 266 on ubuntu against Duktape 2.99.99 at 489, QuickJS 2026.06.04 at 1217 and Hermes 0.12.0 at 1530. On macOS arm64 it scored 380 against Duktape 905 and QuickJS 1761.",
+    "Replacing Duktape for speed: the 1.6x win is a 2019 result on XS 8.8.0 and the current CI shows the reverse. XS also scored below MuJS 1.3.8 there (266 vs 329 on ubuntu, 380 vs 585 on macOS arm64).",
+    "Products that cannot meet LGPL-3.0 relinking obligations for the runtime or GPL-3.0 for the build tools, unless you buy Moddable's commercial licence.",
+    "Code that depends on UTF-16 string semantics, Intl (ECMA-402), Annex B, multiple realms per VM or Function.prototype.toString: XS strings are UTF-8 indexed by code point unless built with mxCESU8, there is one realm per machine, and toString of functions always fails.",
+    "Windows desktop use as a benchmarked engine: the 2026 CI produced no Windows score for xst."
+  ],
+  "integration": {
+    "form": "source-drop (xs/sources plus a platform layer) or the Moddable SDK toolchain (xsc, xsl, mcconfig) for devices",
+    "dependencies": "none beyond libc/libm for the engine core as built here; the xst test tool links LibYAML, fdlibm, pthread and libatomic",
+    "min_toolchain": "C compiler; computed-goto dispatch needs GCC-compatible extensions with optimisation on, otherwise a switch is used; minimum standard not documented",
+    "platforms": "microcontrollers targeted by the Moddable SDK (ESP8266 and ESP32 named in the docs) plus macOS, Linux and Windows hosts (xst makefiles for lin, mac and win)",
+    "thread_safety": "A single machine does not support multiple threads (XS in C); create one machine per thread and pass messages through the host",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline claim did not hold for the current release: in the 2026-10-05 ahaoboy CI, XS 17.9.3 loses every bench-v8 sub-test to Duktape on ubuntu (for example Richards 89 vs 288, Splay 373 vs 1234). On macOS arm64 it wins only RegExp (283 vs 244). That Duktape is an unreleased 2.99.99 master built at -Os. The drop from 2019 is very large (Richards 444 on a 2013 Core i5 vs 89 on a CI runner), so the prebuilt binary's configuration may explain part of it. Moddable's release build settings for xst-lin64.zip are not documented, and the reversal was not resolved here.",
+    "Both data points time xst, the test262 harness, not an embedder build. xs/makefiles/lin/xst.mk compiles every goal with -DmxDebug=1 and -DmxProfile=1, which add debugger and profiler checks to the interpreter's line opcodes (xsRun.c). Its default GOAL is debug (-O0 with AddressSanitizer), so a plain 'make' reproduction measures a sanitizer build. Bellard's 2019 table also built XS at -O3 against -O2 for Duktape.",
+    "The chunk heap is compacted during garbage collection, so pointers from xsToString or xsToArrayBuffer, and host-chunk pointers, go stale after any call that can allocate, run JavaScript, coerce or throw. Refetch them after such calls, and never touch them from interrupts.",
+    "XS in C reports errors with setjmp/longjmp, so C callbacks that hold native resources across XS macros need xsTry/xsCatch to release them."
+  ],
+  "pick_this_over_siblings_when": "Pick XS over QuickJS only when the target is a microcontroller where XS's ROM-prepared VM, linker dead-stripping and the Moddable hardware SDK matter. QuickJS is about 1.5x faster in Bellard's 2019 table and about 4.6x faster in the 2026 CI (1217 vs 266 on ubuntu, derived from page data). For a desktop or server embedding, QuickJS or Hermes are the faster small engines.",
+  "verified_claims_summary": "Bellard ran bench-v8 version 7 in 2019 (gcc 4.9.2 on Fedora 21, Core i5 4570 at 3.2 GHz, xst built at -O3, Duktape at -O2, RegExp disabled for XS). XS 8.8.0 totalled 738 without RegExp against 468 for Duktape 2.3.0 (about 1.6x, derived from page data) and won 5 of 7 tests, losing Splay and NavierStokes. The independent 2026-10-05 GitHub Actions run of the same suite reverses the ranking: Moddable's prebuilt XS 17.9.3 xst scored 266 against Duktape 2.99.99 at 489 on ubuntu, and 380 against 905 on macOS arm64.",
+  "status_note": "Actively maintained by Moddable (SDK release 9.5.0 on 2026-09-05, commits through 2026-09-04, 1.6k stars). Usable under LGPL-3.0 or a commercial licence, but its claim to beat Duktape on speed rests on 2019 numbers that current builds do not reproduce.",
+  "sources_read": [
+    "https://github.com/Moddable-OpenSource/moddable",
+    "https://github.com/Moddable-OpenSource/moddable/commits/public",
+    "https://github.com/Moddable-OpenSource/moddable/releases/latest",
+    "https://github.com/Moddable-OpenSource/moddable/tree/public/.github",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/licenses/readme.md",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/documentation/readme.md",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/documentation/xs/XS%20in%20C.md",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/documentation/xs/XS%20Differences.md",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/documentation/xs/XS%20Conformance.md",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/xs/makefiles/lin/xst.mk",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/xs/makefiles/mac/xst.mk",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/xs/sources/xsCommon.h",
+    "https://raw.githubusercontent.com/Moddable-OpenSource/moddable/public/xs/sources/xsRun.c",
+    "https://raw.githubusercontent.com/quickjs-zh/QuickJS/HEAD/bench.md",
+    "https://github.com/ahaoboy/js-engine-benchmark",
+    "https://github.com/ahaoboy/js-engine-benchmark/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/.github/workflows/update.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/action.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/easy-install/main/dist-manifest/xst.json"
+  ],
+  "confidence": 0.75
+}

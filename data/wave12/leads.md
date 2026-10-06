@@ -17,3 +17,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - LekKit/shadow_pgt: kernel module claiming native speed on VisionFive 2, no numbers (RVVM enricher).
 - Quirrel (GaijinEntertainment/quirrel): Squirrel fork in the dasProfile table, not catalogued (Luau enricher, 2026-10-06); seed candidate.
 - TinyKVM (same author as libriscv, likely github.com/varnish/tinykvm, not opened) and the Segue and ColorGuard ASPLOS 2025 SFI paper (Wasmtime/WAMR): leads from the LFI and libriscv enricher (2026-10-06).
+- ncruces/wasm2go: separate project from goccy/wasm2go, wazero numbers on a Core Ultra 7 258V in go-sqlite3 discussion #361 (batch 49 verifier, 2026-10-06); seed candidate.

@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/pallene-lang/pallene",
+  "one_liner": "Typed Lua dialect compiled ahead of time to C Lua modules; about 12x faster than Lua 5.4 on an integer n-queens loop.",
+  "what_it_does": "You write performance-sensitive functions in Pallene, a Lua look-alike with mandatory type annotations on function signatures, and pallenec compiles each .pln file to C and then to a .so extension module that Lua code loads with require. Pallene functions call and are called by Lua and operate on ordinary Lua tables, strings and functions; records are opaque userdata. It is a companion for hot paths inside a Lua 5.4 program, not a replacement interpreter, and pallenec --emit-lua strips the types back to plain Lua.",
+  "how_it_is_fast": "Static types let the compiler keep integers and floats unboxed in C locals and read and write table array parts and fields directly through Lua's internal data structures instead of the stack-based Lua-C API, with run-time type checks only where a value enters from Lua or from an untyped container. The generated C is then optimised by the system C compiler (CFLAGS are honoured). Per the SBLP 2018 / SCP 2020 paper (quoted in the benchmark post) Pallene keeps Lua's 16-byte tagged values, so LuaJIT's 8-byte NaN-boxed floats still win on float-array code such as Matmul.",
+  "when_to_use": [
+    "A Lua 5.4 host (game, tool, server) where you build and ship the interpreter yourself and need a few integer- or loop-heavy functions about 5-12x faster without writing Lua-C API code.",
+    "Replacing hand-written C modules whose main cost is marshalling through the Lua-C API, since Pallene manipulates Lua tables directly.",
+    "Projects that must stay on PUC-Rio Lua 5.4 semantics (64-bit integers, 5.4 syntax) where LuaJIT is not an option.",
+    "Code you want to keep runnable as plain Lua: removing the types gives the same program, and --emit-lua automates it."
+  ],
+  "when_not_to_use": [
+    "Hosts that run stock system Lua, LuaJIT or any Lua other than the bundled 5.4.7 build: generated modules call internal Lua symbols that only Pallene's patched build exports.",
+    "Float-array or record-array numeric kernels: on the independent array-of-records loop LuaJIT took 0.07 s vs 0.14 s for Pallene, and the paper reports LuaJIT substantially faster on Matmul.",
+    "String-heavy code or code that leans on the standard library: an open issue reports slow string performance (#505), and only string.char, string.sub and a set of float-only math functions are compiled builtins.",
+    "Hosts that run several Lua states, especially across threads (Lua Lanes): generated code uses function-level 'static int cache' slots, flagged as a possible multi-VM problem in open issue #552 with no maintainer reply.",
+    "Production code where a crash is unacceptable: open bug reports include a segfault with disappearing array elements that does not occur under --emit-lua (#507, 2021), a LUAI_ASSERT crash (#562) and undetected uninitialised variables (#650)."
+  ],
+  "integration": {
+    "form": "compiler (pallenec) that emits C and builds .so Lua extension modules",
+    "dependencies": "A C compiler; Pallene's bundled Lua 5.4.7 built with its expose-internal-apis patch (installed as plua/pluac and the pallene-lua launcher); lpeg, argparse and pallene-tracer, all built and installed by make install",
+    "min_toolchain": "C99 compiler (the dev build script uses -std=c99); Lua 5.4.7 exactly",
+    "platforms": "Unix-like systems producing .so modules; other platforms not documented (open issue #516 asks for a cross-platform replacement for c_compiler.lua)",
+    "thread_safety": "not documented; generated modules keep function-level static lookup caches (issue #552)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Modules load only in Pallene's own Lua: the build applies deps/lua/patches/expose-internal-apis.patch to Lua 5.4.7, which exports the internal LUAI_FUNC symbols, adds luaL_checkcoreversion (it errors on any other release number) and luaV_strcmp, and the manual says Pallene 'is only compatible with a specific release version of the interpreter'. The blog's 'Lua 5.4' baseline is this bundled interpreter.",
+    "Harness notes on the Klausmeier post: each figure is a single run timed with the shell's time command; the Lua baseline xdamcnt2.lua defines configOkay and solve as globals, so every hot call in PUC Lua pays a global-table lookup that Pallene's direct C call avoids, which favours Pallene somewhat; the Pallene driver, the C array program and all Pallene/Lua build flags are unpublished; the post's own figures are slightly inconsistent (text says Lua 5.4 took 0.75 s on the array loop, its table says 0.72 s; 3.92 s / 0.32 s is 12.25x, not the 13x stated).",
+    "Typing is strict at run time: integer and float are distinct (local x: float = 0 is a type error), arrays cannot hold nil, reading a missing element of a typed array raises a run-time error instead of returning nil, and the math builtins reject integer arguments.",
+    "Speed depends on how the generated C reaches GCC: issue #651 reports a 36% matmul slowdown with GCC 15.1.1 -O3 from merely moving a CheckGC() call, and issue #564 says Pallene's loop checks block C compiler optimisations."
+  ],
+  "pick_this_over_siblings_when": "Pick Pallene when you are staying inside a Lua 5.4 program and want typed hot functions that work on ordinary Lua tables; pick a faster VM such as LuaJIT Remake (Deegen, a Lua 5.1 interpreter about 185% faster than PUC Lua 5.1 per its README) when you want every script sped up without rewriting, and Daslang or Terra when the hot code can live in a separate statically typed language rather than in typed Lua.",
+  "verified_claims_summary": "Elmar Klausmeier's independent 2020 post (AMD FX-8120, Arch Linux, gcc 9.3.0) timed n-queens counting for N=1..12 at 0.32 s in Pallene vs 3.92 s in Pallene's bundled Lua 5.4 (about 12x), 0.58 s in LuaJIT and 0.2 s in C at -O3, and an array-of-records float loop (N=4000, S=1000) at 0.14 s vs 0.72 s for Lua 5.4 (about 5x) but 0.07 s for LuaJIT (ratios derived from page data). Single runs with a 2020 Pallene; Pallene and Lua build flags are not stated, and the peer-reviewed paper numbers were only visible as snippets.",
+  "status_note": "Actively developed research compiler (described in PUC-Rio papers) (last commit 2026-09-30, new issues filed in October 2026), MIT-licensed and installed from source with make install; maintainers enforce a strict no-LLM/no-AI contribution policy.",
+  "sources_read": [
+    "https://github.com/pallene-lang/pallene",
+    "https://github.com/pallene-lang/pallene/commits/master",
+    "https://github.com/pallene-lang/pallene/commit/622c5c1",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/README.md",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/doc/manual.md",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/Makefile",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/configure",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/build",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/benchmarks/run",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/benchmarks/Makefile",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/benchmarks/benchlib.lua",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/deps/lua/upstream/src/lua.h",
+    "https://raw.githubusercontent.com/pallene-lang/pallene/HEAD/deps/lua/patches/expose-internal-apis.patch",
+    "https://github.com/pallene-lang/pallene/issues",
+    "https://github.com/pallene-lang/pallene/issues/507",
+    "https://github.com/pallene-lang/pallene/issues/552",
+    "https://github.com/pallene-lang/pallene/issues/651",
+    "https://raw.githubusercontent.com/eklausme/eklausme.github.io/HEAD/blog/2020/05-14-performance-comparison-pallene-vs-lua-5-1-5-2-5-3-5-4-vs-c/index.html",
+    "https://github.com/eklausme/c",
+    "https://raw.githubusercontent.com/eklausme/c/master/xdamcnt2.pln",
+    "https://raw.githubusercontent.com/eklausme/c/master/xdamcnt2.lua",
+    "https://raw.githubusercontent.com/eklausme/c/master/xdamcnt2.c",
+    "WebSearch results for '\"Pallene: A companion language for Lua\" pdf github' (paper links on inf.puc-rio.br, ScienceDirect, ReadKong; not opened)"
+  ],
+  "confidence": 0.75
+}
