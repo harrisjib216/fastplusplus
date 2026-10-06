@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/foundation-model-stack/fastsafetensors",
+  "one_liner": "Python safetensors loader with a C++17 pybind11 core that replaces mmap with parallel pread/GDS reads into GPU memory.",
+  "what_it_does": "Loads safetensors checkpoints straight into GPU (or CPU) memory for PyTorch and Paddle, and is wired into vLLM and SGLang as --load-format fastsafetensors. It is not a drop-in for safetensors.safe_open: the low-level API is SafeTensorsFileLoader(add_filenames, copy_files_to_device, get_tensor/get_sharded), with fastsafe_open, ParallelLoader and AutoLoader as easier entry points and ParallelSaver for writing sharded checkpoints.",
+  "how_it_is_fast": "It avoids mmap and demand paging: a fixed pool of std::thread workers issues large pread calls (O_DIRECT where available) into pinned bounce buffers, alternating two buffers and GPU streams per worker so disk reads overlap host-to-device copies. With GPU Direct Storage (cuFile on CUDA, hipFile on ROCm 7.2+, DirectStorage on Windows) data goes NVMe to GPU without host staging. Tensors are instantiated lazily via DLPack, and sharding (torch.distributed broadcast/scatter) and dtype conversion run on the GPU instead of the CPU.",
+  "when_to_use": [
+    "Cold-starting LLM inference servers (vLLM, SGLang) where weight loading from NVMe dominates startup time",
+    "Multi-GPU tensor-parallel loads where CPU-side slicing of mmapped tensors is the bottleneck",
+    "Nodes with GPUDirect Storage or hipFile (ROCm 7.2+) and fast NVMe or parallel file systems (3FS has a dedicated reader)",
+    "AMD MI300X / ROCm without GDS: the nogds bounce-buffer path still beat mmap 2.6x-4.7x on the project's GPT-2 runs"
+  ],
+  "when_not_to_use": [
+    "Weights already in page cache or tmpfs: InstantTensor's sibling table shows fastsafetensors at 0.76x of plain safetensors there",
+    "C++ applications that want a library to link: the C++ code is a pybind11 extension with no standalone C++ API",
+    "Memory-constrained or unified-memory hosts that load checkpoints in a loop: issue #94 reports about 2x file size retained after close()",
+    "Small models on CPU-only hosts, where thread and pinned-buffer setup costs are not repaid (not benchmarked by the project)",
+    "When you need byte-identical, battle-tested loading on new hardware without validation: issue #38 reported corrupted gpt-oss-120b weights on DGX Spark through GdsFileCopier's alignment path (workaround noalign=True or nogds=True)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python 3.10-3.14, typer; build needs setuptools and pybind11; runtime PyTorch or Paddle; optional CUDA cuFile, ROCm hipFile, libnuma, DirectStorage DLLs, fastsafetensor-3fs-reader",
+    "min_toolchain": "C++17 compiler (C++20 /std:c++20 on Windows MSVC), Python 3.10",
+    "platforms": "Linux x86-64 with CUDA or ROCm; Windows (DirectStorage via CUDA interop); unified-memory systems such as DGX Spark; aarch64 wheels were missing per issue #82",
+    "thread_safety": "not documented; loader owns a fixed worker pool and must be closed after its buffers/iterators",
+    "drop_in_for_baseline": "partial — vLLM/SGLang switch via a flag, but direct users must replace safe_open calls with the SafeTensorsFileLoader or fastsafe_open API"
+  },
+  "gotchas": [
+    "Default owning tensors keep the whole file or chunk allocation alive: a small view can pin a large buffer; borrowed_tensors=True avoids that but tensors become invalid after close()",
+    "Close the buffer or exhaust the ParallelLoader/AutoLoader iterator before loader.close(); loader.close() does not close an active iterator",
+    "GDS registration failure silently falls back to the nogds bounce-buffer path with only a warning, so performance can drop without an error",
+    "Bandwidth in perf.py is output tensor bytes over wall time, so F16 conversion runs report fewer bytes (0.77 GB/s) than the file size read"
+  ],
+  "pick_this_over_siblings_when": "Pick it over Run:ai Model Streamer when you want the loader already integrated into vLLM/SGLang with GDS and ROCm/hipFile support; pick InstantTensor instead if its 50 GB/s storage numbers (Qwen3-30B-A3B 1.77 s vs fastsafetensors 22.2 s) hold for your setup, and plain safetensors if weights are already cached.",
+  "verified_claims_summary": "On 8x AMD MI300X (ROCm, fastsafetensors 0.1.15, single-GPU loads, perf/fastsafetensors_perf/perf.py), the tuned nogds path loaded GPT-2 Medium (1.4 GB) at 6.02 GB/s vs 1.28 GB/s for safetensors mmap plus .to(device), and GPT-2 (523 MB) at 2.62 GB/s vs 1.01 GB/s; a cold-cache nogds run reached only 1.24 GB/s and mmap was not run cold. The 4.8x-7.5x and 26.4 GB/s (Llama-70B, 4 GPUs, GDS) figures come from the CLOUD 2025 paper, which was not opened.",
+  "status_note": "Actively maintained (version 0.4.0, Apache-2.0, 167 stars, commits into October 2026) and pip-installable, but it is a Python package for PyTorch/Paddle loaders rather than a C++ library.",
+  "sources_read": [
+    "https://github.com/foundation-model-stack/fastsafetensors",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/README.md",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/docs/amd-perf.md",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/docs/overview.md",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/setup.py",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/perf/fastsafetensors_perf/perf.py",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/fastsafetensors/cpp/ext.cpp",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/fastsafetensors/cpp/ext.hpp",
+    "https://raw.githubusercontent.com/foundation-model-stack/fastsafetensors/HEAD/fastsafetensors/loader.py",
+    "https://github.com/foundation-model-stack/fastsafetensors/issues?q=is%3Aissue",
+    "https://github.com/foundation-model-stack/fastsafetensors/issues/38",
+    "https://github.com/foundation-model-stack/fastsafetensors/issues/94"
+  ],
+  "confidence": 0.7
+}

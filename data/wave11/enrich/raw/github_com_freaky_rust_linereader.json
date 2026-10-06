@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/freaky/rust-linereader",
+  "one_liner": "Small Rust buffered reader returning borrowed line slices; beats std BufRead::read_until and lines() for byte-oriented line scanning.",
+  "what_it_does": "LineReader wraps any io::Read and hands out &[u8] slices of its own fixed internal buffer (64 KiB default, configurable delimiter and capacity) instead of copying into a caller Vec. It is a different interface, not a BufRead drop-in: next_line() returns Option<io::Result<&[u8]>> with the delimiter included, next_batch() returns every complete line currently in the buffer as one slice, and for_each() runs a closure per line.",
+  "how_it_is_fast": "It avoids per-line copying and allocation by borrowing from a fixed buffer, and finds delimiters with the memchr crate (memchr for the next line, memrchr to find the last complete line after each read). next_batch() skips per-line splitting entirely, so a caller with its own SIMD or parallel scanner gets whole blocks of complete lines at near raw read() speed; refill only moves the trailing partial line to the buffer start.",
+  "when_to_use": [
+    "Scanning large log or text files line by line as bytes (no UTF-8 validation needed) where read_until plus buf.clear() is the hot loop",
+    "Pipelines that can process many lines at once: next_batch() hands out multi-line blocks for your own memchr/SIMD parsing or for passing to worker threads",
+    "Inputs with a known maximum line length that fits comfortably within the buffer (configure with with_capacity)",
+    "Non-newline record separators such as NUL or tab via with_delimiter"
+  ],
+  "when_not_to_use": [
+    "Inputs with unbounded line length: lines longer than the buffer are silently split and you cannot tell a truncated line from a final line without a newline (open issue #3)",
+    "Code that needs owned Strings or UTF-8 validated lines: you must copy and validate yourself, which erodes the per-line gain",
+    "New projects that want maintained code: unmaintained since 2019 (v0.4.0); the author points to bstr for_byte_line (0.2.8+) as performing similarly without the line-length limit",
+    "Expecting the 7x headline per line: like-for-like next_line() was 1.51 s vs read_until 1.94 s (1.28x) on the README run"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr 2",
+    "min_toolchain": "not documented (Rust 2015 edition, extern crate syntax)",
+    "platforms": "any",
+    "thread_safety": "Single reader object with &mut self methods; returned slices borrow the reader, so it is not shared across threads (issue #1 on thread-friendly batching still open)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Returned slices borrow the reader's buffer and are invalidated by the next call, so collecting lines requires to_vec()",
+    "Lines longer than the buffer come back as several pieces, and the only hint is the missing trailing delimiter",
+    "Using get_mut() on the inner reader without reset() desynchronizes buffered state",
+    "When the leftover fragment is longer than the consumed part, refill uses Vec::drain plus extend with a fresh zeroed Vec, an allocation on that path"
+  ],
+  "pick_this_over_siblings_when": "rawscan is the closest sibling (C, beats fgets/getline on CPU time); pick linereader inside Rust code for byte-line scanning, and rawscan for C/C++ programs. For a maintained Rust option compare against bstr's for_byte_line before adopting this.",
+  "verified_claims_summary": "The author's README run on a 976 MB, 10.3M-line XML file (Westmere Xeon 2.1 GHz, FreeBSD/ZFS, compiler and harness not published) measured next_batch 0.27 s vs raw read() 0.25 s, next_line 1.51 s, std read_until 1.94 s, read_line 2.54 s and lines() 3.23 s; a second run recorded in src/lib.rs on a 31.6 GB, 501.6M-line input gave LineReader 407.52 MB/s vs read_until 252.62 MB/s (1.61x, derived from page data). The std BufReader capacity used for the baselines is not stated, versus LineReader's 64 KiB buffer.",
+  "status_note": "Abandoned since 2019-09-13 (v0.4.0 on crates.io, about 2.0M downloads, about 289k recent), but MIT-licensed, about 400 lines with no unsafe code and a single memchr dependency, so it is easy to vendor.",
+  "sources_read": [
+    "https://github.com/Freaky/rust-linereader",
+    "https://raw.githubusercontent.com/Freaky/rust-linereader/HEAD/README.md",
+    "https://raw.githubusercontent.com/Freaky/rust-linereader/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Freaky/rust-linereader/HEAD/src/lib.rs",
+    "https://crates.io/api/v1/crates/linereader",
+    "https://github.com/Freaky/rust-linereader/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.75
+}
