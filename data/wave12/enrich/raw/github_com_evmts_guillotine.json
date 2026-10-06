@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/evmts/guillotine",
+  "one_liner": "Early-alpha Zig EVM interpreter with tail-call threaded dispatch; first-party runs show it 1.05-1.48x faster than REVM, about level with evmone.",
+  "what_it_does": "An Ethereum Virtual Machine (interpreter, not a node) written in Zig, configured at compile time (hard fork, EIPs, opcode and precompile overrides, even word size) and exposed as a Zig module (MainnetEvm with init, call and simulate) plus experimental C, Go, Rust, Bun and TypeScript/Wasm SDKs that the README calls vibecoded proofs of concept. It is not a drop-in for REVM or Geth: you set up its own Database, BlockInfo and TransactionContext and call it through its own API.",
+  "how_it_is_fast": "Before running a frame it preprocesses the bytecode into a dispatch schedule of handler pointers with inline metadata, folding common sequences into synthetic fused opcodes (PUSH_ADD_INLINE and similar) and batching static gas and stack-height checks per basic block, then executes it with indirect threading through Zig's always_tail calls so each handler jumps straight to the next. It adds a hand-tuned stack, comptime removal of unused features, and assembly Keccak (keccak-asm).",
+  "when_to_use": [
+    "Research or experiments on EVM interpreter design in Zig, especially dispatch, opcode fusion and comptime-configured EVM variants.",
+    "Embedding an EVM in a Zig program where a C-ABI or Wasm build with a small footprint matters (README: 119 KB core EVM at ReleaseSmall without precompiles).",
+    "Compute-bound, single-call contract execution on mainnet rules (snailtracer-style loops, hashing) where the first-party numbers show about 1.3-1.5x over REVM, if you can verify the results yourself.",
+    "Building custom EVM variants (added or overridden opcodes and precompiles) without Rust generics and feature flags."
+  ],
+  "when_not_to_use": [
+    "Anything that must be consensus-correct: the README says DO NOT USE IN PRODUCTION and reports 1165 of 2251 Ethereum spec tests passing (about 52%, most failures in ecmul/BN254).",
+    "Production pipelines that need a maintained, audited engine: no commits since 2026-01-04, the repo says it is in flux, and the team now describes evmts/guillotine-mini as its spec-compliant core engine.",
+    "Linux or Windows builds without extra work: building is documented for macOS only and pins Zig 0.15.1 exactly plus a Rust toolchain for the crypto dependencies.",
+    "Browser or Wasm use expecting native speed: the dispatch code turns off forced tail calls on wasm32/wasm64, and the Bun SDK rows in results.md are 15-20 ms against 1-2 ms native.",
+    "OP Stack or Arbitrum chains: only Ethereum mainnet is supported."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "arkworks (Rust, elliptic curves), c-kzg-4844, keccak-asm, Zig std crypto; build-time zBench and zig-clap; FFI SDKs for Go, Rust, Bun, C, TypeScript",
+    "min_toolchain": "Zig 0.15.1 exactly, Rust 1.75+",
+    "platforms": "macOS documented; Linux planned; wasm32 build without forced tail calls",
+    "thread_safety": "not documented; each Evm instance holds a mutable journal, call arena and database pointer, so use one instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (evmts/evm-benchmarks, where the README says the benchmarks moved): src/guillotine_runner.zig calls evm.simulate and discards the result, never checking success, gas used or output, and main.zig only parses hyperfine means, so nothing confirms Guillotine and REVM did the same work; with about 48% of spec tests failing, a run that halts early would still be timed as fast. results.md itself admits the FFI runners fail on several rows (shown as 0.00 ms).",
+    "Harness flaw: the evm-benchmarks README says startup overhead is measured and subtracted, but runBenchmarkWithResult ignores the overhead argument and internal_runs is hard-coded to 1, so the 1-2 ms rows in results.md are whole-process times (process start, hex-decoding the bytecode from argv, database setup) comparing a Zig binary with a Rust clap binary; the same README's example output has REVM 1.44x faster than Guillotine on factorial.",
+    "Build asymmetry: REVM is built with plain cargo --release and default features, without its optional asm-keccak feature, while Guillotine uses assembly Keccak, which favours Guillotine on hash-heavy rows such as ten-thousand-hashes.",
+    "The README table (with evmone and Geth) comes from an evm-bench harness that now lives only in old commits, with no CPU, flags or versions; evm.zig rebuilds the dispatch schedule for every frame with no caching, so call-heavy workloads pay preprocessing on each CALL."
+  ],
+  "pick_this_over_siblings_when": "evmone (C++) matches or beats it on 3 of 5 README rows and is spec-compliant, and revm is the maintained Rust standard used across the ecosystem, so pick either for real work; pick Guillotine only for a Zig-native, comptime-configurable EVM experiment. evm2 (alloy-rs) is the sibling to watch if you need more than REVM speed in Rust.",
+  "verified_claims_summary": "First-party README table: evm-bench workloads timed with hyperfine, ms per run, on unstated hardware and flags, showing Guillotine 1.05-1.48x faster than REVM, 2.3-3.8x faster than Geth and within about 10% of evmone (slower on 3 of 5 rows). The successor evm-benchmarks results.md (1 run per process, startup not subtracted, no result check) shows native Guillotine 1.03-1.8x faster than REVM on 33 rows that are mostly 1-2 ms.",
+  "status_note": "MIT and 170 stars, but early alpha (about 52% spec-test pass rate), idle since 2026-01-04 while the team builds a full client on evmts/guillotine-mini, macOS-only build, so treat it as a reference design rather than a library to depend on.",
+  "sources_read": [
+    "https://github.com/evmts/guillotine",
+    "https://github.com/evmts/guillotine/commits",
+    "https://github.com/evmts/guillotine/tree/main/bench",
+    "https://github.com/evmts/guillotine/issues?q=is%3Aissue+benchmark",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/README.md",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/src/evm.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/src/preprocessor/dispatch.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/bench/evm_fixture_benchmarks.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/bench/evm_benchmarks.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/bench/evm_benchmarks_simple.zig",
+    "https://raw.githubusercontent.com/evmts/guillotine/HEAD/bench/build.zig",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/results.md",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/src/guillotine_runner.zig",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/src/revm_executor.rs",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/src/evm.rs",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/build.zig",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/run.sh",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/fixtures/factorial.json",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/fixtures/snailtracer.json",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/fixtures/ten-thousand-hashes.json",
+    "https://raw.githubusercontent.com/evmts/evm-benchmarks/HEAD/fixtures/erc20transfer.json",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/revm/Cargo.toml",
+    "https://github.com/evmts/guillotine-mini",
+    "https://raw.githubusercontent.com/evmts/guillotine-mini/HEAD/README.md",
+    "https://gist.github.com/roninjin10/5dd988c2a95f01ef8c885a809f9f2396"
+  ],
+  "confidence": 0.6
+}

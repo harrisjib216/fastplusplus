@@ -44,3 +44,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - tamnd/bento (Go JavaScript runtime by the katsu author; katsu enricher, 2026-10-06); weak lead.
 - AssemblyScript plus json-as (TypeScript-to-native peers named in Perry's benchmarks/README.md) and Turso (Rust SQLite rewrite, Go driver turso.tech/database/tursogo): leads from the Perry and musql enricher (2026-10-06), repos not opened.
 - risechain/pevm (parallel EVM on revm): README claims 2x average over sequential revm on Ethereum blocks and 22x on a Gigagas Uniswap block, numbers in crates/pevm/benches/README.md (revm enricher, 2026-10-06, not read); seed candidate.
+- 0xjojoex/evm.zig and cryptuon/zig-evm (claims 5-6x parallel transaction execution): Zig EVM leads from WebSearch, unverified (Guillotine enricher, 2026-10-06).

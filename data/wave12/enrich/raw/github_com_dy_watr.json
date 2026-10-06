@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/dy/watr",
+  "one_liner": "Zero-dependency pure-JavaScript WAT-to-Wasm compiler; about 3.6x wabt.js and 6.6x binaryen.js on one small module, in-process.",
+  "what_it_does": "Compiles WebAssembly text (WAT, including GC, SIMD, exceptions, memory64, threads and other post-MVP proposals) to a Wasm binary from JavaScript, and also parses, pretty-prints, minifies, polyfills newer features down to MVP and optimizes. The API is compile(src) returning a Uint8Array, parse/print, a watr`...` tagged template that compiles and instantiates in one step, and separate watr/optimize and watr/polyfill entries; there is also an npx watr CLI. It is not a drop-in for wabt's libwabt.js API (parseWat/toBinary) but covers the wat2wasm use case.",
+  "how_it_is_fast": "A single-pass charCodeAt tokenizer turns the text into nested arrays of source slices, and a direct encoder walks that tree to bytes, all in plain JavaScript (about 44 KB minified); a compile call has no Wasm module instantiation, no copying of source text into a Wasm heap and no IR construction, unlike the Emscripten builds of wabt and Binaryen it is compared with. The code section is written into a growable Uint8Array byte buffer rather than a JS array of numbers, and the cleanup pass copies an AST node only where it changes. It does not type-check function bodies, which also skips work a validating toolchain does.",
+  "when_to_use": [
+    "Generating WAT at runtime in a browser or Node (DSLs, JIT-style codegen, teaching tools, playgrounds) and compiling it in-process many times per second.",
+    "Small to medium modules (the benchmark input is a 200-line, 6.5 KB file) where per-call overhead of loading wabt.js or binaryen.js dominates.",
+    "Bundle-size-sensitive front ends: 44 KB minified (14 KB gzipped) versus 282 KB for wabt.js and 1,100 KB for binaryen.js per the README.",
+    "Size-oriented optimization of hand-written or generated WAT inside a JS build step without spawning wasm-opt (README: 19,734 B total versus 19,852 B for wasm-opt -Oz on its 21 example modules).",
+    "Targeting older engines: watr/polyfill lowers newer proposals to MVP before compiling."
+  ],
+  "when_not_to_use": [
+    "When you need a validator: watr does not type-check bodies, so invalid WAT can compile to an invalid binary that only fails at WebAssembly.Module time.",
+    "Large modules or heavy optimization: the README says Binaryen's native core is faster on a 5.5 MB module (0.44 s versus about 2.6 s optimize plus 0.19 s compile).",
+    "Native toolchains and build systems that already call wabt's wat2wasm or wasm-opt as native binaries; the comparison is against their JavaScript/Wasm builds, not the native CLIs.",
+    "When you need the rest of a toolkit (wasm2wat, objdump, interpreter, wasm2c): watr only goes text to binary.",
+    "Production use of watr/optimize without your own tests: the optimizer received several correctness fixes in late September and early October 2026."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "not documented (ES-module JavaScript, no engines field in package.json; tests run on Node with --experimental-wasm-exnref and in a browser)",
+    "platforms": "any JavaScript engine with ES modules (Node, browsers); a jz-compiled dist/watr.wasm build is also shipped",
+    "thread_safety": "not documented; single-threaded JS, and compile.js keeps module-level error-location state, so use one instance per worker (each worker loads its own copy)",
+    "drop_in_for_baseline": "partial: replaces wabt's wat2wasm (text to binary) and Binaryen parseText plus emitBinary for that job, with a different API and without validation or the other wabt/Binaryen tools"
+  },
+  "gotchas": [
+    "Harness flaw: test/bench.js times one tiny input (test/example/brownian.wat, 200 lines, 6.5 KB) 500 times with no warmup, in a fixed order, with no check that the five outputs are equal; it fetches a relative path, so it runs only in the browser test page, and test/index.js has the bench import commented out, so the README op/s figures come from a manual run with no CPU, browser or engine version stated.",
+    "Harness flaw: the wabt arm (test/util.js wat2wasm) calls toBinary with log: true, so wabt also builds a text log of the binary writer on every iteration, and enables 18 feature flags; this likely handicaps the baseline by an unmeasured amount. On a 6.5 KB input the fixed per-call cost of the Wasm builds (copying text into the Wasm heap, Module dispose) probably weighs heavily too.",
+    "No validation: the spec testsuite's assert_invalid cases pass because the harness hands watr's output to V8's WebAssembly.Module; test/util.js also skips whole classes of assert_invalid (constant-expression rules, offset range, 64-bit alignment, tag result types, custom annotation placement).",
+    "The optimizer comparison (about 110 ms in-process versus 990 ms for wasm-opt as a CLI) has no committed script and includes process spawn on the wasm-opt side; the size numbers predate several optimizer correctness fixes committed 2026-09-29 to 2026-10-01."
+  ],
+  "pick_this_over_siblings_when": "No sibling is a WAT text compiler; wasm2c (WABT) belongs to the same toolkit as the wabt baseline, so pick WABT when you want a native, validating toolchain and pick watr when you must compile WAT inside a JavaScript process with a small bundle. jz (same author) uses watr as its backend, so jz users get it implicitly.",
+  "verified_claims_summary": "In a browser-run loop of 500 compiles of one 6.5 KB WAT file, watr reached 3,123 op/s versus 859 op/s for wabt.js (with its binary-writer log enabled), 473 op/s for binaryen.js parseText plus emitBinary, 1,509 op/s for the spec interpreter's wast.js and 355 op/s for wat-compiler; first-party, no CPU, browser or engine version, no warmup and no output-equality check.",
+  "status_note": "Very actively maintained (v5.11.9, commits through 2026-10-01, one open issue) and MIT-licensed (also offered under the Krishnized License), zero-dependency and easy to vendor, but the speed numbers are a single first-party browser run on one small input with a handicapped wabt arm.",
+  "sources_read": [
+    "https://github.com/dy/watr",
+    "https://github.com/dy/watr/commits/main",
+    "https://github.com/dy/watr/issues?q=is%3Aissue",
+    "https://github.com/dy/watr/tree/main/test",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/readme.md",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/docs.md",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/package.json",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/watr.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/src/compile.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/src/parse.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/src/optimize.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/bench.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/util.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/testsuite.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/optimize.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/index.js",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/index.html",
+    "https://raw.githubusercontent.com/dy/watr/HEAD/test/example/brownian.wat"
+  ],
+  "confidence": 0.6
+}
