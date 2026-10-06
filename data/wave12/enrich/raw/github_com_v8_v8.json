@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/v8/v8",
+  "one_liner": "Google's JIT JavaScript and WebAssembly engine (Chrome, Node.js); about 36-44x QuickJS on the Octane v8-v7 suite.",
+  "what_it_does": "V8 is an ECMAScript and WebAssembly engine that runs standalone (the d8 shell) or embedded in a C++ host. The host initializes a v8::Platform, creates an Isolate (one heap, used by one thread at a time), opens HandleScopes and Contexts, then compiles and runs scripts through v8::Script::Compile/Run and exchanges values through Local<> handles. It is not a drop-in for QuickJS or Duktape: the API is a large, C++20-only object model with its own handle and scope rules.",
+  "how_it_is_fast": "Tiered execution driven by type feedback and inline caches: the Ignition bytecode interpreter collects feedback, hot functions tier up to Sparkplug (baseline compiler), Maglev (mid-tier optimizing compiler, also the on-stack-replacement target) and TurboFan with Turboshaft phases (top-tier speculative optimizer), with deoptimization when speculation fails; an experimental Turbolev tier (Maglev plus Turboshaft) exists behind a flag. Compilation runs concurrently on background threads, regular expressions are compiled to native code with tier-up, and the GC uses parallel scavenges and concurrent marking. The gap over QuickJS in this suite is the warmed-up JIT versus interpreter gap.",
+  "when_to_use": [
+    "Long-running, compute-heavy JavaScript inside a C++ host where warmed-up throughput matters: 48107 vs QuickJS 1217 on Ubuntu, 64220 vs 1761 on macOS arm64, 46932 vs 1067 on Windows.",
+    "Object- and call-heavy code (DeltaBlue 106708 vs 757, RayTrace 116474 vs 1594 on Ubuntu) where speculative optimization pays off most.",
+    "Hosts that also need fast WebAssembly through the same embedding API (the repo's hello-world sample compiles and runs a Wasm module next to a script).",
+    "x64 or arm64 desktop and server hosts that can afford tens of MB, a C++20 toolchain and the gn/depot_tools build, and want the same engine semantics as Chrome and Node.js.",
+    "Multi-tenant hosts that run several Isolates in parallel on separate threads."
+  ],
+  "when_not_to_use": [
+    "Platforms that forbid runtime-allocated executable memory: with --jitless only the interpreter remains, and plb2's Node-nojit row (Apple M1) is no faster than QuickJS (nqueen 55.48 s vs 59.04 s, matmul 162.84 s vs 135.66 s, sudoku 63.91 s vs 67.55 s).",
+    "Small or embedded hosts: the shootout's V8 builds are 28.8 MB (macOS d8) to 66 MB (Ubuntu shell plus shared libraries) versus about 1 MB for QuickJS, and Score/MB on Ubuntu is 729 vs QuickJS 1190.",
+    "Short scripts and cold starts: the suite throws away a one-second warm-up per benchmark, so start-up and JIT warm-up cost are not in these numbers; plb2 notes JIT runtimes need up to about 0.3 s to compile and warm up.",
+    "Regex-heavy workloads or macOS arm64 hosts where JavaScriptCore is an option: JSC beats V8 on RegExp on all three OSes (14308 vs 11558 Ubuntu, 31307 vs 16440 macOS, 19236 vs 10455 Windows) and on the macOS arm64 total (67664 vs 64220).",
+    "Projects that cannot adopt the gn/depot_tools build, C++20, or keep up with frequent V8 releases and security fixes."
+  ],
+  "integration": {
+    "form": "static lib (v8_monolith target with v8_monolithic = true, is_component_build = false, v8_use_external_startup_data = false) or a set of shared libraries (component build)",
+    "dependencies": "depot_tools (gclient, gn, ninja) to fetch and build; ICU when v8_enable_i18n_support is on (InitializeICUDefaultLocation in the sample); libplatform from the same tree. The shootout's Linux build script also sets use_custom_libcxx = true, so check which C++ standard library your V8 build links before mixing it with your own.",
+    "min_toolchain": "C++20 (include/v8config.h errors out when __cplusplus <= 201703L)",
+    "platforms": "Target architectures x64, ia32, arm, arm64, mips64, loong64, ppc64, s390x, riscv64 and riscv32 (v8config.h); Linux, macOS and Windows binaries in the shootout",
+    "thread_safety": "An Isolate may be used by only one thread at a time; v8::Locker/v8::Unlocker must mark thread switches. Separate Isolates can run on separate threads. V8 also starts background threads for concurrent compilation and GC (--single_threaded disables background tasks).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The embedder must be compiled with the same build configuration as the V8 library: V8::Initialize() checks pointer compression, 31-bit Smis, the sandbox, Android target and checks flags against the binary and refuses to start on a mismatch.",
+    "Harness: the three V8 columns are different builds. Ubuntu runs ahaoboy/v8-build's tip-of-tree main (15.7.0; the 'git checkout $VERSION' line is commented out) built with is_component_build = true (934.6 KB d8 plus 65.1 MB of shared libraries), while Windows and macOS arm64 run Google's official canary binaries (v8-win64-rel / v8-mac-arm64-rel 15.7.35) downloaded from storage.googleapis.com. That build script also calls ninja v8_monolith, a target V8's BUILD.gn only defines for non-component builds.",
+    "Harness: each benchmark gets a thrown-away warm-up of at least 1 s, then at least 1 s and 32 iterations of measurement; the score is reference time over the geometric mean, and each engine runs once per OS on a shared GitHub-hosted runner with no repetitions or variance, so the numbers are warmed-up peak throughput only.",
+    "JIT engines carry a large attack surface: WebSearch snippets (pages not opened) report CVE-2026-85046, a V8 type confusion exploited in the wild and fixed in Chrome 152.0.7977.82 on 2026-09-04. Embedders running untrusted code must track V8's security releases or use --jitless."
+  ],
+  "pick_this_over_siblings_when": "Pick V8 over SpiderMonkey (19137) and ChakraCore (19392) when you want about 2.5x their Ubuntu score and an engine under daily development; pick it over QuickJS, Escargot, PrimJS or Hermes only when peak throughput on long-running code justifies 28-66 MB, C++20 and a gn build. On locked-down no-JIT platforms QuickJS gives the same speed as jitless V8 at a fraction of the size.",
+  "verified_claims_summary": "In ahaoboy/js-engine-benchmark (an Octane v8-v7 subset forked from Mozilla's arewefastyet, one run per engine on GitHub-hosted runners with unstated CPUs, results dated 10/5/2026), the d8 shell scored 48107 vs QuickJS 2026-06-04 1217 on Ubuntu (V8 main 15.7.0, component build), 64220 vs 1761 on macOS arm64 and 46932 vs 1067 on Windows (official canary 15.7.35 binaries). plb2 on an Apple M1 MacBook Pro (hyperfine wall-clock, start-up included) shows Node 21.5.0 at 3.73 s vs QuickJS 59.04 s for nqueen and 2.88 s vs 135.66 s for matmul.",
+  "status_note": "Very active (several commits on 2026-10-06; main is version 15.7), BSD-3-Clause and copyable, but the GitHub repo is a read-only mirror of chromium.googlesource.com with issues disabled, and embedding means owning a heavy toolchain and a steady security-update cadence.",
+  "sources_read": [
+    "https://github.com/v8/v8",
+    "https://github.com/v8/v8/commits/main",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/README.md",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/include/v8config.h",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/include/v8-version.h",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/include/v8-locker.h",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/include/v8-isolate.h",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/include/v8-initialization.h",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/samples/hello-world.cc",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/BUILD.gn",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/v8/v8/HEAD/src/flags/flag-definitions.h",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/update.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/build.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/test.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/info.json",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/.github/workflows/update.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/run.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/base.js",
+    "https://raw.githubusercontent.com/ahaoboy/v8-build/HEAD/readme.md",
+    "https://raw.githubusercontent.com/ahaoboy/v8-build/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/ahaoboy/v8-build/HEAD/v8-linux.sh",
+    "https://raw.githubusercontent.com/ahaoboy/v8-build/HEAD/v8-macos.sh",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
