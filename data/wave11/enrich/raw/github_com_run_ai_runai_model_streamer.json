@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/run-ai/runai-model-streamer",
+  "one_liner": "Concurrent C++ safetensors reader with a Python API that loads model weights to GPU faster than Hugging Face's safetensors loader.",
+  "what_it_does": "Model Streamer (renamed from Run:ai Model Streamer; now at dsx-ai-factory/model-streamer) streams tensors from safetensors files on local disk, network file systems, S3, GCS or Azure Blob into a CPU buffer and yields them one by one so the caller can copy each to the GPU while later tensors are still being read. The API is a SafetensorsStreamer context manager with stream_file/stream_files and a get_tensors() iterator, plus optional tensor_names filtering and distributed streaming across ranks; it is also a vLLM load format. It is not a drop-in for safetensors.safe_open: the caller iterates (name, tensor) pairs and must clone tensors it keeps.",
+  "how_it_is_fast": "Reads are split into chunks (2 MiB default on file systems, 8 MiB on object stores) and issued concurrently, overlapping storage reads with host-to-GPU copies instead of mmap page faults or a serial read. Current versions pick a file-system strategy per host from io_uring_direct, io_uring_buffered, libaio_direct and a sync_buffered thread pool (default queue depth 512 for the async engines, 16 threads for the pool), with O_DIRECT where the mount supports it. Object storage uses many parallel ranged GETs (AWS CRT client, about 10 Gbit/s per client), and distributed mode has each rank read a slice and broadcast it over NCCL.",
+  "when_to_use": [
+    "Cold-start loading of large single-file or sharded safetensors checkpoints from cloud block storage (EBS GP3/IO2-class) where one reader cannot saturate the volume.",
+    "Loading weights directly from S3, GCS or Azure Blob without first copying to local disk, especially with multiple GPUs on NVLink using distributed streaming.",
+    "vLLM or PyTorch inference servers that autoscale and need short time-to-ready on x86-64 Linux.",
+    "Network file systems or virtiofs where per-filesystem queue depth tuning (RUNAI_STREAMER_FS_QUEUE_DEPTH=\"512,nfs=64\") helps."
+  ],
+  "when_not_to_use": [
+    "Mixture-of-experts checkpoints with tens of thousands of small tensors: issue #225 reports Qwen3-Next-80B (75,944 tensors, 162.7 GB) loading in 125.7 s versus 43.6 s with vLLM's default safetensors loader (2.9x slower) on a B200, from forced tensor clones and out-of-order delivery.",
+    "Warm page cache or very fast local NVMe/tmpfs: the published wins are against throttled cold EBS volumes, and InstantTensor's table shows this streamer at 9.29 s versus 1.77 s for InstantTensor on 50 GB/s storage.",
+    "Single-reader setups: at concurrency 1 it matched safetensors on GP3 (47.56 s vs 47.99 s), so the gain comes only from parallel reads.",
+    "Non-PyTorch frameworks or non-safetensors formats (docs say PyTorch only), and aarch64 via pip (pip install is documented for x86_64)."
+  ],
+  "integration": {
+    "form": "module (pip wheel runai-model-streamer with a bundled C++ shared library; optional [s3], [gcs], [azure] backend packages)",
+    "dependencies": "PyTorch; libcurl4 and libssl for the C++ core; object-storage extras ship libstreamers3.so statically linked to libssl, libcrypto and libcurl; backend packages must match the core version exactly",
+    "min_toolchain": "C++17, built with Bazel in -c opt (-O2) inside the project devcontainer; prebuilt wheels for x86_64 Linux",
+    "platforms": "Linux x86-64 (pip); aarch64 build config exists (-march=armv8-a+crc+crypto); io_uring and libaio engines probed at runtime with sync_buffered fallback",
+    "thread_safety": "not documented for sharing one SafetensorsStreamer across threads; each streamer owns its OS reader threads, which close with the context manager",
+    "drop_in_for_baseline": "partial: works as a vLLM load format, but direct users replace safe_open/load_file with a streaming iterator and must clone tensors they keep"
+  },
+  "gotchas": [
+    "Yielded tensors live in a reused CPU (or, in distributed mode, device staging) buffer and may be overwritten under RUNAI_STREAMER_MEMORY_LIMIT or freed when the streamer closes; clone them if you keep them (issue #230 tracks owned tensors).",
+    "Default CPU buffer cap is 40 GB in non-distributed mode; distributed streaming needs staging buffers of twice the largest tensor per device.",
+    "Concurrency must be tuned per storage: the GP3 result plateaued at concurrency 4-16 (14.43-14.34 s) because the volume's 1 GiB/s limit was hit, while S3 kept improving up to 32.",
+    "Distributed streaming is on by default for object storage to CUDA, and every rank must pass identical tensor_names; mixing S3 and file paths in one stream_files call is not allowed."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fastsafetensors when weights sit in S3, GCS or Azure Blob or on throttled cloud block volumes and you want vLLM's built-in integration; prefer InstantTensor or fastsafetensors (GDS) for fast local NVMe or many-tensor MoE checkpoints, where this streamer was measured slower.",
+  "verified_claims_summary": "First-party benchmarks.md (Model Streamer 0.6.0, vLLM 0.5.5, CUDA 12.4, AWS g5.12xlarge with one A10G, cold cache) loaded the 15 GB Meta-Llama-3-8B safetensors file in 14.34 s at concurrency 16 versus 47.99 s for the HF safetensors loader on GP3 (3.3x, derived from page data; about 1.05 GB/s versus 0.31 GB/s, derived from page data), 7.53 s versus 47 s on IO2 (6.2x, derived from page data), and 4.88 s versus Tensorizer's 37.36 s from S3; vLLM time-to-ready fell from 66.13 s to 35.08 s on GP3. These numbers predate the io_uring/libaio engines in current code, and no benchmark scripts, CPU model or build flags are published.",
+  "status_note": "Actively maintained (commits through 2026-10-05, 383 stars, Apache-2.0), installable from PyPI as runai-model-streamer; the repo moved to dsx-ai-factory/model-streamer in September 2026 with the old URL redirecting.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/run-ai/runai-model-streamer/HEAD/README.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/README.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/docs/src/benchmarks.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/docs/README.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/docs/src/env-vars.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/docs/src/installation.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/docs/src/usage.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/cpp/README.md",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/cpp/.bazelrc",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/cpp/posix_io/strategy/strategy.h",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/cpp/posix_io/strategy/strategy.cc",
+    "https://raw.githubusercontent.com/dsx-ai-factory/model-streamer/HEAD/cpp/posix_io/engine_factory/engine_factory.cc",
+    "https://github.com/dsx-ai-factory/model-streamer",
+    "https://github.com/dsx-ai-factory/model-streamer/tree/master/cpp",
+    "https://github.com/dsx-ai-factory/model-streamer/tree/master/cpp/posix_io",
+    "https://github.com/dsx-ai-factory/model-streamer/tree/master/cpp/posix_io/strategy",
+    "https://github.com/dsx-ai-factory/model-streamer/issues",
+    "https://github.com/dsx-ai-factory/model-streamer/issues/225",
+    "https://github.com/dsx-ai-factory/model-streamer/releases"
+  ],
+  "confidence": 0.75
+}
