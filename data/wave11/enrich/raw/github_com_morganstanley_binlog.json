@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/morganstanley/binlog",
+  "one_liner": "Asynchronous C++ logger writing structured binary logs; about 15x lower p50 call-site latency than async spdlog in Quill's harness.",
+  "what_it_does": "Binlog logs events as structured binary records instead of formatted text: macros such as BINLOG_INFO(\"x={}\", v) copy the arguments raw into a per-thread lock-free queue, and a consumer you run yourself (Session::consume or binlog::consume on an ostream) drains the queues to a .blog file. Static parts (severity, category, format string, file, line) are written once per call site as an EventSource and events reference them by id. The bread tool converts the .blog file to text (custom format, optional sort by time), and brecovery pulls unconsumed events out of a coredump. The API is macro-based and different from spdlog's logger objects and sinks, so it is not a drop-in replacement.",
+  "how_it_is_fast": "The hot path does no text formatting: it computes the serialized size, reserves contiguous space in a single-producer single-consumer byte queue (default 1 MiB per thread-local writer), memcpy-serializes the arguments with the bundled Mserialize library, and commits with one release store of the write index. Metadata goes through a mutex only the first time a call site fires, and the number of placeholders is checked at compile time. Formatting, timestamp rendering and sorting move offline to bread, which is also why the binary-log throughput (61.79M msg/s in Quill's table) is far above text loggers.",
+  "when_to_use": [
+    "Latency-sensitive C++ services (trading, telemetry) where call-site cost matters and an offline decode step is acceptable",
+    "High-volume logging where smaller raw files help: Quill measured 177 MB binary vs 448 MB text for the same messages (35 MB vs 47 MB zipped)",
+    "Logging containers, tuples, optionals, enums and adapted structs without writing formatters; values (e.g. exact floats) are kept losslessly",
+    "Applications with a main loop or a dedicated thread that can call consume() periodically, since the library runs no hidden backend thread",
+    "Post-mortem debugging where recovering the last queued events from a coredump (brecovery) is valuable"
+  ],
+  "when_not_to_use": [
+    "When logs must be human-readable on disk or piped straight to text tools; every reader needs bread or the binlog reader library",
+    "When tail latency is the target: Quill's harness shows p99.9 of 119 ns (1 thread) and 445 ns (4 threads), against 9-18 ns for Quill, XTR and fmtlog",
+    "Long-lived dependency: the repository was archived read-only on 2026-07-01, with open issues such as a compile error on Ubuntu 24.04 (#189) and an ASAN-reported leak on std::exit (#159)",
+    "Code that logs from global destructors through the default macros (documented undefined behavior from static init order)",
+    "Bursty producers with a slow consumer: a full queue makes the writer allocate a new, larger channel under the session mutex on the hot path, so memory grows instead of dropping or blocking"
+  ],
+  "integration": {
+    "form": "header-only (producer side); static lib and bread executable for reading",
+    "dependencies": "none for logging (links -lrt on Linux); Boost optional for tests, Google Benchmark optional for perf tests",
+    "min_toolchain": "C++14, CMake 3.1+; built and tested with recent GCC, Clang and MSVC",
+    "platforms": "Linux, macOS, Windows (per README); log files use host byte order",
+    "thread_safety": "Session methods are thread-safe (mutex for metadata and consume); each SessionWriter is single-producer, and the default macros use a thread_local writer, so logging from many threads is safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Getters of adapted structs are called twice per event (once for sizing, once for serializing) and must return the same value, or behavior is undefined",
+    "char* arguments are logged as a single character by default, not as strings; use const char* or string_view, or opt in to treating char* as a string",
+    "Default timestamps use std::chrono::system_clock (about 34 ns per event in its own benchmark vs 9 ns with TSC); a TSC clock needs the _W/_C macro and session setup",
+    "On log rotation you must call Session::reconsumeMetadata, or the new file cannot be decoded on its own"
+  ],
+  "pick_this_over_siblings_when": "Pick binlog over Quill, XTR or fmtlog when you want a binary log with offline decoding, coredump recovery and lossless typed values, and can accept about 18 ns p50 instead of about 6 ns and a worse p99.9; pick it over BqLog when call-site latency matters (18 vs 125 ns p50 in the same harness). For an actively maintained text logger, Quill is the safer choice.",
+  "verified_claims_summary": "In Quill v13's harness (odygrd/logger_benchmarks, GCC 14.2, Release -march=x86-64-v3, Intel Core i5-12600 @ 4.8 GHz on a tuned RHEL 9.4 box), logging two ints and a double took 18/119 ns at p50/p99.9 on 1 thread vs 271/360 ns for async spdlog with a file sink, and 29/445 vs 557/1106 ns on 4 threads; a vector of 16 long strings took 60 vs 6906 ns p50. The 61.79M msg/s backend throughput vs spdlog's 2.57M compares binary output with text output, which Quill itself flags as not comparable.",
+  "status_note": "Abandoned: archived read-only on 2026-07-01 after dependabot-only commits (last 2026-03-03), but Apache-2.0 and header-only on the producer side, so vendoring is easy; fixes for open issues will not come upstream.",
+  "sources_read": [
+    "https://github.com/morganstanley/binlog",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/README.md",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/doc/UserGuide.md",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/doc/Internals.md",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/SessionWriter.hpp",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/Session.hpp",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/default_session.hpp",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/detail/Queue.hpp",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/detail/QueueWriter.hpp",
+    "https://raw.githubusercontent.com/morganstanley/binlog/HEAD/include/binlog/basic_log_macros.hpp",
+    "https://github.com/morganstanley/binlog/issues?q=is%3Aissue",
+    "https://github.com/morganstanley/binlog/issues/171",
+    "https://github.com/morganstanley/binlog/issues/159",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md",
+    "https://github.com/odygrd/logger_benchmarks",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/HEAD/README.md",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks/call_site_latency",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_ms_binlog_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_spdlog_call_site_latency.cpp"
+  ],
+  "confidence": 0.85
+}
