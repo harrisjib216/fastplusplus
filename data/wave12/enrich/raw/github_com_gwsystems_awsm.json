@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/gwsystems/awsm",
+  "one_liner": "Research ahead-of-time Wasm-to-LLVM compiler plus a tiny C runtime; its 2020 PolyBench/C slowdown over native C was 13.4%, against WAVM 28.1% and Wasmer 149.8%.",
+  "what_it_does": "The awsm binary (Rust) translates a WebAssembly MVP module into LLVM bitcode. You then compile that bitcode with clang together with aWsm's C runtime (runtime.c, one memory/<mechanism>.c file and a libc/WASI backing), using LTO, to get a native executable or a plain ELF .o that exports wasm__start and links into a larger C/C++ program. There is no embedding API like Wasmtime's: the build pipeline is the interface, and code_benches/run.py is the reference recipe.",
+  "how_it_is_fast": "Every Wasm load and store becomes a call to a small always_inline C stub (get_i32, set_f64 and so on), and indirect calls go through a C table check; LLVM LTO inlines these into the generated code, so the guest gets the full clang -O3 pipeline. Bounds checks are a link-time choice among memory/*.c files: on 64-bit Unix (64bit_nix.c) the runtime reserves 4 GiB plus one 64 KiB guard page as PROT_NONE, so loads and stores carry no check and stray accesses fault. Other files do explicit compare-and-assert checks (generic.c), Intel MPX, x86-32 segmentation, Cortex-M MPU or wrap-around masking, or no protection at all.",
+  "when_to_use": [
+    "Sandboxing compute-bound C/C++ compiled to Wasm (MVP feature set) inside a native program, where AOT compile time at build is fine and you want speed close to native.",
+    "Arm Cortex-M firmware that needs software-isolated components: on an nRF52840 (Cortex-M4), Arm's bento-linker measured aWsm at 78,896 ns against 132,688 ns for WAMR AOT and 2,079,359 ns for wasm3 on qsort, with code size close to native (5,280 B vs 5,228 B).",
+    "Research on bounds-checking strategies: swapping one runtime C file changes the isolation mechanism, and the compiler is under 3.5K lines of Rust.",
+    "Builds that want plain ELF objects to link statically rather than a runtime that loads modules at run time."
+  ],
+  "when_not_to_use": [
+    "Anything that needs post-MVP Wasm: SIMD, threads, multi-value (issue #72), f32/f64 globals (issue #102) and other roadmap features are unsupported, and wasmparser is pinned at 0.58 (2020). The README says not every Wasm instruction is implemented.",
+    "Running untrusted or third-party Wasm in production: the Wasm spec test suite is not run (issue #46), and issue #56 (open since 2021) reports invalid LLVM bitcode at -O1/-O2/-O3 and wrong output at -O0 for modules that run correctly on Wasmtime.",
+    "Workloads that need fast download-to-run latency, such as JIT or interpreter use cases; the README says the AOT design is not a fit there.",
+    "Teams that need a supported toolchain: pinned to Rust 1.56.0, LLVM 13, wasi-sdk 12 and a forked llvm-rs branch. The README calls it a research prototype that is 'not currently turn-key'.",
+    "Hosts that run many instances in one process with the stock runtime: linear memory, its size and the indirect table are process globals. Sledge supplies its own multi-sandbox runtime."
+  ],
+  "integration": {
+    "form": "Rust CLI compiler (cargo build) plus a C runtime source-drop compiled and LTO-linked with the generated bitcode",
+    "dependencies": "LLVM/clang 13 with libc++ (llvm-alt from the gwsystems/llvm-rs 'sfbase' branch), wasmparser 0.58, a Wasm C toolchain (wasi-sdk 12 or the wasmception submodule), and libuv plus uvwasi for the WASI backing",
+    "min_toolchain": "Rust 1.56.0 (pinned by install_deb.sh), LLVM 13, wasi-sdk 12",
+    "platforms": "x86-64, x86-32, aarch64 and Thumb (Cortex-M4/M7); the hosted pipeline (run.py) supports Linux and macOS",
+    "thread_safety": "Not documented. The stock runtime keeps linear memory, memory_size, runtime_heap_base and the indirect table in process-wide globals, so it supports one sandbox instance per process.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "On Linux and macOS, awsm_assert is plain assert(). Building the runtime with -DNDEBUG, the usual release flag, silently removes the explicit bounds checks (generic.c), the indirect-call type checks and other runtime checks. Only the 64bit_nix.c guard-page mode keeps memory isolation without them.",
+    "The effective address is computed as a 32-bit add of base and the static offset (load_val/store_val in src/codegen/block.rs), so base+offset at or above 2^32 wraps to low memory instead of trapping as the spec requires. The access stays inside the sandbox, but faulting programs behave differently than on spec-conforming runtimes.",
+    "Harness flaw in the repo's own benchmark (code_benches/run.py): it times whole process runs (minimum of 10), sends stdout and stderr to /dev/null and never checks results. A miscompile like issue #56 would be timed without being noticed. It also builds several variants (no protection, -u fast-unsafe float truncation, MPX, guard pages), and the README tables do not say which one produced 13.4%.",
+    "The cross-runtime table (Wasmer, WAVM, Lucet, Node.js) cannot be reproduced from the repo: there is no harness for the other runtimes, and the README gives no CPU, compiler versions or aWsm memory mode. Arm's bento-linker notes that its aWsm runtime isolates only 'as long as you can ensure the binary has not been tampered'."
+  ],
+  "pick_this_over_siblings_when": "Pick aWsm over WAMR (AOT) or wasm3 for Cortex-M firmware where code size and speed close to native matter: the bento-linker run shows aWsm at 1.7x to 2.9x WAMR AOT speed and 4.4x to 26x wasm3 on qsort, mandelbrot and maze (derived from page data). On servers, the actively maintained source-translation siblings wasm2c (WABT) and w2c2 take a similar Wasm-to-native-compiler route with far broader feature support. LFI is the better sibling if you need SPEC-scale programs at single-digit overhead.",
+  "verified_claims_summary": "First-party, May 2020: on x86-64, aWsm's mean PolyBench/C slowdown over native C was 13.4% (standard deviation 34.65 points), against WAVM 28.1%, Node.js+Emscripten 84.0%, Lucet 92.8% and Wasmer 149.8%; on aarch64 (Raspberry Pi) it was 6.7%, and on Cortex-M7/M4 it was 40.2%/24.9%. The 2020 comparator versions (Wasmer 0.12.0, Lucet 0.4.1) and the 24-of-30-kernels-within-1.1x figure come from the Middleware 2020 Sledge paper, seen in search snippets only. The README states no CPU, compiler version or aWsm bounds-check mode. The repo's run.py compares only native against aWsm variants, both built with clang -O3 -flto -g.",
+  "status_note": "Slow, single-maintainer upkeep driven by the Sledge project: one or two commits a year since 2024 (the last code change on 2025-11-19 added a Makefile .so build, and the 2026-07-13 commit is a submodule bump), on Rust 1.56/LLVM 13. It is BSD-3-Clause and small enough to vendor, but it is a research prototype with 24 open issues, including an unresolved miscompile report.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/README.md",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/doc/design.md",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/code_benches/run.py",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/install_deb.sh",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/memory/64bit_nix.c",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/memory/generic.c",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/memory/no_protection.c",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/wasm_instructions/memory/64bit_nix.c",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/runtime.c",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/runtime/runtime.h",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/src/codegen/function.rs",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/src/codegen/block.rs",
+    "https://raw.githubusercontent.com/gwsystems/aWsm/HEAD/src/codegen/memory.rs",
+    "https://github.com/gwsystems/aWsm/tree/master/runtime/memory",
+    "https://github.com/gwsystems/aWsm/tree/master/src",
+    "https://github.com/gwsystems/aWsm/tree/master/src/codegen",
+    "https://github.com/gwsystems/aWsm/issues",
+    "https://github.com/gwsystems/aWsm/issues/99",
+    "https://github.com/gwsystems/aWsm/issues/56",
+    "https://github.com/gwsystems/aWsm/commits/master",
+    "https://raw.githubusercontent.com/arm-software/bento-linker/HEAD/README.md",
+    "https://www.jahrhundert.net/papers/sledge-awsm-CR-MW2020.pdf (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.65
+}
