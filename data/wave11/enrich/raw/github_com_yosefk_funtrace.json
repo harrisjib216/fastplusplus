@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/yosefk/funtrace",
+  "one_liner": "Small flight-recorder function call tracer for C/C++ on x86-64 Linux; author reports 4.5-18x lower per-call cost than XRay and uftrace.",
+  "what_it_does": "Records a timeline of every instrumented function call and return per thread, plus optional ftrace scheduling events, into per-thread cyclic buffers, so you can capture what happened during an unusually slow request even in production. You rebuild with stock gcc or clang instrumentation flags (gcc -finstrument-functions or -pg -mfentry -minstrument-return=call, clang -finstrument-functions or -fxray-instrument) and link funtrace.cpp into the executable; snapshots come from SIGTRAP, a C API (funtrace_pause_and_get_snapshot_starting_at_time, funtrace_write_snapshot) or a gdb script on a core dump. A Rust tool, funtrace2viz, decodes funtrace.raw into Perfetto/viztracer JSON.",
+  "how_it_is_fast": "The hook is a few instructions: load the thread_local write pointer, AND it with a wraparound mask (the buffer is aligned to twice its size so clearing one bit wraps it, and a zero mask disables tracing with one branch), store a 16-byte {code pointer | flag bits, rdtsc} entry, bump the pointer. There is no locking, no formatting and no syscalls on the hot path, the runtime lives in the executable so TLS access is a register+offset, and the -pg hooks are hand-written assembly that avoid clobbering argument registers. Decoding and symbolization are deferred to the offline funtrace2viz.",
+  "when_to_use": [
+    "Debugging tail-latency outliers in a C++ server: time each request with funtrace_time() and keep a snapshot of the slowest one.",
+    "You can rebuild the program with instrumentation flags and want a full call timeline per thread rather than perf's averaged samples.",
+    "You want to read trace data out of a core dump to see what each thread did just before a crash.",
+    "Counting exact call frequencies with the bundled funcount (about as fast as funtrace, thread-safe unlike gprof) to decide what to exclude.",
+    "You need a tracer small enough to audit or port (about 1K LOC runtime, BSD-2-Clause)."
+  ],
+  "when_not_to_use": [
+    "You cannot recompile, or need to trace a plugin or Python extension loaded by an uninstrumented host: the runtime must be linked into the executable.",
+    "Non-x86-64 or non-Linux targets: the hot path uses __rdtsc and the docs cover x86/Linux only.",
+    "Programs that create and destroy many threads: thread exit takes a global lock (documented), and open issue #4 reports a program going from 32 ms to 5500 ms with pauses on pthread_join.",
+    "Sampling-style whole-program CPU profiles: without culling short hot functions (NOFUNTRACE, -funtrace-instr-thresh) the overhead of tracing every call is large and the 1 MB per-thread buffer covers only about 16K recent calls.",
+    "Statically linked libstdc++ is not handled by the exception hooks (open issue #5 proposes -Wl,-wrap flags)."
+  ],
+  "integration": {
+    "form": "source-drop (funtrace.cpp, funtrace_pg.S, funtrace.h) plus compiler wrapper scripts and a Rust decoder",
+    "dependencies": "none at runtime beyond pthreads; decoder built with Rust (or prebuilt release); viztracer for viewing",
+    "min_toolchain": "stock gcc or clang; XRay shared-library support needs clang with -fxray-shared (late 2024); program must be linked as C++",
+    "platforms": "x86-64 Linux",
+    "thread_safety": "per-thread lock-free buffers; snapshot taking and thread create/exit share one mutex and snapshots pause tracing globally",
+    "drop_in_for_baseline": "partial — replaces XRay's runtime hooks (needs --allow-multiple-definition and a linker wrapper) but has its own API and file format; not compatible with uftrace's workflow"
+  },
+  "gotchas": [
+    "Likely cause of the open slowdown issue, found in funtrace.cpp: current_time_ms() divides by cpu_cycles_per_second() on every call instead of the cached cpu_freq. When CPUID leaf 0x15 gives no frequency (ECX=0), that function runs popen(\"dmesg | grep ...\"), and if dmesg yields nothing (restricted dmesg) it sleeps 100 ms; this happens on each thread exit while holding the global mutex, and in the GC thread. The per-call hot path is not affected.",
+    "Tail-call artifacts with gcc -pg and XRay, and 'everyone returned' artifacts when an untraced function catches an exception, except with gcc -finstrument-functions.",
+    "gcc -pg mode cannot link shared objects with -Wl,--no-undefined, and passing -pg to the linker makes the program write gmon.out.",
+    "The -funtrace-instr-thresh / no-trace filters post-process compiler assembly text heuristically; the author flags this as hacky for production. Trace entries can be out of order or missing near the buffer wrap because writeout is racy."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Tracy or Palanteer when you want automatic per-function tracing from compiler hooks instead of manual zones, and over magic-trace when you are not on Intel PT hardware or want snapshots triggered from inside the program; bpftime targets uprobe-based instrumentation without recompiling.",
+  "verified_claims_summary": "The author's own microbenchmark gives under 10 ns per instrumented call or return, 6x faster than an LLVM XRay flight-recorder-logging microbenchmark, 15-18x faster than XRay basic logging and 4.5x faster than uftrace; the README gives no hardware, compiler version or harness, and the repo's simple-example/run.sh runs only funtrace's own four builds, not the XRay/uftrace comparison.",
+  "status_note": "Stale since 2025-03-23 with two open, unanswered issues (#4 slowdown, #5 static libstdc++), but BSD-2-Clause and small enough to vendor and patch.",
+  "sources_read": [
+    "https://github.com/yosefk/funtrace",
+    "https://raw.githubusercontent.com/yosefk/funtrace/HEAD/README.md",
+    "https://raw.githubusercontent.com/yosefk/funtrace/HEAD/funtrace.cpp",
+    "https://raw.githubusercontent.com/yosefk/funtrace/HEAD/simple-example/run.sh",
+    "https://github.com/yosefk/funtrace/issues?q=is%3Aissue",
+    "https://github.com/yosefk/funtrace/issues/4",
+    "https://github.com/yosefk/funtrace/issues/5"
+  ],
+  "confidence": 0.75
+}

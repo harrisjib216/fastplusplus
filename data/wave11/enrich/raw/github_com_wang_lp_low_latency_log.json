@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/wang-lp/low-latency-log",
+  "one_liner": "Small async Rust file logger with deferred formatting; higher backend throughput than spdlog-rs, fast_log, ftlog in its own harness.",
+  "what_it_does": "A Rust crate (0.2.0) that writes log lines to a daily, hourly, per-minute or size-rolled file from a dedicated background thread. You build a global `Logger::new(rc, folder, prefix)`, optionally pin the writer thread with `.cpu(n)`, keep the returned guard alive, and log with its own `info!`/`warn!`/`error!` macros; `.std_log(true)` also installs it behind the `log` crate facade. The output format is fixed ([tid] file:line LEVEL message, preceded by a local time stamp) and there is no sink, filter or formatter customization beyond the time format string and a compile-time level feature.",
+  "how_it_is_fast": "The calling thread does no formatting: the macro reads SystemTime and a cached thread-id string, boxes a closure that captures the arguments by move, and pushes it on a bounded crossbeam channel (128K entries by default). The background thread runs `format!` inside that closure, caches the seconds part of the time stamp so chrono formatting happens once per second, writes through a 1 MiB BufWriter with ufmt, and busy-polls with a 1 us (500 ns in the bench) sleep when the queue is empty. The design follows logflume and Quill's deferred-formatting idea, but with a heap-allocated closure per message rather than Quill's encoded argument buffer.",
+  "when_to_use": [
+    "Rust services that log moderate rates (a few million lines per second at most) to local files and want the formatting cost moved off the request thread.",
+    "When spdlog-rs, fast_log or ftlog is your current choice and its 250-600 ns median call cost shows up in profiles; this crate measured 58 ns (M3 Max) and 112 ns (Xeon Gold 6231C) median in the same harness.",
+    "Single-process tools where a fixed line format and file rolling by time or size are all you need.",
+    "As a small (about 900 lines) reference to read or vendor for a deferred-formatting logger in Rust."
+  ],
+  "when_not_to_use": [
+    "If you need the lowest hot-path latency: C++ Quill was 2-3x faster at the median (22 vs 58 ns on M3 Max, 36 vs 112 ns on Xeon) and the README itself only claims comparable p99.9.",
+    "Strict allocation-free or bounded-latency hot paths: every call heap-allocates a boxed closure, and a full bounded queue makes the caller block in crossbeam send rather than drop.",
+    "Structured or JSON logging, multiple sinks, runtime level changes, custom line formats or non-file outputs: none exist (fixed format, compile-time level features).",
+    "Arguments that borrow non-'static data: the macro moves arguments into a 'static closure, so references to locals do not compile and large values are moved into the queue.",
+    "Long-lived projects needing maintenance: 26 commits, 2 stars, no activity since 2024-08-22, README TODOs (format! optimization, custom formats) still open."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "chrono, core_affinity, crossbeam-channel, log, once_cell, ufmt, symlink, gettid, cfg-if",
+    "min_toolchain": "Rust 2021 edition; benchmarks built with Rust 1.78.0 and 1.79.0",
+    "platforms": "Linux and macOS measured; uses a symlink to the latest file and gettid, other platforms not documented",
+    "thread_safety": "Global logger; any thread may log through a multi-producer crossbeam channel with one consumer thread. Logger::flush only sets a flag and does not wait; Logger::finish (guard drop) blocks until the queue is drained and is one-shot.",
+    "drop_in_for_baseline": "partial: with .std_log(true) it serves the `log` crate facade (README TODO says that path is not yet optimized); the fast path needs its own macros and API, not spdlog-rs's"
+  },
+  "gotchas": [
+    "Time stamp bug in src/lib.rs write_date_time_str: the sub-second part is written as `.{}` of the nanosecond remainder without zero padding, so 5,000,000 ns after a second prints \".5000000\" (reads as 0.5 s); lines cannot be sorted or parsed by fractional time.",
+    "open_writer_if_needed reads the existing file size with metadata(&p) on the bare file name instead of the folder-joined path, so size-based rollover starts from 0 after a restart unless the process cwd is the log folder; rollover is also only checked when the second changes.",
+    "The guard returned by init() must be kept; dropping it stops the logger for the whole process, and finish() can run only once, so the logger cannot be restarted.",
+    "Throughput numbers come from different harnesses: the Rust crates share bench/src/common (4M messages, tcmalloc global allocator, LLL with a 1M-entry queue and Logger::finish to drain), while quill was run from its own backend_throughput binary with an unstated build and message format."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (Quill, BqLog, fmtlog, NanoLog, XTR, binlog) are C or C++ and all report lower per-call latency; pick low-latency-log only when you are in Rust and want something simpler than wrapping a C++ logger, accepting that Quill itself measured faster at the median in this repo's own table.",
+  "verified_claims_summary": "First-party runs in BENCHMARK.md: median per-call cost 58 ns (1 thread) on an M3 Max with Rust 1.78.0, against spdlog-rs 252 ns, fast_log 275 ns, ftlog 341 ns and C++ quill 22 ns, and drain throughput of 4.563 M msgs/s against quill 2.88, spdlog-rs 2.605, fast_log 1.741 and ftlog 1.688; on a 4-core Tencent Cloud Xeon Gold 6231C (Rocky 9.3, Rust 1.79.0), 112 ns median and 2.609 M msgs/s against spdlog-rs 592 ns / 1.478 and quill 36 ns / 2.24. All logs went to /dev/shm, single runs, quill compiler and flags not stated.",
+  "status_note": "Stale since 2024-08-22 with 2 stars, but Apache-2.0 (plus MIT-licensed logflume code) and small enough to vendor and fix the time-stamp padding yourself.",
+  "sources_read": [
+    "https://github.com/WANG-lp/low-latency-log",
+    "https://github.com/WANG-lp/low-latency-log/tree/main/src",
+    "https://github.com/WANG-lp/low-latency-log/tree/main/bench",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/README.md",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/BENCHMARK.md",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/LICENSE-LOGFLUME",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/macros.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/internal.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/log_proxy.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/consts.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/src/fmt_utils.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/Cargo.toml",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/src/bench_it.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/src/bench_spdlog.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/src/common/mod.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/src/common/low_latency_log_bench.rs",
+    "https://raw.githubusercontent.com/WANG-lp/low-latency-log/HEAD/bench/src/common/spdlog_bench.rs"
+  ],
+  "confidence": 0.8
+}

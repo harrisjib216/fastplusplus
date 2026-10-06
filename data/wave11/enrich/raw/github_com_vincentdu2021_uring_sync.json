@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/vincentdu2021/uring_sync",
+  "one_liner": "Linux io_uring directory copier and kTLS network sender for many-small-file trees; beats cp -r locally and rsync -az over SSH.",
+  "what_it_does": "A command-line tool (not a library) with two modes: `uring-sync <src> <dst>` copies a directory tree locally like cp -r, and `uring-sync send/recv` streams a tree to a listening receiver over a custom TCP protocol, optionally encrypted with kernel TLS. It copies regular files and their permission bits only; it is not a drop-in rsync (no delta transfer, no resume, no metadata or symlink handling) and the network side needs the same binary on both ends with a pre-shared secret.",
+  "how_it_is_fast": "Local mode scans the tree, sorts files by inode number, then runs a per-file state machine (openat, statx, openat, splice in/out or read/write, close, close) on one io_uring per worker with 64 files in flight by default, so opens, I/O and closes for many files overlap and are submitted in batches; data moves file to pipe to file with IORING_OP_SPLICE and the chunk size is auto-tuned from the file-size distribution. Network mode uses plain blocking read/send per file (the io_uring network path cannot be combined with --tls) with AES-128-GCM done in the kernel via kTLS, so user CPU stays near zero (0.3-0.4 s user vs rsync's 4 s on the same data).",
+  "when_to_use": [
+    "Copying trees of 10^4-10^6 small or medium files (ML datasets, 4-200 KB each) between local NVMe or cloud block volumes on Linux 5.7+.",
+    "Cold-cache bulk copies where per-file syscall latency dominates and a single thread with a deep queue (-j 1 -q 64) can keep the device busy; on network block storage use -j 4 -q 128.",
+    "One-shot bulk push of a dataset to a cloud VM you control, where you can run the receiver yourself and ssh/rsync CPU cost is the bottleneck.",
+    "As a readable reference for an io_uring per-file state machine with buffer and pipe pools (about 1,400 lines of C++20)."
+  ],
+  "when_not_to_use": [
+    "Whenever confidentiality matters on the network path: the HELLO message carries the pre-shared secret in cleartext before kTLS is turned on, and both HKDF nonces also travel in cleartext, so a passive observer can derive the AES-128-GCM keys (docs/NETWORK_DESIGN.md nonetheless lists network sniffing as protected); treat --tls as obfuscation and tunnel over SSH or WireGuard instead.",
+    "Incremental sync, resume, or preserving owners, timestamps, xattrs, hard links or symlinks: only regular files and mode bits are copied, every file is re-sent, and nothing is fsynced.",
+    "Small network transfers: on 10K x 6 KB (60 MB) the kTLS mode was slower than rsync (2.98 s vs 2.63 s), and --splice with kTLS was 2.9x slower than read/send.",
+    "Non-Linux platforms or kernels older than 5.7 (IORING_OP_SPLICE), or kernels without CONFIG_TLS.",
+    "Production use without review: 10 commits, 4 stars, no releases, no issue tracker activity, a single author."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "liburing, fmt, OpenSSL libcrypto (HKDF for kTLS keys); gtest for unit tests",
+    "min_toolchain": "C++20 (GCC 10+ or Clang 12+); Makefile builds with -O3 -march=native",
+    "platforms": "Linux only: io_uring 5.1+, IORING_OP_SPLICE 5.7+, kTLS TX 4.13+ / RX 4.17+; authors measured on Ubuntu 24.04, kernel 6.14",
+    "thread_safety": "not applicable (CLI tool); each worker thread owns its own io_uring, buffer pool and pipe pool and pulls from a shared mutex-protected work queue",
+    "drop_in_for_baseline": "partial: local mode replaces `cp -r src/. dst/` for regular files (no symlinks, ownership or timestamps); network mode is not a drop-in for rsync (needs its own receiver, no delta transfer)"
+  },
+  "gotchas": [
+    "The read/write fallback in src/main.cpp advances the file offset by the read size, not by the write completion's result, so a short write would silently leave a hole; a read returning 0 before the expected size (file shrank during copy) would loop forever. Neither path is hit in the normal splice mode on regular files, but there is no post-copy size check.",
+    "The receiver prints the secret to stdout on start and compares it with a plain string compare; the secret is also passed on the command line, so it shows up in ps and shell history.",
+    "The sender exits right after writing ALL_DONE without waiting for the receiver to acknowledge or flush, so `time` on the sender (how all network numbers were taken) excludes the receiver's tail of writes, while rsync's time includes remote completion.",
+    "Benchmark data comes from /dev/urandom, so rsync -az spent CPU compressing incompressible data, which inflates the rsync baseline; tests/perf/lib/common.sh also times `rm -rf` of the previous destination inside each cp and uring-sync run and never syncs dirty pages, so writeback is outside the measured time for both tools."
+  ],
+  "pick_this_over_siblings_when": "Against fcp and wcp (both parallel cp replacements that beat cp -r), pick uring-sync only if you specifically want a single-thread io_uring design or the built-in network sender; fcp reports about 10x on a kernel tree and wcp has a broader benchmark table, both with more users. Against copy-fast it is the more complete tool, and liburing is the library it is built on if you want to write your own.",
+  "verified_claims_summary": "First-party, apparently single runs on an unnamed laptop NVMe (Ubuntu 24.04, kernel 6.14, compiler and CPU not stated, build flags -O3 -march=native from the Makefile), cold cache: cp -r 22.7 s vs 5.4 s for 100K files of about 100 KB (4.2x) and 7.67 s vs 5.14 s for 100K files of about 4 KB +/-75% (1.5x); 60 s vs 19 s on GCP pd-standard and about 2.15x on pd-balanced. Over the public internet to a GCP VM, the sender-side time for 9.7 GB / 100K files was 165 s with kTLS vs 390 s for rsync -az over SSH (2.36x, the README's \"58% faster\" is time saved) and 16.4 s vs 24.8 s for 589 MB, with plaintext over an SSH tunnel at 366 s.",
+  "status_note": "Ten commits from one author between late 2025 and 2026-01-07, MIT-licensed, no releases or issues; small enough to read and adapt for local copies, but its network encryption is not secure as written.",
+  "sources_read": [
+    "https://github.com/VincentDu2021/uring_sync",
+    "https://github.com/VincentDu2021/uring_sync/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/README.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/Makefile",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/src/net.cpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/src/net_uring.cpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/include/ring.hpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/include/common.hpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/include/protocol.hpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/include/ktls.hpp",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/tests/perf/bench.sh",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/tests/perf/lib/common.sh",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/tests/perf/gen_data.sh",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/docs/DESIGN.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/docs/NETWORK_DESIGN.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/docs/blog/blog-io-uring-file-copier.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/docs/blog/blog-ktls-vs-rsync.md",
+    "https://raw.githubusercontent.com/VincentDu2021/uring_sync/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}
