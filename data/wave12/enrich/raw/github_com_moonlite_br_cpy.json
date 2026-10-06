@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/moonlite-br/cpy",
+  "one_liner": "Tree-walking interpreter for a Python subset in portable C; claims 1.2x-50x over CPython 3.12 with no published benchmark scripts.",
+  "what_it_does": "A single-binary interpreter (lexer, recursive-descent parser, scope resolver, AST evaluator) that runs a large subset of Python 3 syntax: classes with C3 MRO, decorators, generators, comprehensions, f-strings, exceptions, packages, plus built-in math, random, time, sys, os, collections, itertools, functools, heapq, bisect and string. It is used as a command (cpy file.py, cpy -c, a REPL), not as an embeddable library or a CPython extension, and it cannot load CPython C extensions or pip packages.",
+  "how_it_is_fast": "Values are a 16-byte tagged union, so int, float, bool and None are unboxed; a resolver pass turns every local and free variable into a frame slot index or a fixed number of parent hops. The evaluator inlines the common node kinds with an int-op-int fast path using __builtin_*_overflow checks, calls without */** go through a direct path that skips bound-method allocation, small frames come from a free list, and memory is reclaimed by reference counting only. Dicts and sets are a compact insertion-ordered table with linear probing, hashed with unseeded 32-bit FNV-1a for strings and a 64-bit mix for ints.",
+  "when_to_use": [
+    "Small scripts and glue code on a phone (Termux) or a minimal Linux box where a single dependency-free C binary is easier to ship than a CPython install.",
+    "Integer- and loop-heavy scripts whose values stay within signed 64-bit range and that use only the built-in modules listed in the README.",
+    "Teaching or experimenting with interpreter design: the whole implementation is a handful of C files (interp.c is about 2,000 lines) with an internals guide.",
+    "Only after timing your own script against CPython: the repository publishes no benchmark programs or per-benchmark times to rely on."
+  ],
+  "when_not_to_use": [
+    "Anything that needs arbitrary-precision integers, bytes/bytearray, complex numbers, match, async/await, __slots__, __del__, str.encode, except* or most of the standard library; pip packages and C extensions do not work.",
+    "Generator-heavy code: every def-generator runs on its own OS thread with an 8 MB stack and each resume is a pair of semaphore handoffs, which costs far more than a CPython frame switch (generator expressions are plain iterators and are not affected).",
+    "Long-running programs that build reference cycles: there is no cycle collector, so cyclic garbage is never freed.",
+    "Services that put untrusted strings into dicts: string hashing is an unseeded 32-bit FNV-1a, so collisions can be precomputed, unlike CPython's randomized hash.",
+    "Production use in general: the repository is two weeks old (six commits on 2026-09-22, 0 stars) with no releases."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc, libm and pthreads (POSIX semaphores for generators)",
+    "min_toolchain": "C compiler accepting -std=gnu11 and GCC/Clang __builtin_*_overflow builtins (gcc or clang); make",
+    "platforms": "CI builds and tests Linux x86-64 (with ASan/UBSan) and Linux arm64, and cross-builds Android arm64 (NDK, API 24) without running tests; macOS and Windows are not in CI",
+    "thread_safety": "No threading module; the interpreter uses global state and runs on one big-stack thread (512 MB, falling back to 128/32 MB); generator threads only ever run in lockstep with the caller.",
+    "drop_in_for_baseline": "partial: runs many plain .py scripts unchanged, but int overflow raises OverflowError, cycles leak, case conversion only knows Latin, Greek and Cyrillic, and anything outside the supported subset or built-in modules fails"
+  },
+  "gotchas": [
+    "The speed claim cannot be reproduced: the README says 'see tests/ for the exact scripts', but tests/ holds only correctness tests t01-t12, t90 and compare_python.sh, examples/ holds demo programs (fib.cpy prints 8 Fibonacci numbers, it is not the fib(30) benchmark), and no times, CPU, compiler or flags are given for the 1.2x-50x range.",
+    "Part of the numeric-loop advantage is semantic: int is a fixed int64 with overflow checks, so cpy skips the arbitrary-precision object path CPython must take, and a loop that overflows int64 raises OverflowError instead of continuing.",
+    "The test suite's expected .out files are regenerated from cpy's own output (run_tests.sh --update); the CPython comparison script is a developer helper that CI does not run, so 'verified against CPython 3.12' is not enforced.",
+    "docs/internals.md presents slot-resolved locals as the biggest difference from CPython, but CPython also indexes function locals by slot (LOAD_FAST); the claimed attribute-access and dict gains are unexplained by any published measurement."
+  ],
+  "pick_this_over_siblings_when": "Pick cpy only when you need a tiny, dependency-free C binary for simple Python-syntax scripts; for real speedups on real Python code PyPy, Codon, Cython, mypyc or GraalPy have reproducible, independent numbers, and WeavePy publishes a per-fixture parity report against CPython where cpy publishes none.",
+  "verified_claims_summary": "The README alone says a numeric loop, list building, dict fill/read and an attribute-access loop run 1.2x-50x faster than CPython 3.12 and that recursive fib(30) is about on par, on one unnamed machine with no compiler, flags, times or scripts; nothing in the repository lets a reader rerun or check it.",
+  "status_note": "Brand-new single-author project (all six commits on 2026-09-22, MIT, about 2,000 lines of evaluator plus support files, small enough to vendor) with CI on Linux and Android but no releases, no users and an unreproducible speed claim; treat it as a curiosity until benchmark scripts appear.",
+  "sources_read": [
+    "https://github.com/MoonLite-Br/Cpy",
+    "https://github.com/MoonLite-Br/Cpy/commits",
+    "https://github.com/MoonLite-Br/Cpy/tree/main/tests",
+    "https://github.com/MoonLite-Br/Cpy/tree/main/examples",
+    "https://github.com/MoonLite-Br/Cpy/tree/main/src",
+    "https://github.com/MoonLite-Br/Cpy/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/README.md",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/Makefile",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/docs/internals.md",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/docs/language.md",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/tests/compare_python.sh",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/tools/gen_stdlib.sh",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/run_tests.sh",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/examples/fib.cpy",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/src/interp.c",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/src/value.c",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/src/cpy.h",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/src/gen.c",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/MoonLite-Br/Cpy/HEAD/.github/workflows/build.yml"
+  ],
+  "confidence": 0.65
+}

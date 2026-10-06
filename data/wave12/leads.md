@@ -34,3 +34,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - OpenISA/riscv-sbt (RISC-V static binary translator; snippet claims MiBench slowdown 1.12x against rv8 3.16x and QEMU 7.07x) and BlindMindStudios/AngelScript-JIT-Compiler (scriptorium 1.859 s, AngelScript 2.31.0, inactive): leads from the rv8 and AngelScript enrichers (2026-10-06).
 - ecraven/r7rs-benchmarks all.csv (raw reachable): gambit/gambit about 1.95x faster than Guile 3.0.11 (geomean over 53 shared benchmarks), Loko and Bigloo about 1.6x (Guile enricher, 2026-10-06); Scheme seed candidates.
 - revmc (README chart is an image only) and ncruces/wasm2go (go-sqlite3 discussion #361): wasm gh-any search leads (2026-10-06).
+- ml-rust/splintr (LLM BPE tokenizer on the regexr backend, claims unchecked; regexr enricher, 2026-10-06); weak lead.
