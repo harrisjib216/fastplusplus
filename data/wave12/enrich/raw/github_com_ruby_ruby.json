@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/ruby/ruby",
+  "one_liner": "CRuby's built-in Rust JIT; about 2x the CRuby interpreter on Rails-style apps after warmup on x86-64, 1.7x on Graviton4.",
+  "what_it_does": "YJIT is a JIT compiler that ships inside CRuby (the yjit/ directory, written in Rust) and compiles Ruby's YARV bytecode to x86-64 or arm64 machine code at run time. It is a drop-in switch rather than a library: build Ruby with --enable-yjit and run with --yjit, RUBY_YJIT_ENABLE=1, or RubyVM::YJIT.enable after boot. Application code is unchanged; anything YJIT cannot compile falls back to the interpreter through side exits.",
+  "how_it_is_fast": "It uses lazy basic block versioning (BBV): blocks are compiled only when first reached, and each version is specialised on the types and object shapes seen so far, which removes repeated type checks without a separate type analysis. Polymorphic sites get chained guards (up to 8 object shapes for instance-variable reads and writes, smaller limits for aref and expandarray), and about 40 core C methods (Integer ops, is_a?, truthiness and others) have hand-written inline code generators instead of a C call. Code is split into inline and outlined (cold) regions, and methods are compiled only after a call threshold (30 calls, raised to 120 once a process has 40,000 ISEQs).",
+  "when_to_use": [
+    "Long-running CRuby servers (Rails, Liquid templating, Sequel/ActiveRecord apps) where workers serve many requests: the headline app suite gains 1.5x to 2.9x on x86-64 and 1.25x to 2.6x on Graviton4.",
+    "CPU-bound pure-Ruby code with stable types (parsers, template engines, PNG encoding, numeric loops): micro and kernel benchmarks reach 2x to 12x.",
+    "You must stay on CRuby for C extension and gem compatibility, and only need a run-time flag plus a Rust-enabled build.",
+    "x86-64 or arm64 on Linux, macOS or BSD with memory headroom of roughly 10-80% over the interpreter."
+  ],
+  "when_not_to_use": [
+    "Short-lived processes (CLI scripts, one-shot jobs, workers killed often): compilation and warmup can cost more than they return; the published numbers come after 50 warmup iterations.",
+    "Memory-constrained deployments: on the x86-64 headline suite YJIT 4.1.0dev used 1.00x to 1.79x the interpreter's steady-state RSS (geomean about 1.19x; psych-load 30 to 54 MiB, rubocop 1.41x, railsbench 1.32x).",
+    "Code that runs under TracePoint, binding, or redefines basic operators (+, <, ==, nil semantics): YJIT deoptimises or invalidates compiled code (coverage tools and debuggers count).",
+    "Windows or other architectures: YJIT supports only x86-64 and arm64 on macOS, Linux and BSD.",
+    "Workloads that spend most time in C methods or that YJIT cannot compile: knucleotide (about 25-31% of instructions in YJIT) ran 0.98x on both platforms, and 30k_variables ran 0.80x (slower than the interpreter) on Graviton4."
+  ],
+  "integration": {
+    "form": "module (built into the CRuby interpreter; enabled per process)",
+    "dependencies": "rustc at Ruby build time (YJIT and ZJIT declare no required crates); nothing at run time",
+    "min_toolchain": "rustc 1.58.0+ for YJIT alone (yjit/Cargo.toml); rustc 1.85.0+ when ZJIT is built alongside (root Cargo.toml, edition 2024); GCC or Clang for CRuby, GCC recommended for release builds",
+    "platforms": "x86-64 and arm64/aarch64 on macOS, Linux and BSD; no Windows",
+    "thread_safety": "Not documented separately in doc/jit/yjit.md; YJIT is internal to the VM, so Ruby programs need no changes.",
+    "drop_in_for_baseline": "partial — the same ruby binary runs unchanged code with --yjit, but Ruby must have been built with --enable-yjit (check 'ruby --yjit -v' shows +YJIT), and TracePoint/binding-heavy code loses the speedup."
+  },
+  "gotchas": [
+    "Harness asymmetry, documented in the report: YJIT runs get 50 warmup iterations and the interpreter 5, and both are timed per iteration in-process (CLOCK_MONOTONIC) after warmup, so the ratios are steady-state throughput and say nothing about first-request latency; RSS is sampled between post-warmup iterations, not as a peak.",
+    "The Graviton4 CSV shows two regressions the x86-64 summary hides: 30k_variables 0.80x and knucleotide 0.98x; on x86-64 only knucleotide (0.98x) is slower than the interpreter.",
+    "When the executable-memory budget (--yjit-mem-size, default 128 MiB) fills, new code stays in the interpreter unless --yjit-code-gc is on; since Ruby 4.0, ratio_in_yjit in RubyVM::YJIT.runtime_stats works only in a --enable-yjit=stats build.",
+    "Highly polymorphic sites exceed the guard-chain limits (8 shapes for ivars) and take side exits to the interpreter; --yjit-stats lists exit reasons to find them."
+  ],
+  "pick_this_over_siblings_when": "Pick YJIT over TruffleRuby when you need stock CRuby (C extensions, same GC and tooling, quick warmup, about 1.2x memory) rather than TruffleRuby's higher peak on Are We Fast Yet; prefer it over ZJIT, which ships in the same repository, until ZJIT is declared production-ready (Ruby 4.0 NEWS says ZJIT is not yet as fast as YJIT and advises against deploying it).",
+  "verified_claims_summary": "On ruby-bench (commit 17dcac94) with Ruby master 11bb12ad3c built by gcc 14.3.0 (report of 2026-09-20), YJIT 4.1.0dev ran the 16 headline apps at a geomean 1.99x the CRuby 4.1.0dev interpreter on an Intel Xeon Platinum 8488C (from 1.52x on sequel to 2.89x on liquid-render; railsbench 2.20x) and 1.095x YJIT 3.4.7; on AWS Graviton4 the geomean was 1.73x (sequel 1.25x to liquid-render 2.59x; railsbench 1.87x), ratios recomputed from the per-benchmark CSVs. Times are means of post-warmup iterations (50 warmups for YJIT, 5 for the interpreter).",
+  "status_note": "Actively maintained by the YJIT team at Shopify inside ruby/ruby (last commit 2026-10-06) and the recommended production JIT in Ruby 4.0, BSD-2-Clause or Ruby licence; ZJIT, its intended successor in the same repository, is not yet recommended for production.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/doc/jit/yjit.md",
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/yjit/Cargo.toml",
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/yjit/src/codegen.rs",
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/ruby/ruby/HEAD/doc/NEWS/NEWS-4.0.0.md",
+    "https://raw.githubusercontent.com/rubybench/yjit-reports/pages/benchmarks/bench-2026-09-20-010747.html",
+    "https://raw.githubusercontent.com/rubybench/yjit-reports/pages/reports/platform_details/blog_speed_details_2026-09-20-010747.x86_64.csv",
+    "https://raw.githubusercontent.com/rubybench/yjit-reports/pages/reports/platform_details/blog_speed_details_2026-09-20-010747.aarch64.csv",
+    "https://raw.githubusercontent.com/rubybench/yjit-reports/pages/reports/platform_details/blog_memory_details_2026-09-20-010747.x86_64.csv",
+    "https://raw.githubusercontent.com/rubybench/yjit-reports/pages/about.html",
+    "https://github.com/rubybench/yjit-reports/tree/pages/reports",
+    "https://raw.githubusercontent.com/ruby/ruby-bench/HEAD/harness/harness.rb",
+    "https://raw.githubusercontent.com/ruby/ruby-bench/HEAD/harness/harness-common.rb",
+    "https://raw.githubusercontent.com/ruby/ruby-bench/HEAD/README.md",
+    "WebSearch: ZJIT vs YJIT Ruby 4.1 2026 performance production status (snippets only)"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/shedskin/shedskin",
+  "one_liner": "Ahead-of-time transpiler from implicitly statically typed Python 3 to C++; README claims 12x median over CPython 3.14.",
+  "what_it_does": "Shed Skin infers static types for a whole Python program and emits C++ that links against its own C++ reimplementation of the builtins and about 33 partially supported stdlib modules. `shedskin build prog` produces a stand-alone executable; `shedskin build -e mod` produces a CPython extension module whose functions are called from ordinary Python. It is not a drop-in interpreter: code needs no annotations but must be monomorphic (one type per variable, homogeneous containers), avoid eval/getattr/isinstance, *args/**kwargs, nested functions, closures and multiple inheritance, and use no external libraries inside the compiled part.",
+  "how_it_is_fast": "Whole-program type inference (rewritten in 0.9.14) lets every variable become a fixed C++ type, so ints and floats are unboxed machine values (int64 by default, int32 with --int32) and attribute access is a direct member access with no dictionary lookup or bytecode dispatch. Lists map to std::vector, dicts and sets to std::unordered_map/unordered_set (boost::unordered_flat_map/small_vector with --boost), all allocated through the Boehm GC's gc_allocator; idiomatic enumerate/zip/items loops have their temporary tuples optimized away. Optional flags strip Python safety checks: -b (bounds), -w (negative-index wrap), -z (zero division), plus --predict for run-time list-size prediction.",
+  "when_to_use": [
+    "A self-contained CPU-bound kernel of a few hundred to a few thousand lines (simulations, search, ray tracers, emulators, compressors) that you want 10x+ faster without rewriting it in C++.",
+    "You want to keep CPython as the main interpreter and call the hot part as an extension module, passing scalars, builtin containers or instances of your own classes.",
+    "Code that is already effectively monomorphic and uses only builtins plus modules such as math, random, re, collections, heapq, itertools, array, struct.",
+    "You need a stand-alone native binary from Python source (linking only libgc and pcre2) rather than a bundled interpreter."
+  ],
+  "when_not_to_use": [
+    "Programs that depend on numpy, third-party packages or unsupported stdlib modules inside the hot code; numpy arrays must be converted with tolist(), which the docs call very inefficient.",
+    "Code that relies on Python big integers, dict insertion order, isinstance/getattr or other dynamic features: ints are fixed-width and 'ordered dicts' are listed as unsupported.",
+    "Large code bases: the docs say type inference does not scale well beyond several thousand lines (largest compiled program about 6,000 lines), and open issue #1032 reports the same input taking 28 s or 500 s to analyse.",
+    "Hot paths that make many small calls across the extension-module boundary: builtin objects are fully converted (deep copy) on every call and return.",
+    "When you need full Python compatibility with little porting effort: PyPy, Nuitka or Cython run unmodified code; Shed Skin may require 'a lot' of refactoring per its README."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Boehm GC (libgc), PCRE2, Python development headers (for extension modules), CMake for the build/run subcommands; boost containers are bundled for --boost; Windows fetches C++ deps via CMake FetchContent",
+    "min_toolchain": "Python >= 3.8 to run the transpiler; C++20 compiler (g++ -std=c++20 on Linux/macOS, MSVC Build Tools on Windows); CMake 3.18.4+",
+    "platforms": "Linux, macOS, Windows (MSVC + CMake); platform-specific stdlib functionality unsupported",
+    "thread_safety": "not documented; the threading module is not in the supported list (multiprocessing over extension modules is the documented route to parallelism)",
+    "drop_in_for_baseline": "partial: only a restricted, implicitly statically typed Python subset compiles, usually after refactoring; compiled extension modules are imported like normal modules"
+  },
+  "gotchas": [
+    "Integers are fixed-width C++ ints (int64 default since 0.9.13; the README sieve rows used --int32), not Python big ints; generated executables are built without -fwrapv, so overflow is C++ undefined behaviour (only extension modules get -fwrapv). None becomes a NULL pointer, so untested paths can segfault.",
+    "Semantics differ from CPython: dicts are std::unordered_map (iteration order not insertion order), function-argument evaluation order changes, and -w/--nowrap silently stops negative indices from wrapping (the 1.8 s sieve row used --nowrap --nobounds).",
+    "Build flags depend on the path: `shedskin translate` uses the FLAGS file (-O2 -march=native -DNDEBUG), while `shedskin build` on Unix hard-codes -O2 without -march=native; on Windows `build` passes `--config Debug` unless --build-type is given and the -O2 option is added only for UNIX, so default Windows binaries (build/Debug/test.exe) are unoptimized debug builds.",
+    "Harness flaw: the README sieve table says n=100000000, but examples/sieve/sieve.py hard-codes n = 10000000 at both tag v0.9.9 and HEAD (HEAD also runs main() 10 times and times only the last 5 for PyPy warm-up), so the published timings cannot be reproduced from the committed example; the 'benchmarked by asv' badge points to shedskin/benchmarks, a separate microtest suite with one 2015-era machine (Intel i5-3320M, Linux 4.0.6 fc22), not the 80-example 1-100x claim."
+  ],
+  "pick_this_over_siblings_when": "Pick Shed Skin over Cython or mypyc when the code is unannotated but effectively monomorphic and you want a large speedup without writing type declarations, and over PyPy when you must stay on CPython and only a small kernel needs to be fast; prefer Codon for a broader Python-like language with its own compiler and runtime, and PyPy, Nuitka or Cython when the code uses dynamic features or third-party libraries.",
+  "verified_claims_summary": "First-party README numbers: across the 80+ programs in examples/ the compiled code is 1-100x faster than CPython 3.14 (average 20x, median 12x), with no per-program table, script, CPU or compiler stated; a sieve run (labelled n=100000000) took 13.4 s on CPython 3.10.6, 11.4 s on 3.11.0, 5.8 s on PyPy 3.9 and 1.9 s on Shed Skin 0.9.9 with --int32 (1.8 s adding --nowrap --nobounds), about 6-7x (derived from page data) on unstated hardware.",
+  "status_note": "Actively maintained (0.9.14 with a type-inference rewrite and Unicode str, last commit 2026-10-05, about 1.0k stars, 106 open issues); the GPL-3.0 compiler does not cover generated programs' runtime, which is Expat/BSD-3/BSL-1.0, so output is copyable, but the docs still call it experimental.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/README.md",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/docs/documentation.md",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/CHANGELOG.md",
+    "https://github.com/shedskin/shedskin",
+    "https://github.com/shedskin/shedskin/tree/master/shedskin",
+    "https://github.com/shedskin/shedskin/tree/master/scripts",
+    "https://github.com/shedskin/shedskin/tree/master/shedskin/resources",
+    "https://github.com/shedskin/shedskin/tree/master/shedskin/resources/cmake",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/resources/flags/FLAGS",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/resources/flags/FLAGS.osx",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/resources/flags/FLAGS.mingw",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/cmake.py",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/resources/cmake/fn_add_shedskin_product.cmake",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/resources/cmake/CMakeLists.txt",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/shedskin/lib/builtin.hpp",
+    "https://github.com/shedskin/shedskin/tree/master/examples",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/examples/README.md",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/examples/CMakeLists.txt",
+    "https://github.com/shedskin/shedskin/tree/master/examples/sieve",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/examples/sieve/sieve.py",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/examples/sieve/CMakeLists.txt",
+    "https://raw.githubusercontent.com/shedskin/shedskin/v0.9.9/examples/sieve/sieve.py",
+    "https://raw.githubusercontent.com/shedskin/shedskin/performance_comparison/examples/sieve/sieve.py",
+    "https://raw.githubusercontent.com/shedskin/shedskin/v0.9.9/README.md",
+    "https://github.com/shedskin/shedskin/commits/master/examples/sieve/sieve.py",
+    "https://github.com/shedskin/shedskin/issues?q=is%3Aissue%20state%3Aopen%20slow",
+    "https://github.com/shedskin/benchmarks",
+    "https://github.com/shedskin/benchmarks/tree/master/results",
+    "https://raw.githubusercontent.com/shedskin/benchmarks/master/results/bright/machine.json",
+    "https://raw.githubusercontent.com/shedskin/benchmarks/master/asv.conf.json"
+  ],
+  "confidence": 0.8
+}

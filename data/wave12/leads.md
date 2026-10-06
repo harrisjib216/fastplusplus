@@ -6,7 +6,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 
 ## Retier candidates (paper found in a GitHub mirror)
 
-- WasmNow (sillycross/wasmnow, verified B): the OOPSLA 2021 copy-and-patch paper PDF is reachable at raw.githubusercontent.com/fredrikbk/fredrikbk.github.io/master/publications/copy-and-patch.pdf and in the sillycross/sillycross.github.io repo (i7-7700HQ, Clang++ 10 -O3 -DNDEBUG, LLVM 10); the PochiVM verifier used it for an A. Check whether the WasmNow numbers (4.9-6.5x compile, 39-63% faster code than Liftoff) and the Liftoff build are in that paper and retier accordingly.
+- SETTLED 2026-10-06 (enricher opened the paper; tier stays B, caveats in retier-01). WasmNow (sillycross/wasmnow, verified B): the OOPSLA 2021 copy-and-patch paper PDF is reachable at raw.githubusercontent.com/fredrikbk/fredrikbk.github.io/master/publications/copy-and-patch.pdf and in the sillycross/sillycross.github.io repo (i7-7700HQ, Clang++ 10 -O3 -DNDEBUG, LLVM 10); the PochiVM verifier used it for an A. Check whether the WasmNow numbers (4.9-6.5x compile, 39-63% faster code than Liftoff) and the Liftoff build are in that paper and retier accordingly.
 - Instrew (aengelke/instrew, verified C): VEE'21 paper at home.cit.tum.de/~engelke/pubs/2104-vee.pdf (blocked here) would likely raise it to B. Also TPDE (CGO 2026 paper, same host), Box64 (EuroSys 2026, ACM), aWsm (Sledge paper), WARP (Valent-Blocks, IEEE), rv32emu (VMIL'24), HHVM (OOPSLA 2014), Deegen/LuaJIT Remake (OOPSLA 2026, arXiv), Pallene (SBLP/SCP), YJIT (ACM) are paper-access retier candidates.
 - cinderx (facebookincubator/cinderx, MIT, 282 stars): the Cinder JIT moved here; seed candidate if it carries its own numbers.
 - lumen (lucid-softworks/lumen, Rust JS engine): 3953 on macOS v8-v7 in ahaoboy CI (QuickJS enricher, 2026-10-06); seed candidate.
@@ -20,3 +20,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ncruces/wasm2go: separate project from goccy/wasm2go, wazero numbers on a Core Ultra 7 258V in go-sqlite3 discussion #361 (batch 49 verifier, 2026-10-06); seed candidate.
 - FEX-Emu/FEX: x86 and x86-64 emulator for ARM64 with a JIT, not in data (Box64 enricher, 2026-10-06); seed candidate (baseline QEMU, like Box64 and rv8).
 - dstogov/ir: the IR JIT framework behind the PHP 8.4+ JIT; README claims code about 5% slower than gcc -O2 compiled about 40x faster (PHP JIT enricher, 2026-10-06); seed candidate.
+- TurboPython (trozen/tpy-lang): typed Python to C++ without GC, named in the Shed Skin README, benchmark claims unchecked (Shed Skin enricher, 2026-10-06); seed candidate.

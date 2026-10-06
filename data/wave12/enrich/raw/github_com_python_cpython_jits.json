@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/python/cpython#jits",
+  "one_liner": "CPython's built-in experimental copy-and-patch trace JIT; 7.5% (x86-64 Linux) to 11% (macOS arm64) geomean over the plain interpreter.",
+  "what_it_does": "A JIT inside CPython itself, so it runs the same code, C extensions and stdlib as the normal interpreter with no source changes. You opt in at build time with configure --enable-experimental-jit (yes, yes-off or interpreter) or build.bat --experimental-jit; the official 3.14+ macOS and Windows installers ship it switched off. At run time PYTHON_JIT=0/1 overrides the build default, and sys._jit.is_available() / is_enabled() report the state.",
+  "how_it_is_fast": "Hot loops are found by backoff counters (JUMP_BACKWARD starts at 4000, RESUME at 8190). A tracing front end then records the actual path through the specialised tier-1 bytecode as a trace of micro-ops. The tier-2 optimizer does type and constant propagation, removes guards and refcount updates, and caches up to three top-of-stack values in registers (_tos_cache0-2). Code generation is copy-and-patch: at build time Clang/LLVM 21 compiles every micro-op from Tools/jit/template.c into a machine-code stencil (-Os, preserve_none, musttail), and at run time _PyJIT_Compile copies the stencils end to end and patches in operands, jump targets and GOT/trampoline addresses. No compiler runs at run time.",
+  "when_to_use": [
+    "You are already on CPython 3.14/3.15 and want a free few-percent throughput gain on long-running pure-Python, loop-heavy code without changing implementation; try PYTHON_JIT=1 on the official macOS/Windows installers or a --enable-experimental-jit build",
+    "Numeric and object-oriented inner loops in plain Python (the 2026-09-25 run shows richards 2.4x, nbody 1.5x, scimark_sor 1.4x, spectral_norm 1.4x on x86-64 Linux)",
+    "x86-64 Linux and Apple Silicon macOS, the two platforms where the published geomean gains (1.075x and 1.113x, derived from page data) were measured",
+    "You need every C extension and the exact CPython semantics, which rules out PyPy, GraalPy or a fork like Cinder"
+  ],
+  "when_not_to_use": [
+    "Linux AArch64: in the same 2026-09-25 commit run, a Raspberry Pi 5 runner (blueberry, GCC 12.2.0) gets a 1.001x geomean (README table), with 39 of 105 benchmarks slower; html5lib 0.67x, django_template 0.74x, dulwich_log 0.75x (derived from page data)",
+    "Free-threaded (--disable-gil) builds: configure warns that the JIT is built but never used there (GH-133171)",
+    "Production services that need stability: the docs still call it experimental and not recommended for production, and the tracker lists 81 open topic-JIT issues, including stack and frame-local corruption (#158804, #156319, #155823) and wrong guard checks (#158380)",
+    "Template-, parser- and generator-heavy code (django_template, html5lib, k_core, mdp, pycparser regress on x86-64 Linux, Windows and macOS) and code made of long straight-line unpacking or other generated code (unpack_sequence runs 0.36x to 0.71x)",
+    "Profiling with -X perf: the JIT turns itself off with a RuntimeWarning when perf profiling support is active"
+  ],
+  "integration": {
+    "form": "build option of the CPython interpreter (configure --enable-experimental-jit / build.bat --experimental-jit); prebuilt but off by default in the official 3.14+ macOS and Windows installers",
+    "dependencies": "none at run time; building needs LLVM 21 (clang, llvm-readobj, llvm-objdump, llvm-dwarfdump) and a Python 3.11+ to run Tools/jit/build.py. The rest of CPython can be built with any compiler (GCC, MSVC).",
+    "min_toolchain": "LLVM/Clang 21 for stencils (needs musttail and preserve_none); CPython 3.13+ (3.15 for the tracing front end and register caching)",
+    "platforms": "x86-64 and AArch64 on Linux (glibc triples), macOS and Windows, plus i686 Windows (Tools/jit/_targets.py); other triples raise ValueError at build time",
+    "thread_safety": "GIL builds only; the JIT is inactive in free-threaded builds",
+    "drop_in_for_baseline": "partial — same interpreter, same ABI and extensions, but you need a JIT-enabled build (or the official macOS/Windows installer) and PYTHON_JIT=1 where it ships off"
+  },
+  "gotchas": [
+    "Benchmark-reporting flaw: the What's New 7-8% and 11-12% figures cite only x86-64 Linux and macOS arm64. The same 2026-09-25 commit was also run on Linux AArch64 (Raspberry Pi 5), at 0.999x (derived from the pyperf JSONs; 1.001x in the README table), and on Windows x86-64 (MSVC, tail-calling interpreter on both sides), at 1.044x. The geomean also drops 13 benchmarks via bench_runner.toml excluded_benchmarks. With them included, x86-64 falls from 1.075x to 1.064x and macOS from 1.113x to 1.101x (derived from page data). The numbers are real, but they are the best two platforms.",
+    "pyperf runs the JIT build in its JIT mode: 6 processes x 10 values against 20 x 3 for the interpreter, so more in-process warm-up. Re-computing with only the first 3 values per JIT process gives the same geomean (1.075x x86-64, 1.111x macOS), so warm-up does not inflate the result. Short-lived scripts that never reach the 4000-iteration trace threshold will not benefit.",
+    "Each executor gets its own page-rounded mmap (RW, then mprotect to RX, no W+X window), so many small traces cost at least a page each. Issue #149212 reports unpack_sequence splitting into about 22 chained traces, roughly 18 MB of machine code, and about 2.7x more dispatches than tier 1, because a _CHECK_VALIDITY + _SET_IP pair is inserted before every bytecode.",
+    "Native unwinding through JIT frames arrived only in 3.15 (GDB JIT interface and libgcc frame registration on Linux ELF). On 3.14, gdb and perf cannot walk through JIT frames, and test_gdb JIT unwinding is still flaky on aarch64 (#157965)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you must stay on upstream CPython. Cinder reports 1.5-4x but is Meta's fork with its own release cadence, and PyPy/GraalPy are separate runtimes. BeamAsm is the closest analogue (an in-tree JIT of a reference VM), but it gives about 50% on estone where CPython's gives 7-11%. PochiVM and WasmNow show the same copy-and-patch technique as libraries for building your own compiler, not a Python speedup.",
+  "verified_claims_summary": "pyperformance 1.14.0 via bench_runner on main commit 80f9aa0 (3.16.0a0, 2026-09-25), JIT build against the same commit without the JIT, both PGO+LTO. Intel i5-8400, GCC 13.3.0, turbo off: 1.079x (README), 1.075x over 105 benchmarks. Apple Silicon macOS, Clang 21, both tail-calling: 1.113x. Per benchmark the range is 0.82x (k_core) to 2.47x (richards_super), and the same run shows 0.999x on a Raspberry Pi 5 and 1.044x on Windows x86-64 (all ratios derived from the pyperf JSONs).",
+  "status_note": "Actively developed in CPython main (77.5k stars, daily commits) under the PSF licence, but still experimental and off by default with many open crash and miscompile reports; treat it as a free opt-in experiment on x86-64 Linux or macOS, not a production feature.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/README.md",
+    "https://raw.githubusercontent.com/python/cpython/main/Doc/whatsnew/3.15.rst",
+    "https://raw.githubusercontent.com/python/cpython/main/Doc/whatsnew/3.14.rst",
+    "https://raw.githubusercontent.com/python/cpython/main/Doc/whatsnew/3.13.rst",
+    "https://raw.githubusercontent.com/python/cpython/main/Python/jit.c",
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/template.c",
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/_targets.py",
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/build.py",
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/_stencils.py",
+    "https://raw.githubusercontent.com/python/cpython/main/Tools/jit/_optimizers.py",
+    "https://raw.githubusercontent.com/python/cpython/main/Python/optimizer.c",
+    "https://raw.githubusercontent.com/python/cpython/main/Python/optimizer_analysis.c",
+    "https://raw.githubusercontent.com/python/cpython/main/Include/internal/pycore_optimizer.h",
+    "https://raw.githubusercontent.com/python/cpython/main/Include/internal/pycore_backoff.h",
+    "https://raw.githubusercontent.com/python/cpython/main/configure.ac",
+    "https://raw.githubusercontent.com/python/cpython/main/Python/pylifecycle.c",
+    "https://github.com/python/cpython/issues?q=is%3Aissue%20state%3Aopen%20label%3Atopic-JIT",
+    "https://github.com/python/cpython/issues/149212",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/bench_runner.toml",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/RESULTS.md",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT/bm-20260925-ripley-x86_64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0-vs-base.md",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT/bm-20260925-blueberry-aarch64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0-vs-base.md",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0/bm-20260925-ripley-x86_64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT/bm-20260925-ripley-x86_64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0/bm-20260925-blueberry-aarch64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT/bm-20260925-blueberry-aarch64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-TAILCALL/bm-20260925-jones-arm64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT%2CTAILCALL/bm-20260925-jones-arm64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-TAILCALL/bm-20260925-prometheus-amd64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json",
+    "https://raw.githubusercontent.com/savannahostrowski/pyperf_bench/HEAD/results/bm-20260925-3.16.0a0-80f9aa0-JIT%2CTAILCALL/bm-20260925-prometheus-amd64-python-80f9aa0b18d96509eec3-3.16.0a0-80f9aa0.json"
+  ],
+  "confidence": 0.8
+}
