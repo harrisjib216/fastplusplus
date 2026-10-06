@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/fex-emu/fex",
+  "one_liner": "Usermode x86 and x86-64 Linux emulator for ARM64 hosts with an IR-based JIT; about 1.6-2.4x QEMU user-mode in a 2022 test.",
+  "what_it_does": "FEX runs unmodified 32-bit and 64-bit x86 Linux programs on ARM64 Linux, in the role of qemu-x86_64/qemu-i386 user mode, and runs Windows games through Wine/Proton (it can also be built as an arm64ec/WoW64 module for Wine). It needs an x86-64 RootFS (fetched with FEXRootFSFetcher), registers via binfmt_misc, and offers per-app JSON configuration plus the FEXConfig GUI. Library forwarding (thunks) lets guest calls into OpenGL, Vulkan and similar libraries run the host's native ARM64 libraries.",
+  "how_it_is_fast": "A dynamic binary translator: an x86 frontend decodes blocks (with multiblock fragments), lowers them to an SSA IR loosely modelled on arm64, runs IR passes such as redundant flag-calculation elimination and register allocation, and emits arm64 code through a 'splatter' backend; translated blocks are looked up in a block cache, and an optional on-disk code cache (FEX_DISKCACHE=1, FOZ database) cuts JIT stutter. API forwarding (thunking) skips emulating whole graphics and system libraries. It maps x86-TSO onto ARM using LRCPC/LRCPC2/LRCPC3 loads, Apple's hardware TSO bit on Asahi, and per-app options to skip memory-model emulation where an app tolerates it.",
+  "when_to_use": [
+    "Running closed-source x86 or x86-64 Linux binaries (games via Steam/Proton, drivers, tools) on ARM64 Linux, where QEMU user-mode is too slow.",
+    "Mixed 32-bit and 64-bit x86 guests on one ARM64 host with one emulator, with multithreaded guests that need x86 memory-ordering semantics preserved by default.",
+    "GPU-heavy workloads where forwarding OpenGL/Vulkan to host drivers matters more than the CPU JIT (the 2022 glmark2/OpenArena gap against QEMU came mostly from this).",
+    "Hardware with good x86-emulation support: ARMv8.3+ cores with LRCPC, Apple Silicon with its TSO bit, Snapdragon X2 Elite/Oryon-3, or Valve's Steam Frame with its unaligned-atomic kernel patch."
+  ],
+  "when_not_to_use": [
+    "Raw CPU speed is the only criterion: in the only head-to-head with numbers, Box64 beat FEX on every row (7z 3084 vs 1486, dav1d 49.72 vs 27.28 fps on an x86-64 guest, March 2022), and a January 2026 user report (#5221, Cortex-A53, multithreaded SpliX printer filter) measured FEX at 2.260 s against box64 0.908 s and native 0.381 s.",
+    "Hosts other than 64-bit ARM Linux or Windows/Wine arm64ec: no RISC-V, LoongArch, 32-bit ARM, macOS or supported Android build (the maintainer said in October 2024 that FEX does not support Android); x86-64 hosts are CI-only.",
+    "Exact x86 atomicity: split-lock (cacheline-crossing) atomics are emulated on a best-effort basis that can tear data, and each one costs an alignment fault plus a kernel and userspace signal round trip unless the kernel carries Valve's patch.",
+    "Systems with a dedicated PCIe GPU: storing to write-combine (uncached) memory under TSO emulation hits a cliff (the project reports up to 816x worse store bandwidth and games below 1 FPS) unless TSO emulation is disabled for that app.",
+    "Full-system or kernel emulation: FEX is userspace-only by design (no CPL0-2, real or protected mode, IRQs)."
+  ],
+  "integration": {
+    "form": "application (FEX loader and FEXInterpreter via binfmt_misc, FEXConfig GUI, PPA and distro packages) built on the FEXCore library; Wine arm64ec/WoW64 module on Windows targets",
+    "dependencies": "x86-64 RootFS (downloadable with FEXRootFSFetcher); build needs CMake 3.14+ and Clang 13+ (GCC and MSVC are rejected); vendored forks of vixl, jemalloc, robin-map and xxHash; thunk libraries are optional (BUILD_THUNKS off by default in a source build)",
+    "min_toolchain": "C++20, Clang 13+ (MinGW Clang for Windows targets), CMake 3.14",
+    "platforms": "ARM64 Linux, ARMv8.0-a or newer with FEAT_FP and FEAT_CRC32 (FEXCore targets ARMv8.1+); tested on Arch, Fedora, openSUSE and Ubuntu 22.04-25.04; a Fedora wiki snippet (page blocked) says only 4K page-size kernels are supported; Windows arm64ec via MinGW",
+    "thread_safety": "Runs multithreaded guests and emulates the x86-TSO memory model by default; the JIT compiles from several threads at once, with lock contention reduced in FEX-2609. Per-app options that skip memory-model emulation trade correctness for speed.",
+    "drop_in_for_baseline": "partial: replaces qemu-x86_64/qemu-i386 user mode through binfmt_misc on ARM64 Linux, but only on ARM64 hosts and it needs its own RootFS setup"
+  },
+  "gotchas": [
+    "The QEMU comparison is a March 2022 blog by the Box86/Box64 author, read here only from search snippets (box86.org blocked): CPU, compiler flags and the QEMU and FEX versions are not visible, the glmark2 and OpenArena rows measure FEX's GL forwarding against QEMU's software rendering rather than the JIT, and FEX has changed monthly since (now FEX-2609).",
+    "FEX itself publishes no numbers against QEMU or Box64; the maintainer said in October 2024 he had never compared FEX with Box (discussion #4113), and #4626 (June 2025, 'How is the performance compared to Box64?') got no answer with numbers.",
+    "Speed depends heavily on the host CPU's memory-ordering features. On ARMv8.0 every x86 load becomes load-acquire and every store becomes store-release, which the project calls 'exceedingly costly'; LRCPC extensions or Apple's TSO bit recover most of that cost.",
+    "The FEX-2609 disk cache is experimental: it can grow without bound for guests that JIT their own code, has no eviction, and may not be invalidated when files change; delete $HOME/.cache/fex-emu/ to reclaim space."
+  ],
+  "pick_this_over_siblings_when": "Pick FEX over Box64 when you want one emulator for 32-bit and 64-bit x86 guests with x86 memory-ordering emulated by default, Valve-backed Steam/Proton integration and per-app tuning on ARM64; pick Box64 for higher measured CPU throughput or for RISC-V and LoongArch hosts, and Blink when the host is not ARM64.",
+  "verified_claims_summary": "In a March 2022 Box86/Box64-author test on an unnamed ARM Linux machine (CPU, flags and versions not visible; snippet only), FEX ran an x86-64 guest at 1486 7-Zip MIPS vs 931 for QEMU user-mode (about 1.6x) and dav1d single-threaded at 27.28 vs 11.24 fps (about 2.4x); on an x86 guest 1197 vs 691 and 21.75 vs 10.57 (about 1.7x and 2.1x), while Box64/Box86 were roughly twice as fast as FEX on the same rows.",
+  "status_note": "Very active and MIT-licensed, with monthly releases (latest FEX-2609, September 2026), backing from Valve since its start and a Valve kernel patch for it on the Steam Frame; mature enough for gaming on ARM64 Linux, though its speed edge over QEMU rests on old, competitor-run numbers.",
+  "sources_read": [
+    "https://github.com/FEX-Emu/FEX",
+    "https://raw.githubusercontent.com/FEX-Emu/FEX/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/FEX-Emu/FEX/HEAD/docs/SourceOutline.md",
+    "https://raw.githubusercontent.com/FEX-Emu/FEX/HEAD/FEXCore/Readme.md",
+    "https://raw.githubusercontent.com/FEX-Emu/FEX/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/FEX-Emu/FEX/HEAD/LICENSE",
+    "https://github.com/FEX-Emu/FEX/discussions/4113",
+    "https://github.com/FEX-Emu/FEX/issues?q=is%3Aissue+is%3Aopen+slow+OR+performance",
+    "https://github.com/FEX-Emu/FEX/issues/4626",
+    "https://github.com/FEX-Emu/FEX/issues/5221",
+    "https://github.com/orgs/FEX-Emu/repositories",
+    "https://github.com/FEX-Emu/fex-emu.com/tree/main/_posts",
+    "https://raw.githubusercontent.com/FEX-Emu/fex-emu.com/HEAD/_posts/2026-09-17-Scourge-of-emulation.md",
+    "https://raw.githubusercontent.com/FEX-Emu/fex-emu.com/HEAD/_posts/2026-09-07-FEX-2609.md",
+    "https://raw.githubusercontent.com/FEX-Emu/fex-emu.com/HEAD/_posts/2025-11-28-FEXiversary.md",
+    "https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/ (EGRESS_BLOCKED; search snippets only)",
+    "https://fedoraproject.org/wiki/Changes/FEX (EGRESS_BLOCKED; search snippet only)",
+    "https://printserver.ink/blog/box64-vs-fex/ (EGRESS_BLOCKED; search snippet only, no numbers)"
+  ],
+  "confidence": 0.7
+}

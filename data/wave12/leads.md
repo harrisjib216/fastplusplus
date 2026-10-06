@@ -52,3 +52,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - RealNeGate/Cuik (TB backend, named by MiniVM's README as its JIT base): unverified (MiniVM enricher, 2026-10-06); weak lead.
 - Paper-access retier lead: mutable via the independent ADC 2023 study arXiv 2311.04692 (PostgreSQL LLVM JIT vs mutable) (mutable enricher, 2026-10-06).
 - riscv-sbt repo now redirects to lmcad-unicamp/riscv-sbt (batch 88 verifier, 2026-10-06): repo_url override candidate.
+- Box86 (ptitSeb/box86): not catalogued; the 2022 box86.org article gives 7z 3117 vs QEMU 691 on an x86 guest (FEX enricher, 2026-10-06); seed candidate alongside Box64.
