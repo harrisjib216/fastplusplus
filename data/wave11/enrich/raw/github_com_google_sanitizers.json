@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/google/sanitizers",
+  "one_liner": "AddressSanitizer: compiler-instrumented memory error detector with about 2x slowdown versus about 20x for Valgrind Memcheck.",
+  "what_it_does": "ASan finds heap, stack and global buffer overflows, use-after-free, use-after-return, use-after-scope, initialization-order bugs and (via LeakSanitizer) leaks in C/C++. You enable it with -fsanitize=address in Clang (3.1+) or GCC (4.8+) and relink; there is no library API to adopt. This google/sanitizers repository is now an archive of the wiki documentation and helper code (buildbot, dashboard, HWASan/MSan notes); the runtime and instrumentation live in LLVM compiler-rt and GCC libsanitizer.",
+  "how_it_is_fast": "Compile-time instrumentation instead of dynamic binary translation: every load and store gets an inline check of a shadow byte at (addr >> 3) + offset (0x7fff8000 on x86-64 Linux), where one shadow byte encodes how many of 8 application bytes are addressable, with a slow path only for partial qwords. A replacement malloc adds poisoned redzones around allocations and keeps freed memory in a poisoned quarantine, so detection needs no per-access lookup tables or JIT.",
+  "when_to_use": [
+    "CI and fuzzing builds of C/C++ code where you can recompile everything and want memory-safety bugs caught at near-production speed (about 1.9x average on SPEC CPU2006 at -O2).",
+    "Finding stack and global out-of-bounds bugs, which Memcheck and Dr. Memory do not detect per the comparison table.",
+    "Large test suites that are impractical to run under Valgrind's roughly 20x slowdown.",
+    "Linux, macOS, FreeBSD, Android, Windows (MSVC and clang-cl ship ports) on x86, ARM and PPC."
+  ],
+  "when_not_to_use": [
+    "Uninitialized-memory reads: ASan does not detect them; use MemorySanitizer (also needs a full rebuild) or Memcheck.",
+    "Third-party binaries or libraries you cannot rebuild: detection only covers instrumented code, so Valgrind or Dr. Memory still win for binary-only checking.",
+    "Memory- or address-space-constrained targets: ASan reserves about 20 TB of virtual memory for shadow, breaks ulimit -v, and fails with vm.overcommit_memory=2; HWASan is the lower-memory variant on AArch64.",
+    "Statically linked executables (-static is refused with -fsanitize=address) or code loaded with RTLD_DEEPBIND.",
+    "Production builds: it is a debugging tool, and stack use-after-return detection adds extra cost (some SPEC benchmarks 30% to almost 2x more)."
+  ],
+  "integration": {
+    "form": "module (compiler flag -fsanitize=address plus the compiler's runtime library)",
+    "dependencies": "Clang/LLVM compiler-rt or GCC libsanitizer",
+    "min_toolchain": "Clang 3.1+ or GCC 4.8+; use -O1 or higher and -fno-omit-frame-pointer for usable speed and stack traces",
+    "platforms": "Linux, macOS, iOS Simulator, FreeBSD, Android, Windows; x86, x86-64, ARM, ARM64, MIPS, PowerPC64 (per the wiki table)",
+    "thread_safety": "Works with multithreaded programs; races are ThreadSanitizer's job, not ASan's.",
+    "drop_in_for_baseline": "partial — replaces Valgrind Memcheck for addressability and leak checks after a recompile, but not for uninitialized reads or uninstrumented binaries"
+  },
+  "gotchas": [
+    "Clang and GCC ASan runtimes are incompatible; do not mix objects instrumented by one with the other's runtime.",
+    "_FORTIFY_SOURCE is unsupported and can cause false positives or missed bugs.",
+    "Linking shared libraries with -Wl,-z,defs or --no-undefined fails unless -shared-libasan is used (Clang links the runtime statically by default).",
+    "Statically linked libstdc++/libc++ without frame pointers gives truncated new/delete stacks; fast_unwind_on_malloc=0 fixes that at a large speed cost."
+  ],
+  "pick_this_over_siblings_when": "Pick ASan over Dr. Memory, heapusage or memtrail when you can rebuild from source and want the lowest-overhead full addressability checker; pick Dr. Memory or RetroWrite for binaries you cannot recompile, and DoubleTake when only a few percent of overhead is acceptable. This entry documents the same tool as the AddressSanitizer (LLVM compiler-rt) entry, which holds the live code.",
+  "verified_claims_summary": "The comparison page lists typical slowdowns of 2x for ASan, 20x for Valgrind Memcheck and 10x for Dr. Memory with no hardware or methodology and points to the Dr. Memory paper for the Valgrind numbers. ASan's own figure comes from a 2013 SPEC CPU2006 C/C++ run on an Intel Xeon W3690 3.47 GHz with clang 3.3 trunk r179094, -O2 versus -O2 -fsanitize=address -fno-omit-frame-pointer: average slowdown 1.93, median 1.86, range 1.12 (libquantum) to 3.79 (perlbench); the same page has no Valgrind column.",
+  "status_note": "This repository is archived (only buildbot and documentation commits); ASan itself is actively maintained in LLVM and GCC and shipped with every major compiler, so it is usable today but should be obtained from the compiler, not from here.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/google/sanitizers/HEAD/README.md",
+    "https://github.com/google/sanitizers",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizer.md",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizerComparisonOfMemoryTools.md",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizerPerformanceNumbers.md",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizerAlgorithm.md",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizerUseAfterReturn.md",
+    "https://raw.githubusercontent.com/wiki/google/sanitizers/AddressSanitizerFlags.md"
+  ],
+  "confidence": 0.75
+}
