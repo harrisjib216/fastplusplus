@@ -51,6 +51,16 @@ all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFEREN
    environment that reaches usenix.org, arXiv, ACM, IEEE): Exgen-Malloc, SpeedMalloc, LWMalloc, LLFree,
    Dr. Memory (commit.csail.mit.edu/papers/2011/bruening-cgo11-drmemory.pdf), Coz via the CACM copy, RFUSE,
    TriCache, UMap, NOVA, WineFS, SplitFS, vmcache, xNVMe, DAXFS, libseff, Nowa, Heartbeat, RetroWrite, SPDK.
+   **Failed or partial wave 11 runs, queued for a re-run:**
+   - Enricher failed: `data/wave11/enrich/prompts/github_com_hexhive_retrowrite.txt` (RetroWrite). The agent's
+     safety classifier stopped its write mid-call, so `enrich/raw/github_com_hexhive_retrowrite.json` was never
+     written. Its findings were recorded as a decision shortcoming from the agent's report. Ask the user before
+     relaunching; when relaunched, run `render_lists.py` again so the "missing enrichment" note clears.
+   - Searches that ran on WebSearch snippets only, because blogs and HN were blocked (thin yield): the 12 b7/b8
+     assignments `w11-{alloc,fiber,pool,log,prof,fsio}-{blogs,hn}`. Re-run them from an environment that
+     reaches HN Algolia, news.ycombinator.com and personal blogs, then merge, verify and enrich the new records.
+   - Seed pass not run: add a `seed` assignment to `data/wave11/assignments.json` with the leads above
+     (tidwall/bluebox; check the dsx-ai-factory/model-streamer move), then `seed.py`, merge, verify, enrich.
 7. **Wave 12** (languages: bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters) is set up
    but not launched. Re-render b1/b2 before launching so each known list is current. In a cloud session give
    every agent `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
