@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/jasonrohrer/wallclockprofiler",
+  "one_liner": "Single-file C++ 'poor man's profiler' that drives GDB to sample wall-clock stacks, with far less slowdown than callgrind.",
+  "what_it_does": "wallClockProfiler launches a program under GDB, or attaches to a running PID, interrupts it at a fixed rate, records the stack each time, and prints the stacks and functions ranked by share of samples. It is a CLI (wallClockProfiler <samples_per_sec> ./prog [pid [detach_sec]], plus --ignore=SIG1,... for signals that should not stop the target), so no rebuild or relink of the target is needed. The repo also ships variablePrinter, which breaks at a file:line in a live process, prints one variable and detaches.",
+  "how_it_is_fast": "It does not instrument or emulate the program: the target runs natively and is stopped only at each sample. The loop is usleep(1e6/rate), then -exec-interrupt or kill(pid, SIGINT), -stack-list-frames over GDB's MI interface, then -exec-continue. Overhead therefore scales with the sampling rate rather than with instructions executed, which is why it is far cheaper than callgrind's dynamic binary translation.",
+  "when_to_use": [
+    "Single-threaded Linux programs whose time goes to blocking calls (seeks, sockets, sleeps, lock waits) that on-CPU profilers such as perf or gperftools attribute badly.",
+    "Short-term sampling of a live process that GDB can attach to (often needs root), e.g. a few hundred samples from a loaded server.",
+    "Machines where only g++ and gdb are available: one .cpp file, built with plain g++, no other dependencies.",
+    "Low sampling rates (around 20 Hz) when you are hunting one dominant hotspot; the author reports 12% slowdown at that rate."
+  ],
+  "when_not_to_use": [
+    "Multithreaded programs: it lists frames for the current thread only (open issue #7, 'It doesn't work for multithreading').",
+    "Disk-bound code in uninterruptible sleep: GDB cannot stop a process in D state, so those intervals get few or no samples (open issue #12 saw 2 samples instead of about 90 for a 900 ms 1 GB read at 99 Hz).",
+    "High-rate or low-overhead production profiling: every sample is a full ptrace stop plus a GDB MI round trip; perf-style or eBPF samplers cost far less per sample.",
+    "When you need exact call counts or instruction-level cost: the output is a sample histogram, not callgrind-style exact counts."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "gdb on PATH (run with --interpreter=mi), pidof, POSIX/Linux headers",
+    "min_toolchain": "any g++ (README: g++ -o wallClockProfiler wallClockProfiler.cpp); no standard version stated",
+    "platforms": "Linux (fork/pipe/kill, pidof, GDB); other platforms not documented",
+    "thread_safety": "not applicable (CLI); samples only the target's current thread",
+    "drop_in_for_baseline": "partial — it replaces callgrind for 'where does the time go' questions, with sampled wall-clock stacks instead of exact instruction counts"
+  },
+  "gotchas": [
+    "In direct-run mode it finds the target with pidof <name> and takes the first PID printed, so another process with the same name can be picked.",
+    "The real sample rate is below the requested one: the interval is usleep plus the GDB interrupt/stack/continue round trip, not a fixed timer.",
+    "The target sees SIGINT on each sample in direct-run mode; programs with their own SIGINT handlers or other signals need --ignore= (added in December 2025 and February 2026 commits).",
+    "Per-function totals add a stack's count once for every frame naming that function, so recursive functions can show more than 100%."
+  ],
+  "pick_this_over_siblings_when": "Pick it over magic-trace or Coz when you have only gdb and g++ on a box, want blocking time attributed to call stacks, and the target is single-threaded. magic-trace (Intel PT, 2-10% overhead) and Coz (causal estimates for multithreaded code) are stronger tools when their requirements are met.",
+  "verified_claims_summary": "First-party README: on the author's single-threaded fseek-heavy test program (source in testProgram/), sampling at 20 Hz slowed it by about 12%, while valgrind --tool=callgrind --collect-systime=yes ran it 11x slower (160 s vs 14 s). The callgrind output shows an i386 eglibc 2.19 system; CPU, compiler flags and repeat counts are not given.",
+  "status_note": "Lightly maintained (last commits 2026-02-10, merging signal-ignore PRs; five issues open, including multithreading and D-state sampling) and public domain via no_copyright.txt, so the single file is easy to vendor.",
+  "sources_read": [
+    "https://github.com/jasonrohrer/wallClockProfiler",
+    "https://raw.githubusercontent.com/jasonrohrer/wallClockProfiler/HEAD/README.md",
+    "https://raw.githubusercontent.com/jasonrohrer/wallClockProfiler/HEAD/wallClockProfiler.cpp",
+    "https://github.com/jasonrohrer/wallClockProfiler/commits",
+    "https://github.com/jasonrohrer/wallClockProfiler/issues",
+    "https://github.com/jasonrohrer/wallClockProfiler/issues/12",
+    "https://github.com/jasonrohrer/wallClockProfiler/issues/7"
+  ],
+  "confidence": 0.75
+}

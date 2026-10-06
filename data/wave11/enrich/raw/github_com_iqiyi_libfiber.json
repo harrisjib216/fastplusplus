@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/iqiyi/libfiber",
+  "one_liner": "C stackful coroutine runtime with libc network hooks; first-party echo-server chart shows about 1.6-1.7x libco's QPS.",
+  "what_it_does": "libfiber is the coroutine module of acl-dev/acl (lib_fiber) packaged on its own: a per-thread fiber scheduler with an event loop (select, poll, epoll, io_uring on Linux; kqueue on BSD/macOS; iocp and Windows GUI messages on Windows). You create fibers with acl_fiber_create (C), subclass acl::fiber, or use the go[...] lambda macro (C++11), then call acl_fiber_schedule. On Unix it hooks read/write/recv/send/connect/accept/poll/epoll/getaddrinfo and friends, so blocking client libraries such as the MySQL driver run as coroutines without source changes. It also ships channels, fiber mutex/rwlock/event/semaphore, wait_group, fiber_tbox and a fiber_pool.",
+  "how_it_is_fast": "Context switches on x86-64 use a hand-written inline-assembly setjmp/longjmp (x86_jmp.h, the Makefile default USE_JMP_DEF) that saves only callee-saved registers, rsp and the resume address; ARM builds use Boost.Context's jump_fcontext, and ucontext is only a fallback. Linux builds compile with -DSHARE_STACK, so fibers created with go_share or the share-stack attribute run on one shared stack and copy only their used portion on switch, which cuts memory at high fiber counts. I/O waits go straight to the per-thread epoll/kqueue/io_uring loop through the hooked syscalls, so a blocked fiber costs one event registration rather than a thread.",
+  "when_to_use": [
+    "Network servers or clients in C or C++ on Linux/BSD/macOS that want sequential code with thousands of concurrent connections",
+    "Making existing blocking client libraries (MySQL driver, DNS lookups via getaddrinfo) coroutine-friendly without patching them, through the libc hooks",
+    "Windows applications, including MFC/WTL GUI apps, that want coroutine-style networking on the GUI message pump or iocp",
+    "Projects already on the acl framework that want its HTTP server, master/worker process model and fiber pools",
+    "Memory-tight services with very many mostly idle fibers, using shared-stack mode on Linux"
+  ],
+  "when_not_to_use": [
+    "When you need raw switch speed for generators or compute-only coroutines: the tboox benchbox switch page lists libfiber(acl) slower than boost and tbox, and minicoro, libaco or tbox are leaner",
+    "When LGPL-3.0 is not acceptable for static linking into a closed product",
+    "When you need work-stealing across cores: the scheduler is single-threaded, one scheduler per thread, with no migration of fibers between threads",
+    "When global symbol interposition of close/read/write/connect/epoll is unwelcome (other libraries, sanitizers, or your own hooks in the same process)",
+    "When you want a header-only or small dependency: it is a built C library with a large API, and the C++ convenience pieces lean on the acl codebase"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the C core (links -ldl -lpthread); optional liburing when built with HAS_IO_URING=yes; C++ HTTP server and fiber_pool samples need acl (lib_acl_cpp)",
+    "min_toolchain": "C compiler with GNU inline asm on x86-64 (gcc or clang); C++11 for go_fiber.hpp lambdas; Visual Studio solutions (vc2012-2015, built with vc2019) on Windows; MinGW-w64 mentioned in issue #41",
+    "platforms": "Linux, FreeBSD, macOS, Windows; x86-64 custom asm switch, arm/arm64 via Boost.Context fcontext",
+    "thread_safety": "Each thread runs its own scheduler and fibers stay on it. Cross-thread sync must use ACL_FIBER_EVENT / acl::fiber_mutex or fiber_tbox; the FAQ warns that pthread mutexes held across coroutine switches can deadlock threads.",
+    "drop_in_for_baseline": "partial — same model as libco (stackful coroutines plus hooked blocking syscalls), but a different API (acl_fiber_* vs co_create/co_resume) and different event-loop entry point"
+  },
+  "gotchas": [
+    "Shared-stack fibers are not available when Boost.Context jumps are used (arm/arm64 builds, and the code #errors if both are set), so the memory-saving mode is x86-64 Linux only in practice.",
+    "The README's own server sample has a Windows-only typo (timeout *= 1000 on an undeclared name), and on Windows the hooks are absent, so code must call acl_fiber_recv/acl_fiber_send explicitly.",
+    "Open issue #54 (Feb 2026) reports a memory leak on Windows; closed issue #26 reported a leak in fiber_timer::start().",
+    "Benchmark compares whole echo-server samples (libfiber vs libmill, libco and a Go program) with no CPU, OS, compiler or flags, so it measures event-loop plus syscall-hook overhead, not context-switch cost."
+  ],
+  "pick_this_over_siblings_when": "Pick libfiber over libco or libgo when you want a maintained (2026 commits) hook-based network coroutine runtime that also covers Windows iocp/GUI and io_uring; pick libaco, minicoro or tbox when you only need the fastest bare context switch and no I/O runtime.",
+  "verified_claims_summary": "A first-party bar chart (res/benchmark.png) shows echo-server QPS at 100 to 1000 connections: libfiber about 232k at 100 and 178k at 1000, against libco about 147k and 106k (about 1.6-1.7x, derived from page data), with libmill and a Go server in between. No hardware, OS, compiler or flags are given; the libco and libmill server sources are in the repo's benchmark/ directory and the client is acl's lib_fiber/samples/client2.",
+  "status_note": "Active (last commit 2026-01-04, 817 stars) and copyable under LGPL-3.0; it tracks acl-dev/acl lib_fiber, which is where most development happens.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/iqiyi/libfiber/HEAD/README.md",
+    "https://github.com/iqiyi/libfiber/tree/master/c/src",
+    "https://github.com/iqiyi/libfiber/tree/master/c/src/fiber",
+    "https://raw.githubusercontent.com/iqiyi/libfiber/HEAD/c/src/fiber/fiber_unix.c",
+    "https://raw.githubusercontent.com/iqiyi/libfiber/HEAD/c/src/fiber/x86_jmp.h",
+    "https://raw.githubusercontent.com/iqiyi/libfiber/HEAD/c/Makefile",
+    "https://github.com/iqiyi/libfiber/tree/master/benchmark",
+    "https://github.com/iqiyi/libfiber/issues",
+    "https://github.com/iqiyi/libfiber/issues?q=is%3Aissue+is%3Aclosed"
+  ],
+  "confidence": 0.7
+}

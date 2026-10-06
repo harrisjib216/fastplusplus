@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/jarred-sumner/hop",
+  "one_liner": "Uncompressed, read-only archive format and CLI in Zig with an indexed footer, for pulling single files faster than tar or unzip.",
+  "what_it_does": "hop packs a directory into one .hop file (file contents first, a metadata footer last) and can extract it or print one named file to stdout. It is a standalone CLI (hop <dir>, hop archive.hop, hop archive.hop path), not a library and not tar/zip compatible. It was written as an experiment for packaging npm node_modules for Bun.",
+  "how_it_is_fast": "The footer holds a table of packed File structs plus an array of 32-bit Wyhash hashes of each path, so a lookup reads the header, preads the footer, scans the hash array and sends the file's byte range to stdout with sendfile; tar has to walk entries sequentially. The footer is decoded with almost no work: packed-struct arrays are cast straight from the read buffer (std.mem.bytesAsSlice). Extraction and archiving copy data with copy_file_range. The source does not support the README's 'sorted, so faster lookup' line: the hash array is searched linearly (std.mem.indexOfScalar), not by binary search.",
+  "when_to_use": [
+    "Reading a handful of files out of a big bundle of many small files (node_modules-style trees) where tar's sequential scan dominates.",
+    "Studying a minimal indexed-archive layout (content first, hash-indexed footer, zero-copy decode, sendfile/copy_file_range) before designing your own.",
+    "Trusted, locally produced archives under 4 GB where compression, checksums and symlinks are not needed."
+  ],
+  "when_not_to_use": [
+    "Any production or redistribution use: the repo has no license file, so treat it as read-only reference code.",
+    "Untrusted archives: no checksums, no bounds or path validation on entry names (extract passes stored names straight to createFile/makePath, so '../' names can write outside the target directory), and footer structs are cast without alignment checks (open issue #1).",
+    "Archives over 4 GB, or trees that rely on symlinks, empty directories, permissions or mtimes (stored but not restored on extract).",
+    "When you need compression, appends or a maintained tool: indexed formats such as asar, or zip with stored entries, are the fairer comparisons; the code targets a 2021 pre-0.9 Zig and has had no commits since 2021-11-10."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "libc (build.zig links it); Zig standard library",
+    "min_toolchain": "Zig of late 2021 (pre-0.9 std API: *std.mem.Allocator, std.build.Builder, standardReleaseOptions); does not build on current Zig without porting",
+    "platforms": "Linux x86-64 and macOS x86-64/aarch64 (Makefile release targets); Windows not documented",
+    "thread_safety": "not applicable (single-threaded CLI)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Single-file lookup matches only the 32-bit Wyhash of the path and never compares the name, so two paths with the same hash return the wrong file's bytes.",
+    "Archiving calls copy_file_range once per file and records whatever count it returns, without looping on short copies, and never closes the input files (it raises RLIMIT_NOFILE to the hard limit to cope).",
+    "Extraction does not close output files and does not restore the stored chmod or mtime; the .hop file itself is chmodded 0777 and starts with a '#!/usr/bin/env hop' shebang.",
+    "Open issue #3 says the README benchmarks run in the single-millisecond range, where hyperfine warns 'Command took less than 5 milliseconds, results may be inaccurate', so the 25x/10x figures mostly measure process startup."
+  ],
+  "pick_this_over_siblings_when": "None of the siblings is an archive format; ptar is the one closest in spirit (it parallelizes creating plain tar archives). Pick hop only to study an indexed single-file read path; for faster tar creation use ptar, and for copying whole trees fcp or wcp.",
+  "verified_claims_summary": "The author's README screenshots (macOS 12 on an M1-class Mac, plus an unnamed Ubuntu AMD64 server) show hop printing one file from an uncompressed archive of the tigerbeetle repo about 25x faster than unzip and 10x faster than tar; build flags (Makefile uses -Drelease-fast) and the exact commands are not published beyond the images. Open issue #3 points out that these runs take a few milliseconds each, so they mainly measure startup, not archive access.",
+  "status_note": "Abandoned: all 21 commits are dated 2021-11-10, three issues remain open and there is no license, so it is reference-only and needs porting to current Zig.",
+  "sources_read": [
+    "https://github.com/Jarred-Sumner/hop",
+    "https://raw.githubusercontent.com/Jarred-Sumner/hop/HEAD/README.md",
+    "https://raw.githubusercontent.com/Jarred-Sumner/hop/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/Jarred-Sumner/hop/HEAD/src/schema.zig",
+    "https://raw.githubusercontent.com/Jarred-Sumner/hop/HEAD/build.zig",
+    "https://raw.githubusercontent.com/Jarred-Sumner/hop/HEAD/Makefile",
+    "https://github.com/Jarred-Sumner/hop/commits",
+    "https://github.com/Jarred-Sumner/hop/issues?q=is%3Aissue",
+    "https://github.com/Jarred-Sumner/hop/issues/3",
+    "https://github.com/Jarred-Sumner/hop/issues/1"
+  ],
+  "confidence": 0.7
+}

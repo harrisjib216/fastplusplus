@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/iyengar111/nanolog",
+  "one_liner": "Small asynchronous C++11 stream-style logger; lower median caller latency than spdlog async, far behind Quill/fmtlog/PlatformLab NanoLog.",
+  "what_it_does": "NanoLog is a two-file (NanoLog.hpp plus NanoLog.cpp) asynchronous file logger with LOG_INFO / LOG_WARN / LOG_CRIT stream macros, run-time log level, and size-based file rolling. You call nanolog::initialize once with either a GuaranteedLogger (never drops lines) or a NonGuaranteedLogger(ring_mb) (fixed ring that overwrites old lines), and a background thread formats and writes to <dir><name>.N.txt. It is not a drop-in for spdlog: there are no sinks, no fmt-style format strings, no console output and only three levels.",
+  "how_it_is_fast": "The calling thread only encodes raw binary arguments (timestamp, thread id, file/function pointers, then typed values) into a 256-byte NanoLogLine with an inline stack buffer, so string literals are stored as pointers (zero copy) and integer/double-to-text conversion is deferred to the consumer thread. The guaranteed mode pushes into a chain of 8 MB buffers of 32768 slots claimed with one relaxed fetch_add and a per-slot release flag; the non-guaranteed mode is a fixed MPSC ring of 256-byte cache-aligned slots, each guarded by a per-slot atomic_flag spinlock. Formatting with std::ostream, timestamp printing and file I/O all happen on the single background thread.",
+  "when_to_use": [
+    "Legacy or C++11-only codebases that want an async file logger in two source files with no dependencies",
+    "Moderate-rate logging of short lines (under about 256 bytes, so no heap allocation per line) where median caller latency matters more than tail latency",
+    "As a readable reference design for deferred-formatting loggers (binary encode on the hot path, stringify on a worker)",
+    "When you can tolerate dropped lines and want a producer that never blocks on a full queue (NonGuaranteedLogger)"
+  ],
+  "when_not_to_use": [
+    "Latency-critical work today: in the Quill harness it trails Quill, fmtlog, XTR, MS BinLog and PlatformLab NanoLog by roughly 10x at the median, and its 4-thread 99.9th percentile (1419 ns) is worse than spdlog's (1106 ns)",
+    "When you need console sinks, custom formatting, local-time timestamps, appending to an existing file, or structured output: none are provided",
+    "Bursty high-volume logging in guaranteed mode: the producer that fills a buffer allocates the next 8 MB buffer in its own call, other producers spin, and memory grows without bound if the writer falls behind",
+    "Production systems that need a maintained project: abandoned since 2017-03-08 with 18 open issues, including #39 (2025) reporting producer blocking in NonGuaranteedLogger and lost final lines at shutdown in GuaranteedLogger"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard library only; std::thread needs -pthread)",
+    "min_toolchain": "C++11 (README benchmark built with g++ 4.8.4)",
+    "platforms": "any platform with a C++11 standard library; README numbers from Linux Mint 17 on x86-64",
+    "thread_safety": "Logging macros are safe to call from many threads after initialize(); one background thread consumes. Calling a LOG_ macro before initialize() dereferences a null logger pointer.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "License: GitHub shows none and no LICENSE file exists (issue #32), but both NanoLog.hpp and NanoLog.cpp open with the full MIT License text, Copyright (c) 2016 Karthik Iyengar, so the code is copyable under MIT with that notice kept.",
+    "Every log line is terminated with std::endl, which flushes the ofstream per line on the writer thread (issue #31); this caps writer throughput and was not part of the caller-latency benchmark.",
+    "The writer thread sleeps 50 us whenever the queue is empty, timestamps come from std::chrono::high_resolution_clock at microsecond resolution and are printed in UTC via std::gmtime (issues #11, #24, #39).",
+    "The README benchmark timed each call with a microsecond clock, so the 50th percentile of 0 us and the 0.35 us average are quantized; the Quill harness, which reports nanoseconds, is the more reliable comparison."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you want the smallest possible C++11 async logger to vendor or study; for real speed choose PlatformLab NanoLog, Quill or fmtlog, which beat it by about 10x at the median in the same Quill harness and are maintained.",
+  "verified_claims_summary": "In the independent Quill benchmark (odygrd/logger_benchmarks, GCC 14.2, -march=x86-64-v3, i5-12600, logging two ints and a double) Iyengar NanoLog's caller latency is 106/155/491 ns at the 50th/90th/99.9th percentile with 1 thread versus spdlog 271/296/360 ns, and 73/267/1419 ns versus 557/614/1106 ns with 4 threads, so it wins the median but loses the 1-thread and 4-thread 99.9th percentile. Its own README (g++ 4.8.4, i7-2630QM, flags not given, microsecond timer) shows a 0.35 us average versus spdlog async 2.59 us at 1 thread.",
+  "status_note": "Abandoned since 2017-03-08 (753 stars, 18 open issues); the MIT notice in both source files makes it copyable despite GitHub showing no license, and it is small enough to vendor and patch.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Iyengar111/NanoLog/HEAD/README.md",
+    "https://raw.githubusercontent.com/Iyengar111/NanoLog/HEAD/NanoLog.hpp",
+    "https://raw.githubusercontent.com/Iyengar111/NanoLog/HEAD/NanoLog.cpp",
+    "https://raw.githubusercontent.com/Iyengar111/NanoLog/HEAD/nano_vs_spdlog_vs_g3log_vs_reckless.cpp",
+    "https://github.com/Iyengar111/NanoLog",
+    "https://github.com/Iyengar111/NanoLog/issues",
+    "https://github.com/Iyengar111/NanoLog/issues/39",
+    "https://github.com/Iyengar111/NanoLog/issues/32"
+  ],
+  "confidence": 0.8
+}
