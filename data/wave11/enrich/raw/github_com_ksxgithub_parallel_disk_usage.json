@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/ksxgithub/parallel-disk-usage",
+  "one_liner": "Rust disk-usage analyzer (pdu) that walks directories in parallel with rayon; about 2.2x faster than GNU du warm-cache.",
+  "what_it_does": "pdu scans one or more directory trees, sums apparent size, block size or block count, and prints a bar-chart tree (or JSON with --json-output). It is a CLI alternative to dust/dutree, not a drop-in for du's output format, and it also ships a library crate (FsTreeBuilder, TreeBuilder, DataTree, Visualizer) for building custom tools. Optional hardlink detection and deduplication (--deduplicate-hardlinks, POSIX only) and --one-file-system are supported.",
+  "how_it_is_fast": "TreeBuilder recurses into each directory and maps its children through rayon's into_par_iter, so lstat (std::fs::symlink_metadata) and read_dir calls for sibling entries run on a work-stealing thread pool instead of du's single-threaded fts walk. Per-entry metadata is dropped immediately and only the size plus child names are kept; hardlink records go into a concurrent dashmap. Below --max-depth (default 10) children are summed rather than stored, which bounds the tree kept in memory.",
+  "when_to_use": [
+    "Interactive 'where did my disk space go' scans on SSD/NVMe or warm page cache, where parallel stat calls pay off.",
+    "Trees with tens of thousands or more files (the benchmark is a Linux v5.12 source checkout) on multi-core machines.",
+    "When you want a sorted, depth-limited chart or JSON output to pipe into other tools instead of du's flat listing.",
+    "When hardlinks must be counted once: --deduplicate-hardlinks cost nothing measurable in the 0.20.0 benchmark (88.3 ms vs 88.2 ms without it)."
+  ],
+  "when_not_to_use": [
+    "Spinning disks: issue #257 measured pdu at 1m18s vs du 47s on an HDD with 150,000 files because parallel traversal adds seeks; pdu now detects HDDs and drops to 1 thread, so expect no gain there.",
+    "Very large volumes with tens of millions of files: open issue #277 reports pdu being killed at random points after 28-62 million files (about 6 GB RSS) with no diagnosis yet.",
+    "Scripts that parse du's output format or need du flags (--exclude, --time, -s semantics); pdu is a different CLI.",
+    "Copy-on-write filesystems where reflinks matter (pdu ignores reflinks), or trees reached through symlinks (not followed).",
+    "C++ projects wanting an in-process library: this is a Rust crate with no C API."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon, dashmap, sysinfo, derive_more, itertools and other crates; clap and serde_json behind the default cli/json features",
+    "min_toolchain": "Rust edition 2024; repo pins toolchain 1.97.1",
+    "platforms": "Linux, macOS, Windows release binaries; block-size/block-count quantities and hardlink handling are POSIX-only",
+    "thread_safety": "Uses a global rayon pool; the CLI sets its size from --threads (auto, max or a number). Library thread-safety guarantees beyond Send/Sync bounds are not documented.",
+    "drop_in_for_baseline": "partial: computes the same sizes as du (block-size default, du-style hardlink dedup via --deduplicate-hardlinks) but prints a chart or JSON, not du's format"
+  },
+  "gotchas": [
+    "--threads=auto silently becomes 1 thread when any target path is on a detected HDD (prints a warning); pass --threads=max to override.",
+    "Without --deduplicate-hardlinks, every hardlink is counted as real size (like du --count-links), so totals differ from plain du.",
+    "Hardlink dedup with several path arguments removes overlapping paths first; the JSON root is '(total)' when two or more paths are given.",
+    "The published benchmark is for v0.20.0 while the crate is now 0.24.0; the README has not been rerun for newer versions."
+  ],
+  "pick_this_over_siblings_when": "Pick pdu over diskus when you need a per-directory breakdown rather than one total, and over gdu when you want a non-interactive chart/JSON and its own benchmark shows it ahead (88 ms vs gdu 168 ms); zdu's own README shows pdu -H ahead of it on a 57k-file tree (14.0 ms vs 19.6 ms), so pdu is a reasonable default among the Rust du-likes.",
+  "verified_claims_summary": "Project CI (deploy.yaml) runs hyperfine --warmup=1 on a GitHub-hosted ubuntu-latest runner (CPU model not stated) over an unzipped Linux v5.12 source tree plus a small hardlink tree: pdu 0.20.0 block-size 88.2 ms vs du --count-links 196.8 ms (2.23x), dust 110.9 ms, gdu 168.4 ms, ncdu 205.7 ms, dua 231.0 ms; with hardlink dedup 88.3 ms vs du 196.9 ms. This is warm cache only; there is no cold-cache or HDD number.",
+  "status_note": "Actively maintained (v0.24.0, signed release attestations since 0.23.0, packaged in Arch extra), Apache-2.0; usable as a CLI or Rust library but not from C++.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/README.md",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/rust-toolchain",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/USAGE.md",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/fs_tree_builder.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/tree_builder.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/get_size.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/hardlink.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/src/app.rs",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/.github/workflows/deploy.yaml",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/ci/github-actions/competing-benchmark.ts",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/ci/github-actions/benchmark/matrix.ts",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage/HEAD/ci/make-tree-with-hardlinks.sh",
+    "https://github.com/KSXGitHub/parallel-disk-usage/tree/master/ci/github-actions",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage-0.20.0-benchmarks/HEAD/tmp.benchmark-report.competing.block-size.md",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage-0.20.0-benchmarks/HEAD/tmp.benchmark-report.competing.deduplicate-hardlinks.md",
+    "https://raw.githubusercontent.com/KSXGitHub/parallel-disk-usage-0.20.0-benchmarks/HEAD/tmp.benchmark-report.CHARTS.md",
+    "https://github.com/KSXGitHub/parallel-disk-usage/issues?q=is%3Aissue+performance+OR+slow+OR+bug",
+    "https://github.com/KSXGitHub/parallel-disk-usage/issues/277",
+    "https://github.com/KSXGitHub/parallel-disk-usage/issues/257"
+  ],
+  "confidence": 0.8
+}
