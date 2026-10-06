@@ -25,3 +25,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - treVM (arXiv 2604.27570, repo unknown): mentioned by the wasm3 enricher (2026-10-06), unverified.
 - faasm (faasm/faasm): WAVM-based serverless runtime (WAVM enricher, 2026-10-06); weak lead.
 - ykjit/ykcbf (yk-enabled interpreter) and the yk-benchmarks mruby awfy suite (yklua enricher, 2026-10-06); weak leads.
+- HashLink (HaxeFoundation/hashlink): Neko successor, README has no numbers (NekoVM enricher, 2026-10-06); weak lead.

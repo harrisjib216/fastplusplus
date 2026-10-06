@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/themackabu/ant",
+  "one_liner": "Small JavaScript runtime with its own engine and a MIR-based JIT; about 1.8-2.0x QuickJS on the v8-v7 suite.",
+  "what_it_does": "Ant is a Node-style JavaScript runtime (CLI, npm packages, Node-compatible built-ins, WinterTC Minimum Common API) built on Ant Silver, an engine written from scratch in C23. It ships as one 9-12 MB binary. It can also be embedded: packages/libant builds a static libant.a, and examples/embed/embed.c drives it through a C API (ant_create, ant_runtime_init, js_eval_bytecode_eval, js_mkfun/js_set for native functions, js_destroy). That API is its own; it is not QuickJS's JS_* API.",
+  "how_it_is_fast": "Silver compiles source to bytecode and runs it in an interpreter. Per-function type feedback drives a method JIT built on a fork of the MIR backend: a function is compiled after 100 calls, loops tier up through on-stack replacement after about 500 back-edges (scaled by code size), and a function that bails out 5 times goes back to the interpreter. Objects use shapes with polymorphic and megamorphic inline caches, and the GC uses card tables. Release builds use Clang -O3 with LTO, checked-in LLVM PGO profiles trained on tests/bench_* and an HTTP server workload, and mimalloc as the allocator.",
+  "when_to_use": [
+    "CLI tools, serverless or edge handlers where startup time and binary size matter: README hyperfine run shows a Hono import cold start of 3.9 ms vs Bun 8.8 ms and Node 29.4 ms on an Apple M5 Pro",
+    "You currently embed QuickJS or Duktape and run compute-heavy scripts (numeric loops, crypto, string and regex work) where a JIT helps: NavierStokes 8014 vs 1947 and Crypto 3696 vs 913 against QuickJS on ubuntu",
+    "You want Node-compatible modules and npm packages without shipping V8, on Linux (glibc or static musl), macOS or Windows (MinGW), x64 or aarch64",
+    "C hosts that can accept a multi-megabyte static library and a C23 toolchain in exchange for a faster engine than the pure interpreters"
+  ],
+  "when_not_to_use": [
+    "You need spec completeness: test262 pass rate is about 66% (35590 of 53578), while QuickJS covers almost all of ES2023",
+    "Size or memory budgets fit QuickJS or Duktape: the suite's ant binary is 11.7 MB on ubuntu vs QuickJS 1 MB and Duktape 370 KB, and the Windows install totals 47.9 MB with DLLs",
+    "Allocation- or GC-heavy workloads: QuickJS beats it on Splay (3183 vs 2483 on ubuntu, 5786 vs 2338 on macOS arm64) and on RayTrace",
+    "You need V8, JSC or SpiderMonkey-class peak speed: issue #101 reports an N-body kernel at 551 ms in Ant vs 18 ms in Node and about 380 ms in CPython, and a Richards score of about 1862 vs Node's 57267",
+    "You need a stable, documented embedding ABI: the C API has a 'TODO: improve naming' comment, there is no embedding guide beyond examples/embed, and the major version moves fast (README benchmark on 14.1, the suite's build on 15.1)"
+  ],
+  "integration": {
+    "form": "static lib (packages/libant builds libant.a and libant-lto.a) or standalone CLI binary",
+    "dependencies": "Many vendored Meson subprojects: MIR fork, mimalloc, libuv, BoringSSL, PCRE2, libffi, nghttp2, llhttp, zlib-ng, brotli, LMDB, yyjson, utf8proc, Ada, tlsuv, WAMR and others; build also needs Meson, CMake, Node.js >= 22, Zig >= 0.16, and a pinned Rust nightly for Temporal unless -Dtemporal=disabled",
+    "min_toolchain": "C23 (-std=gnu23): GCC >= 14 or Clang >= 18; Apple Clang on macOS; MinGW-w64 GCC via MSYS2 (gnu2x) on Windows; MSVC not supported",
+    "platforms": "Linux x64 and aarch64 (glibc and static musl), macOS x64 and aarch64, Windows x64 (MinGW); a wasm32-wasip1 package carries the parser, interpreter and GC without the JIT",
+    "thread_safety": "Not documented; the API is built around per-isolate state (ant_t created by ant_create), and the embed example creates one isolate per runtime",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The suite's comparison is JIT against interpreters, with different build pipelines. Ant has no *-build entry in js-engine-setup's info.json, so it appears to be the project's own release binary (Clang, -O3, LTO, PGO per BUILDING.md), while QuickJS is a plain upstream 'make' from ahaoboy/quickjs-build. Each engine runs once per OS with no repeats, on unnamed GitHub Actions CPUs.",
+    "Embedders must call js_setstackbase with an address on the host stack before evaluating code, and native functions report errors by returning js_mkerr records, not ordinary Error values.",
+    "The JIT disables itself for a function after 5 bailouts, and tier-up thresholds are fixed (100 calls; OSR after 500 or more back-edges), so short or type-unstable code runs in the interpreter.",
+    "A libant link on macOS pulls in the Security, CoreFoundation and Hypervisor frameworks (sandbox backends), so it is not a light dependency."
+  ],
+  "pick_this_over_siblings_when": "Pick Ant over QuickJS or PrimJS when hot loops dominate and an extra 10 MB or so of binary is acceptable: the same suite shows about 1.8-2.0x QuickJS. Stay with QuickJS when you need near-complete ES conformance, a 1 MB footprint or a mature embedding API, and prefer Escargot or V8 when you need a proven engine rather than a 2026 newcomer.",
+  "verified_claims_summary": "In ahaoboy/js-engine-benchmark's daily CI run of the Mozilla v8-v7 suite (10/5/2026 snapshot), ant 15.1.4977edb5.0 scored 2186 / 3589 / 2001 on ubuntu / macOS arm64 / Windows GitHub runners vs QuickJS 2026.06.04 at 1217 / 1761 / 1067 and Duktape at 489 / 905 / 371. That is about 1.8x, 2.0x and 1.9x QuickJS (derived from page data). Compiler flags for the QuickJS build are its Makefile defaults; the CPU model is not stated.",
+  "status_note": "Very active (daily commits, last on 2026-10-05; 1.3k stars), MIT-licensed and usable as a CLI today, but the engine is young (about 66% of test262) and the embedding library comes with one example and no stable-ABI promise.",
+  "sources_read": [
+    "https://github.com/theMackabu/ant",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/README.md",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/BUILDING.md",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/ant.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/runtime.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/isolate.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/types.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/silver/jit.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/include/silver/feedback.h",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/docs/repo/runtime-invariants.md",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/examples/embed/embed.c",
+    "https://github.com/theMackabu/ant/tree/master/packages/libant",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/packages/libant/build.sh",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/packages/libant/example.sh",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/packages/libant/meson.build",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/packages/libant/meson_options.txt",
+    "https://github.com/theMackabu/ant/tree/master/meson/pgo",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/meson/pgo/build.sh",
+    "https://raw.githubusercontent.com/theMackabu/ant/HEAD/meson/pgo/flags.sh",
+    "https://github.com/theMackabu/ant/tree/master/tests",
+    "https://github.com/theMackabu/ant/issues?q=is%3Aissue",
+    "https://github.com/theMackabu/ant/issues/101",
+    "https://github.com/theMackabu/ant/commits",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/update.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/.github/workflows/update.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/main/info.json",
+    "https://github.com/ahaoboy/quickjs-build",
+    "https://raw.githubusercontent.com/ahaoboy/quickjs-build/HEAD/build.sh"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/haxefoundation/neko",
+  "one_liner": "Deprecated dynamically typed bytecode VM behind Haxe's Neko target; about 1.2x PUC Lua on one 2015 fib run, within noise.",
+  "what_it_does": "NekoVM runs .n bytecode modules produced ahead of time by the nekoc compiler (from the Neko language) or by the Haxe compiler's Neko target. A C host embeds it through neko_vm.h/neko.h: neko_global_init, neko_vm_alloc, neko_vm_select, then load a module through neko_default_loader and call exported functions with val_call*/val_callEx; native extensions are .ndll shared libraries exporting functions with DEFINE_PRIM. It is a different language and API from Lua, not a drop-in.",
+  "how_it_is_fast": "Scripts are compiled ahead of time to a compact accumulator-plus-stack bytecode, and globals are resolved at load time to direct slot pointers (AccGlobal reads *pc), so a global function call costs no hash lookup; integers are 31-bit tagged immediates that need no allocation. With GCC the interpreter is direct-threaded (computed goto, opcodes rewritten to label addresses at module load); MSVC builds use a plain switch. An x86-32 JIT (jit_x86.c) exists but is off unless the host calls neko_vm_jit (the stock neko executable turns it on by default), and it is compiled out on x86-64, Win64 and macOS.",
+  "when_to_use": [
+    "You already ship Haxe code to the Neko target, or maintain a host that loads existing .n modules and .ndll primitives.",
+    "Embedding a small dynamically typed VM with GC in a C host where scripts can be compiled ahead of time and only bytecode is shipped.",
+    "Integer- and call-heavy scripts whose values stay within 31-bit tagged ints, the case where Scriptorium's fib(34) run put the interpreter slightly ahead of PUC Lua."
+  ],
+  "when_not_to_use": [
+    "New projects: the README says 'Deprecated as of 2021-09-09 ... not actively maintained anymore'; recent commits (to 2026-09-19) are build, dependency and CI fixes only.",
+    "You need a reliable speed-up over Lua: the only measured margin (1.104 s vs 1.341 s) flips in the other recorded batch (2.458 s vs 2.359 s), and in the same table Chibi-Scheme (1.009 s), TinyVM, Pawn, LuaJIT and Terra are faster.",
+    "You want the JIT on a modern platform: it is x86-32 only, 'disable jit for win64, which never worked' (2.2.0 changelog), issue #301 reports a segfault when forced on on x86-64, and issue #206 (no answer) asks whether it beats the interpreter at all.",
+    "Numeric code with integers beyond plus or minus 2^30: results are boxed into heap-allocated Int32 values (alloc_best_int), and floats are always boxed."
+  ],
+  "integration": {
+    "form": "shared lib (libneko plus the neko executable, built with CMake) or source-drop of vm/*.c as Scriptorium did; nekoc compiler as a separate tool",
+    "dependencies": "Boehm GC (required by the VM); the standard ndlls add OpenSSL/mbed TLS, pcre2, zlib, MariaDB Connector/C, SQLite, Apache/APR and GTK+3 on Linux, each switchable off with WITH_* CMake options",
+    "min_toolchain": "CMake 3.10.2; Visual Studio 2010-2017 on Windows, Xcode command line tools on macOS, gcc on Linux",
+    "platforms": "Windows, macOS, Linux and BSD; x86, x86-64 and (since 2.4.0) arm64 binaries for Linux and macOS; JIT only on 32-bit x86 outside macOS and Win64",
+    "thread_safety": "one neko_vm per OS thread, chosen with neko_vm_select; threads must be created or registered through neko_thread_create/neko_thread_register so the GC sees them; nothing more is documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: Scriptorium's neko.exe is a custom host (neko/neko.c, the embedding-tutorial code) that never calls neko_vm_jit, and neko_vm_alloc sets run_jit = 0, so the 1.104 s is the MSVC switch-dispatch interpreter, not the stock neko binary (JIT on by default on 32-bit x86) nor a GCC direct-threaded build. The Lua row runs a bare 'lua' from PATH (the repo has no lua.exe; lua/ holds only lua-5.3.1 and luajit-2.0 sources), so the baseline binary and build are unrecorded.",
+    "Harness: bench.cc never checks program output, and the 'Should return 433494437' comment in fib.lua is fib(43); fib(34) is 5702887. The Neko and Lua scripts both call a global function, but Neko resolves globals to slots at load time while Lua's fibR does a hash lookup in _ENV per call, which favours Neko on this test.",
+    "Integers are 31-bit tagged; arithmetic that leaves that range allocates a boxed Int32 through the GC, and wider results wrap as C int arithmetic.",
+    "Licence is mixed: VM and runtime libraries are MIT, but nekoc and nekoml are GPL-2.0, mysql.ndll links the LGPL MariaDB Connector/C, and Boehm GC carries its own notice; the LICENSE file bundles all of these."
+  ],
+  "pick_this_over_siblings_when": "Pick Neko only when you are tied to Haxe's Neko target or existing .n/.ndll code; for a new embedded VM, Luau or Lua give a maintained dynamic language and Chibi-Scheme (1.009 s) or Pawn (0.719 s C core) were faster in the same Scriptorium fib(34) table.",
+  "verified_claims_summary": "r-lyeh's Scriptorium (July 2015, MSVC 2013/2015 with /Ox /Oy /DNDEBUG /MT, AMD A10 3.8 GHz, Windows 7 64-bit) timed whole-process runs of recursive fib(34), 5 launches averaged per batch with the best batch kept: Neko 2.0.0's interpreter (JIT off, bytecode precompiled by nekoc outside the timing) took 1.104 s against 1.341 s for an unidentified PUC Lua on PATH, about 1.21x (derived from page data). In the earlier batch that timed both, Neko was about 4% slower (2.458 s vs 2.359 s), so the margin is within run-to-run noise.",
+  "status_note": "Deprecated upstream since 2021 (2.4.0 in 2024 and 2.4.1 in 2025 are maintenance releases, commits to 2026-09-19 update BoehmGC, mbed TLS and CI); the MIT VM is usable and embeddable, but expect no new features or answers on issues.",
+  "sources_read": [
+    "https://github.com/HaxeFoundation/neko",
+    "https://github.com/HaxeFoundation/neko/commits/master",
+    "https://github.com/HaxeFoundation/neko/tree/master/vm",
+    "https://github.com/HaxeFoundation/neko/issues?q=is%3Aissue+jit+OR+performance+OR+crash",
+    "https://github.com/HaxeFoundation/neko/issues/206",
+    "https://github.com/HaxeFoundation/neko/issues/301",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/README.md",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/CHANGES",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/interp.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/main.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/module.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/neko.h.in",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/neko_vm.h",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/vm.h",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/opcodes.h",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/jit_x86.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/alloc.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/others.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/threads.c",
+    "https://raw.githubusercontent.com/HaxeFoundation/neko/HEAD/vm/load.c",
+    "https://github.com/r-lyeh-archived/scriptorium",
+    "https://github.com/r-lyeh-archived/scriptorium/tree/master/neko",
+    "https://github.com/r-lyeh-archived/scriptorium/tree/master/lua",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/README.md",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.cc",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.csv",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/run.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.neko",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.lua",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/neko/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/neko/neko.c"
+  ],
+  "confidence": 0.6
+}

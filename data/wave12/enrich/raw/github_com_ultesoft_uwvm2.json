@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/ultesoft/uwvm2",
+  "one_liner": "C++26 WebAssembly runtime whose 'u2' direct-threaded interpreter reports about 1.7x lower geomean wall time than wasm3 on Apple Silicon.",
+  "what_it_does": "UWVM2 is a standalone WebAssembly VM (the 'uwvm' executable) with a spec-checked binary parser, WASI Preview 1 host bindings, three linear-memory backends (mmap, multi-thread allocator, single-thread allocator) and plugin preload modules. It has three backends: the u2 interpreter, an LLVM-based JIT, and a tiered mode that combines them. You run modules from the command line (uwvm [options] --run app.wasm args). It has no wasm3-style embedding C API; the Newlib target only produces linkable objects.",
+  "how_it_is_fast": "u2 translates each function in a single pass into a direct-threaded stream of opfunc pointers, so no Wasm opcode is decoded at run time. Opfuncs tail-call the next one with musttail and keep hot paths leaf. The top of the operand stack is cached in a 'register ring' passed in ABI argument registers (on AArch64, x3-x7 for i32/i64 and v0-v7 for f32/f64/v128), which cuts operand-stack memory traffic. Translation-time fusion cuts dispatch count: adjacent-op superinstructions ('conbine' soft/heavy/extra), delay_local consumer variants that read locals directly (modelled on wasm3's _rs/_sr/_ss variants), a fused inc/cmp/br_if loop op, deletion of const+drop runs, and frame-less calls to trivial callees.",
+  "when_to_use": [
+    "Interpreter-only execution of compute-heavy Wasm (hashing, ciphers, integer loops) on AArch64 or x86-64 SysV hosts, where wasm3 is the current choice and a JIT is not allowed or not wanted",
+    "A command-line WASI P1 runner that has to cover unusual targets (DOS/DJGPP, Windows 9x/NT through MinGW, BSDs, SerenityOS, LoongArch, RISC-V) from one codebase",
+    "A tiered setup where a fast-starting interpreter warms up before an LLVM JIT takes over (the --runtime-tiered mode, which the u2 design targets)",
+    "Hosts with or without virtual memory, using the allocator-based linear-memory backends instead of mmap"
+  ],
+  "when_not_to_use": [
+    "You need an embeddable library with a stable C API like wasm3's m3_* or WAMR's wasm_runtime_*: uwvm2 is built and documented as an executable",
+    "Code size matters: the specialized opfunc tables put the Mach-O __TEXT at about 1.4 MB, and the authors say u2 is not a minimal interpreter in the wasm3/WAMR class",
+    "Memory-heavy or branch-heavy kernels: the authors' own analysis says these can lose to wasm3 because u2's general memory paths lengthen dependence chains",
+    "Your toolchain cannot do full C++26 (Clang >= 21 or GCC >= 16, libstdc++ >= 15 or libc++ >= 21; MSVC is unsupported)",
+    "Modules that need Wasm 2.0/3.0 features, threads or WASI P2: documents/features.md marks them unsupported (only Wasm 1.0 and WASI P1 are ticked), and the 383-module comparison covers only modules both engines ran"
+  ],
+  "integration": {
+    "form": "CLI executable (uwvm) built with xmake; no documented embedding library API",
+    "dependencies": "Vendored fast_io, boost_unordered and bizwen headers in third-parties/; the default build also enables the LLVM JIT backend, which needs LLVM libraries and statically linked OpenSSL (configure with --execution-jit=none for an interpreter-only build); xmake >= 2.9.8",
+    "min_toolchain": "Full ISO C++26: LLVM Clang >= 21 (recommended) or GCC >= 16; libstdc++ >= 15 or libc++ >= 21; MSVC not supported",
+    "platforms": "Over 100 target triples (Linux, Darwin, BSDs, Windows NT/9x via MinGW, clang targeting windows-msvc, DOS, WASI, Emscripten, freestanding). The register-ring cache is only on for AArch64 (5 int + 8 FP slots), x86-64 SysV/GNU (3 + 8), riscv64, loongarch64 and MIPS N32/N64; it is off for ARM32, i386, riscv32, PowerPC and MS-ABI x64",
+    "thread_safety": "Not documented for host use; the Wasm threads proposal is marked unsupported, and a multi-thread allocator memory backend exists",
+    "drop_in_for_baseline": "partial — runs the same .wasm/WASI P1 modules as the wasm3 CLI, but has a different command line and no wasm3 C embedding API"
+  },
+  "gotchas": [
+    "A default build compiles in the LLVM JIT, and the default runtime is tiered (interpreter plus lazy LLVM JIT), not u2 alone; pass --runtime-int to run only the interpreter. The case study does not record which uwvm command line or build options produced the wasm3 numbers.",
+    "Release builds default to -march=native (xmake 'march' option), 'fastest' optimisation and LTO, so a default binary is tuned to the build host and may not run on older CPUs; set --march for distributable builds.",
+    "The wasm3 comparison is unreproducible: the 383-module corpus lived in /tmp/uwvm2test, and the cited analysis note test/uwvm2test/u2_vs_wasm3_asm_stitch_analysis.txt still returns 404. The ratio uses wall time (which includes process start and translation) and only modules both engines ran. Translation-time peepholes that delete const+drop runs and inline trivial calls can make microbenchmark modules look better.",
+    "Performance depends on the ABI. The Apple Silicon numbers come from the target with the widest register ring (5 integer + 8 FP slots); MS-ABI x64, ARM32 and i386 run with no stack-top cache at all."
+  ],
+  "pick_this_over_siblings_when": "Pick u2 over wasm3 or the WAMR fast interpreter when you want a pure interpreter that runs as a CLI on AArch64 or x86-64 SysV, can live with a C++26 toolchain, and want an LLVM tier-up path in the same binary. Stay with wasm3 or WAMR when you need a small, embeddable C library, and look at Silverfir-nano or Wasmi when you want interpreter speed claims backed by an independent suite (wasmi-benchmarks) rather than an unpublished first-party corpus.",
+  "verified_claims_summary": "The authors' own February 2026 AArch64 Apple M-series case study (README section 9.1, 'not universal claims') reports a uwvm/wasm3 wall-time ratio with geomean 0.5957 and median 0.7116 over 383 .wasm modules that both engines ran. It also gives internal kernel times of ChaCha20 398 vs 515 ms, SHA512 202 vs 220 ms and BLAKE2s 3094 vs 3427 ms. The exact chip, compiler, flags, wasm3 version and uwvm runtime options are not stated, and the corpus is not published.",
+  "status_note": "Active but effectively single-maintainer (all recent commits by MacroModel, last on 2026-09-20; 14 stars, 0 open issues); Apache-2.0 and buildable from source, but a dev-stage C++26 codebase and a CLI rather than a library.",
+  "sources_read": [
+    "https://github.com/UlteSoft/uwvm2",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/README.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/src/uwvm2/runtime/compiler/uwvm_int/readme.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/src/uwvm2/runtime/compiler/readme.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/src/uwvm2/runtime/compiler/uwvm_int/loop_unwind.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/src/uwvm2/runtime/lib/uwvm_runtime.default.cpp",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/test/uwvm2test/u2_vs_wasm3_asm_stitch_analysis.txt",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/documents/features.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/documents/support.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/documents/how-to-build/linux.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/documents/how-to-build/darwin.md",
+    "https://github.com/UlteSoft/uwvm2/tree/master/documents/command-line",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/documents/command-line/runtime.md",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/xmake.lua",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/xmake/impl.lua",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/xmake/rule.lua",
+    "https://raw.githubusercontent.com/UlteSoft/uwvm2/HEAD/xmake/option.lua",
+    "https://github.com/UlteSoft/uwvm2/tree/master/third-parties",
+    "https://github.com/UlteSoft/uwvm2/commits",
+    "https://github.com/UlteSoft/uwvm2/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.6
+}
