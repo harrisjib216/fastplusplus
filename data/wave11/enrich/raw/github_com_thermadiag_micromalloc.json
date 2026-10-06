@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/thermadiag/micromalloc",
+  "one_liner": "Low-overhead general-purpose C/C++ malloc that usually beats glibc malloc on speed while using about as little memory.",
+  "what_it_does": "Micro is a general-purpose allocator aimed at minimal memory overhead and fragmentation rather than peak speed. It exposes a C API (micro_malloc/micro_free, micro_heap_create/clear/destroy) and a C++ API (micro::heap), and a micro_proxy library replaces the system malloc via LD_PRELOAD-style tricks on Linux and DLL injection on Windows. Independent heaps can be freed in one call and can carve pages from a preallocated buffer or a memory-mapped file.",
+  "how_it_is_fast": "Medium allocations (under 512 KiB) use a two-level radix tree of free chunks sorted by size with fine-grained locking: a true best-fit with immediate coalescing, O(1) like TLSF but exact instead of approximate. Small allocations (under 656 bytes by default) use 16-byte-spaced segregated size classes in 4 KiB-aligned blocks whose header is found by address masking, and those blocks are themselves carved from the radix tree. Threads are bound round-robin to per-core arenas instead of using thread-local caches, which keeps memory low and makes thread creation cheap (the reason it does well on Larson).",
+  "when_to_use": [
+    "Replacing glibc malloc (or the Windows Low-fragmentation Heap) system-wide or per-process where resident memory matters more than the last bit of throughput.",
+    "Many-threaded programs where glibc malloc scales negatively and per-thread caches in jemalloc/mimalloc would inflate RSS.",
+    "Workloads that create and destroy many short-lived threads (Larson-style servers).",
+    "Arena-style code that wants independent heaps freed in one call, or allocation out of a fixed buffer or a memory-mapped file.",
+    "Small-memory systems: memory level 0 targets machines with only a few MBs."
+  ],
+  "when_not_to_use": [
+    "Raw allocation throughput is the goal: the README says it is usually slower than mimalloc, snmalloc, tbbmalloc and jemalloc, and the cross-thread plot shows snmalloc and jemalloc well ahead.",
+    "Security-sensitive or attacker-facing heaps: the README states it has no hardening against heap exploitation.",
+    "macOS and Android: replacement of the system allocator is untested there per the README.",
+    "Huge-page dependent workloads: huge pages are not supported yet.",
+    "Projects that need a well-tested, widely deployed allocator: single author, 33 stars, test suite described as incomplete."
+  ],
+  "integration": {
+    "form": "static lib, shared lib, or header-only (define MICRO_HEADER_ONLY); micro_proxy for malloc replacement",
+    "dependencies": "none (embeds a simplified komihash)",
+    "min_toolchain": "C++14 (CMake 3.8+); gcc, clang or msvc",
+    "platforms": "Linux and most Unix systems, Windows; macOS/Android untested for replacement",
+    "thread_safety": "Thread-safe: per-core arenas with fine-grained locking in the radix tree; MICRO_NO_LOCK build option removes locking for single-threaded systems",
+    "drop_in_for_baseline": "partial — link micro_proxy (or use the mp LD_PRELOAD tool) to replace malloc/free process-wide; otherwise call the micro_* API explicitly"
+  },
+  "gotchas": [
+    "Memory profile is a compile-time choice (MICRO_MEMORY_LEVEL 0-4, default 2); levels 3-4 trade memory for speed, and the radix tree has a static per-arena cost that grows with the level.",
+    "Arena depletion (MICRO_DEPLETE_ARENAS=1, default) lowers memory at the expense of parallelism; behavior is also tunable through many MICRO_* environment variables read at startup.",
+    "With the file page provider, setting MICRO_PAGE_FILE_PROVIDER to a fixed filename makes spawned child processes share the same file ('certain crash' per the README); use MICRO_PAGE_FILE_PROVIDER_DIR instead.",
+    "All allocations are only 16-byte aligned."
+  ],
+  "pick_this_over_siblings_when": "Pick it over v8malloc or FastAlloc when lower RSS than glibc matters more than throughput, and over Mesh when you want low overhead without page meshing; pick a TLSF allocator like XenoAtom.Allocators or rlsf instead for a single-threaded or embedded pool with deterministic timing.",
+  "verified_claims_summary": "First-party plots (md/benchmarks.md) compare micro with glibc 2.17, jemalloc 5.3.0, mimalloc 1.8 and snmalloc 3.14, built with gcc 10.3.0 (flags not stated) on a Xeon Gold 5220R under CentOS 7: same-thread alloc/free of random sizes up to 500 or 5000 bytes for 1-10 threads, a cross-thread random-free test and Larson, plotting Mops/s against peak-RSS/requested-bytes. Micro is faster than glibc with similar overhead, slower than snmalloc and jemalloc, and has the lowest overhead cross-thread; no numbers are given in text. Harness note from benchs/alloc_dealloc_same_thread.cpp: every allocator runs in sequence in one process (micro first), and overhead is computed from getrusage peak RSS, which is a lifetime maximum. If the plots came from such runs, later allocators' overhead can never read lower than micro's peak. The cleanup call (micro_clear, malloc_trim, mi_heap_collect) is inside the timed region, and snmalloc gets no cleanup.",
+  "status_note": "Stale since late 2024 (one closed issue, single author) but MIT-licensed, dependency-free and usable header-only, so it is easy to trial via the mp LD_PRELOAD tool before committing.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/md/benchmarks.md",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/md/examples.md",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/benchs/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/benchs/alloc_dealloc_same_thread.cpp",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/micro/testing.hpp",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/micro/os_page.hpp",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/micro/micro.h",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/micro/internal/os_page.cpp",
+    "https://raw.githubusercontent.com/Thermadiag/micromalloc/HEAD/md/images/same_thread.svg",
+    "https://github.com/Thermadiag/micromalloc/issues?q=is%3Aissue",
+    "https://github.com/Thermadiag/micromalloc/tree/main/benchs",
+    "https://github.com/Thermadiag/micromalloc/tree/main/micro"
+  ],
+  "confidence": 0.75
+}
