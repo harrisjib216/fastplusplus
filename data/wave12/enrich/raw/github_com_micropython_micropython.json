@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/micropython/micropython",
+  "one_liner": "Lean Python 3 implementation for microcontrollers and embedding; about 3.4x faster than Duktape 1.2.2 on 2015 fib(34), slower than PUC Lua.",
+  "what_it_does": "MicroPython implements Python 3.4 syntax (plus async/await and selected later features) with a subset of the standard library, for microcontrollers and other constrained systems as well as Unix and Windows. It runs .py source or precompiled .mpy bytecode, either from a filesystem or frozen into the firmware. For embedding in a C program, the embed port generates a self-contained set of .c/.h files configured by your own mpconfigport.h. It is a different language from the Duktape baseline (JavaScript), so it competes as the choice of embedded scripting engine, not as a drop-in.",
+  "how_it_is_fast": "A compact bytecode VM in which every object is one machine word: small ints and interned strings (qstrs) are tagged immediates (MICROPY_OBJ_REPR_A), so integer-heavy code such as fib allocates nothing. MICROPY_OPT_CACHE_MAP_LOOKUP_IN_BYTECODE caches the results of global, name and attribute lookups in the bytecode (enabled in the benchmarked Windows build), and GCC builds can use computed-goto dispatch, which mpconfig.h puts at roughly 10% faster. Per-function @micropython.native and @micropython.viper decorators emit machine code; the docs put native at roughly twice the speed of bytecode, and viper gains more by using machine-word integers.",
+  "when_to_use": [
+    "You want Python syntax for scripting on microcontrollers (esp32, rp2, stm32, samd, mimxrt and others) with as little as 256 KiB flash and 16 KiB RAM.",
+    "Embedding a small Python-like interpreter in a C application through the embed port, where CPython is too large.",
+    "Recursive or integer-heavy scripting where small-int tagging avoids allocation, with hot functions moved to @micropython.native or @micropython.viper.",
+    "Picking a scripting engine against Duktape 1.x-era JavaScript, which used doubles for every number unless built with fastint."
+  ],
+  "when_not_to_use": [
+    "Raw interpreter speed: in the same 2015 table PUC Lua (1.341 s) is about 2.1x faster, and AngelScript, Lily, mruby, Squirrel, s7 and NekoVM all finish fib(34) faster.",
+    "Code that needs full CPython semantics, the CPython C API or C extensions such as NumPy: only a subset of Python 3 is implemented, and the differences are catalogued in tests/cpydiff.",
+    "Long-running, allocation-heavy services on small heaps: open issues report heap fragmentation (#15894, an RP2 web server after 60 h) and super-linear json.dumps on large lists (#19147).",
+    "Production Windows hosts: the README of the Windows port calls it experimental and community-supported, and the benchmarked build was that port compiled with MSVC."
+  ],
+  "integration": {
+    "form": "source-drop (ports/embed generates self-contained .c/.h for a host C project) or standalone firmware or executables per port",
+    "dependencies": "none for the core; the build uses make, bash and Python 3.3+ (rp2 and esp32 also use CMake), and the microcontroller ports need their vendor SDKs",
+    "min_toolchain": "gcc per the README (MSVC and mingw-w64 builds exist for the Windows port); Python 3.3+ for the build scripts",
+    "platforms": "Unix-like (Linux, BSD, macOS, WSL), Windows (experimental port), and over twenty microcontroller ports in three support tiers",
+    "thread_safety": "Interpreter state is one global (mp_state_ctx), so one interpreter per process; ports with _thread run with or without a GIL depending on MICROPY_PY_THREAD_GIL; @native code does not release the GIL",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: scriptorium's bench.exe times whole processes launched through system() (cmd.exe and interpreter start-up included; N-1 runs to nul, the last printing to the console), and bench.cc keeps each engine's minimum session average. MicroPython ran in only two sessions, 6.687 s and 2.842 s. In the first session every engine was slower (PUC Lua 2.359 s against 1.341 s later), so compare engines within a session: 2.14x faster than Duktape in session 1 and 3.36x in session 3.",
+    "The measured build is MicroPython v1.4.4-90-g9220dc4-dirty (genhdr/mpversion.h, built 2015-07-09) from the experimental Windows port compiled with MSVC, which sets MICROPY_OPT_COMPUTED_GOTO to 0 and turns on MICROPY_DEBUG_PRINTERS and source-line info. Current MicroPython is v1.29.0 (August 2026), and the result says nothing about current builds or microcontroller ports.",
+    "The Duktape baseline is handicapped. javascript/duktape/make.bat builds Duktape 1.2.2 with cl /Ox /Oy /MT /DNDEBUG but without DUK_OPT_FASTINT, so every JS number is a double. fib.js also calls a global function, while MicroPython's build caches global lookups in bytecode. The effect of either difference was not measured.",
+    "bench.csv also holds four Duktape runs (9.063-9.715 s) in a two-column format that bench.cc's parser drops (it needs three fields). The table's 9.544 s is therefore not Duktape's best run; against 9.063 s the gap would be about 3.2x (derived from page data)."
+  ],
+  "pick_this_over_siblings_when": "Pick MicroPython over Lua, mruby, Squirrel or AngelScript when you need Python syntax and ready-made microcontroller ports rather than top interpreter speed, since all of those beat it on this fib test. Among JavaScript-side alternatives, QuickJS or XS beat Duktape by larger and more recent margins.",
+  "verified_claims_summary": "Third-party 2015 scriptorium shootout on an AMD A10 at 3.8 GHz running Windows 7 64-bit: recursive fib(34), whole process timed through bench.exe and averaged over 5 launches, best session kept. MicroPython 1.4.4 (Windows port, MSVC /Ox) took 2.842 s against 9.544 s for Duktape 1.2.2 (MSVC /Ox, no fastint), about 3.4x faster, and 1.341 s for PUC Lua.",
+  "status_note": "Very active MIT project (22.1k stars, 9.0k forks, 19,127 commits, last commit 2026-10-02, v1.29.0 released August 2026) that is easy to vendor through the embed port, but the speed evidence is an eleven-year-old single micro-benchmark on an experimental Windows build against a handicapped Duktape baseline.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/README.md",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.csv",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.cc",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/run.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.py",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.js",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.lua",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/python/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/javascript/duktape/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/javascript/duktape/duktape.h",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/python/micropython/windows/mpconfigport.h",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/python/micropython/windows/build/genhdr/mpversion.h",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/python/micropython/py/mpconfig.h",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/README.md",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/ports/embed/README.md",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/examples/embedding/README.md",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/docs/reference/speed_python.rst",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/ports/windows/README.md",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/ports/windows/mpconfigport.h",
+    "https://raw.githubusercontent.com/micropython/micropython/HEAD/py/mpstate.h",
+    "https://github.com/micropython/micropython",
+    "https://github.com/micropython/micropython/releases",
+    "https://github.com/micropython/micropython/tree/master/tests",
+    "https://github.com/micropython/micropython/issues?q=is%3Aissue%20state%3Aopen%20performance",
+    "https://github.com/svaarala/duktape/issues/57",
+    "https://blog.miguelgrinberg.com/post/benchmarking-micropython (EGRESS_BLOCKED; search snippet only)"
+  ],
+  "confidence": 0.75
+}
