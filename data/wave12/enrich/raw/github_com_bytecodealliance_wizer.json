@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/bytecodealliance/wizer",
+  "one_liner": "Build-time Wasm pre-initializer: snapshots a module's initialized memory and globals so startup skips init (1.35x-6.00x vs plain Wasmtime).",
+  "what_it_does": "Wizer instantiates a core Wasm module in Wasmtime, calls its exported initializer (default export name now 'wizer-initialize'; older releases used 'wizer.initialize'), then rewrites the binary so globals start at their recorded values and the non-zero memory regions become data segments. The output is an ordinary .wasm with the same exports (the init export is dropped by default and the start function is removed), so any engine can load it. It ships as a CLI ('wasmtime wizer' today, the standalone 'wizer' binary earlier) and as a Rust library whose current API takes a Store, the input bytes and an async instantiate closure.",
+  "how_it_is_fast": "Ahead-of-time state snapshotting: the expensive one-time setup (compiling a regex set, parsing YAML, building a JS heap) runs once at build time instead of on every instantiation, and instantiation becomes copying data segments into linear memory. The snapshot scans each Wasm page for non-zero runs (in parallel with rayon), merges segments separated by small gaps and caps output at 10,000 segments by merging the smallest gaps; with Wasmtime's memfd/copy-on-write memory initialization (which the current UAP bench forces) those segments map rather than copy.",
+  "when_to_use": [
+    "Wasm modules whose own initialization dominates per-instance cost: large regex sets, parsed config or tables, interpreter or JS-engine heaps, built before the first request",
+    "Instance-per-request serverless or plugin hosts on Wasmtime, where every request pays instantiate plus init (UAP: 98.3 ms to 16.4 ms in the 2020 run)",
+    "Deterministic initialization that touches no host state, or only WASI calls you explicitly allow at build time",
+    "Pipelines that already post-process Wasm, where adding a snapshot step and then wasm-opt to strip init-only code is cheap"
+  ],
+  "when_not_to_use": [
+    "Cheap initializers: the regex case gains only 1.35x (249 us to 184 us), and modules with little init gain nothing",
+    "Web or network delivery where module size matters: the README warns Wizer often grows the Data section",
+    "Modules that mutate tables or GC objects: the validator rejects any table.set/grow/fill/copy/init, elem.drop, data.drop, struct.set or array.set anywhere in the code, and mutable reference-typed globals",
+    "Modules that import globals, tables or memories, or whose init needs host imports, files, sockets or wall-clock values (open issues #24 file reads with --dir, #21 listening on a port, #125 monotonic clock offsetting)",
+    "As a substitute for a faster engine: it does not change compile time or execution speed, only how much guest init runs at instantiation"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "Wasmtime (Cranelift backend) with wasmparser and wasm-encoder; rayon (default feature, parallel snapshotting); wasmtime-wasi in the standalone wizer crate and the CLI",
+    "min_toolchain": "wasmtime-wizer 48.0.x declares Rust 1.95.0 (50.0.0-rc.1: Rust 1.97.0); standalone wizer 11.0.3 builds on wasmtime 42; guest can be any language that exports an init function",
+    "platforms": "Output is a standard core Wasm module usable by any engine; the tool runs wherever Wasmtime with Cranelift builds (host list not stated in the README); disable the rayon feature for single-threaded targets",
+    "thread_safety": "not documented (snapshotting is internally parallel via rayon)",
+    "drop_in_for_baseline": "partial — a build step in front of Wasmtime (or any engine); the guest must export an initializer and be written so runtime paths do not redo init (e.g. LazyLock, as the bench guests do)"
+  },
+  "gotchas": [
+    "UAP benchmark harness flaw (current wasmtime crates/wizer/benches/uap.rs and the original v1.1.0 harness): run() is called with length 5, so the regex set matches only 'Mozil', not the full Firefox user-agent string it allocates and copies; assert_eq!(result, 0) passes only because of that truncation (a check against uap-core's current regexes.yaml with Python re finds 2 user-agent patterns matching the full string). The 6.00x therefore measures instantiate plus init with almost no matching work; real per-request parsing in a fresh instance adds the same cost to both columns and lowers the ratio.",
+    "The README table is from December 2020 (old Wasmtime, no CPU, Rust or Wasmtime version given); the 2020-era harness reused one Store for all iterations, while the current one creates a fresh Store per iteration and the UAP bench forces memfd memory init, so the published numbers are not what the current code would print.",
+    "Old-repo issue #126 (open): wizer truncated the DataCount to 10,000 on a module with 80,390 data segments, producing invalid output that crashed wasm-opt; the upstream rewrite now writes previous + new segment counts, so it looks fixed in wasmtime-wizer, but the issue was never closed.",
+    "The export name and API changed between versions: 'wizer.initialize' with Wizer::new().allow_wasi(true)?.run(&bytes) in the standalone README versus 'wizer-initialize' and an async run(&mut store, &bytes, instantiate_closure) upstream; the upstream README snippet still shows a non-async closure."
+  ],
+  "pick_this_over_siblings_when": "It is complementary to the runtimes listed (Wasmi, wasm3, Fizzy, tinywasm and other fast-startup interpreters cut engine compile and instantiate cost; Wizer cuts the guest's own init cost), so pick it when profiling shows the module's initializer, not code translation, dominates startup; it composes with Wasmtime or any engine that loads core Wasm.",
+  "verified_claims_summary": "First-party criterion runs from December 2020 on Wasmtime of that era: instantiate plus initialize plus one call took 248.85 us without Wizer versus 183.99 us with it for a one-regex program, and 98.297 ms versus 16.385 ms for a program that builds a uap-core RegexSet; no hardware, Rust or Wasmtime version is stated, and the UAP call matches only a 5-byte prefix, so it is a pure startup measurement.",
+  "status_note": "Active but relocated: development continues in bytecodealliance/wasmtime crates/wizer (wasmtime-wizer, 'wasmtime wizer'), while the old repo (1.1k stars, not archived, 20 open issues) still publishes the wizer crate as a thin re-export (v11.0.3, 2026-03-10); Apache-2.0 WITH LLVM-exception per Cargo.toml.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/HEAD/src/lib.rs",
+    "https://github.com/bytecodealliance/wizer",
+    "https://github.com/bytecodealliance/wizer/issues",
+    "https://github.com/bytecodealliance/wizer/issues/126",
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/v1.1.0/benches/uap.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/v1.6.0/benches/uap.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wizer/v1.6.0/benches/uap-bench/src/lib.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/README.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/Cargo.toml",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/src/lib.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/src/snapshot.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/src/rewrite.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/regex.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/uap.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/regex-bench/src/lib.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/uap-bench/src/lib.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/regex-bench/Cargo.toml",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/crates/wizer/benches/uap-bench/Cargo.toml",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/HEAD/Cargo.toml",
+    "https://crates.io/api/v1/crates/wasmtime-wizer",
+    "https://raw.githubusercontent.com/ua-parser/uap-core/master/regexes.yaml"
+  ],
+  "confidence": 0.75
+}

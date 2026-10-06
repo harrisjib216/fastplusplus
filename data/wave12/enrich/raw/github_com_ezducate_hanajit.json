@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/ezducate/hanajit",
+  "one_liner": "Alpha llvmlite-based Python JIT: ties Numba on scalar loops, beats it on call overhead and fused NumPy expressions.",
+  "what_it_does": "A @jit decorator (plus prange, pmap, specialize, evolve) that parses a function with CPython's ast module, infers types over a small lattice (int64, float64, float32, bool, pointers, 1-D/2-D arrays) and compiles a per-argument-type specialization through llvmlite at LLVM -O3. Anything outside that subset (classes, dicts, strings, exceptions, generators, allocating arrays inside the kernel, most of NumPy) runs in CPython after one warning instead of failing. The same typed IR can also be exported as a standalone x86-64 executable, a wasm32/wasm64 module, GPU kernels launched through ctypes driver bridges (CUDA, Level Zero, Vulkan, Metal; HIP untested) or a Vitis HLS kit.",
+  "how_it_is_fast": "Ordinary LLVM -O3 code generation, which is why scalar loops land within a few percent of Numba (both use LLVM). The wins over Numba come from three specific mechanisms: a loop-fusion engine that compiles a whole NumPy expression (ufuncs, np.where, np.clip, np.sum) into one pass with no temporary arrays; a native CPython 3.12+ vectorcall object per jitted function, so dispatch is roughly 50 ns per call instead of Numba's roughly 220 ns; and evolve(), a genetic search over LLVM pass settings (vectorize, SLP, unroll count, vector width, codegen level and, if allowed, fast-math IR) that keeps the fastest variant on the caller's data.",
+  "when_to_use": [
+    "Python code that calls a small numeric kernel hundreds of thousands of times from an interpreted loop, where Numba's dispatcher overhead dominates (RESULTS-MICRO dispatch rows: 3.6x-5.0x less than Numba)",
+    "Multi-operation NumPy expressions over large float64 arrays inside a jitted function, where temporaries cost memory bandwidth (14.4 ms vs Numba 49.6 ms, or 30.7 ms with Numba fastmath, on a 2M-element 5-op expression)",
+    "Memory-bound reductions where float32 or reduce_reassoc reordering is acceptable, or exact int8/int16 sums via the opt-in narrow mode",
+    "Experiments that need the same Python kernel exported to a no-Python x86-64 executable, a wasm module or a driver-only GPU launch without a CUDA toolkit"
+  ],
+  "when_not_to_use": [
+    "As a general Numba replacement: on the 48 non-dispatch micro-workloads it averages 1.00x of Numba (derived from page data), and it loses on cross-function calls (0.14x), loop break/continue (0.81x) and max element (0.86x)",
+    "Production code: alpha status, 2 stars, 23 commits, one author, APIs may change before 1.0",
+    "Code needing Python semantics for big integers or index errors: integers are int64 (silent wrap where CPython would grow) and array indexing has no bounds check (negative indices are wrapped NumPy-style)",
+    "Object-heavy code, strings, dicts, classes or array allocation inside kernels: these fall back to the interpreter at CPython speed",
+    "Callers from C++: it is a Python package only"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "llvmlite>=0.42 (bundles LLVM); NumPy for array kernels; optional cuda-python, nvidia-cuda-nvcc-cu12 (libdevice), a host C compiler for executable export and clang for wasm linking",
+    "min_toolchain": "Python 3.10 (classifiers to 3.14, CI 3.10-3.13); native vectorcall dispatch needs CPython 3.12+",
+    "platforms": "Linux, Windows and macOS (CI includes Apple Silicon); standalone-executable export is x86-64 only; GPU launch via CUDA, Level Zero, Vulkan, Metal drivers (HIP untested on hardware)",
+    "thread_safety": "nogil=True releases the GIL around compiled kernels and the docs call this always safe; thread safety of compilation and the dispatcher cache is not documented",
+    "drop_in_for_baseline": "partial — @jit mirrors Numba's @njit for simple numeric functions, but the supported subset differs and unsupported code silently runs in CPython (one warning) instead of raising like njit"
+  },
+  "gotchas": [
+    "Harness flaw in benchmarks/evolve_bench.py (source of the 1.19x 'GA vs numba' geomean): the hanajit+GA column is evolve()'s internal best_ms, the minimum of re-measured top-3 finalists chosen from up to about 60 candidate timings, while Numba gets one best-of-5 measured by the harness; the harness's own re-measurement of the installed kernel (t_hj_check) is computed and discarded, so near-1.0x rows carry a selection bias in Hana Jit's favour.",
+    "evolve()'s 'every candidate is checked' gate compares only the function's return value on the example and 3 random probes; arrays written in place are not compared, so a kernel that fills an output array and returns 0 is effectively unchecked. With allow_fastmath=True the candidate IR uses full LLVM 'fast' flags (nnan, ninf, nsz, reassoc) and passes at 1e-9 relative tolerance on uniform(-10, 10) probes that never contain NaN or Inf.",
+    "README four-way table (fourway.py) runs evolve(allow_fastmath=True) against plain njit without fastmath, and its own check allows a 1e-6 relative difference, so 'guaranteeing an identical result' does not hold; with njit(fastmath=True) the fp-reduction win disappears (RESULTS-FOURWAY.md 0.7 vs 0.7 ms).",
+    "RESULTS-MICRO's 1.12x overall geomean over Numba comes from the 4 dispatch rows (4.31x); without them the 48 compute workloads geomean is 1.00x (derived from page data), and the 'sum of range' row is 0.00 ms vs 0.00 ms (ratio is timer noise); results were recorded with hanajit 0.5.1, docs/performance.md still lists cross-function calls as uncompiled although the README now advertises helper inlining, and the core modules are about 4,400 lines rather than the README's 3,000."
+  ],
+  "pick_this_over_siblings_when": "Against Numba (catalogued, same LLVM backend and far more mature) pick Hana Jit only when per-call dispatch or temporary-array traffic from NumPy expressions dominates, or when you want the Python-to-executable/wasm/GPU export paths; PPy targets Python-integer-correct loops against PyPy, and the CPython JIT or Cinder speed up whole programs without restricting the subset.",
+  "verified_claims_summary": "First-party runs on a single core of an unnamed x86_64 shared CI container (Python 3.12.3, Numba 0.66.0, NumPy 2.x, llvmlite and LLVM versions not stated): scalar loops tie Numba, call dispatch costs about 50 ns vs about 220 ns for Numba, a fused 5-op NumPy expression runs 14.4 ms vs 49.6 ms (Numba default) or 30.7 ms (Numba fastmath), and the GA-tuned geomean over 15 kernels is 1.19x over Numba with fastmath allowed for both, a figure biased upward by the harness timing selection described in gotchas.",
+  "status_note": "Actively developed alpha (PyPI 0.24.0 on 2026-08-19, last commit 2026-08-19, 476-case test suite), Apache-2.0 and pip-installable with only llvmlite, but a 2-star single-author project whose benchmark files lag the code by many versions.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/README.md",
+    "https://github.com/ezducate/HanaJit",
+    "https://github.com/ezducate/HanaJit/tree/main/hanajit",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/fourway.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/RESULTS-FOURWAY.md",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/RESULTS-EVOLVE.md",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/RESULTS-MICRO.md",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/RESULTS.md",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/evolve_bench.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/microbench.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/benchmarks/bench_v016.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/evolve.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/__init__.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/codegen.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/decorator.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/typeinfer.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/autopar.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/cache.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/doctor.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/errors.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/inline.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/narrow.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/parallel.py",
+    "https://raw.githubusercontent.com/ezducate/HanaJit/HEAD/hanajit/rewrite.py",
+    "https://pypi.org/pypi/hanajit/json"
+  ],
+  "confidence": 0.75
+}

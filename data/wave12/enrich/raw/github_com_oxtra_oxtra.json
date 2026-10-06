@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/oxtra/oxtra",
+  "one_liner": "Student-built x86-64 to RISC-V user-mode binary translator; up to 2.6x faster than QEMU 4.1.0 on tiny inputs, slower on larger ones.",
+  "what_it_does": "oxtra runs statically linked x86-64 Linux ELF programs on a 64-bit RISC-V Linux host (`oxtra <x86-64 elf> -a \"args\"`). It covers about 55 x86 mnemonics (report Appendix C) with no SSE, x87 or AVX, so guests must be built with the team's musl-gcc fork or musl-gcc with all SIMD disabled (helper/compile_c.sh). Dynamic linking, threads and self-modifying code are not supported. It is a command-line tool, not a library, and it is not a drop-in for qemu-x86_64 on ordinary distro binaries.",
+  "how_it_is_fast": "There is no intermediate representation: fadec decodes each x86 instruction into a C++ class that emits RISC-V directly. All 16 x86 GPRs are statically mapped to RISC-V registers (argument registers line up, so forwarded syscalls need no moves), and s1/s8/s9/s10/s11 hold the return stack, call table, TLB, jump table and context. Blocks run to the next jmp/call/ret/syscall, so conditional branches do not end a block. Translated code is kept forever and static links are patched into direct jumps (block chaining). x86 flags are evaluated lazily: a reverse pass marks which instructions must materialise which flags, with recursive look-ahead into statically linked successor blocks (--flag-depth, default 4). A call table plus ring-buffer return stack turns ret into a check and a direct jump. Guest memory is not emulated: oxtra links itself high (0x7F000000) and the guest uses its own addresses directly.",
+  "when_to_use": [
+    "Studying how to translate x86-64 to RISC-V without an IR: lazy flags with cross-block liveness, return-stack call/ret and register pinning are each documented in the project report (documentation/paper/Paper.pdf) and in a small BSD-3-Clause codebase",
+    "Short-running, small static musl x86-64 command-line tools on an RV64 Linux host, where translation and startup dominate. The report's wins come from these: primes below 10,000 and gzip on a 132 kB file",
+    "Memory-constrained RV64 hosts, where the report measured peak memory 2.55x (gzip) to 3.87x (primes) lower than QEMU 4.1.0",
+    "As a starting point for a research DBT that targets RISC-V hosts specifically"
+  ],
+  "when_not_to_use": [
+    "Long-running or compute-heavy guests: on primes below 1,000,000 oxtra was 35% slower than QEMU (3685 vs 2720 ms), and on gzip of a 13 MB file only about 20% faster",
+    "Ordinary x86-64 binaries: any SSE, x87 or AVX instruction is unsupported, and so are glibc, dynamic linking and threads. That excludes almost all distro-built software, and even printf and malloc in stock musl builds needed a no-SSE recompile",
+    "Running untrusted code: guest and translator share one address space, guest memory is not emulated, and the report says not all segmentation faults are detected",
+    "Guests that generate or modify code (JITs, self-modifying code): translated code is translated once and never invalidated",
+    "Anything needing support or newer QEMU baselines: the project stopped after a 2019 lab course (last commit 2020-11-16), and the only comparison is against QEMU 4.1.0"
+  ],
+  "integration": {
+    "form": "single statically linked executable (CMake build); a prebuilt RV64 binary ships as release v1.0.1",
+    "dependencies": "vendored libs/fadec (x86 decoder) and libs/fmt; a riscv64-unknown-linux-gnu cross toolchain to build; guests need musl with SSE disabled (the oxtra/musl-gcc fork or helper/compile_c.sh flags)",
+    "min_toolchain": "CMake 3.11+, GCC only (CMakeLists.txt stops with 'Only GNUCC is supported'), C++17; release flags -O2 -ffixed-s11 -Wl,-Ttext-segment=0x7F000000, linked -static",
+    "platforms": "Host: 64-bit RISC-V Linux only (on x86 machines the README runs it inside QEMU via a Docker image). Guest: x86-64 Linux static ELF, the integer subset listed in Appendix C",
+    "thread_safety": "Not applicable for guests: multithreaded guest programs are unsupported (report sections 3.1 and 6); the translator itself runs one guest thread.",
+    "drop_in_for_baseline": "partial: `oxtra prog -a \"args\"` replaces `qemu-x86_64 prog args` only for static, no-SSE musl binaries that stay within the supported instruction and syscall subset"
+  },
+  "gotchas": [
+    "Harness flaw: every timing ran with both translators themselves inside system-mode QEMU (Fedora RISC-V) on an unstated host. The data show instruction counts do not track time there: on primes below 1,000,000 oxtra (c) executes 14% fewer instructions than QEMU (0.8607 normalised) yet runs 35% longer, against the report's claim that instruction counts are the more objective proxy for real hardware. Our inference, untested: the outer emulator must retranslate whatever code each DBT generates, which may favour oxtra (about 0.8x QEMU's generated instructions) on exactly the short inputs where it wins.",
+    "The repo does have a timing script, helper/benchmark.sh. It runs a fixed 10 iterations and timestamps with `date +%s%N`, so a `date` process spawn falls inside every sample. The report's boxplots use 100 runs (small inputs) and 5 runs (large inputs), so the script that produced the published numbers is not in the repo.",
+    "The project's own claims disagree: the README says the current version 'consistently beats qemu', and the conclusion says 'up to 20% faster than QEMU when executing gzip', while Results.tex shows 2.56x on the 132 kB gzip input and a 35% loss on primes below 1,000,000.",
+    "Translated code is never freed (no code cache), so memory grows with the guest's code footprint. The adjust and direction flags are not modelled (std and popf are unimplemented), and common instructions such as sbb, xchg, cmpxchg, bswap and bsf are absent from the supported list."
+  ],
+  "pick_this_over_siblings_when": "Pick oxtra only to study a compact x86-64-to-RISC-V translator without an IR. To actually run x86-64 software on RISC-V, Box64 is the better choice: maintained, with SSE/AVX and dynamic glibc programs on RISC-V hosts. Instrew (LLVM-based, from oxtra's advisor's group) is the research option for peak translated-code quality.",
+  "verified_claims_summary": "A first-party lab-course report (summer semester 2019, Results.tex) compares oxtra 1.0.1 with QEMU 4.1.0 user mode on static no-SSE musl x86-64 guests, with everything inside system-mode QEMU on an unstated host CPU. Medians: primes below 10,000, 20.68 vs 54.71 ms (2.65x); gzip 132 kB, 60.42 vs 154.83 ms (2.56x); gzip 526 kB, 270.5 vs 348.9 ms (1.29x); gzip 13 MB, 2623 vs 3137 ms (1.20x); primes below 1,000,000, 3685 vs 2720 ms (QEMU 1.35x faster). Ratios are derived from page data. The two large inputs used only 5 runs each.",
+  "status_note": "Abandoned university project (last commit 2020-11-16; the README says the authors no longer have time to contribute; 0 open issues). It is BSD-3-Clause and small enough to read or fork as reference code, but it is not a usable x86 compatibility layer for real software.",
+  "sources_read": [
+    "https://github.com/oxtra/oxtra",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/README.md",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/LICENSE",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/documentation/paper/Results.tex",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/documentation/paper/Paper.pdf",
+    "https://github.com/oxtra/oxtra/tree/master/helper",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/helper/benchmark.sh",
+    "https://raw.githubusercontent.com/oxtra/oxtra/master/helper/compile_c.sh",
+    "https://github.com/oxtra/oxtra/tree/master/src"
+  ],
+  "confidence": 0.75
+}
