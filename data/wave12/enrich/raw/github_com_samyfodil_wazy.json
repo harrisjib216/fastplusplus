@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/samyfodil/wazy",
+  "one_liner": "Pure-Go WebAssembly runtime hard-forked from wazero; about 1.3x faster compiled codegen on a 6.5 MB module, up to 9x on instantiate and interruptible loops.",
+  "what_it_does": "wazy embeds WebAssembly guests in a Go process with no cgo. It offers an optimizing compiler on amd64 and arm64 and a portable interpreter everywhere else. The API is wazero's with the module path changed, apart from host-function registration: reflection-based `WithFunc` is gone, and the typed generic helpers `HostFunc0..16` and `HostProc0..16` replace it. On top of wazero's feature set it adds Core Wasm 3.0, the Component Model with 114 WASI 0.2 host functions, and the WASI 0.3 async ABI.",
+  "how_it_is_fast": "Interruptible execution (`WithCloseOnContextDone`) compiles to a decrement of a reserved register plus a predicted-not-taken branch at function entries and loop back-edges, where wazero makes a check every iteration. Bounds checks are elided for masked dynamic addresses, leaf functions skip the stack-overflow check, and `memory.fill` calls `memclrNoHeapPointers` for large zero fills. Instantiation recycles linear-memory buffers and wasm stacks through size-classed pools, sizes memory to what the module will grow to, and memoizes funcrefs in a dense table. On Intel parts with the JCC erratum, code is padded with NOPs to keep branches off 32-byte boundaries.",
+  "when_to_use": [
+    "Go services that must stay `CGO_ENABLED=0` and run third-party or Rust/C libraries compiled to Wasm.",
+    "Guests that must be cancellable by context deadline: with `WithCloseOnContextDone` on, wazy costs 1.04x-1.28x over its own option-off build on go-anydoc, where wazero v1.12.0 costs 3.0x-6.4x.",
+    "Many short-lived instances per request: Instantiate measured 1.724 us vs 15.74 us for wazero on a 37 KB TinyGo module (Apple M4), with the caveats under gotchas.",
+    "Wasm Component Model, WASI 0.2 or WASI 0.3 async components from Go, which upstream wazero does not run.",
+    "Memory-access-heavy compiled guests (string manipulation, array reversal, base64), where the README reports 12-18% less time than wazero."
+  ],
+  "when_not_to_use": [
+    "When cgo is acceptable and raw throughput matters: Wasmtime (Cranelift) is about 2x faster on the 7.5 MB PDF run (0.37 s vs 0.75 s) and about 16% faster on fibonacci.",
+    "Untrusted multi-tenant hosts on the tagged release v0.3.0 (2026-09-07): the pooled-memory isolation fixes (#74, #69) landed on main on 2026-09-20 with no tag since, and #75 (api.Memory access racing Module.Close can touch reclaimed storage) is still open.",
+    "Teams that need a long-maintained runtime: wazy is a few months old with one author and 44 stars, while wazero is mature and widely deployed. go-anydoc's README says wazy 'makes no API-stability promise'; wazy's README says the API is stable.",
+    "Pure-compute guests without close-on-context-done: fibonacci is a wash (2.849 ms vs 2.798 ms), host calls tie (47.8 ns vs 48.3 ns), and the codegen gap on the large module is about 1.3x.",
+    "Compiling large modules in memory-tight processes: go-anydoc measured a cold compile of its 6.5 MB module at 1.2 s and 517 MB peak RSS; a compilation cache cuts warm loads to 6 ms and 37 MB."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys only (the benchmarks/vs-wazero module additionally links wasmtime-go v34 and needs cgo)",
+    "min_toolchain": "Go 1.25 (go.mod floor; benchmarks run on Go 1.26)",
+    "platforms": "compiler on amd64 and arm64 (linux, darwin, windows tested every commit); interpreter on any Go target (BSDs, illumos, plan9, js/wasm, s390x, ppc64le, riscv64, 386); 32-bit hosts cap linear memory just under 2 GiB",
+    "thread_safety": "Inherits wazero's model: api.Function Call is documented as not concurrent (OPTIMIZATIONS.md C10). Open issue #75: api.Memory reads and writes racing Module.Close are unsafe.",
+    "drop_in_for_baseline": "partial: same API shape as wazero after changing the import path (go-anydoc ported with a one-line import change), but reflection-based WithFunc host registration is removed in favour of HostFuncN/HostProcN"
+  },
+  "gotchas": [
+    "The 9.1x Instantiate figure was measured before the 2026-09-20 fixes ed4381b8 (#74: 'a fresh instance sees the previous tenant's write' through a recycled pooled memory) and 0f363441 (#69: Close racing api.Memory reads), both on the recycle path the benchmark loops through. The harness also skips `_start` (WithStartFunctions()) and closes each instance right away, so the pool always hits on a barely touched memory. Nothing has been re-measured since the fixes.",
+    "The headline 9.8x (interruptible loops) and 4.9x (6.5 MB module, compiled) mostly measure what `WithCloseOnContextDone` costs wazero v1.12.0; with the option off, the 5 MB docx gap is 1.3x (0.14 s vs 0.11 s), and wazero's in-flight PRs #2529/#2530/#2533 bring its option cost to 1.01x-1.10x.",
+    "The wazero baseline pin has moved three times: README says fork point c0f3a4ec6411, docs/performance.md says f4779551afb4, and benchmarks/vs-wazero/go.mod pins 6edbb8c01a5f; the interruptible and memory.fill rows were run against wazero@main or HEAD. The compiled-execution -18%/-14%/-12% rows have no recorded per-arm numbers (docs/performance.md says so).",
+    "wazy emits no Spectre index clamping on heap or table accesses (Wasmtime clamps by default), and the vs-wazero benchmark module needs cgo because it links wasmtime-go, even for the wazero-only arms."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued wasm siblings (Wasmi, WAMR, wasm3, tinywasm, Fizzy, Silverfir-nano, PolkaVM and others) is a pure-Go runtime with an optimizing compiler. Pick wazy when the host is Go and cgo is ruled out. If you can link C or Rust, a Wasmtime-class JIT runs about 2x faster on large modules and an in-place interpreter like Wasmi starts faster.",
+  "verified_claims_summary": "In-repo benchstat runs on an Apple M4 (Go 1.26, interleaved A/B, upstream wazero as control) give Instantiate 1.724 us vs 15.74 us and a host-call tie. A core-pinned i9-12900HK gives 160 us vs 2074 us on a 100k-iteration loop with close-on-context-done. A third-party go-anydoc run (Apple M5 Pro, Go 1.26.1, CGO_ENABLED=0, wazy v0.3.0 vs wazero v1.12.0) found about 1.7-1.8x on the interpreter and 1.3x compiled with close-on-context-done off.",
+  "status_note": "Very active (seven tags from v0.1.0 on 2026-08-15 to v0.3.0 on 2026-09-07; main last committed 2026-09-20) and Apache-2.0. It is copyable but young and single-author: build from main rather than v0.3.0 for the pooled-memory isolation fixes, and watch the open #75 race before hosting untrusted tenants.",
+  "sources_read": [
+    "https://github.com/samyfodil/wazy",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/README.md",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/OPTIMIZATIONS.md",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/go.mod",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/benchmarks/vs-wazero/README.md",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/benchmarks/vs-wazero/go.mod",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/benchmarks/vs-wazero/bench_test.go",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/benchmarks/vs-wazero/wazy_test.go",
+    "https://raw.githubusercontent.com/samyfodil/wazy/HEAD/benchmarks/vs-wazero/wazero_test.go",
+    "https://github.com/samyfodil/wazy/commits/main.atom",
+    "https://github.com/samyfodil/wazy/commit/ed4381b8",
+    "https://github.com/samyfodil/wazy/tags",
+    "https://github.com/samyfodil/wazy/issues?q=is%3Aissue",
+    "https://github.com/samyfodil/wazy/issues/75",
+    "https://raw.githubusercontent.com/xusenlin/go-anydoc/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

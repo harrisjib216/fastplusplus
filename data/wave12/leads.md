@@ -35,3 +35,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ecraven/r7rs-benchmarks all.csv (raw reachable): gambit/gambit about 1.95x faster than Guile 3.0.11 (geomean over 53 shared benchmarks), Loko and Bigloo about 1.6x (Guile enricher, 2026-10-06); Scheme seed candidates.
 - revmc (README chart is an image only) and ncruces/wasm2go (go-sqlite3 discussion #361): wasm gh-any search leads (2026-10-06).
 - ml-rust/splintr (LLM BPE tokenizer on the regexr backend, claims unchecked; regexr enricher, 2026-10-06); weak lead.
+- klippa-app/go-pdfium experimental/BENCHMARKS.md (wazero vs wazy on 144 PDFs; wazy enricher, 2026-10-06); seed candidate for a wazy cross-check.
