@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/black7375/nowa",
+  "one_liner": "Research C runtime for wait-free continuation-stealing fork/join, reported faster than lock-based Cilk Plus/TBB and OpenMP tasks.",
+  "what_it_does": "Nowa is a fork/join concurrency platform for fully-strict parallelism, built on Chaoran Yang's Fibril. You declare a fibril_t frame with fibril_init, spawn calls with the fibril_fork(&fr, fn, (args)) macro (plus a variant that takes a return pointer), wait with fibril_join, and bracket the program with fibril_rt_init/fibril_rt_exit. The same benchmark sources compile against serial, Cilk Plus, TBB and OpenMP back ends through FIBRIL_* macros, so it is a different API rather than a drop-in for any baseline.",
+  "how_it_is_fast": "It uses continuation stealing (work-first, as in Cilk): the parent's continuation sits in a per-worker deque and thieves resume it on a fresh stack from a pool, handled with a cactus-stack technique that swaps rsp/rbp in inline asm. Nowa's change over Fibril is replacing the lock-based THE deque protocol and the join arbitration with atomic counters, swap and CAS (the wait-free strand arbitration of the IPDPS 2021 paper), so the owner never takes a lock on pop or join. The lock-based THE protocol is kept behind -DDEQUE_USE_THE for comparison.",
+  "when_to_use": [
+    "Research or benchmarking of fork/join schedulers on many-core x86-64 Linux (the paper's headline is at 256 hardware threads)",
+    "Recursive divide-and-conquer C/C++ kernels (fib, nqueens, cholesky, strassen, quicksort) where spawn and join overhead and join contention dominate",
+    "As a reference implementation of wait-free continuation-stealing join to port into another runtime",
+    "Reproducing the IPDPS 2021 comparison against Cilk Plus, TBB and libomp with the bundled run_benchmarks.sh"
+  ],
+  "when_not_to_use": [
+    "Anything other than x86-64 with GCC: the fork and join paths use inline asm on rbp/rsp/r15, the C API relies on GCC nested functions, and it uses GCC optimize attributes",
+    "Production code: research prototype, a 0-star mirror of a Zenodo artifact, abandoned since 2022",
+    "Programs that need futures, task graphs, parallel-for or async I/O; it only supports fully-strict fork/join",
+    "Deep spawn nesting: the per-worker deque is a fixed 1024-slot ring (DEQUE_SIZE) with no overflow check in fibrili_push",
+    "Shared or oversubscribed machines: idle workers spin on random steals with sched_yield and never sleep"
+  ],
+  "integration": {
+    "form": "static/shared lib (libfibril via autotools) plus headers",
+    "dependencies": "pthreads; Cilk Plus, TBB, OpenMP/libomp only for the comparison benchmarks; Fibril submodule for the baseline runtime",
+    "min_toolchain": "GCC 4.8+ (uses __atomic builtins, nested functions in C, C++ lambdas in the C++ path); autoconf 2.69, libtool",
+    "platforms": "x86-64 Linux only (inline asm, mmap/madvise, pthread_attr_setstack)",
+    "thread_safety": "Multi-worker runtime by design; fibril_rt_init must be called once from the main thread, and the worker count comes from the argument or the FIBRIL_NPROCS environment variable",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "build.sh runs 'git submodule update --init --remote' on an SSH URL (git@gitlab.cs.fau.de:i4/manycore/fibril.git), so the Fibril baseline build fails for anyone without FAU GitLab access; the Nowa library in src/ builds independently.",
+    "Functions that fork must carry the 'fibril' attribute (no-omit-frame-pointer), and stolen continuations run on pooled stacks of 1 MiB (PARAM_STACK_SIZE 0x100000), so deep recursion inside one strand can overflow.",
+    "The steal path retries a CAS in a loop (deque_steal), so the wait-free property applies to the owner's pop and the join arbitration, not to thieves.",
+    "The repo has no published result numbers; plots/ holds only plotting scripts, so the speedups must be taken from the paper."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Staccato or Heartbeat Scheduling when you want to study continuation stealing with wait-free joins at very high core counts, rather than a usable library. For real C++ projects, Weave (Nim) is not an option, and a maintained pool such as citor or Fork Union is the practical choice.",
+  "verified_claims_summary": "According to WebSearch snippets of the IPDPS 2021 paper (the PDF on www4.cs.fau.de is EGRESS_BLOCKED), Nowa is up to 1.64x faster than the lock-based Cilk Plus and TBB runtimes on a 256-hardware-thread machine, 1.17x on average, and 8.68x faster on average than OpenMP tasks under Clang's libomp, over a 12-benchmark fork/join suite. CPU model and compiler flags were not readable this session; run_benchmarks.sh shows 50 runs plus 1 warm-up per configuration, swept over 9 core counts.",
+  "status_note": "Abandoned research artifact (mirror last touched 2022-10-01, 276 commits, MIT); small enough to vendor on x86-64 Linux with GCC, but treat it as a reference design rather than a dependency.",
+  "sources_read": [
+    "https://github.com/black7375/nowa",
+    "https://github.com/black7375/nowa/tree/master/plots",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/README.md",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/build.sh",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/Makefile.am",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/test/Makefile.am",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/benchmark/Makefile.am",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/fibril.h",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/fibrile.h",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/fibrili.h",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/fibrili.c",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/deque.c",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/deque.h",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/runtime.c",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/stack.c",
+    "https://raw.githubusercontent.com/black7375/nowa/HEAD/src/param.c",
+    "https://www4.cs.fau.de/Publications/2021/schmaus2021nowa.pdf (EGRESS_BLOCKED, 403)"
+  ],
+  "confidence": 0.55
+}

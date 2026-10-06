@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/atul-singh-as/custom-memory-allocator",
+  "one_liner": "Educational C++20 fixed-size pool and first-fit free-list allocators; the pool beats macOS malloc/free on bulk 16 B allocation.",
+  "what_it_does": "Two single-threaded allocators with their own interfaces, not a malloc replacement. mem::PoolAllocator(blockSize, blockCount, alignment) hands out fixed-size slots from one pre-allocated chunk through Allocate()/Free()/Reset(). mem::FreeListAllocator(totalBytes, FitPolicy) serves variable sizes and alignments from one pre-reserved arena, splitting blocks on allocation and coalescing them on free.",
+  "how_it_is_fast": "The pool is a classic intrusive free list (a slab allocator): each free slot's first 8 bytes point to the next free slot, so Allocate and Free are a single pointer pop or push with no size classes, locking or metadata lookup. The free-list allocator is textbook first-fit (or best-fit) over a doubly linked free list, with boundary headers holding physical prev/next links for coalescing. It walks the list linearly, so it is not a fast path.",
+  "when_to_use": [
+    "Single-threaded code that allocates many same-sized objects (nodes, particles, entities) and knows an upper bound on their count up front",
+    "Frame-style workloads that can drop everything at once with PoolAllocator::Reset()",
+    "As a small, readable reference for how slab and free-list allocators work before adopting a production allocator",
+    "Vendoring about 300 lines of MIT code when a full allocator dependency is not wanted"
+  ],
+  "when_not_to_use": [
+    "Any multithreaded allocation: neither allocator is thread-safe and there are no thread caches",
+    "As a general malloc replacement: FreeListAllocator was slower than macOS malloc in its own sample (8.06 ms vs 5.68 ms bulk at 16 B) and does a linear first-fit search",
+    "When the object count is unbounded: the pool returns nullptr once exhausted and never grows",
+    "Security-sensitive code: no guard pages, no poisoning, no ownership check in PoolAllocator::Free",
+    "Production use in general: one commit, 1 star, and the author calls it an educational/portfolio implementation"
+  ],
+  "integration": {
+    "form": "source-drop (CMake static lib target 'allocator')",
+    "dependencies": "none",
+    "min_toolchain": "C++20 (CMake 3.16+); uses aligned ::operator new",
+    "platforms": "any (build instructions are macOS-only; no platform-specific code seen)",
+    "thread_safety": "Not thread-safe; the README says to wrap it in a mutex",
+    "drop_in_for_baseline": "partial: a separate class API (Allocate/Free on an allocator object), no malloc/operator new override and no std::allocator adapter"
+  },
+  "gotchas": [
+    "The README says both allocators assert on double free, but only FreeListAllocator::Free has that assert; PoolAllocator::Free has no double-free or ownership check and silently corrupts the free list.",
+    "PoolAllocator rounds blockSize up only to sizeof(void*), not to the requested alignment, so a block size that is not a multiple of the alignment (e.g. 24 B with 16 B alignment) returns misaligned slots after the first one. The benchmark sizes are all multiples of 16, so they are unaffected.",
+    "Harness bias: the pool's constructor, outside the timed region, threads the free list through every slot and so pre-faults all pages, while the malloc bulk timing includes first-touch page faults. The churn column shows malloc at 0.00 ms, which is consistent with the compiler eliding the unused malloc/free pair, so churn comparisons are meaningless.",
+    "blockSize * blockCount is not checked for overflow, and FreeListAllocator stores an 8-byte offset before every user pointer plus a 48-byte header, so per-allocation overhead is large for 16 B objects."
+  ],
+  "pick_this_over_siblings_when": "Pick it only for learning, or to vendor a minimal single-threaded pool; NotKeira/fast-alloc gives a similar pool with Linux numbers on a named CPU, and Bloodmoon001/memory-allocator and privateMwb/ArenaAllocator cover the same educational niche. For anything general-purpose, use the catalogued malloc replacements (mimalloc-class allocators, IsoAlloc, Mesh).",
+  "verified_claims_summary": "The README's sample output, measured on an unspecified macOS machine (Apple clang, -O2, Release), shows the pool completing 200000 16-byte allocations and frees in bulk in 0.89 ms against 5.68 ms for macOS malloc/free (about 6.4x, derived from page data). The free-list allocator was slower (8.06 ms), and the churn column is not usable because malloc reads 0.00 ms. The README's '5-15x' and 'FreeList clearly faster on churn' claims are not supported by its own sample.",
+  "status_note": "One initial commit (2026-09-23) on a 1-star MIT repo labelled educational by its author; small enough to read and vendor, but not hardened.",
+  "sources_read": [
+    "https://github.com/atul-singh-as/custom-memory-allocator",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/README.md",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/include/PoolAllocator.hpp",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/src/PoolAllocator.cpp",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/include/FreeListAllocator.hpp",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/src/FreeListAllocator.cpp",
+    "https://raw.githubusercontent.com/atul-singh-as/custom-memory-allocator/HEAD/tests/test_allocator.cpp"
+  ],
+  "confidence": 0.6
+}
