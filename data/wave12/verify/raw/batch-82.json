@@ -1,0 +1,93 @@
+[
+  {
+    "id": "https://github.com/risechain/pevm",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party Criterion tables in crates/pevm/benches/README.md (bench code crates/pevm/benches/mainnet.rs and gigagas.rs; CPU named as Graviton3 c7g.8xlarge), but no rustc version is stated anywhere (no rust-toolchain file) and the tables were last updated in November 2024 on older code, so the build behind the numbers cannot be pinned. Under the project's precedent a missing compiler version on first-party numbers is C, not A.",
+    "corrections": {
+      "compiler_and_flags": "cargo bench --features global-alloc --bench mainnet, and JEMALLOC_SYS_WITH_MALLOC_CONF=\"thp:always,metadata_thp:always\" cargo bench --features global-alloc --bench gigagas. Bench profile inherits the workspace release profile: codegen-units=1, lto=fat at the time the tables were written (November 2024); strip=true and panic=abort were added later (PR #443, 2024-12-16), and Cargo ignores panic for bench targets anyway. Global allocator: snmalloc on aarch64 and rpmalloc elsewhere for mainnet, jemalloc with THP for gigagas. Concurrency: min(available_parallelism, 12 on ARM / 8 on x86) for mainnet; gigagas uses available_parallelism (32 on the stated machine). rustc version not stated (no rust-toolchain file; edition 2024 at HEAD).",
+      "claimed_speedup": "Benches README (Graviton3 c7g.8xlarge): mocked 1-Gigagas blocks, Uniswap Swaps 413.42 ms sequential vs 18.707 ms parallel (22.1x), ERC20 Transfers 246.43 vs 60.817 ms (4.05x), Raw Transfers 159.08 vs 56.425 ms (2.82x). Mainnet: 'We are currently ~2.02 times faster than sequential execution on average', max speed-up x4.32 (block 7279999, 4.54 vs 1.05 ms), max slow-down x0.89. Derived from page data over the 85 mainnet rows: 63 blocks more than 5% faster, 18 within 5% of 1.0, 4 slower (0.89x to 0.93x); per-block mean ratio 1.96x, geometric mean 1.78x, ratio of summed times 2.04x. Top-level README repeats 2x average and 22x on the Uniswap gigagas block for the legacy Block-STM design.",
+      "caveats": "Numbers are first-party and stale: crates/pevm/benches/README.md was last changed for results on 2024-11-05/2024-11-20 (later edit 2024-12-16 only touched profiling commands), so they reflect the November 2024 code and revm version; the gigagas section says CANCUN spec while the current gigagas.rs runs SpecId::OSAKA. No rustc version anywhere. Baseline is revm run sequentially inside pevm's own harness (pevm.execute with force_sequential, i.e. execute_revm_sequential, which wraps storage in a CacheDB, commits state.clone() per transaction and builds pevm-format state transitions), not an independent geth, evmone or reth run. Pevm::execute itself falls back to sequential for blocks under 4,000,000 gas or with fewer transactions than the concurrency level, which is why 18 mainnet rows read 1.0x. Chain state is preloaded into memory (authors argue disk-backed state would favor parallel execution, unmeasured). The 22x figure is a synthetic mocked block of independent Uniswap swaps (README says it does not represent real-world blocks). The README describes the measured design as 'Legacy'; the new architecture (inline EVM, shreds, sparse trie) is still TODO, and the repo is marked work in progress, not production ready. Parallel Go (Polygon, Sei) being slower than sequential Rust/C++ is asserted with no numbers."
+    },
+    "notes": "All quoted numbers match the benches README and the 63/18/4 split of the 85 mainnet rows checks out; the average is about 2x only as a ratio of summed times (per-block geomean 1.78x, derived). Downgraded A to C: first-party, no rustc version, tables measured on November 2024 code that has since changed (CANCUN to OSAKA spec in gigagas, profile edits). Metadata confirmed on github.com: MIT, 355 stars, not a fork or archived, last commit 2026-06-05.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/benches/README.md",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/README.md",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/Cargo.toml",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/benches/mainnet.rs",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/benches/gigagas.rs",
+      "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/src/pevm.rs",
+      "https://github.com/risechain/pevm",
+      "https://github.com/risechain/pevm/commits/main",
+      "https://github.com/risechain/pevm/commits/main/crates/pevm/benches/README.md",
+      "https://github.com/risechain/pevm/pull/443/files"
+    ]
+  },
+  {
+    "id": "https://github.com/paradigmxyz/revmc",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Upgraded from C: the independent SkelOT paper (EuroSys 2027; artifact SipengXie2024/skelot-artifact with harness revmc/examples/runner and scripts/run_stage_replay.sh, raw results data/exec_replay_{interpreter,per_hash}_base.json, Xeon Platinum 8275CL, rustc 1.91 channel, LLVM 21.1.8) measures naive per-hash revmc AOT against the revm interpreter on a 10,000-block Base replay. Not A because the measured code is a modified fork snapshot of revmc (merge base 4995ac64, about 1,900 added lines plus bug fixes and a revm API migration), the rustc patch level is recorded as unknown, and the fork's build profile was not checked; the README chart's 1.85x-19x figures remain first-party with no CPU or flags.",
+    "corrections": {
+      "benchmark_url": "https://github.com/SipengXie2024/skelot-artifact",
+      "claimed_speedup": "Independent (SkelOT artifact, EuroSys 2027): replay of 10,000 Base mainnet blocks (3,520,323 transactions), exec wall time revm interpreter 534.4 s vs naive per-hash revmc AOT 459.1 s, about 1.16x (derived from page data; mode_reports[0].exec_wall_seconds in data/exec_replay_{interpreter,per_hash}_base.json); single-block smoke test 1.13x to 1.21x. First-party README chart 'REVM Compiler Improvement vs. REVM Interpreter' (Execution Time in microseconds, image only, no CPU or flags): Fibonacci 19.00x, Counter 2.77x, WETH Contract 1.85x.",
+      "workload": "Independent: SkelOT's replay harness executes 10,000 Base mainnet blocks (3.52M transactions) under the revm interpreter and under per-code-hash AOT artifacts compiled by a revmc fork, timing execution only (compilation excluded, objects cached). First-party: Criterion execution time of three contracts (Fibonacci, Counter, WETH) under the revm interpreter versus revmc-compiled code; same-named fixtures (fibonacci-calldata, counter, weth) exist in crates/revmc-cli/src/benches.rs, now run at OSAKA spec by crates/revmc-cli/benches/bench.rs.",
+      "compiler_and_flags": "SkelOT artifact: rustc 1.91 rustup channel (patch release recorded as unknown), LLVM 21.1.8 from apt.llvm.org, GNU ld, cargo build --release -p revmc-examples-runner (fork's release profile not checked). README chart: none stated; upstream revmc's release profile is opt-level 3, thin LTO, codegen-units 16, panic abort, and its bench profile inherits a debug=full profiling profile.",
+      "hardware": "SkelOT artifact: Intel Xeon Platinum 8275CL @ 3.00 GHz, 16 hardware threads, 30 GiB, Ubuntu 24.04.2. README chart: not stated.",
+      "caveats": "On real mainnet traffic the gain is small: about 1.16x on a 10,000-block Base replay (independent SkelOT measurement, derived), in line with Paradigm's own 'O(1-10%)' remark for mainnet sync (search snippet only). The 1.85x-19x figures exist only as a README bar-chart image (asset 96adf64b-8513-469d-925d-4f8d902e4e0a, viewed) with no CPU, compiler or flags, from a June 2024 upload; the 19x Fibonacci case is a pure compute loop. The current criterion bench (crates/revmc-cli/benches/bench.rs, codspeed) commits no results, so the chart cannot be matched to a current run. SkelOT measured a modified fork (merge base 4995ac64fb4e, snapshot 9acff128, with bug fixes and a revm API migration), not a revmc release; its timed interpreter and per-hash runs report different success_count (2,507,504 vs 2,511,307) and total_gas (458,337,083,713 vs 458,309,813,705), while the README cites a separate sanity file for zero mismatches. JIT mode pays a compile cost on first execution; LLVM 22 is required, Linux/macOS only. No evmone comparison exists in the repo, chart or paper even though evmone is a listed baseline. BNB Chain blog snippet also quotes 1.85x-19x and up to 6.9x on compute-heavy workloads (snippet only)."
+    },
+    "notes": "Chart numbers 19.00x / 2.77x / 1.85x confirmed by viewing the PNG. Tier raised C to B on the independent SkelOT EuroSys 2027 artifact, which shows only about 1.16x on a real Base replay; record that real-world gain and the fork/mismatch caveats as shortcomings. Metadata confirmed on github.com: Apache-2.0 OR MIT, 289 stars, not a fork or archived, last commit 2026-10-03.",
+    "urls_opened": [
+      "https://github.com/paradigmxyz/revmc",
+      "https://github.com/paradigmxyz/revmc/commits/main",
+      "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/README.md",
+      "https://github.com/paradigmxyz/revmc/assets/17802178/96adf64b-8513-469d-925d-4f8d902e4e0a",
+      "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/benches/bench.rs",
+      "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/src/benches.rs",
+      "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/Cargo.toml",
+      "https://github.com/SipengXie2024/skelot-artifact",
+      "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/README.md",
+      "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/data/exec_replay_interpreter_base.json",
+      "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/data/exec_replay_per_hash_base.json"
+    ]
+  },
+  {
+    "id": "https://github.com/eduardosm/rsjsonnet",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Third-party table jrsonnet docs/benchmarks.adoc, generated at jrsonnet commit 4824700 (2026-04-01) by the public nix derivation nix/benchmarks.nix (hyperfine -N -w4 -m20), with rsjsonnet built from source at pinned commit 27be3153 by nix/rsjsonnet.nix (its release profile: lto=true, codegen-units=1, panic=abort), go-jsonnet b5ef4cd9 and C++ jsonnet d33798d4 pinned, toolchains pinned by flake.lock (nixpkgs a124a10ea33a, 2026-02-07) and the CPU stated (Ryzen 9 9950X3D). Same basis as the jrsonnet entry's tier A from this doc; compiler version numbers are pinned rather than printed, so if named versions are required it falls to B (independent measurement).",
+    "corrections": {
+      "claimed_speedup": "jrsonnet docs/benchmarks.adoc (third-party, run by the author of competing jrsonnet): Kube-prometheus manifests rsjsonnet 57.9 +/- 2.6 ms vs Go 1068.4 +/- 16.5 ms vs Scala native 204.6 +/- 2.3 ms (C++ omitted, takes hours); Realistic 1: 7.8 ms vs Go 3158.3 ms; Realistic 2: 163.4 vs Go 3160.3 ms; Graalvm CI: 68.5 vs Go 600.3 ms; Large string join: 12.4 vs Go 46.4 vs C++ 39.7 ms; Tail call: 1200.9 vs Go 2559.0 vs C++ 18460.1 microseconds (the table unit is us, not ms). Derived from page data: rsjsonnet is faster than Go in all 26 shared rows (geomean about 4.8x, min 1.09x on 'Comparsion for array', max about 405x on Realistic 1) and faster than C++ in all 18 shared rows (geomean about 36x, min 1.97x on Simple recursive call); versus sjsonnet native it wins 19 of 27 rows (geomean about 1.4x) and loses 8 (for example Inheritance recursion 115.6 vs 46.7 ms); jrsonnet beats rsjsonnet in 24 of 27 rows.",
+      "compiler_and_flags": "Built by nix at jrsonnet commit 4824700 (flake.lock nixpkgs a124a10ea33a, 2026-02-07): rsjsonnet via rustPlatform.buildRustPackage at commit 27be31532180c611383ceb2b7f03193ab1253487 with its release profile (lto=true, codegen-units=1, panic=abort, strip debuginfo); go-jsonnet b5ef4cd9 via buildGoModule (cmd/jsonnet); C++ jsonnet d33798d4 via its Makefile 'jsonnet' target under stdenv; every implementation wrapped with --max-stack 200000; timing by hyperfine -N -w4 -m20. Compiler versions are implied by the nixpkgs pin, not printed.",
+      "caveats": "The only numbers live in the jrsonnet repo (generated 2026-04-01), not in rsjsonnet's own repo or README (no own benchmarks). The table author maintains jrsonnet, which is shown fastest: jrsonnet beats rsjsonnet in 24 of the 27 rows (derived), and rsjsonnet is labelled 'Rust (alternative)'. rsjsonnet is slower than sjsonnet (Scala native) in 8 rows and C++ jsonnet has no row on the real-world cases and several others (too slow). Each row times a whole CLI process, so startup is included: the eight microsecond-unit rows (Tail call, Inheritance function recursion, String strips, Big object, manifestJsonEx, manifestTomlEx, parseInt, substr; about 1.2 to 1.5 ms per rsjsonnet process vs 1.4 to 5.4 ms for Go) mostly measure startup, and the harness never compares outputs. The doc labels go-jsonnet and C++ as v0.22.0-rc1 while the nix files pin 2026-03-23 commits. 30 stars, low adoption."
+    },
+    "notes": "Every quoted number and every derived count (Go 26/26, C++ 18/18, sjsonnet native 19 of 27, jrsonnet ahead in 24 of 27) re-derived from the adoc; only fix is the Tail call row unit (microseconds, not ms). Tier A kept for consistency with the jrsonnet entry from the same doc (batch 75), with the same pinned-not-printed compiler caveat; sjsonnet sits at B only because it was a prebuilt binary. Metadata confirmed on github.com: Apache-2.0 OR MIT, 30 stars, not a fork or archived, last commit 2026-05-18.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/docs/benchmarks.adoc",
+      "https://github.com/CertainLach/jrsonnet/commits/master/docs/benchmarks.adoc",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/benchmarks.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/rsjsonnet.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/go-jsonnet.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/cpp-jsonnet.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/flake.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/4824700/flake.lock",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/4824700/nix/rsjsonnet.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/4824700/nix/go-jsonnet.nix",
+      "https://raw.githubusercontent.com/CertainLach/jrsonnet/4824700/nix/cpp-jsonnet.nix",
+      "https://raw.githubusercontent.com/eduardosm/rsjsonnet/27be31532180c611383ceb2b7f03193ab1253487/Cargo.toml",
+      "https://raw.githubusercontent.com/eduardosm/rsjsonnet/HEAD/README.md",
+      "https://github.com/eduardosm/rsjsonnet",
+      "https://github.com/eduardosm/rsjsonnet/commits/main"
+    ]
+  }
+]

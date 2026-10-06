@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/ivankra/quickjs-aot",
+  "one_liner": "QuickJS fork whose qjsc -A compiles a script's bytecode to C ahead of time; about 1.36-1.43x the stock QuickJS interpreter on V8 suites.",
+  "what_it_does": "A proof-of-concept fork of Bellard's QuickJS (2025-11-29 upstream plus the author's tail-call dispatch patches) that adds an ahead-of-time mode to the qjsc compiler. `./qjsc -A prog.js` emits C for every bytecode function, compiles it with clang -O2 together with the whole preprocessed engine, and produces one native executable per script; `qjsc -A -e -o a.c` leaves the C file for a custom build. At load time each function's bytecode is checked against the compiled copy and the native version is called through the interpreter's tail-call entry; everything else still runs in the normal interpreter.",
+  "how_it_is_fast": "It is a first Futamura projection: the interpreter is partially specialized for a fixed bytecode input. After the interpreter is refactored into one preserve_none/musttail function per opcode (tail-call dispatch), aot-parse.py extracts each opcode body from the preprocessed quickjs.c, and qjsc pastes the bodies in bytecode order, turning jumps into direct gotos and exposing the bytecode as a static const array so clang can constant-fold operands. That removes dispatch and lets the C compiler optimize across opcodes; the -B mode, which keeps a label at every opcode, gets about half the gain.",
+  "when_to_use": [
+    "A fixed, known-at-build-time JavaScript program (CLI tool, embedded script, game logic) that already runs on QuickJS and needs more throughput without a JIT.",
+    "Numeric or loop-heavy code: the README shows the largest gains on NavierStokes (2.14x), Crypto (2.13x), Mandreel and Gameboy (derived from page data).",
+    "Platforms where a JIT is forbidden or unwanted but a C compiler is available at build time.",
+    "As a template for building an AOT compiler for another tail-call-dispatched interpreter: the generator is about 160 lines of C plus a 90-line Python extractor."
+  ],
+  "when_not_to_use": [
+    "Code created at run time (eval, new Function, code loaded after the build): it stays interpreted; CodeLoad gained nothing (0.995x) and RegExp-heavy code only about 4%.",
+    "ES modules: aot_compile returns immediately for a module ('TODO: handle modules'), before visiting child functions, so a module input gets no native code at all.",
+    "Production use: it is a 9-star proof of concept from one commit (2025-12-09) on top of the tail-call refactor, with no AOT tests in the Makefile or CI.",
+    "Toolchains without clang's preserve_none and musttail attributes (GCC lacks preserve_none): the opcode extractor needs the tail-call dispatch table, so the build fails.",
+    "When you only need the cheaper part of the gain: the tail-call dispatch branch alone gives +8.45% (v8-v7) and +13.29% (v8-v9), and on zlib it gives nearly all of the 1.56x."
+  ],
+  "integration": {
+    "form": "source-drop (fork of QuickJS; qjsc -A emits C that is compiled into a standalone executable)",
+    "dependencies": "clang at build time (Makefile forces CONFIG_CLANG=y), python3 for aot-parse.py; the generated executable links libquickjsaot.a, -lm, -ldl, -lpthread",
+    "min_toolchain": "clang with __attribute__((preserve_none)) and musttail support; exact minimum version not documented",
+    "platforms": "Measured only on aarch64 Linux (Mac M4, Debian 13 VM); the tail-call dispatch is disabled on Emscripten; other targets not documented",
+    "thread_safety": "not documented (generated code uses the unchanged QuickJS runtime)",
+    "drop_in_for_baseline": "partial — same engine and JS semantics, but you ship one native binary per script built from the repo's build tree instead of running scripts with qjs; runtime-loaded code and modules stay interpreted"
+  },
+  "gotchas": [
+    "Build-flag mismatch behind the table: the Makefile adds -fwrapv ('ensure that signed overflows behave as expected') to every interpreter object, but qjsc's compile command for -A is only 'clang -O2 -D _GNU_SOURCE' and the generated file #includes the whole preprocessed engine (quickjs.i), so the AOT column's engine core is built without -fwrapv while the base and tail columns had it; signed-overflow UB in the engine is no longer defined in AOT binaries.",
+    "The README does not say how the base and tail columns were built: the base commit b226856 (Bellard's upstream 'updated to unicode 17.0.0' commit) builds with gcc on Linux by default, the tail-20251204 branch needs -DTAIL_CALL_DISPATCH=1 and clang, and the author's own javascript-zoo QuickJS recipe says clang builds are 'significantly more performant' than gcc and uses -O3, so compiler choice could account for part of the base-to-tail step.",
+    "qjsc -A works only from the build tree: make install copies neither libquickjsaot.a nor quickjs.i. Functions with bytecode shorter than 5 or longer than 10000 bytes are not compiled, a bytecode mismatch silently falls back to the interpreter with a stderr warning, and AOT binaries print 'aot enabled' to stderr.",
+    "The qjs-aot helper caches its binary at /tmp/qjs-aot-<script basename>, keyed only by the file name and content, so concurrent or multi-user runs can collide."
+  ],
+  "pick_this_over_siblings_when": "Pick it over plain QuickJS when the script is fixed at build time and a 1.36-1.43x gain on V8-style workloads matters; PrimJS reports a similar 1.29x on Octane but speeds up any code, including eval, as a maintained engine, and gkurt/quickjs (+18% Octane over QuickJS-NG) is an interpreter-only fork, so prefer those when code arrives at run time or production maturity matters.",
+  "verified_claims_summary": "The README table (Mac M4, Debian 13 VM, median of 20 runs, higher score is faster) gives qjsc -A 3518 vs 2582 for upstream QuickJS commit b226856 on the v8-v7 geomean (1.36x, derived from page data) and 7784 vs 5425 on v8-v9 (1.43x), with tail-call dispatch alone at 2800 and 6146; scores come from the benchmarks' own in-script timers, so compile time is excluded. The harness is probably javascript-zoo's harness/bench.py, which parses the printed scores, but the compiler and flags for the base and tail columns are not stated, and the AOT build omits -fwrapv.",
+  "status_note": "Proof of concept, last commit 2025-12-09 (one AOT commit on top of the tail-call refactor of the 2025-11-29 upstream), 9 stars, no issues and no AOT tests; MIT, so the generator is easy to study or port, but it is not something to ship without your own test262 run on AOT binaries.",
+  "sources_read": [
+    "https://github.com/ivankra/quickjs-aot/tree/aot",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/README.md",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/Makefile",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/qjs-aot",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/LICENSE",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/qjsc.c",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/aot-parse.py",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/quickjs.c",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/TODO",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/Changelog",
+    "https://raw.githubusercontent.com/ivankra/quickjs-aot/aot/.github/workflows/ci.yml",
+    "https://github.com/ivankra/quickjs-aot/tree/aot/.github/workflows",
+    "https://github.com/ivankra/quickjs-aot/commits/aot",
+    "https://raw.githubusercontent.com/ivankra/quickjs/b22685617750e51d95f643d8eb1382dd09dd3bf1/Makefile",
+    "https://github.com/ivankra/quickjs/commit/b22685617750e51d95f643d8eb1382dd09dd3bf1",
+    "https://raw.githubusercontent.com/ivankra/quickjs/tail-20251204/Makefile",
+    "https://raw.githubusercontent.com/ivankra/quickjs/tail-20251204/quickjs.c",
+    "https://github.com/ivankra/javascript-zoo/tree/master/bench",
+    "https://raw.githubusercontent.com/ivankra/javascript-zoo/master/bench/Makefile",
+    "https://raw.githubusercontent.com/ivankra/javascript-zoo/master/harness/bench.py",
+    "https://github.com/ivankra/javascript-zoo/tree/master/engines/quickjs",
+    "https://raw.githubusercontent.com/ivankra/javascript-zoo/master/engines/quickjs/Dockerfile",
+    "https://raw.githubusercontent.com/ivankra/javascript-zoo/master/engines/quickjs/Makefile",
+    "https://raw.githubusercontent.com/ivankra/javascript-zoo/master/engines/quickjs/README.md",
+    "https://github.com/bnoordhuis/quickjit"
+  ],
+  "confidence": 0.7
+}

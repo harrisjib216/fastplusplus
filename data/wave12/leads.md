@@ -51,3 +51,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - goant (robomotionio/goant): pure-Go JS engine, ahaoboy Ubuntu V8 v7 score 981 vs goja 264 (Paserati enricher, 2026-10-06); seed candidate.
 - RealNeGate/Cuik (TB backend, named by MiniVM's README as its JIT base): unverified (MiniVM enricher, 2026-10-06); weak lead.
 - Paper-access retier lead: mutable via the independent ADC 2023 study arXiv 2311.04692 (PostgreSQL LLVM JIT vs mutable) (mutable enricher, 2026-10-06).
+- riscv-sbt repo now redirects to lmcad-unicamp/riscv-sbt (batch 88 verifier, 2026-10-06): repo_url override candidate.
