@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/xrp-project/xrp",
+  "one_liner": "OSDI'22 research kernel that lets an eBPF function in the NVMe driver chain dependent reads, beating read() and io_uring for on-disk B-tree lookups.",
+  "what_it_does": "XRP is an artifact repo: a patched Linux 5.12 kernel, BPF-KV (a B+-tree key-value store built for it), a patched WiredTiger 4.4.0 and a C++ YCSB driver. Applications load a BPF_PROG_TYPE_XRP program with libbpf and issue a new read_xrp(fd, buf, count, offset, bpf_fd, scratch) syscall; on each NVMe completion the BPF function parses the block, writes the next file offset, and the driver resubmits the I/O without returning to user space. This is not a drop-in for read(): the on-disk data structure traversal has to be rewritten as a verifier-safe BPF function.",
+  "how_it_is_fast": "It removes the per-hop cost of the file system, block layer and syscall boundary for pointer-chasing reads: after the first I/O, follow-up reads are resubmitted from the NVMe interrupt handler. Logical-to-physical translation uses a 'metadata digest', an RCU-protected cached copy of ext4's extent status tree pushed into the driver (lookup about 96 ns per the paper). The gain grows with index depth because each extra hop adds only about 3.5-3.9 us, close to raw device latency on Optane.",
+  "when_to_use": [
+    "Research or prototyping of storage offload on Linux with a microsecond-latency NVMe SSD (the paper used an Intel Optane P5800X).",
+    "Point lookups in a large on-disk B+-tree or LSM index with several uncached levels, where each lookup is a chain of dependent 512 B reads.",
+    "Workloads that want kernel-bypass-like lookup latency without SPDK's busy-polling cores; the paper reports XRP matching or beating SPDK throughput at 9+ threads on 6 cores.",
+    "Read-mostly stores whose index file extents stay stable for seconds or longer (immutable SSTables, B-tree files with rare extent changes)."
+  ],
+  "when_not_to_use": [
+    "Production systems: it requires booting a custom 5.12.0-xrp+ kernel, the repo has 13 commits and has been idle since December 2022.",
+    "Ordinary flash NVMe drives with hundreds of microseconds latency: open issue #8 reports BPF-KV with XRP at 2,039 op/s vs 2,497 op/s without it (about 22% slower) on a Xeon Silver 4114 with an Intel NVMe SSD.",
+    "Data larger than 512 B per hop, structures needing fanout, or traversals that span multiple files; the prototype supports none of these.",
+    "Data buffered in the kernel page cache or mutated concurrently: XRP does not interact with the page cache and offers no locking during traversal; the application must keep its own cache and fall back to normal syscalls when a traversal fails.",
+    "Scans: WiredTiger YCSB E and D show no significant gain, since only the first key of a scan benefits."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Patched Linux 5.12 kernel (submodule), libbpf 0.1.0, clang/llvm, liburing, SPDK (for baseline variants), cmake; Ubuntu 20.04 assumed by the scripts",
+    "min_toolchain": "Not documented beyond the build scripts (gcc-multilib, clang, llvm from Ubuntu 20.04 apt); compiler flags not stated",
+    "platforms": "x86-64 Linux 5.12.0-xrp+ only, ext4 only, NVMe devices (scripts hard-code /dev/nvme0n1 by default)",
+    "thread_safety": "Each BPF context is private to one NVMe request so no locking inside a traversal; concurrent writers to the traversed structure are not supported (stable-data-structure assumption)",
+    "drop_in_for_baseline": "partial: read_xrp is a new syscall beside read(); each data structure needs a custom BPF traversal function and a user-space fallback path"
+  },
+  "gotchas": [
+    "Request size is fixed at 512 B and fanout is not implemented in the released prototype, although struct bpf_xrp reserves up to 16 next addresses.",
+    "The BPF verifier can reject real traversal code: open issue #9 reports test_wiredtiger failing to load with 'The sequence of 8193 jumps is too complex'.",
+    "Build is fragile: open issues #4 and #5 report Makefile and kernel build errors, and old .deb URLs had to be fixed (issue #2).",
+    "Latency plots come from a closed-loop generator, so XRP runs at higher throughput than read() and io_uring in those figures; chains of interrupts can also starve CPU-bound processes sharing a core under CFS (paper section 4.3)."
+  ],
+  "pick_this_over_siblings_when": "Pick XRP over SPDK when you want near-bypass latency for dependent B-tree lookups but cannot dedicate busy-polling cores or give up the kernel file system; pick liburing or SPDK for anything you need to ship, since XRP is a non-upstream research kernel. BaM addresses GPU-initiated storage access, a different problem.",
+  "verified_claims_summary": "On a 6-core i5-8500 with an Intel Optane P5800X, Linux 5.12, O_DIRECT, BPF-KV random 512 B lookups with 3 on-disk index levels got 47%-94% more throughput and 20%-34% lower p99 latency than read() across thread counts; at index depth 6 XRP's average latency was 45% above SPDK while read() was 142% above. WiredTiger 4.4.0 on YCSB (1 billion 16 B pairs, 46 GB, pread() baseline) gained up to about 1.25x throughput and up to 40% lower p99 latency, with little effect on YCSB D and E.",
+  "status_note": "Abandoned research artifact (last commit 2022-12-12, open build and regression issues unanswered); the Apache-2.0 user-space parts are copyable, but the kernel patch is GPL-2.0 kernel code tied to Linux 5.12.",
+  "sources_read": [
+    "https://github.com/xrp-project/XRP",
+    "https://raw.githubusercontent.com/xrp-project/XRP/HEAD/README.md",
+    "https://raw.githubusercontent.com/xrp-project/XRP/HEAD/XRP%20Draft.pdf",
+    "https://raw.githubusercontent.com/xrp-project/XRP/HEAD/build_and_install_bpfkv.sh",
+    "https://raw.githubusercontent.com/xrp-project/XRP/HEAD/build_and_install_kernel.sh",
+    "https://github.com/xrp-project/XRP/issues?q=is%3Aissue",
+    "https://github.com/xrp-project/XRP/issues/8",
+    "https://github.com/xrp-project/XRP/issues/9"
+  ],
+  "confidence": 0.85
+}

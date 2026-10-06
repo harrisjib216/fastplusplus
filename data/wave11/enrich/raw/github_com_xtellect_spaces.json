@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/xtellect/spaces",
+  "one_liner": "Single-file C malloc replacement for Linux x86-64 with destroyable region heaps; README ranks it ahead of jemalloc on several mimalloc-bench workloads.",
+  "what_it_does": "Spaces is a 10,877-line spaces.c plus spaces.h that replaces malloc, free, realloc, posix_memalign, aligned_alloc and malloc_usable_size when linked with --whole-archive. Linked normally it leaves libc malloc alone and exposes only its own API: 62 functions around 'chunks' (heap regions) that can be destroyed in one call, capped with a byte ceiling, walked to list live allocations, created as fixed-size pools, shared across processes through System V shared memory, or put in a lock-free thread-exclusive mode.",
+  "how_it_is_fast": "Slabs are 64 KB-aligned, so free() finds size class, owner thread and region by masking the pointer (ptr & ~0xFFFF) with no page map or radix tree. There are 52 size classes from 8 B to 8 KB with a per-thread intrusive freelist cache (832 B in total), so same-thread malloc/free uses no atomics or locks; cross-thread frees go to a per-slab ABA-safe Treiber stack (one CAS each). Allocations above 8 KB come straight from mmap with huge-page support; slabs come from 4 MB batch regions (about one mmap per 64 slabs), and heap state is pooled across thread create/destroy.",
+  "when_to_use": [
+    "C or C++ programs on x86-64 Linux that want arena-style teardown (parsers, compilers, per-request heaps) and a general malloc in the same library.",
+    "Subsystems that need a hard memory budget enforced by the allocator (spaces_chunk_set_ceiling returns NULL or calls your handler).",
+    "Debugging or diagnostics where walking every live allocation in a region at run time, with no profiler or rebuild, is useful.",
+    "Workloads like larson (cross-thread producer-consumer) and large 5-25 MB blocks, where the README ranks it #2 among the allocators it tested.",
+    "Fixed-size object pools (list nodes, connection structs) through spaces_chunk_create_fixed."
+  ],
+  "when_not_to_use": [
+    "Anything other than x86-64 Linux: the single-file distribution is pre-processed for that one target only.",
+    "Heavy thread churn or many threads allocating widely varying sizes: README says it ranks #6 on glibc-thread and that the slab working set does not stay cache-hot with 500 threads.",
+    "Memory-tight services: each slab has a 64 KB virtual footprint, the 4 KB slab header wastes about 6% per segment, and freed memory is not returned with MADV_FREE, so RSS stays high until reuse.",
+    "Choosing on speed alone: mimalloc-style allocators appear to rank #1 on the README's workloads, and no competitor numbers, CPU model or compiler version are published.",
+    "Projects needing mature, audited code: 2 commits (2026-03-23 and 2026-03-29), no releases, 64 stars."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc and pthreads (uses System V shm/sem headers)",
+    "min_toolchain": "GCC (Makefile uses gcc -O3 -pthread -fPIC; uses GCC __sync builtins and pragmas); minimum version not documented",
+    "platforms": "x86-64 Linux only",
+    "thread_safety": "Thread-safe by default (per-thread caches, CAS-based remote free); thread-exclusive mode drops locking and must only be used when one thread owns all allocations in that chunk",
+    "drop_in_for_baseline": "partial: drop-in malloc replacement for jemalloc when statically linked with -Wl,--whole-archive (libspaces.so is also built); the region API is extra and not jemalloc-compatible (no mallctl)"
+  },
+  "gotchas": [
+    "The default error handler is interactive: on double free, bad pointer or ceiling violation it prints to stderr and loops on getchar() asking Abort/Retry/Ignore; the loop has no EOF case, so with stdin closed or at end-of-file it spins forever. Install spaces_set_error_handler early in main() for servers, daemons and CI (README says the same).",
+    "Intrusive freelist overwrites the first 8 bytes of a freed object, and the minimum allocation is 8 bytes.",
+    "bench.sh only times Spaces itself (median wall time and peak RSS over 3 runs, stdout discarded, non-zero exits still counted); it builds no competitor allocators and does not include the 'spacesbench' workload, so the README ranks cannot be reproduced from the repo. The Makefile's bench-all target passes -a -T, which bench.sh does not accept.",
+    "Include spaces.h after <stdlib.h> and other headers that declare malloc."
+  ],
+  "pick_this_over_siblings_when": "Pick Spaces over Mesh or IsoAlloc when you want region destroy, per-region ceilings and live-allocation walking in the same library as a fast malloc; pick a mainstream general-purpose allocator (the catalog's jemalloc/mimalloc class) or v8malloc when raw multi-threaded throughput or portability matters more, since Spaces publishes no competitor numbers and runs only on x86-64 Linux.",
+  "verified_claims_summary": "The README table gives Spaces' own numbers on mimalloc-bench workloads built with gcc -O3 against libspaces.a (larson 124 M ops/s, malloc-large 6.0 ms per allocation, mleak 0.26 s, glibc-simple 6.9 s, xmalloc-test 10.6 M/s, mstress 6.9 s) with a rank against jemalloc, snmalloc, tcmalloc and Hoard; competitor values, the #1 allocator, CPU, core count and compiler version are not given.",
+  "status_note": "Active but very young (2 commits, last 2026-03-29); MIT-licensed single file that is easy to vendor, but x86-64 Linux only and unproven outside its author's benchmarks.",
+  "sources_read": [
+    "https://github.com/xtellect/spaces",
+    "https://raw.githubusercontent.com/xtellect/spaces/HEAD/README.md",
+    "https://raw.githubusercontent.com/xtellect/spaces/HEAD/bench.sh",
+    "https://raw.githubusercontent.com/xtellect/spaces/HEAD/Makefile",
+    "https://raw.githubusercontent.com/xtellect/spaces/HEAD/spaces.c"
+  ],
+  "confidence": 0.7
+}
