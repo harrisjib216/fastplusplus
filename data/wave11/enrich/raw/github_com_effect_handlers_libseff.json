@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/effect-handlers/libseff",
+  "one_liner": "C library of shallow effect handlers on stackful coroutines; OOPSLA 2024 paper reports about 2x faster generators than Tencent libco.",
+  "what_it_does": "libseff gives C programs algebraic-effect style control: a coroutine (seff_coroutine_new) performs a named effect (PERFORM/YIELD macros, effects declared with DEFINE_EFFECT), and the code that resumed it (seff_resume with a bitmask of handled effects) gets back a request it can switch on, then resumes the coroutine with a reply. Exceptions, generators, async I/O and lightweight threads are built on this; the repo also ships a work-stealing scheduler (scheduler/scheff), actors and queue utilities, and an HTTP server example. It is its own API, not a drop-in for libco or C++20 coroutines.",
+  "how_it_is_fast": "Handlers are not closures and not a stack that is walked: each coroutine records its handled-effect bitmask and seff_locate_handler finds the target by checking bits up the chain of running coroutines, then a short x86-64 assembly switch (asm/seff.S) jumps to it. Default stacks are segmented (clang -fsplit-stack, with the split-stack limit kept at %fs:0x70) and freed stacklets are kept on a linked list for reuse to soften the hot-split problem; fixed-size and virtual-memory policies are build options.",
+  "when_to_use": [
+    "Research or systems code in C that wants exceptions, generators and user-level threads from one effect-handler mechanism",
+    "x86-64 Linux servers with many lightweight tasks where segmented stacks keep per-task memory small",
+    "Comparing effect-handler runtimes: bench/ builds libseff, libco, cppcoro, libhandler, libmprompt and cpp-effects from git submodules side by side",
+    "Generator-heavy code where the paper reports libseff ahead of libco and cppcoro (snippet: 1.7x vs cppcoro, 2x vs libco)"
+  ],
+  "when_not_to_use": [
+    "Anything except x86-64 Linux with clang: decls/seff_types.py accepts only x86-64, and the code relies on -fsplit-stack, the gold linker and %fs TLS offsets",
+    "Production use that needs maintenance or a community: 16 stars, 35 commits, last commit 2025-07-09",
+    "Hot paths that call small functions inside a coroutine under segmented stacks: the paper notes an empty call can be about 11x slower than a plain C call (hot split)",
+    "Calling libc or other code not built with -fsplit-stack from a coroutine without the provided syscall-wrapper trampolines (MAKE_SYSCALL_WRAPPER), which switch to the system stack",
+    "When a plain fast switch is all you need: minicoro or libaco are simpler and portable"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time; build needs clang-10 (Makefile default), ld.gold and python3 to generate seff_types.h; benchmarks also need the git submodules, libc++, Boost.Context and python2.7 for cppcoro",
+    "min_toolchain": "clang with -fsplit-stack support (Makefile pins clang-10), C gnu11; benchmark harness C++17/C++20 with libc++",
+    "platforms": "x86-64 Linux only",
+    "thread_safety": "current coroutine is __thread; coroutines can be run by the bundled multi-threaded scheduler, otherwise not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Both the top-level Makefile and bench/common.mk default to BUILD := debug (-O0); pass BUILD=release (-O3 -DNDEBUG, plus -flto=thin for benchmarks) before timing anything",
+    "bench/context_switch_bench/libco.cpp runs both libco coroutines on one shared stack (co_alloc_sharestack(1, 128 KB)), so every alternate resume makes libco free, malloc and memcpy the used stack (save_stack_buffer in libco's co_routine.cpp); this inflates libco's switch cost relative to its private-stack mode, and it grows with the depth and padding arguments",
+    "The README is two lines; usage has to be learned from tests/ and the paper, whose PDF was not reachable from this session",
+    "Mulan PSL v2 license (Huawei copyright headers): OSI-approved and permissive, but less familiar to legal teams than MIT/BSD"
+  ],
+  "pick_this_over_siblings_when": "Pick libseff over libco, libaco or minicoro only when you want effect handlers (typed effects, handler lookup, exceptions and generators from one primitive) rather than a bare switch; for a plain fast switch libaco and minicoro are more portable and simpler, and libdill or libgo are more mature runtimes.",
+  "verified_claims_summary": "The claim comes from the peer-reviewed OOPSLA 2024 paper, read only through search snippets: on an Intel Xeon Gold 6154 (Ubuntu 20.04, clang 12) the generator benchmark ran 0.66 us for libseff versus 1.33 us for libco, about 2x, and 1.7x faster than cppcoro. The repo's context-switch harness puts libco on a single shared stack, which adds a stack copy per switch, so the libco gap partly measures that configuration.",
+  "status_note": "Research code, stale since 2025-07-09 with 16 stars; Mulan PSL v2 and small enough to vendor, but tied to x86-64 Linux, clang split-stack and gold.",
+  "sources_read": [
+    "https://github.com/effect-handlers/libseff",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/README.md",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/Makefile",
+    "https://github.com/effect-handlers/libseff/tree/master/src",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/src/seff.h",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/src/seff.c",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/decls/seff_types.py",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/common.mk",
+    "https://github.com/effect-handlers/libseff/tree/master/bench/context_switch_bench",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/context_switch_bench/Makefile",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/context_switch_bench/context_switch_common.hpp",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/context_switch_bench/libseff.cpp",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/context_switch_bench/libco.cpp",
+    "https://raw.githubusercontent.com/effect-handlers/libseff/HEAD/bench/context_switch_bench/cppcoro.cpp",
+    "https://raw.githubusercontent.com/Tencent/libco/HEAD/co_routine.cpp"
+  ],
+  "confidence": 0.55
+}
