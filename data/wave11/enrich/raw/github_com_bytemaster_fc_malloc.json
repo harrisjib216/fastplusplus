@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/bytemaster/fc_malloc",
+  "one_liner": "2013 proof-of-concept thread-caching allocator with a dedicated free-recycling thread; README claims about 2x faster than glibc and jemalloc.",
+  "what_it_does": "An experimental multi-threaded allocator, written in 15 commits over two weeks in April-May 2013. The code that produced the README numbers is malloc2.cpp at commit 39e4d67, which exposes malloc2(int)/free2(char*) and is built together with its own benchmark main. It is not a malloc/free replacement: there is no realloc, calloc, aligned allocation, size lookup or interposition. fc_malloc.cpp and fc_malloc.h at HEAD are unfinished stubs that do not compile (undefined `len`, a `free` with no return type), and HEAD's bench.cpp drives a later fixed_pool.hpp design instead.",
+  "how_it_is_fast": "It borrows the LMAX Disruptor single-writer idea. Each thread bump-allocates from its own 8 MB mmap page and pushes freed pointers into a private, non-atomic ring buffer (16K slots). One garbage-collector thread busy-polls every thread's ring and moves the pointers into a shared 1M-slot recycle ring. Allocating threads then claim 16 recycled blocks at a time with a single relaxed fetch_add, so the fast path is a thread-local cache pop with no locks or CAS.",
+  "when_to_use": [
+    "As reading material on Disruptor-style allocator design: single-producer free queues per thread plus a dedicated recycler thread.",
+    "To reproduce a 2013-era producer-consumer microbenchmark with fixed-size blocks, cross-thread frees and a spare core for the recycler.",
+    "As a starting point for a fixed-size-class pool inside your own code, after you rewrite the synchronization with proper atomics and backpressure."
+  ],
+  "when_not_to_use": [
+    "Anything in production: no license (issue #1 closed without one), abandoned since 2013-05-07, and the last commit message says the fixed_pool design 'still has multi-threaded' bugs.",
+    "Mixed allocation sizes: in the benchmarked malloc2.cpp, get_bin() ignores the size and returns the same bin for every request, so a recycled small block can be handed out for a larger request (heap overflow).",
+    "Programs that free in bursts faster than the single recycler thread can drain them: the per-thread garbage ring and the shared recycle ring have no backpressure, so the writer can lap the reader and pointers get dropped (leak) or recycled twice (double handout).",
+    "Machines without a spare core: the recycler thread busy-spins (its usleep is commented out) even when idle.",
+    "Programs that need memory returned to the OS: pages are never unmapped."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for malloc2.cpp (its own disruptor.hpp, mmap_alloc.hpp, fast_rand.cpp); HEAD CMakeLists links the benchmark against jemalloc",
+    "min_toolchain": "C++11 (-std=c++0x), GCC/Clang builtins (__builtin_clzll, __thread)",
+    "platforms": "Linux and macOS (POSIX mmap); x86 rdtsc in fast_rand.cpp; Windows not supported despite CMake defines",
+    "thread_safety": "Claimed lock-free and thread-safe, but cross-thread handoff uses plain or volatile int64 fields with no acquire/release ordering (data races under the C++ memory model), and the rings can overflow (see when_not_to_use)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README says 128-byte allocations, but the benchmark at the commit that added the tables (39e4d67, malloc2.cpp) allocates 60 bytes (rounded to 64 plus a 16-byte header) and never touches the memory; HEAD bench.cpp instead allocates 10000 bytes into 32K-slot arrays with memset, a configuration that matches neither table.",
+    "free2() publishes its ring position only after more than 10 frees, so up to 10 frees per thread stay invisible to the recycler.",
+    "mmap_alloc checks `if(!limit)` instead of MAP_FAILED, so a failed mmap returns (char*)-1; on Linux it opens /dev/zero for every page and never closes the fd. The HEAD fixed_pool maps at address hints that encode the size class ((ItemSize<<32) + pos*PageSize) and only asserts that the hint was honoured; on macOS it passes MAP_FIXED to that address, which can clobber existing mappings.",
+    "Open issues #3-#5 (2020) report double allocation after block merging and duplicate ring-buffer claims in malloc3.cpp; none were answered."
+  ],
+  "pick_this_over_siblings_when": "Effectively never for use: IsoAlloc, Spaces or micromalloc are licensed, maintained, size-class-correct malloc replacements with real benchmarks. Read fc_malloc only for the Disruptor-style recycler-thread idea, which none of the catalogued siblings use.",
+  "verified_claims_summary": "First-party wall times from one random producer-consumer run on unstated hardware, compiler and jemalloc version: 2.6 s vs 5.8 s glibc and 4.5 s jemalloc on 1 thread, and 6.8 s vs 18.2 s and 13.6 s on 10 threads; a second table shows 4.8-12.9 s vs jemalloc's 9.7-27.9 s at 1-10 threads with about 14% more RAM. The benchmarked allocator (malloc2.cpp at 39e4d67) serves one fixed 60-byte size, uses a spinning extra thread, and its unbounded-overwrite rings can drop or double-issue blocks under exactly this cross-thread free load, so the numbers do not describe a general-purpose, correct malloc.",
+  "status_note": "Abandoned since 2013-05-07 with no license (all rights reserved) and HEAD sources that do not compile as a library; reference only.",
+  "sources_read": [
+    "https://github.com/bytemaster/fc_malloc",
+    "https://github.com/bytemaster/fc_malloc/commits/master",
+    "https://github.com/bytemaster/fc_malloc/commit/39e4d67",
+    "https://github.com/bytemaster/fc_malloc/issues?q=is%3Aissue",
+    "https://github.com/bytemaster/fc_malloc/issues/1",
+    "https://github.com/bytemaster/fc_malloc/issues/5",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/bench.cpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/fc_malloc.cpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/fc_malloc.h",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/fixed_pool.hpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/fc_heap.hpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/mmap_alloc.hpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/HEAD/ideas.txt",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/39e4d672aaf38207105321859445beab30255a4e/malloc2.cpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/39e4d672aaf38207105321859445beab30255a4e/disruptor.hpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/39e4d672aaf38207105321859445beab30255a4e/fast_rand.cpp",
+    "https://raw.githubusercontent.com/bytemaster/fc_malloc/39e4d672aaf38207105321859445beab30255a4e/README.md"
+  ],
+  "confidence": 0.8
+}
