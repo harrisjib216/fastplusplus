@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/xs-lang0/xs",
+  "one_liner": "New scripting language with VM and register-allocating x86-64/arm64 JIT; about 2x CPython on recursive fib, far behind V8.",
+  "what_it_does": "XS is a standalone dynamically typed language (optional type annotations, pattern matching, closures, effects, actors) shipped as one C binary with a tree-walk interpreter, a bytecode VM (the default), an opt-in --jit backend, transpilers to C and JavaScript, and tooling (LSP, formatter, package manager). You write programs in XS syntax; it does not run Python or JavaScript source, so it is an alternative language rather than a faster runtime for an existing one.",
+  "how_it_is_fast": "With --jit, main.c calls jit_compile on the whole program at start-up: every function proto is lowered to a small linear IR (src/jit/ra_lower.c), split into basic blocks, given per-block liveness and linear-scan allocated onto three callee-saved registers, then emitted as x86-64 or arm64 machine code. The code has tagged small-integer (SMI) fast paths for arithmetic and compares, an XMM path for boxed XS_FLOAT operands, an inlined monomorphic inline cache for global loads, a fused compare-and-branch peephole and refcount-pair elimination. Recursive self-calls stay native through tier2_run_until and the per-proto jit_entry cache; unsupported opcodes (throw, yield, await, effects, imports) go through the vm_step_jit trampoline.",
+  "when_to_use": [
+    "You are writing XS anyway and have call-heavy integer code (recursion, counters): --jit cut fib(30) from 274 ms (VM) to 38 ms in the repo's own 2026-05-03 run.",
+    "Short-lived scripts where start-up dominates: hello world is about 3-7 ms versus 15-28 ms for CPython and 53-110 ms for Node in the repo's runs.",
+    "Experimenting with a small, readable register-allocating baseline JIT for a dynamic language (about 4,900 lines across the x86-64 path files in src/jit), on x86-64 or aarch64."
+  ],
+  "when_not_to_use": [
+    "Float-heavy numeric code: the repo's own mandelbrot run has XS --jit at 0.577 s vs CPython 0.338 s and Node 0.112 s; floats are boxed XS_FLOAT values, only small integers get tagged fast paths.",
+    "Anything where V8 is the alternative: STATUS.md's own table has fib(35) at 520 ms for XS --jit vs 210 ms for Node, and on README fib(30) XS is about 5x slower than Node once process start-up is subtracted (derived from page data).",
+    "Multi-core compute: the VM holds a global lock in its dispatch loop, so pure-compute threads take turns (README).",
+    "Production systems that need a stable, audited runtime: young project with 129 stars, the HTTPS client does not validate certificate chains (README), and STATUS.md admits silent JIT miscompiles on some corner cases.",
+    "iOS, ESP32 or other targets without the JIT (README: mobile builds drop it; ESP32 is VM-only)."
+  ],
+  "integration": {
+    "form": "standalone statically linked binary (xs); src/xs_embed.h offers an embedding entry point (not reviewed)",
+    "dependencies": "none (BearSSL is vendored under src/tls/bearssl)",
+    "min_toolchain": "C11 with gcc or clang and GNU make; default build -O2, make release -O3 -flto -DNDEBUG",
+    "platforms": "JIT on x86-64 and aarch64 (Linux, macOS, FreeBSD via mmap; Windows via VirtualAlloc); VM also on WASI, iOS, Android, ESP32",
+    "thread_safety": "OS threads via spawn, but the bytecode VM runs under a global lock released only around blocking calls (README)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "--jit silently becomes --vm when the top-level script cannot be lowered: main.c falls back to the VM if jit_compile returns NULL for the main proto, and vm.c intentionally does not dispatch into compiled inner functions from VM frames, so one unsupported construct in the script body can disable the JIT without a message (the fallback notice needs XS_VERBOSE_JIT=1). The 2026-04-24 benchmarks/baseline.json shows exactly this pattern (fib --jit 0.155 s vs --vm 0.150 s). The 'threshold-driven' compile in jit.h (jit_maybe_compile, XS_JIT_THRESHOLD) is not on the --jit path.",
+    "STATUS.md: 'JIT and VM disagree on a few --jit corner cases listed in the test suite as documented carryovers; pass --vm if you hit a silent miscompile.' tests/run.sh also counts a JIT that fell back to the VM as passing, since outputs then match trivially.",
+    "Benchmark harness flaws: every timing includes process start-up (in benchmarks/results.json every Node row is 0.101-0.119 s against a 0.110 s start-up row, so the Node column measures start-up), and the README's reproduction pointer tests/bench_backends.sh runs no Node or Python and lists benchmarks/bench_fibonacci.xs, which does not exist (the file is bench_fib.xs), so that row times an error exit on all three backends and still reports 'ok' because the three empty stdouts match.",
+    "The JIT code buffer is mapped read-write-execute (PROT_READ|PROT_WRITE|PROT_EXEC on Linux, PAGE_EXECUTE_READWRITE on Windows) with no W^X switching, 4 MiB by default (XS_JIT_CODE_SIZE_MB raises it to 1 GiB)."
+  ],
+  "pick_this_over_siblings_when": "Pick XS only if you want the language itself; to speed up existing Python code, Numba, Cinder or CPython's own copy-and-patch JIT work on unchanged Python, and for JavaScript workloads V8 is already several times faster than XS on compute, with Perry and katsu the catalogued options that claim wins over Node.",
+  "verified_claims_summary": "On an unspecified 'AMD Ryzen 7' Linux x86-64 box (build flags and compiler not stated), best of three cold runs with wall time including process start-up, XS --jit ran fib(30) in 31 ms vs Node 20 at 62 ms and CPython 3.13 at 71 ms; subtracting each runtime's hello-world time leaves about 28 ms for XS vs about 56 ms for CPython (about 2x faster) and about 5 ms for Node (XS about 5x slower) (derived from page data). The repo's committed 2026-05-03 cross-runtime run agrees on fib (0.038 s vs CPython 0.083 s) but shows XS --jit slower than both CPython and Node on mandelbrot.",
+  "status_note": "Actively developed (v1.2.32, 489 commits, last commit 2026-05-20, Apache-2.0) and easy to build from source, but young and single-maintainer, with acknowledged JIT miscompiles and a JIT that only pays off on integer-heavy, call-heavy code.",
+  "sources_read": [
+    "https://github.com/xs-lang0/xs",
+    "https://github.com/xs-lang0/xs/tree/main/benchmarks",
+    "https://github.com/xs-lang0/xs/tree/main/src",
+    "https://github.com/xs-lang0/xs/tree/main/src/jit",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/README.md",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/STATUS.md",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/VERSION",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/Makefile",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/run.sh",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/results.json",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/baseline.json",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_fib.xs",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_fib.py",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_fib.js",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_mandelbrot.xs",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_mandelbrot.py",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/benchmarks/bench_mandelbrot.js",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/tests/bench_backends.sh",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/tests/run.sh",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/jit.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/jit.h",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/ra_ir.h",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/ra_lower.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/ra_alloc.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/ra_live.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/jit/ra_codegen.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/vm/vm.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/xs-lang0/xs/HEAD/src/core/value.h"
+  ],
+  "confidence": 0.75
+}
