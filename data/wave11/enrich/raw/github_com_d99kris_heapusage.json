@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/d99kris/heapusage",
+  "one_liner": "LD_PRELOAD/DYLD_INSERT_LIBRARIES heap-error and leak checker covering a small subset of Valgrind Memcheck without CPU emulation.",
+  "what_it_does": "A shell wrapper (`heapusage [-t tools] PROG [ARGS]`) preloads libheapusage, which interposes malloc/free/calloc/realloc (and C++ new/delete through them) and reports leaks, double frees, buffer overflows and use-after-free in Memcheck-like text output. No recompilation is needed; source file and line numbers come from backward-cpp when binutils-dev (libbfd), libdw or libdwarf is present on Linux. On-demand reports are available through a signal (`-s SIGUSR1`) or by linking libheapusage and calling `hu_report()`.",
+  "how_it_is_fast": "The program runs natively; only allocator calls are intercepted, unlike Valgrind, which runs the whole program on a synthetic CPU. Overflow and use-after-free detection use an electric-fence style page allocator: each block is page-aligned via posix_memalign with a PROT_NONE guard page right after it, and freed blocks are mprotect'ed PROT_NONE in a FIFO quarantine (default 10% of physical RAM), so bad accesses fault in hardware and are reported from a SIGSEGV/SIGBUS handler. The speed comes from not instrumenting loads and stores, not from making the allocator itself cheap: every allocation captures a backtrace() of up to 20 frames under one global std::mutex.",
+  "when_to_use": [
+    "Finding leaks (`-t leak`) in a large program that is too slow to run under Valgrind, on a debug build.",
+    "Embedded Linux on x86, amd64 or aarch64, or macOS, where Valgrind is unavailable or badly supported (it cannot run on current Apple Silicon macOS).",
+    "Catching heap overflows past the end of a block and use-after-free in a binary you cannot rebuild with -fsanitize=address.",
+    "Taking leak snapshots of a long-running process on demand with `-s SIGUSR1`."
+  ],
+  "when_not_to_use": [
+    "Allocation-heavy or multithreaded code under the default `error` tool: each malloc costs at least two pages, two mprotect calls and a backtrace under a global mutex, so slowdown can be large and memory use can grow by orders of magnitude for small objects. No overhead numbers are published.",
+    "When you need uninitialized-read detection, stack or global overflow checks, or underflow (before-start) detection; Memcheck or ASan cover these and Heapusage does not ('scribble' mode only makes such bugs more likely to show).",
+    "Code that allocates through aligned_alloc, memalign, posix_memalign, valloc or pvalloc, or relies on malloc_usable_size; these are not intercepted.",
+    "When you can rebuild: ASan/LSan (about 2x slowdown) finds more bug classes with exact reports.",
+    "Third-party macOS apps without the get-task-allow entitlement, because DYLD_INSERT_LIBRARIES injection is refused."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "pthread, libdl; bundled backward-cpp (MIT); optional binutils-dev (libbfd), libdw or libdwarf for file:line in stack traces",
+    "min_toolchain": "C++11, CMake 3.0+",
+    "platforms": "Linux 2.6.31+ on x86, amd64, aarch64; macOS 10.12+ (tested on macOS 15.7 and Ubuntu 24.04)",
+    "thread_safety": "Thread-safe: a single global std::mutex serializes all intercepted allocator calls, with thread-local recursion guards and pthread_atfork handlers.",
+    "drop_in_for_baseline": "partial — a runtime wrapper like `valgrind ./prog` with no recompilation, but it covers only leaks, double frees, past-the-end heap overflows and use-after-free, with different flags and less precise output"
+  },
+  "gotchas": [
+    "Guarding allocations makes many mprotect regions; large programs can hit /proc/sys/vm/max_map_count, and the tool then exits and tells you to raise it.",
+    "Once the quarantine (10% of RAM by default, `-q`) is full, the oldest freed blocks are really released and later use-after-free on them is no longer detected.",
+    "Blocks are padded to 2*sizeof(void*), so overflows of a few bytes into that padding are not caught; only accesses that reach the guard page fault.",
+    "Leak reports can include memory from system libraries (for example printf buffers) that would be freed at library teardown."
+  ],
+  "pick_this_over_siblings_when": "Pick it over AddressSanitizer or DoubleTake when you cannot recompile, and over Dr. Memory when you need macOS or aarch64 Linux support. For heap profiling rather than error finding, heaptrack or bytehound fit better, and tracing_malloc is the sibling with an actual measured speedup over Valgrind.",
+  "verified_claims_summary": "Nothing was measured. The README says only that Heapusage 'has less performance impact than Valgrind' and is meant for applications that cannot run at Valgrind slowdown speed; no benchmark, compiler, flags or hardware are given.",
+  "status_note": "Actively maintained (v2.39, last commit 2026-07-12, no open issues) and BSD-3-Clause, so it is fine to use or vendor; there is no performance evidence, so treat the speed claim as directional only.",
+  "sources_read": [
+    "https://github.com/d99kris/heapusage",
+    "https://github.com/d99kris/heapusage/issues?q=is%3Aissue",
+    "https://github.com/d99kris/heapusage/tree/master/src",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/README.md",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/src/humalloc.cpp",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/src/humain.cpp",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/src/hulog.cpp",
+    "https://raw.githubusercontent.com/d99kris/heapusage/HEAD/src/heapusage"
+  ],
+  "confidence": 0.75
+}

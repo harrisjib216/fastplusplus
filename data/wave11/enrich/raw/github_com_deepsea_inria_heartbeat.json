@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/deepsea-inria/heartbeat",
+  "one_liner": "Research prototype of Heartbeat Scheduling (PLDI 2018): amortizes task creation against Cilk Plus-style eager spawning without manual grain-size tuning.",
+  "what_it_does": "This is the C++ prototype behind the PLDI 2018 paper 'Heartbeat scheduling: provable efficiency for nested parallelism' (Acar, Charguéraud, Guatto, Rainey, Sieczkowski). Programs are not written with spawn/sync. You write them either as hand-coded `sched::vertex` subclasses with trampoline state machines, or in an embedded DSL (`edsl::pcfg`, a parallel control-flow-graph language with `dc::stmt`, `dc::spawn_join` and parallel loops) that a cactus-stack interpreter runs. The bench/ directory ports PBBS benchmarks (radixsort, samplesort, suffixarray, removeduplicates, convexhull, nearestneighbors, delaunay, refine, raycast, mis, mst, spanning) so each one builds as `.heartbeat`, `.cilk` (Cilk Plus PBBS) and `.cilk_elision` binaries for head-to-head runs.",
+  "how_it_is_fast": "Heartbeat scheduling runs code sequentially by default and only promotes the oldest latent parallel task (the outermost spawn point) into a real, stealable task about once every kappa cycles (the 'heartbeat', default 30 us via `-promotion_threshold`). Task-creation cost is therefore bounded to a small fraction of the work no matter how fine-grained the program is, and promoting outermost work keeps the span bounded. That replaces the manual cutoffs or granularity control that PBBS uses with Cilk. The heartbeat is checked by polling rdtsc against a per-worker deadline (fuel.hpp), and the repo includes several work-stealing back ends (std::deque per worker with steal requests, Chase-Lev concurrent deques, steal-half).",
+  "when_to_use": [
+    "Studying or reproducing the PLDI 2018 heartbeat results against Cilk Plus PBBS on a many-core x86-64 Linux box (the paper used 40 cores).",
+    "Prototyping granularity-control ideas for very fine-grained nested parallelism (recursive divide and conquer such as fib, with nested parallel loops) where manual cutoffs are hard to choose.",
+    "Comparing work-stealing variants (Chase-Lev, steal-one, steal-half, heartbeat) under one harness with pview visualizations."
+  ],
+  "when_not_to_use": [
+    "Production code: there is no license file (reference only), the last commit was in 2022, and it is a research prototype.",
+    "Ordinary C++ code: you must rewrite it as vertex state machines or in the pcfg DSL, and the interpreter adds overhead that the paper's later work (TPAL, PLDI 2021) set out to remove.",
+    "Non-x86 targets: timing uses inline rdtsc and PAUSE assembly, and the build hard-codes -DTARGET_X86_64 -m64 -march=native.",
+    "If you need a maintained heartbeat-style runtime, Spice (Zig) and chili (Rust) are active descendants; for C++ use TBB, Taskflow or a sibling pool.",
+    "Building is not self-contained: you need the external deepsea-inria repos (cmdline, chunkedseq, sptl, cactus-stack, pbbs-include), a Cilk Plus runtime for baselines, and GCC 7-era -fcilkplus, which modern GCC removed."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "deepsea-inria cmdline, chunkedseq, sptl, cactus-stack, pbbs-include (benchmarks); optional hwloc, tcmalloc (gperftools), Cilk Plus runtime for baselines; pthread",
+    "min_toolchain": "gnu++1y (C++14) with GCC; nix shell pins gcc7; clang possible with -latomic",
+    "platforms": "x86-64 Linux only (rdtsc inline asm, /proc/cpuinfo)",
+    "thread_safety": "Its own multi-worker runtime; launched via heartbeat::launch with -proc N; no documented reentrancy or embedding guarantees",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The heartbeat period is converted from microseconds to TSC cycles using the 'cpu MHz' line of /proc/cpuinfo (default 1.2 GHz if absent), which is the current and not the nominal frequency. Under frequency scaling the real promotion interval can differ from the requested one.",
+    "README sample output reports only absolute exectime and utilization; no comparison is shown in the repo. Cilk comparisons have to be reproduced via bench/bench.ml (pbench/prun/pplot) yourself.",
+    "The example code comments note that a lambda launch path crashes GCC; launch_interpreter is the workaround.",
+    "PBBS input files under _data/ are not in the repo and must be generated separately."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Spice or chili only when you want the original PLDI 2018 C++ artifact with Cilk Plus PBBS baselines. For anything you would ship, Spice (Zig) or chili (Rust) implement the same heartbeat idea with maintained code and published numbers, and Nowa or Staccato are the C++ continuation-stealing options with Cilk comparisons.",
+  "verified_claims_summary": "Only WebSearch snippets of the PLDI 2018 paper were available: on about ten PBBS benchmarks at 40 cores the heartbeat prototype generally matched or beat the Cilk Plus PBBS implementations, with task-creation overhead under 5% versus sometimes over 25% for PBBS granularity control. Benchmarks were built with GCC -O2 -march=native, and the hardware was 40 cores per the README samples, CPU model not stated in the repo. The paper PDF (chargueraud.org, inria.hal.science) was EGRESS_BLOCKED, so no per-benchmark number was confirmed.",
+  "status_note": "Abandoned since 2022-07-01 with no license file, so reference only; useful as the source artifact of the heartbeat scheduling idea rather than as a library to adopt.",
+  "sources_read": [
+    "https://github.com/deepsea-inria/heartbeat",
+    "https://github.com/deepsea-inria/heartbeat/tree/master/include",
+    "https://github.com/deepsea-inria/heartbeat/tree/master/bench",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/README.md",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/bench/Makefile",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/bench/shell.nix",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/bench/bench.ml",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/bench/promotion-threshold-experiment.md",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/heartbeat.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/scheduler.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/cycles.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/fuel.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/machine.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/include/edsl.hpp",
+    "https://raw.githubusercontent.com/deepsea-inria/heartbeat/HEAD/example/fib.cpp",
+    "https://www.chargueraud.org/research/2018/heartbeat/heartbeat.pdf (EGRESS_BLOCKED)",
+    "https://inria.hal.science/hal-01937946/document (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.6
+}
