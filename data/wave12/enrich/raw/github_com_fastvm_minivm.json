@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/fastvm/minivm",
+  "one_liner": "Small C register VM running a Lua subset; 2022 build beat luajit -joff on fib(35) but lost to LuaJIT's JIT.",
+  "what_it_does": "A command-line VM and REPL (build/bin/minivm) that parses a Lua-like language with a tree-sitter grammar, lowers it to a basic-block register IR and interprets it. Earlier (2021-2022) it was a cross-language bytecode VM driven by the Paka frontend; the code was later rewritten around the Lua frontend. It is not a drop-in for the Lua or LuaJIT C API: there is no documented embedding API, and the test list (tool/core.mak) covers only closures, tables, basic control flow, recursion and loops.",
+  "how_it_is_fast": "Direct-threaded dispatch: vm/backend/backend.c translates each IR basic block lazily, on first entry, into a byte stream of GCC labels-as-values handler addresses (computed goto) with operands inlined. Opcodes are specialised by operand kind (register/immediate variants such as ADD_RI, BLT_RR), literal-literal arithmetic is folded during translation, and values are tagged cells (8-byte union plus a 1-byte type tag) in a flat register file. The 2022 README attributed its binary-trees result to a custom allocator and GC; the current Linux build uses the Boehm conservative GC (vendor/bdwgc) instead.",
+  "when_to_use": [
+    "Studying how a compact (~1,200-line backend) direct-threaded register interpreter with lazy basic-block translation is built",
+    "Experiments with a small, MIT-licensed Lua-subset interpreter where startup time matters (README: 0.307 ms for hello world, first-party, no baseline)",
+    "Teaching or prototyping a VM frontend on Linux x86-64 or WebAssembly (emcc targets in the makefile)",
+    "Integer-typed numeric experiments: the --number= flag switches the number type among i8, i16, i32, i64, f32 and f64"
+  ],
+  "when_not_to_use": [
+    "As a LuaJIT replacement: on the only published comparison (fib(35), 2022, M1) LuaJIT with its JIT on was about 3.1x faster, and the JIT the README advertises does not exist in current code (issue #29 'Implement JIT', open since June 2024)",
+    "Running real Lua programs: only a tested subset is supported; no metatables, coroutines or standard-library coverage appears in the test list",
+    "Embedding in a host application: no documented library build or stable C API in the current tree",
+    "Allocation-heavy work on macOS, Windows or WebAssembly builds: the makefile builds those with -DVM_NO_GC, which maps vm_malloc to plain malloc with no collector, so garbage is never reclaimed",
+    "Production use: single maintainer, last functional change June 2024 (the June 2025 commit only fixes a --load argument check), and the only Windows bug report (#28, no output) was closed without a documented fix"
+  ],
+  "integration": {
+    "form": "built executable via GNU Make (source-drop for embedding; no documented library target)",
+    "dependencies": "git submodules vendor/bdwgc (Boehm GC, Linux/FreeBSD builds), vendor/tree-sitter (Lua parser runtime), vendor/isocline (REPL), vendor/raylib (drawing, mac/windows/freebsd/web targets); cargo only to regenerate the tree-sitter parser",
+    "min_toolchain": "C11 with GNU extensions (computed goto, statement expressions), GCC or Clang; MSVC not supported",
+    "platforms": "Linux x86-64, FreeBSD amd64, Windows x64 and WebAssembly per README; the makefile also has a mac target",
+    "thread_safety": "not documented; one shared register file per vm_t and the latest release commit is titled 'no threads'",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README speed commands do not run on current code: main/minivm.c has no --dump-time option (an unknown flag is treated as a file name and exits with 'error: no such file'), its clock() start time is never printed, and test/fib/fib40.lua does not exist (404); so the README's fib(40) 1725.805 ms and 0.307 ms timings come from an older build",
+    "Only comparative numbers are the January 2022 Paka-frontend VM (README at commit cf7ec355): fib(35) minivm 159.3 ms vs luajit -joff 403.8 ms vs LuaJIT JIT 51.6 ms, hyperfine with process startup included, one M1 laptop, MiniVM build flags not stated; binary-trees results are only a log-scale chart without numbers, and its 'faster than C' claim is against FastVM/paka bench/tree.c, a naive malloc/free-per-node C version",
+    "Current harness flaws (test/bench.sh with minivm.sh, lua.sh, luajit.sh): one run per test, wall clock from date +%s.%N that also includes process startup and a cat of the captured output, failing tests silently dropped from the table, and minivm.sh's rebuild step is commented out so it times whatever binary exists (the default makefile OPT is -Os -flto, size-optimised); no results are published",
+    "Calls recurse on the C stack (vm_run_repl calls itself per Lua call) and each frame takes registers from a fixed 65,536-slot array allocated in main.c; no depth check is visible in vm/backend/backend.c, so deep recursion can run past that buffer"
+  ],
+  "pick_this_over_siblings_when": "Pick LuaJIT for any real Lua workload (faster with its JIT on, full Lua 5.1, embeddable API), and Wren when you want a small embeddable scripting VM with an independent benchmark re-run; MiniVM is mainly worth reading as a compact computed-goto register VM design, not something to deploy.",
+  "verified_claims_summary": "In January 2022 the Paka-frontend MiniVM ran recursive fib(35) in 159.3 ms against 403.8 ms for luajit -joff (about 2.5x faster, derived from page data) but 51.6 ms for LuaJIT with the JIT on, Node 146.0 ms and clang -Ofast C 36.7 ms, measured with hyperfine including startup on a 2020 MacBook Air M1 (first-party, MiniVM flags unstated). The rewritten Lua-frontend code has no published comparison.",
+  "status_note": "Stale: real development stopped June 2024 (one small fix June 2025), the README's JIT and timing commands are out of date, and it is MIT-licensed and small enough to read, but is a research-grade toy, not a vendorable runtime.",
+  "sources_read": [
+    "https://github.com/FastVM/minivm",
+    "https://github.com/FastVM/minivm/commits/main",
+    "https://github.com/FastVM/minivm/issues?q=is%3Aissue",
+    "https://github.com/FastVM/minivm/issues/29",
+    "https://github.com/FastVM/minivm/issues/28",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/README.md",
+    "https://raw.githubusercontent.com/FastVM/minivm/cf7ec35504622d6661c7f677fbed9dc8a8e1eb62/README.md",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/makefile",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/tool/core.mak",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/bench.sh",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/minivm.sh",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/luajit.sh",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/lua.sh",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/graph.sh",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/graph.py",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/fib/fib.lua",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/fib/fib40.lua",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/test/tables/trees.lua",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/main/minivm.c",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/vm/vm.h",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/vm/ir.h",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/vm/lib.h",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/vm/lib.c",
+    "https://raw.githubusercontent.com/FastVM/minivm/HEAD/vm/backend/backend.c",
+    "https://github.com/FastVM/paka/tree/main/bench",
+    "https://raw.githubusercontent.com/FastVM/paka/main/bench/tree.paka",
+    "https://raw.githubusercontent.com/FastVM/paka/main/bench/tree.lua",
+    "https://raw.githubusercontent.com/FastVM/paka/main/bench/tree.c",
+    "https://raw.githubusercontent.com/FastVM/paka/main/bench/ptree.c",
+    "https://raw.githubusercontent.com/FastVM/paka/main/bench/tree.js",
+    "https://news.ycombinator.com/item?id=29850562 (WebSearch snippet only; HN and mirrors blocked)"
+  ],
+  "confidence": 0.7
+}
