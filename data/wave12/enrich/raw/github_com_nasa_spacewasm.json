@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/nasa/spacewasm",
+  "one_liner": "NASA JPL's no_std Wasm 1.0 interpreter for flight software; compiles plus instantiates modules about 60x faster than Wasmtime or Wasmer Cranelift.",
+  "what_it_does": "A Rust no_std decoder, validator and interpreter for WebAssembly 1.0 (MVP plus mutable globals and custom page sizes), built to run command sequences and low-trust code on spacecraft. The embedder creates an Engine with fixed-capacity host modules, streams the binary in chunks through a WasmStream into Module::new (which decodes, validates and translates in one pass into IR pages held by a CodeBuilder), then drives Interpreter.run with an instruction budget. Its API differs from Wasmtime's and Wasmer's. A C API crate (spacewasm_c_api) and a WASI 0.1 command-line runner (spacewasi) are included.",
+  "how_it_is_fast": "Startup is cheap because there is no optimizing back end. A single streaming pass decodes, validates and lowers the bytecode into a fixed-width IR of 16-bit words, with indexes and branch targets already resolved. No machine code is generated and nothing gets a second pass. Execution is a plain stack-machine interpreter (a visitor dispatching one IR instruction at a time, counting fuel per instruction), so the startup advantage over JITs disappears on long runs.",
+  "when_to_use": [
+    "Embedded or no_std Rust hosts that must load a module from flash or a file in chunks, without holding the whole binary in one contiguous buffer.",
+    "Systems with flight-software memory rules: allocation only during module initialisation, from a capped set of fixed-size pages, with failures returned as errors and never panics.",
+    "Hosts that need bounded, resumable execution: run() takes an instruction budget and returns OutOfFuel, host functions can pause the engine and resume it later, and interpreted calls do not use the native stack.",
+    "Short-lived invocations of MVP modules where compile plus instantiate time dominates: about 0.1 ms for CoreMark or an ERC-20 contract on an EPYC 7763, against about 10 ms for Wasmtime (Cranelift)."
+  ],
+  "when_not_to_use": [
+    "Compute-heavy or long-running code: its execution geomean in the same suite is x79.53 of the fastest, against WAMR fast-interpreter x17.07 and Wasmtime Pulley x27.92, and JITs are far faster.",
+    "Modules that use post-MVP features (bulk memory, sign extension, non-trapping float-to-int, multi-value, SIMD, tail calls). Recent clang and rustc emit some of these by default, so you have to build with -mcpu=mvp or post-process with the bundled wasm2mvp.sh.",
+    "When only the lowest startup matters: Wasmi v2 lazy (x1.37), wasm3 lazy, DLR-FT wasm-interpreter, submilli-wasm and toywasm all start faster, and V8 starts faster on the three largest modules (spidermonkey 10.9 ms vs 65.2 ms, ffmpeg 35.5 ms vs 293.0 ms).",
+    "Untrusted modules on 32-bit targets, or modules with more than 65,535 functions or globals, until open issues #158 and #201 are fixed.",
+    "Projects that need a stable API: 13 crates.io releases between 0.4.4 (2026-07-27) and 0.7.1 (2026-09-04), and CompilerOptions changed between the 0.5.2 API used by the benchmark adapter and the repo's own HEAD bench."
+  ],
+  "integration": {
+    "form": "crate (no_std); also a C static/shared library via crates/spacewasm_c_api",
+    "dependencies": "libm =0.2.16 only (pinned under the project's no-dependencies requirement); the embedder must install an allocator through the spacewasm::global_allocator! macro (its own C-ABI hooks, not Rust's #[global_allocator])",
+    "min_toolchain": "Rust 1.87 (2024 edition)",
+    "platforms": "any Rust no_std target in principle; uses x86 inline asm (sqrtss) for some float ops, with a miri-soft-floats feature to switch to soft floats; 32-bit targets have an open decoder-panic bug (#158)",
+    "thread_safety": "not documented; an Engine owns one interpreter stack and run() takes &mut Engine, so use one engine per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Open issue #201 (2026-09-14): get_func_ref and get_global_ref narrow a validated index with 'as u16'. A module with 65,537 globals validates, and global.get 65536 silently returns global 0's value. Issue #158: a malformed module panics the decoder on 32-bit targets, which contradicts the no-panic requirement on the flight targets it aims at.",
+    "Benchmark harness asymmetries (from wasmi-benchmarks source, effect on the numbers not measured). The SpaceWasm adapter replaces the flight PageAllocator with plain malloc/free and feeds the module in copied 1 KiB chunks. The Wasmtime adapter builds wasmtime 47.0.3 with default-features = false (runtime and anyhow only), so the default parallel-compilation feature is off: Cargo.lock shows no rayon under wasmtime, while the Wasmer compilers do pull rayon. The 63x gap to stock Wasmtime Cranelift on a multi-core machine is therefore likely overstated, though Wasmer (Cranelift), whose compilers pull rayon, was only about 10% faster than Wasmtime (Cranelift) here.",
+    "Only startup was measured in its favour: the comparison is a single-pass interpreter translator against optimizing JITs. Among eager translators doing the same full validation and translation, SpaceWasm beats Wasmi v2 eager and wasm3 eager on 6 of 7 modules but loses on pulldown-cmark (8.8 ms vs 5.3 ms and 8.1 ms) (derived from page data).",
+    "The IR is fixed-width and usually larger than the bytecode. Hard limits include 256 modules per store, 255 parameter words, 65,535 local words, 32-byte import and custom-section names, and a ±2,097,151-instruction branch range; a longer import name is rejected at decode time. unsafe code sits in the stack, memory and IR-reader hot paths and relies on the up-front validator; the strict-assertions feature re-checks bounds at run time."
+  ],
+  "pick_this_over_siblings_when": "Pick SpaceWasm over Wasmi or wasm3 when its flight-software constraints matter more than speed: no_std, init-only fixed-page allocation, chunked streaming decode and fuel-bounded resumable execution. Wasmi starts and executes faster. Pick it over DLR-FT wasm-interpreter, which starts faster (x10.95 vs x25.84) and whose requirement set SpaceWasm adopted, if you want NASA JPL's implementation with its C API and WASI runner.",
+  "verified_claims_summary": "In the third-party wasmi-benchmarks startup suite (time to compile, validate and instantiate 7 modules from a 0.1 ms ERC-20 contract to ffmpeg; criterion; bench profile with fat LTO; AMD EPYC 7763, probably a GitHub Actions VM; spacewasm 0.5.2, wasmtime 47.0.3, wasmer 7.2.1), SpaceWasm's geomean is x25.84 of the per-case fastest, against x1634.19 for Wasmtime (Cranelift) and x1484.15 for Wasmer (Cranelift). That is about 63x and 57x faster startup; per case, CoreMark takes 0.109 ms vs 9.87 ms and ffmpeg 0.293 s vs 17.96 s against Wasmtime (Cranelift). The rustc version and suite commit are not recorded.",
+  "status_note": "Active and Apache-2.0 (1.6k stars, last commit 2026-09-28, frequent 0.x releases with API churn). Usable as a crate today for MVP modules, but test and validator coverage is still being fixed: open issue #209 says the README overstates unit-test instruction coverage, and #206 says the differential validator oracle tests never run in CI.",
+  "sources_read": [
+    "https://github.com/nasa/spacewasm",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/docs/ir.md",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/docs/REQUIREMENTS.md",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/src/interpreter.rs",
+    "https://github.com/nasa/spacewasm/tree/main/crates/spacewasm_std/benches",
+    "https://raw.githubusercontent.com/nasa/spacewasm/HEAD/crates/spacewasm_std/benches/coremark.rs",
+    "https://github.com/nasa/spacewasm/issues",
+    "https://github.com/nasa/spacewasm/issues/62",
+    "https://github.com/nasa/spacewasm/issues/201",
+    "https://crates.io/api/v1/crates/spacewasm",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/spacewasm/lib.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/spacewasm/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/benches/criterion/startup.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/wasmtime/lib.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/wasmtime/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/wasmer/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/Cargo.lock",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/data/amd-epyc-7763/criterion.json",
+    "https://raw.githubusercontent.com/bytecodealliance/wasmtime/v47.0.3/crates/wasmtime/Cargo.toml"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/nuitka/nuitka",
+  "one_liner": "Python-to-C compiler that runs unmodified CPython 2.6-3.14 code; about 3.4x CPython 2.7 on pystone, far less on typical code.",
+  "what_it_does": "Nuitka translates Python modules into C that links against libpython plus Nuitka's own static C runtime, then builds the result with a C compiler. You give it an unmodified program or module and choose an output: an executable that still needs the installed CPython, a self-contained folder (--mode=standalone), a single file (--mode=onefile), or a CPython extension module (--mode=module) that replaces a .py file. There are no source annotations or language subset; compiled and uncompiled code run together, and C extension modules keep working.",
+  "how_it_is_fast": "Whole-module optimisation runs on a node tree before C code generation. It does constant propagation and folding, function inlining, and removes frame setup where no frame is needed. Objects are still PyObject*, but generic C-API calls are replaced with specialised helpers per operand type, for example BINARY_OPERATION_* and RICH_COMPARE_* families and exact-type iterator fast paths. A few native C types (nuitka_bool, nuitka_void) skip boxing; full C-level type inference is still listed as 'in progress'. Gains on top come from C-compiler LTO and PGO (--lto=yes, --pgo-c) and from static linking of libpython.",
+  "when_to_use": [
+    "Pure-Python, call-heavy CPU code that you cannot annotate or rewrite. In the independent python-speed suite on CPython 3.9.4, Nuitka halved the recursive fibonacci time (1199 ms vs 2417 ms).",
+    "Shipping a Python application as a standalone folder or single-file binary, where some speed-up comes as a side benefit of the build.",
+    "Compiling one hot module into an extension module (--mode=module) and leaving the rest of the program interpreted.",
+    "Code that depends on CPython C extensions (NumPy and similar) and therefore cannot move to PyPy or a restricted-subset compiler."
+  ],
+  "when_not_to_use": [
+    "Workloads dominated by C-library calls, regex, string handling or I/O. In python-speed, regex was slightly slower than CPython 3.9.4 (2407 ms vs 2335 ms) and string/memory only 5% faster. In the Shed Skin README, Nuitka 0.6.16 took 11.4 s on the sieve example, the same as CPython 3.11.0.",
+    "When you can add type information: Cython, mypyc, Codon or Shed Skin give much larger gains on numeric loops, and PyPy is faster on long-running pure-Python code.",
+    "Fast edit-compile cycles or large codebases on small machines: C compilation of whole programs is slow and can exhaust RAM, and the README has a whole section on compiler out-of-memory failures and on --low-memory and --jobs.",
+    "Code that needs pdb or tracing, reads co_code, or builds new functions from a function's __code__ (compiled functions have no bytecode)."
+  ],
+  "integration": {
+    "form": "Python package (pip install Nuitka) that emits executables or CPython extension modules",
+    "dependencies": "CPython of the same version (or a standalone/onefile build that bundles it; Anaconda and Homebrew Python work, Windows Store Python and macOS pyenv do not); a C11 compiler (gcc 5.1+, clang, MSVC 2022+, the MinGW64 that Nuitka downloads, or zig); Scons is used internally (Python 3.4 needs a second Python for it); optional ccache and zstandard",
+    "min_toolchain": "CPython 2.6/2.7 or 3.4-3.14; gcc 5.1+ (g++ 4.4+ as C++03 fallback) or MSVC 2022+; MinGW64 does not work with Python 3.13+",
+    "platforms": "Linux, FreeBSD, NetBSD, macOS, Windows (32-bit, 64-bit, ARM); tested on x86, x86_64 and arm",
+    "thread_safety": "not documented separately; compiled code runs inside the CPython runtime and follows its threading model",
+    "drop_in_for_baseline": "partial: it runs unmodified Python source and keeps C extensions working, but the output is a binary or extension module. Extension modules must keep their file name and load only into the same CPython version, 'python -m compiled_module' fails, co_code is empty and pdb cannot trace compiled functions."
+  },
+  "gotchas": [
+    "Harness flaw in the published table: the compiled Python 2 command is 'for i in {1..100}; do BENCH=1 ./pystone.bin ; done | sort -n | head -rn 1'. head has no -r option, so it prints nothing. Read as 'head -n 1' after an ascending sort, it would pick the slowest compiled run, not the best one used for the uncompiled row. The text says 1000 runs while the loop runs 100, so the table cannot have come from these commands as printed. No CPU, C compiler version or Nuitka version is given, and the Python 3 commands have no published results.",
+    "pystone flatters a constant-propagating compiler. Its timed loop (tests/benchmarks/pystone.py, Proc0) contains a dead store ('IntLoc3 = 5 * IntLoc1 - IntLoc2' is overwritten on the next line) and an inner while loop over constants (IntLoc1 = 2, IntLoc2 = 3), which CPython must execute and a constant-propagating compiler can fold (not checked whether Nuitka does). The score also subtracts an empty-loop 'nulltime' that each build times itself. Expect the 3.4x to shrink sharply on real code (about 1.18x total in python-speed).",
+    "Licence: the compiler is AGPL-3.0. LICENSE-RUNTIME.txt grants an exception only for the Target Code (your compiled program linked with Nuitka's runtime library), so modified versions of the compiler itself stay AGPL.",
+    "Builds without --deployment keep debugging safeguards on (for example fork-bomb detection on self-execution). Code that clones functions through types.FunctionType(func.__code__, ...) breaks and must use the compiled function's clone() method instead."
+  ],
+  "pick_this_over_siblings_when": "Pick Nuitka over Cython, mypyc, Codon or Shed Skin when the code must stay unmodified, unannotated, full-language Python and you also want a distributable binary. Pick it over PyPy or GraalPy when you depend on CPython C extensions or the exact CPython semantics, and accept a much smaller speed-up than those give on pure-Python hot loops.",
+  "verified_claims_summary": "The only published numbers are first-party. Nuitka's README table runs pystone under Debian's CPython 2.7 and takes the best of repeated runs: 137,498 pystones/s uncompiled, 460,995 compiled with --lto=yes (3.35x) and 503,682 with --lto=yes --pgo-c (3.66x). A second row labelled 'Nuitka Python 2.7', not explained in the README, reaches 3.72x of the Debian baseline. No CPU, C compiler version or Nuitka version is given, and there are no Python 3 results.",
+  "status_note": "Very active: develop branch committed 2026-10-05, PyPI 4.2.2 released 2026-09-22, 15.2k stars. Usable today on CPython 2.6-2.7 and 3.4-3.14 under AGPL-3.0 with a runtime exception for compiled output; some deployment features (data-file embedding, container builds) are commercial-only.",
+  "sources_read": [
+    "https://github.com/Nuitka/Nuitka",
+    "https://raw.githubusercontent.com/Nuitka/Nuitka/HEAD/README.rst",
+    "https://raw.githubusercontent.com/Nuitka/Nuitka/HEAD/LICENSE-RUNTIME.txt",
+    "https://raw.githubusercontent.com/Nuitka/Nuitka/HEAD/tests/benchmarks/pystone.py",
+    "https://raw.githubusercontent.com/Nuitka/Nuitka/HEAD/tests/benchmarks/pystone3.py",
+    "https://raw.githubusercontent.com/Nuitka/Nuitka/HEAD/Developer_Manual.rst",
+    "https://github.com/Nuitka/Nuitka/issues?q=is%3Aissue+slower",
+    "https://pypi.org/pypi/Nuitka/json",
+    "https://raw.githubusercontent.com/vprelovac/python-speed/HEAD/README.md",
+    "https://raw.githubusercontent.com/shedskin/shedskin/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

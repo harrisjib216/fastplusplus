@@ -15,3 +15,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Topaz (topazproject/topaz, kostya fork): Ruby on RPython, beats CRuby 2.7 in kostya/jit-benchmarks (Cython enricher, 2026-10-06); seed candidate.
 - ThePhD/lua-bindings-shootout: multi-library Lua binding benchmark harness (the LuaBridge3 bench derives from it); a neutral re-run would settle the LuaBridge3 vs sol2 claims (LuaBridge3 enricher, 2026-10-06).
 - LekKit/shadow_pgt: kernel module claiming native speed on VisionFive 2, no numbers (RVVM enricher).
+- Quirrel (GaijinEntertainment/quirrel): Squirrel fork in the dasProfile table, not catalogued (Luau enricher, 2026-10-06); seed candidate.
+- TinyKVM (same author as libriscv, likely github.com/varnish/tinykvm, not opened) and the Segue and ColorGuard ASPLOS 2025 SFI paper (Wasmtime/WAMR): leads from the LFI and libriscv enricher (2026-10-06).

@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/luajit/luajit",
+  "one_liner": "Tracing JIT compiler and assembler-written interpreter for Lua 5.1; runs Lua code several times faster than PUC-Rio Lua 5.4.",
+  "what_it_does": "LuaJIT is a complete Lua implementation (standalone `luajit` binary plus an embeddable library) that is API- and ABI-compatible with the Lua 5.1 C API, so an application that embeds Lua 5.1 usually only has to link against a different library. On top of Lua 5.1 it ships the `bit` module, an FFI that declares and calls C functions and C data structures directly from Lua, the `jit.*` control module, a profiler and selected Lua 5.2/5.3 extensions. Since 2026-07-20 the v2.1 branch also accepts some LuaJIT 3.0 syntax (native bit operators, `!=`, ternary, compound assignment, `continue`), but it is still not Lua 5.3/5.4.",
+  "how_it_is_fast": "Two tiers: a fast bytecode interpreter written in assembler through DynASM, and a trace compiler that records hot loops and calls (hotloop default 56 iterations), turns them into SSA IR and optimizes them with constant folding, CSE, loop-invariant hoisting, load/store forwarding, array bounds check elimination, allocation sinking and operand fusion before emitting machine code. FFI cdata accesses (for example a `uint8_t[?]` or `bool[?]` array) are compiled to plain loads and stores, which is part of why the kostya/benchmarks `*_jit.lua` variants are fast.",
+  "when_to_use": [
+    "Embedding a scripting language in a C or C++ application (games, network proxies such as OpenResty, appliances) where Lua 5.1 semantics are acceptable and script CPU time matters.",
+    "Numeric and loop-heavy Lua code: same-source kostya/jit-benchmarks numbers show about 10x to 30x over Lua 5.4.4 on nbody, mandelbrot, spectralnorm and matmul.",
+    "Code that needs to call C libraries or work on raw C arrays and structs from Lua without writing C binding code (FFI).",
+    "Platforms on the supported list: x86, x64, ARM, ARM64, PPC, MIPS32, MIPS64 on Windows, Linux, BSD, macOS, Android and consoles."
+  ],
+  "when_not_to_use": [
+    "Code written for Lua 5.3/5.4: there is no integer subtype, no `//` floor division, no `_ENV`, no bit operator metamethods; 5.2 compatibility is partial and some parts need a -DLUAJIT_ENABLE_LUA52COMPAT build.",
+    "String-library and pattern-matching workloads: LuaJIT lost regexdna to Lua 5.4.4 in kostya/jit-benchmarks (9.99 s vs 8.94 s) and gained only 2.2x on fasta and 2.6x on revcomp.",
+    "Platforms that forbid runtime code generation (iOS, consoles): the JIT is disabled there and only the interpreter runs; the docs say it is still faster than plain Lua, but the large speedups disappear.",
+    "Untrusted scripts that get FFI access: the FFI has no memory safety (out-of-bounds array access or a misdeclared C function can crash the process).",
+    "Allocation-heavy workloads where memory is tight: binarytrees peaked at 307.5 MB under LuaJIT vs 145.2 MB under Lua 5.4.4."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (libluajit / lua51.dll) plus standalone luajit executable",
+    "dependencies": "none beyond the C library (-lm -ldl on Linux when linking statically)",
+    "min_toolchain": "Recent GCC, Clang/LLVM or MSVC; GNU Make for the POSIX/MinGW build. The docs ask you to build it with its own build system and not to drop its sources into your tree. Default flags are -O2 -fomit-frame-pointer.",
+    "platforms": "x86, x64, ARM, ARM64, PPC, MIPS32, MIPS64; Windows, Linux, BSD, macOS, POSIX, Android, iOS (interpreter only), PS4/PS5/Xbox/Switch (interpreter only)",
+    "thread_safety": "Not documented beyond the Lua 5.1 model: separate lua_State instances are independent; one state must not be used from several threads at once.",
+    "drop_in_for_baseline": "partial: drop-in for Lua 5.1 (API+ABI compatible, including C modules); not a drop-in for the Lua 5.4.7 baseline used in the benchmark because 5.3/5.4 integer and operator semantics differ"
+  },
+  "gotchas": [
+    "Harness flaw in the headline source: kostya/benchmarks runs different scripts under the two interpreters. bf_jit.lua is a different design from bf.lua (one closure per instruction, a fixed 8192-cell uint8_t FFI tape with no bounds check, separate inc/dec closures) while bf.lua uses a growing Lua table of unbounded integers and an if-chain dispatcher; primes_jit.lua swaps the Lua table for an FFI bool[] sieve. The 6.5x (bench.b) and 3.4x (primes) ratios therefore mix interpreter speed with data-structure choices. bench.b never underflows a cell, so the outputs agree.",
+    "In kostya's primes.lua (the plain-Lua baseline) fill_array writes a global `a` (missing `local`), adding a global lookup per element over 5,000,001 iterations; primes_jit.lua does not have this cost because it uses ffi.new. The handicap is small but it favours LuaJIT.",
+    "The kostya/benchmarks README version table is partly stale (it lists Java 24.0.2 and Go 1.25.0 while docker/Dockerfile installs JDK 26.0.1 and Go 1.26.5); its LuaJIT row 2.1.1748495995 carries a 2025-05-29 commit timestamp although the Dockerfile builds openresty/luajit2 v2.1-20260701, and it lists Lua 5.4.7 while the Dockerfile installs Debian lua5.5. Which binaries produced the timings is not certain.",
+    "Code the JIT cannot compile (NYI operations, for example some FFI operations such as table initializers, aggregates by value, ffi.cdef calls inside loops) silently falls back to the interpreter; check with `luajit -jv`. Use luaL_newstate, not lua_newstate with a custom allocator, and load the `jit` library, or the JIT stays off."
+  ],
+  "pick_this_over_siblings_when": "Pick LuaJIT over LuaAOT (lua-aot-5.4), whose own README says it is not as fast as LuaJIT, and over Mobius, when your scripts can live with Lua 5.1 semantics; pick LuaAOT or stock Lua 5.4 when you need 5.4 integers and operators. Wren beat LuaJIT only with the JIT turned off (-joff) on its own method-call benchmark, so it is not a reason to skip LuaJIT for throughput.",
+  "verified_claims_summary": "kostya/benchmarks (Xeon E-2324G, Docker on Debian forky, LuaJIT from openresty/luajit2 built with plain make, Lua from the Debian package) times LuaJIT at 5.686 s vs 37.051 s for Lua on bench.b and 0.309 s vs 1.056 s on primes, but with FFI-based *_jit.lua scripts on the LuaJIT side. The same-source kostya/jit-benchmarks round from 2023-02-28 (Ryzen 7 3800X, LuaJIT 2.1.0-beta3 vs Lua 5.4.4, both built with plain make, CPU time from os.clock) gives nbody 1.44 s vs 19.69 s and mandelbrot 0.5 s vs 5.39 s, but LuaJIT is slower on regexdna (9.99 s vs 8.94 s).",
+  "status_note": "Actively maintained by Mike Pall on the rolling v2.1 branch (commits through 2026-09-08, including JIT fixes and the July 2026 syntax backport); MIT-licensed and copyable, with the GitHub repo a mirror of the official git repository and releases only as source or rolling 2.1.<timestamp> versions.",
+  "sources_read": [
+    "https://github.com/LuaJIT/LuaJIT",
+    "https://github.com/LuaJIT/LuaJIT/commits/v2.1",
+    "https://github.com/LuaJIT/LuaJIT/issues/1475",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/README",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/COPYRIGHT",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/luajit.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/install.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/extensions.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/running.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/ext_ffi_semantics.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/ext_jit.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/Makefile",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/luajit_rolling.h",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bench.b",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.lua",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf_jit.lua",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/primes/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/primes/primes.lua",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/primes/primes_jit.lua",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/nbody/test.lua",
+    "https://github.com/openresty/luajit2/tags"
+  ],
+  "confidence": 0.85
+}
