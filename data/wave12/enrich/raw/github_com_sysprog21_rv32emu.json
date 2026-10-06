@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/sysprog21/rv32emu",
+  "one_liner": "RV32 RISC-V emulator in C with an interpreter, template JIT and LLVM tier; charted 1.25-2.85x faster than QEMU 9.0 user mode.",
+  "what_it_does": "Runs RV32I/E guest programs with the M, A, F, C and Zba/Zbb/Zbc/Zbs extensions, either as static newlib ELF binaries in user mode or as a minimal system emulator that boots RV32 Linux. It ships as a command-line binary (build/rv32emu). A small C API (rv_create, rv_run, rv_step, rv_delete in src/riscv.h) lets you embed it. It is not a drop-in for qemu-riscv32: it implements its own newlib-compatible syscall layer, not Linux user-mode syscalls, and has only one hart.",
+  "how_it_is_fast": "There are three tiers. First, a tail-call-threaded interpreter (musttail handlers, no switch dispatch) with IR constant folding and macro-op fusion such as lui+addi into one op. Second, a template JIT (T1C) for hot basic blocks on x86-64 and Arm64, with a small dynamic register allocator and block chaining that patches direct branches to jump straight between translated blocks. Third, an LLVM tier (T2C) that compiles hot regions: it traces successor blocks, keeps guest registers in LLVM locals, and predicts indirect jumps that hit one target at least 90% of the time so call-heavy loops become one region. T2C compiles on a background thread.",
+  "when_to_use": [
+    "Running compute-bound RV32 bare-metal or newlib programs on an x86-64 or Arm64 host where qemu-riscv32 is the incumbent; the vendor chart shows about 2-2.85x on integer, sorting and crypto kernels.",
+    "Teaching, research or simulators that need a readable RISC-V reference you can modify (C99/C11, MIT licence) and that still runs fast.",
+    "Embedding an RV32 guest in a C program, for example a scripting or sandbox layer, with JIT speed on desktop hosts and an interpreter fallback elsewhere.",
+    "Running RV32 programs in the browser through the WebAssembly build (interpreter only, since the JIT targets native x86-64 and Arm64)."
+  ],
+  "when_not_to_use": [
+    "You need RV64, the D/Q extensions, full V, multiple harts, or Linux user-mode syscall emulation: rv32emu supports RV32 only with partial V, and its user mode is a newlib syscall layer.",
+    "Linux workloads under system emulation that create many short-lived processes: SFENCE.VMA flushes throw away compiled blocks, and the page's fork+exec column shows T1C and T2C barely ahead of the interpreter (10,324 and 10,397 ms vs 10,974 ms on Threadripper).",
+    "Programs that rewrite their own code in user mode: the JIT does not invalidate translated code when the guest modifies its instructions (docs/codegen.md).",
+    "Hosts other than x86-64 and Arm64, where the default build falls back to the interpreter, or builds where LLVM 18-21 cannot be installed, which leaves only T1C.",
+    "Picking an emulator because of the QEMU chart: the speedups are vendor-measured, shown only as a PNG, and come from an unstated tier configuration."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Berkeley SoftFloat (git submodule, for the F extension); SDL2 and SDL2_mixer for the default build (can be turned off); LLVM 18-21 development package for T2C; pthreads",
+    "min_toolchain": "GCC or Clang with C11 (built as -std=gnu11), musttail support for the threaded interpreter; LLVM 18-21 for T2C (LLVM 20+ validated in CI); LTO on by default needs llvm-ar when the compiler is Clang",
+    "platforms": "JIT on x86-64 and Arm64 hosts (Linux and macOS in CI); interpreter on other hosts; WebAssembly build via Emscripten",
+    "thread_safety": "Single hart, single guest thread. With T2C one background compiler thread is created, and its handle is a static global in src/riscv.c, so more than one T2C-enabled emulator per process is not documented as supported.",
+    "drop_in_for_baseline": "partial — it runs the same static RV32 newlib binaries from the command line as qemu-riscv32 user mode, but has no Linux syscall ABI, no RV64 and no multi-hart support, and its system mode is a minimal virt-like machine rather than QEMU's device set"
+  },
+  "gotchas": [
+    "Harness flaw in the headline claim: the QEMU comparison is a PNG chart only (docs/jit-bench.png). The script that produced it, QEMU's build and run flags, rv32emu's host flags, whether T2C was on, and whether elapsed time includes process start-up are all unstated. The page text says primes, sha512 and emfloat gain the most, but the chart shows them as the three smallest gains (about 1.25x, 1.26x and 1.5x).",
+    "T2C compiles on a separate pthread (t2c_runloop in src/riscv.c), so wall-clock comparisons against single-threaded QEMU TCG user mode give rv32emu a second host core for LLVM work. On a host limited to one CPU the gap may be smaller.",
+    "The default build (make defconfig) is T1C only. T2C needs make jit_defconfig with LLVM installed, so a default build will not reach the T2C figures (for example Dhrystone 16,269 vs 33,365 DMIPS on Threadripper).",
+    "Misaligned halfword and word accesses trap as on hardware unless you pass -m. Run-time-generated guest code is not scanned or invalidated."
+  ],
+  "pick_this_over_siblings_when": "Pick it over rv8 (the CARRV 2017 RISC-V-to-x86-64 translator, an x86-64-only research codebase) when you need an actively maintained RV32 emulator with an Arm64 JIT and a Linux system mode. Pick libriscv when the job is embedding sandboxed guest calls with nanosecond call overhead, and RVVM if you want its tracing JIT without an LLVM dependency (RVVM publishes no numbers); rv32emu is the choice for RV32 newlib or Linux guests with an LLVM-optimised hot tier.",
+  "verified_claims_summary": "The project's own chart (docs/benchmark.md, Intel Core i7-11700 at 2.5 GHz, Ubuntu 22.04.1, guests built with GCC 14.2.0 for RV32IM, mean of 200 iterations) shows tiered-JIT rv32emu faster than QEMU v9.0.0 user mode on all ten nbench-derived and crypto kernels. Read by eye, that is about 1.25x on primes and sha512 and about 2.0-2.85x on the sorts, bitfield, assignment, idea, huffman and Dhrystone. Separately, on Threadripper 2990WX with GCC 14.2, T2C reaches 33,365 DMIPS vs 2,533 for the interpreter (about 13x, derived from page data) and CoreMark 13,272 vs 1,835 iterations/s, with CoreMark rejected on a checksum mismatch.",
+  "status_note": "Actively maintained (last commit 2026-10-03, 1,751 commits, per-PR benchmark CI with paired 'duet' runs); MIT-licensed and copyable, but the QEMU comparison predates the current T1C default, and the VMIL'24 paper behind it could not be opened here (dl.acm.org and the NCKU research portal are blocked).",
+  "sources_read": [
+    "https://github.com/sysprog21/rv32emu",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/README.md",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/docs/benchmark.md",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/docs/jit-bench.png",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/docs/build.md",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/docs/codegen.md",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/configs/defconfig",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/configs/jit_defconfig",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/configs/interpreter_defconfig",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/Makefile",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/tests/bench.py",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/src/riscv.h",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/src/riscv.c",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/src/t2c.c",
+    "https://raw.githubusercontent.com/sysprog21/rv32emu/HEAD/src/main.c",
+    "https://github.com/sysprog21/rv32emu/issues?q=is%3Aissue+jit",
+    "https://github.com/sysprog21/rv32emu/issues/689",
+    "https://github.com/sysprog21/rv32emu/issues/322",
+    "https://github.com/sysprog21/rv32emu/commits/master/docs/jit-bench.png"
+  ],
+  "confidence": 0.65
+}

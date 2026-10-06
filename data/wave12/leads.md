@@ -29,3 +29,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - aengelke/fadec (x86 decoder), aengelke/rellume (lifter), okitec/farmdec, the EOS VM Optimized Compiler in AntelopeIO/spring (LLVM AOT) and the Biotite static binary translator (repo unknown): leads from the Instrew and EOS VM enricher (2026-10-06).
 - jrsonnet (Rust jsonnet implementation, faster than sjsonnet on most cases in its docs/benchmarks.adoc; batch 60 verifier, 2026-10-06); seed candidate.
 - atJIT (kavon/atJIT, autotuning JIT built on Easy::jit) and ClangJIT (Hal Finkel, arXiv 1904.08555, repo not checked): leads from the Easy::jit enricher (2026-10-06).
+- revm (bluealloy/revm): 84.8 ms vs geth 235 ms in evm-bench (evmone enricher, 2026-10-06); seed candidate alongside evmone.
+- radfordneal/xsum (exact FP64 summation, MIT, paper in repo as xsum-paper.pdf, timing programs vs iFastSum and OnlineExact) and radfordneal/matprod (GPL, SIMD reproducible matmul, NEWS says slower than OpenBLAS): wave 8 numerics leads from the pqR enricher (2026-10-06).

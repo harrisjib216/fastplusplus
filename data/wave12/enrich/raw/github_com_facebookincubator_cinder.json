@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/facebookincubator/cinder",
+  "one_liner": "Meta's CPython fork with a method-at-a-time C++ JIT and Static Python; 1.5-3.8x over its own interpreter on four microbenchmarks.",
+  "what_it_does": "Cinder is Meta's production fork of CPython (3.8, then 3.10) that runs Instagram's Django server: a full Python binary built with configure and make, so ordinary Python code runs unchanged. The JIT is opt-in (-X jit or PYTHONJIT=1) and is usually limited to hot functions named in a jit-list file; Static Python is a separate bytecode compiler that uses annotations in modules marked `import __static__` to emit typed opcodes. The fork's default branch (meta/3.14) is now a plain CPython 3.14 tree whose description calls the name historical; the JIT and Static Python ship as the MIT-licensed CinderX extension (pip install cinderx, weekly PyPI releases, latest 2026.10.5.0) for stock CPython 3.14.",
+  "how_it_is_fast": "The JIT lowers bytecode to a typed, register-based HIR in SSA form, runs optimisation passes, inserts reference-count operations from per-opcode metadata, lowers to LIR for register allocation and emits x64 code with AsmJit; shadow-frame mode avoids allocating full Python frames. Static Python adds typed slots (LOAD_FIELD/STORE_FIELD become fixed-offset loads), vtable-based INVOKE_FUNCTION/INVOKE_METHOD calls that the JIT turns into direct native calls, and unboxed int64/double/cbool/Array primitives. The interpreter also carries shadowcode (an inline-caching specialising interpreter similar to PEP 659) and eager evaluation of immediately awaited coroutines.",
+  "when_to_use": [
+    "Large CPython services (pre-fork web servers such as Django) where you can profile production, put the hot functions in a jit-list and compile them before forking workers.",
+    "Object-heavy, call-heavy Python code: the paper's untyped Richards ran 3.8x faster with the JIT and shadow frames than the same build without the JIT.",
+    "Hot modules you are willing to annotate with Static Python primitives (int64, double, cbool, Array): hand-optimised typed Richards reached 17.7x and typed nbody 6.6x over the untyped no-JIT runs.",
+    "Teams already on Python 3.14 who want the same JIT without a forked runtime: use the CinderX wheel (Linux x86-64/aarch64, macOS arm64, Windows x86-64; cinderx.jit.auto() compiles hot functions automatically)."
+  ],
+  "when_not_to_use": [
+    "Anyone needing support: the cinder/3.10 README answers 'Is this supported?' with 'Short answer: no', and CinderX calls itself experimental for external users.",
+    "Numeric list-manipulating code left untyped: fannkuch and nbody gained only about 1.5x from the JIT, and simply-typed (T-Min) versions were no faster than untyped code under the JIT.",
+    "Running Static-Python-typed code without the JIT: typed fannkuch T-Max took 34.9 s under Static Python alone versus 4.1 s for the untyped original, because the interpreter keeps primitives boxed.",
+    "Short-lived scripts with the default JIT setting: by default the JIT compiles every function ever called, which the README warns can make programs slower; immortal instances also make straight-line code slower in the fork.",
+    "Platforms other than Linux x64 for the fork itself (the 3.10 README says anything else, including macOS, probably won't work); the README's basic build has no PGO/LTO."
+  ],
+  "integration": {
+    "form": "Cinder: full CPython fork built from source (configure && make, or the ghcr.io cinder-runtime Docker image); successor CinderX: Python C++ extension module (pip wheel)",
+    "dependencies": "Cinder: CPython build dependencies plus the AsmJit library used by the JIT back end; the README recommends building inside the project's Fedora-based CI Docker image. CinderX: stock CPython 3.14.",
+    "min_toolchain": "Cinder 3.10: Linux x64 toolchain from its CI image (C++ JIT; open issue #114 reports a C++20 build error); CinderX: Python 3.14, GCC 13+ or Clang 18+",
+    "platforms": "Cinder fork: Linux x86-64 only. CinderX: Linux x86-64 and aarch64, macOS arm64, Windows x86-64 (PyPI wheels for cp314 and free-threaded cp314t)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial: Cinder replaces the CPython 3.10 binary and runs unmodified code, but the JIT needs -X jit plus a jit-list and Static Python needs annotated modules loaded by the strict/static loader; CinderX is an import-and-enable extension for stock CPython 3.14"
+  },
+  "gotchas": [
+    "Baseline is not stock CPython: the paper's no-JIT column is the same Cinder build (with shadowcode and immortal instances), and the README's '18x the performance of stock CPython' maps to 17.7x over that build only for the hand-optimised typed Richards; the simply-typed version gives 7.2x. No CPU model, compiler or PGO/LTO state is given.",
+    "Harness weakness: all three Richards drivers (richards.py, richards_static.py, richards_static_basic.py in Tools/benchmarks) call Richards().run(n) and discard its boolean, so the holdCount 9297 / qpktCount 23246 result check never fails a timed run; fannkuch does assert its result (30). No wrong result was found, but the timings are not output-checked for Richards.",
+    "The paper's summary table (Microbenchmark performance ratios) is inconsistent for deltablue: richards, fannkuch and nbody divide Static Python + JIT + shadow frames by untyped code under JIT + shadow frames, but the deltablue ratios 0.59 and 0.30 match division by the typed code's no-JIT, no-Static-Python time (0.992 s); on the same basis as the other rows they would be about 0.89 and 0.45 (derived from page data). The appendix raw data used for this entry are unaffected.",
+    "Open JIT issues show rough edges: #87 (Static Python @inline with double arguments aborts the JIT with 'No pattern found for opcode Fadd: Xxr'), #86 (nonsensical TypeError with -X jit and static compile), and #29 (-X jit-enable-jit-list-wildcards, which the paper's commands use, about 4x higher PyEntry_init overhead)."
+  ],
+  "pick_this_over_siblings_when": "Pick Cinder/CinderX over the CPython copy-and-patch JIT (about 7-8% geomean on pyperformance) when you can curate hot functions or add Static Python types and want multi-x gains on object-oriented code while staying on CPython; pick Numba or Hana Jit instead for numeric array kernels, where typed loop compilation gives far larger speedups with less code change.",
+  "verified_claims_summary": "The Programming 2023 paper appendix timed four public microbenchmarks (mean of 10 runs of process user time, Cinder 3.8-era commits built with default configure settings on 64-bit CentOS Linux, CPU and compiler not stated): untyped richards 10.06 s without the JIT versus 2.64 s with JIT and shadow frames (3.8x), deltablue 1.87x, nbody 1.56x, fannkuch 1.50x; hand-typed Static Python Richards with JIT ran in 0.567 s (17.7x over untyped no-JIT). The baseline in every case is Cinder's own interpreter, not stock CPython.",
+  "status_note": "The fork's meta/3.14 branch is active (commits on 2026-10-06) but is now a CPython tree; the cinder/3.10 branch with the documented JIT stopped on 2024-06-25, and the JIT lives on in the actively released, MIT-licensed CinderX extension, which is the practical way to use it today; explicitly unsupported for outside users.",
+  "sources_read": [
+    "https://github.com/facebookincubator/cinder",
+    "https://github.com/facebookincubator/cinder/commits",
+    "https://github.com/facebookincubator/cinder/commits/cinder/3.10",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.10/README.rst",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/HEAD/README.rst",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/richards.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/richards_static.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/richards_static_basic.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/richards_static_lib.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/richards_static_basic_lib.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/fannkuch.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/fannkuch_static.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/fannkuch_static_lib.py",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/jitlist_main.txt",
+    "https://raw.githubusercontent.com/facebookincubator/cinder/cinder/3.8/Tools/benchmarks/jitlist_richards_static.txt",
+    "https://github.com/facebookincubator/cinder/issues?q=is%3Aissue+jit",
+    "https://github.com/facebookincubator/cinder/issues/29",
+    "https://github.com/facebookincubator/cinder/issues/87",
+    "https://github.com/facebookincubator/cinderx",
+    "https://raw.githubusercontent.com/facebookincubator/cinderx/HEAD/README.md",
+    "https://pypi.org/pypi/cinderx/json",
+    "https://raw.githubusercontent.com/brownplt/insta-model/HEAD/pj-7.1/paper.tex"
+  ],
+  "confidence": 0.8
+}

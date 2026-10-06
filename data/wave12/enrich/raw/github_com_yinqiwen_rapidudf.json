@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/yinqiwen/rapidudf",
+  "one_liner": "LLVM-JIT C-like expression/UDF engine for C++ with SIMD column ops; 6-10x over scalar native loops, scalar code slightly slower than native.",
+  "what_it_does": "Compiles expression strings or a small C-like DSL (if/elif/else, while, auto variables) at run time into typed C++ callables, e.g. JitCompiler::CompileExpression<bool,int,int>(\"x >= 1 && y < 10\", {\"x\",\"y\"}). The same DSL works on simd_vector<T> columns and on a DataFrame-like table type with filter, order_by, topk, group_by, distinct, map and merge. It can read C++ structs, STL containers, protobuf and flatbuffers objects through registered reflection. It is an embeddable rule/feature-computation engine, not a drop-in for any standard API; compiling one function takes 10-100 ms (README), and an LRU cache (exec::eval_function) avoids recompiling.",
+  "how_it_is_fast": "Scalar UDFs are lowered to LLVM IR and compiled by ORC LLJIT for the host CPU (JITTargetMachineBuilder::detectHost, -O2 pass pipeline by default), so they run at roughly native speed. Vector UDFs are strip-mined into 64-element chunks (kVectorUnitSize) held as LLVM <64 x T> vectors for arithmetic. Transcendental functions call precompiled Google Highway kernels with runtime CPU dispatch (HWY_DYNAMIC_DISPATCH): hn::Sin, hn::Cos, hn::Log10 and similar polynomial approximations, with SLEEF for tan, cosh, erf and other functions Highway lacks. The speedup is SIMD plus approximate vector math against scalar libm calls, not the JIT itself.",
+  "when_to_use": [
+    "Rule engines, ranking or feature pipelines that evaluate user-supplied formulas over float/double columns of thousands of rows, where scalar libm calls dominate (sin, cos, log10, sqrt): 6-10x over a plain scalar C++ loop in the vendor's AVX2 runs.",
+    "You need formulas changed at run time without recompiling the service, with near-native scalar speed (fib JIT 22.5 us vs 19.2 us for GCC -O2 native in the README).",
+    "Filter/topk/group_by over columnar data built from protobuf, flatbuffers or plain structs inside a C++ server, without embedding a full query engine.",
+    "Single-node x86-64 servers with AVX2 or AVX-512, where Highway's dynamic dispatch picks the widest target."
+  ],
+  "when_not_to_use": [
+    "You can write the kernel ahead of time: a C++ loop calling Highway or SLEEF directly (or GCC with -O2 -ffast-math and libmvec) gets the same SIMD gain without LLVM in the process. The JIT adds nothing to scalar speed, which is 5-17% slower than GCC -O2 native on fib (PR #9 and README).",
+    "You need results bit-identical to glibc libm: vector sin, cos and log10 use Highway approximations (up to 3 ULP for sin/cos), and sin/cos are only valid within [-39000, +39000].",
+    "Latency-critical paths that cannot absorb 10-100 ms compile time per new expression, or binaries that cannot take LLVM 18+, Highway, SLEEF, x86-simd-sort, abseil, Boost, protobuf and flatbuffers as dependencies.",
+    "ARM or non-x86 hosts: the CMake build links only LLVM's X86 code generator, and an ARM build is not documented, although NEON SLEEF paths were added to the SIMD kernels.",
+    "Projects that need a stable ABI, a shared library or an active issue tracker: the CMake file says no ABI stability, the issue tracker is empty, and there are no tagged releases."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "LLVM 18+, Google Highway 1.4.0, SLEEF 3.9.0, x86-simd-sort, abseil-cpp, fmtlib, spdlog, Boost (preprocessor, parser, thread, system), protobuf, flatbuffers, nlohmann/json",
+    "min_toolchain": "C++17; LLVM 18+; Bazel or CMake 3.14+",
+    "platforms": "x86-64 Linux (CMake links LLVM x86codegen only; Highway dispatches SSE2 to AVX-512 at run time); ARM NEON kernels exist for the SIMD functions, but an ARM JIT build is not documented",
+    "thread_safety": "README: compiled JIT functions are stateless and thread-safe; each call that allocates vectors needs its own rapidudf::Context arena. JitCompiler thread safety is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the README's 10.5x Wilson CTR figure: the native baseline is declared float wilson_ctr(float, float) but uses double literals (1.96, 1.96 * 1.96), so C++ evaluates it in double precision. The f32 SIMD JIT was compared against a scalar f64 computation. The rewritten harness (rapidudf/tests/benchmark.cc) casts the literals with T(1.96) to avoid this, and the PR #9 rerun reports 9.3x for f32 vs f32 scalar native.",
+    "The benchmark binary is built with copts -O2 and no -march, so the native side targets baseline x86-64 (SSE2) and makes scalar libm calls, which GCC will not vectorise without -ffast-math. The JIT side uses detectHost and Highway dynamic dispatch (AVX2/AVX-512). README numbers also come from an older harness whose benchmark names no longer exist, with no CPU model or compiler version. The PR #9 rerun was a 'bazel-built debug binary' on a '32-core Skylake'.",
+    "Vector tails are handled by copying the remaining n elements into a buffer padded with 1s (LoadNVector), so reductions are not polluted. Bit (1-bit) vectors, however, are loaded and stored as a full 64-lane word regardless of n (compiler/codegen_vector.cc), so bit buffers must be padded.",
+    "Vector UDFs need a rapidudf::Context argument for arena allocation, and runtime errors arrive as rapidudf::UDFRuntimeException, so callers must catch exceptions. Older JIT builds had correctness bugs fixed in May 2026: signed casts emitted zext instead of sext, string literals over 12 characters dangled (PR #6), and scalar float casts used swapped FPExt/FPTrunc (PR #9)."
+  ],
+  "pick_this_over_siblings_when": "Pick RapidUDF over AsmJit or sljit when you want a high-level expression/DSL front end with columnar SIMD built in instead of emitting machine code yourself. Pick it over PochiVM or Easy::jit when expressions arrive as strings at run time rather than as C++ code to be specialised; for raw scalar JIT speed none of these beat a GCC -O2 build.",
+  "verified_claims_summary": "The README (AVX2 CPU unnamed, -O2, 4099-element arrays, Google Benchmark) shows the vectorised JIT computing a sin/cos expression over doubles in 33,962 ns vs 207,145 ns for a native scalar loop (6.1x, derived from page data). A float Wilson CTR formula ran in 6,661 ns vs 69,961 ns (10.5x), but against a baseline evaluated in double precision. Scalar JIT fib was 17% slower than GCC -O2 native (22,557 vs 19,246 ns). A later rerun with the rewritten harness (PR #9, 32-core Skylake, debug Bazel build) reports 7.4x, 3.6x (f64) and 9.3x (f32) over scalar native, with fib 5% slower than native.",
+  "status_note": "Active (last commit 2026-05-24, 125 commits, a burst of correctness fixes and a benchmark rewrite in May 2026), Apache-2.0 and copyable, but a single-maintainer project with 100 stars, no releases, no ABI promise and a heavy dependency stack; its README numbers predate the current harness.",
+  "sources_read": [
+    "https://github.com/yinqiwen/rapidudf",
+    "https://github.com/yinqiwen/rapidudf/commits/main",
+    "https://github.com/yinqiwen/rapidudf/issues?q=is%3Aissue",
+    "https://github.com/yinqiwen/rapidudf/pull/9",
+    "https://github.com/yinqiwen/rapidudf/pull/6",
+    "https://github.com/yinqiwen/rapidudf/tree/main/rapidudf",
+    "https://github.com/yinqiwen/rapidudf/tree/main/rapidudf/compiler",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/README.md",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/LICENSE",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/WORKSPACE",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/cmake/rapidudf-deps.cmake",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/rapidudf.h",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/copts/configure_copts.bzl",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/tests/benchmark.cc",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/tests/BUILD",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/compiler/options.h",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/compiler/codegen.cc",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/compiler/codegen_vector.cc",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/compiler/compiler.cc",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/functions/simd/vector_unary.cc",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/functions/simd/sleef_dispatch-inl.h",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/functions/simd/vector.h",
+    "https://raw.githubusercontent.com/yinqiwen/rapidudf/main/rapidudf/types/vector.h",
+    "https://raw.githubusercontent.com/google/highway/master/hwy/contrib/math/math-inl.h"
+  ],
+  "confidence": 0.7
+}
