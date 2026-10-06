@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/zig-utils/zig-js",
+  "one_liner": "JavaScript engine in Zig with a JavaScriptCore-shaped C API; ten small kernels run 2.3x faster than system JSC, which probably had its JIT off.",
+  "what_it_does": "zig-js is a standalone JavaScript and WebAssembly engine written in Zig. Zig hosts use it as the `js` module (`js.Context.create`, `ctx.evaluate`); C, C++ and Objective-C hosts link `libzig-js.a`, which exports JavaScriptCore-shaped headers and symbols (`JSGlobalContextCreate`, `JSEvaluateScript`, `JSObjectCallAsFunction` and others) plus a macOS Objective-C bridge. On top of that it adds shared-realm `Thread`s with no GIL, workers, and an optional precise GC. It is a subset of the JSC API, not a full replacement, and its APIs are pre-stabilization.",
+  "how_it_is_fast": "Execution is tiered: a tree-walking interpreter, then a bytecode VM with inline caches, then an AArch64 baseline JIT (MAP_JIT memory with W^X switching), then a speculative optimizing tier over a documented numeric subset with deoptimization back to the interpreter. The VM also contains guarded quickening kernels. Nine of them are labelled `legacy_narrow` in the project's own inventory, meaning each matches one exact bytecode loop shape, and most of the benchmark rows run through them. A July 16 profile shows the arithmetic row spending 93.3% of samples in JIT-generated code and fibonacci spending 96.6% in `runQuickObservableRecurrence`. Arrays still spend 65% of samples in the general `runChunk` dispatch loop.",
+  "when_to_use": [
+    "A Zig program that needs an embedded JavaScript engine and can build with Zig 0.17-dev, so it does not have to link V8 or JSC.",
+    "A macOS arm64 host written against the JavaScriptCore C API, where you want to try another engine behind the same calls for the subset zig-js implements.",
+    "Scripts that need real parallelism inside one JavaScript heap: shared-realm `Thread`s with no GIL, which JSC's public API does not offer (the report shows 4.84x scaling at 8 lanes).",
+    "Tight numeric loops and small call-heavy kernels on Apple Silicon, where the baseline JIT and the quickening kernels apply.",
+    "Embedders who want test262 conformance (53,175 of 53,175 configured tests) from an MIT engine with no C++ dependency."
+  ],
+  "when_not_to_use": [
+    "Peak throughput against JSC with its JIT on, V8 or SpiderMonkey: no such comparison exists, and the published JSC baseline very likely ran interpreter-only.",
+    "JSON-heavy, Wasm SIMD or Promise-heavy work: on the project's own diagnostics system JSC is 4.05x faster on JSON parse and stringify (up to 10.47x on deep stringify) and about 10x faster on Wasm SIMD.",
+    "Linux x86-64, Windows, iOS, tvOS or visionOS: there is no native tier on x86-64 (correctness CI only, no performance claim), and Windows and restricted Darwin targets are unsupported.",
+    "Production systems that need a stable ABI or API: everything is pre-stabilization, macOS arm64 has no release-gated correctness CI, and one author commits daily.",
+    "Code that does not match the documented fast subsets: most code stays on the tree-walker or general bytecode dispatch, and loops shaped differently from the benchmark kernels miss the exact-pattern kernels."
+  ],
+  "integration": {
+    "form": "static lib (libzig-js.a with JavaScriptCore-shaped C headers) or Zig module",
+    "dependencies": "zig-regex and zig-gc (zig-utils), resolved by local path as sibling checkouts (../zig-regex, ../zig-gc); macOS Objective-C bridge glue; the system JavaScriptCore framework only for differential and benchmark targets",
+    "min_toolchain": "Zig 0.17.0-dev (at least 0.17.0-dev.956; Zig 0.16 will not build it)",
+    "platforms": "macOS AArch64 for both native tiers (the only published performance); Linux x86-64 is correctness-gated in CI and runs interpreter or VM only; Windows, iOS, tvOS and visionOS are unsupported",
+    "thread_safety": "Contexts and C API handles are affine to the thread that created them. Use one context per OS thread or workers that exchange structured-clone messages. Contexts created with enable_threads get shared-realm Threads that run in parallel without a GIL by default (gil = true serializes them).",
+    "drop_in_for_baseline": "partial: exports an inventoried subset of the JavaScriptCore C API plus an Objective-C bridge pinned to one macOS SDK. Signatures match, but coverage is incomplete, it adds zig-js extensions (ZJSGlobalContextCreateThreaded and others), and it is pre-stabilization."
+  },
+  "gotchas": [
+    "Harness flaw: the JSC baseline very likely ran without its JIT. WebKit's isJITEnabled() under HAVE(MAC_JIT_RESTRICTIONS) (macOS arm64) with Apple's internal SDK requires the com.apple.security.cs.allow-jit entitlement. build.zig links bench/comparison_jsc.zig against the framework with no codesign or entitlement step, and comparison_jsc.zig sets no options. JSC's derived per-operation costs, about 15.5 ns per modulo-add iteration and 26.7 ns per recursive call, look like its LLInt interpreter. The headline therefore compares the zig-js JIT with interpreter-only JSC.",
+    "The kernels are benchmark-shaped. docs/advanced/vm-quickening.md lists `legacy_narrow` exact-bytecode kernels that match the benchmark rows one by one: four-property-loop (properties), polymorphic-property-loop, fixed-shape three-property allocation loop (object_churn), packed-array push with an 'add-three-and-bitmask' specialization that matches `(i + job + lane) & 65535` (arrays), packed-array sum, numeric-call-loop for direct, method, closure and arguments calls, and observable-numeric-recurrence (fibonacci). Only arithmetic runs in the general baseline JIT. The project says these kernels are not evidence of broad coverage.",
+    "Default `Context` uses an arena that frees nothing until `destroy()` (enable_gc defaults to false). The benchmark turned on the precise GC, so long-running hosts must opt into it.",
+    "Report statistics: the 5.67x zig-js cold-lifecycle scaling geomean includes closure_calls at 11.08x, which comes from a bimodal one-lane median (203.962 ms against a 107.068 ms minimum); without that row the geomean is 5.27x (derived from page data). Rows with up to 46.63% RSD were accepted. The current runners time `__benchmarkInvoke`, not the report's `__benchmarkSelected`."
+  ],
+  "pick_this_over_siblings_when": "Pick it over QuickJS when the host is Zig or already uses the JavaScriptCore C API on macOS arm64 and needs shared-heap parallel threads. QuickJS stays the choice for small, portable C embedding on any OS. For raw speed V8 (or Hermes on mobile) remains the safer pick, because zig-js has not been compared against any JIT-enabled engine.",
+  "verified_claims_summary": "Setup: Apple M3 Pro, macOS 27.0, Zig 0.17.0-dev.1441 ReleaseFast with precise GC; the JSC side was the system JavaScriptCore 22625.1.24.11.2 called through its public C API. In one warmed context zig-js ran ten small project-written kernels 1.21x (object_churn) to 5.34x (fibonacci) faster, geomean 2.32x, and 2.53x and 2.52x at 8 independent warmed and cold contexts. The JSC runner carries no allow-jit entitlement, so JSC most likely ran interpreter-only, and most rows hit zig-js's exact-pattern VM kernels.",
+  "status_note": "Very active (one author, daily commits, about 4,815 commits, last on 2026-10-06; 31 stars) and MIT-licensed, but pre-stabilization, needs Zig 0.17-dev with sibling checkouts, and has published performance only on macOS arm64. The 2.32x headline is not a fair engine comparison: the JSC baseline was very likely interpreter-only, and most rows go through benchmark-shaped VM kernels. On the project's own JSON diagnostics JSC is 4x faster.",
+  "sources_read": [
+    "https://github.com/zig-utils/zig-js",
+    "https://github.com/zig-utils/zig-js/commits/main",
+    "https://github.com/zig-utils/zig-js/issues",
+    "https://github.com/zig-utils/zig-js/issues?q=JavaScriptCore+JIT",
+    "https://github.com/zig-utils/zig-js/tree/main/docs/.data",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/README.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/build.zig",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/.data/benchmark-comparison-2026-07-29-precise-nursery.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/.data/json-jit-pipeline-jsc-2026-10-01.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/.data/baseline-jit-profile-2026-07-16.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/bench/comparison.js",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/bench/comparison_jsc.zig",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/bench/comparison_zig_js.zig",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/architecture.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/platforms.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/baseline-jit.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/optimizing-jit.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/advanced/index.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/advanced/execution-tiers.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/advanced/vm-quickening.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/advanced/embedding.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/api.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/conformance.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/threads/index.md",
+    "https://raw.githubusercontent.com/zig-utils/zig-js/HEAD/docs/dependencies.md",
+    "https://github.com/WebKit/WebKit/blob/main/Source/JavaScriptCore/jit/ExecutableAllocator.cpp",
+    "https://github.com/WebKit/WebKit/blob/main/Source/WTF/wtf/PlatformHave.h",
+    "https://developer.apple.com/forums/thread/821584"
+  ],
+  "confidence": 0.65
+}
