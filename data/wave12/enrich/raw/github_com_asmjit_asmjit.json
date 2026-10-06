@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/asmjit/asmjit",
+  "one_liner": "C++ machine-code emitter for x86/x86-64/AArch64 with optional register allocator; compiles PostgreSQL expressions about 200x faster than LLVM JIT.",
+  "what_it_does": "AsmJit generates native code at run time from C++ calls: you create a CodeHolder for a target environment, emit instructions through an Assembler (direct encoding), Builder (node list you can edit before serializing) or Compiler (virtual registers, function signatures and calling conventions handled for you), then add the result to a JitRuntime to get a callable pointer. It is a code generator, not a compiler infrastructure: there is no IR optimizer, so code quality is whatever the caller emits. It does not replace LLVM's API; a project such as pg_jitter has to write its own lowering from its IR to AsmJit calls.",
+  "how_it_is_fast": "Instructions are encoded straight from typed operands using a generated instruction database, with no SSA construction or optimization pipeline, which is where LLVM spends its tens of milliseconds. The Compiler layer adds only a node list and a register-allocation pass (ra_pass/ra_local), and node memory comes from arena allocators that are reset rather than freed. Executable memory comes from JitAllocator, which hands out pieces of large mapped blocks (64 kB default) tracked by bit vectors and an RB tree, with optional dual mapping where W^X is enforced.",
+  "when_to_use": [
+    "Compile latency matters more than peak code quality: per-query or per-expression JIT in databases (pg_jitter compiles typical PostgreSQL expressions in 0.1-0.4 ms vs 20-60 ms for llvmjit), regex or filter engines, emulators and DSP kernels generated at run time.",
+    "You need full x86/x86-64 instruction coverage including SIMD up to AVX-512, or AArch64 with NEON, from C++ without pulling in LLVM.",
+    "You want a register allocator and calling-convention handling (Compiler) but not an optimizer, because your front end already knows what code it wants.",
+    "Cross-generating x86 or AArch64 code from another host, including from Emscripten with ASMJIT_NO_JIT."
+  ],
+  "when_not_to_use": [
+    "Long-running hot code where an optimizing back end pays for itself; AsmJit does no instruction selection or optimization across what you emit.",
+    "Targets other than x86, x86-64 and AArch64: there is no AArch32, RISC-V, PowerPC or s390x backend (core.h lists only X86/X86_64 and AArch64); sljit or MIR cover more architectures.",
+    "When the absolute lowest compile time is the goal: on the pg_jitter PG18 page sljit compiles in roughly half AsmJit's time on almost every query (SUM_int 0.052 vs 0.109 ms), and MIR beats it on the 100- and 300-column deform queries.",
+    "Projects that need a stable API or vendor support: the maintainer opened issue #507 'DEVELOPMENT SUSPENDED' (2026-01-21: no support, only trivial PRs), and API-breaking renames still landed in 2025-09 and 2026-09.",
+    "Teams without assembly-level expertise: correctness of generated code, ABI details outside the Compiler's model and debugging with the Logger are on you."
+  ],
+  "integration": {
+    "form": "static lib, shared lib, or source-drop (ASMJIT_EMBED / ASMJIT_STATIC)",
+    "dependencies": "none beyond libc (pthread, and librt for shm_open on some Linux libcs)",
+    "min_toolchain": "C++17 per the build docs in core.h, but the current CMakeLists.txt needs CMake 3.24 and sets cxx_std_20 as a PUBLIC feature; CI-tested with GCC 9+, Clang 14+ and VS2022",
+    "platforms": "x86, x86-64 and AArch64 code generation (including arm64e pointer authentication since v1.23); hosts Linux, Windows 7+, macOS, FreeBSD, NetBSD, OpenBSD; Emscripten only with ASMJIT_NO_JIT",
+    "thread_safety": "JitAllocator alloc/release are documented thread-safe (internal lock), JitAllocator::reset is not; CodeHolder and emitters carry no thread-safety guarantee in the docs read, so use one per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Evidence is indirect and partly not like for like: the numbers time pg_jitter's own AsmJit backend inside PostgreSQL with jit_inline_above_cost and jit_optimize_above_cost forced to 0, so LLVM pays full inlining and optimization on every query. On the Wide1K rows (llvmjit 983-2043 ms vs asmjit 0.08-0.18 ms) the benchmarked pg_jitter 0.3.0 skipped deform JIT: its source now says the old cache-derived cap 'incorrectly disabled profitable 1000-column sparse deform', and asmjit execution there equals the interpreter (0.97-0.98x). Do not quote those rows.",
+    "pg_jitter's AsmJit backend creates a fresh JitRuntime per compiled expression (struct AsmjitCode holds its own runtime, default 64 kB block), so the measured 0.1-0.3 ms includes per-expression executable-memory setup; a shared runtime would probably narrow the gap to sljit, but that is not measured.",
+    "The API changes often: the 2025-09-06 refactor renamed every camelCase function to snake_case (for example newIntPtr to new_gp_ptr) and Zone to Arena, and 2026-09-04 renamed the 'support' library to 'axl' and ASMJIT_ARCH_* macros to ASMJIT_TARGET_ARCH_*; pin a commit. Static users must define ASMJIT_STATIC in every translation unit that includes AsmJit.",
+    "No exceptions are used: functions return Error codes, so install an ErrorHandler and Logger (the docs recommend both). AArch64 Compiler fixes landed after the 2026-03-24 benchmark (x30/lr use during function calls 2026-09-06, new_gpw width 2026-03-26, FMOV encoding 2025-12-09), and issue #83 (Win64 vector arguments passed indirectly) has been open since 2015."
+  ],
+  "pick_this_over_siblings_when": "Pick AsmJit over sljit when you want C++ with full x86 SIMD or AArch64 NEON coverage and a register allocator rather than sljit's portable low-level IR (sljit compiles about 2x faster in the same shootout and runs on more architectures); pick TPDE instead when your input is already LLVM IR, and use pg_jitter itself (its README favours the sljit backend) if the goal is just faster PostgreSQL JIT.",
+  "verified_claims_summary": "pg_jitter 0.3.0 on PostgreSQL 18.1, Apple M1 Pro, macOS, build flags not stated (2026-03-24): JIT compile time from EXPLAIN JSON was 0.109 ms for the AsmJit backend vs 22.263 ms for llvmjit on SUM_int and 0.245 vs 45.5 ms on GroupBy_5agg (about 200x, derived from page data), with LLVM forced to full optimization and inlining. Query time with JIT forced on was 42.2 vs 68.1 ms; without LLVM's compile time execution is about 42.1 vs 45.8 ms.",
+  "status_note": "Zlib-licensed and easy to vendor, with maintainer commits through 2026-09-22 (v1.23), but the maintainer declared development suspended for lack of funding in issue #507 (still open), so treat it as sporadically maintained by one author with no support commitment rather than 'active'.",
+  "sources_read": [
+    "https://github.com/asmjit/asmjit",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/README.md",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/build_defs.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/jit_runtime.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/jit_allocator.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/jit_allocator.cpp",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/error_handler.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit/core/compiler.h",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit-testing/bench/asmjit_bench_overhead.cpp",
+    "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/asmjit-testing/bench/asmjit_bench_codegen.cpp",
+    "https://github.com/asmjit/asmjit/tree/master/asmjit/core",
+    "https://github.com/asmjit/asmjit/tree/master/asmjit-testing/bench",
+    "https://github.com/asmjit/asmjit/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/asmjit/asmjit/issues/507",
+    "https://github.com/asmjit/asmjit/commits/master",
+    "https://github.com/vladich/pg_jitter/blob/master/bench/ARM64/0.3.0/BENCHMARKS_v18.md",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/README.md",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/bench_all_backends.sh",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/bench_comprehensive.sh",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/parse_explain_json.py",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_asmjit.cpp",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_asmjit_arm64.inc",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_common.c",
+    "https://github.com/vladich/pg_jitter/tree/master/tests",
+    "https://github.com/vladich/pg_jitter/tree/master/src"
+  ],
+  "confidence": 0.75
+}
