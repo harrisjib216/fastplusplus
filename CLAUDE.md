@@ -160,11 +160,63 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - Enricher findings that change a record (baseline, numbers, caveats) go in a retier file even
   when the tier stays; add_decisions.py only applies the override fields.
 
+- merge.py id drift (wave 12): when a later raw file carries the same repo with a different name and category,
+  the merged record flips to the higher-tier or higher-confidence copy (Apogee, Wangshu, Topaz, lua-rs) or
+  gains a `#category` suffix whose position depends on raw-file sort order (CPython JIT became
+  `python/cpython#jits`, WARP, lua-aot, quickjs-ng split). Run the scratchpad check_ids.py (compares
+  merged.json against a snapshot and the verify ids.json files) after every merge; fix the ids.json of an
+  unlaunched batch, record `duplicate` for a split id, and record `name`/`category` overrides to keep a
+  verified record's identity when a new raw copy wins the dedup.
+- Pin enrichment pairs: gen_enrich.py must never rewrite an existing pair directory; new pairs are only built
+  for unenriched prompts not already covered, numbered from the top. Otherwise relaunches after kills
+  realign odd/even pairs and launch the wrong prompts. When a verified entry later turns `duplicate`
+  (go-quickjs, cinderx), delete its enrich prompt and the unlaunched pair that held it before re-pairing.
+- Reject precedents added in wave 12: an interpreter that pattern-matches the benchmark's function names and
+  replaces them with native loops (R8/NoClip), a compile row that hits an in-memory cache (wazero via the
+  PolkaVM benchtool), a RegExp fast path that never runs a regex (Pipa), design targets presented as
+  measurements (r8e) and a hard-coded speedup table (zig-evm). Downgrade precedents: third-party numbers
+  measured before a hot-path correctness fix (Paserati #550), a tuned fork measured in place of upstream
+  (Topaz), and a baseline crippled by a build default (AssemblyScript's tsc useDefineForClassFields).
+- `verify.py apply` picks up a verifier's draft before its report arrives, so enrich.py then renders prompts
+  for records whose verdict may still change; do not launch those enrichers until the batch reports.
+- A session-limit kill (2026-10-06, nine Opus enrichers) again left complete files behind: all 13 orphaned
+  enrich/raw files had the full 13-key set; shortcomings were taken from their gotchas and status_note fields,
+  and only the 7 missing partners were relaunched (4 agents at a time after the reset).
+
 ## Status (2026-10-06)
 
-- Waves 1-11 are finished except the open items below. Lists after the 2026-10-06 session: COPYABLE 1669,
-  REFERENCE 193, REJECTED 29. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads,
-  the RetroWrite enrichment and paper-access retiers in data/wave11/leads.md; then wave 12).
+- Waves 1-12 are finished except the open items below. Lists after the 2026-10-06 wave 12 session: COPYABLE 1883,
+  REFERENCE 199, REJECTED 34. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads and the
+  RetroWrite enrichment, wave 12 seed leads and paper-access retiers in data/wave12/leads.md; then the
+  QUEUE extensions: waves 13-14, cross-language claims, presentation).
+- Wave 12 (interpreters-and-vms) closed 2026-10-06 in one cloud session: searches b1-b8 for all 4 categories
+  (32 raw files; b7/b8 on WebSearch snippets plus github.com since blogs and HN were blocked, 36 records) plus
+  seed-a..d (28 lead projects); 239 merged, 90 verify batches with 236 verdicts (confirm 209, downgrade 22,
+  reject 5), 220 verified (A 38, B 62, C 112, D 8; copyable 214, reference 3, mixed 3; jits 57,
+  embedded-scripting 56, bytecode-vms-and-wasm 53, language-interpreters 50, plus 4 filed by category override),
+  every verified entry enriched. Rejected for invalid evidence: R8/NoClip (interpreter pattern-matches the
+  benchmark's function names and replaces them with fused native loops, hard-coded pass_hash), wazero (PolkaVM
+  benchtool compile row hits an in-memory module cache; MQF precedent), Pipa (RegExp suite fast path does a
+  literal find, no regex runs; stb-zip precedent), r8e (memory figures are design targets copied from
+  ARCHITECTURE.md) and zig-evm (README 5-6x table is a hard-coded array in src/benchmark_demo.zig; zokio
+  precedent). 14 duplicates: LuaJIT Remake second id, libriscv second id, lua-aot and quickjs-ng suffixed ids,
+  wasm-compiler suffix, rquickjs, bare, zig-mquickjs, OpenResty luajit2 (fork of LuaJIT with an anecdote only),
+  fastschema/qjs (quickjs-ng on wazero), go-quickjs (Go port of quickjs-ng), ulua (Rust port of Luau),
+  cinderx (same project as cinder). Retier file data/wave12/verify/raw/retier-01.json (82 entries): up to A
+  fakelua, julia, GraalPython, ruby/ruby YJIT, CPython JIT, daScript, Apogee, wazy, goja-perf, musql, Loko, jz,
+  jrsonnet, Zipp; to B WasmNow (copy-and-patch paper via a github.io mirror), Luau, Moddable, TruffleRuby,
+  Wizard (OOPSLA 2022 artifact), wasmer, Graal, Pythran, evmone, Guile, revmc (SkelOT artifact); down
+  Paserati A to C (numbers predate inline-cache fix #550), Topaz A to C (kostya fork breaks hash semantics,
+  warm best-of-5 vs one cold CRuby iteration), pevm A to C and vnmakarov MJIT A to C (first-party, collapsed
+  empty-loop row), AssemblyScript C to D (JS baseline crippled by useDefineForClassFields, reproduced 7x),
+  zig-js and tpy-lang to D; many caveat corrections (Web49, Zef richards 20x loop, Regorus stale v0 commands,
+  pocketlang module-scope Python loops, Wizard validation-excluded timer, Bigloo I/O rows, Quirrel swapped
+  f2s/s2f rows, Cyber stale). Keep-and-document overrides for every verifier "not notable" reject. Open: seed
+  leads in data/wave12/leads.md (angelsea, goant, Box86, hxcpp, fafo, 0xjojoex/evm.zig, Cuik, LC Scheme),
+  paper-access retiers (Instrew VEE'21, TPDE, Box64 EuroSys, aWsm, WARP, rv32emu VMIL, HHVM, Deegen, Pallene,
+  YJIT, mutable EDBT 2023 and ADC 2023 arXiv 2311.04692, Higgs arXiv 1507.02437), repo_url overrides to
+  consider (kostya/topaz, lmcad-unicamp/riscv-sbt), and cross-wave leads (xsum, matprod, qj, tsv-utils,
+  Turso, splintr) parked in QUEUE.md.
 - Wave 11 (runtime-and-systems) closed 2026-10-06 in one cloud session: searches b1-b8 for all 6 categories
   (48 raw files; b7/b8 on WebSearch snippets since blogs and HN were blocked) , 147 merged, 49 verify batches,
   144 verified after three duplicate folds (A 19, B 19, C 92, D 14; copyable 125, reference 17, mixed 2;

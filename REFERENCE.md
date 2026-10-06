@@ -562,6 +562,86 @@ Research AVX2/AVX-512 Round 3 Dilithium code using PSPM-TEE sparse c·s multipli
 
 [repo](https://github.com/xurq5953/Optimizing-Dilithium-Implementation-with-AVX2-512) · [benchmark](https://arxiv.org/abs/2306.01989)
 
+### interpreters-and-vms
+
+#### bytecode-vms-and-wasm
+
+##### Wasmer (LLVM backend)  `Rust`  `MIT (repository); BUSL-1.1 for the LLVM and Singlepass compiler crates from Wasmer 6.0`  `active`  `Tier B`
+
+Rust WebAssembly runtime whose optional LLVM backend runs WASI code about 1.15x faster than Wasmtime and 1.34x faster than V8.
+
+**Beats:** Wasmtime (Cranelift) and V8 (Node.js) — Frank Denis's December 2022 run of libsodium's built-in benchmark suite compiled once to WASI (about 70 crypto primitives, the same wasm for every runtime, compile time excluded; per a snippet of his post, a Zen 2 CPU pinned to one core, with runtime versions and flags unstated) gives wasmer-llvm 0.872x Wasmtime's per-test time and 0.747x Node/V8's. These are geomeans over 69 shared tests, faster on 54 and 60 respectively (derived from page data). I reproduced both figures exactly from the CSVs; dropping the tiny rows gives 0.841x and 0.753x, and WAMR's iwasm and wasm2c stay faster than wasmer-llvm.
+
+**Known shortcoming:** In the Frank Denis libsodium CSVs behind the 0.872x-of-wasmtime and 0.747x-of-node figures, WAMR iwasm (a listed baseline) is faster (wasmer-llvm takes 1.277x its time and wins 1 of 69 tests) and wasm2c is faster too; no CPU model or versions. The LLVM and Singlepass backends are BUSL-1.1 from Wasmer 6.0 (usability mixed) while the measured numbers come from the old MIT-era backend; the 2026 Denis post snippets put Wasmer ahead of Wasmtime.
+
+**Known shortcoming:** Enricher: about 18 of the 70 libsodium rows are tiny (under 5000 units, onetimeauth2 at 0 or 1) with the 2022 units and timer undocumented (today's cmptest.h uses ITERATIONS=200 on a microsecond clock, so values are multiples of 5000); the wins over wasmtime and node survive on rows at or above 5000 (0.841x and 0.753x), but the apparent win over WasmEdge (0.819x, faster on 31 of 69) comes only from the tiny rows and WasmEdge is faster on rows at or above 5000 (1.031x, 1.104x above 100000). The README's 'LLVM about 50% faster than Cranelift' is not reproduced (0.858x of wasmer-cranelift time, 0.902x on rows at or above 5000). Per-function LLVM modules with no inlining, volatile memory ops by default (#3987), requires exactly LLVM 22 (other versions silently disable the backend), BUSL-1.1 from 6.0.0 with the last MIT crate 5.0.6 (2025-05-02); open LLVM performance issues #6535, #6529, #6521, #6491, #6489.
+
+**How:** Each Wasm function is lowered to its own LLVM IR module (via inkwell) and the functions are compiled in parallel on a rayon pool. Ordinary-size functions get a hand-picked function-level pass list (SCCP, early-CSE, SROA, aggressive-instcombine, jump threading, GVN, DSE, loop-rotate, indvars, memcpyopt), and code generation runs at OptimizationLevel::Aggressive with the host CPU's feature flags. Statically reserved linear memories rely on guard pages instead of explicit bounds compares (dynamic memories get a check marked likely-in-bounds with llvm.expect). Memory 0's base pointer is passed as a hidden first argument (the 'm0' or pass-params optimization, on by default since 7.1), and memory accesses carry per-memory TBAA tags. There is no cross-function inlining because each function is its own module, and functions above a size threshold drop to an O1-style pipeline; both cap how close it gets to whole-module LLVM AOT runtimes such as WAMR's wamrc, wasm2c or WAVM.
+
+**Use it when:**
+- Long-running, CPU-bound WASI modules (crypto, codecs, numeric kernels) where steady-state throughput matters more than compile latency, and compiled modules can be cached or serialized.
+- You already embed Wasmer (Rust or C API, WASIX) on its default Cranelift backend: swapping in LLVM gave a 0.858x geomean time (about 1.17x) on the 2022-12 libsodium suite, or about 1.08-1.10x on the non-trivial rows (derived from page data).
+- Ahead-of-time pipelines: compile with LLVM on a build machine (cross-compilation is supported), ship the serialized artifact and run it headless without LLVM on the target.
+- x86-64 or aarch64 hosts on Linux, macOS or Windows where an LLVM 22 toolchain can be installed for the build.
+
+**Skip it when:**
+- Startup- or compile-latency-sensitive work (cold starts, untrusted uploads, blockchains): LLVM compiles far slower than Cranelift or Singlepass. Wasmer's own Singlepass README recommends Singlepass where JIT bombs are a risk, and the 7.1 changelog says huge functions had to drop optimization (Python compile time from about 90 s to about 10 s). A Wasmer 2.2 blog snippet (page blocked) describes a module where Cranelift took about 10 minutes and the LLVM compile was stopped after 3 hours.
+- When peak steady-state speed is the only goal: in the same 2022-12 data WAMR's iwasm (wasmer-llvm takes 1.277x its time, faster on 1 of 69 tests) and wasm2c (1.171x) are faster. WasmEdge is also faster on every row large enough to measure well (see gotchas).
+- Production use of Wasmer 6.0 or later with the LLVM backend when you are not a paying Wasmer sponsor: the crate is BUSL-1.1. The last MIT release of wasmer-compiler-llvm is 5.0.6 (2025-05-02).
+- SIMD-heavy or unusual store patterns: open issues report large LLVM-backend slowdowns for v128.bitselect feeding extends (#6535), i64x2 shifts by 32..63 (#6529), dynamic i8x16 shifts (#6521), store16 and rem_u-addressed stores (#6491, #6489), f64.convert_i64_u (#6083) and memory.size (#6147).
+- Code written against the Wasmtime embedding API or Node's WASI: this is a different runtime and API, not a drop-in replacement.
+
+**Vs siblings:** Pick it over Wasmtime and V8 (and over Wasmer's own Cranelift default) when you are already on Wasmer and want steady-state throughput on long-running modules. If peak throughput is the only goal, the WAMR (iwasm) and wasm2c siblings were faster on the same libsodium data. For startup-bound work, interpreters such as Wasmi, wasm3 or Fizzy are the right choice.
+
+**Gotchas:**
+- Licence split: the repository and its badge say MIT, but wasmer-compiler-llvm and wasmer-compiler-singlepass from 6.0.0 (2025-04-24) are under the Business Source License 1.1 (crates.io lists them as 'non-standard'). Production use is allowed only for Wasmer sponsors; each version becomes MPL 2.0 four years after publication. The last MIT LLVM crate is 5.0.6 (2025-05-02). The benchmarked 2022 build was MIT-era (release dates suggest 3.0.x to 3.1.0; the version is not stated).
+- The build needs LLVM 22 exactly: BUILD.md says any other version silently disables the backend, so check the 'Enabled Compilers:' banner.
+- Semantics knobs: by default, user memory loads and stores on static memories are marked volatile so LLVM cannot delete them, which costs speed (issue #3987 shows a dead load emitted before each store). Non-volatile memops are faster but the code calls them 'not 100% SPEC compliant'; they are switched on automatically for WASIX modules (PR #6212), with --disable-non-volatile-memops to opt out. NaN canonicalization is off by default.
+- Harness flaw in the benchmark: about 18 of the 70 libsodium rows are tiny (values under 5000 for every runtime; onetimeauth2 is recorded as 0 or 1). The 2022 run's units and timer are undocumented: today's cmptest.h, with ITERATIONS=200 and a microsecond clock, could only print multiples of 5000. The wins over Wasmtime and V8 survive dropping those rows (0.841x and 0.753x on 51 rows at 5000 or above). The apparent geomean win over WasmEdge (0.819x on 69 rows, but faster on only 31) comes from the tiny rows: on rows at 5000 or above, wasmer-llvm takes 1.031x WasmEdge's time (faster on 15 of 51), and 1.104x on rows at 100000 or above. The first-party README claim of 'about 50% faster' than Cranelift is not reproduced: 0.858x wasmer-cranelift's time (about 1.17x faster) on 70 rows, 0.902x on rows at 5000 or above (all derived from page data).
+
+**Status:** Actively maintained (7.5.0 released 2026-10-01, commits on 2026-10-06, 21.1k stars) and usable as a crate or CLI, but the LLVM backend's BUSL-1.1 licence since 6.0 limits production use to Wasmer sponsors unless you pin the MIT 5.0.6 release; the speedup was measured on a 2022 MIT-era build with undocumented units for the tiny rows.
+
+[repo](https://github.com/wasmerio/wasmer) · [benchmark](https://github.com/jedisct1/webassembly-benchmarks/tree/master/2022-12/res)
+
+#### embedded-scripting
+
+##### yklua (Yk JIT retrofitted into PUC Lua)  `C (Lua interpreter) with the Rust Yk JIT`  `MIT (PUC-Rio Lua notice in src/lua.h and doc/readme.html); no repository-level LICENSE file covering the Yk additions`  `active`  `Tier A`
+
+PUC-Rio Lua 5.5.0 with the yk meta-tracing JIT bolted on; about 1.96x faster than stock Lua 5.5 on a 22-benchmark geomean.
+
+**Beats:** PUC-Rio Lua 5.5.0 (stock lua.org tarball, the version yklua is based on) built with -flto as an LTO baseline — yk's public ReBench harness (ykjit/yk-benchmarks) runs 22 benchmarks (14 AWFY, 4 CLBG, 3 real-world, BigLoop) for 5 invocations of 10 iterations each, on an AMD EPYC 7F52 (Debian, kernel 6.12.57). It compares yklua against stock PUC Lua 5.5.0 built with gcc -O2 -flto. I recomputed the 2026-10-06 14:23 run from its data file: a geomean time ratio of 0.511 (1.96x), with per-benchmark speedups from 1.09x (DeltaBlue) to 5.77x (Mandelbrot). The last 10 nightly runs range from 0.504 to 0.519.
+
+**Known shortcoming:** Upgraded C to A on the ykjit/yk-benchmarks gh-pages data (geomean time ratio 0.513, about 1.95x, over 22 benchmarks against stock Lua 5.5.0 -flto on an AMD EPYC 7F52, harness and flags public); the record's Mandelbrot 3.2 s to 0.8 s claim was not found (data shows 5.84x). Experimental, needs the yk toolchain (ykllvm versus gcc), uneven 1.09x-5.84x. No repository LICENSE file (Lua core MIT), so usability is mixed.
+
+**Known shortcoming:** Enricher: recomputed 20261006_142333.data gives geomean 0.511 (1.96x), from 1.09x DeltaBlue to 5.77x Mandelbrot, but the timing is wall clock while yk compiles on YK_JOBS (num_cpus minus 1) background threads against a single-threaded baseline with CPU time unreported; there is no JIT-off executor, the baseline is gcc computed-goto against ykllvm switch dispatch, the location leak #113 is confirmed in code (luaF_freeproto never calls yk_location_drop), LuLPeg slows over its run (787 vs 911 ms), Linux x86-64 only, and the yk docs rate it pre-alpha.
+
+**How:** yk is a meta-tracing system. ykllvm embeds the interpreter's own LLVM IR (fat LTO, .llvmbc section) and stackmaps in the binary. A yk_mt_control_point call at the top of luaV_execute counts executions of per-pc YkLocations, which are placed at backward-jump and for-loop heads at parse time and at the entry of functions found to be recursive. Once a location passes YK_HOT_THRESHOLD (131 by default), yk records the interpreter's path through its own IR and compiles that trace. The interpreter is annotated so that traces specialise well: yk_promote on constants, prototype sizes and the pc, yk_idempotent on loads, and yk_unroll on helper loops. Constant-folded traces then remove dispatch, type checks and table lookups, in the same way PyPy's meta-tracing does.
+
+**Use it when:**
+- Loop-heavy numeric Lua on Linux x86-64, where gains are largest: Mandelbrot 5.8x, BigLoop 3.9x, spectralnorm 3.4x, Heightmap 3.1x, Sieve 3.0x and NBody 2.9x against stock Lua 5.5.0.
+- You want a JIT while keeping current PUC Lua 5.5 semantics (integers, 5.4/5.5 features) rather than moving to LuaJIT's Lua 5.1 dialect.
+- Research or prototyping on meta-tracing: the yk changes are a small set of USE_YK hooks in lvm.c, ldo.c, lparser.c, lfunc.c and lstate.c, so it is a readable worked example of retrofitting a JIT into a C interpreter.
+- Long-running scripts where a 1.5-2x average speedup is worth carrying an experimental toolchain (Rust nightly, ykllvm).
+
+**Skip it when:**
+- Production or shipped embeddings. The README says experimental, yk's docs rate it pre-alpha, all.lua is 'currently failing for non-serialised compilation', and 25 issues are open, including per-file test failures since 2023 and a lua_assert failure in luac (#110).
+- Any platform other than Linux on x86-64 (a yk requirement), or builds that cannot use Rust nightly and the ykllvm LLVM fork.
+- Object-heavy or allocation-heavy code gains little: DeltaBlue 1.09x, Storage 1.23x, Havlak 1.24x, CD 1.35x and binarytrees 1.36x.
+- Hosts that load Lua C modules or other code with dlopen at run time. yk's gotchas say it assumes no code is loaded or unloaded at run time, and code without embedded IR cannot be inlined into traces.
+- When peak speed matters more than Lua 5.5 compatibility: the author's 2026 blog post says it does not reach LuaJIT's peak performance (search snippet only; tratt.net is blocked here).
+
+**Vs siblings:** LuaJIT Remake (Deegen) and Luau target Lua 5.1 or a 5.1-derived dialect, and Pallene compiles a typed subset. yklua is the only catalogued option that JIT-compiles unmodified Lua 5.5, so pick it when you need 5.5 semantics and can accept pre-alpha status. For production embedding, Luau's interpreter or LuaJIT are the mature choices.
+
+**Gotchas:**
+- Harness caveat on the timing: AWFY's harness.lua measures wall-clock time (os.monotonic), and yk compiles traces on up to num_cpus - 1 background threads (YK_JOBS default) on the 16-core EPYC 7F52. Stock Lua is single-threaded. CPU time is not reported, so the 1.96x is a wall-clock figure that does not charge JIT compilation. The suite also has no yklua executor with the JIT off (YK_JITC=none), so the cost of the yk instrumentation in interpreter mode is not shown.
+- The two binaries are built differently. The baseline is gcc -O2 -flto with Lua's computed-goto jump-table dispatch, which lvm.c enables by default under GCC. yklua is ykllvm clang -O2 with -DLUA_USE_JUMPTABLE=0, because yk cannot trace threaded dispatch. Results are correctness-checked: harness.lua asserts each benchmark's verification result. The cbgame inputs are scaled down from the standard sizes (fannkuchredux 10, binarytrees 15), and ReBench runs with --no-denoise.
+- Yk locations leak (issue #113, open since 2025-04): luaF_freeproto frees the yklocs array but never calls yk_location_drop. Programs that create functions repeatedly (load, string.dump and undump) therefore accumulate yk location state. The yklocs array is also not counted in luaF_protosize, so the GC does not account for it.
+- Warm-up is cheap but steady state is not always better. In the 2026-10-06 14:23 run, no benchmark's first iteration was more than 10% slower than its steady-state mean (iterations 6-10), and most were under 5% slower (DeltaBlue is the worst case, 793 ms against 720 ms). LuLPeg got slower as it ran (787 ms in iteration 1 against 911 ms over iterations 6-10, coefficient of variation 0.18; derived from page data).
+
+**Status:** Very active (a run of ltratt PRs merged 2026-10-05) but experimental and pre-alpha with 7 stars. The Lua core carries PUC-Rio's MIT notice and yk is Apache-2.0 or MIT, but the yklua repo has no LICENSE file covering its own changes, so treat it as a research artefact rather than something to vendor.
+
+[repo](https://github.com/ykjit/yklua) · [benchmark](https://raw.githubusercontent.com/ykjit/yk-benchmarks/gh-pages/index.html)
+
 ### media-and-graphics
 
 #### color-and-resampling
@@ -3063,6 +3143,169 @@ Rust modular-arithmetic/NTT crate whose NEON ML-KEM-512 example edges out liboqs
 **Status:** One developer, 11 commits (the burst of 2026-08-11 changes delivered the FIPS 203 fixes and the speedups, and the last commit was 2026-09-03), no issues filed, not on crates.io, and noncommercial-licensed, so treat it as reference code to read, not a dependency.
 
 [repo](https://github.com/crabnebula-dev/moduletto) · [benchmark](https://github.com/crabnebula-dev/moduletto/blob/main/BENCHMARKS.md)
+
+### interpreters-and-vms
+
+#### bytecode-vms-and-wasm
+
+##### EOS VM  `C++`  `EOS VM License v1.0 (MIT-derived text with an added clause requiring source release of any covered work used for non-EOSIO blockchain purposes; not OSI-approved)`  `stale`  `Tier C`
+
+Header-only C++ WebAssembly interpreter and x86-64 single-pass JIT for Antelope blockchains; vendor claims up to 16x over the Binaryen interpreter.
+
+**Beats:** Binaryen and WABT WebAssembly interpreters — The only numbers are block.one's EOSIO 2 announcement, seen as search snippets: 'EOS VM runs the EOS Mechanics WASM CPU benchmarks up to 16x faster than Binaryen' (the EOSIO 1.0 interpreter), with no runtime, hardware, compiler or method given; the EOSIO v2.0.0 release notes on GitHub carry no numbers and recommend EOS VM JIT for block producers and the EOS VM Optimized Compiler, which is not in this repo, for other nodes. The repo's bench-interp tool prints a single parse time and execution time with no published results.
+
+**Known shortcoming:** Vendor 16x claim is snippet only (medium.com blocked) and it is unclear which runtime produced it (the Optimized Compiler is not in this repo); the VM Matters paper puts it far behind wasmtime and WAVM. LICENSE is the custom non-OSI 'EOS VM License V1.0', not MIT, so usability is reference. Fork of EOSIO/eos-vm.
+
+**Known shortcoming:** Enricher: the cited EOS Mechanics CPU contract (AlohaEOS/eos-mechanics contracts/eosmechanics.cpp) has is_prime never returning false for odd p (prime = BOOL(p)), Lucas-Lehmer overflow for p over 32, '1LLU << p' undefined up to 375, a discarded result and self-reported cpu_usage_us timing, so the 16x claim (snippet only, runtime unknown, no numbers in the v2.0.0 notes) rests on a broken harness. MVP-only opcodes, 8 GiB virtual reservation per allocator, process-wide signal handlers, JIT x86-64 only.
+
+**How:** The interpreter's parser rewrites Wasm into an internal bitcode of fixed-size variant opcodes with branch and call targets pre-resolved (br_table_data, call_imm), dispatched through a statically derived visitor instead of virtual calls, and keeps module data in non-owning bump allocators that live as long as the module. Linear memory sits in an 8 GiB PROT_NONE reservation with guard pages, so loads and stores need no bounds checks and host functions need no pointer validation. The JIT is a single-pass x86-64 code writer driven directly by the parser (memory base kept in rsi, no IR or LLVM), which keeps compile time linear. Time limits cost nothing in the hot loop: on expiry the watchdog makes the code pages non-executable and the resulting SIGSEGV unwinds the run.
+
+**Use it when:**
+- Antelope/EOSIO-compatible chains, or any system that needs bit-identical Wasm results across machines (softfloat on by default) and consensus-matching limits such as call depth 250 and per-section caps in `options`.
+- Embedding untrusted Wasm in a C++ host where predictable, linear load and validation time matters more than peak speed (the README contrasts this with WAVM's long, unpredictable LLVM compiles).
+- Hard per-call CPU deadlines without instruction counting: the watchdog revokes execute permission on the code pages when time runs out.
+- Many short calls into small contracts with cheap host-function transitions on x86-64 Linux (JIT) or other 64-bit Unix hosts (interpreter).
+
+**Skip it when:**
+- Peak throughput: the peer-reviewed 'VM Matters' study (snippet only) measured EOS VM at about 20 s on a matrix benchmark against about 70-170 ms for WAVM and Wasmtime, so it only beats the old Binaryen and WABT interpreters.
+- Modern Wasm modules: the opcode table is MVP only (no sign-extension, saturating float-to-int, bulk memory, reference types or SIMD), so modules from toolchains that enable post-MVP features by default will not load unless built for the MVP target.
+- Windows (CMake stops with an error on WIN32) or a JIT on anything but x86-64; AArch64 gets only the interpreter.
+- Projects that cannot accept the EOS VM License v1.0: its share-alike clause covers any work adapted for other blockchain purposes and it is not OSI-approved.
+- Hosts that install their own SIGSEGV/SIGFPE handlers or whose host functions need destructors to run when a trap unwinds.
+
+**Vs siblings:** Pick EOS VM over wasm3, WAMR or Wasmi only when you need Antelope consensus compatibility, softfloat determinism and zero-overhead watchdog deadlines in a header-only C++ engine; for general embedding those interpreters have measured numbers, permissive licences and wider platform support, and WAVM or WasmEdge win on peak speed.
+
+**Gotchas:**
+- Each wasm_allocator reserves 8 GiB of virtual memory (max_memory = 4ull << 31) plus guard pages; it had no destructor until April 2025 (commit 'Add destructor to wasm_allocator to release memory'), so older copies leaked the mapping.
+- Static initialization installs process-wide SIGSEGV, SIGFPE (and SIGBUS outside Linux) handlers and traps unwind with siglongjmp; the README warns host functions must be able to 'fail hard' without destructors, and the watchdog starts a new std::thread for every timed run.
+- A timeout disables code pages for the whole module: other threads running the same module take SEGVs and retry until the timed-out run re-enables them (signals.hpp comment), so one slow contract stalls its siblings briefly.
+- Harness flaw in the cited benchmark: the EOS Mechanics CPU action (AlohaEOS/eos-mechanics contracts/eosmechanics.cpp) has is_prime assign `prime = BOOL(p)` inside its test, so it never returns FALSE for odd p, and the Lucas-Lehmer step overflows 64 bits for p > 32 and shifts 1LLU by up to 375 (undefined behaviour); the work is about 35,000 iterations of a 64-bit multiply and remainder whose result is discarded (a code comment warns it could be optimized out), timed by self-reported on-chain cpu_usage_us that the repo's own disclaimer says producers can manipulate.
+
+**Status:** Stale since 2025-07-30 (sync-call work for Antelope's node software), maintained by the EOS Network Foundation for its own chain with 5 open issues; the custom non-OSI licence and MVP-only Wasm make it a reference design rather than a general-purpose engine.
+
+[repo](https://github.com/AntelopeIO/eos-vm) · [benchmark](https://medium.com/eosio/introducing-eosio-2-enhancing-performance-improving-security-and-new-developer-tools-38ca29c7ab4c)
+
+##### Mitey JIT (csjh/mitey-jit)  `C++`  `no license`  `active`  `Tier C`
+
+Experimental Arm64/macOS WebAssembly JIT with a fused validate-and-compile pass; starts big modules about 3x faster than Wasmtime.
+
+**Beats:** wasmtime, V8 (Node.js) — Author's own blog post (csjh.blog, unreachable here; numbers relayed by search snippets) timed load+validate+instantiate with hyperfine on an M1 MacBook Air: SpiderMonkey 52.8 ms (unrolled JIT) and 65.8 ms (single-pass JIT) vs Wasmtime 183.3 ms, Wasmtime single-pass 197.4 ms and Node 66.3 ms; Figma 159.7 / 198.8 ms vs Wasmtime 710.4 ms and Node 92.5 ms. Execution (median of three): the single-pass JIT ran esbuild in 3.126 s vs Wasmtime 3.316 s and Node 3.694 s but lost to Wasmtime on Coremark and SpiderMonkey; compiler flags, Wasmtime and Node versions and Wasmtime cache settings are not known.
+
+**Known shortcoming:** The record credited the esbuild win to the wrong backend: the unrolled JIT is 'too slow' for esbuild and the single-pass baseline backend wins it, 3.126 s vs 3.316 s Wasmtime (1.06x) and 3.694 s Node. The single-pass backend loses to Wasmtime on SpiderMonkey (347 vs 577) and Coremark. No licence file, so reference only; Arm64 macOS only; no benchmark code in the repo and the blog is blocked here.
+
+**Known shortcoming:** Enricher: HEAD main.cpp and test/executor.cpp wire only the baseline backend; nothing includes the minimal backend and backend/current.hpp includes a missing ./arm64.hpp, so the blog's 'unrolled JIT' numbers are not reproducible from HEAD. Branch-range checks are assert-only and 2x too loose (bcond/cbz/cbnz allow under 2 MiB against a real +-1 MiB range), so an NDEBUG build would silently wrap out-of-range branches. One global 5 MB value stack, a global trap jmp_buf, process-wide SIGBUS/SIGILL handlers, no SIMD, no LICENSE, no build file. Codegen fixes landed January to February 2026 (i64.sub bug, br_table register overlap, fuzzing fixes) and the post date is unreadable, so it is unknown whether the numbers predate them.
+
+**Independent measurement:** licence, committed harness, independent run
+
+**Independent measurement:** reproducible build of the measured backend
+
+**How:** Startup: validation and code generation happen in one linear pass per function (validate_and_compile), with no IR and no optimizer, which is why it beats Wasmtime's Cranelift compile on large binaries. The current 'baseline' backend is a single-pass compiler whose validation stack also tracks where each value lives (register, stack slot, immediate or condition flags): locals live in callee-saved registers, temporaries come from an LRU register cache, constants fold into immediates, and comparisons stay in flags until a branch consumes them. Bounds checks are removed by reserving 16 GiB of PROT_NONE address space per linear memory (guard regions on both sides, mprotect to grow), and stack overflow is caught by a guard page instead of per-push checks. The older 'minimal' backend emits a chain of calls into precompiled C++ handlers ([[clang::musttail]], preserve_most on cold trap paths), an unrolled interpreter.
+
+**Use it when:**
+- Research or teaching: a compact, readable single-pass Wasm-to-Arm64 compiler (register cache, flag tracking, guard-page bounds checks) to study or borrow ideas from.
+- Short-lived runs of very large Wasm binaries on an Apple Silicon Mac where compile latency dominates (author's numbers: SpiderMonkey starts in 65.8 ms vs 183.3 ms for Wasmtime).
+- Comparing baseline-compiler design choices against Wasmtime Winch or Cranelift on the same Arm64 machine.
+
+**Skip it when:**
+- Anything shipped: no LICENSE file (all rights reserved by default), README says 'Not meant for production use', no build file in the repo.
+- Linux, Windows or x86-64: the pager uses MAP_JIT, pthread_jit_write_protect_np and SIGBUS from macOS; backend/current.hpp errors out on x86.
+- Peak-throughput workloads: the single-pass backend loses to Wasmtime on Coremark (26616 vs 28260) and the SpiderMonkey score (347 vs 577); only esbuild was faster (3.126 s vs 3.316 s, 1.06x).
+- Modules that use SIMD (v128 is commented out in spec.hpp), threads or multiple concurrent instances/threads (one process-wide value stack and trap jmp_buf).
+- Multi-tenant or embedding hosts: it installs process-wide SIGBUS and SIGILL handlers and reserves 16 GiB of address space per memory plus 400 bytes of executable space per code-section byte.
+
+**Vs siblings:** Pick it over Wasmi or wasm3 only to study an Arm64 single-pass JIT design, since those are portable, licensed and maintained interpreters with near-zero startup; pick WAMR or Wasmtime itself for anything that must ship. Against wisp (another baseline compiler compared with Winch and Singlepass), mitey-jit's distinctive part is guard-page bounds checks and flag/register tracking during validation on Arm64.
+
+**Gotchas:**
+- Code-reading finding: the shipped main.cpp and test/executor.cpp both include backend/arm64/baseline.hpp, and nothing includes the minimal backend (minimal.cpp, backend/minimal/composer.hpp); backend/current.hpp includes a non-existent ./arm64.hpp. The post's 'unrolled JIT' numbers are therefore not reproducible from HEAD without restoring an older wiring.
+- Branch-range checks are assert()-only and twice too loose: bcond/cbz/cbnz accept byte offsets below 2 MiB although the 19-bit field reaches only +-1 MiB (b/bl accept 256 MiB vs a +-128 MiB range), and a release build with NDEBUG drops them, so a branch that is out of range would silently wrap. The minimal backend's put_br encodes stack offsets in a 9-bit field with only a comment ('should be handled better when src/dst are higher than 1<<9'). Not observed failing; it bites only very large functions or deep value stacks.
+- Trap handling is longjmp out of signal handlers (SIGBUS for guard regions, SIGILL for encoded trap instructions); the handlers are installed process-wide, and the heap registry never removes freed memories, so a later SIGBUS in a reused address range could be taken for a Wasm trap.
+- The JIT region is reserved as 400 bytes per code-section byte plus 400 per function, and its size is stored in a uint32_t header, so code sections above about 10.7 MB unmap only part of the region on free; the instruction cache is never invalidated after writing code (sys_icache_invalidate is commented out; the source comment reasons fresh pages cannot hold stale lines).
+
+**Status:** Active (457 commits, last 2026-02-13, with many Jan-Feb 2026 codegen fixes such as 'fix i64sub bug', 'fix br_table to avoid temporary reg overlap' and 'fix validation bugs found by fuzzing', so the post's numbers may predate them; post date not readable here), but unlicensed and macOS-Arm64-only, so reference reading only.
+
+[repo](https://github.com/csjh/mitey-jit) · [benchmark](https://csjh.blog/posts/a-tale-of-three-wasm-runtimes/)
+
+#### embedded-scripting
+
+##### Zef  `C++`  `no license`  `active`  `Tier C`
+
+Toy AST-walking interpreter tuned with inline caches; its leaky Yolo-C++ build beats CPython 3.10 and QuickJS-ng on four benchmarks.
+
+**Beats:** QuickJS-ng 0.14.0 (release binary qjs-linux-x86_64), Lua 5.4.7 (built with GCC 11.4.0), CPython 3.10 (Ubuntu 22.04 package) — On the author's ScriptBench1 (nbody, splay, richards, deltablue; mean wall-clock seconds over 30 interleaved runs on an Intel Core Ultra 5 135U, Ubuntu 22.04.5), the GCC 11.4.0 Yolo-C++ build's geomean was 0.0686 s against CPython 3.10 0.1296 s (1.89x faster), Lua 5.4.7 0.0577 s (1.19x slower) and QuickJS-ng 0.14.0 0.2036 s; the QuickJS-ng margin is about 1.40x once richards.js's 20 iterations are divided out (derived from page data). The memory-safe Fil-C++ 0.677 build (geomean 0.2759 s) is slower than all three baselines.
+
+**Known shortcoming:** ScriptBench/richards.js runs runRichards() 20 times while the other language ports run it once, so the QuickJS-ng richards row is inflated about 20x; the win over QuickJS-ng is about 1.40x after correction, not 2.97x (derived from page data). The fast yoloBuild is an incomplete port that never frees memory (the author calls it unsound) built from a separate checkout of unstated revision; the memory-safe Fil-C++ build is slower than QuickJS, CPython and Lua. No licence file, so reference only. CPU Intel Core Ultra 5 135U, GCC 11.4.0.
+
+**Known shortcoming:** Enricher: deltablue.js runs one extra projectionTest and splay.js uses Math.random() keys while the other ports use seeded xorshift; richards.lua prints FAILURE without a non-zero exit and run-benchmarks checks only exit status, so a wrong Lua result still gets timed. The Yolo-C++ build allocates through calloc and never frees (src/utils.h FIXME 'unsound'), and it beats Lua only on splay and deltablue, the allocation-heavy rows that therefore pay no GC cost. Dormant since 2026-04-22, no embedding API.
+
+**Independent measurement:** corrected richards iteration count, licence
+
+**Independent measurement:** like-for-like ports with result checks and a freeing build
+
+**How:** It stays a recursive AST walker but adds the machinery a JIT would use: NaN-style tagged 64-bit values (doubles offset by 0x1000000000000, inline int32s), hash-consed Symbols instead of std::string lookups, a Storage/Offsets object model computed in a resolve pass, and inline caches implemented by placement-constructing specialized AST nodes over generic ones (constructCache<>), guarded by watchpoints for scope-chain and subclass invariants. The rest is grinding: per-operator Binary<>/Unary<> nodes, getter/setter inference, a global (class, symbol) to callee table, Zero/One/TwoArguments specializations, and constant array-literal specialization. The final 4x comes from compiling with an ordinary C++ compiler instead of Fil-C++, where GC allocations become calloc and are never freed.
+
+**Use it when:**
+- You are writing your own dynamic-language interpreter and want a worked, diff-by-diff example of inline caches and watchpoints in an AST interpreter, with measured gains per step.
+- You want evidence of what each classic trick buys in an interpreter without a JIT: object model plus inline caches gave 4.55x, symbols 18%, argument specialization about 4%, per the write-up.
+- Teaching or research on memory-safe C++ (Fil-C++) overheads: the write-up documents Fil-C pathologies (std::optional unions and stack Values becoming heap allocations) and their workarounds.
+- Short-lived scripts in a hobby setting where a self-contained interpreter in about 100 source files is acceptable.
+
+**Skip it when:**
+- Embedding a scripting language in an application: there is no host API, no sandboxing and no documented C++ interface; Lua, Luau or QuickJS are the realistic choices.
+- Any long-running workload on the fast build: the Yolo-C++ path allocates with calloc and never frees (src/utils.h marks it 'FIXME: This is unsound'), so memory grows until the process dies.
+- Wanting speed with memory safety: the documented Fil-C++ build (with GC) is 2.13x slower than CPython 3.10, 4.78x slower than Lua 5.4.7 and 1.36x slower than QuickJS-ng 0.14.0 on the author's geomean.
+- Anything needing a licence: the repo has no LICENSE file and the README names none, so the code cannot be reused.
+- Production maturity: single-author side project, 82 commits, last commit 2026-04-22, no releases, one open issue (broken localhost links in the docs).
+
+**Vs siblings:** Pick Zef only as reading material on interpreter optimization; for an actual embedded engine Lua or Luau (faster than Zef's fast build on nbody and richards, with an embedding API) or QuickJS (a real JS engine) win, and Daslang or LuaJIT Remake (Deegen) are the catalogued choices when interpreter speed itself is the goal.
+
+**Gotchas:**
+- Harness flaw: ScriptBench/richards.js calls runRichards() 20 times while the Zef, Lua and Python ports run it once, so QuickJS-ng's richards time (0.7193 s) covers 20x the work. Per run QuickJS-ng takes about 0.036 s vs 0.0309 s for Yolo-C++ Zef, and the headline 2.97x geomean win over QuickJS-ng shrinks to about 1.40x (derived from page data). deltablue.js also runs one extra projectionTest(100) after its 20 rounds, and splay.js keys come from Math.random() while the other ports use a seeded xorshift.
+- The Yolo-C++ build never reclaims memory, and it beats Lua 5.4.7 only on splay (0.3992 vs 0.4393 s) and deltablue (0.0784 vs 0.0832 s), the two allocation-heavy rows, so those wins carry no collection cost while CPython, Lua and QuickJS-ng do collect (inference from the write-up and src/utils.h). The benchmarked binary came from a separate checkout (pizlscript/yoloBuild) whose revision is not stated.
+- Result checks are uneven: ScriptBench/richards.lua tests 'qpktcount == QPKTCOUNT or holdcount == HOLDCOUNT' and only prints FAILURE without a non-zero exit, and run-benchmarks only checks exit status, so a wrong Lua result would still be timed. The Python and Zef ports do fail the run on a wrong count.
+- Timing is wall-clock of the whole process via Ruby Time.now, including interpreter startup; several rows run only 14-40 ms (nbody: Lua 0.0142 s, QuickJS-ng 0.0214 s, Yolo Zef 0.0233 s), so startup compresses the ratios. The script defaults to --repeat 3; the write-up says 30 runs.
+
+**Status:** Single-author demonstration project, dormant since 2026-04-22 after a month of commits; no licence, so reference only, and its fast configuration leaks all memory by design.
+
+[repo](https://github.com/pizlonator/zef) · [benchmark](https://github.com/pizlonator/zef/blob/master/website/source/implementation.md)
+
+#### jits
+
+##### HHVM  `C++`  `PHP-3.01 AND Zend-2.0 (core); MIT (Hack typechecker and Hack Standard Library)`  `active`  `Tier C`
+
+Meta's JIT virtual machine for Hack; reported 1.6x over the 2014-era Zend PHP interpreter on real applications.
+
+**Beats:** PHP reference interpreter (Zend Engine), 2014-era version per the OOPSLA 2014 paper (version not seen); HPHPc as a second comparison — No numbers exist in the repo; the claim rests on search snippets of the peer-reviewed but first-party OOPSLA 2014 paper: HHVM about 1.6x faster than the PHP (Zend) interpreter of that time on real-world applications in sandbox mode, and 2.64x (sandbox) and 2.79x (production) geometric-mean speedups on its benchmark suite against 1.93x for the earlier HPHPc static compiler; PHP version, hardware and flags were not visible. A later first-party figure (PLDI 2018, snippet) is a 21.7% gain on the Facebook website from the region-based PGO JIT over HHVM's earlier tracelet JIT.
+
+**Known shortcoming:** Raised D to C on the OOPSLA 2014 abstract (1.6x over PHP on real-world apps in sandbox mode), snippet only since the paper is blocked; the baseline is 2014 PHP and current HHVM runs Hack only. Zend-2.0 licence is not OSI-approved, so usability is mixed. Off-baseline.
+
+**Known shortcoming:** Enricher: no benchmark in the repo; all numbers are search snippets (OOPSLA 2014 1.6x over 2014 Zend, PLDI 2018 21.7% over the old tracelet JIT on facebook.com); Hack-only since 4.0 (2019), no GitHub tags since HHVM-4.172.3 (2023-05-02), x86 builds force -march=x86-64-v3, the hackers-guide docs are stale, and the hhvm/oss-performance harness was archived 2022-01-13 with no results.
+
+**How:** A type-specializing JIT: it observes the runtime types flowing through bytecode, emits machine code specialized for them and guards the assumptions with type checks. Code is first compiled as small 'tracelet' profiling regions, then retranslated with profile-guided optimization into large 'hot CFG' regions that can cover whole functions with loops. Regions are lowered HHBC to HHIR (SSA IR with a rich type lattice, guard relaxation, simplification, dead-code elimination) to vasm (low-level IR with its own register allocator) and then to x86-64 or arm64 code; HHBBC whole-program type inference in repo-authoritative mode removes more checks ahead of time.
+
+**Use it when:**
+- You write Hack (or are migrating a large PHP 5-era codebase into Hack) and want a JIT VM tuned for a long-running, request-oriented web tier like Meta's.
+- Large server-side codebases where a repo-authoritative (whole-program, pre-compiled bytecode) deployment and profile-guided warm-up are acceptable.
+- Studying a production dynamic-language JIT: the hackers-guide docs and the region-based PGO design (PLDI 2018) are a good reference for type-specializing JITs.
+- x86-64 servers with AVX2-class CPUs (the build uses -march=x86-64-v3) or aarch64 Linux.
+
+**Skip it when:**
+- Running PHP: the 3.30 series was the last that aimed for PHP compatibility and HHVM 4.0 (2019) is Hack-only (search snippets of hhvm.com and Phoronix; the pages were blocked here); for PHP use php-src with opcache JIT, the catalogued PHP JIT sibling.
+- You need packaged, versioned releases: the GitHub repo has no tags after HHVM-4.172.3 and HHVM-4.168.4 (both 2023-05-02) even though master gets commits daily, so current code means building from source (the hackers guide warns the first build can take an hour or more).
+- Short-lived CLI scripts or small sites: the JIT relies on profiling then retranslation, so warm-up matters; startup and memory cost are not documented in the repo.
+- Pre-Haswell x86-64 CPUs, 32-bit systems, or PIE-only environments: CMake forces -march=x86-64-v3, refuses non-64-bit builds and links with -no-pie.
+- Licence-sensitive redistribution: the core is PHP-3.01 plus Zend-2.0 (not OSI-approved); only the Hack typechecker and HSL are MIT.
+
+**Vs siblings:** Pick HHVM only for Hack code; for PHP the php-src opcache JIT (catalogued at about 2.6x-9.5x faster than plain PHP 8.2 on kostya/jit-benchmarks numeric kernels, derived from its sibling summary) and JPHP (claims about 13% slower than PHP 7.4) are the relevant siblings, and current HHVM cannot run PHP at all. Compared with Meta's other catalogued JIT, Cinder (CPython), HHVM is the far more mature, production-proven design but locks you into the Hack language.
+
+**Gotchas:**
+- The only speed numbers are first-party and snippet-only: the OOPSLA 2014 paper (1.6x over PHP on real-world apps in sandbox mode; 2.64x and 2.79x geomean on its benchmark suite vs HPHPc's 1.93x) and the PLDI 2018 JIT paper (21.7% faster on the Facebook website than the previous tracelet-based HHVM JIT, per a review snippet); neither paper was opened here, and the repo carries no benchmark.
+- The PHP baseline is obsolete: it is the 2014-era Zend interpreter, before PHP 7 rewrote the engine and PHP 8 added a JIT, and current HHVM no longer runs PHP, so no current like-for-like comparison exists. Meta's own oss-performance harness (hhvm/oss-performance: WordPress, Drupal, MediaWiki and others on PHP 5, PHP 7 and HHVM) was archived on 2022-01-13 with the README saying it had no results to share.
+- In-repo docs are partly stale: hphp/doc/hackers-guide says HHVM is written in C++14 and that PHP is 'currently supported for historical reasons', while CMakeLists.txt requires C++20 and PHP support ended in 2019; jit-core.md still lists a ppc64 backend, but the CMake files only detect x86_64 and aarch64.
+- Type guards multiply: without guard relaxation, a translation with 4 guards can need up to 10^4 retranslations that chain linearly (jit-optimizations.md), so highly polymorphic code can fall off the fast path.
+
+**Status:** Very actively developed (commits on 2026-10-06) as Meta's production Hack runtime, but with no GitHub release tags since May 2023, a heavyweight from-source build and a mixed PHP/Zend licence, it is practical only for teams committed to Hack.
+
+[repo](https://github.com/facebook/hhvm) · [benchmark](https://dl.acm.org/doi/10.1145/2660193.2660199)
 
 ### media-and-graphics
 

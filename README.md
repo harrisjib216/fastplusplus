@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1669 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 193 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 29 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 1883 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 199 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 34 candidates that failed verification.
 
-Tiers across both lists: A 408, B 332, C 1037, D 85.
+Tiers across both lists: A 446, B 394, C 1149, D 93.
 
 ## Evidence tiers
 
@@ -37,6 +37,10 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
 | crypto-and-hashing | non-crypto-hashes | 30 | 6 | 17 | 7 | 0 |
 | crypto-and-hashing | signatures-kem | 20 | 7 | 5 | 8 | 0 |
+| interpreters-and-vms | bytecode-vms-and-wasm | 53 | 8 | 15 | 27 | 3 |
+| interpreters-and-vms | embedded-scripting | 56 | 6 | 27 | 21 | 2 |
+| interpreters-and-vms | jits | 57 | 12 | 10 | 34 | 1 |
+| interpreters-and-vms | language-interpreters | 50 | 11 | 10 | 27 | 2 |
 | media-and-graphics | color-and-resampling | 57 | 4 | 5 | 42 | 6 |
 | media-and-graphics | font-shaping-text-layout | 23 | 1 | 2 | 18 | 2 |
 | media-and-graphics | image-codecs | 72 | 17 | 6 | 40 | 9 |
@@ -56,12 +60,12 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | numerics-and-science | geometry-spatial | 62 | 5 | 9 | 45 | 3 |
 | numerics-and-science | random-and-quasi-random | 59 | 15 | 4 | 37 | 3 |
 | numerics-and-science | sparse-and-solvers | 55 | 7 | 25 | 20 | 3 |
-| parsing-and-text | csv-tabular | 11 | 2 | 0 | 9 | 0 |
+| parsing-and-text | csv-tabular | 12 | 2 | 0 | 10 | 0 |
 | parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
 | parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |
 | parsing-and-text | parser-generators-and-combinators | 8 | 3 | 0 | 5 | 0 |
-| parsing-and-text | regex-engines | 9 | 2 | 3 | 4 | 0 |
-| parsing-and-text | text-search-and-indexing | 9 | 3 | 0 | 6 | 0 |
+| parsing-and-text | regex-engines | 10 | 2 | 3 | 5 | 0 |
+| parsing-and-text | text-search-and-indexing | 10 | 3 | 0 | 7 | 0 |
 | parsing-and-text | unicode-utf8 | 16 | 6 | 0 | 10 | 0 |
 | runtime-and-systems | allocators-gcs | 28 | 4 | 4 | 18 | 2 |
 | runtime-and-systems | coroutines-fibers | 18 | 0 | 1 | 14 | 3 |
@@ -70,7 +74,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | runtime-and-systems | profilers-and-instrumentation | 20 | 0 | 5 | 10 | 5 |
 | runtime-and-systems | thread-pools-work-stealing | 16 | 3 | 1 | 11 | 1 |
 | serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |
-| serialization-and-formats | json | 51 | 21 | 3 | 26 | 1 |
+| serialization-and-formats | json | 52 | 22 | 3 | 26 | 1 |
 | serialization-and-formats | reflection-and-codegen | 8 | 3 | 1 | 4 | 0 |
 | serialization-and-formats | yaml-toml-xml | 28 | 9 | 0 | 19 | 0 |
 | stdlib-replacements | allocators | 17 | 4 | 4 | 8 | 1 |

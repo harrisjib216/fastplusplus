@@ -61,10 +61,25 @@ all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFEREN
      reaches HN Algolia, news.ycombinator.com and personal blogs, then merge, verify and enrich the new records.
    - Seed pass not run: add a `seed` assignment to `data/wave11/assignments.json` with the leads above
      (tidwall/bluebox; check the dsx-ai-factory/model-streamer move), then `seed.py`, merge, verify, enrich.
-7. **Wave 12** (languages: bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters) is set up
-   but not launched. Re-render b1/b2 before launching so each known list is current. In a cloud session give
-   every agent `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
-   Algolia and arXiv. Weekly usage limit: ten Opus agents at once ran a whole wave on 2026-10-06 without a kill.
+7. **Wave 12 closed 2026-10-06** (220 verified, all enriched; see CLAUDE.md Status). Open wave 12 follow-ups in
+   `data/wave12/leads.md`: seed leads not yet run (angelsea MIR JIT for AngelScript, goant pure-Go JS engine,
+   ptitSeb/box86, HaxeFoundation/hxcpp, LayerZero-Labs/fafo, 0xjojoex/evm.zig, RealNeGate/Cuik, bsaleil/lc,
+   Wastrel on codeberg, treVM, Biotite, atJIT's ClangJIT); repo_url overrides to consider (kostya/topaz is the
+   fork that was measured; OpenISA/riscv-sbt now redirects to lmcad-unicamp/riscv-sbt). Paper-access retiers
+   (need an environment that reaches arXiv, ACM, IEEE, usenix, openproceedings, TUM and Saarland hosts):
+   Instrew (VEE'21), TPDE (CGO 2026), Box64 (EuroSys 2026), aWsm (Sledge), WARP (Valent-Blocks), rv32emu
+   (VMIL'24), HHVM (OOPSLA 2014), Deegen/LuaJIT Remake (OOPSLA 2026), Pallene (SBLP/SCP), YJIT, Wizard (OOPSLA
+   2022 paper itself), mutable (EDBT 2023 and the ADC 2023 study arXiv 2311.04692), Higgs (arXiv 1507.02437),
+   weval (PLDI paper on cfallin.org), riscv-sbt (sol.sbc.org.br), Segue/ColorGuard ASPLOS 2025.
+   Harness re-runs that would settle disputes: ThePhD/lua-bindings-shootout for LuaBridge3 vs sol2, a
+   JIT_NO_SUSPEND run of the AngelScript JIT, kvmserver's Wasmtime and isolated-vm groups for TinyKVM.
+   **Thin-yield searches queued for a re-run** from an environment that reaches HN Algolia,
+   news.ycombinator.com and personal blogs: the 8 b7/b8 assignments `w12-{interp,jit,wasm,embed}-{blogs,hn}`
+   (36 records on WebSearch snippets plus github.com).
+   **Cross-wave leads from wave 12 enrichers** (seed candidates for the named waves): radfordneal/xsum and
+   radfordneal/matprod (wave 8 numerics), 6/qj (wave 4 json), eBay/tsv-utils (wave 3 csv-tabular), Turso Rust
+   SQLite rewrite (wave 5 databases), ml-rust/splintr (tokenizers), lmcad-unicamp/MOSFHET (crypto),
+   klippa-app/go-pdfium wazero-vs-wazy benchmark (wasm cross-check).
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 
