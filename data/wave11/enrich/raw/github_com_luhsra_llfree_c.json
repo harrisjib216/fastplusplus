@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/luhsra/llfree-c",
+  "one_liner": "Lock- and log-free page-frame allocator in C; up to 88% (4 KiB) and 98% (2 MiB) lower concurrent allocation time than Linux's buddy allocator.",
+  "what_it_does": "LLFree hands out physical page frames (4 KiB up to 4 MiB orders) for an OS kernel, hypervisor or anything that manages a flat frame range; it is not a malloc. The C API (include/llfree.h) is llfree_init over caller-provided metadata buffers sized by llfree_metadata_size, then llfree_get / llfree_put with a request of (order, class, per-core local slot), plus drain, tree on/offlining and stats. Integrators supply their own llfree_platform.h and llfree_types.h (atomics, logging); the std/ versions target userspace. This repo is the C reimplementation of the Rust llfree-rs and is what the modified Linux tree points to for integration.",
+  "how_it_is_fast": "No locks and no log: the persistent lower allocator is a bitfield of 512 bits per 2 MiB region (one bit per 4 KiB frame), with a 2 MiB entry holding a free counter and a huge-page flag, all updated with atomic compare-exchange. An upper, volatile layer groups 2 MiB entries into trees (8 by default) and reserves a tree per core and per class (e.g. small vs huge, movable vs immovable), so cores rarely touch the same cache lines and 4 KiB allocations do not fragment 2 MiB regions. The lower layer is crash-consistent on nonvolatile memory and the upper layer is rebuilt on boot.",
+  "when_to_use": [
+    "Kernel or hypervisor page-frame allocation on many-core machines where the buddy allocator's zone lock contention dominates (concurrent 4 KiB and 2 MiB requests)",
+    "Systems that want many 2 MiB huge pages available and less compaction work (paper reports 64% fewer compaction page movements, abstract only)",
+    "Persistent-memory frame allocators that must survive crashes without a log (LLFREE_INIT_RECOVER)",
+    "Research OSes, unikernels or VM memory ballooning (HyperAlloc, EuroSys 2025, builds on it) that need a small C frame allocator"
+  ],
+  "when_not_to_use": [
+    "Userspace object allocation: it is not a malloc replacement and gives frame numbers, not pointers",
+    "Orders above 4 MiB (order 10) or arbitrary-size ranges: only 4 KiB to 4 MiB allocations are handled",
+    "You need the measured numbers to hold for this exact code: the ATC 2023 evaluation ran the Rust llfree-rs in a modified Linux 6.x, not this C reimplementation",
+    "Small projects wanting a stable API: 12 stars, research code whose API (classing, policy callbacks) changed recently"
+  ],
+  "integration": {
+    "form": "static lib (make DEBUG=0 builds build/libllc.a) or source-drop into a kernel tree",
+    "dependencies": "none beyond C11 atomics; you provide llfree_platform.h and llfree_types.h",
+    "min_toolchain": "Clang by default (Makefile CC := clang, -std=c11); uses GNU statement expressions and C23-style 'enum : uint8_t', so GCC/Clang only",
+    "platforms": "64-bit platforms with C11 atomics; userspace std/ build on Linux; kernel integration via luhsra/llfree-linux",
+    "thread_safety": "Designed for concurrent use from all cores without locks (atomic CAS on bitfields, per-core reservations)",
+    "drop_in_for_baseline": "partial — replaces the Linux buddy allocator only through the patched llfree-linux kernel; the API differs from alloc_pages"
+  },
+  "gotchas": [
+    "Release builds use -march=native, so a library built on one machine may not run on an older CPU",
+    "Freed frames must be returned with a matching request (order and class) in llfree_put",
+    "llfree_tree_stats is fast but may be inaccurate; llfree_stats scans the lower allocator for exact counts",
+    "Allocations can come back in a different class than requested (demotion), reported in llfree_result_t.class"
+  ],
+  "pick_this_over_siblings_when": "The siblings (mimalloc-class mallocs, TLSF, arena and pool allocators) all serve userspace objects; pick LLFree only when you are allocating physical page frames in a kernel or hypervisor, where none of them apply.",
+  "verified_claims_summary": "Per the USENIX ATC 2023 abstract (read via search snippet; the usenix.org PDF is blocked here), the Rust LLFree inside Linux cut concurrent 4 KiB allocation time by up to 88% and 2 MiB allocation time by up to 98% versus the Linux buddy frame allocator, and needed 64% fewer compaction page movements; the paper data came from raw hardware not named on the pages read, with an artifact (Distinguished Artifact Award) validated on Linux 6.0-6.2.",
+  "status_note": "Active (585 commits, last commit 2026-09-17), MIT-licensed and small enough to vendor, but research code with a moving API and few users.",
+  "sources_read": [
+    "https://github.com/luhsra/llfree-c",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/README.md",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/include/llfree.h",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/std/llfree_platform.h",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/std/llfree_types.h",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/Makefile",
+    "https://raw.githubusercontent.com/luhsra/llfree-c/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/luhsra/llfree-rs/HEAD/README.md",
+    "https://github.com/luhsra/llfree-bench",
+    "https://github.com/luhsra/llfree-bench/tree/main/artifact-eval",
+    "https://www.usenix.org/system/files/atc23-wrenger.pdf (blocked, 403)"
+  ],
+  "confidence": 0.65
+}
