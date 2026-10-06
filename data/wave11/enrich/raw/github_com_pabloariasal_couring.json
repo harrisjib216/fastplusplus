@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/pabloariasal/couring",
+  "one_liner": "Single-file C++20 teaching demo comparing blocking reads, a thread pool, raw io_uring and io_uring coroutines for loading OBJ files.",
+  "what_it_does": "A 433-line program (couring.cpp) that opens up to 512 .obj files from a directory, reads each whole file, and parses it with tinyobjloader. A command-line flag picks one of five strategies: --trivial, --thread-pool, --iouring, --coroutines and --coro-pool. It is not a library: there is no reusable API, only example code paired with a blog series.",
+  "how_it_is_fast": "The io_uring variants queue one IORING_OP_READ per file into a 512-entry ring with liburing and collect completions with io_uring_submit_and_wait / io_uring_peek_cqe. The coroutine variants wrap each read in a C++20 awaitable whose completion entry carries the coroutine handle, so a completion resumes parsing. --coro-pool then hops onto a BS::thread_pool (v3.3.0) to parse on many threads. The thread-pool variant simply runs blocking read() plus parse across hardware threads, and since parsing dominates, that is where the gain comes from.",
+  "when_to_use": [
+    "Learning how to bridge io_uring completions to C++20 coroutine handles (awaitable + user_data = coroutine_handle pattern)",
+    "As a starting skeleton for batching many small whole-file reads through one ring on Linux 5.1+",
+    "Teaching that CPU-bound parsing, not I/O, often dominates 'load many files' workloads"
+  ],
+  "when_not_to_use": [
+    "As a production I/O library: no API, no error handling for short reads, no tests, abandoned since 2022-11-30",
+    "When files are page-cache hot and parsing dominates: the README's own run has the plain thread pool (0.177 s) beat every io_uring variant (0.230-0.368 s)",
+    "On non-Linux platforms or kernels older than 5.1; liburing is required",
+    "When you need more than 512 files: openFiles stops at MAX_FILES = 512"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "liburing (system), BS::thread_pool v3.3.0 and tinyobjloader v2.0.0rc10 via CMake FetchContent",
+    "min_toolchain": "C++20 with coroutines (GCC needs -fcoroutines, which CMakeLists sets), CMake 3.2+",
+    "platforms": "Linux 5.1+ only (io_uring)",
+    "thread_safety": "not documented; --coro-pool resumes coroutines on pool threads while the main thread busy-polls the CQ and reads handle.done() without synchronization",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Coroutine results are thrown away: promise_type::return_value(Result result) does `result = std::move(result);`, which assigns the parameter to itself (it shadows the member). So --coroutines and --coro-pool return empty ObjReaders. Parsing still runs, so the timings reflect the work, but the output is never checked.",
+    "Nothing validates the output: the only check is an assert (compiled out in Release) that each mesh has 1024 faces, and 'Processed N files' counts every result, good or not. Short or failed read() calls are ignored in the trivial and thread-pool paths.",
+    "--coro-pool busy-spins the main thread on io_uring_peek_cqe, which inflates user time (0.732 s against 0.371 s for trivial).",
+    "Timings come from bash `time` on one run of the whole process, including directory walk and opening all 512 fds. The README's data prep copies one OBJ file hundreds of times, so reads are almost certainly page-cache hot."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to learn the coroutine-over-io_uring pattern. For real io_uring work use liburing directly (it is the dependency here). For a measured multi-file copy or read pipeline, copy-fast or uring-sync are closer to usable tools.",
+  "verified_claims_summary": "One run of run_all on unspecified hardware and compiler (CMake Release, GCC gets -fcoroutines), loading 512 OBJ files. Wall times: blocking single-thread 0.419 s, thread pool 0.177 s (2.4x), io_uring 0.368 s (1.14x), coroutines 0.339 s (1.24x), coroutines plus thread pool 0.230 s (1.8x, all derived from page data). Multithreaded parsing, not io_uring, gives the biggest gain.",
+  "status_note": "Abandoned demo (4 commits, last 2022-11-30, no issues), MIT-licensed; worth reading for the coroutine/io_uring glue, not for vendoring.",
+  "sources_read": [
+    "https://github.com/pabloariasal/couring/issues",
+    "https://github.com/pabloariasal/couring/commits",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/README.md",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/couring.cpp",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/run_all",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/cmake/fetch_thread_pool.cmake",
+    "https://raw.githubusercontent.com/pabloariasal/couring/HEAD/cmake/fetch_tinyobjloader.cmake"
+  ],
+  "confidence": 0.75
+}

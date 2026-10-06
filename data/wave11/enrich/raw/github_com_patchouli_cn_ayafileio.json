@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/patchouli-cn/ayafileio",
+  "one_liner": "Python async file I/O with a C++ native core on io_uring, IOCP and Dispatch I/O; beats thread-pool aiofiles on small cached reads.",
+  "what_it_does": "A Python package (nanobind C++20 extension, v1.11.2) whose ayafileio.open() returns an AsyncFile with an aiofiles-style async API: read/write/seek, text modes and async iteration. It adds things aiofiles lacks: positioned read_at/write_at, batched read_many/write_many, whole-file read_bytes(_many), aopen() and acopy(). The backend is chosen per platform: io_uring on Linux 5.1+, IOCP on Windows and Dispatch I/O on macOS, with a thread-pool fallback. It is a Python library; the C++ core has no public C++ API.",
+  "how_it_is_fast": "Each operation is submitted to a kernel completion API instead of an asyncio executor thread. Results are delivered to the event loop through an adaptive completion batcher (call_soon_threadsafe on count threshold or last in-flight op). Cache-hit fast paths resolve the future inline, so await never yields: io_uring IORING_SETUP_COOP_TASKRUN with an inline CQ peek after submit, Windows FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, and macOS mincore residency check plus pread. Reads go zero-copy into a pre-built PyBytes, writes go zero-copy from a held buffer view, and a thread-local IORequest freelist avoids per-op allocation.",
+  "when_to_use": [
+    "asyncio services doing many small (4-64 KiB) reads of page-cache-hot files, where aiofiles' per-op executor round-trip dominates",
+    "Random positioned reads from many coroutines on one handle (read_at), which aiofiles cannot do without seek+read",
+    "Loading or writing many files concurrently from asyncio (read_bytes_many / write_bytes_many with parallel aopen), e.g. config or model-shard fan-out",
+    "Linux with kernel 5.19+ for the COOP_TASKRUN inline path; prebuilt wheels cover CPython 3.10-3.15 including free-threaded builds"
+  ],
+  "when_not_to_use": [
+    "Large sequential buffered writes on Linux: the README's CI run has aiofiles ahead at 4 MiB blocks (0.4x)",
+    "As a C++ library: there is no C++ API; use liburing directly instead",
+    "When you need tested, stable semantics: version 1.11.2 (2026-10-06) still fixes fd-lifetime races on macOS, and 1.11.1 fixed a use-after-free in aopen's error path. The project moves fast, with commits labelled AI-assisted.",
+    "Windows CI-class VMs: the windows-2022 runner measured 64 KiB sequential read at 0.79x and 4 KiB small reads at 0.62x of aiofiles",
+    "Cold-cache or O_DIRECT workloads: none of the published cells measure uncached storage"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (prebuilt wheels); building from source needs scikit-build-core <1.1, nanobind >=2.12, CMake 3.15+, and liburing on Linux (otherwise io_uring is disabled and the thread-pool fallback is used)",
+    "min_toolchain": "Python 3.10+, C++20 compiler for source builds (built -O3 / MSVC /O2, Release)",
+    "platforms": "Linux (io_uring, kernel 5.1+; x86-64, aarch64, riscv64 wheels), Windows 7+ (IOCP), macOS 10.10+ (Dispatch I/O)",
+    "thread_safety": "Concurrent positioned reads/writes on one handle are supported; seek+read on a shared handle races by design (the benchmark avoids it), and overlapping concurrent writes have unspecified ordering",
+    "drop_in_for_baseline": "partial: open() mirrors the aiofiles API (async with, read/write/seek, text modes), but ayafileio is unbuffered by default and write buffers must not be mutated until the write future resolves"
+  },
+  "gotchas": [
+    "The comparison is lopsided: in the random-read cell aiofiles does await seek() plus await read() (two executor round-trips per op), while ayafileio does one read_at. aiofiles runs buffered, ayafileio unbuffered. All reads hit a 256 MiB file that was just written, so they are page-cache hot.",
+    "README arrow figures (6.8K to 499K, 929 to 3,046 MB/s) are this library's own before/after versions; only the parenthesised ratios compare against aiofiles.",
+    "The macOS 499K ops/s small-read figure was measured on 1.11.1, whose close-path fd fix was itself racy (ABA on the dup'd descriptor, possible EBADF on an unrelated file). 1.11.2 rewrote it, and the README has not been re-measured since.",
+    "Zero-copy writes pin the caller's buffer until the future resolves; mutating it in place changes what gets written."
+  ],
+  "pick_this_over_siblings_when": "Pick it over aiofiles when you are in Python asyncio and need fast small or concurrent reads. From C or C++, liburing (or LLFIO for a portable C++ API) gives the same kernel paths without the Python layer. couring is only a teaching demo of the coroutine-over-io_uring pattern.",
+  "verified_claims_summary": "First-party tests/t_compare.py runs on GitHub Actions runners (Python 3.14, CPU and kernel not recorded; median of 3 one-second rounds after a 0.3 s warmup) against aiofiles at its defaults. On Linux io_uring, random cache-hot 4 KiB reads ran 19.6x-35.4x faster and small sequential reads 9.2x faster, but 4 MiB sequential writes ran 0.4x. Windows headline write figures are local, unspecified NVMe runs.",
+  "status_note": "Very active (1.11.2 on 2026-10-06, 376 commits, MIT, PyPI wheels marked Production/Stable), but the low-level backends still get frequent race and lifetime fixes, so pin a version.",
+  "sources_read": [
+    "https://github.com/Patchouli-CN/ayafileio",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/README.md",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/tests/t_compare.py",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/docs/CHANGES.md",
+    "https://raw.githubusercontent.com/Patchouli-CN/ayafileio/HEAD/src/backends/io_uring_backend.cpp"
+  ],
+  "confidence": 0.7
+}
