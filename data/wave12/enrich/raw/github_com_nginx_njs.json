@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/nginx/njs",
+  "one_liner": "nginx's built-in JavaScript engine (ES5.1 plus an ES6+ subset) for request scripting; about 1.5x Duktape on v8-v7, behind QuickJS.",
+  "what_it_does": "njs is the scripting layer of NGINX: two dynamic modules (ngx_http_js_module and ngx_stream_js_module) run JavaScript handlers for access control, header and body rewriting, subrequests and ngx.fetch, and a standalone njs CLI runs scripts without the nginx objects. It ships two engines selected with js_engine: the original built-in njs engine (ES5.1 strict plus a curated set of ES6+ features; still the default but deprecated since 1.0.0) and QuickJS (recommended, ES2023), linked from Bellard's libquickjs. A C API exists in src/njs.h (njs_vm_create, njs_vm_clone, njs_vm_destroy) and builds as libnjs.a, but it is shaped around nginx and is not a drop-in for Duktape's API.",
+  "how_it_is_fast": "The built-in engine parses and generates bytecode for its own VM (src/njs_parser.c, njs_generator.c, njs_vmcode.c) and is built around cheap per-request VMs: nginx compiles the script once and njs_vm_clone gives each request a copy backed by a fresh fast memory pool (njs_mp_fast_create) that is freed in one step when the VM is destroyed; njs.h exposes no garbage-collector entry point. Regular expressions go to PCRE2 (or PCRE). Against the -Os Duktape build its lead comes from Richards, DeltaBlue and EarleyBoyer (1.7-3.0x on Ubuntu, derived from page data); it is a plain interpreter, so QuickJS's tighter bytecode interpreter stays ahead.",
+  "when_to_use": [
+    "You already run nginx and need request-time logic (auth checks, header or body rewriting, routing, subrequests, ngx.fetch) without a separate service.",
+    "Short-lived per-request scripts: each request gets a clone of a precompiled VM and its memory is released in one shot at request end.",
+    "Existing scripts written for the default njs engine that you are not ready to move to js_engine qjs.",
+    "Choosing between small interpreters for nginx-style scripts on Linux: njs scored 721 vs Duktape 489 on Ubuntu in this suite."
+  ],
+  "when_not_to_use": [
+    "General embedding outside nginx: QuickJS scores 1217 / 1761 vs njs 721 / 950 (Ubuntu / macOS arm64), is about 1 MB, and is documented for embedding; njs's C API is documented only through nginx and the CLI.",
+    "New code: the built-in engine is deprecated since 1.0.0; the README recommends js_engine qjs and says QuickJS will eventually become the default.",
+    "Modern JavaScript: the njs engine covers ES5.1 plus selected ES6+ features (logical assignment ||= and &&= arrived only in 0.9.6, March 2026), while its QuickJS engine supports ES2023.",
+    "RegExp-heavy or allocation-heavy scripts: njs loses RegExp to the -Os Duktape build on both platforms (113 vs 129, 216 vs 244) and Splay on macOS (1472 vs 2594); on macOS arm64 it loses 4 of 8 tests and the total margin is only about 5%.",
+    "Windows hosts: the shootout has no njs build, and ahaoboy/njs-build's Windows job is commented out."
+  ],
+  "integration": {
+    "form": "nginx dynamic module (ngx_http_js_module, ngx_stream_js_module) or built into nginx; standalone njs CLI; libnjs.a static library",
+    "dependencies": "PCRE2 or PCRE, zlib, OpenSSL (WebCrypto), libxml2 and libxslt (xml module); optional libquickjs.a for the QuickJS engine; libedit for the interactive CLI",
+    "min_toolchain": "C compiler, gcc or clang (auto/cc); default flags are -O -g -W -Wall -Wextra -Werror, so a newer compiler that adds warnings can break the default build",
+    "platforms": "Unix-like systems that nginx supports (the README points to nginx's tested-platform list); the shootout builds Linux x86-64 and macOS arm64; no Windows build",
+    "thread_safety": "Not documented; a VM (njs_vm_t) is used from one thread, and nginx runs single-threaded worker processes that clone one VM per request",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stale build of a deprecated engine: the shootout's njs comes from ahaoboy/njs-build, which rebuilds only on a push or tag to that repo (no schedule), and reports 0.9.2 (released 23 Sep 2025); eight releases (0.9.3 to 1.0.1, 02 Sep 2026) have shipped since, including engine fixes such as an Array.prototype.sort use-after-free, a Buffer.concat type confusion and Buffer out-of-bounds reads.",
+    "Engine measured: njs_shell.c defaults to the njs engine ('-n njs|QuickJS ... njs is default') and update.ts passes no flag or NJS_ENGINE, so the recommended QuickJS backend that njs-build links into the same binary (configure --with-quickjs against libquickjs.a) was not measured; the 1.9 MB size behind Score/MB 386 likely includes that QuickJS code.",
+    "Harness: one run per engine per day on unnamed GitHub runner CPUs; v8-v7 base.js discards a 1 s warm-up and times at least 1 s per test, so Time(s) has a 20 s floor and the 62 s vs 70 s wall times compare only coarsely. Neither side is a tuned build: njs uses its default -O (not -O2) and Duktape is an -Os build of unreleased master.",
+    "Memory model: njs.h has no GC API and NGINX describes njs as creating a VM per request and freeing its memory when the request completes (QuickJS blog, search snippet only), so expect allocation-heavy loops in long-running CLI or stream scripts to hold memory until the VM is destroyed. The same blog says QuickJS with js_context_reuse runs within 1% of the njs engine on request workloads, so the v8-v7 gap says little about nginx throughput."
+  ],
+  "pick_this_over_siblings_when": "Pick njs only inside nginx, where it is the supported scripting module, and there prefer its QuickJS engine; outside nginx QuickJS is faster (1217 vs 721 on Ubuntu, 1761 vs 950 on macOS) and documented for embedding. Among small interpreters in the same shootout it sits with PrimJS (737) and LibJS (691) on Ubuntu, below Quanta (1068).",
+  "verified_claims_summary": "In ahaoboy/js-engine-benchmark's v8-v7 run (snapshot 10/5/2026, GitHub-hosted runners, CPU not stated, one run per engine), the njs CLI 0.9.2 running its built-in engine scored 721 on Ubuntu and 950 on macOS arm64 versus Duktape 2.99.99 (-Os build of master) at 489 and 905, about 1.5x and 1.05x (derived from page data); QuickJS 2026-06-04 scored 1217 and 1761. njs was built from nginx/njs master by ahaoboy/njs-build with njs's default -O flags and linked against Bellard's libquickjs.a; there is no Windows result.",
+  "status_note": "Actively maintained by NGINX (1.0.1 on 02 Sep 2026, master at 1.0.2) under BSD-2-Clause, but the measured built-in engine is deprecated in favour of QuickJS, so this entry is evidence about legacy njs scripts rather than a reason to adopt the engine.",
+  "sources_read": [
+    "https://github.com/nginx/njs",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/README.md",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/CHANGES",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/external/njs_shell.c",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/src/njs.h",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/src/njs_vm.c",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/src/njs_vmcode.h",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/auto/cc",
+    "https://raw.githubusercontent.com/nginx/njs/HEAD/auto/pcre",
+    "https://github.com/nginx/njs/issues?q=is%3Aissue+performance",
+    "https://raw.githubusercontent.com/ahaoboy/njs-build/HEAD/build.sh",
+    "https://raw.githubusercontent.com/ahaoboy/njs-build/HEAD/.github/workflows/build.yml",
+    "https://github.com/ahaoboy/njs-build/actions",
+    "https://github.com/ahaoboy/njs-build/releases",
+    "https://github.com/ahaoboy/njs-build/releases/tag/v0.1.1",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/update.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/info.json",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/.github/workflows/update.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/run.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/base.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/info.json",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/action.yml",
+    "https://nginx.org/en/docs/njs/engine.html (EGRESS_BLOCKED)",
+    "https://blog.nginx.org/blog/quickjs-engine-support-for-njs (WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}
