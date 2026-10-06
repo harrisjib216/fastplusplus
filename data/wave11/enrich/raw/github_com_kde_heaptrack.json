@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/kde/heaptrack",
+  "one_liner": "Linux heap profiler using LD_PRELOAD and libunwind; much lower time and memory overhead than Valgrind massif (no published numbers).",
+  "what_it_does": "heaptrack records every heap allocation and free along with its backtrace, so you can find peak memory consumers, leaks, allocation hotspots and temporary allocations. You run `heaptrack <app>` or attach to a running process with `heaptrack --pid` (injection through gdb), and it writes a compressed trace that heaptrack_print (text, massif-format export, flamegraph.pl collapsed stacks) or the Qt/KDE heaptrack_gui analyzes. It replaces massif as a profiling tool, not as an API; no code changes are needed except to annotate custom pool allocators.",
+  "how_it_is_fast": "The application runs natively instead of on Valgrind's serializing JIT: a preload library interposes malloc, free, calloc, realloc, posix_memalign, aligned_alloc, valloc, dlopen and dlclose, plus mimalloc and Boehm GC hooks, through dlsym(RTLD_NEXT), so only allocation calls pay any cost. Each event captures a backtrace with libunwind's unw_backtrace using a per-thread unwind cache (cache size 1024), deduplicates it into a TraceTree of instruction pointers (sorted children, binary-searched) and emits one compact hex line (+ size index ptr / - ptr) to a pipe. Symbolization and aggregation happen later in the separate heaptrack_interpret process, and a timer thread samples timestamps and RSS from /proc/self/statm.",
+  "when_to_use": [
+    "Heap profiling of large or long-running multi-threaded C/C++ (or Rust/D) applications on Linux that are impractical to run under massif's serialization.",
+    "Finding allocation hotspots and temporary allocations (malloc directly followed by free), which massif's pre-aggregated output cannot show.",
+    "Attaching to an already running process to see what is allocating right now (needs gdb).",
+    "Embedded targets: record a raw trace with --raw on the device and interpret it on a host with --sysroot and debug paths.",
+    "CPU-heavy code with few allocations, where heaptrack adds almost nothing because it only intercepts allocator calls."
+  ],
+  "when_not_to_use": [
+    "Allocation-heavy hot loops: every malloc/free takes a global lock, unwinds the stack and writes a line, so programs that allocate millions of times per second still slow down noticeably (no overhead numbers are published).",
+    "Pool or arena allocators that bypass malloc, or page-level and stack accounting: massif's --pages-as-heap and stack profiling cover these, while heaptrack needs code annotations and cannot profile the stack.",
+    "Non-Linux targets: the collector is Linux-only (FreeBSD has code paths); only heaptrack_print and heaptrack_gui build on macOS.",
+    "Binaries built with clang's ASan (unsupported), or code linked with old gold linkers, where libunwind produces bogus backtraces that crash the GUI with out-of-memory.",
+    "Hour-long captures you need to browse quickly: the data format cannot be seeked, so large profiles load slowly and zooming the timeline reloads them."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "collector: libunwind (or unwind tables), Boost iostreams and program_options, zlib, optionally zstd, elfutils, libdl, pthread, gdb for attach; GUI: Qt 6.5+, KDE Frameworks, optional KDiagram",
+    "min_toolchain": "C++17 and CMake 3.16 per CMakeLists.txt (the README's C++11, CMake 2.8.9 and Qt 5 lines are out of date)",
+    "platforms": "Linux (x86-64, ARM, embedded via --raw); analyzers also build on macOS",
+    "thread_safety": "Safe for multi-threaded targets: one global timed mutex serializes allocation event recording, and a thread_local RecursionGuard prevents re-entry; pthread_atfork handlers cover forking.",
+    "drop_in_for_baseline": "partial: replaces massif as a workflow (run the app under heaptrack instead of valgrind --tool=massif, and heaptrack_print can export massif format), but it does not do page-as-heap or stack profiling"
+  },
+  "gotchas": [
+    "The README's 'multi-threaded applications are not serialized' means the program code; allocator calls from all threads still contend on one global lock inside libheaptrack.",
+    "Backtraces need debug symbols and frame unwinding info; release builds without debug info give unresolved frames, and Rust needs debug = true in the workspace Cargo.toml.",
+    "The GitHub repo is a mirror: patches go to invent.kde.org/sdk/heaptrack and bugs to bugs.kde.org.",
+    "Unwind depth is capped at 64 frames (Trace::MAX_SIZE) and can be lowered for speed; deeper stacks are truncated."
+  ],
+  "pick_this_over_siblings_when": "Choose heaptrack over bytehound when you want a mature, distro-packaged C/C++ heap profiler with a GUI and an attach mode; bytehound claims cheaper unwinding but likewise publishes no numbers. Choose it over memtrail or heapusage when you need full allocation timelines and flame graphs rather than just leak reports.",
+  "verified_claims_summary": "No measurement exists: the README only says heaptrack's time and memory overhead is 'significantly lower' than Valgrind massif, that it does not serialize threads and that it does not slow non-allocating CPU work. The author's blog post (found by search, not opened) gives only rough estimates, so the tier stays D.",
+  "status_note": "Actively maintained by KDE and KDAB (version 1.6.80 in CMakeLists, commits through 2026-10-02); the collector is GPL-2.0-or-later with LGPL-2.1+ parts, fine for use as a tool though not for vendoring into proprietary code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/README.md",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/libheaptrack.cpp",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/heaptrack_preload.cpp",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/heaptrack_inject.cpp",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/heaptrack.sh.cmake",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/trace.h",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/trace_libunwind.cpp",
+    "https://raw.githubusercontent.com/KDE/heaptrack/HEAD/src/track/tracetree.h",
+    "WebSearch: heaptrack massif overhead comparison faster milianw blog (snippets only)"
+  ],
+  "confidence": 0.75
+}
