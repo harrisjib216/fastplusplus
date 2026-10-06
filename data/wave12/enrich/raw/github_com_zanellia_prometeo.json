@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/zanellia/prometeo",
+  "one_liner": "Typed-Python-subset DSL transpiled to self-contained C on BLASFEO; beats CPython, Nuitka and PyPy on a Fibonacci loop.",
+  "what_it_does": "prometeo is an embedded DSL: you write statically typed Python (type hints, `pmat`/`pvec` matrices, `dims` constants, `pmt_gemm_nn`/`pmt_potrf`-style calls) that runs unchanged under CPython with `pmt file.py --cgen=False`, or is transpiled by `pmt file.py --cgen=True` into a C file plus header and Makefile that link only against libcpmt and BLASFEO, not libpython. It targets embedded optimal-control code (Riccati recursions, MPC) rather than general Python. It is not an interpreter and not a drop-in for CPython.",
+  "how_it_is_fast": "AST-level transpilation of a statically typed subset to plain C, so integer and float loops become native C loops (Python `int` maps to C `int`, `float` to `double`). Static analysis computes a worst-case heap size and the generated code uses two preallocated bump heaps (8- and 64-byte aligned) instead of malloc and garbage collection. Matrix operations call BLASFEO, a small-matrix BLAS/LAPACK with panel-major storage and hand-tuned kernels, which is where the large wins over NumPy and Julia at small sizes come from.",
+  "when_to_use": [
+    "Embedded MPC or optimal-control kernels with small-to-medium dense matrices (state sizes about 4-300) that must ship as self-contained C with a bounded, statically known heap.",
+    "Prototyping such kernels in Python syntax and running them under CPython for debugging, then emitting C for an embedded Linux or bare-metal toolchain.",
+    "Small dense linear algebra where NumPy/SciPy call overhead dominates: the Riccati benchmark ran 2.1x-35.7x faster than NumPy, largest at the smallest sizes (derived from page data).",
+    "Typed integer or float loops that need to leave Python without dragging in libpython, where Nuitka or Cython would not be embeddable."
+  ],
+  "when_not_to_use": [
+    "General Python code: only a typed subset with a few linear algebra operations is supported (README disclaimer), with no standard library, dynamic typing or Python objects in generated code.",
+    "Production or long-lived projects: last commit and last PyPI release 0.0.11 on 2022-05-19, open issues on overloads (#20) and Apple M1 loading (#23).",
+    "Python 3.10 or newer, or Windows: setup.py pins python_requires '>=3.8, <3.10' and casadi==3.5.5, and pmt raises 'Running on unsupported operating system' outside Linux and macOS.",
+    "Large matrices where BLAS work dominates: the lead over NumPy falls to 2.3x and over Julia with MKL to 2.0x at state size 292, before correcting for the stage-count mismatch noted in gotchas.",
+    "Code that relies on Python's arbitrary-precision integers (see gotchas)."
+  ],
+  "integration": {
+    "form": "module (pip package prometeo-dsl with the `pmt` CLI) that emits a source-drop C file, header and Makefile linked against libcpmt and libblasfeo shared libraries",
+    "dependencies": "BLASFEO (git submodule) and libcpmt for generated code; Python side: astpretty, strip_hints, astunparse, numpy, scipy, multipledispatch, pyparsing, casadi==3.5.5, jinja2, numexpr",
+    "min_toolchain": "Python 3.8-3.9 per setup.py (README says 3.6+); gcc with -std=c99 for generated code",
+    "platforms": "Linux and macOS (pmt refuses other OSes); BLASFEO targets x86-64 and ARM; Apple M1 load failure open as issue #23",
+    "thread_safety": "Not documented; generated code keeps its heap pointers in file-scope globals (___c_pmt_8_heap, ___c_pmt_64_heap), so it is not reentrant across threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Fibonacci harness is uneven and unoptimised: pmt's Makefile template builds generated C with `gcc -fPIC -std=c99` and no -O flag (so it times -O0 code, where gcc cannot hoist the loop-invariant fib call); prometeo's 0.657075 s matches the generated main's printf(\"%f\") timer that starts after heap malloc, CPython's 3-decimal 11.787 s matches pmt's wall-clock around exec(), and the Nuitka and PyPy timing commands are not in the repo.",
+    "Riccati work mismatch (derived from benchmark sources): riccati_mass_spring.py.in runs 4 stages (`for i in range(1, N)`, N=5) while the NumPy template (`range(N)`) and Julia riccati.jl (`1:N`) run 5, so the NumPy and Julia ratios are overstated by up to 1.25x (about 1.7x-28.6x and 1.6x-14.6x after scaling by 4/5, derived from page data); the hand-written BLASFEO C used for the parity line is not in benchmarks/.",
+    "The committed Riccati JSONs cannot be regenerated as is: run_benchmark.py does float(outs) on the program output but the current generator prints 'execution time:...s' and 'total time:...s'; run_benchmark_numpy.py now writes riccati_benchmark_numpy_blasfeo.json, which is not committed and which run_benchmark.py tries to load.",
+    "Python `int` becomes a 32-bit C `int` in generated code, so results can wrap (undefined behaviour in C) past 2^31 while the same program under CPython uses bignums; also the repo LICENSE is BSD-2-Clause but the PyPI metadata says LGPL."
+  ],
+  "pick_this_over_siblings_when": "Pick prometeo over Codon, Nuitka, Cython or Pythran only when the output must be standalone C with no Python runtime and a bounded heap for small dense linear algebra on embedded targets; for speeding up ordinary Python programs, Codon, Shed Skin or Pythran cover far more of the language.",
+  "verified_claims_summary": "First-party only, on a Dell XPS-9360 (i7-7560U at 2.30 GHz): a typed iterative fib loop (3e7 calls, labelled '10E7 runs') took 11.787 s under CPython 3.7, 10.039 s under Nuitka, 1.78 s under PyPy3.7 and 0.657 s as prometeo-generated C (about 17.9x CPython and 2.7x PyPy, derived from page data); a Riccati factorization matched hand-written BLASFEO C (0.84x-1.05x of its speed) and beat NumPy by 2.1x-35.7x and Julia with MKL by 2.0x-18.3x, with prometeo doing one fewer stage than NumPy and Julia.",
+  "status_note": "Abandoned since 2022-05-19 (PyPI 0.0.11, self-described very preliminary) but BSD-2-Clause in the repo and its generated C is plain C99 callable from C++; treat it as a reference design for Python-to-embedded-C with BLASFEO rather than a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/README.md",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/setup.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/examples/fibonacci/fibonacci.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/examples/fibonacci/CPU_time.txt",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/cpmt/Makefile",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/cmdline/pmt.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/cgen/code_gen_c.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/__init__.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/mem/__init__.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/auxl/__init__.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/prometeo/linalg/__init__.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/run_benchmark.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/run_benchmark_numpy.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/run_benchmark_julia.py",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati_mass_spring.py.in",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/test_riccati_numpy.py.in",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/test_riccati.jl",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati.jl",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/Project.toml",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati_benchmark_prometeo.json",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati_benchmark_blasfeo_api.json",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati_benchmark_numpy.json",
+    "https://raw.githubusercontent.com/zanellia/prometeo/HEAD/benchmarks/riccati_benchmark_julia.json",
+    "https://github.com/zanellia/prometeo/issues?q=is%3Aissue",
+    "https://pypi.org/pypi/prometeo-dsl/json"
+  ],
+  "confidence": 0.6
+}
