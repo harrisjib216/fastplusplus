@@ -55,3 +55,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Box86 (ptitSeb/box86): not catalogued; the 2022 box86.org article gives 7z 3117 vs QEMU 691 on an x86 guest (FEX enricher, 2026-10-06); seed candidate alongside Box64.
 - Static Hermes (facebook/hermes, already catalogued) and Perry (repo unknown) named in the jlucaso1/js-compiled harness, whose results live only on blocked GitHub Pages (scriptc enricher, 2026-10-06).
 - angelsea (AsuMagic/angelsea, BSD-2): MIR-based JIT for AngelScript 2.37+, README claims 0-40% over the BlindMindStudios JIT in a real application and about 5x on a generic-call benchmark (AngelScript JIT enricher, 2026-10-06); seed candidate.
+- LayerZero-Labs/fafo (Rust, revm-based parallel EVM, Apache-2.0/MIT, 65 stars) and the Supra AFT 2025 BTM paper (arXiv 2503.03203, up to 1.33x over pevm, snippet only, no repo found) (pevm enricher, 2026-10-06); seed candidates.
