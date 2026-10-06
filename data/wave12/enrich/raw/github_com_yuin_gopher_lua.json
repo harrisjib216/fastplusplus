@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/yuin/gopher-lua",
+  "one_liner": "Pure-Go Lua 5.1 VM for embedding in Go programs; about Python-3.4 speed in 2016, now behind CPython.",
+  "what_it_does": "A Lua 5.1 compiler and register-based VM written in Go (plus Lua 5.2 goto), for scripting Go applications without cgo. The Go API is object-based rather than stack-based: values are LValue interfaces (LNumber, LString, *LTable, *LFunction, LUserData, LChannel), and the stack is used only to pass arguments and return values. It adds Lua-side Go channels, context-based cancellation and shareable compiled FunctionProto bytecode. It also ships a `glua` standalone interpreter with the same options as `lua`.",
+  "how_it_is_fast": "It makes no special performance claim; the README calls it 'not fast but not too slow'. The main loop dispatches through a function jump table indexed by opcode, with hot register operations inlined into _vm.go by a code-generation step. An unsafe bulk allocator boxes float64 numbers into LValue interfaces from pooled float blocks, and the integers 0-127 are preallocated. Registry and call-stack sizes are tunable, and a fixed-size call stack is the fastest setting.",
+  "when_to_use": [
+    "You need a Lua 5.1 scripting layer inside a Go binary with no cgo (cross-compiles cleanly, static builds).",
+    "Config, rules or plugin scripts where host-call ergonomics, goroutine and channel integration, or context cancellation matter more than raw interpreter speed.",
+    "Many short-lived or pooled LStates running the same script: compiled FunctionProto bytecode can be shared read-only across states.",
+    "You want the largest Go-Lua ecosystem: about 7,000 stars plus companion modules (gopher-luar, gluamapper, gopher-json, gluahttp, gopher-lua-libs)."
+  ],
+  "when_not_to_use": [
+    "CPU-bound script hot loops: independent fib(35) runs put it 1.9-2.0x behind CPython 3 (ugobenchfib 2020 and 2022, version not stated) and 2.3x behind CPython 2 (Tengo README) and 3-6x behind C Lua.",
+    "Speed among Go-hosted VMs: Shopify go-lua, goja, Tengo and uGO all beat it in ugobenchfib 2022 (GopherLua 3.21 s vs uGO 1.98 s, go-lua 2.90 s).",
+    "Code that needs Lua 5.2+ semantics (integers, bitwise ops, _ENV), string.dump, package.loadlib, debug hooks or os.setlocale; none are supported.",
+    "Sharing one LState across goroutines: it is not goroutine-safe, and the README recommends one LState per goroutine or a pool.",
+    "Sandboxed untrusted scripts that need cheap timeouts: SetContext switches to a main loop that does a channel select on every instruction (README: 7.5 s vs 5.3 s on fib)."
+  ],
+  "integration": {
+    "form": "Go module (go get github.com/yuin/gopher-lua)",
+    "dependencies": "github.com/chzyer/readline (for the glua REPL); otherwise standard library",
+    "min_toolchain": "Go 1.23 (go.mod since the 2026-04-01 bump; the 2016 benchmark used Go 1.7)",
+    "platforms": "any Go target (pure Go, no cgo)",
+    "thread_safety": "LState is not goroutine-safe; use one per goroutine (sync.Pool pattern in the README). Compiled FunctionProto bytecode is safe to share read-only.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark caveat: the wiki numbers are single `time` runs of fib(35) from 2016 (Go 1.7, Python 3.4.3, Windows 7, CPU model not stated). Later independent runs reverse both headline wins: CPython beats GopherLua by 1.9-2.3x, and Shopify go-lua is faster than GopherLua (2.90 s vs 3.21 s in ugobenchfib 2022; 4,028 ms vs 4,409 ms in Tengo's README).",
+    "Numbers are float64 only (LNumber), as in Lua 5.1. The bulk allocator uses unsafe and reflect.SliceHeader to point interfaces into shared float blocks, so a whole block stays alive until every float in it is dead.",
+    "Setting a context makes every instruction pay a channel select, about 40% slower on the README's fib run. The CPU columns in that README timing (0.01 s user) are not meaningful; only wall time is.",
+    "Hash parts of tables do not shrink when entries are set to nil (issue #214, open since 2018). A fix for pathologically complex Lua patterns and a LOADNIL code-generation bug fix were only merged on 2026-04-01."
+  ],
+  "pick_this_over_siblings_when": "Pick GopherLua over uGO, Tengo, goja or Expr when you specifically want Lua syntax and its Go ecosystem inside a pure-Go binary; pick those siblings when interpreter speed matters, since uGO and Tengo are about 1.5-1.6x faster on fib(35). For speed with Lua in Go, Wangshu (catalogued under language-interpreters) reports a 15-18x JIT speedup over gopher-lua v1.1.2.",
+  "verified_claims_summary": "The author's 2016 wiki times one recursive fib(35) run per implementation with `time` on Windows 7 64-bit (2 CPUs, 8 GB, CPU not named) and Go 1.7: GopherLua 5.40 s vs CPython 3.4.3 5.84 s (about 1.08x), Lua 5.1.4 1.71 s, go-lua 8.13 s, otto 173.32 s and anko 182.73 s. Independent fib(35) runs since then (ugobenchfib on Intel i5 with Go 1.15 and on Apple M1 with Go 1.18; Tengo's README) show native CPython 1.9-2.0x faster than GopherLua (Python 3, version not stated, in ugobenchfib) and 2.3x faster (Python 2, in Tengo's README).",
+  "status_note": "Widely used (about 7,000 stars, 710 forks), MIT, and still maintained, but merges come in yearly batches (Aug 2024, Nov 2024, Apr 2026) with 54 open issues and 52 open PRs. Fine to depend on for embedding, but do not choose it for speed.",
+  "sources_read": [
+    "https://github.com/yuin/gopher-lua",
+    "https://github.com/yuin/gopher-lua/commits/master",
+    "https://github.com/yuin/gopher-lua/wiki/Benchmarks",
+    "https://github.com/yuin/gopher-lua/issues?q=is%3Aissue+performance",
+    "https://github.com/yuin/gopher-lua/issues/225",
+    "https://github.com/yuin/gopher-lua/issues/214",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/README.md",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/go.mod",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/_vm.go",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/vm.go",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/state.go",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/value.go",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/config.go",
+    "https://raw.githubusercontent.com/yuin/gopher-lua/HEAD/alloc.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/README.md",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/README.md",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/README.md"
+  ],
+  "confidence": 0.7
+}

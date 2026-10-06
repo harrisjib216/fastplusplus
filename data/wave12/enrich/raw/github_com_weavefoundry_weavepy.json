@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/weavefoundry/weavepy",
+  "one_liner": "Experimental Rust Python 3.14 interpreter with a Cranelift JIT; about 2x CPython 3.14.8 on its own fixtures.",
+  "what_it_does": "A from-scratch Python interpreter in Rust (lexer, parser, compiler, VM, C-API layer) that aims to run unmodified CPython 3.14 code, including binary wheels through an emulated C-API, with a `weavepy` CLI that is argv-compatible with `python`. It is meant as a drop-in for the `python` executable, and the `weavepy` crate can also be embedded as a library. It is not on crates.io (version 0.0.0), so you build it from the workspace.",
+  "how_it_is_fast": "Tiered execution: a bytecode interpreter with specialization and call-shape inline caches, a Cranelift-backed tier-2 JIT on by default (typed scalar, object, dict, string and slots lanes with guards and deopt back to exact interpreter frames, native-to-native calls, OSR at loop back edges), and since PR #83 a baseline 'frame compiler' for loops that tier 2 declines. Native Rust implementations replace pure-Python stdlib paths (deque, datetime, pickle, regex, map/filter), small ints and floats are unboxed, and tracebacks are built lazily. The biggest wins are integer and float loop kernels that compile entirely to native code.",
+  "when_to_use": [
+    "CPU-bound pure-Python loops over ints and floats (sumvm, nested_loops, jitloop ran in 0.05-0.08 of CPython 3.14.8's time; spectral_norm 0.20; fib 0.36).",
+    "Experimenting with a faster CPython-compatible runtime on code that does not depend on CPython object identity or obscure C-API corners.",
+    "Research into tiered JITs for Python: the repo keeps RFCs, per-pass performance reports and raw census data, and a Cranelift tier-2 design you can read.",
+    "Workloads where per-process startup matters slightly: the parity run measured 19.4 ms vs CPython's 24.5 ms for the startup fixture (x86-64 host)."
+  ],
+  "when_not_to_use": [
+    "Class-heavy OO code like DeltaBlue: 3.03x CPython's time; class-attribute reads through an instance cost about 357 instructions vs CPython's 36, and isinstance about 1,635 vs 271.",
+    "Memory-constrained or import-heavy processes: after importing logging or asyncio, peak RSS is 2-2.5x CPython's, and imports retire 1.3-1.8x CPython's instructions.",
+    "Production use: single author, 3 stars, 0 open issues, no releases or crates.io package; performance moved from 2.75x slower than CPython (committed macOS-aarch64 baseline, early September) to 0.50x in four weeks of large PRs.",
+    "Code relying on CPython object identity of numbers: the unboxed numeric model makes test_marshal's id()-based new-object checks unsatisfiable (documented divergence).",
+    "Generator-heavy and dict-heavy code where it is at or behind parity (generators 1.10x, dict_ops 0.92-1.06x of CPython's time)."
+  ],
+  "integration": {
+    "form": "built binary (Cargo workspace; the weavepy crate is embeddable but unpublished)",
+    "dependencies": "Rust toolchain; Cranelift 0.132 (JIT), rustls (ssl), rusqlite (sqlite3), vendored expat; tools/pgo_build.py needs the llvm-tools rustup component",
+    "min_toolchain": "Rust 1.93 (workspace rust-version, set by Cranelift 0.132); rust-toolchain.toml tracks stable",
+    "platforms": "Linux, macOS x86-64 and ARM64, Windows (CI lanes on all three); benchmarks only on macOS",
+    "thread_safety": "GIL by default with eval-breaker hand-off from JIT code; a free-threaded lane exists (PR #75) and PEP 684/734 sub-interpreters are supported",
+    "drop_in_for_baseline": "partial: argv-compatible `python` replacement that the README says passes 546 of 550 CPython regrtest labels and 40 ecosystem rows (pandas, Django, FastAPI), but the parity report lists test_capi, test_genexps, test_tempfile and test_utf8_mode failing on the dev host, plus a documented id() divergence for numbers"
+  },
+  "gotchas": [
+    "Harness flaw: the headline 0.50 geomean is not over 24 fixtures as the doc states. crates/weavepy-bench/src/report.rs drops the three census fixtures (deque_ops, datetime_ops, pickle_bench) from the CPython geomean, so 0.50 covers 21 fixtures. The 0.75 vs main uses all 24 (base_geomean has no filter). Over all 24 rows of the doc's table the CPython ratio is 0.53, derived from page data.",
+    "The geomean leans on three JIT loop kernels (sumvm, jitloop, nested_loops at 0.05-0.08). Without them the other rows give about 0.70-0.71 of CPython's time (derived from page data).",
+    "Fixtures discard bench(n)'s return value, and the gate never checks outputs. Per-iteration times (about 2 ns for sumvm's loop) are consistent with native loops, not dead-code elimination, but correctness rests on the separate test suites.",
+    "Each sample is one bench(n) call in a fresh process (5 samples plus 1 discarded warm-up), so JIT compile time is inside the timed region. CPython is whatever `python3.14` is on PATH. An earlier pass on an Intel macOS host used CPython 3.14.5 built with PGO, LTO and the tail-call interpreter; the parity doc does not say how 3.14.8 was built."
+  ],
+  "pick_this_over_siblings_when": "Pick PyPy for a mature JIT that is far faster on loops and stable today. Codon, mypyc and Cython compile typed subsets for larger gains but are not drop-in. WeavePy is only worth a look if you need CPython 3.14 semantics and C-API wheels in a JIT runtime and accept experimental status; the CPython tail-calling interpreter is the conservative 3-5% option.",
+  "verified_claims_summary": "The project's own bench gate on one Intel Core i9-9980HK macOS laptop ran a release build of WeavePy (PR #83 does not mention PGO) interleaved with CPython 3.14.8 from PATH. Per-fixture medians gave 0.50 of CPython's time as a geometric mean over 21 fixtures (0.53 over all 24 table rows), from 0.05 on sumvm to 3.03 on deltablue. The Rust version and CPython build flags are not stated.",
+  "status_note": "Very active (daily large PRs by one author, last commit 2026-10-05), dual MIT/Apache-2.0, unpublished 0.0.0 workspace. Its performance claims are four weeks old and swing fast between reports, so treat it as an experiment, not a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/README.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE-CPYTHON-PARITY.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE-EXECUTION.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE-JSON.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE-RUNTIME-METADATA.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/docs/PERFORMANCE-DISPATCH-MEMORY.md",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/tools/pgo_build.py",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/src/fixtures.rs",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/src/main.rs",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/src/report.rs",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/src/runner.rs",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/src/stats.rs",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/fixtures/sumvm.py",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/fixtures/jitloop.py",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/fixtures/nested_loops.py",
+    "https://raw.githubusercontent.com/weavefoundry/weavepy/HEAD/crates/weavepy-bench/baselines/bench-macos-aarch64.json",
+    "https://github.com/weavefoundry/weavepy/tree/main/crates/weavepy-bench/src",
+    "https://github.com/weavefoundry/weavepy/tree/main/crates/weavepy-bench/baselines",
+    "https://github.com/weavefoundry/weavepy/commits/main",
+    "https://github.com/weavefoundry/weavepy/issues?q=is%3Aissue",
+    "https://github.com/weavefoundry/weavepy/pull/83",
+    "https://crates.io/api/v1/crates/weavepy"
+  ],
+  "confidence": 0.65
+}
