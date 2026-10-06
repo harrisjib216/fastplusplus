@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/platformlab/nanolog",
+  "one_liner": "Binary, printf-style C++ logger from Stanford PlatformLab with about 7-14 ns call-site latency, 20-40x below spdlog.",
+  "what_it_does": "A Linux-only asynchronous logger with a printf-like NANO_LOG(LEVEL, fmt, args...) macro and four levels (DEBUG, NOTICE, WARNING, ERROR). The application writes a compact binary log file. A separate decompressor program turns that file back into readable text. It is not a drop-in replacement for spdlog: the format strings are printf rather than fmt, there are no sinks or loggers, and the output is binary.",
+  "how_it_is_fast": "Static log information (format string, file, line, argument types) is pulled out at compile time, either by a Python preprocessor pass or by C++17 constexpr parsing of the format string. The hot path then copies only the dynamic arguments and an rdtsc timestamp into a lock-free per-thread staging buffer (1 MB by default). A background thread compresses and deduplicates those records and writes them out with POSIX AIO, and all formatting happens offline in the decompressor (USENIX ATC'18 paper).",
+  "when_to_use": [
+    "Latency-critical Linux x86-64 services (trading, storage, RPC servers) where a log call has to cost about 10 ns at p50 and stay near 11-21 ns at p99.9",
+    "Very high log volume where small binary files and an offline decompress step are acceptable",
+    "Codebases already using printf-style format strings that want the C++17 library mode with no build changes beyond linking -lNanoLog -lrt -pthread",
+    "Multi-threaded producers: the Quill harness shows 4-thread p99.9 at 21 ns against 1106 ns for spdlog"
+  ],
+  "when_not_to_use": [
+    "You need readable text logs live (tail -f, stdout, log shippers): output is binary only, and stdout and uncompressed output are open feature requests (#51, #52)",
+    "Windows, macOS or ARM64 targets: the README says Linux only, the timestamps use rdtsc, and ARM64 and Windows are open issues (#69, #67)",
+    "You want fmt-style formatting, sinks, file rotation or multiple log files: none of these exist (rotation #63 and multiple files #62 are open requests)",
+    "You need an actively maintained dependency: the last commit was December 2020, and issue #70 (2023) asks whether the project is dead",
+    "CMake, vcpkg or Conan builds: it builds with GNU Make only, and a CMake request (#37) and package-manager request (#55) are open"
+  ],
+  "integration": {
+    "form": "static lib (libNanoLog.a plus decompressor); the Preprocessor mode instead generates per-build library code through a Python script and NanoLogMakeFrag",
+    "dependencies": "pthreads, POSIX AIO (librt); Python 3.4.2+ and GNU Make 4.0+ to build; googletest submodule for unit tests",
+    "min_toolchain": "C++17, GNU g++ 7.5.0 or newer",
+    "platforms": "Linux only (x86-64 in practice: rdtsc timestamps; ARM64 is open issue #69)",
+    "thread_safety": "Thread-safe: each thread logs into its own __thread StagingBuffer, which a single background thread drains; the producer blocks when its buffer is full",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Compile with -Werror=format: the README warns that format errors may silently corrupt the log file at runtime. The %n specifier is rejected, and \"%*.d\" is reported unsupported (#74)",
+    "The Preprocessor mode builds a library that is non-portable even between compilations of the same application, so the decompressor must come from the same build as the binary that wrote the log",
+    "A logging thread blocks (it does not drop records) when its 1 MB staging buffer fills. The log file is opened with O_DSYNC, so throughput depends on disk",
+    "Open bug reports: 'Internal Error: Corrupted BufferExtend' (#64), and the nanosecond field in formatted timestamps can be negative or drift from system time (#28)"
+  ],
+  "pick_this_over_siblings_when": "Pick it over fmtlog, Quill or XTR when you want printf format strings and the smallest binary logs, and accept Linux-only, binary output and no maintenance; those three match or beat its latency (6-9 ns p50) in the same harness, are maintained and write text. Against MS BinLog it has lower tail latency (11 vs 119 ns p99.9 at 1 thread), but BinLog is maintained and has the published throughput number (61.79M msg/s), while NanoLog is absent from Quill's throughput table.",
+  "verified_claims_summary": "Quill v13.0.0 latency harness (odygrd/logger_benchmarks, GCC 14.2 Release -march=x86-64-v3, i5-12600 on a tuned RHEL 9.4 box) logs two ints and a double. PlatformLab NanoLog measured 8/9/11 ns (p50/p90/p99.9) on 1 thread vs spdlog 271/296/360, and 14/14/21 on 4 threads vs 557/614/1106. NanoLog's own README reports 7/37 ns vs spdlog v1.1.0 214/2546 for a static string, with no compiler or CPU listed.",
+  "status_note": "Stale (last commit 2020-12-22, nearly 6 years, about 30 open issues with no replies, so effectively abandoned), but ISC-licensed and small enough to vendor and patch; last documented toolchain is g++ 7.5.0.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PlatformLab/NanoLog/HEAD/README.md",
+    "https://raw.githubusercontent.com/PlatformLab/NanoLog/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PlatformLab/NanoLog/HEAD/runtime/NanoLogCpp17.h",
+    "https://raw.githubusercontent.com/PlatformLab/NanoLog/HEAD/runtime/RuntimeLogger.h",
+    "https://raw.githubusercontent.com/PlatformLab/NanoLog/HEAD/runtime/Config.h",
+    "https://github.com/PlatformLab/NanoLog/issues",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
