@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/chicoxyzzy/cynic",
+  "one_liner": "Pre-alpha strict-only JavaScript and WebAssembly engine in Zig whose interpreter beats QuickJS-NG on its author's micro-benchmarks.",
+  "what_it_does": "Cynic is a from-scratch ECMAScript engine (plus a WebAssembly interpreter called Sarcasm) written in Zig, shipped as a `cynic` CLI (lex, parse, eval, run, repl) and a Zig embedding API built around an explicit `Engine` struct with allocator threading and no globals. It is strict-only (no sloppy mode, no Annex B, no legacy web-compat built-ins) and starts each realm hardened: frozen primordials, built-in `harden()`, and `eval`/`Function` off unless the host passes `--allow=eval`. It is not API-compatible with QuickJS; the README says the embedding API and runtime behavior are still evolving.",
+  "how_it_is_fast": "The bytecode is register-file plus implicit accumulator (Ignition/Hermes style) with one-byte opcodes, narrow immediate forms, fused opcodes such as `make_array_n` and `LoopIncLt`, a post-finalization `Star r; Ldar r` forwarding pass, and a direct-threaded dispatch loop in the Lantern interpreter; the docs reject QuickJS's pure-stack design for its higher dispatch count. Values are NaN-boxed with the JSC encoding (unboxed doubles, 16-bit tags), and load, store, computed-property and method-call sites carry typed inline caches (the benchmarking doc credits the `lda_property` IC with a 66% drop on prop_access). Above Lantern sit two JIT tiers, Bistromath (T1) and Ohaimark (T2), on x86_64 and AArch64, but the cross-engine numbers that beat QuickJS-NG were taken with `--no-jit`.",
+  "when_to_use": [
+    "You embed JavaScript in a Zig program, or want a hardened-by-default JS sandbox (frozen primordials, host-gated eval and Wasm compilation) and your scripts are strict-mode or ES modules.",
+    "Interpreter-only throughput on tight int32 arithmetic, array-literal and constructor loops matters: in the author's interpreter-tier snapshot Cynic --no-jit is 3.1-6.5x faster than QuickJS-NG on arith_loop, mod_loop, array_literal_loop, construct_loop and class_instantiate.",
+    "Compute-heavy scripts of the Octane kind where QuickJS-NG is your current engine and a few MB more RSS is acceptable (crypto 1.73x, splay 1.71x, navier-stokes 1.24x, raytrace 1.21x faster in the same snapshot, derived from page data).",
+    "You need JS and WebAssembly in one small native engine on x86_64 Linux or Apple Silicon macOS."
+  ],
+  "when_not_to_use": [
+    "Production use of any kind: the README calls it pre-alpha, the embedding API is still changing, test262 coverage is about 89% of the runtime-mode sweep, and closed issues include panics on large Numbers (#22, #23) and a CLI `eval` that ran code with syntax errors (#137).",
+    "Legacy or web-compat code: sloppy-mode scripts, Annex B features, `with`, legacy octal literals and Annex B regex leniencies are rejected, so a lot of npm-era code will not run unmodified.",
+    "Memory-constrained hosts: QuickJS-NG peaks at 1,792 KiB on nearly every micro fixture against 6,016-27,520 KiB for Cynic, and on deltablue 1,920 KiB vs 12,544 KiB.",
+    "Workloads like deltablue (Cynic 430 ms vs qjs 344 ms) or richards (a tie), and anything where Hermes, V8 --jitless or JSC with JIT off is an option: all three beat Cynic on every Octane macro in the same snapshot.",
+    "Windows, mobile, or a C/C++ host that needs a stable C API: Windows and mobile are unsupported and no C API is documented."
+  ],
+  "integration": {
+    "form": "Zig source build (`zig build`): CLI binary plus a Zig embedding API; no tagged releases",
+    "dependencies": "none declared in build.zig.zon; vendored test262, Wasm testsuite, Unicode, CLDR and IANA tzdata assets (Intl is a compile-time choice: -Dintl=off|stub|full)",
+    "min_toolchain": "Zig development build 0.17.0-dev.1275+59a628c6d, pinned in build.zig.zon (anyzig can fetch it)",
+    "platforms": "Native CI on x86_64-linux-gnu and Apple Silicon macOS; cross-builds aarch64-linux-gnu, x86_64-linux-musl, aarch64-macos; wasm32-freestanding for the browser playground; JIT tiers only on x86_64 and AArch64 macOS/Linux; no Windows or mobile",
+    "thread_safety": "not documented (state is owned by an explicit Engine struct, no globals)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured posture is not the default posture: bench-cross.sh runs Cynic with --no-jit --unhardened --allow=eval, while the CLI default is hardened with both JIT tiers on; in the same snapshot the default JIT-on run is slower than --no-jit on several micros (arith_loop 99 vs 77 ms, construct_loop 337 vs 312, mod_loop 69 vs 60) and within 3% on every macro.",
+    "Harness gap: bench-cross.sh sends every engine's stdout to /dev/null and checks only the exit code, so the checksums the micro fixtures print are never compared across engines (the Octane macros do self-check, e.g. crypto throws if decryption does not round-trip). Timing is spawn-to-exit wall clock with `date +%s%3N`, so start-up is inside every number, and arith_loop, array_literal_loop, construct_loop and json_stringify keep their accumulator in a top-level script `let`, so they also time each engine's global-binding access path.",
+    "The baseline binary is pinned down after all: jsvu's QuickJS installer downloads quickjs-ng's release asset qjs-linux-x86_64, which quickjs-ng's release.yml builds on Alpine (musl) with GCC as a static CLI with static mimalloc in CMake's default Release mode; the CPU model of the benchmark host is still unstated.",
+    "The snapshot is from revision 6e125807 (2026-08-06) and covers 19 micro fixtures; bench/micros now holds 39 (BigInt, relational and double-increment fixtures added later) with no newer cross-engine snapshot. The record's note that Cynic vendors QuickJS's libregexp comes from a bench-cross.sh comment that looks stale: vendor/ has no libregexp and ARCHITECTURE.md names Perlex as Cynic's own regex engine."
+  ],
+  "pick_this_over_siblings_when": "Pick Cynic over QuickJS when you want a hardened, strict-only engine with a faster interpreter on arithmetic and allocation loops and can live with pre-alpha status and 3-7x the RSS; QuickJS remains the choice for small footprint, sloppy-mode compatibility and a stable C API. Hermes (faster than Cynic on every Octane macro here) or PrimJS and Escargot are better picks when you need a mature non-JIT engine today.",
+  "verified_claims_summary": "The author's internal cross-engine snapshot (tools/bench-cross.sh, revision 6e125807, Linux 6.8 x86_64, CPU model not stated, pinned to CPU 1, median of 12 subprocess wall-clock runs after one warmup) has Cynic --no-jit, built with zig build -Doptimize=ReleaseFast, ahead of QuickJS-NG 0.15.1 (jsvu's static musl/mimalloc release binary) on all 18 micro fixtures qjs completes (3.1-6.5x on the arithmetic and allocation loops, near ties on promise_chain and shallow_cons_miss) and on four of six Octane macros (1.2-1.7x), tied on richards and 1.25x slower on deltablue (derived from page data). The page labels itself an unpublished internal regression compass, so this is first-party evidence.",
+  "status_note": "Very active (2,558 commits, last commit 2026-10-05, 26 stars, no releases) and MIT-licensed, but pre-alpha with an evolving embedding API and a pinned Zig development compiler, so treat it as an engine to watch or experiment with, not one to ship.",
+  "sources_read": [
+    "https://github.com/chicoxyzzy/cynic",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/README.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench-cross-results.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/tools/bench-cross.sh",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/docs/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/docs/benchmarking.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/docs/jit.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/micros/arith_loop.js",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/micros/mod_loop.js",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/micros/array_literal_loop.js",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/micros/json_stringify.js",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/micros/construct_loop.js",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/macros/README.md",
+    "https://raw.githubusercontent.com/chicoxyzzy/cynic/HEAD/bench/macros/crypto.js",
+    "https://github.com/chicoxyzzy/cynic/tree/main/bench/micros",
+    "https://github.com/chicoxyzzy/cynic/tree/main/vendor",
+    "https://github.com/chicoxyzzy/cynic/issues?q=is%3Aissue",
+    "https://github.com/chicoxyzzy/cynic/issues/137",
+    "https://raw.githubusercontent.com/GoogleChromeLabs/jsvu/HEAD/engines/quickjs/extract.js",
+    "https://raw.githubusercontent.com/GoogleChromeLabs/jsvu/HEAD/engines/quickjs/get-latest-version.js",
+    "https://raw.githubusercontent.com/GoogleChromeLabs/jsvu/HEAD/engines/quickjs/predict-url.js",
+    "https://raw.githubusercontent.com/GoogleChromeLabs/jsvu/HEAD/shared/installer.js",
+    "https://raw.githubusercontent.com/quickjs-ng/quickjs/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/quickjs-ng/quickjs/HEAD/CMakeLists.txt"
+  ],
+  "confidence": 0.75
+}
