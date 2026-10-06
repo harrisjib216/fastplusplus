@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/dfeneyrou/palanteer",
+  "one_liner": "Single-header C++11 tracing/logging instrumentation plus viewer; enqueues a log in ~19 ns versus 1250 ns measured for spdlog.",
+  "what_it_does": "Palanteer is an instrumentation toolkit: a single-header MIT C++ library (palanteer.h, define PL_IMPLEMENTATION once) records scopes (plBegin/plEnd), data values, locks, memory, context switches and printf-style logs (plLogDebug/Info/Warn/Error with a category), and streams them to an AGPL viewer or a Python scripting module that can also call registered CLIs in the program. It is not a drop-in logger: logs are binary records that need the viewer to read, with optional console echo. A Python instrumentation module covers unmodified Python programs.",
+  "how_it_is_fast": "Static strings (file names, event names, log formats) are hashed at compile time and sent once, so a log call writes only hashes, an RDTSC timestamp and raw arguments; formatting is deferred to the viewer side. Events go into a preallocated double-banked global buffer claimed with a single atomic fetch_add on a cache-line-aligned bank/index word, and a collection thread swaps banks and ships them (zstd-compressed records). Instrumentation groups compile out to zero instructions when disabled.",
+  "when_to_use": [
+    "Debug/performance observation of C++11+ programs on Linux or Windows where you want timeline, flame graph, plots and logs from one instrumentation pass.",
+    "Hot-path logging where you can accept binary logs read through a viewer; enqueue cost is tens of ns, not microseconds.",
+    "Test automation that drives a program through Python scripts (CLI calls, freeze points, event collection).",
+    "Builds that need instrumentation compiled out per group or static strings stripped (external string mode) for shipping binaries."
+  ],
+  "when_not_to_use": [
+    "Production logging that needs human-readable files, rotation or multiple sinks: only one binary file, and the author says this rules out permanent logging.",
+    "macOS or Windows on ARM64: OS support is Linux and Windows 10; issue #49 reports Windows ARM64 failing to build on __rdtsc.",
+    "Heavy use of dynamic (runtime) names: issue #47 reports plBeginDyn/plEndDyn are very slow because of the string pool, and pool exhaustion busy-waits.",
+    "Burst rates above the collection buffer (default ~5 MB, ~100K events per ~5 ms period): instrumented threads busy-wait and a SATURATION log is emitted.",
+    "Shipping the viewer or Python scripting module in proprietary tools: they are AGPL-3.0-or-later; project is beta and stale since May 2025, with protocol and record formats not stable across versions."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the C++ instrumentation (optional libunwind and libdw on Linux for stack trace dumps); viewer needs OpenGL 3.3+ and bundles Dear ImGui, stb, zstd; Python modules need CPython 3.7+",
+    "min_toolchain": "C++11 for the instrumentation header; C++14 for viewer and scripting module",
+    "platforms": "Linux 32/64-bit (tested x64 and armv7l) and Windows 10; RDTSC on x86-64, std::chrono steady_clock fallback elsewhere; viewer Linux 64-bit and Windows 10 only",
+    "thread_safety": "Instrumentation calls are multithread-safe (shared buffer claimed by atomic fetch_add); threads busy-wait when the buffer or dynamic-string pool is exhausted",
+    "drop_in_for_baseline": "partial \u2014 printf-style plLog API replaces spdlog/NanoLog call sites, but output is binary records for the viewer, not formatted text sinks"
+  },
+  "gotchas": [
+    "The 19.2 ns vs 1250 ns spdlog comparison times only the write into each logger's internal queue (no formatting or output); only Palanteer's test program is published, and the author notes spdlog's own published figures could not be reproduced, so the ~50-65x margin is unverified. NanoLog was faster (10.7 ns) and produced smaller files (7 MB vs 18 MB).",
+    "All threads share one atomic bank/index counter, so per-event cost under many concurrently logging threads is not documented; the 6.1 ns self-test figure is called 'very optimistic' by the author (small loop).",
+    "Exceeding compile-time resource limits (CLI count, request buffer) triggers assertion failures rather than graceful degradation.",
+    "Servers and instrumentation library versions must match; older records may become unreadable after upgrades."
+  ],
+  "pick_this_over_siblings_when": "Pick Tracy (2.25 ns per zone, actively developed, wider platform support) for general frame/zone profiling; pick Palanteer when you also want low-cost printf-style logs with graphable arguments and Python-scripted remote control and testing of the program in the same tool. funtrace is the choice for automatic function-level tracing with lower per-call cost.",
+  "verified_claims_summary": "First-party docs table on an AMD Ryzen 7 5700U: 1M-iteration loop logging one integer parameter, queue write only, gives Palanteer 19.2 ns, NanoLog 10.7 ns and spdlog 1250 ns per log (about 65x versus spdlog and 1.8x slower than NanoLog, derived from page data), plus compile speed of 2800 vs 470 (spdlog) and 265 (NanoLog) logs/s; the comparison harness and flags are not public. Separate self-tests on a Core i7-7600U report 6.1 ns (gcc, Debian 10) and 4.3 ns (MSVC 2019) per traced event, and the connected testprogram reports ~19-21 ns per event with ~4.7-4.9M events/s server processing.",
+  "status_note": "Stale (last commit 2025-05-12, beta, 2.2k stars, open build and performance issues); the MIT single header is easy to vendor, but the viewer and scripting tools are AGPL-3.0-or-later.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dfeneyrou/palanteer/HEAD/README.md",
+    "https://raw.githubusercontent.com/dfeneyrou/palanteer/main/docs/index.html",
+    "https://raw.githubusercontent.com/dfeneyrou/palanteer/HEAD/c++/palanteer.h",
+    "https://github.com/dfeneyrou/palanteer/issues",
+    "https://github.com/dfeneyrou/palanteer/issues/47"
+  ],
+  "confidence": 0.7
+}

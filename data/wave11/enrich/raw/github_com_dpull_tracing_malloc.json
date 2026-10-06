@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/dpull/tracing_malloc",
+  "one_liner": "Linux LD_PRELOAD malloc hook that records live allocations with stack traces; far lower overhead than Valgrind for leak hunting.",
+  "what_it_does": "tracing_malloc is a small C shared library (libtracing_malloc.so) injected with LD_PRELOAD that overrides malloc, free, calloc, realloc, posix_memalign, aligned_alloc and malloc_usable_size. Each live allocation is stored with its size, a wall-clock timestamp and a 28-frame return-address stack in a memory-mapped file /tmp/tracing.malloc.<pid>, and /proc/self/maps is copied to /tmp so addresses can be symbolised later. No recompilation of the target is needed; Python and Go tools under tools/ (allocation, addr2line-go) read the dumps to show unfreed memory over time.",
+  "how_it_is_fast": "It does far less work than Valgrind: no dynamic binary translation or shadow memory, only a dlsym(RTLD_NEXT) forward to the real allocator plus a libunwind unw_backtrace and an insert into a fixed-size open-addressing (linear probing) table guarded by one pthread mutex. Records live directly in a MAP_SHARED file, so there is no serialization step and the data survives a crash.",
+  "when_to_use": [
+    "Finding leaks or memory growth in large Linux C/C++ servers (the README example is a UE4 dedicated server) that are too slow to run under Valgrind.",
+    "Observing which call stacks hold memory at a given moment in a long-running process, without rebuilding it.",
+    "Quick x86-64 Linux investigations where you can build libunwind 1.3.1 and a CMake shared library."
+  ],
+  "when_not_to_use": [
+    "Detecting invalid reads/writes, use-after-free or uninitialised memory: it only tracks allocation lifetimes, unlike Valgrind memcheck or ASan.",
+    "Allocation-heavy multithreaded programs: every malloc takes a full libunwind backtrace and one global mutex, and freed slots become tombstones that are never compacted, so probe chains can grow over long runs.",
+    "Processes with more than 8,388,608 (RECORD_MAX_COUNT) live allocations: further records are silently dropped when the table fills.",
+    "Non-Linux targets, or when you need memalign/valloc/pvalloc/reallocarray or mmap-based allocations tracked (not hooked).",
+    "Projects that need a license: no LICENSE file is in the repository."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libunwind (static unwind.a, build_libunwind fetches v1.3.1), libdl, pthread; Python for the analysis tools",
+    "min_toolchain": "C11, CMake 3.5",
+    "platforms": "Linux (LD_PRELOAD, /proc, sbrk); 64-bit only (static assert sizeof(void*) == 8)",
+    "thread_safety": "Inserts and removes are serialized by one pthread mutex; record_update's lookup and the field writes after hashmap_add run outside the lock",
+    "drop_in_for_baseline": "partial: replaces valgrind --leak-check style leak finding via LD_PRELOAD on unmodified binaries, but provides none of memcheck's access checking"
+  },
+  "gotchas": [
+    "At startup hashmap_create writes the pointer field of all 8M 256-byte slots, so each traced process touches a 2 GiB MAP_SHARED file in /tmp (plus a .maps copy); forked children create their own.",
+    "free() calls the real free before removing the record, and record_update looks up without the mutex, so under threads an address reused by another thread can race with its stale record.",
+    "Hash slot is pointer % 8M; allocator pointers are 16-byte aligned, so only one slot in 16 is a home slot and linear-probe clusters form.",
+    "Bash processes are skipped on purpose (is_bash), and calloc's pre-init fallback multiplies nmemb*size without an overflow check."
+  ],
+  "pick_this_over_siblings_when": "Pick it over heaptrack or bytehound only when you want a tiny, readable LD_PRELOAD hook whose records sit in a crash-surviving mmap file; heaptrack and bytehound are more complete heap profilers, and AddressSanitizer or Dr. Memory are the choice when you also need access-error detection.",
+  "verified_claims_summary": "One first-party `time` run of a UE4 ExampleServer (about 5 s, -ansimalloc): real 5.375 s native, 6.888 s under tracing_malloc, 53.204 s under default Valgrind (memcheck), with no hardware, compiler or repeat counts given. CPU time tells a sharper story than wall time: user+sys 0.97 s native, 2.61 s with tracing_malloc (about 2.7x) and 49.3 s under Valgrind (about 19x more than tracing_malloc) (derived from page data); the native run is mostly idle, so the 28% wall-clock overhead understates the hook's cost.",
+  "status_note": "Small single-author project (8 stars, 89 commits, last commit 2026-05-25) with no license file, so reference only; the code is short enough to read in an hour and reimplement.",
+  "sources_read": [
+    "https://github.com/dpull/tracing_malloc",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/README.md",
+    "https://github.com/dpull/tracing_malloc/tree/master/src",
+    "https://github.com/dpull/tracing_malloc/tree/master/tools",
+    "https://github.com/dpull/tracing_malloc/commits/master",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc.h",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc_hook.c",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc_record.c",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc_stacktrace.c",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc_hashmap.c",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/src/tracing_malloc_hashmap.h",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/build_libunwind",
+    "https://raw.githubusercontent.com/dpull/tracing_malloc/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}

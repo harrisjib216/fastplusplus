@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/dmtrkovalenko/zlob",
+  "one_liner": "Zig glob(3)-compatible globbing and parallel file walker with C/Rust APIs; about 2-3x faster than Rust glob crate and walkdir.",
+  "what_it_does": "zlob is a globbing library with a POSIX glob(3)-shaped C API (zlob/zlob_at/zlobfree, glob_t-like struct, ZLOB_* flags mirroring GLOB_*), plus extensions: ** recursion, {a,b} braces, bash extglob, .gitignore filtering, and in-memory path-list matching (zlob_match_paths, compiled zlob_pattern_t). It also ships a parallel recursive walker (zlob_walk / zlob_walk_collect, Rust WalkBuilder) meant to replace the Rust walkdir and ignore crates, with per-entry metadata fetched only for the attributes you ask for. Available as a C library, a Zig module and a Rust crate (zlob on crates.io).",
+  "how_it_is_fast": "The pattern is analysed first so literal prefixes prune traversal (drivers/**/*.c only opens drivers/), and common leaf shapes such as *.c or *.{c,h,zig} compile to masked 1-4 byte suffix compares done for several suffixes at once with Zig @Vector SIMD (src/suffix_match.zig). Directory listing calls getdents64 directly on Linux (with a SWAR dirent scan as of 1.6.5), getattrlistbulk on macOS and ntdll on Windows; metadata comes from statx with a requested-field mask. The walker runs one directory per task on a work-stealing pool, and results are unsorted by default (ZLOB_NOSORT in ZLOB_RECOMMENDED).",
+  "when_to_use": [
+    "Recursive extension globs (**/*.c, src/**/*.{rs,toml}) over large source trees, such as editor/file-finder indexing (it was built for the fff finder).",
+    "Replacing walkdir or ignore in Rust tools that walk big trees with .gitignore rules, especially when only size/mtime metadata is needed.",
+    "Filtering a large in-memory list of paths against glob patterns without touching the file system (zlob_match_paths / indices variants).",
+    "C code that wants glob(3) semantics plus ** and braces, and can take a Zig-built static or shared library."
+  ],
+  "when_not_to_use": [
+    "Build systems that cannot add the Zig toolchain: the C library builds only with zig 0.16.0.",
+    "Programs relying on sorted glob output by default: ZLOB_RECOMMENDED omits sorting, so you must drop NOSORT and give up some of the measured speed.",
+    "Code needing GLOB_ALTDIRFUNC-style custom directory callbacks; path-matching mode documents that some flags (NOMAGIC, TILDE with relative paths) may not behave as expected.",
+    "Linux without statx (WSL1): open issue #30 says walker metadata comes back as size/mtime 0 with no error or fallback.",
+    "If you need the glibc glob() speedup as evidence: the README claims 1.2-1.7x (up to 10x) over glibc but publishes no table or harness for it."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime; Zig 0.16.0 to build (Rust crate wraps the same Zig code)",
+    "min_toolchain": "zig 0.16.0 exactly (build.zig.zon minimum_zig_version 0.16.0; README says only 0.16.0)",
+    "platforms": "Linux, macOS, Windows (platform-specific listing paths); no-libc targets also built (a parallel-worker segfault there was fixed 2026-08-17)",
+    "thread_safety": "Walker is multithreaded (threads=0 means one per CPU; visitor callbacks run on workers, with a worker_id for lock-free sharding); thread safety of concurrent zlob() calls not documented",
+    "drop_in_for_baseline": "partial: C API mirrors glob(3) with a zlob prefix and zlob_t struct, but it is not a symbol-level replacement for glibc glob() and the Rust API differs from the glob and walkdir crates"
+  },
+  "gotchas": [
+    "Walk table in the README says 'real 185k-entry repository' run with the 'medium/' filter, but rust/benches/walk_comparison.rs builds synthetic temp trees and its 'medium' tree is about 8,034 entries; the 185,737-entry numbers cannot be reproduced from the published harness as written, and the README does not say which zlob variant (serial, parallel, collect) each row is.",
+    "In the glob benchmark the zlob side runs with NOSORT while the glob crate yields sorted per-directory output and allocates a PathBuf per match, so part of the gap is semantics, not matching speed; the globset+walkdir 1,000x+ ratios come from walking the whole tree for shallow patterns.",
+    "** does not follow directory symlinks by default (ZLOB_FOLLOW_SYMLINKS opts in with a (dev, ino) visited set), unlike the glob crate, so match counts on trees with directory symlinks differ; a nushell user reported 1,748 vs 1,767 matches for **/*.rs (issue #18, closed with PR #19).",
+    "README links LICENSE.md, which does not exist; the license file is LICENSE (MIT)."
+  ],
+  "pick_this_over_siblings_when": "Pick zlob when the job is pattern-driven file discovery (glob or gitignore-aware walk) inside your own program; al-dente (dent) and bfs are find-style command-line tools, and ripgrep is a searcher that only uses a walker internally.",
+  "verified_claims_summary": "With the project's criterion harness over a Linux kernel checkout (93,638 files) on an Intel Core i7-14700K, zlob 1.x built ReleaseFast with zig 0.16.0 resolved **/*.c in 24.2 ms vs 49.2 ms for the Rust glob crate (2.0x) and shallow patterns like fs/*.c in 9.84 us vs 31.9 us (3.2x); walker rows (27.4 ms vs walkdir 90.9 ms, 2.4 ms vs ignore 8.0 ms) come from a synthetic-tree harness whose sizes do not match the README's stated 185,737 entries. No glibc glob() or C++ std::filesystem comparison is published.",
+  "status_note": "Actively developed (v1.6.5, last commit 2026-08-30, 230 stars), MIT-licensed and usable from C, but tied to zig 0.16.0 for builds.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/README.md",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/include/zlob.h",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/rust/benches/glob_comparison.rs",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/rust/benches/walk_comparison.rs",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/scripts/run-benchmarks.sh",
+    "https://raw.githubusercontent.com/dmtrKovalenko/zlob/HEAD/src/suffix_match.zig",
+    "https://github.com/dmtrKovalenko/zlob",
+    "https://github.com/dmtrKovalenko/zlob/issues?q=is%3Aissue",
+    "https://github.com/dmtrKovalenko/zlob/issues/18",
+    "https://github.com/dmtrKovalenko/zlob/issues/30",
+    "https://github.com/dmtrKovalenko/zlob/commits/main",
+    "https://github.com/dmtrKovalenko/zlob/tree/main/src"
+  ],
+  "confidence": 0.75
+}

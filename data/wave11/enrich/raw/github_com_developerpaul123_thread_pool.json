@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/developerpaul123/thread-pool",
+  "one_liner": "Header-only C++20 thread pool with per-worker mutex queues and stealing; first-party bench shows ~7% over BS::thread_pool 3.5.",
+  "what_it_does": "A general-purpose task pool: dp::thread_pool pool(n); pool.enqueue(f, args...) returns a std::future, pool.enqueue_detach(f, args...) fires and forgets, and wait_for_tasks() blocks until the in-flight counter reaches zero. The task wrapper type and thread type are template parameters (default std::move_only_function<void()> when the library provides it, else std::function; std::jthread). It is not a fork-join or task-graph scheduler and has no parallel-for helper.",
+  "how_it_is_fast": "Each worker owns a std::deque guarded by a std::mutex plus a std::counting_semaphore; enqueue picks a target worker round-robin from a mutex-protected 'priority queue' of worker ids and signals that worker. Idle workers drain their own queue from the front, then steal one task from the back of a peer's queue, looping while an atomic unassigned-task counter is positive. The speed edge over BS::thread_pool comes mostly from per-worker queues (less contention than one shared queue) and from std::move_only_function avoiding the shared_ptr<promise> that std::function forces for enqueue(); there is no lock-free deque.",
+  "when_to_use": [
+    "You want a small, readable, MIT, header-only C++20 pool to vendor, with futures or detached tasks.",
+    "Many independent, flat tasks submitted from one producer thread (the shape the benchmarks exercise).",
+    "Toolchains with std::move_only_function (C++23 library: MSVC 2022, recent libstdc++/libc++), where enqueue avoids a shared_ptr allocation per task.",
+    "You need a per-thread init callback (constructor takes an init function receiving the worker id)."
+  ],
+  "when_not_to_use": [
+    "Recursive or nested parallelism where tasks wait on child futures: issue #57 (open, labelled bug) documents deadlock when all workers block in .get(); use a work-stealing fork-join runtime instead.",
+    "Very fine-grained tasks or many producers: every enqueue takes two mutexes (the round-robin id queue and the target deque) and wakes a semaphore; task_thread_pool already beats it on small tasks in the author's own clang table (109.7% vs 100% at the 8-element case).",
+    "When you need a parallel_for, priorities, cancellation of running tasks, or scheduling against TBB/OpenMP/Taskflow class runtimes; none were benchmarked.",
+    "If you need evidence of end-to-end task completion speed: the published matrix benchmark times only submission (see gotchas)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (benchmarks pull nanobench, doctest, function2 and the compared pools via CPM)",
+    "min_toolchain": "C++20 (concepts, std::jthread, std::counting_semaphore, std::atomic::wait); README lists Visual Studio 2022, Clang 10+, GCC 11+, CMake 3.25+",
+    "platforms": "any platform with a C++20 standard library; CI on Ubuntu and Windows",
+    "thread_safety": "enqueue/enqueue_detach are safe from any thread (mutex-protected queues); clear_tasks is best-effort and can race with stealing per its own doc comment",
+    "drop_in_for_baseline": "partial — similar enqueue/future model to BS::thread_pool but different method names (enqueue/enqueue_detach vs submit/push_task), no parallel loops"
+  },
+  "gotchas": [
+    "Benchmark harness flaw: in benchmark/source/matrix_multiplication.cpp the provider lambdas return void, so the results vector stays empty and each nanobench epoch only enqueues 25k-100k detached tasks and returns without waiting for them; the ms/op figures measure submission throughput (with earlier epochs' backlog still running), not time to finish the work.",
+    "The labels overstate the work: multiply_array uses sqrt(a.size()) as the side length, so '256x256' is a 16x16 int matmul (8 is 2x2, 1024 is 32x32); argument vectors are copied into each task.",
+    "Baseline is old: the benchmark pins bshoshany/thread-pool 3.5.0 and uses BS::thread_pool_light, not the current BS::thread_pool releases.",
+    "enqueue_detach swallows exceptions silently; constructor throws std::invalid_argument for 0 threads; destructor waits for all queued tasks."
+  ],
+  "pick_this_over_siblings_when": "Pick it over riften::Thiefpool when you want a simpler mutex-based header that the author maintains and that matches Thiefpool within ~1-2% in the shared harness; pick nexus, Fork Union or a fork-join runtime (chili-style, Heartbeat, Nowa) for fine-grained or recursive work, where this pool's two-mutex submit path and blocking futures are weak points.",
+  "verified_claims_summary": "Author's nanobench run on a Ryzen 7 5800X under Windows (MSVC table; clang table via WSL also published, flags not stated) puts dp::thread_pool with std::move_only_function about 3% ahead of its std::function variant and about 7-10% ahead of BS::thread_pool_light 3.5.0, level with riften::Thiefpool, and behind task_thread_pool on the small cases; the timed loop measures task submission, not completion, and the 'NxN' sizes are really sqrt(N)-sided matrices.",
+  "status_note": "Active (last commit 2026-09-10, release 0.7.0, 568 stars, account renamed from DeveloperPaul123 to ptsouchlos); MIT and small enough to vendor, but the speed claim rests on a submission-only first-party benchmark.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/README.md",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/include/thread_pool/thread_pool.h",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/include/thread_pool/thread_safe_queue.h",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/source/main.cpp",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/source/matrix_multiplication.cpp",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/source/thread_pool_scaling.cpp",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/source/count_primes.cpp",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/include/utilities.h",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/results/benchmark_results_clang.md",
+    "https://raw.githubusercontent.com/ptsouchlos/thread-pool/HEAD/benchmark/results/benchmark_results_msvc.md",
+    "https://github.com/ptsouchlos/thread-pool/tree/main/benchmark/source",
+    "https://github.com/ptsouchlos/thread-pool/issues?q=is%3Aissue",
+    "https://github.com/ptsouchlos/thread-pool/issues/57",
+    "https://github.com/ptsouchlos/thread-pool"
+  ],
+  "confidence": 0.75
+}
