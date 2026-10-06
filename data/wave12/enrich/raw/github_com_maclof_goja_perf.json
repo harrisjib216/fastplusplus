@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/maclof/goja-perf",
+  "one_liner": "API-compatible fork of the pure-Go goja JavaScript engine with quickening, loop traces and cheaper Go/JS calls; beats upstream goja.",
+  "what_it_does": "Embeds an ECMAScript 5.1+ interpreter in a Go program with no cgo, exactly like dop251/goja: same package name and API (goja.New, RunString, AssertFunction, ExportTo), only the import path changes to github.com/maclof/goja-perf. On top of upstream it adds an opt-in capability sandbox (goja.NewSandbox) with built-in allow/deny lists, a dynamic-code (eval/Function) block and wall-clock timeouts.",
+  "how_it_is_fast": "Adaptive quickening rewrites hot bytecode (cached global references, unboxed float fast paths for add, multiply and bitwise or) and loop back-edges are counted so hot integer loops lower to a typed trace IR run by a Go executor with range guards and deoptimisation. On Windows/amd64 and Linux/amd64 one trace shape (sum += i over an ascending, descending or constant-step counter) is emitted as x86-64 machine code into an mmap'd W^X region; a separate lowering keeps the empty global counter loop in a Go integer. Boundary paths drop primitive boxing, reuse VM stack storage and cache reflected method templates, which is where the 1.4x-2.9x call-benchmark gains and allocation drops come from.",
+  "when_to_use": [
+    "Go services that embed goja for scripting and call JS from Go (or Go from JS) many times per request: CallJS 267 ns to 94 ns and CallNative 192 ns to 93 ns, with per-call allocations going to zero.",
+    "Hosts that need a cheap, pure-Go, cgo-free JS runtime per tenant or request: the fork's benchjs suite measured fresh-runtime setup at 13-219 us versus 0.6-1.3 ms for a fresh V8 context.",
+    "Running untrusted user scripts where you want a deny-by-default global allowlist, eval/Function blocking and a timeout without writing that plumbing yourself (still behind OS/container limits).",
+    "Code bases already on upstream goja that can absorb an import-path change and want the boundary speedups without touching scripts."
+  ],
+  "when_not_to_use": [
+    "Compute-heavy JavaScript: the fork's own benchjs results put V8 (Node 24.4, V8 13.6) about 15x faster at the steady-state geomean and 36-56x on a 20x20 matmul; use a V8 or QuickJS binding if cgo is acceptable.",
+    "Projects that depend on goja_nodejs packages: the fork is a distinct module, so its *goja.Runtime and upstream's are different Go types and only console/require/util are bundled as an internal copy.",
+    "When you need upstream's latest fixes and ES2025 features: the fork's last commit is 2026-09-02, while upstream dop251/goja has since merged ES2025 Iterator helpers, a WeakMap reimplementation, async iterator support and several correctness fixes (sparse arrays, ToInt32, bound function length) the fork does not carry.",
+    "Risk-averse production use: two-star single-maintainer fork, about a month old, developed by a coordinator/subagent AI workflow (AGENTS.md), with no issues filed yet."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "regexp2, go-sourcemap, golang.org/x/text, google/pprof, Masterminds/semver, goccy/go-yaml (same set as upstream goja)",
+    "min_toolchain": "Go 1.25 (go.mod); numbers measured with Go 1.26.2",
+    "platforms": "any Go platform; native-code traces only on windows/amd64 and linux/amd64 (needs mmap/mprotect PROT_EXEC or the Windows equivalent), typed Go executor elsewhere; Linux/386 CI-tested",
+    "thread_safety": "Not goroutine-safe per Runtime (one goroutine at a time, as upstream); Sandbox serializes its own Run* calls.",
+    "drop_in_for_baseline": "partial — same API and package name, but the import path changes, upstream and fork Goja values are distinct Go types, and goja_nodejs needs an adapter"
+  },
+  "gotchas": [
+    "Two of the seven 'significant' README rows have no code change behind them: BenchmarkVmNOP2 (1.96x) sets vm.prg to an empty Program, so halted() is true at pc 0 and the jump instruction never executes (the benchmark times only 'vm.pc = 0' plus halted(), whose source is identical in fork and upstream), and BenchmarkMapDelete (1.48x, same 480 B/op and 5 allocs) exercises orderedMap set/remove and asciiString hashing whose fork source matches upstream apart from the import path; both gains are layout or machine-noise artifacts, consistent with the fork's own benchjs note that Goja samples on this laptop had CV 29-209%.",
+    "The 249.71x MainLoop row comes from global_counter_trace.go, a lowering that matches only an empty-body 'for (var i = 0; i < CONSTANT; i++) {}' at global scope; it does not speed up loops that do any work.",
+    "The native x86-64 trace backend accepts exactly one IR shape, an accumulator adding the loop counter (sum += i) with step 1, -1 or a constant step; every other loop stays in the typed Go executor or the interpreter.",
+    "The interpreter dispatch loop now checks tier state on every instruction (vm.tier != nil && ...), and native traces need executable memory, so hardened environments that deny PROT_EXEC fall back silently to the Go executor."
+  ],
+  "pick_this_over_siblings_when": "Pick it over quickjs-jit (Longbridge QuickJS-NG with JIT), katsu or Graal.js when the host is a Go program that must stay cgo-free and mostly crosses the Go/JS boundary; pick one of those (or a V8 binding) when JS compute throughput matters, since V8 is about 15x faster than this fork on the fork's own pure-JS workloads.",
+  "verified_claims_summary": "Against its upstream merge base 8f1c069, on Go 1.26.2, Windows/amd64, AMD Ryzen 9 PRO 7940HS, ten interleaved samples per version: Go/JS call micro benchmarks improved 1.39x-2.86x with allocation drops, and an empty global counter loop improved 249.71x through a special-case lowering; 48 of 55 shared benchmarks did not change significantly, and two of the seven significant rows (VmNOP2, MapDelete) measure code the fork did not change. The benchjs suite (published in benchjs/README.md, contrary to the record) shows V8 13.6 about 15x faster on steady-state pure JS and Goja runtime creation 25-60x cheaper than a V8 context.",
+  "status_note": "Released v0.2.2 on 2026-09-02 with no commits since and upstream fixes from September-October 2026 not merged; MIT-licensed, pure Go and copyable, but treat as an experimental single-maintainer fork.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/README.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/go.mod",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/global_counter_trace.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/runtime_test.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/SANDBOX.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/benchjs/README.md",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/native_trace_amd64.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/native_trace_memory_linux_amd64.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/native_trace_stub.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/native_trace_amd64_bench_test.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/vm.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/vm_test.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/map.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/builtin_map_test.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/string_ascii.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/value.go",
+    "https://raw.githubusercontent.com/maclof/goja-perf/HEAD/func.go",
+    "https://github.com/maclof/goja-perf",
+    "https://github.com/maclof/goja-perf/commits",
+    "https://github.com/maclof/goja-perf/issues",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/go.mod",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/vm.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/vm_test.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/map.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/builtin_map_test.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/string_ascii.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/value.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/func.go",
+    "https://github.com/dop251/goja/commits/master"
+  ],
+  "confidence": 0.8
+}

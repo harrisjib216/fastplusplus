@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/d5/tengo",
+  "one_liner": "Bytecode-VM scripting language for Go; fib(35) 1.3-2.2x faster than go-lua, GopherLua and goja, slower than C Lua.",
+  "what_it_does": "Tengo is a dynamically typed scripting language with Go-like syntax (`:=`, function literals, closures, immutable values) that is compiled to bytecode and run by a VM written in pure Go. A host program creates tengo.NewScript(src), injects values with Add, compiles and runs it (Run/RunContext), then reads results with Get; tengo.Eval handles one-off expressions, and a CLI/REPL runs .tengo files. It is its own language, so it does not run existing Lua, JavaScript or Python code.",
+  "how_it_is_fast": "Source is compiled once to compact bytecode (opcodes with 1-2 byte operands, a constants pool, globals and locals addressed by index) with dead code after returns removed (optimizeFunc), and the VM runs it in one switch loop over a fixed 2,048-slot stack and 1,024-entry frame array allocated with the VM. Direct self-recursive tail calls reuse the current frame instead of pushing a new one (vm.go). Values are Go interface Objects and every integer arithmetic result is a freshly allocated *Int (objects.go), so arithmetic-heavy code is bound by Go's allocator and GC, which is why native C Lua stays 2-3x ahead.",
+  "when_to_use": [
+    "A Go service that needs user-editable rules, transforms or state machines in pure Go (no cgo), and where you can choose the script language.",
+    "Call-heavy CPU-bound scripts (recursion, small functions, loops): in four third-party fib(35) runs (ozanh/ugobenchfib, 2020-2022) Tengo beat go-lua by 1.33-1.75x, GopherLua by 1.47-1.88x and goja by 1.52-2.05x (derived from page data).",
+    "Running untrusted scripts: no modules are importable unless allowed with SetImports, file imports are off by default, SetMaxAllocs caps object allocations and RunContext cancels on a context.",
+    "Compile once, run many times: Compiled.Set/Get change and read globals between runs and Compiled.Clone gives copies safe for concurrent execution."
+  ],
+  "when_not_to_use": [
+    "Users must write Lua, JavaScript or Python, or you need those ecosystems' libraries: use GopherLua or goja instead.",
+    "You need C-Lua-level speed: native Lua ran fib(35) 3.1x faster in the README (756 ms vs 2,315 ms) and 2.2x faster in ugobenchfib (1.00 s vs 2.19 s); with cgo allowed, embed Lua, LuaJIT or Luau.",
+    "Evaluating a tiny expression per request: every Run builds a new VM with fixed arrays of about 80 KB (2,048-slot stack plus 1,024 frames, computed from vm.go), and issue #412 proposing a pool is open; a dedicated expression engine such as Expr fits better.",
+    "Non-tail recursion deeper than 1,024 frames, which fails with ErrStackOverflow (only direct self tail calls are flattened).",
+    "Projects that need an actively answered upstream: commits are sporadic (a few community fixes per year) and issue #464 'Is this project still alive?' (June 2025) shows no maintainer reply."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (go.mod has no requires)",
+    "min_toolchain": "go.mod declares Go 1.13; CI tests Go 1.18",
+    "platforms": "any Go target (pure Go, no cgo)",
+    "thread_safety": "Compiled.Run and RunContext hold a mutex, so one Compiled runs one script at a time; Compiled.Clone returns copies safe for concurrent use; tengo.MaxStringLen and MaxBytesLen are process-wide and must not change while a VM runs",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: tengobench cmd/bench/main.go times a single os/exec run per interpreter including process start and discards the exit error (`_ = cmd.Run()`), so a crashing interpreter would show a tiny time; outputs are never checked. The README table dates from May 2020 (tengo v2.1.2, competitors pinned to 2019-2020 commits) and the native Go row runs a compiled binary that does not read the source file. The uGO fork (ozanh/ugobenchfib) reuses the same single-run, error-ignoring harness.",
+    "The margin depends on the Go compiler: on the same Apple M1 VM, ugobenchfib measured Tengo's lead over go-lua at 1.72x with Go 1.17 and 1.33x with Go 1.18 (derived from page data), so the README's 1.7x over go-lua is not a stable figure.",
+    "Every integer arithmetic result allocates a new *Int, and each OpBinaryOp counts against SetMaxAllocs, so allocation caps trip on plain arithmetic loops, not only on data-structure creation.",
+    "Recent correctness fixes: `int == float` always returned false until #477 (April 2026), dead-code elimination produced 'invalid jump position' errors (#376, #431), and a 10,000-key map panicked (#402); fmt.println writes straight to process stdout with no per-script capture (issue #342, open), so replace the fmt module (ReplaceBuiltinModule) to isolate output."
+  ],
+  "pick_this_over_siblings_when": "Pick Tengo over GopherLua and goja when you control the script language and want the fastest pure-Go general-purpose interpreter for call-heavy code (about 1.5-1.9x over GopherLua and 1.5-2.2x over goja on fib(35)); pick GopherLua or goja when scripts must be Lua or JavaScript, Expr for single expressions evaluated at high rates, and note that the Tengo-derived uGO ran fib(35) about 1.1x faster than Tengo in its author's 2022 runs.",
+  "verified_claims_summary": "The README table is one wall-clock run per interpreter CLI of recursive fib(35), process start included, generated by d5/tengobench in May 2020 on unstated hardware: Tengo 2,315 ms vs go-lua 4,028 ms, GopherLua 4,409 ms and goja 5,194 ms, with native Lua faster at 756 ms. Third-party reruns agree on the ordering: ozanh/ugobenchfib (Apple M1 Parallels VM, Ubuntu 20.04, Go 1.18, tengo v2.10.1, May 2022) measured Tengo 2.19 s vs go-lua 2.90 s, GopherLua 3.21 s, goja 3.33 s and native Lua 1.00 s, and mna/bench_go_scripting (Lenovo T460, August 2024) measured fib at Tengo 3.04 s vs Risor 4.89 s.",
+  "status_note": "Sporadically maintained (last commit 2026-10-03 after a year-long gap in 2024-2025; maintainer silent on issue #464), MIT and dependency-free pure Go, so easy to vendor; the ugobenchfib reruns are an independent measurement with hardware and Go version stated, which could support tier B for the comparison against other Go-hosted interpreters, though not against C Lua.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/README.md",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/go.mod",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/vm.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/compiler.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/script.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/tengo.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/objects.go",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/docs/interoperability.md",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/.github/workflows/test.yml",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/README.md",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/cmd/bench/main.go",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/go.mod",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.tengo",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fibtc.tengo",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.lua",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.js",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.py",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.star",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/README.md",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/cmd/bench/main.go",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/go.mod",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/Makefile",
+    "https://raw.githubusercontent.com/mna/bench_go_scripting/HEAD/README.md",
+    "https://raw.githubusercontent.com/risor-io/risor/HEAD/README.md",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/README.md",
+    "https://github.com/d5/tengo/issues?q=is%3Aissue+performance+OR+slow+OR+panic+OR+leak",
+    "https://github.com/d5/tengo/issues/464",
+    "https://github.com/d5/tengo/issues/342",
+    "https://github.com/d5/tengo/commits"
+  ],
+  "confidence": 0.8
+}

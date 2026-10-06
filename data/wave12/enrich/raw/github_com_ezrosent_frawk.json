@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ezrosent/frawk",
+  "one_liner": "JIT-compiled AWK dialect in Rust with SIMD CSV/TSV parsing; runs AWK scripts several times faster than gawk and mawk.",
+  "what_it_does": "frawk runs AWK-style pattern/action programs over text, with -icsv and -itsv modes that parse quoted CSV and escaped TSV correctly, which classic awk cannot do without preprocessing. It is a command-line tool, not a library: most common AWK programs give the same output, but it is its own dialect with a few semantic differences and extensions (PREPARE blocks, PID, -pr/-pf parallel modes, extra builtins).",
+  "how_it_is_fast": "The script goes through a typed SSA CFG with static type inference, so numbers and strings are known before execution and coercion branches disappear. That typed IR is JIT-compiled with LLVM (or Cranelift; a bytecode interpreter is available via -Binterp) and calls into a shared Rust runtime. Input uses a two-phase, simdcsv-style parser: a SIMD pass finds structural characters, then a cheap state machine runs once per structural character. The same split lets one reader thread chunk a single file and hand records to worker threads (-pr). It also uses SIMD UTF-8 validation, a fast float parser, the Rust regex crate, hashbrown maps and jemalloc.",
+  "when_to_use": [
+    "Ad-hoc aggregations (sums, filters, group-bys, custom arithmetic) over multi-GB CSV with quoted fields, where awk would need a csv2tsv pass and Python's csv module is roughly 8x slower (19.6 s vs 2m48.7s in the author's run).",
+    "Replacing gawk or mawk in batch pipelines that scan large files: serial frawk was 1.4-3x faster than gawk -b on sum, select and filter, and 5.9x faster on a statistics script.",
+    "Embarrassingly parallel scans of one big file on a multicore box: -pr reached about 1.8-3 GB/s on an 8-core laptop without splitting the file first.",
+    "Logic that does not fit a fixed menu of commands (xsv/xan/qsv/tsv-utils), such as conditional weighted sums or multi-column expressions."
+  ],
+  "when_not_to_use": [
+    "Simple fixed operations on TSV: tsv-utils beat serial frawk on every task it ran (for example 2.7 s vs 3.1 s sum, 4.9 s vs 14.8 s group-by on macOS) and was faster per core even against parallel frawk.",
+    "Hash-map-heavy work such as group-by: serial frawk only ties gawk (14.8 s vs 14.8 s macOS, 22.1 s vs 23.5 s Linux), and the author says arrays need optimization.",
+    "Scripts that read from command pipes via getline: issue #98 reports frawk about 3x slower than mawk.",
+    "Production pipelines that need strict POSIX awk behaviour or prompt bug fixes: open issues include field assignment not working in CSV mode (#111), NF override not clearing fields (#119), string format specifiers broken on the Cranelift backend (#121) and scientific-notation literals (#83).",
+    "Windows or environments where you cannot install nightly Rust and LLVM 12: Windows is untested by the author, and a Cranelift misaligned-pointer report is open there (#101)."
+  ],
+  "integration": {
+    "form": "crate (command-line binary; `cargo install frawk`), not a library API",
+    "dependencies": "Rust crates (regex, hashbrown, cranelift 0.93, crossbeam, memchr, fast-float, bumpalo, optional tikv-jemallocator); system LLVM 12 via llvm-sys 120 for the default llvm_backend feature",
+    "min_toolchain": "Nightly Rust by default (stable works without the `unstable` feature); LLVM 12 for the LLVM backend; no MSRV stated",
+    "platforms": "Linux and macOS on x86-64 tested by the author (allow_avx2 feature uses AVX2 when present); Windows untested and only builds with default features disabled; aarch64 not documented",
+    "thread_safety": "Not a library. -pr (record-level) and -pf (file-per-worker) run the main loop on -j worker threads; BEGIN and END run on one thread, and variables shared with END are aggregated implicitly.",
+    "drop_in_for_baseline": "partial: many awk programs run unchanged, but frawk has no awk-style strnum, so a user function such as max($4,$5) on raw fields compares lexicographically unless the arguments are converted with +0 (the performance doc's own note). CSV mode needs -icsv, -itsv and -F'\\t' are different parsers, and parallel mode changes semantics (row order, implicit aggregation)."
+  },
+  "gotchas": [
+    "Harness flaw in the published Statistics benchmark: the parallel script's variance merge tests `if (i == 1)` with i never set and adds `sums[k]` with k undefined, so the merged mean feeding the variance is wrong. The logged outputs show parallel stddev 1.906e14 to 2.017e14, varying per run, against 1.806e14 from serial frawk, gawk, mawk, xsv and tsv-summarize. The parallel stats times (3.4-3.6 s TSV on macOS) therefore come from a script with wrong output. The serial numbers are unaffected, and their outputs match gawk.",
+    "In -pr mode, numeric scalars used in both the main loop and END are summed across workers, and string scalars take an arbitrary worker's value. min, max and variance need explicit PREPARE/PID merging, which is easy to get wrong, as the author's own stats script shows. Output rows are also reordered, so the parallel select and filter timings are not like-for-like with tools that keep order.",
+    "Benchmark scope: TSV runs used -F'\\t' (plain split, no escape handling), not -itsv. The filter benchmark gave awk/frawk `$4 > 0.000024` but tsv-filter `--gt 4:0.000025 -H`, with outputs sent to /dev/null and never compared. The group-by data has only two distinct keys (FORESTLAND, TIMBERLAND), so it hardly exercises hash maps.",
+    "Every frawk timing includes JIT compile time. That cost is small here, but it dominates on tiny inputs; -Binterp exists for small scripts."
+  ],
+  "pick_this_over_siblings_when": "Pick frawk over xan, qsv or zsv when the job is a small program (conditional sums, custom formulas, explicit multi-pass aggregation) rather than one of their built-in commands, and the CSV is quoted so classic awk cannot parse it. For standard select, count, stats or filter jobs, xan, qsv and zsv are maintained and need no LLVM or nightly toolchain.",
+  "verified_claims_summary": "The author's 2021 runs report the minimum wall time of 5 runs on a 16-inch MacBook Pro (8-core i9 2.3 GHz, Big Sur 11.2.1) and on a dual Xeon E5-2620 v4 Ubuntu 18.04 box. gawk 5.0.1/5.1 ran with -b and mawk was 1.3.4; frawk used the use_jemalloc and allow_avx2 features, and rustc/LLVM versions are not stated. On the 7.9 GB TREE_GRM_ESTN TSV on macOS, serial frawk (LLVM) summed two columns in 10.0 s vs gawk 14.0 s and mawk 42.0 s, and ran the statistics script in 12.5 s vs gawk 73.3 s; the logged sums, means and stddevs match gawk except in the parallel stats runs.",
+  "status_note": "Stale: the author stepped back in 2024, and a contributor landed parser and runtime fixes in September 2025, but the last crates.io release is 0.4.8 from 2023-03-21. It is MIT OR Apache-2.0 and usable as a CLI if you build master with nightly Rust plus LLVM 12 (or Cranelift only). The published parallel Statistics benchmark comes from a script with a variance-merge bug that prints a wrong stddev.",
+  "sources_read": [
+    "https://github.com/ezrosent/frawk",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/README.md",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/performance.md",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/overview.md",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/parallelism.md",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/types.md",
+    "https://github.com/ezrosent/frawk/tree/master/info/scripts",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/sum2.sh",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/sum2.sh.out",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/sum2.sh.out.mac",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/stat_2.sh",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/stat_2.sh.out",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/stat_2.sh.out.mac",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/complex_sum.sh",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/complex_sum.py",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/complex_sum.sh.out.mac",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/groupby.sh",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/groupby.sh.out.mac",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/select.sh",
+    "https://raw.githubusercontent.com/ezrosent/frawk/HEAD/info/scripts/filter.sh",
+    "https://github.com/ezrosent/frawk/issues",
+    "https://github.com/ezrosent/frawk/issues/98",
+    "https://github.com/ezrosent/frawk/issues/110",
+    "https://github.com/ezrosent/frawk/commits/master",
+    "https://crates.io/api/v1/crates/frawk"
+  ],
+  "confidence": 0.8
+}

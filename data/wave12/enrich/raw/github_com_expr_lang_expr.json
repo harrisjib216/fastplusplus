@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/expr-lang/expr",
+  "one_liner": "Statically typed Go expression language compiled to bytecode; about 1.3x faster than cel-go on a small boolean rule.",
+  "what_it_does": "Expr compiles a short, side-effect-free expression (comparisons, boolean logic, membership, builtins such as all, filter and map, calls to Go functions) against a Go environment (a struct or a map) and then evaluates it many times. expr.Compile(src, expr.Env(env), options...) type-checks the source against the env and returns a *vm.Program; expr.Run(program, env) evaluates it. It is a rule and filter language with its own syntax, not a CEL implementation and not a general scripting language.",
+  "how_it_is_fast": "A type checker infers static types from the env, so the compiler emits specialised opcodes: OpLoadFast for map[string]any lookups, OpEqualInt and OpEqualString, and OpCallTyped for functions whose signature is in a generated list, which avoids reflect.Value.Call. An AST optimizer folds constants, turns 'in' over a constant int or string array into a set lookup, and fuses builtins (filter+map, len(filter) into count, sum over ranges and arrays). The VM is a single switch loop over a []Opcode with an []any stack.",
+  "when_to_use": [
+    "Business rules, feature flags, filters and access policies compiled once and evaluated many times against Go structs or maps; the README lists Argo, OpenTelemetry Collector, CoreDNS and KEDA as users.",
+    "When type errors in user-written rules should surface at compile time against your Go env type rather than at run time.",
+    "Collection predicates over Go slices: map(array, # * 2) on 100 ints took 4,695 vs 24,421 ns/op for cel-go (about 5.2x, derived from page data).",
+    "Evaluating untrusted expressions on v1.17.7 or later: evaluation is documented as always terminating, and there is a per-run memory budget (DefaultMemoryBudget 1e6) and a compile-time AST node cap (DefaultMaxNodes 1e4).",
+    "Pure-Go builds that want no dependencies: go.mod has no require lines and declares go 1.18."
+  ],
+  "when_not_to_use": [
+    "Inputs that are protobuf messages, or expressions that must also run outside Go: franchb/cel-go-benchmarks (linux/amd64, expr v1.8.9 vs cel-go v0.6.0 with OptOptimize and a custom Activation) measured cel-go at 123 ns/op vs Expr at 186 ns/op on one field comparison.",
+    "Anything that needs state, side effects or loops: Expr is side-effect-free by design; use goja, Tengo or a Lua engine.",
+    "Versions before 1.17.7 with untrusted data or expressions: CVE-2025-68156 (unbounded recursion in flatten, min, max, mean and median crashes the process on deeply nested or cyclic data; fixed in 1.17.7) and CVE-2025-29786 (parser memory exhaustion on huge input; fixed in 1.17.0).",
+    "Hot paths that call methods on a struct env: in issue #734 a user measured 365.2 ns/op for a struct-env method vs 48.26 ns/op for a function in a map env and 60.49 ns/op for expr.Function."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "go.mod declares go 1.18",
+    "platforms": "any Go target (pure Go)",
+    "thread_safety": "Not documented in the files read. expr.Run creates a fresh vm.VM on every call, so concurrent runs of one Program do not share VM state; a reused vm.VM holds per-run state (stack, ip, memory) and should stay on one goroutine.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "expr.Run allocates a new vm.VM per call; hot loops can reuse a vm.VM (the repo has a Benchmark_expr_reuseVm case), one per goroutine.",
+    "Runs that build large arrays or maps (ranges, map, sort) fail once they exceed the 1e6 memory budget, and generated expressions above 10,000 AST nodes are rejected at compile time; raise these with vm.VM.MemoryBudget and expr.MaxNodes.",
+    "Go functions whose signature is not in the generated FuncTypes list are called through reflection (the OpCall path); declare hot functions with expr.Function or a matching signature.",
+    "Harness caveats in the comparison repo (no flaw found that inflates Expr's lead): single runs at -benchtime=20s with no -count, mid-2023 versions (expr v1.13.0 under the old github.com/antonmedv/expr path, cel-go v0.17.1), and cel-go programs built without cel.EvalOptions(cel.OptOptimize). goja and otto receive their variables once via vm.Set before the loop, while Expr, cel-go and govaluate are passed the params map on every iteration, which favours the JavaScript engines. Results are checked only after the timed loop."
+  ],
+  "pick_this_over_siblings_when": "Pick Expr over goja, Tengo or GopherLua when the job is a single side-effect-free rule or filter evaluated many times: on the same boolean rule it is about 2x faster than goja (70.27 vs 146.2 ns/op), and it adds compile-time type checks and termination guarantees. Use those siblings when scripts need statements, state or loops.",
+  "verified_claims_summary": "In the Expr author's comparison repo (Apple M2, go test -bench=. -benchtime=20s, one run, Go toolchain not stated, mid-2023 library versions), a precompiled boolean rule over a four-key map took 70.27 ns/op in Expr vs 91.27 in cel-go (about 1.3x) and 146.2 in goja, and map over 100 ints took 4,695 vs 24,421 ns/op (about 5.2x, derived from page data). A separate 2020-era benchmark with protobuf input and an optimised cel-go program shows the reverse: cel-go 123 vs Expr 186 ns/op.",
+  "status_note": "Active (last commit 2026-07-07, 8k stars, MIT, no dependencies) and widely embedded (the README lists Google Cloud, Uber, Argo and OpenTelemetry Collector); use v1.17.7 or later to get both 2025 denial-of-service fixes.",
+  "sources_read": [
+    "https://github.com/expr-lang/expr",
+    "https://github.com/expr-lang/expr/commits",
+    "https://github.com/expr-lang/expr/releases",
+    "https://github.com/expr-lang/expr/security/advisories",
+    "https://github.com/expr-lang/expr/security/advisories/GHSA-cfpf-hrx2-8rv6",
+    "https://github.com/expr-lang/expr/security/advisories/GHSA-93mq-9ffx-83m2",
+    "https://github.com/expr-lang/expr/issues?q=is%3Aissue+performance",
+    "https://github.com/expr-lang/expr/issues/734",
+    "https://github.com/expr-lang/expr/issues/607",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/README.md",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/go.mod",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/expr.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/bench_test.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/vm/vm.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/vm/opcodes.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/vm/func_types%5Bgenerated%5D.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/conf/config.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/optimizer/optimizer.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/optimizer/in_array.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/optimizer/filter_len.go",
+    "https://raw.githubusercontent.com/expr-lang/expr/HEAD/optimizer/filter_map.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/README.md",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/go.mod",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/common.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/expr_test.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/celgo_test.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/goja_test.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/otto_test.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/govaluate_test.go",
+    "https://github.com/franchb/cel-go-benchmarks",
+    "https://raw.githubusercontent.com/franchb/cel-go-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/franchb/cel-go-benchmarks/HEAD/benchmark_test.go",
+    "https://raw.githubusercontent.com/franchb/cel-go-benchmarks/HEAD/go.mod",
+    "https://github.com/guamoko995/expr-cls"
+  ],
+  "confidence": 0.75
+}

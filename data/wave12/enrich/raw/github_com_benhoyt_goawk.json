@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/benhoyt/goawk",
+  "one_liner": "POSIX AWK interpreter in Go with CSV mode and embedding API; faster than one-true-awk, slower than gawk and mawk.",
+  "what_it_does": "GoAWK is a POSIX AWK implementation shipped both as a `goawk` command-line binary and as Go packages (parser, interp) for running AWK programs inside Go code. It adds CSV/TSV input and output modes with named fields (`@\"amount\"`), negative field indexes, code coverage, and calling Go functions from AWK via Config.Funcs. For repeated runs, interp.New compiles once and Interpreter.Execute reuses allocations across inputs.",
+  "how_it_is_fast": "Since PR #88 (January 2022) programs are compiled to 32-bit 'word code' and run on a stack virtual machine with a single big switch dispatch loop (interp/vm.go); the opcode count was cut (24 builtin calls folded into one CallBuiltin) and specialised opcodes such as AugAssignLocal, FieldInt and ConcatMulti avoid generic paths. Numeric strings are converted to numbers lazily, regexes and printf formats are cached, and release binaries are built with Go profile-guided optimisation from the interp microbenchmarks (scripts/make_binaries.sh). Regex matching uses Go's RE2-style regexp in leftmost-longest mode, which is the main remaining bottleneck.",
+  "when_to_use": [
+    "You need an AWK engine embedded in a Go program (no cgo, no external awk binary), e.g. user-supplied transform scripts in a pipeline, as Redpanda Connect does.",
+    "Machines whose only awk is one-true-awk / BWK awk (macOS, BSD): GoAWK beat it on 18 of 23 timing scripts in the author's run, geo mean 1.45x.",
+    "CSV/TSV processing with AWK syntax and proper quoting: the author's 1 GB CSV read takes 3.18 s (on a par with Go's encoding/csv at 3.22 s) and write 5.64 s versus 13.0 s for frawk.",
+    "Field arithmetic, loops and array-heavy scripts (sum, count, mandelbrot-style loops), where the VM gains concentrate; it also beat gawk on 9 of 23 scripts.",
+    "Sandboxed execution: Config.NoExec, NoFileWrites and NoFileReads block system(), pipes and file I/O, and a context can cancel long runs."
+  ],
+  "when_not_to_use": [
+    "If gawk or mawk is available and raw speed is the goal: by geo mean gawk is about 1.28x and mawk about 1.6x faster (derived from page data), and mawk won every one of the 23 scripts.",
+    "Regex-heavy scripts: `/.$/` (tt.10) ran at 0.34x the speed of one-true-awk and the text formatter tt.15 at 0.62x, because Go's regexp is slow; the umbrella optimisation issue #91 lists regex speed as not done.",
+    "CSV reading at maximum throughput: the project's own CSV benchmark shows frawk reading 1 GB about 3.1x faster (1.01 s vs 3.18 s).",
+    "Scripts relying on gawk-only extensions: GoAWK targets POSIX AWK plus its own additions, not gawk compatibility.",
+    "Unicode character semantics on long strings: chars mode (-c / Config.Chars) is opt-in, and an earlier character-based default made gron.awk hang in v1.13 (issue #93) because string functions became O(N)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (go.mod has no requires)",
+    "min_toolchain": "Go 1.20 (go.mod; raised in v1.31.0)",
+    "platforms": "any Go target; release binaries for linux 386/amd64/arm64, windows 386/amd64, darwin amd64/arm64, freebsd amd64/arm",
+    "thread_safety": "not documented; an Interpreter keeps variables, I/O state and caches between Execute calls, so use one per goroutine",
+    "drop_in_for_baseline": "partial — the goawk binary accepts POSIX AWK programs and the common flags, but output can differ where the README lists differences (CSV mode, negative field indexes, single-quoted strings) and regex semantics come from Go's regexp in leftmost-longest mode"
+  },
+  "gotchas": [
+    "Harness flaw: scripts/benchmark_awks.py keeps min(sorted(times)[1:]), i.e. the second-fastest of six runs rather than discarding a warm-up run; it times whole processes, ignores non-zero exit status beyond printing it, never compares outputs, and scales the input until GoAWK alone takes 0.5 s.",
+    "First-party numbers drift a lot between runs: the author's 23 Dec 2021 table (commit b05d0d9, tree-walker) has GoAWK tt.01 at 4.25 and geo mean 1.57, while PR #88 a month later shows tt.01 at 2.02 and geo mean 1.45; the gawk and mawk leads hold in both.",
+    "The published tables predate v1.30.0's switch to leftmost-longest regex matching, PGO-built releases and newer Go compilers, and have not been re-measured; a `go install` build does not get the PGO profile, which is generated only by scripts/make_binaries.sh.",
+    "The dynamic regex cache is 'dumb, non-LRU': only the first 100 distinct dynamic regex strings are cached (interp.go), so scripts that build many regexes at run time recompile them on every use."
+  ],
+  "pick_this_over_siblings_when": "The listed siblings (Tantivy, IResearch, SeekStorm, ugrep, ngi and other index or grep tools) solve indexed search, not line-by-line AWK scripting, so pick GoAWK when you need an AWK language runtime inside Go; for the fastest AWK, frawk (another wave 12 entry) reads CSV about 3x faster and mawk wins every timing script.",
+  "verified_claims_summary": "In the author's January 2022 run (PR #88; scripts/benchmark_awks.py over 23 testdata/tt.* scripts, wall time including process start, second-best of six runs), the bytecode VM averaged 1.45x the speed of one-true-awk (geo mean), against 1.86x for gawk and 2.32x for mawk. GoAWK was slower than one-true-awk on 5 scripts, down to 0.32x on regex matching. Hardware, OS, Go version and awk versions are not stated.",
+  "status_note": "Actively maintained (v1.32.0 released 2026-09-15, the last commit), MIT, no dependencies and a stable v1 Go API; usable as a library today, but listed as faster than one-true-awk only, not than gawk or mawk.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/README.md",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/scripts/benchmark_awks.py",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/scripts/make_binaries.sh",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/go.mod",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/docs/csv.md",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/interp/interp.go",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/interp/newexecute.go",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/interp/vm.go",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/goawk.go",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/testdata/tt.04_printf_fields",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/testdata/tt.05_concat_fields",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/testdata/tt.10_regex_ends_with",
+    "https://raw.githubusercontent.com/benhoyt/goawk/HEAD/testdata/tt.15_format_lines",
+    "https://github.com/benhoyt/goawk/pull/88",
+    "https://github.com/benhoyt/goawk/tree/master/testdata",
+    "https://github.com/benhoyt/goawk/commit/b05d0d983d4e96ae518c6af3e846fbb1a15040aa",
+    "https://github.com/benhoyt/goawk/commit/b05d0d983d4e96ae518c6af3e846fbb1a15040aa.patch",
+    "https://github.com/benhoyt/goawk/releases",
+    "https://github.com/benhoyt/goawk/issues?q=is%3Aissue+performance+OR+slow",
+    "https://github.com/benhoyt/goawk/issues/93",
+    "https://github.com/benhoyt/goawk/issues/91"
+  ],
+  "confidence": 0.75
+}

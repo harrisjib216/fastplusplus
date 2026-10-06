@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/dop251/goja",
+  "one_liner": "Pure-Go ECMAScript 5.1+ bytecode engine; about 9x faster than otto on fib(35), far slower than V8.",
+  "what_it_does": "goja embeds a JavaScript engine (full ES5.1, most of ES6 and some later features) in a Go program with no cgo. You create a goja.Runtime, Set Go values or functions into it, run source with RunString or a precompiled *Program with RunProgram, and pull results back with Export, ExportTo or AssertFunction. It fills the same niche as otto (the README says it was inspired by it) but with a different API, so call sites must be ported.",
+  "how_it_is_fast": "Source is parsed and compiled once into a flat array of instructions, each a Go value with an exec(*vm) method, run by a fetch-and-dispatch loop over a value stack; the Tengo table labels goja a VM and otto an interpreter. The compiler resolves variables at compile time to stack slots or indexed closure 'stash' slots, and only scopes reached by a direct eval() fall back to lookup by name. A compiled *Program is independent of any runtime, so parsing and compiling can be skipped on reuse.",
+  "when_to_use": [
+    "A Go service that must run user- or tenant-supplied JavaScript (rules, transforms, plugins) and has to cross-compile without cgo.",
+    "Moving off otto: fib(35) about 9.3x faster in the Tengo table, and 2.6x faster (146.2 vs 380.1 ns/op) on a small boolean expression in the Expr author's comparison (both derived from page data).",
+    "Running existing ES5/ES6 JavaScript (the README cites Babel and the TypeScript compiler) inside a Go process.",
+    "Scripts that call into Go often with complex data structures, where the cgo crossing cost of a V8 binding would outweigh V8's faster execution (the README's own argument).",
+    "Sandboxed execution that needs a kill switch: Runtime.Interrupt stops a running script and SetMaxCallStackSize caps call depth."
+  ],
+  "when_not_to_use": [
+    "CPU-heavy JavaScript: the README says you are 'definitely better off with V8'; in the Tengo table goja's fib(35) (5,194 ms) is about 6.9x slower than PUC Lua (756 ms) and 2.7x slower than CPython 2 (1,907 ms) (derived from page data).",
+    "When the scripts need not be JavaScript: Tengo (2,315 ms), go-lua (4,028 ms) and GopherLua (4,409 ms) beat goja on fib(35) in the same table, and uGO's own table also puts goja behind them.",
+    "Small boolean or arithmetic rules over Go maps: Expr (70.27 ns/op) and cel-go (91.27 ns/op) beat goja (146.2 ns/op) in the Expr author's comparison.",
+    "Untrusted source of unbounded size: issue #746 (opened 2026-09-30, still open, fix proposed in PR #749) shows about 300,000 nested parentheses kill the process with a fatal goroutine stack overflow that recover() cannot catch.",
+    "Hot loops that call Go methods from JavaScript: issue #657 (open, no reply) measures about 20,000 ns/op for a JS loop calling strings.Builder.WriteString against about 500 ns/op in plain Go."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Pure Go, no cgo. go.mod requires github.com/dlclark/regexp2/v2, github.com/go-sourcemap/sourcemap, golang.org/x/text, github.com/google/pprof, github.com/Masterminds/semver/v3, github.com/goccy/go-yaml and github.com/dop251/goja_nodejs (goja_nodejs is used by the goja CLI; which others are test-only was not checked).",
+    "min_toolchain": "Go 1.25 (README and go.mod)",
+    "platforms": "any Go target (pure Go, no cgo)",
+    "thread_safety": "A Runtime may be used by only one goroutine at a time, and object values cannot be passed between runtimes; a compiled *Program is runtime-independent and documented as safe to use concurrently. Interrupt is the cross-goroutine way to stop a run.",
+    "drop_in_for_baseline": "partial — it covers the same pure-Go embedding use as otto, with similar Set/Get/Export ideas, but it is a different package and API (goja.New, RunString/RunProgram, AssertFunction, ExportTo), so call sites must be rewritten."
+  },
+  "gotchas": [
+    "Use one Runtime per goroutine (for example a pool) and share the compiled *Program; sharing a Runtime across goroutines is unsupported.",
+    "JSON.parse goes through Go's UTF-8 decoder, so lone UTF-16 surrogates become U+FFFD, and Date calendar-to-epoch conversion uses Go int, so overflowing arguments give wrong results (both listed in the README).",
+    "There is no setTimeout, setInterval or event loop; the separate goja_nodejs project supplies require, console and an event loop.",
+    "Harness flaw behind the independent numbers: tengobench's cmd/bench/main.go times one wall-clock run of each interpreter's CLI, including process start and compilation. It discards the error from cmd.Run() and never checks the result, so an interpreter that crashed would show a near-zero time. The fibt(35) script makes only 35 calls, so its 2-14 ms column (goja 4 ms vs otto 6 ms) measures process start, not tail calls."
+  ],
+  "pick_this_over_siblings_when": "Pick goja over Tengo, uGO or GopherLua only when the scripts must be JavaScript or you need to run existing JS libraries. On fib(35), Tengo (2,315 vs 5,194 ms) and uGO (1.98 vs 3.33 s in its own table) are about 2.2x and 1.7x faster (derived from page data). For side-effect-free rules, Expr is about 2x faster than goja on the same boolean expression.",
+  "verified_claims_summary": "The one reproducible goja-vs-otto timing is the Tengo README table (d5/tengobench; goja build of 2020-04-14, otto of 2019-12-19, Go toolchain and hardware not stated), which times a single wall-clock run including process start: recursive fib(35) took 5,194 ms in goja vs 48,539 ms in otto, about 9.3x (derived from page data). The Expr author's comparison (Apple M2, goja 2023-08-12, otto v0.2.1) gives 146.2 vs 380.1 ns/op on one small boolean expression (about 2.6x); goja's own 'six to seven times' has no published data behind it.",
+  "status_note": "Actively maintained, with commits through 2026-10-06 and ES2025 iterator helpers merged 2026-10-02; MIT-licensed pure Go that needs Go 1.25, although the README's speed claim still has no data, since issue #2 has been open without a maintainer reply since 2016.",
+  "sources_read": [
+    "https://github.com/dop251/goja",
+    "https://github.com/dop251/goja/commits",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/README.md",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/go.mod",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/goja/main.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/vm.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/compiler.go",
+    "https://raw.githubusercontent.com/dop251/goja/HEAD/runtime.go",
+    "https://github.com/dop251/goja/issues?q=is%3Aissue+performance",
+    "https://github.com/dop251/goja/issues/746",
+    "https://github.com/dop251/goja/issues/657",
+    "https://github.com/dop251/goja/issues/494",
+    "https://github.com/d5/tengobench",
+    "https://github.com/d5/tengobench/tree/master/code",
+    "https://github.com/d5/tengobench/tree/master/cmd",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/README.md",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/go.mod",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/cmd/bench/main.go",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.js",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fibtc.js",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fibtc.otto",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.tengo",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fibtc.tengo",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.lua",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fibtc.lua",
+    "https://raw.githubusercontent.com/d5/tengobench/HEAD/code/fib.py",
+    "https://raw.githubusercontent.com/d5/tengo/HEAD/README.md",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/README.md",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/go.mod",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/goja_test.go",
+    "https://raw.githubusercontent.com/antonmedv/golang-expression-evaluation-comparison/HEAD/otto_test.go"
+  ],
+  "confidence": 0.75
+}

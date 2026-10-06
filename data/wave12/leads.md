@@ -39,3 +39,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - polkavm-ffi (rotkonetworks/romio): third-party C FFI for PolkaVM, 25 downloads (PolkaVM enricher, 2026-10-06); weak lead.
 - qj (6/qj, Rust plus simdjson, MIT, 16 stars): README on an M5 Max claims 25-190x over jq on NDJSON with jaq and gojq columns (jaq enricher, 2026-10-06); wave 4 json seed candidate.
 - rsjsonnet (eduardosm/rsjsonnet, Rust): jrsonnet's table shows it beating go-jsonnet everywhere (kube-prometheus 57.9 vs 1068.4 ms) (sjsonnet enricher, 2026-10-06); seed candidate.
+- eBay/tsv-utils (D): faster than frawk per core on every TSV task per frawk's own tables (frawk enricher, 2026-10-06); wave 3 csv-tabular seed candidate.
+- guamoko995/expr-cls (Go expression evaluator from typed closures): README claims 9.015 ns/op vs expr 172.0 and cel-go 267.9 on X+(6.0*Y), Ryzen 5 5600H, 3 stars, unchecked (Expr enricher, 2026-10-06).
