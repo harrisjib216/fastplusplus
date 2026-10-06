@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/cppcxy/lua-rs",
+  "one_liner": "Pure-Rust Lua 5.5 interpreter and embedding crate; roughly at parity with C Lua 5.5, faster on macOS, slower on x86 Linux.",
+  "what_it_does": "luars reimplements the Lua 5.5 compiler, VM, GC and standard library in Rust and exposes a high-level embedding API (Lua::new, load().exec/eval, register_function, LuaUserData derive, async exec, optional sandbox and serde features), plus a standalone `lua` binary, a debugger crate and a WASM target. It passes the upstream Lua test suite entry point all.lua except the testC-dependent sections. It is not a drop-in for liblua: there is no C API, no C module loading, and its bytecode format differs.",
+  "how_it_is_fast": "It is a register-based Lua VM in Rust with tagged-pointer values, compact GC object layouts and unsafe stack/upvalue pointer fast paths on the hot interpreter loop; recent commits trim per-call CallInfo work and string interning. Some of the wins come from library-level algorithm choices rather than the interpreter loop: table.sort with the default comparator on all-integer, all-float or all-string arrays copies the array into a Vec and calls Rust's sort_unstable_by (pdqsort, linear on presorted input) instead of Lua's quicksort with per-compare VM calls. The `lua` binary also installs mimalloc as its global allocator.",
+  "when_to_use": [
+    "Rust host applications that want Lua 5.5 scripting with no C toolchain, cross-compilation of liblua or FFI layer (pure cargo build).",
+    "Embedding Lua in a WASM build (crates/luars_wasm) where linking C Lua is awkward.",
+    "Workloads heavy on table.sort/insert/remove/move, coroutines or local-variable arithmetic, where the repo's own runs show luars ahead of C Lua (Windows coroutines 152%, table library 118% to 301%).",
+    "Apple Silicon hosts: the contributed M4 run is above parity on 13 of 14 script groups."
+  ],
+  "when_not_to_use": [
+    "C or C++ hosts: there is no lua_State C API, so it cannot replace liblua; use C Lua, Luau or LuaJIT there.",
+    "x86-64 Linux servers where throughput matters: the README says broad Linux runs are often 20-40% slower than native Lua, and on Windows 9 of 14 script groups are below parity (closures 80%, multiple returns 78%, metatables 78%).",
+    "Programs that load C modules (package.loadlib always fails), share precompiled bytecode with C Lua (string.dump format is luars-only) or depend on full debug-library behavior (debug.setuservalue/getuservalue missing, hooks partly implemented).",
+    "Hosts that need multi-threaded access to one VM: the VM is single-threaded internally (Rc, raw pointers); the `unsafe-send` feature only marks types Send+Sync and leaves exclusion to the caller.",
+    "Safety-critical embedding: the code is AI-assisted (README), unsafe sits in GC/value layout and VM hot paths, Miri tests run with stacked borrows disabled, and issue #28 reported a SIGSEGV from running collect_garbage() during a host-side table iteration."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "chrono, itoa, luars-derive; optional serde and serde_json (feature serde); js-sys on wasm32; the luars_interpreter binary adds mimalloc and luars_debugger",
+    "min_toolchain": "Rust edition 2024 (so Rust 1.85 or newer); no rust-version field on crates.io and no rust-toolchain.toml in the repo",
+    "platforms": "Windows and macOS (Apple M4) measured; Linux, Windows and macOS built in the GitHub Actions benchmark workflow; wasm32 via crates/luars_wasm",
+    "thread_safety": "Single VM is single-threaded (Rc and raw pointers internally); opt-in `unsafe-send` feature adds unsafe impl Send/Sync for framework bounds, with no internal locking",
+    "drop_in_for_baseline": "partial — Lua 5.5 language and stdlib compatible at script level (upstream all.lua passes with testC skips), but no C API, no C modules, incompatible bytecode, and a Rust-only embedding API"
+  },
+  "gotchas": [
+    "os.clock returns wall-clock seconds since VM start (std::time::Instant via platform_time.rs), not process CPU time as C Lua's clock() gives on Linux and macOS; scripts that time themselves get different semantics, and in the repo's benchmarks native Lua is timed in CPU time and luars in wall time on POSIX (this skews slightly against luars, not for it). The difference is not listed in docs/Different.md.",
+    "Harness: the per-script percentages in docs/benchmarks/*.md are hand-summarized from per-subtest ops/sec printed by one run of each interpreter; there is no aggregation script, no repetition or variance, and run_benchmarks.sh falls back to whatever `lua` is on PATH when `lua5.5` is absent without checking its version (the macOS contributor's native Lua version and build are unrecorded). The snapshots were last touched 2026-03-30 (macOS) and 2026-04-22, five months before the current 0.26.3 code.",
+    "bench_table_lib's 'sorted' and 'reversed' subtests measure an algorithm change: luars's default table.sort on homogeneous arrays is Rust pdqsort (linear on presorted input), C Lua's is median-of-3 quicksort calling lua_lessthan per compare. The same fast path treats NaN as equal to everything (partial_cmp unwrap_or Equal) and compares mixed integer/float arrays through f64, so orderings differ from C Lua for NaN or integers above 2^53, and Rust documents that sort_unstable_by may panic when the comparator is not a total order.",
+    "docs/Different.md lists further gaps: multi-value concatenation across a coroutine yield does not resume correctly, the stack-overflow limit differs from C Lua, os.date never sets isdst, no locale-dependent number parsing, and GC does not shrink stacks."
+  ],
+  "pick_this_over_siblings_when": "Pick luars over Luau or LuaJIT Remake only when the host is Rust (or WASM) and you want stock Lua 5.5 semantics without linking C; from C++ Luau (geomean about 1.5x over PUC Lua) is both faster and has a C API. Against Prolua, the other from-scratch reimplementation in the catalogue (0.60x to 1.19x of Lua 5.4.8's time), luars has the richer embedding toolkit and the newer language version, and like Lua-CSharp it is chosen for host-language purity rather than raw speed.",
+  "verified_claims_summary": "With in-script os.clock timing and one run per interpreter, the Windows snapshot (Ryzen 7 5800X, run_benchmarks.ps1) puts luars at 78% to 152% of native Lua 5.5 throughput, below parity on 9 of 14 script groups, and a contributor's Apple M4 run (run_benchmarks.sh) at 99% to 301%, above parity on 13 of 14. The luars binary is cargo --release with the default profile plus mimalloc, rustc and native-Lua build flags are not stated, and the README reports Linux as often 20-40% slower with no Linux numbers in the repo.",
+  "status_note": "Actively developed (0.26.3 on crates.io, about 61k downloads, last commit 2026-09-11 with a run of perf commits) and MIT-licensed, but young, AI-assisted and still changing its unsafe internals, so pin a version and run your own workload against C Lua before adopting it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/docs/benchmarks/windows.md",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/docs/benchmarks/macos.md",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/run_benchmarks.ps1",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/.github/workflows/benchmarks.yml",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/Cargo.toml",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars_interpreter/Cargo.toml",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars_interpreter/src/bin/main.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/rust-toolchain.toml",
+    "https://github.com/CppCXY/lua-rs/tree/main/benchmarks",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/benchmarks/bench_table_lib.lua",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/benchmarks/bench_locals.lua",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/benchmarks/bench_arithmetic.lua",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/benchmarks/run_all.lua",
+    "https://github.com/CppCXY/lua-rs/tree/main/crates/luars/src",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/src/platform_time.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/src/stdlib/os.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/src/stdlib/mod.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/src/stdlib/table.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/crates/luars/src/stdlib/sort_table/mod.rs",
+    "https://raw.githubusercontent.com/CppCXY/lua-rs/HEAD/docs/Different.md",
+    "https://crates.io/api/v1/crates/luars",
+    "https://github.com/CppCXY/lua-rs/issues?q=is%3Aissue",
+    "https://github.com/CppCXY/lua-rs/issues/28",
+    "https://github.com/CppCXY/lua-rs/issues/34",
+    "https://github.com/CppCXY/lua-rs/commits/main",
+    "https://github.com/CppCXY/lua-rs/commits/main/docs/benchmarks"
+  ],
+  "confidence": 0.75
+}
