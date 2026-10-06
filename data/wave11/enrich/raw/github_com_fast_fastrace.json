@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/fast/fastrace",
+  "one_liner": "Rust timeline-tracing library (successor to minitrace) whose span creation costs 19-151x less than tokio-tracing in its own benchmark.",
+  "what_it_does": "fastrace records spans and events for distributed tracing. You add a #[fastrace::trace] attribute, or create a Span::root per request, and spans are exported through a Reporter such as ConsoleReporter or fastrace-opentelemetry. Libraries depend on it without features, so instrumentation compiles to nothing, and only the application turns on the 'enable' feature. It is not a drop-in for tokio-tracing's API; a compatibility layer, fastrace-tracing, captures tracing-instrumented spans, and log-crate records attach to the current span.",
+  "how_it_is_fast": "LocalSpan keeps child spans in a thread-local stack with no locking or atomics when a local parent is set; spans that cross threads or await points use the heavier, thread-safe Span. Timestamps come from the fastant crate (TSC-based clock), and finished span batches go to a background collector thread that calls the reporter every report_interval (default 1 s), so the instrumented thread does not serialize or export anything. Without the 'enable' feature the macros compile away entirely.",
+  "when_to_use": [
+    "Instrumenting hot paths in Rust libraries or servers (KV stores, query engines, storage layers) where tracing overhead per span must stay in the hundreds of nanoseconds or below.",
+    "Library crates that want to ship tracing hooks that cost nothing unless the final application enables them.",
+    "Request-scoped traces exported to OpenTelemetry backends via fastrace-opentelemetry, with axum, tonic, tower, reqwest or poem integrations.",
+    "Workloads with many short child spans per request (100 to 1000 spans), where the README gap over tokio-tracing is widest."
+  ],
+  "when_not_to_use": [
+    "C or C++ codebases: it is Rust-only with no C API; C++ users need a different tracer.",
+    "You need per-span verbosity levels, tracing-subscriber's layer/filter ecosystem or structured event logging as the primary output: fastrace has no 'level' concept and no logging macros of its own.",
+    "Long-lived or endless root spans: spans are reported when the root is dropped, so a root that never ends never reports.",
+    "Toolchains older than Rust 1.91 (MSRV 1.91.0, edition 2024)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "fastant, fastrace-macro, parking_lot, pin-project, rand, rtrb, serde (plus opentelemetry crates when fastrace-opentelemetry is used)",
+    "min_toolchain": "Rust 1.91.0 (edition 2024)",
+    "platforms": "any Rust target; benchmarked on x86-64 (Intel Broadwell, Skylake, AMD Zen) and arm64 (AWS Graviton2)",
+    "thread_safety": "Span is thread-safe and Send; LocalSpan is single-thread and must not cross threads or .await points; collection runs on one background thread",
+    "drop_in_for_baseline": "partial: a different API from tokio-tracing; the fastrace-tracing compatibility layer captures existing tracing spans in two lines"
+  },
+  "gotchas": [
+    "LocalSpan::enter_with_local_parent does nothing silently when no local parent is set, so a missing set_local_parent() call drops spans without an error.",
+    "Span records created before set_reporter() are ignored, and flush() must be called before exit or buffered spans are lost.",
+    "The README sells a tail-sampling design, but Config::tail_sampled, max_spans_per_trace and report_before_root_finish are deprecated no-ops in 0.7.x, so there is no per-trace span cap against runaway memory.",
+    "The README tables come from an older criterion 'compare' bench (results/*.txt from cargo-criterion on Ubuntu 20.04 EC2, including rustracing); the current benches/compare.rs is a divan harness against tokio-tracing with an OpenTelemetry layer only, so the rustracing column cannot be reproduced from HEAD."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (binlog, BqLog, fmtlog, lockfreelog) are C++ loggers compared against spdlog, so they solve a different problem. Pick fastrace only for span-based distributed tracing in Rust; for low-latency C++ logging use fmtlog or binlog.",
+  "verified_claims_summary": "Per its results README, the authors ran cargo criterion on the compare bench on four 8-vCPU AWS EC2 instances (m4 Broadwell, m5 Skylake, m5a Zen, m6g Graviton2; Ubuntu 20.04) to time one root span plus N child spans. On m4.2xlarge fastrace took 0.44 us, 0.75 us, 3.4 us and 27.8 us for 1, 10, 100 and 1000 spans, against 8.2 us, 46 us, 423 us and 4.19 ms for tokio-tracing (19x to 151x) and 5.5 us to 1.52 ms for rustracing. The rustc version is not recorded, and in fastrace's case the span export cost lands on a background thread, not on the timed thread.",
+  "status_note": "Actively maintained (0.7.19, commits into 2026, used by Databend and Apache OpenDAL); Apache-2.0, so it is safe to adopt in Rust projects, but it has no value for C++ code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/README.md",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/crates/fastrace/Cargo.toml",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/crates/fastrace/src/lib.rs",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/crates/fastrace/src/collector/mod.rs",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/crates/fastrace/src/collector/global_collector.rs",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/benches/Cargo.toml",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/benches/benches/compare.rs",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/benches/results/README.md",
+    "https://raw.githubusercontent.com/fast/fastrace/HEAD/benches/results/compare-m4.2xlarge.txt",
+    "https://github.com/fast/fastrace/tree/main/benches",
+    "https://github.com/fast/fastrace/tree/main/benches/results",
+    "https://github.com/fast/fastrace/tree/main/benches/benches",
+    "https://github.com/fast/fastrace/tree/main/crates/fastrace/src",
+    "https://github.com/fast/fastrace/tree/main/crates/fastrace/src/collector"
+  ],
+  "confidence": 0.75
+}
