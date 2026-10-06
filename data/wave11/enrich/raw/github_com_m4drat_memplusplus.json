@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/m4drat/memplusplus",
+  "one_liner": "Experimental single-threaded C++ arena allocator with GC smart pointers and heap compaction; beats jemalloc in its own charts, not glibc malloc.",
+  "what_it_does": "mem++ is a C++20 library that hands out memory from 32 MB mmap'd arenas and offers garbage-collected smart pointers (mpp::MakeShared<T>, MakeSharedN<T>) plus a manual mpp::CollectGarbage() that frees unreachable objects and relocates live ones. A raw mpp::Allocate/Deallocate (malloc/free-like) API also exists but the README marks it deprecated. It is not a malloc replacement: there is no malloc/free interposition, and pointers to GcPtr objects are invalidated by every collection.",
+  "how_it_is_fast": "Allocation is a bump of the arena's top chunk when it has room; otherwise it does a best-fit lookup in a per-arena treap of freed chunks (ChunkTreap, GetFirstGreaterOrEqualToChunk) and splits the result. Free coalesces with neighbouring chunks and the top chunk, ptmalloc-style, using 16-byte headers and 32-byte minimum chunks. During GC it splits the object graph into connected components, places each component contiguously in one arena, and for singly-linked-list-shaped components lays nodes out in traversal order, which is where the 4-8x iteration speedup over a randomized list comes from.",
+  "when_to_use": [
+    "Research or teaching on compacting GC and locality-improving heap layout in C++.",
+    "Single-threaded programs built around pointer-chasing structures (linked lists) whose nodes end up scattered in memory, where a manual compaction pass can pay off.",
+    "Experiments comparing bump/treap allocators against jemalloc, which its own complex benchmark shows about 2x slower than mem++ (chart-read values)."
+  ],
+  "when_not_to_use": [
+    "As a faster general allocator: in its own charts glibc malloc (ptmalloc2, glibc 2.31) and rpmalloc beat it on the 4096-allocation test, and mimalloc and glibc malloc beat it on the 1M-op complex test.",
+    "Any multithreaded program: the README says it supports only single-threaded applications, and multithreading is an open low-priority issue (#21).",
+    "Production code: the README says it is not recommended for production, the API is unstable (0.3.5), and the last commit was 2023-11-22.",
+    "Code that keeps references or raw pointers into GC-managed objects across CollectGarbage(), since compaction invalidates them.",
+    "Windows, or projects needing a clear license: Windows support is an open issue (#27) and the repo has no LICENSE file."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime beyond libc/mmap; googletest and google benchmark only for tests and benchmarks",
+    "min_toolchain": "C++20 (CMAKE_CXX_STANDARD 20), CMake 3.13+, g++ or clang++",
+    "platforms": "Unix-like systems with mmap; Windows not supported",
+    "thread_safety": "Not thread-safe; single-threaded only per README",
+    "drop_in_for_baseline": "partial — malloc/free-like mpp::Allocate/Deallocate exist (deprecated) but nothing replaces malloc or operator new globally; the GC API is a different, smart-pointer interface"
+  },
+  "gotchas": [
+    "The allocator benchmarks call the deprecated raw mpp::Allocate/Deallocate, not the GC path, so they do not measure MakeShared or CollectGarbage cost.",
+    "Allocate and Deallocate scan the arena list linearly (GetSuitableChunk loops over every arena; Deallocate finds the owning arena by range check), so cost grows with the number of 32 MB arenas.",
+    "The 'ptmalloc2' column in the benchmarks is the build machine's system malloc (glibc 2.31); the benchmark build uses clang-15 Release with Google Benchmark, 5 repetitions, CPU not stated.",
+    "Garbage collection is manual only; automatic collection is an open issue (#45). Compaction moves objects and invalidates raw pointers and references."
+  ],
+  "pick_this_over_siblings_when": "Pick mem++ over SGCL only if you want compaction and locality-driven relocation rather than a concurrent tracing collector; for plain allocation speed, fast-alloc pools or IsoAlloc beat glibc malloc where mem++ does not.",
+  "verified_claims_summary": "First-party Google Benchmark runs (clang-15, Release, CPU unknown, results only as box-plot images): 4096 random-size allocations take about 590 us for mem++ vs about 1160 us for jemalloc and 960 us for mimalloc, but about 220 us for glibc 2.31 malloc and 150-200 us for rpmalloc; the 1M-op mixed benchmark is about 1010 ms vs jemalloc about 2000 ms and rpmalloc about 1340 ms, but slower than mimalloc (about 670 ms) and glibc malloc (about 700 ms). The 4-8x figure compares iterating a linked list after compaction with the same list randomized in mem++'s own heap.",
+  "status_note": "Stale since 2023-11-22 with 22 open issues, no LICENSE file and an author warning against production use, so it is reference material only.",
+  "sources_read": [
+    "https://github.com/m4drat/memplusplus",
+    "https://github.com/m4drat/memplusplus/issues",
+    "https://github.com/m4drat/memplusplus/tree/master/libmemplusplus/src",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/README.md",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/libmemplusplus/CMakeLists.txt",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/libmemplusplus/src/memory_manager.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/libmemplusplus/src/arena.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus/HEAD/libmemplusplus/src/gc.cpp",
+    "https://github.com/m4drat/memplusplus-benchmarks",
+    "https://github.com/m4drat/memplusplus-benchmarks/tree/master/benchmarks/mempp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/compile_all_and_run.sh",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/benchmark_alloc.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/benchmark_complex.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/allocator_api_override.h",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/mempp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/mempp/allocator_api_override.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/mempp/benchmark_memory_access.cpp",
+    "https://raw.githubusercontent.com/m4drat/memplusplus-benchmarks/HEAD/benchmarks/ptmalloc2/allocator_api_override.cpp"
+  ],
+  "confidence": 0.65
+}

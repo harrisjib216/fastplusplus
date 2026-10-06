@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/mtmucha/coros",
+  "one_liner": "Header-only C++23 coroutine fork-join task library with a work-stealing pool; roughly ties oneTBB, beats OpenMP tasks.",
+  "what_it_does": "Coros turns functions into tasks by returning coros::Task<T> and using co_return/co_await; tasks run on a coros::ThreadPool started with start_sync/start_async from main. Tasks wait on children with co_await coros::wait_tasks(...) (lazy scheduling) or wait_tasks_async (eager), fire-and-forget with enqueue_tasks, and chain with chain_tasks(...).and_then(...). Results and exceptions are stored in std::expected<T, std::exception_ptr>. It is a new API, not a drop-in for TBB parallel_invoke or OpenMP task pragmas.",
+  "how_it_is_fast": "Each worker owns a Chase-Lev work-stealing deque (circular power-of-two buffer, grown 4x on overflow, after Le et al.'s correct weak-memory-model deque) storing coroutine handles; idle workers pick a random victim and scan all queues, then fall back to a shared moodycamel::ConcurrentQueue for tasks submitted from outside. Stackless coroutines make a spawn a heap-allocated coroutine frame plus a deque push, and co_await on a child uses symmetric transfer so nested waits do not grow the stack. top_ and bottom_ are padded with hardware_destructive_interference_size to avoid false sharing.",
+  "when_to_use": [
+    "C++23 code (GCC 13+ or Clang 17+) that wants fork-join recursion expressed with co_await instead of TBB lambdas or OpenMP pragmas",
+    "Very fine-grained recursive tasks (fib-style spawn trees) where OpenMP tasks, especially GCC libgomp, are orders of magnitude slower per the README graphs",
+    "Small codebases that want a vendorable, header-only, BSL-1.0 scheduler with exception propagation via std::expected",
+    "Moving work between several thread pools (wait_tasks(tp, ...) resumes the awaiting task on a named pool)"
+  ],
+  "when_not_to_use": [
+    "If oneTBB is already in use: the README graphs show parity on x86 (Coros ~27 ms vs oneTBB ~25 ms for fib(30) at 16 threads) and only modest wins on ARM",
+    "Latency- or power-sensitive processes: idle workers busy-spin forever (run() loops on noop_coroutine; thread yielding is a TODO), burning 100% CPU on every pool thread",
+    "MSVC builds (not supported) or toolchains without std::expected",
+    "Clang on x86 at high steal rates: open issue #2 reports the seq_cst atomic_thread_fence in Dequeue::steal() compiles to mfence and dominates matmul time",
+    "Long-lived pools with bursty spawning: grown deque buffers are kept in old_buffers_ until the pool is destroyed"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (vendors moodycamel concurrentqueue.h in include/)",
+    "min_toolchain": "C++23, GCC 13+ (with -fcoroutines) or Clang 17+ (libc++); MSVC not supported",
+    "platforms": "x86-64 and ARM per the README graphs; any platform with C++23 threads and atomics otherwise not documented",
+    "thread_safety": "ThreadPool is shared by its workers; tasks from outside go through a lock-free MPMC queue; the pool must outlive its tasks. CI runs ASan and TSan builds.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Exceptions thrown inside enqueue_tasks tasks are rethrown immediately, since nothing awaits them; Task<void> has no value()/operator*",
+    "Lambda coroutines with captures are unsafe once the lambda dies; pass state through coroutine parameters",
+    "Published harness flaw: benchmarks/tbb/fib_tbb.h and mat_tbb.h hard-code tbb::task_arena arena(4) and ignore g_thread_num, so the committed oneTBB benchmark always runs 4 threads; the oneTBB thread sweep in the README graphs cannot be reproduced from the repo as committed",
+    "Each harness writes 50 millisecond-resolution runs per thread count to text files; how the plotted value was derived (mean, median) is not documented, and the TBB matmul uses std::atomic<int> inputs where Coros uses plain int"
+  ],
+  "pick_this_over_siblings_when": "The other coroutines-fibers entries (minicoro, libaco, libco-style switchers, Boost.Cobalt) are context-switch or async I/O primitives; pick Coros when you need a parallel fork-join scheduler on stackless C++ coroutines, and Marl when you need stackful fibers that may block.",
+  "verified_claims_summary": "README graphs (read by eye) show fib(30) time vs threads (1-16) and a 1024x1024 recursive int matmul against oneTBB, GCC libgomp and LLVM libomp: at 16 threads x86 fib Coros ~27 ms vs oneTBB ~25 ms, libomp ~140 ms, libgomp ~3000 ms; ARM fib ~22 ms vs ~27 ms oneTBB; matmul ~818 ms vs ~840 ms oneTBB. Benchmark CMake uses -std=c++23 -O3 (-fcoroutines -fopenmp for GCC, libc++ and libomp for Clang); compiler versions and CPU models are not stated, and the committed oneTBB harness pins 4 threads.",
+  "status_note": "Stale since 2024-09-13 with one open performance issue (#2); BSL-1.0 and header-only, so easy to vendor, but treat it as a well-built student-scale scheduler rather than a TBB replacement.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/README.md",
+    "https://github.com/mtmucha/coros/tree/main/include",
+    "https://github.com/mtmucha/coros/tree/main/benchmarks",
+    "https://github.com/mtmucha/coros/tree/main/benchmarks/tbb",
+    "https://github.com/mtmucha/coros/issues?q=is%3Aissue",
+    "https://github.com/mtmucha/coros/issues/2",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/include/thread_pool.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/include/deque.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/include/task.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/main.cpp",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/coros_fib.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/coros_mat.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/openmp_fib.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/openmp_mat.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/tbb/main.cpp",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/tbb/fib_tbb.h",
+    "https://raw.githubusercontent.com/mtmucha/coros/HEAD/benchmarks/tbb/mat_tbb.h"
+  ],
+  "confidence": 0.7
+}

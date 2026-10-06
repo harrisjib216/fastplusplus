@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/lxl66566/zdu",
+  "one_liner": "Parallel Rust disk-usage CLI with a dust-style tree chart; 2.7-10x faster than dust, mixed against pdu.",
+  "what_it_does": "zdu is a `du` replacement that walks a tree in parallel and prints dust's tree chart with percent bars. It began as a port of dust v1.2.5 and keeps dust's CLI shape (-d depth, -n count, -s apparent size, -f file count, -x one filesystem, -L follow links, regex/type/size/time filters, -j JSON, --files-from). It is a command-line tool only; there is no library API.",
+  "how_it_is_fast": "The walk runs as flat rayon scope tasks (no recursion): each directory is read once into a Vec, entries are processed with into_par_iter clamped to a 64-entry minimum leaf, and each subdirectory spawns its own task that bubbles its node up via an atomic pending counter. Hard-link dedup uses a 256-shard Mutex<HashSet<(inode, device)>> sharded on the inode, which the source says cut /nix/store from 818 ms to 631 ms versus a device-keyed shard; directories are classified from readdir d_type instead of an extra stat. On Windows, DirEntry::metadata() reuses the FindNextFile data so plain entries need no per-file stat.",
+  "when_to_use": [
+    "Interactive disk-usage inspection where you want dust's tree chart but faster on large trees (hundreds of thousands to millions of files).",
+    "Link-heavy trees such as /nix/store, where the README shows 402.7 ms vs pdu -H 1.401 s and dust 1.118 s.",
+    "Windows/NTFS scans: README shows 2.7-7.4x over dust and 2.0-6.2x over pdu on 7.6k-163k file trees.",
+    "Many-core machines with warm page cache, the only setting measured (32 logical cores)."
+  ],
+  "when_not_to_use": [
+    "Small trees on Linux: pdu -H beat it on ~/.cargo (14.0 ms vs 19.6 ms).",
+    "When you need a library to embed in a C++ program; this is a Rust binary.",
+    "Cold-cache or spinning-disk scans: not benchmarked; diskus and gdu siblings publish cold-cache numbers.",
+    "When you need exact GNU du semantics: allocated size is capped heuristically (blocks*512 replaced by size rounded to blksize when it exceeds that by more than 65536 blocks), and Windows counts plain-file hard links once per link.",
+    "Production use requiring maturity: 0 stars, first commits and release all in September 2026."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon, clap, regex, serde/serde_json, chrono, lscolors, nu-ansi-term, terminal_size, config-file, ctrlc, stfu8, thousands, unicode-width; on Windows filesize and winapi-util",
+    "min_toolchain": "Rust 1.85 (edition 2024)",
+    "platforms": "Linux/Unix and Windows (both benchmarked); macOS not documented",
+    "thread_safety": "not applicable (CLI); internally multithreaded via rayon",
+    "drop_in_for_baseline": "partial — CLI flags largely follow dust (it is a dust port), but not pdu's flags or output format; installed crate name is zdu-rs, binary zdu"
+  },
+  "gotchas": [
+    "The README links pdu to XAMPPRocky/pdu, but the versions benchmarked (0.21.1, 0.24.0) and the -H/--deduplicate-hardlinks flag match KSXGitHub/parallel-disk-usage.",
+    "No benchmark script is published; the tables give hyperfine means only, with no CPU model or variance.",
+    "Every regular entry's (inode, device) goes into the dedup set in default mode, not only entries with link count above 1, so memory grows with file count; -s (apparent size) skips dedup.",
+    "zdu renders a full tree while pdu prints a flat list, so the comparison is not output-equivalent (README argues this favors pdu)."
+  ],
+  "pick_this_over_siblings_when": "Pick zdu over pdu (parallel-disk-usage) when you want dust's tree output, are on Windows, or scan link-heavy trees; pick pdu for small Linux trees and diskus when you only need a single total, since diskus publishes cold-cache numbers and zdu does not.",
+  "verified_claims_summary": "Author's hyperfine runs with warm page cache on 32 logical cores (CPU not named): on Linux, zdu 19.6/143.8/402.7 ms vs dust 1.2.4 at 202.2 ms/388.2 ms/1.118 s and pdu 0.21.1 -H at 14.0/228.3/1401 ms for 57k, 509k and 1.2M files; on Windows 10/NTFS 2.7-7.4x over dust 1.2.3 and 2.0-6.2x over pdu 0.24.0 without -H. Release build uses LTO and codegen-units=1; no other flags or harness published.",
+  "status_note": "Active (88 commits, last 2026-09-18) but brand-new with 0 stars; MIT OR Apache-2.0, installable with cargo install, usable as a CLI tool rather than copyable library code.",
+  "sources_read": [
+    "https://github.com/lxl66566/zdu",
+    "https://github.com/lxl66566/zdu/commits",
+    "https://github.com/lxl66566/zdu/tree/main/src",
+    "https://raw.githubusercontent.com/lxl66566/zdu/HEAD/README.md",
+    "https://raw.githubusercontent.com/lxl66566/zdu/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/lxl66566/zdu/HEAD/src/dir_walker.rs",
+    "https://raw.githubusercontent.com/lxl66566/zdu/HEAD/src/platform.rs",
+    "https://raw.githubusercontent.com/lxl66566/zdu/HEAD/src/node.rs"
+  ],
+  "confidence": 0.6
+}
