@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/snu-csl/rfuse",
+  "one_liner": "FAST '24 research FUSE replacement: per-core shared-memory ring channels and hybrid polling; about 2.27x FUSE random-read throughput (paper snippet).",
+  "what_it_does": "RFUSE replaces the FUSE kernel module and libfuse with a modified kernel driver (built as fuse.ko) and librfuse (a fork of libfuse 3.10.5), so existing high-level and low-level FUSE filesystems run without source changes. Requests and replies move through ring buffers that are mapped as shared memory between the kernel and the daemon, one ring per core, instead of read()/write() on /dev/fuse through a single shared queue. The repository is the paper's artifact: a Linux 5.15.0 tree, the FUSE and RFUSE drivers and libraries, NullFS and StackFS test filesystems, and fio, scale_fio, FxMark and Filebench scripts.",
+  "how_it_is_fast": "Per-core ring channels (io_uring-style submission/completion rings, RFUSE_NUM_IQUEUE of them) remove the single global request queue and its lock contention, and avoid inter-NUMA traffic for metadata-heavy parallel work. Hybrid polling cuts context switches and wake-ups: in rfuse_comp.c the kernel side checks for completion and calls schedule() in a loop for up to RFUSE_COMP_MAX_IDLE = 50 us before it sleeps, which pays off for short metadata operations. Shared-memory rings also cut request copying between kernel and user space.",
+  "when_to_use": [
+    "Research or reproduction of FUSE-overhead work on a Linux 5.15 test machine you control (kernel rebuild and module swap are acceptable).",
+    "Many-core boxes (the artifact ran on 80 cores) with fast NVMe where stock FUSE's single queue limits random-I/O or metadata scalability.",
+    "Benchmarking an existing libfuse 3 filesystem against a faster transport without porting it, since the FUSE API is kept unchanged.",
+    "Pass-through or stackable filesystems (StackFS-like) where random reads and metadata ops dominate."
+  ],
+  "when_not_to_use": [
+    "Production systems or distro kernels: it needs a patched 5.15.0 kernel build and replaces the in-tree fuse module; users report 'Invalid module format' and build errors (issues #1, #3).",
+    "Sequential I/O: the artifact's own claims say FUSE, RFUSE and ext4 perform similarly there because of the page cache.",
+    "Small machines: the authors note results may differ on fewer cores and older PCIe; the ring count is a compile-time constant (80 by default).",
+    "Unprivileged or containerized deployments where loading a custom kernel module is not allowed.",
+    "Comparisons with newer upstream mechanisms (FUSE passthrough, FUSE over io_uring in Linux 6.14+): none are made in the repo."
+  ],
+  "integration": {
+    "form": "kernel module + shared lib",
+    "dependencies": "patched Linux 5.15.0 kernel (included), librfuse (libfuse 3.10.5 fork, meson/ninja), build-essential, kernel-package and related packages per README",
+    "min_toolchain": "Linux 5.15.0, meson >= 0.42, GCC toolchain able to build the 5.15 kernel",
+    "platforms": "Linux x86_64 (tested on Ubuntu 20.04.5, 2x40-core CPUs, PCIe 4.0 NVMe)",
+    "thread_safety": "Kernel side uses per-ring spinlocks; daemon threading follows libfuse multithreaded loop semantics (not separately documented).",
+    "drop_in_for_baseline": "partial — source-compatible for FUSE filesystems (same API), but requires swapping the kernel module and library, a specific kernel version, and a per-machine RFUSE_NUM_IQUEUE edit"
+  },
+  "gotchas": [
+    "RFUSE_NUM_IQUEUE must be edited by hand in both lib/librfuse/include/rfuse.h and driver/rfuse/rfuse.h to match the core count before building.",
+    "The RFUSE driver builds as fuse.ko, so it replaces stock FUSE on the machine rather than running beside it.",
+    "Hybrid polling spins (schedule() loop) for up to 50 us per request before sleeping, trading CPU time for latency.",
+    "Latency-breakdown numbers (Figures 2 and 7) need debug builds with -DDEBUG timestamp printk, so do not benchmark throughput with those builds."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling accelerates FUSE itself: pick RFUSE when the filesystem must stay a FUSE daemon, and liburing or SPDK when you control the I/O path directly instead of going through a userspace filesystem.",
+  "verified_claims_summary": "Per a search snippet of the FAST '24 paper (usenix.org PDF blocked here), RFUSE with StackFS on a 2-socket 80-core machine with a PCIe 4.0 NVMe SSD and Linux 5.15.0 reached 2.27x the random-read throughput of stock FUSE, with sequential I/O at parity with ext4. The repo's claims.md states the expected trends (RFUSE beats FUSE on random fio, scale_fio, FxMark and Filebench, near ext4) but contains no numbers.",
+  "status_note": "Research artifact with occasional maintenance (last commit 2025-05-08, all four issues closed by Dec 2024), GPL-2.0 kernel code; usable for experiments, not as a maintained production FUSE replacement.",
+  "sources_read": [
+    "https://github.com/snu-csl/rfuse",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/README.md",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/bench/claims.md",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/driver/rfuse/rfuse.h",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/driver/rfuse/rfuse_dev.c",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/driver/rfuse/rfuse_comp.c",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/driver/rfuse/rfuse_comp.h",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/driver/rfuse/Makefile",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/lib/librfuse/meson.build",
+    "https://raw.githubusercontent.com/snu-csl/rfuse/HEAD/lib/librfuse/include/rfuse.h",
+    "https://github.com/snu-csl/rfuse/tree/master/driver/rfuse",
+    "https://github.com/snu-csl/rfuse/issues?q=is%3Aissue",
+    "https://www.usenix.org/system/files/fast24-cho.pdf (blocked, 403; search snippets only)"
+  ],
+  "confidence": 0.6
+}

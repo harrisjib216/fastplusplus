@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/sm2coin/libcr",
+  "one_liner": "Stackless, macro-based C++17 coroutines and protothreads with 1:N and M:N schedulers; 3 ns switches versus 2.5 us kernel thread handoffs.",
+  "what_it_does": "libcr gives stackless coroutines and protothreads for memory-constrained machines (the README targets Raspberry Pi class devices), plus single-threaded (cr::sync) and thread-safe (cr::mt) schedulers, a hybrid scheduler, and coroutine-aware events, condition variables, mutexes, barriers, futures and fixed queues. Coroutines are declared with macros (COROUTINE, CR_STATE, CR_INLINE, CR_YIELD, CR_AWAIT, CR_CALL, CR_FINALLY, CR_THROW); locals that live across a suspension must sit in the CR_STATE block. It is a different interface from threads, Boost.Context or C++20 coroutines, not a drop-in.",
+  "how_it_is_fast": "Each coroutine stores only a resume address: suspension points save a label address with GCC's labels-as-values (&&label) and resume with a computed goto (goto *ip), so a switch is an indirect jump with no stack swap or register save. Nothing is allocated dynamically and no stack is reserved, so a coroutine is 56 bytes on 64-bit (8 bytes for a bare protothread) and nested coroutines can be embedded in, or unioned inside, the parent's state. The thread-unsafe sync scheduler avoids atomics entirely, which is why it is about 4x faster than the mt variant in a single thread.",
+  "when_to_use": [
+    "Very many small cooperative tasks (state machines, protocol handlers) on memory-limited Linux boards where a 64 KiB+ stack per fiber is unaffordable.",
+    "Single-threaded event loops where switch cost dominates and the GCC/Clang computed-goto requirement is acceptable.",
+    "M:N designs that need coroutines to migrate between worker threads, using the cr::mt or HybridScheduler variants.",
+    "AGPL-compatible projects (or internal research code) that want a compact, allocation-free scheduler to study or vendor."
+  ],
+  "when_not_to_use": [
+    "Closed-source or permissively licensed products: AGPL-3.0 copyleft also covers network use.",
+    "MSVC builds: specific.hpp hits '#error \"Compiler not supported!\"' without __GNUC__.",
+    "Code that needs to yield from deep inside ordinary (non-coroutine) call chains or call third-party blocking code: it is stackless, so every suspendable frame must itself be a libcr coroutine.",
+    "New C++20 code: native stackless coroutines give similar memory benefits without the macro syntax and the restriction on locals across suspension points.",
+    "Teams that need a maintained dependency: 81 commits, 5 stars, a 2020-2025 gap in commits, and the README warns that breaking changes are still made."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "sm2coin timer submodule (depend/timer), pulled by CMake running git submodule init/update; pthread for the mt parts",
+    "min_toolchain": "C++17, GCC or Clang (labels-as-values extension); CMake 2.6+",
+    "platforms": "any GCC-supported target (no OS-specific code per README); MSVC unsupported",
+    "thread_safety": "Two families: cr::sync types are thread-unsafe (fastest); cr::mt types are thread-safe and let coroutines move between threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Native local variables do not survive CR_YIELD/CR_AWAIT/CR_CALL; anything live across a suspension must be declared in CR_STATE.",
+    "Exceptions are a custom error/no-error flag (CR_THROW), not C++ exceptions; CR_FINALLY must not contain return, throw, yield or await.",
+    "The library's CMakeLists hard-codes -Werror and -g, and release mode (-DLIBCR_RELEASE=ON) adds -O2 -mtune=native; the 2025-04-09 commit fixed a build break on a newer compiler, so expect warnings-as-errors breakage on new toolchains.",
+    "CMake runs git submodule commands at configure time and copies headers into the source tree's include/ directory."
+  ],
+  "pick_this_over_siblings_when": "Pick libcr over stackful libraries such as libaco, libco-style libcopp or libdill when per-task memory matters more than the convenience of yielding from arbitrary calls; minicoro or libaco are simpler to adopt and license-friendlier when stacks are affordable, and CO2 is the closer stackless alternative with a published comparison against Boost.Coroutine2.",
+  "verified_claims_summary": "The README reports, on an Intel Core i7-8700 in release mode, 335 MHz (3 ns) per thread-unsafe coroutine switch, 80 MHz (12 ns) thread-safe in one thread and 166 MHz (6 ns) thread-safe across 12 threads, against about 400 kHz (2.5 us) for kernel thread synchronisation handoffs (about 837.5x). The coroutine numbers come from the companion repo sm2coin/libcr-test (yield loops over N coroutines, -O3 -mtune=native in release, compiler version not stated), but that tool contains no kernel-thread benchmark, so the 2.5 us baseline has no published code; no comparison with Boost.Context, libco or other coroutine libraries is given.",
+  "status_note": "Stale (two small commits in April 2025 after a gap since December 2020), AGPL-3.0 and small enough to vendor, but GCC/Clang only and still described by its author as evolving with breaking changes.",
+  "sources_read": [
+    "https://github.com/sm2coin/libcr",
+    "https://github.com/sm2coin/libcr/commits",
+    "https://github.com/sm2coin/libcr/tree/master/src",
+    "https://raw.githubusercontent.com/sm2coin/libcr/HEAD/README.md",
+    "https://raw.githubusercontent.com/sm2coin/libcr/HEAD/docs/intro.md",
+    "https://raw.githubusercontent.com/sm2coin/libcr/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/sm2coin/libcr/HEAD/src/specific.hpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr/HEAD/src/Coroutine.hpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/README.md",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/CMakeLists.txt",
+    "https://github.com/sm2coin/libcr-test/tree/master/src",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/src/test.cpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/src/Benchmark.cpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/src/Benchmark.hpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/src/bench/Scheduler.hpp",
+    "https://raw.githubusercontent.com/sm2coin/libcr-test/HEAD/src/bench/MtScheduler.hpp"
+  ],
+  "confidence": 0.65
+}

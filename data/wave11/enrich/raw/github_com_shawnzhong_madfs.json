@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/shawnzhong/madfs",
+  "one_liner": "LD_PRELOAD userspace persistent-memory file layer over ext4-DAX; FAST '23 reports up to 3.6x ext4-DAX concurrent throughput.",
+  "what_it_does": "MadFS is a research library filesystem for persistent memory (PM). Built as libmadfs.so, it is loaded with LD_PRELOAD and intercepts glibc open/read/write/pread/pwrite/lseek/stat/fsync/mmap/close, so unmodified programs run on files that sit on an ext4-DAX mount. Files it creates carry embedded metadata (a block map kept as a compact log) and an xattr pointing to a shared-memory object used for cross-process coordination; any other file falls back to the normal syscall.",
+  "how_it_is_fast": "Per-file virtualization: block mapping, crash consistency and concurrency control live in userspace inside the mmap'ed file, so data and most metadata operations skip the kernel. Writes are copy-on-write blocks committed by appending to the embedded log, and cross-process synchronization uses lock-free optimistic concurrency control (OCC) on the log tail instead of kernel inode locks. Persistence uses MAP_SYNC mappings plus clwb/clflushopt, and by default transaction entries are flushed only at fsync (MADFS_TX_FLUSH_ONLY_FSYNC).",
+  "when_to_use": [
+    "Research or prototyping on Intel Optane PM (or DRAM-emulated PM via memmap) where you want to compare a userspace PM filesystem against ext4-DAX, NOVA or SplitFS; the repo ships scripts that drive all four.",
+    "Multi-threaded or multi-process pread/pwrite workloads on shared files, where ext4-DAX inode locking limits scaling and OCC helps.",
+    "Running unmodified LevelDB or SQLite on PM to measure what userspace metadata buys (the paper's YCSB and TPC-C experiments).",
+    "Studying a working implementation of embedded-log CoW crash consistency and user-level OCC for file I/O."
+  ],
+  "when_not_to_use": [
+    "Production storage: research code, no license file, last commit 2023-03-05, and Optane PM is discontinued.",
+    "Workloads that need truncate, ftruncate or flock: these PANIC in src/lib/misc.cpp.",
+    "Programs that use stdio (fopen/fread): fopen is passed straight to glibc, so those files do not get MadFS handling.",
+    "Anything without a DAX-capable PM device or emulated pmem: it relies on MAP_SYNC mmap of a DAX mount.",
+    "Workloads that depend on fcntl results or fcntl locks: the fcntl/fcntl64 wrappers return 0 for every fd without making the call."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libpmem2 (PMDK), oneTBB 2021.5 and magic_enum 0.8.0 (fetched by CMake), pthread, libatomic, libdl",
+    "min_toolchain": "C++20; GCC 10.3+/11.3 or Clang 10/14 per README; CMake 3.16+",
+    "platforms": "Linux x86-64 only in practice (built with -march=native; uses clwb/clflushopt, AVX-512 detected); needs a DAX filesystem on PM or emulated PM",
+    "thread_safety": "Designed for concurrent threads and processes on the same file via user-level OCC (mutex, spinlock and rwlock variants are build options); the TSAN data race in issue #210 was closed in 2022.",
+    "drop_in_for_baseline": "partial: runs unmodified POSIX programs via LD_PRELOAD, but only for regular files created by MadFS (or converted with tools/to_madfs) with block-aligned sizes; truncate/ftruncate/flock abort, fcntl is a no-op, openat64 ignores dirfd, and O_WRONLY opens are upgraded to O_RDWR."
+  },
+  "gotchas": [
+    "fcntl and fcntl64 return 0 at their first line for every descriptor, so F_GETFL/F_SETLK and similar calls silently do nothing, MadFS file or not. SQLite's POSIX advisory locks become no-ops under MadFS, which also takes those syscalls out of the TPC-C/SQLite runs.",
+    "openat64 ignores dirfd ('TODO: implement the case where pathname is relative to dirfd'), so relative paths resolve against the CWD.",
+    "An existing non-empty file is used as a MadFS file only if it has the shm xattr and a block-aligned size; otherwise it falls back to plain syscalls with only a log warning, so you can unknowingly benchmark ext4-DAX.",
+    "Each process prints its build and runtime options to stderr when the library loads, and prints 'MadFS unloaded' on exit, which can break tools that parse stderr."
+  ],
+  "pick_this_over_siblings_when": "Pick MadFS over SplitFS when many threads or processes write the same file and you want metadata and concurrency control in userspace without a kernel module (SplitFS still sends metadata to ext4 and its benchmarks are in MadFS's own scripts). Pick it over NOVA or WineFS when you cannot load a custom kernel filesystem, since MadFS runs on a stock ext4-DAX mount.",
+  "verified_claims_summary": "The FAST '23 paper abstract, reproduced in the README, reports up to 3.6x ext4-DAX throughput on concurrent microbenchmarks and 48% (YCSB on LevelDB) and 85% (TPC-C on SQLite) speedups over NOVA. Benchmark drivers (Google Benchmark micro_st/micro_mt, bench_tpcc.py, bench_ycsb.py) are public and compare MadFS, ext4-DAX, NOVA and SplitFS, built with -march=native and LTO. The PM hardware and CPU are given only in the paper, which was not reachable (usenix.org blocked; a WebSearch did not return them).",
+  "status_note": "Abandoned research artifact (last commit 2023-03-05, 0 open of 48 issues, 51 stars) with no LICENSE file, so reference only; it needs Optane-class or emulated PM to run.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/README.md",
+    "https://github.com/ShawnZhong/MadFS",
+    "https://github.com/ShawnZhong/MadFS/issues?q=is%3Aissue",
+    "https://github.com/ShawnZhong/MadFS/tree/main/src/lib",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/lib/lib.cpp",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/lib/open.cpp",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/lib/misc.cpp",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/lib/mmap.cpp",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/file/file.h",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/src/tx/read.h",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/scripts/bench_mt.py",
+    "https://raw.githubusercontent.com/ShawnZhong/MadFS/HEAD/scripts/fs.py"
+  ],
+  "confidence": 0.75
+}
