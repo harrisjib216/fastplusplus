@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/programminggod-byte/fluxio",
+  "one_liner": "Header-only C++20 io_uring (SQPOLL, fixed files and buffers) O_DIRECT block I/O engine; out-runs Boost.Asio file I/O and Go on 4 KiB writes.",
+  "what_it_does": "FluxIO is a Linux block-I/O engine for 4 KiB-page O_DIRECT reads, writes and fdatasync on a small set of registered files. You push flux::IORequest structs into an SPSC submission ring, call process_submissions(), then poll_completion() and try_pop_completion() for flux::IoCompletion records; it is not a drop-in for pread/pwrite, iostreams or Asio. flux::flux_storage_engine picks the io_uring backend when liburing.h is present and a synchronous pread/pwrite O_DIRECT backend otherwise, and pybind11 bindings are included.",
+  "how_it_is_fast": "It sets up io_uring with IORING_SETUP_SQPOLL so a kernel thread polls the submission queue (no io_uring_enter per batch while it is awake), registers the file descriptors (IOSQE_FIXED_FILE) and a pool of page-aligned buffers (io_uring_register_buffers, read_fixed/write_fixed) so the kernel skips per-I/O fd lookup and page pinning. Free buffer slots come from a 128-bit bitmask allocated with ctz, and request/completion queues are cache-line-aligned SPSC rings. FileBlockManager fallocate()s 10 MB chunks with FALLOC_FL_KEEP_SIZE ahead of the write frontier (80% watermark) to cut extent allocation on sparse files.",
+  "when_to_use": [
+    "Linux NVMe workloads issuing many independent 4 KiB O_DIRECT reads or writes at queue depth 4-128 from one thread, e.g. a storage engine, log or block cache.",
+    "When you can spare a second core for the SQPOLL kernel thread in exchange for higher IOPS from a single submitting thread.",
+    "Write-heavy streams into preallocated files, where it measured about 0.5-0.7 M IOPS (sequential and random 4 KiB writes) on a consumer NVMe drive.",
+    "As a compact, readable example of SQPOLL plus fixed files and buffers to copy into your own engine (MIT, a few headers)."
+  ],
+  "when_not_to_use": [
+    "Sequential reads: it measured 278,054.8 IOPS vs Go's 302,860.5 (0.92x), and IOPS per core is roughly on par with Go once the SQPOLL thread is counted (README).",
+    "Requests larger than the page size (default 4096 B): each request must fit one registered buffer, so larger I/O must be split by the caller.",
+    "Non-Linux, buffered or non-x86 environments: io_uring and O_DIRECT only, and the code calls __builtin_ia32_rdtsc directly for timestamps.",
+    "Multi-threaded submission: rings are single-producer/single-consumer and the engine holds no locks.",
+    "Production use without your own testing: 9 commits in under a week (2026-09-30 to 2026-10-04), no CVE or issue history, and the benchmark harness does not check per-I/O results."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "liburing (optional; without it the POSIX pread/pwrite backend is used), pthread; pybind11 only for the Python module",
+    "min_toolchain": "C++20 (concepts, <bit>); README builds with g++ -std=c++20 -O3",
+    "platforms": "Linux only; io_uring backend effectively x86-64 (direct __builtin_ia32_rdtsc and pause calls); SQPOLL may need root or CAP_SYS_NICE on older kernels (README runs the benchmark with sudo)",
+    "thread_safety": "single-threaded per engine: lock-free SPSC submission and completion rings, one producer and one consumer",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README headline 'QD128 random write with FileBlockManager 429,229.3 IOPS vs Go 29,074.7 and Asio 28,411.3' uses FluxIO's QD16 row: its own Mode 2 table shows 28,335.9 IOPS at QD128 (and 16,816.5 at QD64), the same as the Go and Asio sparse-file numbers, so the claimed fix for the ext4 inode-lock collapse is not supported at QD128.",
+    "bench_fluxio.cpp counts every completion as a finished op and never checks comp.failed or comp.result, so failed or short I/Os would still inflate IOPS; register_file silently reopens without O_DIRECT if the filesystem returns EINVAL, which would turn the run into page-cache I/O.",
+    "io_uring register_file() only opens files that already exist (it never passes O_CREAT on a missing path) and a failed open hits FLUXIO_SAFE_CHECK, which calls abort(); the POSIX backend does create the file.",
+    "Writes are memcpy'd into the registered buffer and reads are copied out of it on completion, so 'fixed buffers' does not mean zero-copy for the caller; the SQPOLL thread spins for 2000 ms after each burst (sq_thread_idle)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over raw liburing when you want SQPOLL, fixed files and buffers, slot management and fallocate-ahead already wired up for 4 KiB O_DIRECT blocks; pick liburing itself (or SPDK for full userspace NVMe) when you need arbitrary request sizes, multiple threads, or measured, mature behavior.",
+  "verified_claims_summary": "First-party runs of benchmark/bench_fluxio.cpp (4 KiB O_DIRECT, 20,000-50,000 ops per point, QD 1-128, 256 MB file, thread pinned to core 2, consumer NVMe, CPU model not stated) peak at 715,827.6 IOPS sequential and 542,998.1 random write vs Go os.O_DIRECT with goroutines (239,383.5 and 248,800.8) and Boost.Asio C++20 file I/O (86,783.1 and 86,821.4), using about 200% CPU vs about 100%. The Go and Asio harnesses are not in the repo, and the sparse-file QD128 comparison quotes FluxIO's QD16 result.",
+  "status_note": "Active but brand new (9 commits, 2026-09-30 to 2026-10-04, 6 stars, no issues); MIT and small enough to vendor, but treat it as a reference design rather than a hardened dependency.",
+  "sources_read": [
+    "https://github.com/programmingGod-byte/FluxIO",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/README.md",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/benchmark/bench_fluxio.cpp",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/include/fluxio/backend/io_uring_backend.h",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/include/fluxio/backend/file_state.h",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/include/fluxio/backend/fileBlockManager.h",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/include/fluxio/backend/posix_backend.h",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/include/fluxio/util/fluxio_macros.h",
+    "https://raw.githubusercontent.com/programmingGod-byte/FluxIO/HEAD/CMakeLists.txt"
+  ],
+  "confidence": 0.7
+}
