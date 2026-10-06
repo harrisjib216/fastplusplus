@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/yvt/rlsf",
+  "one_liner": "Rust no_std TLSF allocator with constant-time alloc/free; lower latency and far smaller code than dlmalloc on microcontrollers and wasm.",
+  "what_it_does": "Implements the Two-Level Segregated Fit (TLSF) algorithm of Masmano et al. (ECRTS 2004) as a Rust crate. The core type Tlsf<'pool, FLBitmap, SLBitmap, FLLEN, SLLEN> carves up memory pools you hand it (for example a static array) and exposes unsafe allocate(Layout)/deallocate(ptr, align). FlexTlsf grows pools from a source, and GlobalTlsf / SmallGlobalTlsf implement GlobalAlloc (plus a malloc-style CAlloc trait) on unix and on wasm32 without atomics.",
+  "how_it_is_fast": "TLSF keeps segregated free lists indexed by a first level (power-of-two size class, found with leading_zeros) and a second level (SLLEN linear subdivisions, found by a rotate), with a bitmap per level so a fitting non-empty list is found with bit-scan instructions instead of a search. Every alloc and free is therefore O(1) with immediate coalescing of neighbours. rlsf caps each pool with a permanently occupied sentinel block instead of a last-block flag, which the README says simplifies the code and improves worst-case time and code size.",
+  "when_to_use": [
+    "Bare-metal or RTOS firmware (e.g. Cortex-M) that needs a heap with a bounded worst-case allocation time.",
+    "Real-time code paths where malloc latency jitter matters more than peak throughput.",
+    "wasm32 builds where allocator code size matters: SmallGlobalTlsf measured 1267 bytes vs 9613 for dlmalloc.",
+    "Managing a fixed static arena or a carve-out region (DMA buffers, shared memory) with a general-purpose allocator."
+  ],
+  "when_not_to_use": [
+    "Multi-threaded hosted applications: no concurrent access; GlobalTlsf wraps the whole pool in one mutex, so use jemalloc, mimalloc or TCMalloc there.",
+    "Allocation-heavy desktop/server workloads: no small-object fast path or thread caches; the README itself says modern allocators such as glibc and jemalloc may win.",
+    "Programs that need memory returned to the OS: GlobalTlsf never gives pages back.",
+    "Targets other than unix or wasm32 without atomics if you want GlobalTlsf: elsewhere (e.g. ESP32, wasm with atomics, Windows) you must wire Tlsf/FlexTlsf into GlobalAlloc yourself (issues #4, #8 open)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, const-default, rustversion; libc on unix",
+    "min_toolchain": "Rust 1.61 (edition 2021)",
+    "platforms": "any for Tlsf/FlexTlsf (no_std); GlobalTlsf on unix and wasm32 without atomics",
+    "thread_safety": "Tlsf is single-threaded (&mut self); GlobalTlsf is Sync via a single global mutex (FIFO lock gives O(contending threads) worst case)",
+    "drop_in_for_baseline": "partial — GlobalTlsf is a drop-in #[global_allocator] replacing Rust's default (dlmalloc on wasm32); on embedded targets the Tlsf core API needs a small GlobalAlloc wrapper"
+  },
+  "gotchas": [
+    "Maximum block size is (GRANULARITY << FLLEN) - GRANULARITY; with the README's u16/12/16 config on 32-bit that is about 64 KiB, so pick FLLEN for your largest allocation.",
+    "Internal fragmentation grows with free block size (README example: up to 4094 bytes worst case); SLLEN trades list count against fragmentation.",
+    "deallocate requires the caller to pass the original alignment; allocate/deallocate are unsafe.",
+    "Version 0.2.2 (2026-02-07) fixed invalid reference creation flagged by Miri and added a provenance workaround for GlobalAlloc dealloc/realloc; a Miri false-positive issue (#20) is still open."
+  ],
+  "pick_this_over_siblings_when": "Pick rlsf over Talc when you want hard constant-time bounds rather than best wasm throughput (Talc's own wasm benchmarks rate it ahead of RLSF in size and speed); pick it over XenoAtom.Allocators (also TLSF) when you are in Rust/no_std rather than .NET. The other siblings target multi-threaded hosted malloc and are not alternatives on a microcontroller.",
+  "verified_claims_summary": "First-party FarCri.rs runs on an STM32F401 (Cortex-M4F) put rlsf's alloc/dealloc at 260-320 cycles vs 450-750 for the Rust dlmalloc crate (0.2.x, fed by a bump page source), 340-440 for buddy-alloc and 300-700 for umm_malloc (umm_malloc ignored alignment); a separate wasm build measured code size 1267 bytes vs 9613 for dlmalloc. Compiler version and flags are not given and the numbers appear only in chart alt text hosted on yvt.jp.",
+  "status_note": "Active (v0.2.2 in February 2026, commits through July 2026, v1 tracking issue open), MIT/Apache-2.0, small enough to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/README.md",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf/Cargo.toml",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf/src/lib.rs",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf/src/global.rs",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf/src/tlsf.rs",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf/src/flex.rs",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf_benchmark_farcri/Cargo.toml",
+    "https://raw.githubusercontent.com/yvt/rlsf/HEAD/crates/rlsf_benchmark_farcri/benches/stress.rs",
+    "https://github.com/yvt/rlsf/tree/main/crates/rlsf/src",
+    "https://github.com/yvt/rlsf/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.8
+}

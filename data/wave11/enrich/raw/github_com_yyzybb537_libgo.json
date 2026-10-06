@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/yyzybb537/libgo",
+  "one_liner": "Go-style stackful coroutine runtime for C++11 with multi-thread scheduler and syscall hooks; switches faster than libco and ucontext.",
+  "what_it_does": "Gives C++ a goroutine-like model: launch work with the go keyword macro, and a scheduler (Scheduler::Start(min, max) threads) runs, suspends and reclaims coroutines. It ships channels, co_mutex, co_rwmutex, timers, coroutine-local storage and connection/coroutine pools. On Linux it hooks blocking libc calls (connect, read, recv, poll, select, sleep, gethostbyname and others) so synchronous drivers such as hiredis or mysqlclient yield instead of blocking the thread. It is a full runtime, not a drop-in for libco's or ucontext's API.",
+  "how_it_is_fast": "Context switches use Boost.Context's hand-written fcontext assembly (make_fcontext/jump_fcontext, copied from a vendored boost.context and renamed libgo_* at configure time), which saves only callee-saved registers instead of the signal mask and full register set that swapcontext handles. Scheduling is per-thread processors (P) with load-based work stealing; a dispatcher thread steals tasks from a P whose coroutine runs past a timeout.",
+  "when_to_use": [
+    "Server code on Linux that must call blocking client libraries (MySQL, Redis) from many concurrent tasks without one OS thread per connection.",
+    "Porting Go-style designs (goroutines plus channels) to C++11 with a built-in multi-thread scheduler.",
+    "Workloads with tens of thousands of mostly idle coroutines where switch latency matters more than creation cost (gist: 150 ns switch at 30000 coroutines vs libco 450 ns).",
+    "Replacing a ucontext-based coroutine layer on x86-64 Linux, macOS or Windows (VS2015/2017)."
+  ],
+  "when_not_to_use": [
+    "New projects wanting a maintained library: last commit 2023-03-10, open issue #292 asks whether the project is dead, and several crash reports (#216, #248, #251, #280) are unanswered.",
+    "Creation-heavy workloads: creating 1000 coroutines took 8.3 us vs 3.9 us for libco in the same gist.",
+    "Memory-tight deployments: stacks are malloc'd per coroutine at 1 MB by default (README: 1 million coroutines need about 4.5 GB); no shared-stack mode like libco's.",
+    "Code that relies on thread-local storage or non-reentrant TLS-based libc functions; coroutines can resume on other threads and the README warns against TLS.",
+    "When C++20 stackless coroutines fit: the same gist shows them faster than every stackful row."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime (vendored boost.context sources used at configure time for the asm; Boost needed only for the tests); static_hook archive for fully static links",
+    "min_toolchain": "C++11; CMake; VS2015 or later on Windows",
+    "platforms": "Linux, macOS, Windows 7+ (x86, x64); other CPUs only as far as the vendored boost.context asm selection covers them (not documented)",
+    "thread_safety": "Multi-threaded scheduler with work stealing; channels and co_mutex are the documented synchronization primitives; TLS usage across switches is unsafe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Syscall hooking interposes libc symbols; link libgo first (and -ldl), and for static builds use -Wl,--whole-archive -lstatic_hook -lc -lpthread, or hooks silently do not apply.",
+    "Coroutine stacks come from std::malloc with no guard page by default (protect_stack_page = 0), so a stack overflow corrupts the heap unless you enable protect pages.",
+    "config.h warns that a 2 MB stack_size commits about 10x more memory than 1 MB on Linux; the gist's 1000+ coroutine rows used 2 MB stacks.",
+    "Build runs a b2 bootstrap inside third_party/boost.context to pick the asm file, so cross-compiling needs care."
+  ],
+  "pick_this_over_siblings_when": "Pick libgo over libco, libaco or libcopp when you want a whole runtime (multi-thread scheduler, channels, libc hooks) rather than a bare switch primitive; pick minicoro or libaco instead for the lowest raw switch cost in a single thread, and Boost.Cobalt or C++20 coroutines when stackless is acceptable and maintenance matters.",
+  "verified_claims_summary": "A gist by the libcopp author (2019-09-29, g++ -O2, CPU and compiler version not stated, co_yield ping-pong) measured libgo switch cost at 30 ns for one coroutine and 150 ns at 30000 coroutines vs libco (static stack pool) 84 and 450 ns and Linux ucontext 439 and 890 ns; libgo's 1000-coroutine cell prints '32 us', likely a typo, and older 2018 libgo builds were much slower.",
+  "status_note": "Abandoned since March 2023 with unanswered crash reports, but MIT-licensed, packaged in vcpkg and still usable as a reference runtime.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/README.md",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/libgo/context/context.h",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/libgo/context/fcontext.cpp",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/libgo/common/config.h",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/libgo/common/config.cpp",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/libgo/scheduler/scheduler.h",
+    "https://raw.githubusercontent.com/yyzybb537/libgo/HEAD/third_party/select_asm.sh",
+    "https://github.com/yyzybb537/libgo/tree/master/libgo/context",
+    "https://github.com/yyzybb537/libgo/issues?q=is%3Aissue+crash",
+    "https://gist.github.com/owent/1842b56ac1edd5a7db54590d41af1c44"
+  ],
+  "confidence": 0.75
+}
