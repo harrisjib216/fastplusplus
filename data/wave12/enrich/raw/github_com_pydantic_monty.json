@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/pydantic/monty",
+  "one_liner": "Rust Python-subset sandbox for LLM-written code; sub-millisecond sandbox checkout versus 16 ms to 2.7 s for WASI, Docker, Pyodide and hosted sandboxes.",
+  "what_it_does": "Monty is a from-scratch Python 3.14 subset (ruff's parser, its own bytecode VM) built to run model-generated code with no filesystem, network or environment unless the host passes in functions, mounts or host objects. Python (pydantic-monty) and npm (@pydantic/monty) packages expose a pool API: Monty() spawns `monty` worker subprocesses, pool.checkout() gives a REPL session, and session.feed_run() executes code, suspending on host calls. Rust users get monty-pool for the same subprocess model or the in-process `monty` crate for trusted code. Sessions can be dumped to a few kilobytes at a host call and resumed or forked elsewhere.",
+  "how_it_is_fast": "The speed claim is about startup, not throughput: a new sandbox is one protobuf message to an already-running worker process from a pool, so there is no container, VM or Wasm module to start and no CPython initialisation. The REPL session persists between feeds, so an agent's tenth command does not replay the first nine, which is what the stateless baselines must do. Release binaries use fat LTO with one codegen unit (Cargo.toml).",
+  "when_to_use": [
+    "Running short LLM-written Python (code mode, programmatic tool calling) per request, where 1 ms sandbox checkout matters more than full CPython compatibility.",
+    "Agents that issue many small REPL commands against one session: 10 feeds took 0.40 ms in the vendor run, against 35-700 ms for the replaying Pyodide, WASI and Docker setups.",
+    "Workflows that pause on a slow host call or a human approval and resume later or on another machine, using the kilobyte-sized snapshot (dump/load).",
+    "Hosts that want enforced memory, per-feed duration, recursion and host-round-trip limits without operating containers; each worker is about 2 MB baseline plus its memory limit (vendor docs)."
+  ],
+  "when_not_to_use": [
+    "Code that needs real Python: no class inheritance, no generators (yield), no match, no del, no user-defined exceptions, no @property/@classmethod, no third-party packages, and a partial stdlib (no enum, io, struct, hashlib, logging and others).",
+    "Trusted code where plain in-process CPython is acceptable: exec/eval takes about 0.1 ms and ten exec calls 0.3 ms on the vendor's own table, faster than Monty's 0.8 ms and 0.4 ms.",
+    "CPU-heavy scripts: no throughput comparison with CPython is published (monty-bench's CPython runs stay local and off CodSpeed), and third-party coverage quotes 'between 5x faster and 5x slower' than CPython (search snippet only).",
+    "Threat models that need OS-level isolation by default: it is a language-level sandbox with no seccomp, container or VM; a worker escape runs with the application's OS privileges on the application host (OS isolation is the commercial Full Monty).",
+    "Anything relying on lazy iterators: enumerate, zip, map, filter and reversed are eager, so map(f, itertools.count()) runs until a limit trips."
+  ],
+  "integration": {
+    "form": "Python package (pydantic-monty plus the pydantic-monty-runtime worker binary), npm package @pydantic/monty, and Rust crates (monty in-process, monty-pool for worker subprocesses)",
+    "dependencies": "Python package: pydantic-monty-client and pydantic-monty-runtime (prebuilt `monty` binary, 11-15 MB wheels). Rust: ruff_python_parser, ty crates for optional type checking, num-bigint, fancy-regex and others; no C dependencies inside the sandbox.",
+    "min_toolchain": "Rust 1.96 (edition 2024) to build; Python 3.10+ for the Python package",
+    "platforms": "Prebuilt workers for macOS x86-64 and arm64, manylinux x86-64, aarch64, armv7l, i686, ppc64le and s390x, musllinux x86-64 and aarch64, Windows win32 and amd64 (pydantic-monty-runtime 1.1.0 on PyPI)",
+    "thread_safety": "Each session runs in its own worker subprocess and a crash only kills that worker; a session takes one feed at a time, and cancelling MontyRepl.feed_run_async poisons the session (open issue #533). Thread safety of the in-process monty crate is not documented.",
+    "drop_in_for_baseline": "partial — it runs a CPython 3.14 subset with documented divergences, behind a different API (pool, checkout, feed_run with external_lookup), not as a python executable or embeddable CPython"
+  },
+  "gotchas": [
+    "Benchmark asymmetry: Monty's 0.77 ms is the median of 20 checkouts from a pool whose worker already exists, while the WASI, Docker, Daytona and Pyodide rows are single samples starting from nothing; Monty's 0.40 ms agent run is one back-to-back sample taken right after an identical warm-up run, although the docs state back-to-back checkouts are about 20x faster than after a 1 s idle (0.04 vs 0.77 ms). The pool-creation figure (4.5 ms, median of 7) comes from pydantic-monty 0.0.21 and the checkout figure from 1.0.0b3, so one table mixes versions.",
+    "The agent-run baselines replay commands 1 to n because the chosen wrappers keep no state (python.wasm via _start, docker exec python -c, mcp-run-python's fresh-globals eval); a persistent CPython REPL inside the same container or Pyodide instance would avoid the replay, so the 35-700 ms figures measure those wrappers more than the runtimes (inference from scripts/startup_performance.py).",
+    "max_memory and both duration limits are off unless set, and the Rust pool has no request timeout by default; max_recursion_depth and max_suspensions default to 1000 and cannot be disabled. Recent hardening issues include a stack-overflow abort (#649), a type-checker crash (#717) and a panic on container mutation from a guest __eq__ (#729), all closed, while #921 (functools.partial can kill a memory-limited worker) and #788 (truncating writes destroy mounted files while charging 0 bytes) are open.",
+    "docs/alternatives.md says the package is about a 4.5 MB download, but the 1.1.0 pydantic-monty-runtime wheels on PyPI are 11.4-15.0 MB; third-party write-ups quoting 0.004 ms startup describe the earlier in-process design, before the subprocess pool raised a new sandbox to about 0.8 ms (search snippet)."
+  ],
+  "pick_this_over_siblings_when": "Pick Monty over pocketpy when the code is untrusted LLM output and you need resource limits, host-call suspension and snapshots from Python, JS or Rust rather than a Python subset embedded in a C++ app; for raw Python throughput PyPy, Cython or Codon are the catalogued choices, and LLRT is the analogous startup-latency play for JavaScript.",
+  "verified_claims_summary": "Vendor run of scripts/startup_performance.py on an Apple M3 Max (macOS 26.5.2, driven from CPython 3.14.7): getting a sandbox from an open OSS Monty pool and running 1 + 1 took 0.77 ms (median of 20; 4.5 ms including pool creation) versus 16 ms for precompiled CPython 3.14.7 WASI in wasmtime 48, 195 ms for docker run python:3.14-alpine, about 1500 ms for a Daytona EU sandbox and 2700 ms for Pyodide in Deno via mcp-run-python (single samples); ten REPL commands took 0.40 ms versus 35-700 ms for those baselines replaying the commands. In-process CPython eval and exec were faster than Monty (0.1 ms and 0.3 ms), and no interpreter-speed comparison with CPython is published.",
+  "status_note": "Very active (v1.1.0 released 2026-10-05, 823 commits, 8.6k stars, v1.0.0 declared production-ready in September 2026) and MIT licensed, but the evidence is vendor documentation from Pydantic, which sells the Full Monty server.",
+  "sources_read": [
+    "https://github.com/pydantic/monty",
+    "https://github.com/pydantic/monty/commits/main",
+    "https://github.com/pydantic/monty/issues?q=is%3Aissue+sandbox+escape+OR+security+OR+performance+OR+slow",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/README.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/index.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/alternatives.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/limitations/index.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/quickstart/rust.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/security.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/resource-limits.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/docs/snapshots.md",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/scripts/startup_performance.py",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/crates/monty-bench/Cargo.toml",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/crates/monty-bench/benches/main.rs",
+    "https://raw.githubusercontent.com/pydantic/monty/HEAD/LICENSE",
+    "https://pypi.org/pypi/pydantic-monty/json",
+    "https://pypi.org/pypi/pydantic-monty-runtime/json",
+    "https://crates.io/api/v1/crates/monty",
+    "WebSearch: pydantic monty interpreter benchmark vs CPython speed faster slower (snippets from pydantic.dev/articles/pydantic-monty and victorstack-ai.github.io; pages not opened)"
+  ],
+  "confidence": 0.6
+}

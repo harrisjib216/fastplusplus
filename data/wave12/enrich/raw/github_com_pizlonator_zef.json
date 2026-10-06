@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/pizlonator/zef",
+  "one_liner": "Toy AST-walking interpreter tuned with inline caches; its leaky Yolo-C++ build beats CPython 3.10 and QuickJS-ng on four benchmarks.",
+  "what_it_does": "Zef is a small dynamically typed, class-based scripting language (closures, nested classes, packages, accessors) by Fil Pizlo, written to demonstrate interpreter optimization techniques. It ships as a standalone executable (`zef <script>`, one argument; main.cpp parses, resolves and evaluates the file) with no embedding API, no bytecode format and no standard library beyond intrinsic classes. The repo is mostly valuable for its write-up (website/source/implementation.md), which walks through 21 commits that took the interpreter from 35x slower than CPython to 2.1x slower (Fil-C++) or 1.9x faster (Yolo-C++).",
+  "how_it_is_fast": "It stays a recursive AST walker but adds the machinery a JIT would use: NaN-style tagged 64-bit values (doubles offset by 0x1000000000000, inline int32s), hash-consed Symbols instead of std::string lookups, a Storage/Offsets object model computed in a resolve pass, and inline caches implemented by placement-constructing specialized AST nodes over generic ones (constructCache<>), guarded by watchpoints for scope-chain and subclass invariants. The rest is grinding: per-operator Binary<>/Unary<> nodes, getter/setter inference, a global (class, symbol) to callee table, Zero/One/TwoArguments specializations, and constant array-literal specialization. The final 4x comes from compiling with an ordinary C++ compiler instead of Fil-C++, where GC allocations become calloc and are never freed.",
+  "when_to_use": [
+    "You are writing your own dynamic-language interpreter and want a worked, diff-by-diff example of inline caches and watchpoints in an AST interpreter, with measured gains per step.",
+    "You want evidence of what each classic trick buys in an interpreter without a JIT: object model plus inline caches gave 4.55x, symbols 18%, argument specialization about 4%, per the write-up.",
+    "Teaching or research on memory-safe C++ (Fil-C++) overheads: the write-up documents Fil-C pathologies (std::optional unions and stack Values becoming heap allocations) and their workarounds.",
+    "Short-lived scripts in a hobby setting where a self-contained interpreter in about 100 source files is acceptable."
+  ],
+  "when_not_to_use": [
+    "Embedding a scripting language in an application: there is no host API, no sandboxing and no documented C++ interface; Lua, Luau or QuickJS are the realistic choices.",
+    "Any long-running workload on the fast build: the Yolo-C++ path allocates with calloc and never frees (src/utils.h marks it 'FIXME: This is unsound'), so memory grows until the process dies.",
+    "Wanting speed with memory safety: the documented Fil-C++ build (with GC) is 2.13x slower than CPython 3.10, 4.78x slower than Lua 5.4.7 and 1.36x slower than QuickJS-ng 0.14.0 on the author's geomean.",
+    "Anything needing a licence: the repo has no LICENSE file and the README names none, so the code cannot be reused.",
+    "Production maturity: single-author side project, 82 commits, last commit 2026-04-22, no releases, one open issue (broken localhost links in the docs)."
+  ],
+  "integration": {
+    "form": "source-drop (standalone executable built with Meson; no library target)",
+    "dependencies": "Fil-C++ 0.678 or later for the documented GC build; Meson and Ninja. The non-Fil-C path in src/utils.h builds with an ordinary C++20 compiler but has no GC.",
+    "min_toolchain": "C++20 (meson.build cpp_std=c++20, -fno-exceptions, -fno-rtti); Fil-C++ 0.678+ per README; GCC 11.4.0 used for the Yolo-C++ measurements",
+    "platforms": "Only Linux x86-64 (Ubuntu 22.04.5) is tested in the write-up; the value encoding assumes no object pointer falls below 0x100000000",
+    "thread_safety": "not documented; the language has no threads and runtime structures such as watchpoints (src/watchpoint.h: plain version counter and std::vector of handlers) are unsynchronized",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: ScriptBench/richards.js calls runRichards() 20 times while the Zef, Lua and Python ports run it once, so QuickJS-ng's richards time (0.7193 s) covers 20x the work. Per run QuickJS-ng takes about 0.036 s vs 0.0309 s for Yolo-C++ Zef, and the headline 2.97x geomean win over QuickJS-ng shrinks to about 1.40x (derived from page data). deltablue.js also runs one extra projectionTest(100) after its 20 rounds, and splay.js keys come from Math.random() while the other ports use a seeded xorshift.",
+    "The Yolo-C++ build never reclaims memory, and it beats Lua 5.4.7 only on splay (0.3992 vs 0.4393 s) and deltablue (0.0784 vs 0.0832 s), the two allocation-heavy rows, so those wins carry no collection cost while CPython, Lua and QuickJS-ng do collect (inference from the write-up and src/utils.h). The benchmarked binary came from a separate checkout (pizlscript/yoloBuild) whose revision is not stated.",
+    "Result checks are uneven: ScriptBench/richards.lua tests 'qpktcount == QPKTCOUNT or holdcount == HOLDCOUNT' and only prints FAILURE without a non-zero exit, and run-benchmarks only checks exit status, so a wrong Lua result would still be timed. The Python and Zef ports do fail the run on a wrong count.",
+    "Timing is wall-clock of the whole process via Ruby Time.now, including interpreter startup; several rows run only 14-40 ms (nbody: Lua 0.0142 s, QuickJS-ng 0.0214 s, Yolo Zef 0.0233 s), so startup compresses the ratios. The script defaults to --repeat 3; the write-up says 30 runs."
+  ],
+  "pick_this_over_siblings_when": "Pick Zef only as reading material on interpreter optimization; for an actual embedded engine Lua or Luau (faster than Zef's fast build on nbody and richards, with an embedding API) or QuickJS (a real JS engine) win, and Daslang or LuaJIT Remake (Deegen) are the catalogued choices when interpreter speed itself is the goal.",
+  "verified_claims_summary": "On the author's ScriptBench1 (nbody, splay, richards, deltablue; mean wall-clock seconds over 30 interleaved runs on an Intel Core Ultra 5 135U, Ubuntu 22.04.5), the GCC 11.4.0 Yolo-C++ build's geomean was 0.0686 s against CPython 3.10 0.1296 s (1.89x faster), Lua 5.4.7 0.0577 s (1.19x slower) and QuickJS-ng 0.14.0 0.2036 s; the QuickJS-ng margin is about 1.40x once richards.js's 20 iterations are divided out (derived from page data). The memory-safe Fil-C++ 0.677 build (geomean 0.2759 s) is slower than all three baselines.",
+  "status_note": "Single-author demonstration project, dormant since 2026-04-22 after a month of commits; no licence, so reference only, and its fast configuration leaks all memory by design.",
+  "sources_read": [
+    "https://github.com/pizlonator/zef",
+    "https://github.com/pizlonator/zef/tree/master/src",
+    "https://github.com/pizlonator/zef/commits/master",
+    "https://github.com/pizlonator/zef/issues",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/README.md",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/run-benchmarks",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/meson.build",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/run-benchmarks-results-1776652178.csv",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/website/source/implementation.md",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/website/source/index.md",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/README.md",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/richards.js",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/richards.zef",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/richards.lua",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/richards.py",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/splay.js",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/splay.zef",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/splay.py",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/splay.lua",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/nbody.js",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/nbody.zef",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/nbody.lua",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/nbody.py",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/deltablue.js",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/ScriptBench/deltablue.zef",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/src/utils.h",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/src/storage.h",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/src/value.h",
+    "https://raw.githubusercontent.com/pizlonator/zef/HEAD/src/watchpoint.h"
+  ],
+  "confidence": 0.45
+}
