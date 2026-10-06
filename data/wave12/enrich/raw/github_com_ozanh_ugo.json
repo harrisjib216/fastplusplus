@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/ozanh/ugo",
+  "one_liner": "Pure-Go bytecode scripting VM for embedding in Go programs; ran fib(35) about 10% faster than Tengo and 1.5x faster than go-lua.",
+  "what_it_does": "uGO is a dynamically typed scripting language with Go-like syntax (plus try/catch/finally, param/global declarations and destructuring) that a Go program compiles and runs in-process. The API is ugo.Compile(script, ugo.DefaultCompilerOptions) followed by ugo.NewVM(bytecode).Run(globals, args...), with an Eval type for REPL-style incremental runs and an Invoker for calling script functions from Go. It is its own language, not a Lua or JavaScript implementation, so it does not replace an existing Lua or JS engine for existing scripts.",
+  "how_it_is_fast": "A switch-dispatched stack VM (vm.go loop) runs byte-encoded instructions over a fixed array of 2,048 value slots and 1,024 call frames inside the VM struct, so calls do not allocate frames. Binary operations go through a type switch on the common concrete types (Int, String, Float, Uint, Char, Bool) before falling back to the interface method, and equality has dedicated opcodes. Self-recursive tail calls reuse the current frame, and an AST optimizer does constant folding, constant propagation (v0.5.0) and compile-time evaluation of side-effect-free builtins. The 0.2.0 rewrite (issue #7) targeted interface allocations in binary operations, the main cost in the 0.1 line.",
+  "when_to_use": [
+    "A Go service needs user-supplied rules or conditions evaluated in-process without cgo; the author uses it in production for Sigma rule conditions.",
+    "Call-heavy or arithmetic script code where you would otherwise pick Tengo: uGO's fib(35) was 1.98 s vs Tengo 2.19 s, go-lua 2.90 s, GopherLua 3.21 s and goja 3.33 s (Go 1.18).",
+    "Scripts that need structured error handling (try/catch/finally with runtime errors as values) and a timeout or abort from another goroutine (VM.Abort is safe across goroutines).",
+    "Cross-compiled or WebAssembly targets where a C interpreter cannot be linked (the project ships a WebAssembly playground)."
+  ],
+  "when_not_to_use": [
+    "When cgo is acceptable: native Lua ran the same fib(35) in 1.00 s, about 2x faster than uGO, and Go itself took 43 ms.",
+    "When users already write Lua or JavaScript: GopherLua, go-lua and goja run an existing language, while uGO is a small one-author language with its own syntax.",
+    "Deeply recursive scripts: the VM has a hard limit of 1,024 frames and 2,048 value slots per VM.",
+    "When you need an actively developed engine: there was one commit (v0.5.0, 2025-05-10) after May 2023, and minor releases have broken the bytecode encoding (v0.4.0) and compiler options (v0.5.0).",
+    "Simple expression evaluation (filters, predicates): Expr (expr-lang) is the better-measured choice in the catalogue at about 70 ns per evaluation."
+  ],
+  "integration": {
+    "form": "Go module (github.com/ozanh/ugo), pure Go, no cgo",
+    "dependencies": "none for the core package (it imports only its own parser, token and registry packages); the ugo REPL command adds github.com/peterh/liner",
+    "min_toolchain": "Go 1.19 (go.mod and the v0.5.0 notes); the README still says Go 1.15 and above, which is out of date",
+    "platforms": "any Go target, including WebAssembly",
+    "thread_safety": "One VM runs one script at a time (Run holds a mutex); Abort and Aborted are safe from other goroutines; Eval and Invoker are documented as not safe for concurrent use. Run separate VMs per goroutine.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness flaws (ugobenchfib cmd/bench/main.go): each engine is timed once as a whole process with `_ = cmd.Run()`, so exit status and output are never checked and startup, parse and compile are included. The fibt(35) column makes only 35 calls (tail-recursive fib(n-1, b, a+b)), so its 0.46 to 6.3 ms values measure process startup, not interpreter speed. Use only the fib(35) column.",
+    "The measured build is not reproducible: go.mod pins github.com/ozanh/ugo v0.1.2 and the Makefile runs `go install` without a version, yet the table reports a 0.2.0 release candidate. The numbers are from 2022-05-03 inside a Parallels VM on an Apple M1, and the engine has since changed through v0.5.0.",
+    "From reading vm.go (not run): only frame depth is checked (ErrStackOverflow at 1,024 frames). The 2,048-slot value stack is not bounds-checked on push or call, so deep non-tail recursion can hit a Go index-out-of-range panic first. NewVM leaves recovery off (the README example never calls SetRecover), so that panic reaches the host goroutine. Call SetRecover(true) or recover in the caller when running untrusted scripts.",
+    "parser/parser.go is a modified Go and Tengo parser that carries BSD-style (Go) and MIT (Tengo) notices besides the project's MIT licence. Keep those notices when vendoring."
+  ],
+  "pick_this_over_siblings_when": "Pick uGO over Tengo when you want Tengo's model (Go-native, bytecode VM, no cgo) with try/catch error handling and slightly faster calls (about 10% on fib(35)). Tengo has the larger user base and is the safer default. Pick GopherLua or goja instead when script authors must write Lua or JavaScript.",
+  "verified_claims_summary": "In the author's ugobenchfib harness (a fork of Tengo's tengobench), one wall-clock run per engine of a recursive fib(35) took 1.98 s for the uGO 0.2.0 release candidate against Tengo 2.19 s, go-lua 2.90 s, GopherLua 3.21 s and goja 3.33 s. That is about 1.10x, 1.46x, 1.62x and 1.68x (derived from page data). The run used Go 1.18 under Ubuntu 20.04 in a Parallels VM on an Apple M1, with process startup included. Native Lua (1.00 s) and Python 3 (1.64 s) were faster than uGO in the same table.",
+  "status_note": "Stale (v0.5.0 on 2025-05-10 is the only commit after May 2023; 193 commits, 125 stars, open issues are the author's own feature ideas), MIT-licensed pure Go with no core dependencies, so it is easy to vendor, but you would be maintaining a one-author language.",
+  "sources_read": [
+    "https://github.com/ozanh/ugo",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/README.md",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/go.mod",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/vm.go",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/optimizer.go",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/ugo.go",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/eval.go",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/docs/optimizer.md",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/cmd/ugo/main.go",
+    "https://raw.githubusercontent.com/ozanh/ugo/HEAD/parser/parser.go",
+    "https://github.com/ozanh/ugo/tree/main/parser",
+    "https://github.com/ozanh/ugo/commits/main",
+    "https://github.com/ozanh/ugo/releases",
+    "https://github.com/ozanh/ugo/releases/tag/v0.2.0",
+    "https://github.com/ozanh/ugo/issues?q=is%3Aissue",
+    "https://github.com/ozanh/ugo/issues/7",
+    "https://github.com/ozanh/ugo/issues/31",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/README.md",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/go.mod",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/cmd/bench/main.go",
+    "https://github.com/ozanh/ugobenchfib/tree/master/code",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fib.ugo",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fibtc.ugo",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fib.tengo",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fibtc.tengo",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fib.lua",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fibtc.lua",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fib.js",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fib.py",
+    "https://raw.githubusercontent.com/ozanh/ugobenchfib/HEAD/code/fibtc.py"
+  ],
+  "confidence": 0.7
+}
