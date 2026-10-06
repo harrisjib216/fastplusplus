@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/bitmario/risvm",
+  "one_liner": "Tiny untyped 32-bit register bytecode VM in about 1000 lines of C++; one hand-written assembly benchmark ran 1.45x faster than Lua 5.3.",
+  "what_it_does": "RISVM is an embeddable bytecode interpreter for a small RISC-style instruction set: 16 general-purpose 32-bit registers plus ip/bp/sp/ra, 70 instructions (integer and float arithmetic, loads/stores, stack, call/ret, conditional jumps, stdio print/read), a 64 KB address space shared by program and stack, and host interrupts via a callback. You embed it with VM vm(program, size); vm.run(maxInstr) and produce bytecode with the bundled Python 3 assembler (an undocumented Python 'reduced C' compiler, rc/rcc.py, was added in November 2018). It is not a language runtime like Lua or Python: there are no types, objects, strings beyond byte arrays, or garbage collection.",
+  "how_it_is_fast": "There is no special dispatch technique: run() is a while loop over a switch on one-byte opcodes, with operands read byte by byte from unaligned memory and the instruction pointer kept in the register array. Its edge over Lua and CPython comes from doing far less work per instruction: registers are raw uint32 values with no type tags, boxing or overflow checks, arithmetic is native 32-bit unsigned, and the benchmark program is hand-written register assembly (five instructions per inner-loop iteration) rather than compiled from a high-level language.",
+  "when_to_use": [
+    "Microcontroller or embedded targets (the README mentions Xtensa and AVR) where you want a tiny, dependency-free VM to run small downloadable programs written in assembly.",
+    "As a teaching or starting codebase for a register VM: about 1000 lines, MIT-licensed, with Catch2 unit tests for the system, register, stack, memory, arithmetic, conversion and branching instructions.",
+    "Integer-heavy control logic you are willing to hand-write in assembly, where a dynamically typed scripting language's per-operation type checks would dominate.",
+    "Hosts that need an instruction budget: run(maxInstr) returns VM_PAUSED after N instructions so the host can time-slice scripts."
+  ],
+  "when_not_to_use": [
+    "Running untrusted bytecode: division or modulo by zero is not checked (a host-process SIGFPE on x86), and OP_READS passes a pointer into VM memory to getline(), which may realloc it if the input line is longer than the buffer.",
+    "Programs larger than 64 KB or needing a heap: addresses, program length and stack size are 16-bit, and there is no allocator or garbage collection.",
+    "Anything that needs a compiler toolchain or portability guarantees: use a WebAssembly interpreter, which runs code compiled from C, C++ or Rust; RISVM has only its assembler and an undocumented 2018 'reduced C' prototype.",
+    "Big-endian targets or compilers other than GCC and Clang (the decoder uses GNU statement expressions and assumes little-endian).",
+    "Maintained production use: the last commit was 2018-12-25 and the one open issue (#10, arrays, 2019) has no answer."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the VM (C standard library stdio); Python 3 for the assembler",
+    "min_toolchain": "C++11 (Makefile -std=c++11) with GNU statement expressions, so GCC or Clang",
+    "platforms": "any little-endian platform with GCC or Clang per the README; numbers given only for an unnamed x86-64 machine, with Xtensa and AVR mentioned qualitatively",
+    "thread_safety": "not documented; all state lives in the VM object (registers, memory, interrupt callback), so separate instances share nothing in the code read, and I/O goes straight to the process's stdio.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 4.97 s figure dates from the 2018-10-15 commit 'add performance docs and new lua benchmark', before bounds and stack-overflow checks were added on 2018-10-19. The checks are now on by default (compile with VM_DISABLE_CHECKS to remove them) and add branches to every instruction, and the current build has not been re-timed.",
+    "Harness asymmetry: the RISVM and C++ versions use 32-bit unsigned modulo, while Lua 5.3 uses 64-bit signed integers (lua_Integer is long long by default, and luaV_mod adds zero/-1 and sign-correction checks). The loop does about 455 million modulo operations (derived), and on Intel Skylake-class cores 64-bit DIV takes 35-88 cycles against 26 for 32-bit (search snippets), so part of the 1.45x over Lua may come from operand width rather than the VM. The CPU is not named, so this is untested.",
+    "The baselines' 'globals' handicap is uneven. In Lua, num and i are for-loop locals and only isPrime is global (written about 100,000 times against 455 million inner iterations), so it is negligible. The Python version runs at module level, so num and i are looked up by name on every iteration, which inflates the 7.2x.",
+    "Printing about 9,600 primes is negligible next to the 455 million trial divisions (derived), so the benchmark measures one modulo-compare-branch loop: about 10.9 ns per iteration for RISVM vs 15.9 ns for Lua and 4.0 ns for C++ (derived from page data)."
+  ],
+  "pick_this_over_siblings_when": "Pick RISVM over wasm3, WAMR or Wasmi only when you want a minimal, hackable custom ISA (about 1000 lines) and will write the bytecode yourself; wasm3 and WAMR run code compiled by standard toolchains, sandbox memory accesses, are maintained, and have independent benchmarks.",
+  "verified_claims_summary": "A single first-party run (2018) of a trial-division prime finder below 100,000, hand-written in RISVM assembly, took 4.97 s against 7.23 s for an equivalent Lua 5.3 script (about 1.45x faster) and 35.95 s for module-level Python 3.6.6 (about 7.2x), but 2.8x slower than C++ (G++ 7.3 -O3, 1.80 s) and 2.3x slower than node 8.10 (derived from page data). The machine is an unnamed x86-64 system, and the VM build flags behind the timing are not stated.",
+  "status_note": "Abandoned since 2018-12-25 (31 stars, the README itself says work in progress with no compatibility promises), but MIT-licensed and small enough to vendor and harden yourself.",
+  "sources_read": [
+    "https://github.com/bitmario/RISVM",
+    "https://github.com/bitmario/RISVM/commits/master",
+    "https://github.com/bitmario/RISVM/issues?q=is%3Aissue",
+    "https://github.com/bitmario/RISVM/tree/master/rc",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/examples/asm/primes.asm",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/src/vm.cpp",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/src/vm.h",
+    "https://raw.githubusercontent.com/bitmario/RISVM/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/lua/lua/v5.3.6/lvm.c",
+    "https://raw.githubusercontent.com/lua/lua/v5.3.6/luaconf.h",
+    "WebSearch: 'Skylake DIV r64 latency vs DIV r32 latency' (snippets citing https://arxiv.org/pdf/1902.01961 and an LKML thread; pages not opened)"
+  ],
+  "confidence": 0.7
+}

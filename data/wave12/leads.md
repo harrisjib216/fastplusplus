@@ -26,3 +26,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - faasm (faasm/faasm): WAVM-based serverless runtime (WAVM enricher, 2026-10-06); weak lead.
 - ykjit/ykcbf (yk-enabled interpreter) and the yk-benchmarks mruby awfy suite (yklua enricher, 2026-10-06); weak leads.
 - HashLink (HaxeFoundation/hashlink): Neko successor, README has no numbers (NekoVM enricher, 2026-10-06); weak lead.
+- aengelke/fadec (x86 decoder), aengelke/rellume (lifter), okitec/farmdec, the EOS VM Optimized Compiler in AntelopeIO/spring (LLVM AOT) and the Biotite static binary translator (repo unknown): leads from the Instrew and EOS VM enricher (2026-10-06).

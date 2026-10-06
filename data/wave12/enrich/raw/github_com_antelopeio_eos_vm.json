@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/antelopeio/eos-vm",
+  "one_liner": "Header-only C++ WebAssembly interpreter and x86-64 single-pass JIT for Antelope blockchains; vendor claims up to 16x over the Binaryen interpreter.",
+  "what_it_does": "Executes WebAssembly contracts deterministically under hard resource limits for Antelope (EOSIO) nodes. You instantiate `eosio::vm::backend<Host, Impl>` with the Wasm bytes and a `wasm_allocator`, where Impl is `interpreter` (default), `jit` or `jit_profile` (x86-64 only), register host functions through `registered_host_functions<Host>::add`, and call exports with typed arguments, optionally under a watchdog timer. It is a different API from Binaryen's or WABT's interpreters, not a drop-in replacement.",
+  "how_it_is_fast": "The interpreter's parser rewrites Wasm into an internal bitcode of fixed-size variant opcodes with branch and call targets pre-resolved (br_table_data, call_imm), dispatched through a statically derived visitor instead of virtual calls, and keeps module data in non-owning bump allocators that live as long as the module. Linear memory sits in an 8 GiB PROT_NONE reservation with guard pages, so loads and stores need no bounds checks and host functions need no pointer validation. The JIT is a single-pass x86-64 code writer driven directly by the parser (memory base kept in rsi, no IR or LLVM), which keeps compile time linear. Time limits cost nothing in the hot loop: on expiry the watchdog makes the code pages non-executable and the resulting SIGSEGV unwinds the run.",
+  "when_to_use": [
+    "Antelope/EOSIO-compatible chains, or any system that needs bit-identical Wasm results across machines (softfloat on by default) and consensus-matching limits such as call depth 250 and per-section caps in `options`.",
+    "Embedding untrusted Wasm in a C++ host where predictable, linear load and validation time matters more than peak speed (the README contrasts this with WAVM's long, unpredictable LLVM compiles).",
+    "Hard per-call CPU deadlines without instruction counting: the watchdog revokes execute permission on the code pages when time runs out.",
+    "Many short calls into small contracts with cheap host-function transitions on x86-64 Linux (JIT) or other 64-bit Unix hosts (interpreter)."
+  ],
+  "when_not_to_use": [
+    "Peak throughput: the peer-reviewed 'VM Matters' study (snippet only) measured EOS VM at about 20 s on a matrix benchmark against about 70-170 ms for WAVM and Wasmtime, so it only beats the old Binaryen and WABT interpreters.",
+    "Modern Wasm modules: the opcode table is MVP only (no sign-extension, saturating float-to-int, bulk memory, reference types or SIMD), so modules from toolchains that enable post-MVP features by default will not load unless built for the MVP target.",
+    "Windows (CMake stops with an error on WIN32) or a JIT on anything but x86-64; AArch64 gets only the interpreter.",
+    "Projects that cannot accept the EOS VM License v1.0: its share-alike clause covers any work adapted for other blockchain purposes and it is not OSI-approved.",
+    "Hosts that install their own SIGSEGV/SIGFPE handlers or whose host functions need destructors to run when a trap unwinds."
+  ],
+  "integration": {
+    "form": "header-only (plus a softfloat static library built by CMake when ENABLE_SOFTFLOAT is on, the default)",
+    "dependencies": "Berkeley SoftFloat (vendored under external/softfloat) unless softfloat is disabled; pthreads for the watchdog; Catch2 and the eos-vm-test-wasms repo only for tests",
+    "min_toolchain": "C++20 with GNU extensions per CMakeLists.txt (docs/OVERVIEW.md still says C++17), CMake 3.12+, GCC or Clang",
+    "platforms": "Linux and macOS; JIT x86-64 only, interpreter on 64-bit Unix hosts that can reserve 8 GiB of virtual address space per wasm_allocator",
+    "thread_safety": "One backend, wasm_allocator and watchdog per thread; a parsed module can be shared across threads since 2023 (issue #7 closed), and the signal-handling state is thread_local.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Each wasm_allocator reserves 8 GiB of virtual memory (max_memory = 4ull << 31) plus guard pages; it had no destructor until April 2025 (commit 'Add destructor to wasm_allocator to release memory'), so older copies leaked the mapping.",
+    "Static initialization installs process-wide SIGSEGV, SIGFPE (and SIGBUS outside Linux) handlers and traps unwind with siglongjmp; the README warns host functions must be able to 'fail hard' without destructors, and the watchdog starts a new std::thread for every timed run.",
+    "A timeout disables code pages for the whole module: other threads running the same module take SEGVs and retry until the timed-out run re-enables them (signals.hpp comment), so one slow contract stalls its siblings briefly.",
+    "Harness flaw in the cited benchmark: the EOS Mechanics CPU action (AlohaEOS/eos-mechanics contracts/eosmechanics.cpp) has is_prime assign `prime = BOOL(p)` inside its test, so it never returns FALSE for odd p, and the Lucas-Lehmer step overflows 64 bits for p > 32 and shifts 1LLU by up to 375 (undefined behaviour); the work is about 35,000 iterations of a 64-bit multiply and remainder whose result is discarded (a code comment warns it could be optimized out), timed by self-reported on-chain cpu_usage_us that the repo's own disclaimer says producers can manipulate."
+  ],
+  "pick_this_over_siblings_when": "Pick EOS VM over wasm3, WAMR or Wasmi only when you need Antelope consensus compatibility, softfloat determinism and zero-overhead watchdog deadlines in a header-only C++ engine; for general embedding those interpreters have measured numbers, permissive licences and wider platform support, and WAVM or WasmEdge win on peak speed.",
+  "verified_claims_summary": "The only numbers are block.one's EOSIO 2 announcement, seen as search snippets: 'EOS VM runs the EOS Mechanics WASM CPU benchmarks up to 16x faster than Binaryen' (the EOSIO 1.0 interpreter), with no runtime, hardware, compiler or method given; the EOSIO v2.0.0 release notes on GitHub carry no numbers and recommend EOS VM JIT for block producers and the EOS VM Optimized Compiler, which is not in this repo, for other nodes. The repo's bench-interp tool prints a single parse time and execution time with no published results.",
+  "status_note": "Stale since 2025-07-30 (sync-call work for Antelope's node software), maintained by the EOS Network Foundation for its own chain with 5 open issues; the custom non-OSI licence and MVP-only Wasm make it a reference design rather than a general-purpose engine.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/README.md",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/docs/OVERVIEW.md",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/tools/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/tools/bench_interp.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/backend.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/x86_64.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/watchdog.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/allocator.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/signals.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/options.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/constants.hpp",
+    "https://raw.githubusercontent.com/AntelopeIO/eos-vm/HEAD/include/eosio/vm/opcodes_def.hpp",
+    "https://github.com/AntelopeIO/eos-vm/tree/main/include/eosio/vm",
+    "https://github.com/AntelopeIO/eos-vm/issues?q=is%3Aissue",
+    "https://github.com/AntelopeIO/eos-vm/commits/main",
+    "https://raw.githubusercontent.com/EOSIO/eos-vm/HEAD/README.md",
+    "https://github.com/EOSIO/eos/releases/tag/v2.0.0",
+    "https://github.com/AlohaEOS/eos-mechanics",
+    "https://raw.githubusercontent.com/AlohaEOS/eos-mechanics/HEAD/README.md",
+    "https://raw.githubusercontent.com/AlohaEOS/eos-mechanics/HEAD/contracts/eosmechanics.cpp",
+    "https://eosioeos.wordpress.com/2021/10/03/introducing-eosio-2-enhancing-performance-improving-security-and-new-developer-tools/ (EGRESS_BLOCKED)",
+    "WebSearch: EOS VM 16x Binaryen EOS Mechanics; EOSIO 2 EOS VM Interpreter/JIT/Optimized Compiler (snippets only)"
+  ],
+  "confidence": 0.55
+}

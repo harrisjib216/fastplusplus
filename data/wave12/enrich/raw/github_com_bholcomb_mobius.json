@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/bholcomb/mobius",
+  "one_liner": "Embeddable C-syntax scripting language with a register bytecode VM; about 16% less total time than Lua 5.4 on its own micro-suite.",
+  "what_it_does": "Mobius is a standalone interpreter and an embeddable runtime (libmobius-core shared library with a C API: mobius_new_state, mobius_exec_string, register native functions, userdata types, calls back into scripts). It is a new language, not a Lua or Python replacement: C-style syntax, tables and dense arrays, optional type annotations with type locking, fibers with spawn/await, channels and shared values scheduled on real worker threads, plus bundled JSON, HTTP, web, SQLite, WebSocket, regex and compression modules.",
+  "how_it_is_fast": "A Lua-style register VM with 32-bit ABC/ABx instructions and RK constant operands, dispatched with computed goto (labels-as-values) on GCC and Clang. Type locking lets the compiler emit type-specialized opcodes (ADD_II, LT_II, integer-only IFORPREP/IFORLOOP, immediate-operand ADDI/LTI) and the peephole stage emits superinstructions such as MOVE_ADDI, GETGLOBAL_CALL, CALL_DIRECT and AGET_ADD_CHECK (a fused 'sum = sum + arr[i]' that never materializes the element). Type tags live in a separate array beside the registers, strings are interned, and memory is reclaimed by reference counting with a backup cycle collector.",
+  "when_to_use": [
+    "Adding a scripting layer to a C or C++ application (game engine, editor, tool) where you want C-like syntax and Lua-class interpreter speed on integer loops and string building.",
+    "Scripts that need concurrency inside the language: fan-out with spawn/await across worker threads without writing a native threading layer.",
+    "Standalone tools and small web services that benefit from JSON, HTTP, SQLite and WebSockets shipped with the runtime instead of third-party packages.",
+    "Replacing CPython for CPU-bound integer loops in an embedded context: its arithmetic and nested-loop rows are 6.5-8x faster than CPython in the project's own table."
+  ],
+  "when_not_to_use": [
+    "When raw speed is the goal: it is only on par with PUC Lua 5.4 (slower on fib(30), dense arrays and string-key tables) and far behind LuaJIT, which the project does not compare against.",
+    "Workloads dominated by string handling, short-lived containers or record building: CPython beat it on string ops (1.69x), object create/destroy (1.14x) and the mixed workload (1.15x).",
+    "Tight memory budgets: a minimal embedded state peaks around 6.3 MB RSS (5.4 MB tuned) and starts worker threads by default, far heavier than a Lua state.",
+    "Production use that needs stability or TLS: version 0.1.0, 3 stars, one main author, the C API changed repeatedly in October 2026 (userdata parameters, removed time limits and abort), Windows and macOS ports marked untested, and network modules are plain-transport only.",
+    "Code that relies on Lua or Python integer semantics: Mobius '/' truncates and '%' is a C-style remainder, so negative operands give different results."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "pthread and dl on Linux for the core; bundled modules pull in miniz, SQLite and others; built with the repo's own bundled 'buildy' build tool (committed binaries), not CMake",
+    "min_toolchain": "C++17 (buildy.yaml cpp_standard c++17); computed-goto dispatch needs GCC or Clang, other compilers fall back to a switch loop",
+    "platforms": "Linux x86-64 is the tested platform; Windows and macOS ports were added 2026-10-04 and are marked untested; release builds use -march=native (a 'portable' configuration targets x86-64-v2)",
+    "thread_safety": "Each MobiusState is independent and can run concurrently with others; within a state, fibers run on a worker-thread pool (default hardware_concurrency/2 - 1 extra threads), reference counts are atomic and shared containers use locks; registered native functions may be called from any worker thread and must be thread-safe themselves.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetries in the README benchmark: the Mobius fib(30) function is annotated 'n: int64): int64' even though the comment above it says 'Deliberately left un-annotated: this is the un-specialized call path' (the Lua and Python versions cannot express types); the mixed workload preallocates its Mobius array with array_create(n) inside the timer while Lua and Python grow from empty; Lua times itself with os.clock (process CPU time) while Mobius and Python use monotonic wall clocks; Mobius is built -O3 -march=native -flto while Lua and CPython are whatever binaries are on PATH.",
+    "The Total row is the median of each script's whole-run timer, which includes untimed setup; the eight row medians sum to 359.0 ms (Mobius) vs 420.3 ms (Lua) vs 1402.6 ms (CPython). The total is dominated by the arithmetic row (850.9 of CPython's 1424.8 ms), so the geometric mean of the eight row ratios is about 0.93x of Lua's time and 0.47x of CPython's (about 2.1x faster, not 3.8x) (derived from page data).",
+    "The raw output behind the README table is not committed; the committed benchmark_summary_latest.json (2026-07-12) predates later VM and benchmark-script changes and shows Mobius about 1.3x slower than Lua.",
+    "Several superinstructions (AGET_ADD_CHECK for 'sum = sum + arr[i]', ADD_CHECK for locked accumulators, MOVE_MULI) match the benchmark loops' exact shapes, so the suite may flatter Mobius relative to code that does not hit those patterns."
+  ],
+  "pick_this_over_siblings_when": "Pick Mobius over Wren or pocketpy when you want built-in multi-threaded fibers and a large bundled standard library in an embeddable C-syntax language; pick LuaJIT when interpreter or JIT speed matters most, and Wren or plain Lua when you need a small, mature, low-memory runtime.",
+  "verified_claims_summary": "On the project's own eight checksum-verified micro-benchmarks (median of five runs, run_benchmarks.py), the README reports a total of 373.9 ms for Mobius vs 443.3 ms for Lua 5.4 and 1424.8 ms for CPython 3; Mobius wins five of eight rows against Lua and five of eight against CPython. The Mobius build is the release configuration (-O3 -march=native -funroll-loops -flto, C++17), but the CPU, the Lua build and the CPython version are not stated and the raw results behind the table are not committed.",
+  "status_note": "Actively developed (last commit 2026-10-04, 391 commits) but version 0.1.0 with a fast-moving C API and 3 stars; MIT-licensed and copyable, best treated as an experimental embeddable language rather than a drop-in faster Lua.",
+  "sources_read": [
+    "https://github.com/bholcomb/mobius",
+    "https://github.com/bholcomb/mobius/commits/main",
+    "https://github.com/bholcomb/mobius/tree/main/src",
+    "https://github.com/bholcomb/mobius/tree/main/src/mobius",
+    "https://github.com/bholcomb/mobius/tree/main/src/mobius/vm",
+    "https://github.com/bholcomb/mobius/tree/main/docs",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/README.md",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/benchmarks/run_benchmarks.py",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/benchmarks/benchmark_comprehensive.mob",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/benchmarks/benchmark_comprehensive.lua",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/benchmarks/benchmark_comprehensive.py",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/benchmarks/benchmark_summary_latest.json",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/buildy.yaml",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/src/buildy.yaml",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/src/mobius/vm/opcodes.h",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/src/mobius/vm/vm.h",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/src/mobius/vm/vm.cpp",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/include/mobius/mobius.h",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/docs/index.md",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/docs/embedding/embedding-guide.md",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/docs/reference/standard-library.md",
+    "https://raw.githubusercontent.com/bholcomb/mobius/HEAD/docs/guide/getting-started.md"
+  ],
+  "confidence": 0.75
+}

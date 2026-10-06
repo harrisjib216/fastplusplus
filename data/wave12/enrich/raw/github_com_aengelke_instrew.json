@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/aengelke/instrew",
+  "one_liner": "LLVM-based user-mode dynamic binary translator for Linux (x86-64, AArch64, RISC-V64 guests); paper reports far lower overhead than QEMU and HQEMU.",
+  "what_it_does": "Runs an unmodified Linux ELF binary for another (or the same) ISA, like qemu-user: `instrew /bin/ls -l`. Guests are x86-64, AArch64 and RISC-V64 (rv64imafdc); hosts are x86-64 and AArch64. It is a standalone two-process tool, not a library: a small static client holds the guest address space and code cache, and a server process lifts, optimizes and compiles code and sends back ELF objects.",
+  "how_it_is_fast": "The Rellume lifter decodes a whole guest function's control-flow graph and lifts it to one LLVM IR function, so guest registers live in SSA values across basic blocks instead of being spilled to a CPU-state struct at every block as in QEMU TCG. The server runs a short LLVM pass list (DCE, EarlyCSE, InstCombine, MemCpyOpt) and the LLVM back end at -O2 by default, and Rellume models SIMD and FP instructions so LLVM emits native host code for them. A register-based calling convention between translated functions (fastcc, on by default) and optional call/ret lifting (-callret) cut the cost of control transfers; translated objects can be cached on disk keyed by a SHA-1 of the code bytes and configuration.",
+  "when_to_use": [
+    "Long-running, single-threaded, compute-bound Linux programs (SPEC CPU-style kernels) where LLVM optimization time is repaid by faster translated code.",
+    "Cross-ISA user-mode runs of RISC-V64 or AArch64 binaries on x86-64 (or x86-64 binaries on AArch64) when qemu-user is too slow, especially for floating-point-heavy code that QEMU emulates in software.",
+    "Research or tooling that wants guest code as LLVM IR: -dumpir prints IR after lifting, calling-convention change, optimization or codegen, and -perf=2 writes JITDUMP for profiling translated code.",
+    "Repeated runs of the same binary: -cache stores compiled objects under ~/.cache/instrew and skips lifting and codegen on a hit."
+  ],
+  "when_not_to_use": [
+    "Multi-threaded guests: clone with CLONE_VM returns -EOPNOTSUPP ('multi-threading is currently not implemented', client/emulate.c; issue #9).",
+    "Programs that install signal handlers or recover from SIGSEGV/SIGBUS: a delivered guest signal with a handler aborts the process ('guest signal handling not implemented').",
+    "Guests that generate or modify code at run time (JITs, self-modifying code): mmap, mprotect and munmap pass straight to the host with no code-cache invalidation.",
+    "Full-system emulation, non-Linux guests or big-endian hosts; and recent-distro binaries that use syscalls the client does not emulate (README warning; issue #18 for Ubuntu 24.04 is open).",
+    "Short-lived processes where per-function LLVM compilation dominates; no published numbers cover startup-heavy workloads."
+  ],
+  "integration": {
+    "form": "standalone executable (meson/ninja build; server binary embeds the client)",
+    "dependencies": "LLVM 21-23 (shared or static), OpenSSL libcrypto (SHA-1 for the cache), git submodules Rellume, fadec, frvdec, farmdec; python3 at build time; clang and lld for the test suite",
+    "min_toolchain": "C++17 and C11, meson 0.52+, LLVM 21 to 23 (the September 2026 port dropped older LLVM)",
+    "platforms": "Linux user mode only; hosts x86-64 and AArch64 (little-endian); guests x86-64, AArch64, RISC-V64 rv64imafdc",
+    "thread_safety": "Guest multi-threading not implemented (clone with CLONE_VM fails); fork is supported and gets its own server connection.",
+    "drop_in_for_baseline": "partial — command-line replacement for qemu-user on single-threaded Linux ELF binaries that use no signal handlers and no run-time code generation; no system mode, no plugin API comparable to QEMU TCG plugins"
+  },
+  "gotchas": [
+    "README says -targetopt defaults to 3, but server/codegenerator.cc sets init(2) and documents 'default: 2'; the TargetMachine is also created with empty CPU and feature strings, so translated code targets the generic host baseline (for example plain x86-64), not -mcpu=native.",
+    "Signal support is explicitly marked 'very simple and INCORRECT' in client/emulate.c: only SIG_DFL and SIG_IGN work, handlers abort, guest sigreturn aborts.",
+    "No address-space isolation: guest mmap/mprotect/munmap/brk run natively ('TODO: catch dangerous maps'), so a guest can map over the client or its code cache.",
+    "The headline overhead figures could not be tied to one configuration: search snippets give 53% vs QEMU 648% and HQEMU 124%, another 59% vs 1044% and 135% on x86-64, and one summary attributes the 53/648/124 set to a RISC-V guest on an AArch64 host; the paper PDF was blocked and the repo has no benchmark scripts."
+  ],
+  "pick_this_over_siblings_when": "Pick Instrew over Blink, rv8 or oxtra when you need several guest ISAs (x86-64, AArch64, RISC-V64) and peak translated-code quality from LLVM on long-running compute kernels; pick Box64 for real-world x86-64 applications on ARM64 that need threads, signals and Wine, which Instrew does not handle.",
+  "verified_claims_summary": "Only search snippets of the VEE'21 paper were seen: on SPEC CPU2017 Instrew's mean overhead over native is 53% (67% INT, 40% FP) versus HQEMU 124% and QEMU 648% (another snippet: 716%, QEMU not finishing all FP runs because of softfloat), and a second summary gives 59% vs QEMU 1044% and HQEMU 135% on x86-64; the x86-64 test machine was 2x Intel Xeon E5-2697 v3 (Haswell, 2.6 GHz) per snippet. Compiler, flags, LLVM version and whether translation time is included were not seen, and the numbers come from 2021 code.",
+  "status_note": "Active again (LLVM 21-23 port on 2026-09-10 after no commits since 2024-06-07), single maintainer, LGPL-2.1-or-later, 4 open issues including an unhandled-syscall report and a segfault; usable as a research-grade translator, not a production qemu-user replacement.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/README.md",
+    "https://github.com/aengelke/instrew",
+    "https://github.com/aengelke/instrew/issues?q=is%3Aissue",
+    "https://github.com/aengelke/instrew/commits/master",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/meson.build",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/meson.build",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/meson.build",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/test/meson.build",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/config.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/config.h",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/cache.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/codegenerator.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/optimizer.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/rewriteserver.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/callconv.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/server/connection.cc",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/main.c",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/emulate.c",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/translator.c",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/dispatch.c",
+    "https://raw.githubusercontent.com/aengelke/instrew/HEAD/client/memory.c",
+    "https://raw.githubusercontent.com/aengelke/rellume/HEAD/README.md",
+    "https://mediatum.ub.tum.de/doc/1614897/1614897.pdf (blocked, 403)",
+    "WebSearch: Efficient LLVM-Based Dynamic Binary Translation Instrew SPEC CPU2017 (snippets only)"
+  ],
+  "confidence": 0.6
+}

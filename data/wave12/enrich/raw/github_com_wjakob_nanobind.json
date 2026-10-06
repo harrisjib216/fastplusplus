@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/wjakob/nanobind",
+  "one_liner": "C++17/CPython binding library from pybind11's author; 2.3-3.1x faster builds, 3-10x lower call overhead than pybind11.",
+  "what_it_does": "nanobind exposes C++ functions and classes to Python (and Python objects to C++) using near-identical syntax to pybind11 (NB_MODULE, nb::class_, .def, nb::arg), so porting is mostly a rename plus fixes for removed features. It builds ordinary extension modules through nanobind_add_module() in CMake (or scikit-build-core/Bazel), can target the Python stable ABI from 3.12, generates .pyi stubs, and exchanges arrays zero-copy with NumPy, PyTorch, JAX and others through nb::ndarray (DLPack or the buffer protocol). It extends CPython; it does not embed an interpreter in a C++ program.",
+  "how_it_is_fast": "C++ instance data, function records and type records are co-located with the corresponding Python objects (24 bytes per-instance overhead vs 56 in pybind11, no holder indirection), calls in both directions use PEP 590 vectorcall with a dispatch loop that does no heap allocation, and internal maps use tsl::robin_map instead of std::unordered_map. Compile time and binary size drop because the dispatch loop and runtime live in a separately compiled support library (libnanobind) instead of being re-instantiated in every binding file, headers avoid most of the STL (STL casters are opt-in includes), and features such as overload complexity, C++ multiple inheritance and holder types were simplified or removed.",
+  "when_to_use": [
+    "Exposing a large C++17 library to CPython where build time and wheel size matter: the author's 720-function and 252-class modules compiled 2.3-3.1x faster than pybind11 and were 3.3-3.7x smaller in -Os builds (see the libnanobind caveat under gotchas).",
+    "Chatty Python-to-C++ boundaries with small arguments: about 3x lower overhead than pybind11 for plain function calls and about 10x for constructing a bound object and calling a method, in -Os builds.",
+    "Shipping one wheel per platform across Python versions via the stable ABI (Python 3.12+), as JAX does for its CUDA plugins.",
+    "Zero-copy tensor exchange between C++ and NumPy/PyTorch/JAX/TensorFlow through nb::ndarray, or free-threaded CPython 3.13+ extensions (FREE_THREADED flag, supported since 2.2.0)."
+  ],
+  "when_not_to_use": [
+    "You need to embed Python inside a C++ executable or run several interpreters in one process: the porting guide lists embedding and multi-interpreter support as removed by design (pybind11's embed API remains the option).",
+    "Existing pybind11 code that relies on binding multiple C++ base classes, custom holder types, classes with overloaded or deleted operator new/delete, custom metaclasses, module-local bindings, py::array or .def_buffer(): these are removed, and custom type casters must be rewritten (from_python/from_cpp, noexcept).",
+    "Per-call work dominates: the benchmark functions only add six numbers, so the call-overhead gains vanish when each call does real work.",
+    "Cython is competitive at run time: in the author's class benchmark Cython was about 1.4x faster than nanobind (0.21 s vs 0.30 s in -Os builds) and Cython compiled the function-heavy debug module faster (x0.8).",
+    "Python older than 3.10: nanobind 3.x requires 3.10 or newer."
+  ],
+  "integration": {
+    "form": "headers plus a small support library (libnanobind) compiled from source by nanobind_add_module; static by default, NB_SHARED or a split-mode nanobind-backend wheel optional",
+    "dependencies": "CPython (or PyPy, with documented limitations) headers; tsl::robin_map bundled as a submodule; CMake 3.15+ or scikit-build-core 0.10+ (Bazel documented)",
+    "min_toolchain": "C++17, CMake 3.15, Python 3.10+ (nanobind 3.x); stable ABI needs Python 3.12+",
+    "platforms": "Linux, macOS and Windows (MSVC; clang-cl tested in CI since 3.0.1); the prebuilt backend wheels cover x86-64, aarch64 and riscv64",
+    "thread_safety": "GIL-protected by default; with FREE_THREADED on Python 3.13+ nanobind's internals use localized locks, but the bound C++ code must protect its own state (ft_mutex/ft_lock_guard provided), and loading any extension without free-threading support re-enables the GIL globally",
+    "drop_in_for_baseline": "partial — near-identical syntax to pybind11, but removed features (multiple C++ inheritance, holders, embedding, py::array, module-local bindings) and a changed type-caster API require code changes"
+  },
+  "gotchas": [
+    "Harness flaw in the size and compile-time comparison: docs/microbenchmark.ipynb links every nanobind module against a prebuilt shared library (-L.. -lnanobind, -rpath ..), so libnanobind's own compile time and size are left out of the nanobind bars, while pybind11 compiles its whole runtime into each module. nanobind_add_module's default is a static libnanobind linked into each extension. The compiled core in today's nanobind-backend 1.0.0 wheel (cp312, x86-64) is 230,640 bytes; adding about 0.22 MiB to nanobind's 0.38 and 0.26 MiB -Os module sizes would shrink the lead over pybind11 (1.41 and 0.85 MiB) from 3.7x/3.3x to roughly 2.3x/1.8x (my estimate from a newer version, not measured by the author). The lead remains, but the '~5x smaller' headline is not what a default single-module build gets.",
+    "The [debug] runtime ratios (13.7x and 22.5x vs pybind11) compare pybind11's dispatch code compiled at -O0 inside the module with nanobind's dispatch code in the separately built libnanobind, whose build flags the notebook does not record; quote the -Os ratios (3.0x function, 10.1x class) instead. The README and docs headlines ('~4x' compile time, '~5x' size, '~10x' runtime) match only the pybind11+smart_holder or class-only columns; plain pybind11 maxima are 3.1x, 3.7x and 10.1x.",
+    "Numbers date from nanobind 1.2.0, Python 3.10.6 and clang 15 (2023) and were not re-run for 2.x/3.x. Minor harness quirks that do not touch the pybind11 comparison: the Boost.Python class bindings declare the fifth argument type twice in py::init, and the pure-Python reference Struct0.sum omits field d.",
+    "Type bindings are shared across extensions only when they use the same nanobind ABI version, compiler family, C++ library, debug/release mode and stable/unstable ABI; otherwise they are isolated, and two packages binding the same type can trigger 'type was already registered' warnings (FAQ). STL type casters need explicit includes such as nanobind/stl/string.h."
+  ],
+  "pick_this_over_siblings_when": "The siblings in this category (sol2, LuaBridge3) bind C++ to an embedded Lua state; pick nanobind when the target is CPython extension modules, and pick sol2 or LuaBridge3 when you are embedding a scripting runtime in your C++ program, which nanobind explicitly does not support. The category placement is questionable: nanobind belongs with FFI/binding generators rather than embedded scripting engines.",
+  "verified_claims_summary": "The author's notebook compiled 720 trivial functions and 252 small classes with clang++ 15.0.7 (-std=c++17 -march=native, -O0 -g3 or -Os then stripped) on an AMD Ryzen 9 7950X with boost off and clocks pinned (median of 5): in -Os builds nanobind 1.2.0 compiled 2.7x (func) and 3.1x (class) faster than pybind11, produced 3.7x and 3.3x smaller modules (excluding libnanobind), and ran 10M calls in 0.61 s vs 1.80 s and 2.5M construct+sum in 0.30 s vs 3.06 s under Python 3.10.6. Cython won the class runtime test (0.21 s).",
+  "status_note": "Actively maintained (3.1.0 released Sep 2026, last commit 2026-09-28), BSD-3-Clause, about 3.7k stars and used by JAX, XLA/MLIR, IREE, Apple MLX and FEniCS; safe to adopt for new CPython bindings, with porting effort for pybind11 code that uses removed features.",
+  "sources_read": [
+    "https://github.com/wjakob/nanobind",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/README.md",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/benchmark.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/microbenchmark.ipynb",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/images/times.svg",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/images/sizes.svg",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/images/perf.svg",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/why.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/porting.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/changelog.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/faq.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/free_threaded.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/building.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/docs/api_cmake.rst",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/pyproject.toml",
+    "https://raw.githubusercontent.com/wjakob/nanobind/master/cmake/nanobind-config.cmake",
+    "https://pypi.org/pypi/nanobind/json",
+    "https://pypi.org/pypi/nanobind-backend/json",
+    "https://files.pythonhosted.org/packages/b9/2c/7fb13ecb1e8c0c268e26c6bc44be4a7f51996b2a3c006749ce6fc4fd7da2/nanobind_backend-1.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+    "https://github.com/wjakob/nanobind/issues?q=is%3Aissue+performance+slower+pybind11",
+    "https://github.com/wjakob/nanobind/issues/918"
+  ],
+  "confidence": 0.85
+}
