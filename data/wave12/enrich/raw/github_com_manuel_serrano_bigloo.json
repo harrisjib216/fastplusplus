@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/manuel-serrano/bigloo",
+  "one_liner": "Optimizing Scheme-to-C (and JVM) compiler; about 1.6x faster than Guile 3.0.11 on the ecraven R7RS suite, slower than Chez.",
+  "what_it_does": "Bigloo is a whole-program-optimizing Scheme compiler from Inria that emits C (compiled by the system C compiler into native executables or libraries) or JVM classes, plus an interpreter. The language is mostly R5RS with Bigloo extensions: a module system, a class-based object system, pattern matching, lexer and LALR parser generators, a C and Java FFI, and libraries for pthreads, sockets, SSL, SQLite, libuv and multimedia. It is a batch compiler you invoke like a C compiler (`bigloo -O6 foo.scm -o foo`), not a drop-in replacement for Guile's embeddable VM or REPL workflow. Portable R7RS code needs shims: the benchmark suite ships a Bigloo prelude that defines bytevectors, square, exact-integer-sqrt and current-jiffy.",
+  "how_it_is_fast": "Scheme is compiled ahead of time to C and then optimized by gcc, so the program runs as native code with no bytecode dispatch. The compiler front end does closure analysis (control-flow analysis, comptime/Cfa), type and storage-use inference, inlining, beta reduction, dataflow type specialization, tagged-fixnum and flonum specialization (Fxop, Flop, Fastfl), box/unbox elimination (Prebox, Uncell), and tail-call and return-to-goto rewriting. -O6 adds stack allocation of non-escaping values (Stackable), numeric specialization (Nums) and fast flonums on top of -O3 (comptime/Init/parse_args.scm). Memory is managed by a bundled Boehm-Demers-Weiser conservative GC (gc-8.2.12 at head).",
+  "when_to_use": [
+    "You want standalone native executables or C-linkable libraries from Scheme and need a large win over Guile on CPU-bound integer, flonum and list code (fib, tak, fft, peval and lattice ran 2.2x to 3.4x faster than Guile 3.0.11 -O3)",
+    "I/O-heavy text processing with ports (read1, cat, wc, tail, sum1 ran 5x to 16x faster than Guile)",
+    "Projects that call C or Java libraries directly through an FFI, or that need Bigloo's object system, pattern matching and parser generators in compiled code",
+    "Server-side or systems Scheme on Linux that uses the bundled pthread, SSL, SQLite, libuv and socket libraries from compiled code"
+  ],
+  "when_not_to_use": [
+    "When top speed is the goal: Chez Scheme 10.3.0 beats Bigloo 4.6a on aggregate in the same suite (Bigloo about 0.63x of Chez's speed, faster on 18 of 50 rows), and Gambit (0.78x) and Loko (0.73x) are also faster on aggregate (derived from all.csv)",
+    "Continuation-heavy code: first-class call/cc needs the -call/cc flag, fibc ran at 0.35x Guile's speed, ctak was killed at the 300 s limit, and on the JVM back end call/cc only works within its dynamic extent",
+    "Strict R7RS programs: there are no complex numbers (mbrotZ failed with 'Unbound variable -- imag-part'), and the compiler, slatex and equal benchmarks failed to compile, crashed or hit the time limit",
+    "Allocation-heavy symbolic workloads where Guile was faster: graphs 0.34x, nboyer 0.62x, gcbench 0.67x, string 0.47x",
+    "Interactive development with an embeddable VM: Bigloo is a batch whole-program compiler, and building it from git needs an existing Bigloo to bootstrap"
+  ],
+  "integration": {
+    "form": "compiler toolchain (bigloo executable) producing native executables or static/shared libraries via C; separate JVM back end",
+    "dependencies": "a C compiler and GNU make; bundled Boehm GC (gc-8.2.12), libuv (v1.51.0), PCRE/PCRE2, GMP (6.3.0 if none found) and libbacktrace; optional OpenSSL, SQLite, libunistring and multimedia libraries; JDK for the JVM back end",
+    "min_toolchain": "not documented; CI builds with the ubuntu-latest gcc, and closed issues cover clang-16 (#98) and gcc-15 (#149) fixes",
+    "platforms": "Linux x86-64 is the only CI target; configure has options for macOS (darwin), Win32 (mingw, cygwin) and Android; a musl/Alpine build issue (#125) was closed in 2025",
+    "thread_safety": "Preemptive threads through the pthread and srfi18 libraries plus FairThreads (fthread), with a thread-enabled Boehm GC; per-object thread safety is not documented",
+    "drop_in_for_baseline": "partial: runs most portable R7RS benchmark programs once a prelude adds missing R7RS procedures, but it has no Guile module system, no Guile C API and no complex numbers"
+  },
+  "gotchas": [
+    "The headline 1.62x geomean over Guile is lifted by five I/O rows (sum1 16.2x, read1 12.7x, cat 8.3x, wc 7.0x, tail 5.3x). Without them it is about 1.33x, faster on 31 of 45 rows, and about 0.57x of Chez (derived from all.csv).",
+    "Harness flaw: the ecraven Bigloo prelude defines exact-integer-sqrt through a float-based integer-length, (ceiling (/ (log n) (log 2))). That overflows for bignums above about 1.8e308 and is off by one at exact powers of two, so the pi and chudnovsky 'floating point exception' crashes are probably the prelude's fault rather than Bigloo's. These rows are excluded from the ratios, so the result is not inflated.",
+    "The same prelude rebinds error (to return its arguments) and call-with-current-continuation at top level, and Bigloo warns 'Disabling optimization for library function' for both. Results are in safe mode: -O6 without -unsafe. Bigloo's own -Obench mode adds -unsafe, -freturn and static linking, so it could run faster than the suite shows.",
+    "Each benchmark was run once (NB_RUNS=1) on a low-power i3-N305 with the Arch gcc, version unstated. The suite ran 4.6a while the repo head is 4.7b (unstable) and a 4.7a tarball exists (issue #147); Bigloo timestamps come from epoch nanoseconds converted to a double, so they are quantised to 256 ns (irrelevant at second scale)."
+  ],
+  "pick_this_over_siblings_when": "Pick Bigloo over Chez Scheme, Gambit Scheme or Loko when you need Scheme compiled through C or to the JVM with a direct C/Java FFI, an object system and bundled SSL/SQLite/libuv libraries. If raw speed on this suite is what matters, Chez (about 1.6x faster than Bigloo on aggregate), Gambit and Loko all beat it.",
+  "verified_claims_summary": "In ecraven/r7rs-benchmarks (independent; Intel Core i3-N305, Arch Linux, single run each, safe mode), Bigloo 4.6a compiled with '-O6 -call/cc -copt -O3' through gcc beat Guile 3.0.11 (guild compile -O3) on 36 of 50 shared programs, with a geomean of 1.62x (derived from all.csv), e.g. fib 2.56 s vs 6.49 s and tak 1.76 s vs 3.11 s. Seven Bigloo rows failed or crashed and were excluded. In the same run, Chez Scheme 10.3.0 at --optimize-level 2 was about 1.6x faster than Bigloo on aggregate.",
+  "status_note": "Actively maintained by Manuel Serrano (last commit 2026-09-15; a 4.7a tarball was published in 2026 per issue #147; 5 open issues). The runtime and libraries are under the GNU Library GPL, so compiled programs can link them, while the compiler itself is GPL-2.0-or-later.",
+  "sources_read": [
+    "https://github.com/manuel-serrano/bigloo",
+    "https://github.com/manuel-serrano/bigloo/commits/master",
+    "https://github.com/manuel-serrano/bigloo/tree/master/comptime",
+    "https://github.com/manuel-serrano/bigloo/issues?q=is%3Aissue",
+    "https://github.com/manuel-serrano/bigloo/issues/147",
+    "https://github.com/manuel-serrano/bigloo/issues/119",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/README.md",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/COPYING",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/configure",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/.github/workflows/bigloo.yml",
+    "https://raw.githubusercontent.com/manuel-serrano/bigloo/HEAD/comptime/Init/parse_args.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/bench",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/README.org",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/index.html",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/results.Bigloo",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/results.Guile",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Bigloo-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Guile-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/common.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/common-postlude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/pi.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/chudnovsky.scm"
+  ],
+  "confidence": 0.8
+}

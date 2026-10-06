@@ -1,0 +1,71 @@
+{
+  "id": "https://gitlab.com/weinholt/loko",
+  "one_liner": "Self-hosted R6RS/R7RS Scheme compiling ahead of time to static amd64 binaries; beats Guile 3 on most r7rs-benchmarks.",
+  "what_it_does": "Loko is a Scheme system written in Scheme and some assembler, with no C underneath, that compiles R6RS or R7RS top-level programs ahead of time into statically linked ELF binaries for Linux, NetBSD or bare amd64 hardware (loko -std=r7rs --compile prog.scm). It also has a REPL that starts in about 1.2 ms, Guile-fibers-compatible lightweight concurrency, and its own drivers and TCP/IP stack for running without an operating system. It is a separate implementation, not a drop-in for Guile: portable R6RS/R7RS code runs, Guile modules and C bindings do not.",
+  "how_it_is_fast": "A native-code compiler (closure conversion, cp0-style inlining, type inference, loop and letrec passes in compiler/) emits amd64 machine code directly, with tagged immediates for fixnums, chars and flonums, so procedure calls, closures and allocation are compiled rather than run on a bytecode VM as in Guile. Inexact numbers are 32-bit IEEE singles packed into the upper half of a tagged 64-bit word (tag #b01001111, shift 32 in arch/amd64/tagging.sls), so float arithmetic never allocates; this is cheaper than Guile's and Chez's 64-bit doubles but less precise. Whole programs are compiled together into one static binary with eval disabled by default.",
+  "when_to_use": [
+    "Small R6RS/R7RS command-line tools on Linux/amd64 that should ship as one static binary with no libc or C toolchain and start in about a millisecond.",
+    "Call-, closure- and allocation-heavy symbolic code where all.csv shows Loko well ahead of Guile 3.0.11: ctak 4.15x, fibc 3.97x, tak 1.87x, fib 1.65x (derived from page data).",
+    "Port-based text I/O in pure Scheme: cat 4.68x and wc 4.27x faster than Guile in the same run (derived from page data).",
+    "Hobby-OS, bare-metal or driver work in Scheme: multiboot2 and EFI boot, AHCI/IDE disks, e1000e/virtio/rtl81x9 NICs, USB 1/2 (UHCI/EHCI) and a TCP/IP stack."
+  ],
+  "when_not_to_use": [
+    "Floating-point code: inexact numbers are single precision only; nucleic, sum1 and sumfp returned wrong answers in the suite, and subnormals such as 5e-40 cannot be read (open issue #60).",
+    "Bignum or exact-arithmetic work: pi takes 156.5 s against Guile's 0.108 s and chudnovsky 28.0 s against 0.124 s; repeated string-append is also slow (string 5.24 s vs 0.205 s).",
+    "Programs that need C libraries (no FFI), platforms other than amd64, multicore parallelism (fibers are cooperative and not parallel within a Loko process), or eval over compiled libraries (open issue #29).",
+    "Peak throughput when Chez Scheme is an option: Loko runs at about 0.65x of Chez 10.3.0's speed on the same suite and is 16x-22x slower on call/cc-heavy fibc and ctak (derived from page data).",
+    "Memory-hungry programs without tuning: the heap has a fixed size (LOKO_HEAP, in megabytes), and earley died with 'out of heap memory' in the benchmark run."
+  ],
+  "integration": {
+    "form": "standalone AOT compiler and runtime; programs become static ELF binaries (loko --compile)",
+    "dependencies": "none at run time (static binary, no libc); building from git needs Chez Scheme 9.5+ to bootstrap, Akku 1.0.0+ and GNU make; the release tarball includes a prebuilt binary and the Akku packages",
+    "min_toolchain": "Chez Scheme 9.5+ for bootstrapping from git; nothing for the release tarball",
+    "platforms": "amd64 only: Linux, NetBSD and bare metal (Multiboot/Multiboot2, EFI); virtual machines must support alignment checks (#AC)",
+    "thread_safety": "One heap per Loko process; fibers are call/cc-based, cooperative and never run in parallel; port access is not multi-fiber safe (open issue #20) and dynamic-wind is broken under fibers (manual, issue #26)",
+    "drop_in_for_baseline": "partial — runs portable R6RS and R7RS programs (passes almost all of Racket's R6RS and Chibi's R7RS test suites), but not Guile modules or C bindings, flonums are single precision, and compilation is ahead of time only"
+  },
+  "gotchas": [
+    "Harness flaw: none of the six float benchmarks that passed checks numeric precision. fft transforms a vector of 65,536 zeros (input '100 65536 0.0 0.0', so 0.0 is right at any precision), ray always returns 'ok, mbrot checks the iteration count of one corner pixel, and pnpoly and simplex compare integers. Loko computed them in unboxed single precision while Guile and Chez used doubles, so those rows (1.21x-3.45x over Guile; fft 1.93x faster even than Chez) compare different arithmetic. Without them the Guile geomean is about 1.52x, not 1.62x (derived from page data).",
+    "Harness asymmetry: the bench script runs Guile with GC_INITIAL_HEAP_SIZE=100000000 but leaves Loko at its default fixed heap; earley hit 'Fatal error: out of heap memory' after 19 s and has no Loko time. Each benchmark ran once (NB_RUNS=1).",
+    "Version drift: the suite measured loko-0.12.1 (tagged 2023-09-26). 0.13.0 (2026-06-27) fixes a 'miscompilation due to bad type inference on bitwise-and', so the measured compiler had a known codegen bug and head may time differently.",
+    "Open bugs worth knowing: stack overflows kill the process (#3), the code generator crashes on bad arities (#10), a wrong check is inserted for undefined variables (#38), and the TCP/IP stack gets wedged easily (#58, also noted in the 0.13.0 NEWS)."
+  ],
+  "pick_this_over_siblings_when": "Gambit and Bigloo match Loko's lead over Guile in the same suite (Bigloo about 1.62x geomean) and add a C FFI, double-precision flonums and more platforms, and Chez Scheme (catalogued) is about 1.5x faster than Loko overall; pick Loko only when you want static amd64 binaries with no C toolchain or libc, millisecond start-up, or a Scheme that runs on bare hardware.",
+  "verified_claims_summary": "Independent ecraven/r7rs-benchmarks all.csv (one run per benchmark, Intel Core i3-N305, Arch Linux, January 2026; timed by each program's own jiffy clock, so start-up is excluded): loko-0.12.1 static binaries beat guile-3.0.11 (guild compile -O3) on 48 of 51 shared benchmarks, geomean about 1.62x (1.52x without the float rows), and run at about 0.65x of chez-10.3.0's speed (faster on 22 of 52) (derived from page data). Three float benchmarks gave wrong answers and earley ran out of heap, so they have no time.",
+  "status_note": "Actively maintained by one author (0.13.0 released 2026-06-27, commits to 2026-10-03) under EUPL-1.2-or-later, a copyleft licence; fine as a toolchain for amd64 tools and OS experiments, but its single-precision flonums and slow bignums rule it out for numeric work.",
+  "sources_read": [
+    "https://gitlab.com/weinholt/loko/-/raw/master/README.md",
+    "https://gitlab.com/weinholt/loko/-/raw/master/NEWS.md",
+    "https://gitlab.com/weinholt/loko/-/raw/master/arch/amd64/tagging.sls",
+    "https://gitlab.com/weinholt/loko/-/raw/master/runtime/flonums.sls",
+    "https://gitlab.com/weinholt/loko/-/raw/master/Documentation/manual/usage.texi",
+    "https://gitlab.com/weinholt/loko/-/raw/master/Documentation/manual/int-concurrency.texi",
+    "https://gitlab.com/weinholt/loko/-/raw/master/Documentation/manual/introduction.texi",
+    "https://gitlab.com/api/v4/projects/weinholt%2Floko/repository/tree?recursive=true",
+    "https://gitlab.com/api/v4/projects/weinholt%2Floko/repository/tags?per_page=6",
+    "https://gitlab.com/api/v4/projects/weinholt%2Floko/issues?state=opened",
+    "https://gitlab.com/api/v4/projects/weinholt%2Floko/repository/commits?per_page=3",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/bench",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/results.Loko",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/index.html",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Loko-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Loko-postlude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Guile-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/mbrot.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/fft.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/string.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/pi.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/ray.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/simplex.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/pnpoly.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/fft.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/mbrot.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/mbrotZ.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/pnpoly.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/ray.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/simplex.input",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/inputs/sumfp.input"
+  ],
+  "confidence": 0.82
+}

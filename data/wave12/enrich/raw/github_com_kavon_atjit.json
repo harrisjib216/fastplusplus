@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/kavon/atjit",
+  "one_liner": "Research JIT for C++ that specialises a function at runtime and autotunes LLVM knobs online; up to 1.48x over its own default on matmul.",
+  "what_it_does": "atJIT extends Easy::jit: you compile with the atjitc wrapper around clang++, which embeds the bitcode of selected functions, and at runtime call tuner::ATDriver::reoptimize(fn, args..., tuner_kind(...)) before each call. Arguments can be placeholders, runtime values that become JIT-time constants, or tuned parameters (e.g. IntRange) that the tuner fills in for algorithm selection. reoptimize returns an easy::FunctionWrapper that is either a variant still being measured or the best one found so far.",
+  "how_it_is_fast": "Runtime specialisation (constant-folding runtime values into the JIT-compiled LLVM IR, as in Easy::jit) plus online empirical autotuning: each new variant applies a knob configuration (LLVM loop metadata llvm.loop.unroll.count/full, vectorize.enable/width, interleave.count, distribute.enable, licm_versioning.disable; inlining threshold; optimizer and codegen opt levels; FastISel; IPRA; Polly tiling only in the deprecated POLLY_KNOBS build). Calls are timed with steady_clock until the standard error falls under pct_err (default 2%), and the best variant is kept. Search strategies are random search, Bayesian optimisation (XGBoost is a build requirement) and simulated annealing; compile jobs run on libdispatch serial queues so callers keep getting the current best while new variants compile.",
+  "when_to_use": [
+    "A long-running process that calls the same hot numeric kernel (hundreds of microseconds or more per call) thousands of times, so per-call timing and background JIT compiles amortise.",
+    "Kernels whose best unroll, vectorisation width or inlining choice depends on sizes that are fixed at runtime but unknown at build time (pass them as runtime values so they are specialised).",
+    "Choosing among algorithm variants online via a tuned integer parameter (IntRange) measured on real inputs.",
+    "Research or teaching on online autotuning: the knob set, random/Bayes/annealing tuners and the measurement policy are small and readable."
+  ],
+  "when_not_to_use": [
+    "Short or rarely called functions: every reoptimize call builds a context and an Optimizer object and does a map lookup, every call is wrapped in steady_clock timing, and the first call per specialisation waits for an LLVM compile.",
+    "Production code: abandoned since 2019-08-29 with open crash reports (#14 segfault calling a reoptimized function after repeated Bayes reoptimize, #13 stat-dumping segfault, #10 possible double free when an LLVM Module outlives its LLVMContext).",
+    "Current toolchains: get-llvm.sh pins llvmorg-8.0.1 (X86 target only), CMake requires LLVM with RTTI and the libLLVM dylib, and CI only tested Ubuntu with LLVM 8; expect porting work on newer LLVM.",
+    "When an ahead-of-time -O3 build or a library routine may already be as fast: the only published result compares the tuner's best variant with the JIT's own untuned default, on one naive triple-loop matrix multiply.",
+    "When run-to-run reproducibility matters: the random tuner seeds from the system clock and tuned configurations are not persisted (listed as a TODO), so each process re-tunes from scratch."
+  ],
+  "integration": {
+    "form": "shared lib (ATJitRuntime) plus a clang plugin pass, used through the atjitc clang++ wrapper",
+    "dependencies": "LLVM and Clang 8 built from source with RTTI and libLLVM dylib (get-llvm.sh, llvmorg-8.0.1), libdispatch (Grand Central Dispatch), XGBoost (xgboost/get.sh); optional out-of-tree LLVM+Polly for loop knobs (deprecated, sources out of sync per issue #11); Google Benchmark for benchmarks; Python 2.7, lit and Valgrind for tests; OpenCV for examples",
+    "min_toolchain": "C++17 (README: GCC >= 7 or Clang >= 4 to build), LLVM 8+ (CMake refuses LLVM < 8), CMake 3.8 (CMakeLists.txt; README says 3.5)",
+    "platforms": "x86-64 Linux (Ubuntu in GitLab CI; get-llvm.sh builds only the X86 target); TODO.md lists ARM and macOS as untested",
+    "thread_safety": "not documented; ATDriver keeps per-function state in a std::unordered_map with no locking, so use one driver per thread; compile jobs run on libdispatch serial queues, and Optimizer::status() is documented as imprecise under concurrent recompile.",
+    "drop_in_for_baseline": "false: the program must be built with atjitc (clang plugin) and every call site rewritten to call AT.reoptimize(...) and then the returned wrapper."
+  },
+  "gotchas": [
+    "The auto const& returned by reoptimize refers to the driver's internal Trial or Best slot, which is moved or swapped on the next reoptimize call; tuning only progresses if you call reoptimize before (ideally every) call, so do not cache the returned reference.",
+    "Open crash bugs: #14 (2019-04-29) segfault calling a function reoptimized repeatedly with AT_Bayes and an IntRange parameter; #13 segfault when dumping stats; #10 potential double free of an LLVM Module outliving its context. None has a fix or comment.",
+    "Tuning is nondeterministic and not persisted: RandomTuner seeds std::mt19937_64 from system_clock, its first trial is always the default configuration, and exporting or reloading tuned configs is only a TODO.",
+    "Harness and evidence flaws: the slide's Default mean (662,929 ns) is from 5 measurements and the best (445,898 ns) from 129; the slide kernel (T** MatMul that callocs its result inside the timed call) is not the repo's benchmark/matmul.h (flat __restrict__ arrays, DIM 200), and DIM, element type, CPU and build flags are not given; the bars fall monotonically from Default to G, so slower random trials and tuning cost are not shown. In benchmark/matmul.h the only correctness check is assert(verifyCheck(...)) on one element, which the default Release build (NDEBUG) compiles out, so benchmark runs do not verify tuned variants."
+  ],
+  "pick_this_over_siblings_when": "Pick atJIT over Easy::jit, which it is built on, only when you want the JIT to search compiler knobs per specialised kernel rather than just specialise on runtime values, and can accept LLVM 8, XGBoost, libdispatch and open crash bugs; for plain runtime specialisation Easy::jit is the lighter choice. RapidUDF and the copy-and-patch JITs in this category solve expression or language compilation, not autotuning of existing C++ functions.",
+  "verified_claims_summary": "First-party July 2018 status-talk slides (doc/slides/ANL_Summer_Status_Update.pdf): slide 10 prints mean call times of 662,929 ns for atJIT's default knob configuration (inlining threshold 225, no loop hints) and 445,898 ns for the best random-search configuration (inlining threshold 976 plus unroll, vectorize width 8, interleave and distribute loop metadata), 1.487x derived from slide data, charted on slide 11 as 'up to 1.48x'. The kernel is a naive templated square matrix multiply specialised on DIM; matrix size, element type, CPU, compiler and flags are not stated, and no clang -O3 ahead-of-time or Easy::jit baseline was measured.",
+  "status_note": "Abandoned research prototype (last commit 2019-08-29, 53 stars, no releases, 4 open issues including two segfaults) under BSD-3-Clause, tied to LLVM 8.0.1; copy its knob set and online-tuning policy as a design, not as a dependency.",
+  "sources_read": [
+    "https://github.com/kavon/atJIT",
+    "https://github.com/kavon/atJIT/issues?q=is%3Aissue",
+    "https://github.com/kavon/atJIT/issues/14",
+    "https://github.com/kavon/atJIT/issues/10",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/README.md",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/.gitlab-ci.yml",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/get-llvm.sh",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/benchmark/benchmark.cpp",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/benchmark/matmul.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/benchmark/qsort.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/driver.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/Feedback.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/RandomTuner.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/CodegenOptions.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/optimizer.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/LoopKnob.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/include/tuner/KnobConfig.h",
+    "https://raw.githubusercontent.com/kavon/atJIT/HEAD/doc/slides/ANL_Summer_Status_Update.pdf"
+  ],
+  "confidence": 0.8
+}

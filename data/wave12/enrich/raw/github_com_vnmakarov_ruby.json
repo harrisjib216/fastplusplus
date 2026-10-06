@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/vnmakarov/ruby",
+  "one_liner": "2017 CRuby fork with register-based (RTL) bytecode and a method JIT that emits C and runs GCC/Clang; beats MRI 2.0 and 2.5-dev.",
+  "what_it_does": "A fork of CRuby 2.5-development (branch rtl_mjit_branch) that replaces the stack-based YARV instructions with register-transfer (RTL) instructions generated straight from the parse tree, and adds MJIT, a method JIT switched on with the -j option. It is a whole interpreter, not a library: you build the branch and run Ruby scripts with it. The README calls the JIT very early and only ready for a few small, simple programs.",
+  "how_it_is_fast": "RTL instructions name their operands (plus a, b, c instead of getlocal/getlocal/opt_plus/setlocal), cutting dispatch count and VM-stack traffic, with immediate-operand specialisation, combined compare-and-branch instructions and type-speculative instructions that de-speculate when a guess fails. MJIT translates a hot method's RTL into C, compiles it with gcc -O2 or clang -O2 against a precompiled, script-minimised vm.c header in background worker threads, and dlopen()s the resulting .so from /tmp; speculative code can bail out to the interpreter and be recompiled ('mutated') up to a limit (default 2).",
+  "when_to_use": [
+    "Studying or copying the design of a C-compiler-backed method JIT: minimised precompiled header, priority queue of methods, parallel compile workers, deoptimisation back to the interpreter (mjit.c is about 3,100 lines).",
+    "Research comparing register-based and stack-based bytecode in CRuby, using the branch's MJIT-benchmarks scripts (compare.rb, optcarrot-compare.rb) as a starting harness.",
+    "Small, long-running, numeric or loop-heavy Ruby 2.5-era scripts on x86-64 Linux with GCC installed and a spare core for background compilation, where wall time matters more than CPU time or memory."
+  ],
+  "when_not_to_use": [
+    "Any production or current Ruby code: the branch is a 2017 prototype on Ruby 2.5-dev, last committed 2017-09-29; use YJIT in mainline CRuby instead.",
+    "Hosts without a C compiler at run time, with a shared or untrusted /tmp, or in sandboxes that forbid exec and dlopen.",
+    "Memory-constrained deployments: peak memory geomean 4.15x (GCC) and 6.44x (Clang) of MRI 2.0 on the microbenchmarks, because the compiler's memory counts.",
+    "Short scripts and code dominated by core-library C methods: each small method takes about 50-70 ms to compile, and fannk (Array#slice!/reverse/insert heavy) gets 1.1x with or without the JIT.",
+    "CPU-time or battery-bound workloads: on optcarrot the CPU-time gain over the 2.5-dev base is only about 1.13x (derived from page data), and on red-black MJIT uses more CPU than MRI 2.0 (0.75x GCC, 0.64x Clang)."
+  ],
+  "integration": {
+    "form": "source-drop (whole CRuby 2.5-dev fork; build the interpreter from rtl_mjit_branch)",
+    "dependencies": "gcc or clang on PATH at run time (found via execvp), pthreads, dlopen, a writable /tmp; the minimised MJIT header must be in the build dir or installed include dir",
+    "min_toolchain": "not documented; measured with GCC 6.3.1 and Clang 3.9.1 as the JIT back end",
+    "platforms": "x86-64 Linux (Fedora 25 measured); macOS forced to Clang via a 2017 contributed patch; others not documented",
+    "thread_safety": "MJIT compiles in detached worker pthreads under one engine mutex while the Ruby VM runs; open issue #10 reports a crash in a multithreaded Rails benchmark with JIT on",
+    "drop_in_for_baseline": "partial — runs ordinary Ruby scripts (JIT via -j), but only Ruby 2.5-dev semantics, MJIT not passing make check, and the README limits it to small simple programs"
+  },
+  "gotchas": [
+    "Harness flaws: compare.rb's 'CPU time' parses only the user field of /usr/bin/time (system time dropped); optcarrot-compare.rb runs each Ruby 2 times, not the 3 the README states, and keeps the best FPS; and on optcarrot MJIT's 2.7x-3.13x wall gain over MRI 2.0 shrinks to about 1.13x CPU time against the 2.5-dev base (derived from page data), so the wall speedup leans on compiling on a second core of the 2-core i3-7100.",
+    "The 'while' row (387.29x, GCC) is a method running an empty counting loop 1,000,000 times, called 2,000 times, with its result discarded; since MRI 2.0 was tuned to take 20-70 s per benchmark, 387x means about 0.05-0.18 s for 2e9 iterations, so GCC -O2 removed or collapsed the loop (Clang gets 9.28x). It alone lifts the 23-benchmark geomean from about 5.1x to 6.18x.",
+    "Security: JIT files use predictable /tmp names (/tmp/<prefix>p<pid>u<id>), the C file is opened with fopen(\"w\") without O_EXCL, GCC is invoked with -I/tmp, and the compiler is looked up through PATH; a local user can plant files or symlinks. The README lists 'MJIT vulnerability' as unaddressed future work.",
+    "Correctness: open issue #10 (Feb 2019, no maintainer reply) reports Rails Ruby Bench on the RTL branch with --jit crashing with NoMethodError \"undefined method `setsockopt' for nil:NilClass\" in net/http under threads; the same run without JIT works. The RTL interpreter alone is slower than its base on optcarrot (35.76 vs 39.43 FPS)."
+  ],
+  "pick_this_over_siblings_when": "Pick YJIT (ruby/ruby) for any real Ruby workload: the author's own 2023 successor branch (sir-mirjit, same repo) measured YJIT at 262.1 FPS on optcarrot against 123.1 for his newer MIRJIT, and he declared the project dormant in YJIT's favour; JRuby or TruffleRuby suit long-running servers. Pick this branch only as readable reference code for a GCC/Clang-backed method JIT on top of a register VM, the design whose JIT infrastructure fed Ruby 2.6's MJIT.",
+  "verified_claims_summary": "Author's README (15 June 2017, Intel i3-7100, 32 GB, Fedora 25; minimum of 3 runs via /usr/bin/time, start-up and JIT compile included): over 23 microbenchmarks MJIT with GCC 6.3.1 -O2 has a wall-time geomean of 6.18x MRI 2.0 (Clang 3.9.1 -O2: 4.02x; the 2.5-dev base 1.12x), which is about 1.93x over MRI 2.0 and 1.74x over base on the ten algorithmic programs once the loop-kernel rows are set aside (derived from page data); optcarrot at 2000 frames runs 78.22 FPS (GCC) and 90.58 FPS (Clang) versus 28.96 for MRI 2.0 and 39.43 for base. The compiler and flags used to build the interpreters themselves are not stated.",
+  "status_note": "rtl_mjit_branch is abandoned (last commit 2017-09-29; the repo's default branch is now the sir-mirjit successor, which the author called dormant in 2023 in favour of YJIT); dual BSD-2-Clause/Ruby licence makes the MJIT design copyable, but the code is a prototype interpreter fork, not something to deploy.",
+  "sources_read": [
+    "https://github.com/vnmakarov/ruby",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/README.md",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/MJIT-benchmarks/compare.rb",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/MJIT-benchmarks/optcarrot-compare.rb",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/MJIT-benchmarks/while.rb",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/MJIT-benchmarks/fannk.rb",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/mjit.c",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/rtl_mjit_branch/mjit.h",
+    "https://raw.githubusercontent.com/vnmakarov/ruby/sir-mirjit/README.md",
+    "https://github.com/vnmakarov/ruby/commits/rtl_mjit_branch",
+    "https://github.com/vnmakarov/ruby/branches/all",
+    "https://github.com/vnmakarov/ruby/issues?q=is%3Aissue",
+    "https://github.com/vnmakarov/ruby/issues/10",
+    "WebSearch snippet: Ruby 2.6 MJIT merge history (developer.squareup.com/blog/rubys-new-jit, ruby/ruby PR #1782, bugs.ruby-lang.org Feature #14235); pages not opened"
+  ],
+  "confidence": 0.8
+}

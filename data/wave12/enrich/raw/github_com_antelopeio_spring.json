@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/antelopeio/spring",
+  "one_liner": "LLVM-based tier-up compiler for Wasm smart contracts inside Antelope's nodeos; claimed faster than EOS VM JIT, no published numbers.",
+  "what_it_does": "EOS VM OC is the optimizing tier of the Spring node (formerly Leap/EOSIO): a contract first runs on the baseline runtime (EOS VM JIT by default, or the EOS VM interpreter), while a forked compile process translates its Wasm to native x86-64 code in the background; later actions then run the cached native code. It is not a library API: it is enabled through nodeos options (--eos-vm-oc-enable auto/all/none, --eos-vm-oc-whitelist, --eos-vm-oc-cache-size-mb default 1024, --eos-vm-oc-compile-threads default 1) and is wired to Antelope's host functions, transaction timer and chain database.",
+  "how_it_is_fast": "The Wasm-to-LLVM-IR emitter is derived from WAVM; LLVMJIT.cpp runs a short legacy function pass pipeline (mem2reg, instcombine, simplifycfg, jump threading, constant propagation) and emits position-independent code for the generic host triple (no CPU-specific features). Linear memory is addressed through the GS segment (LLVM address space 256) with no explicit bounds checks: memory.cpp maps memfd-backed 'slices' surrounded by PROT_NONE regions, out-of-range accesses fault into a SIGSEGV handler, and memory.grow mostly just moves the GS base (wrgsbase via FSGSBASE when the kernel allows, arch_prctl otherwise), falling back to mprotect above a page threshold. Deadlines cost nothing in hot loops: the transaction timer's expiry callback mprotects the code mapping to PROT_NONE so the next instruction fetch faults; only a volatile call-depth counter is updated per call.",
+  "when_to_use": [
+    "You operate an Antelope (Vaulta/EOS, WAX, Telos and similar) node on x86-64 Linux and want hot system contracts (eosio.*) and read-only transactions to run as native code.",
+    "API or read-only nodes serving many repeated read-only queries against the same contracts, where background compile cost is amortized across many calls.",
+    "Studying a production design for guard-page sandboxing plus GS-segment memory addressing and timer-driven code-unmapping preemption in a Wasm AOT tier."
+  ],
+  "when_not_to_use": [
+    "As a general-purpose Wasm engine: it compiles only the Wasm Antelope hands it, and f32/f64 min, max, ceil, floor, trunc, nearest and float-to-int truncations are emitted as calls to an intrinsic named eosvmoc_internal.unreachable (a source comment says these should call out to C++ implementations); WAVM, Wasmtime or Wasmer are the standalone options.",
+    "Any platform other than x86-64 Linux: it depends on the GS segment, arch_prctl, memfd, Linux SIGSEGV semantics and an x86 assembly stack switch (switch_stack_linux.s).",
+    "Builds with a current LLVM: the Spring README says LLVM 7 to 11 only ('newer versions do not work') and LLVMJIT.cpp uses the legacy pass manager and ORC APIs of that era.",
+    "When you need published, reproducible speedups: no benchmark of OC against EOS VM JIT or the interpreter exists in the repo, and the 'order of magnitude' claim is known only from search snippets of retired EOS VM docs (eos.io no longer resolves).",
+    "Processes that cannot afford huge virtual address reservations or a process-wide SIGSEGV handler (Leap issue 645 counted 529 slices of about 8 GiB, roughly 4.2 TiB of virtual memory per execution thread, before Leap 5 added the mprotect threshold)."
+  ],
+  "integration": {
+    "form": "module (part of the nodeos binary in AntelopeIO/spring; not packaged separately)",
+    "dependencies": "LLVM 7-11 (Linux only), Boost (asio for the compile monitor), Spring's chain library, fc and chainbase",
+    "min_toolchain": "C++20 compiler and standard library, CMake 3.16+ (README); reference builds use GCC 10 with LLVM 11 on Ubuntu 20.04/22.04",
+    "platforms": "x86-64 Linux only (FSGSBASE used when the kernel enables it; disable with the SPRING_DISABLE_FSGSBASE environment variable)",
+    "thread_safety": "One executor and one memory mapping per execution thread; compilation happens in separate forked oc-compile processes limited by RLIMIT_CPU and RLIMIT_AS; the SIGSEGV handler is installed once per process and chains to any earlier handler",
+    "drop_in_for_baseline": "partial: a node flag switches it on, and the baseline runtime still serves each contract until its background compile finishes; it cannot be used outside an Antelope node"
+  },
+  "gotchas": [
+    "The default 'auto' mode applies OC only to eosio.* accounts, read-only transactions and whitelisted suffixes (default xsat,vaulta), and not when a producer applies blocks; every other contract stays on EOS VM JIT unless you set 'all'.",
+    "Open spring issue #1880 (2025-12-10): full replays crash intermittently with eos-vm-oc-enable on (workaround: set it to none); PR #1881 'Do not oc interrupt during replay', which targets runs with disable-replay-opts, was still open when read.",
+    "Out-of-bounds memory accesses and deadline expiry are both delivered as faults to a process-wide SIGSEGV handler that siglongjmps out of the contract when the fault address lies in the executor's code or memory range and otherwise chains to the previous handler; stack depth is bounded by a per-call depth counter plus a compile-time per-function stack-size cap (the compile child exits if exceeded), with a PROT_NONE guard at the bottom of the wasm stack. Spring's own checktime_unit_test_eos-vm-oc has an open test-failure issue (#1822).",
+    "Compiled code lives in an on-disk code cache whose header id must match the nodeos version ('existing EOS VM OC code cache not compatible with this version'), so upgrades start cold and re-tier every contract."
+  ],
+  "pick_this_over_siblings_when": "Only if you run an Antelope node: the catalogued EOS VM entry (AntelopeIO/eos-vm) is the baseline interpreter/JIT this tier sits on, and standalone Wasm needs are better served by WAVM (the code it was derived from, with published libsodium shootout numbers) or wasm2c, both of which have measured results.",
+  "verified_claims_summary": "Nothing was measured: spring, its chain_plugin docs and the EOSIO v2.0.0 and v2.0.0-rc1 release notes give no numbers (rc1 says only that OC 'exceeds the performance of WAVM'); the claim of being 'often an order of magnitude faster' than WABT, Binaryen, the EOS VM interpreter and EOS VM JIT comes from search snippets of the retired EOS VM docs, with no workload, hardware or compiler.",
+  "status_note": "Maintained inside Spring (last commit on main 2025-11-12, OC fixes such as PR #1881 still in review in December 2025); the code is MIT at the top level with WAVM's BSD-3-Clause notice in the OC directory, and it is reference material rather than something you can lift out, since it is bound to Antelope's host functions, timer and LLVM 7-11.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/README.md",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/About%20WAVM",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/docs/01_nodeos/03_plugins/chain_plugin/index.md",
+    "https://github.com/AntelopeIO/spring/tree/main/libraries/chain/webassembly/runtimes/eos-vm-oc",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/LLVMJIT.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/LLVMEmitIR.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/memory.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/gs_seg_helpers.c",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/executor.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/code_cache.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/compile_monitor.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/compile_trampoline.cpp",
+    "https://raw.githubusercontent.com/AntelopeIO/spring/HEAD/libraries/chain/webassembly/runtimes/eos-vm-oc/stack.cpp",
+    "https://github.com/AntelopeIO/spring/commits/main",
+    "https://github.com/AntelopeIO/spring/issues?q=is%3Aissue+%22OC%22",
+    "https://github.com/AntelopeIO/spring/issues/1880",
+    "https://github.com/AntelopeIO/spring/pull/1881",
+    "https://github.com/AntelopeIO/leap/issues/645",
+    "https://github.com/EOSIO/eos/releases/tag/v2.0.0-rc1",
+    "https://github.com/atticlab/eos-bp-performance",
+    "https://raw.githubusercontent.com/atticlab/eos-bp-performance/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/atticlab/eos-bp-performance/HEAD/cpu_perf_presentation.pdf"
+  ],
+  "confidence": 0.6
+}

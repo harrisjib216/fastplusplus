@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/paradigmxyz/revmc",
+  "one_liner": "LLVM-based JIT/AOT compiler that turns EVM bytecode into native code for revm; beats the revm interpreter, modestly on real blocks.",
+  "what_it_does": "A Rust workspace (revmc umbrella crate plus revmc-codegen, revmc-llvm, revmc-runtime, revmc-builtins, revmc-build) that compiles EVM contract bytecode per code hash and spec into native functions. EvmCompiler::new_llvm, translate(name, bytecode, spec_id) and the unsafe jit_function give a function pointer; JitEvm wraps any revm EVM, overrides frame_run to dispatch by code hash to compiled code and falls back to the interpreter on a miss. AOT output is a shared library whose final binary must export the revmc-builtins runtime (revmc_build::emit() in build.rs); revmc-runtime adds a JitBackend with O(1) lookup, background compilation of hot hashes, AOT preload from an artifact store and LRU or idle eviction.",
+  "how_it_is_fast": "It removes the interpreter's per-opcode dispatch loop and lets LLVM optimize whole contracts: bytecode analysis resolves dynamic jumps, drops unreachable JUMPDEST blocks, deduplicates identical blocks and runs dead store elimination on the EVM stack. Gas and stack-length checks are batched per section (base gas of a section paid once), branch-weight metadata keeps failure paths cold, gas constants are folded at compile time from the spec's GasParams, and single_error mode collapses all failure paths into one exit so LLVM can delete their materialization. Complex operations (CALL/CREATE with suspend and resume, keccak, host access) go through builtins, so host- and storage-bound code gains little.",
+  "when_to_use": [
+    "You already run revm (a Reth-style node, indexer, simulator or replay tool) and execute the same contracts millions of times, so compile cost amortizes.",
+    "Compute-heavy contract code (arithmetic loops, in-EVM hashing, ray tracers like snailtracer): the README chart's 19x is a Fibonacci loop.",
+    "A known hot set of contracts (top-N by usage) that you can AOT-compile ahead of time and preload, avoiding JIT warm-up.",
+    "Linux or macOS hosts where shipping an LLVM 22 dependency (or prebuilt AOT objects) is acceptable.",
+    "Research on EVM compilation: the codebase is the base of at least one academic fork (SkelOT)."
+  ],
+  "when_not_to_use": [
+    "Storage- or I/O-bound transactions: issue #77 reports only 20-30% for a Uniswap V2 swap under AOT, and SkelOT's 10,000-block Base replay gains about 1.16x overall because most time is outside contract bytecode.",
+    "One-shot or cold execution (RPC eth_call on arbitrary contracts, fuzzing new bytecode): LLVM compilation dwarfs execution; SkelOT's naive per-hash AOT of a Base corpus needed 27,758 s of compile time and 5.05 GB of objects for 19,130 units.",
+    "Windows, or environments without LLVM 22; also contracts above 24 KiB, which the runtime's default jit_max_bytecode_len skips.",
+    "Consensus-critical deployments that cannot tolerate an experimental compiler: June 2026 commits fixed stack sync for diverging builtins (#394), dynamic-gas failure order (#395) and failure-stack materialization (#392), and segfaults were reported in #61 and, for erc20_transfer in AOT mode, #79.",
+    "If you want a faster interpreter without a native code generator: evm2 or evmone are simpler to deploy."
+  ],
+  "integration": {
+    "form": "crate (git dependency; the crates.io release is 0.1.0 from 2024-06-27 and does not match main)",
+    "dependencies": "LLVM 22 via inkwell 0.9 (llvm22-1, static or dynamic linking features), revm 43.x crates, alloy-primitives, ruint, rayon, crossbeam, dashmap, libloading, tempfile; optional alloy-evm integration",
+    "min_toolchain": "Rust 1.95 (workspace rust-version, edition 2024), LLVM 22",
+    "platforms": "Linux and macOS; Windows unsupported. Supported CPU architectures are not documented in the README (the backend initializes only the native LLVM target).",
+    "thread_safety": "Runtime JitBackend: lookups read an immutable resident map, compilation runs on a backend thread plus min(max(1, cpus/2), 4) worker threads (in-process or an out-of-process helper). EvmCompiler is used from one thread, and JIT function pointers live in the compiler's code memory, so the compiler must outlive them.",
+    "drop_in_for_baseline": "partial — JitEvm wraps a revm EVM and falls back to the interpreter for uncompiled hashes, but you must compile or AOT-load code, keep compiler memory alive, export revmc-builtins for AOT, and the runtime is disabled by default (enabled: false)."
+  },
+  "gotchas": [
+    "RuntimeConfig.single_error defaults to true: every failure (stack underflow, invalid jump, invalid opcode, real out-of-gas) is reported as OutOfGas, so halt reasons in traces or RPC errors differ from the interpreter's.",
+    "Harness flaw in crates/revmc-cli/benches/bench.rs: each arm reuses one EVM and calls transact_one in a loop without finalize, so journal state accumulates across Criterion iterations (both arms equally), and sanity_check compares only is_success() between interpreter and JIT (not output, gas or state) and is skipped in CodSpeed builds.",
+    "SkelOT's timed interpreter run diverges from its own sanity file (success_count 2,507,504 and total_gas 458,337,083,713 vs 2,511,307 and 458,309,813,705 for both modes in the sanity run); from its per_target data, family-member contracts took 141.6 s vs 93.8 s (1.51x) while the remaining 392.8 s vs 365.3 s gained only 1.075x, and of the 271 members with at least 1,000 timing samples the median ratio is 1.06x with 43% slower under naive per-hash AOT (derived from page data).",
+    "Unsafe API surface: jit_function is unsafe, compiled code is called through raw function pointers, and AOT artifacts carry an ABI_VERSION (currently 0) that must match the runtime."
+  ],
+  "pick_this_over_siblings_when": "Pick revmc over evm2 or Guillotine when you are committed to revm and your hot contracts are compute-bound enough to repay LLVM compilation; pick evmone or evm2 for interpreter-level gains with no LLVM dependency or warm-up. It is orthogonal to pevm (parallel block execution on revm), which attacks a different bottleneck.",
+  "verified_claims_summary": "Independently, the SkelOT EuroSys 2027 artifact replayed 10,000 Base mainnet blocks (3.52M transactions) on a Xeon Platinum 8275CL with a revmc fork (rustc 1.91 channel, LLVM 21.1.8): 534.4 s under the revm interpreter vs 459.1 s with naive per-hash AOT, about 1.16x with compilation excluded. First-party, the README bar chart (Criterion, no CPU or flags, June 2024) shows 19.00x on Fibonacci, 2.77x on Counter and 1.85x on WETH over the revm interpreter.",
+  "status_note": "Actively maintained (last commit 2026-10-03, tracking revm 43) and dual MIT/Apache-2.0, still labelled experimental; Reth v2.4.0 ships it as opt-in experimental JIT behind --jit flags, but crates.io lags at 0.1.0 (2024), so use a git dependency.",
+  "sources_read": [
+    "https://github.com/paradigmxyz/revmc",
+    "https://github.com/paradigmxyz/revmc/tree/main/crates",
+    "https://github.com/paradigmxyz/revmc/commits/main",
+    "https://github.com/paradigmxyz/revmc/issues?q=is%3Aissue",
+    "https://github.com/paradigmxyz/revmc/issues/77",
+    "https://github.com/paradigmxyz/revmc/issues/79",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/README.md",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc/Cargo.toml",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc/src/lib.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/benches/bench.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/src/benches.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/src/lib.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-cli/src/fixture.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-context/src/lib.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-context/src/jit_evm.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-codegen/src/lib.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-codegen/README.md",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-runtime/README.md",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-runtime/Cargo.toml",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-runtime/src/lib.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-runtime/src/runtime/mod.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-runtime/src/runtime/config.rs",
+    "https://raw.githubusercontent.com/paradigmxyz/revmc/HEAD/crates/revmc-llvm/Cargo.toml",
+    "https://crates.io/api/v1/crates/revmc",
+    "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/README.md",
+    "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/data/exec_replay_interpreter_base.json",
+    "https://raw.githubusercontent.com/SipengXie2024/skelot-artifact/HEAD/data/exec_replay_per_hash_base.json",
+    "https://github.com/paradigmxyz/reth/releases"
+  ],
+  "confidence": 0.8
+}

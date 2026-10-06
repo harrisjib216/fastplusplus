@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/assemblyscript/assemblyscript",
+  "one_liner": "Ahead-of-time compiler from a strict TypeScript dialect to WebAssembly via Binaryen; its 7.2x-over-JavaScript n-body claim is mostly a harness artifact.",
+  "what_it_does": "asc compiles a statically typed TypeScript variant (i32/f64 and other Wasm-native types, classes laid out in linear memory, monomorphized generics) into a .wasm module plus optional generated JS bindings (--bindings esm or raw). It is not a drop-in for TypeScript or JavaScript: there is no any type, closures that capture locals, iterators/for..of, rest parameters, exceptions, Promises or dynamic property assignment, so code must be written or ported for it. The output runs in any Wasm engine (browsers, Node, Wasmtime, Wasmer).",
+  "how_it_is_fast": "Static typing lets the compiler emit plain Wasm numeric instructions with no type checks, boxing or deoptimization, and Binaryen's optimizer (optimizeLevel 0-3, shrinkLevel, --converge re-runs passes to a fixed point) cleans up the module ahead of time. Classes are C-struct-like records in linear memory, StaticArray holds data inline, and unchecked() plus --noAssert drop bounds checks and assertions. The runtime is selectable: incremental TLSF allocator plus incremental GC (default), minimal (manual __collect) or stub (bump allocator, never frees), which is what the n-body benchmark used.",
+  "when_to_use": [
+    "Self-contained numeric kernels (physics steps, DSP, codecs, hashing, emulators) that do lots of i32/f64 work per call and touch few managed objects.",
+    "You want predictable steady-state speed in browsers or Node without JIT warm-up or deoptimization cliffs, and a small module (the n-body build is 1.8 KB).",
+    "A team that knows TypeScript needs a Wasm toolchain installable with npm, without an Emscripten/Rust/C++ toolchain.",
+    "Plugin or sandbox code for Wasm hosts (Wasmtime, Wasmer, WAMR) where the guest must be small and its memory layout explicit."
+  ],
+  "when_not_to_use": [
+    "Code that calls across the JS/Wasm boundary often or moves arrays and strings back and forth: in LeanyLabs' run JavaScript beat AssemblyScript on add (697.3M vs 125.8M ops/s), importCallback (351,545 vs 24,366 ops/s) and squareArray.",
+    "Existing TypeScript you hoped to speed up by recompiling: the project's own FAQ says pre-existing TypeScript 'doesn't magically become faster', especially with heavy use of managed objects and GC.",
+    "Code that relies on closures, union types, any, iterators, exceptions, async/await, JSON or RegExp (not implemented or community add-ons only).",
+    "Server-side work that needs WASI or the component model: the project labels both 'harmful' and does not target them.",
+    "Workloads where a well-written JIT-compiled JavaScript version already runs near the Wasm speed, which on the n-body kernel it does once the baseline harness is fixed (see gotchas)."
+  ],
+  "integration": {
+    "form": "npm package (asc compiler CLI and JS API) producing .wasm modules with optional generated JS bindings",
+    "dependencies": "binaryen (pinned nightly, 131.0.0-nightly.20260721 at HEAD) and long; the generated .wasm has no runtime dependency beyond the host's imports",
+    "min_toolchain": "Node.js >= 20 and npm >= 10 to run the compiler (engineStrict); output needs a Wasm engine with the MVP plus sign-extension, non-trapping float-to-int, bulk-memory and mutable-global features enabled by default",
+    "platforms": "any WebAssembly host (Chrome, Firefox, Safari, Node, Wasmtime, Wasmer); wasm32 linear memory; SIMD, threads, GC, reference types and exception handling sit behind --enable flags at various stages",
+    "thread_safety": "not documented; threads is a feature flag still in implementation, and the bundled runtimes (TLSF + incremental GC) are single-threaded by design",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the headline 7.2x: the n-body JS baseline is built with 'tsc -p assembly -t esnext' and TypeScript ^4.7.4, which defaults useDefineForClassFields to true for ES2022 and later (getUseDefineForClassFields in TS 4.7.4 utilities.ts), so Body is emitted with class field declarations that start every f64 field as undefined. In this session's probe on Node 22.22.0, the same advance() loop took 3,155 ms with those field declarations and 443 ms without (5M steps, about 7x, identical positions), the same ratio as the README's 11,640 vs 1,606 ms; plain JS then runs at roughly the AssemblyScript figure. Issue 1326 (2020, older TypeScript) had JS faster than AssemblyScript on the same sample.",
+    "The benchmark also ran Node with --nowasm-bounds-checks --nowasm-stack-checks --noliftoff, the stub runtime (never frees) and --noAssert with unchecked() array reads; production builds normally keep bounds checks and the default incremental GC, so expect slower Wasm than the table.",
+    "unchecked() and --noAssert remove safety checks rather than proving them unnecessary; an out-of-range index then reads or writes arbitrary linear memory instead of trapping.",
+    "Open miscompilation issue #3051 ('\"+=\" for an operand with side effects causes miscompilation', 2026-10-04) and a run of compiler-crash reports (#3043-#3050, 2026-10-03/04); test generated code, and pin the asc and Binaryen versions since the package tracks Binaryen nightlies."
+  ],
+  "pick_this_over_siblings_when": "Siblings here are mostly Wasm runtimes (Wasmtime, WAMR, wasm3, Wasmi) that would execute AssemblyScript's output rather than compete with it; among source-to-Wasm compilers, dy/jz claims about 2x over AssemblyScript on its kernels, so pick AssemblyScript when you need a mature, widely used (18k stars) typed language with a standard library, bindings generator and GC rather than jz's JavaScript-subset approach.",
+  "verified_claims_summary": "One first-party n-body run (AssemblyScript/examples, MacBook Pro 15-inch 2019, macOS 12.5.0, Node v18.7.0 with Wasm bounds and stack checks off, asc 'latest', 20M steps by default) reports 1,606 ms for AssemblyScript Wasm, 1,611 ms for Rust Wasm and 11,640 ms for the tsc-transpiled JavaScript. The JavaScript figure is inflated by the esnext class-field emit described in gotchas, so the evidence supports 'about level with Rust Wasm and with well-emitted JIT JavaScript' on this kernel, not 7.2x over V8; independent micro-benchmarks (LeanyLabs, i5-8250, AssemblyScript 0.18.x) are mixed and mostly favour JavaScript.",
+  "status_note": "Actively maintained (v0.28.20 released 22 July, last commit 2026-07-21, 18.0k stars, Apache-2.0, 189 open issues) and easy to adopt from npm, but the only speed claim against its baseline rests on a crippled JavaScript build and should be re-tiered or flagged as not shown to be faster.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/README.md",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/package.json",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/NOTICE",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/std/assembly.json",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/HEAD/tsconfig-base.json",
+    "https://github.com/AssemblyScript/assemblyscript",
+    "https://github.com/AssemblyScript/assemblyscript/releases",
+    "https://github.com/AssemblyScript/assemblyscript/issues/1326",
+    "https://github.com/AssemblyScript/assemblyscript/issues?q=is%3Aissue+performance+slower",
+    "https://github.com/AssemblyScript/assemblyscript/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/README.md",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/package.json",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/asconfig.json",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/tests/index.js",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/assembly/index.ts",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/assembly/tsconfig.json",
+    "https://raw.githubusercontent.com/AssemblyScript/examples/HEAD/n-body/scripts/postprocess.js",
+    "https://raw.githubusercontent.com/AssemblyScript/website/HEAD/src/frequently-asked-questions.md",
+    "https://raw.githubusercontent.com/AssemblyScript/website/HEAD/src/status.md",
+    "https://raw.githubusercontent.com/AssemblyScript/website/HEAD/src/runtime.md",
+    "https://raw.githubusercontent.com/AssemblyScript/website/HEAD/src/compiler.md",
+    "https://raw.githubusercontent.com/AssemblyScript/website/HEAD/src/introduction.md",
+    "https://raw.githubusercontent.com/microsoft/TypeScript/v4.7.4/src/compiler/utilities.ts",
+    "https://raw.githubusercontent.com/LeanyLabs/assemblyscript-benchmarks/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
