@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/choll/xtr",
+  "one_liner": "C++20 low-latency logger: per-thread SPSC ring buffer plus background {fmt} consumer; about 6-10 ns call-site latency vs spdlog async's 271-360 ns.",
+  "what_it_does": "XTR is a logging library for latency-sensitive C++ code. You create an xtr::logger (which owns a background consumer thread) and get one xtr::sink per thread or component, then log through macros such as XTR_LOG(sink, \"fmt {}\", x), XTR_LOGL(level, ...), XTR_LOG_TSC or XTR_TRY_LOG. Format strings are {fmt} syntax; formatting, timestamp rendering and I/O (file, io_uring, systemd journal or a custom back-end) happen on the consumer thread. It is not an spdlog API drop-in.",
+  "how_it_is_fast": "The call site only serializes a pointer to a type-specialized formatting function plus the arguments, by value, into a lock-free single-producer ring buffer (256 KiB per sink by default) owned by that sink; no allocations or system calls are made. The consumer thread busy-spins over all sinks, decodes, formats with {fmt} and writes, optionally batching through io_uring. The basic XTR_LOG macros skip the clock read entirely (the consumer stamps the record), which is where the sub-nanosecond README numbers come from.",
+  "when_to_use": [
+    "Trading, real-time or other hot paths that need consistent single-digit-nanosecond log calls on Linux or FreeBSD x86-64, with a core to spare for the consumer.",
+    "Logging scalars and short strings: in the Quill author's harness, int/int/double costs 6/10 ns at p50/p99.9 on 1 thread and large strings 7/15 ns, against spdlog's 271/360 and 247/290 ns.",
+    "One sink per thread, so producers never contend with each other.",
+    "You want built-in log-level control from outside the process (xtrctl), logrotate reopen, systemd journal output, or an io_uring file back-end."
+  ],
+  "when_not_to_use": [
+    "Windows, macOS or ARM: only Linux and FreeBSD x86-64 are supported.",
+    "Logging containers or other complex types: arguments are copied and formatted, and the Quill harness puts a std::vector of 16 large strings at 752-959 ns per call (1 thread), about 10x Quill's bounded queue (53-120 ns), though still about 9x faster than spdlog.",
+    "Pre-C++20 toolchains (the Makefile builds with -std=c++20 and the header uses concepts).",
+    "CPU-constrained or power-sensitive hosts: the consumer thread spins continuously because it cannot block without a system call on the producer side.",
+    "You need spdlog's sink ecosystem or API compatibility."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "{fmt}; liburing optional (io_uring back-end); Catch2 and Google Benchmark only for tests and benchmarks",
+    "min_toolchain": "C++20 (GCC; README benchmark uses g++ 15.3.0, Quill harness GCC 14.2)",
+    "platforms": "Linux x86-64, FreeBSD x86-64",
+    "thread_safety": "xtr::logger functions are thread-safe; xtr::sink functions are not (except level/set_level), so use one sink per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Plain XTR_LOG does not read a clock at the call site: the background thread timestamps the record when it dequeues it, so timestamps are late and can be reordered relative to real events. Use XTR_LOG_TSC (about 9-10 ns in the README) or XTR_LOG_RTC when accurate time matters; the Quill harness numbers use XTR_LOGL_TSC, so they are comparable to spdlog.",
+    "Default macros block (spin with pause) when the sink's ring buffer is full; only the XTR_TRY_LOG variants drop, counting drops in dropped_count(). String arguments may be truncated when the sink is full, and vcopy records are dropped whole.",
+    "Arguments are copied by value unless wrapped in xtr::nocopy, in which case the referenced data must outlive consumption; ring capacity is the compile-time XTR_SINK_CAPACITY (256 KiB default), and changing it requires rebuilding libxtr.",
+    "A single-header form exists (single_include/xtr/logger.hpp), but the documented build is make/CMake through Conan and pkg-config; the logger destructor blocks until every sink created from it is destroyed."
+  ],
+  "pick_this_over_siblings_when": "Pick XTR over Quill or PlatformLab NanoLog when you are on Linux/FreeBSD x86-64, log mostly scalars and strings (where it ties Quill at 6-10 ns and edges NanoLog), and want io_uring, xtrctl and journal integration; pick Quill when you log STL containers (about 10x cheaper there) or need Windows/macOS.",
+  "verified_claims_summary": "The Quill author's harness (odygrd/logger_benchmarks; XTR via XTR_LOGL_TSC with io_uring off, spdlog as an async_logger with a 1-thread pool, block overflow policy and basic_file_sink_st), GCC 14.2 Release -march=x86-64-v3 on an i5-12600 with isolated cores, measured int/int/double call-site latency of 6/10 ns (p50/p99.9) for XTR against spdlog's 271/360 ns on 1 thread and 8/18 against 557/1106 ns on 4 threads, plus 7.73M against 2.57M msg/s throughput. XTR's own README shows 0.894 ns for an empty XTR_LOG (no timestamp read) and 9-10 ns for TSC variants on a Ryzen 5950X with g++ 15.3.0 and a CPU-scaling warning, with no spdlog row.",
+  "status_note": "Actively maintained single-author project (874 commits, last commit 2026-09-16, 77 stars, Conan Center package) under MIT, so copyable; small user base.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/README.md",
+    "https://github.com/choll/xtr",
+    "https://github.com/choll/xtr/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/docs-src/guide.rst",
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/docs-src/index.rst",
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/single_include/xtr/logger.hpp",
+    "https://raw.githubusercontent.com/choll/xtr/HEAD/Makefile",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_xtr_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_spdlog_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

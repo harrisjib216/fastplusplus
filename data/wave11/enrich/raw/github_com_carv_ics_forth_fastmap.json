@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/carv-ics-forth/fastmap",
+  "one_liner": "Linux 4.14 kernel module replacing the mmap page-fault and eviction path for fast block devices; 3.7-7x more page faults/s than mmap at high thread counts.",
+  "what_it_does": "FastMap is a research kernel module (dmap) that provides its own memory-mapped I/O path for a block device (/dev/dmap/dmapN) or for files under a WrapFS stacked mount (mount -t wrapfs /mnt/backing /mnt/fmap). Applications keep the plain mmap() API; any mmap of the FastMap device or of files under the wrapped mount goes through FastMap instead of the kernel page cache. Fetches and evictions use direct I/O to the underlying device or file system.",
+  "how_it_is_fast": "Per the author's PhD thesis (chapter 4, based on the ATC'20 paper): it removes the centralized contention points of the Linux mmap path by keeping separate clean and dirty trees per core (radix and red-black trees, pages assigned to cores round-robin), uses full per-page reverse mappings instead of Linux object-based rmap to cut CPU work on eviction, and runs a dedicated DRAM cache with per-core free lists and clean queues plus batched TLB shootdowns. It also raises device queue depth, and adds a user-set read-ahead to pre-map pages for sequential access.",
+  "when_to_use": [
+    "Research or reproduction work on mmap-heavy applications (mmap-based key-value stores such as Kreon, graph processing with Ligra, an mmap'd heap for Silo) on Optane-class NVMe where page-fault throughput, not the device, is the bottleneck.",
+    "Many threads (16-80) taking random page faults on one mapping, where Linux mmap stops scaling beyond about 8 threads on the authors' 32-core box.",
+    "Out-of-memory datasets on a fast block device where you can dedicate a fixed DRAM cache to the mapping.",
+    "A machine you can pin to Linux 4.14 (the evaluated kernel is 4.14.72) and where crashing the kernel is acceptable."
+  ],
+  "when_not_to_use": [
+    "Any production system: open issue #2 (2022) reports a kernel panic on random writes (rand_threads_write) on 4.14.123 with no maintainer reply.",
+    "Modern kernels: the module resolves unexported symbols with kallsyms_lookup_name, which kernels from 5.7 on no longer export, and the README only supports 4.14.",
+    "Machines whose core count is not 32 or 80: NUM_FREELISTS is hard-coded to 32 in shared_defines.h and mmap_buffer_hash_table.c only has tables for 1, 32 or 80 (otherwise '#error NUM_FREELISTS number is not supported!'); issue #1 reports a crash on a 256-core server.",
+    "Mostly sequential workloads: the thesis reports only 6.06% average gain on MonetDB TPC-H.",
+    "If you can change the application's I/O model: io_uring or SPDK (siblings) avoid the page-fault path entirely and are maintained."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Linux 4.14 kernel source/headers; userspace ioctl tools in the repo; WrapFS (included) for the file-system mode",
+    "min_toolchain": "Kernel build toolchain for Linux 4.14 (compiler not documented)",
+    "platforms": "Linux 4.14 only; evaluated on x86-64 Intel Xeon (E5-2630 v3, E5-4610 v3)",
+    "thread_safety": "Designed for concurrent page faults from many threads (per-core structures); stability bugs reported (issue #2 kernel panic on writes)",
+    "drop_in_for_baseline": "partial \u2014 applications keep calling mmap(), but only on /dev/dmap/dmapN or files under a WrapFS mount after the module is loaded with a fixed DRAM cache size"
+  },
+  "gotchas": [
+    "The README's cache-size example is wrong: perma_mmap_buf_size=1024 is 1024 4 KB pages, i.e. 4 MB, not the 4 GB it states; the default in main.c is PAGES_16G (16 GB of DRAM reserved at load).",
+    "The headline 11.8x (11.89x in the thesis) needs out-of-tree Speculative Page Fault kernel patches modified for FastMap; stock FastMap without SPF gives 4.7x (read) and 7x (write) on 80 threads, and 3.7x / 6.6x on 32 threads, all on null_blk, which discards I/O.",
+    "The 5.27x figure is Ligra BFS on a DRAM-backed pmem block device (21.9 s vs 4.15 s); on the Optane SSD the same run is 3.31x (21.3 s vs 6.42 s).",
+    "Licensing is mixed: the LICENCE file is LGPL-2.1, but main.c declares MODULE_LICENSE(\"GPL\")."
+  ],
+  "pick_this_over_siblings_when": "Pick FastMap over UMap (userfaultfd, user space) or TriCache when the application must keep using kernel mmap semantics and you can run a 4.14 kernel module; pick vmcache/exmap, UMap, liburing or SPDK for anything maintained or on a current kernel.",
+  "verified_claims_summary": "Author-run measurements (ATC'20 paper, restated in Papagiannis's PhD thesis) on Linux 4.14.72, CentOS 7.3, 2x Xeon E5-2630 v3 (32 hyper-threads) and 4x Xeon E5-4610 v3 (80 hyper-threads), 256 GB DDR4, Intel Optane P4800X, null_blk and pmem: random page-fault IOPS 3.7x/6.6x (read/write) over Linux mmap at 32 threads and 4.7x/7x at 80 threads; 11.89x read IOPS only with SPF patches; Ligra BFS 3.31x on Optane, 5.27x on pmem; Kreon YCSB about 2x on average; MonetDB TPC-H +6.06%. Compiler and flags not stated; the random page-fault microbenchmarks (tests/rand_threads_read.c, tests/rand_threads_write.c) are in the repo.",
+  "status_note": "Research prototype, stale since 2021-09-29 with two unanswered crash/scalability issues; LGPL-2.1 code is copyable, but it is tied to Linux 4.14 and is useful mainly as a design reference.",
+  "sources_read": [
+    "https://github.com/CARV-ICS-FORTH/FastMap",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/README.md",
+    "https://github.com/CARV-ICS-FORTH/FastMap/tree/main/driver",
+    "https://github.com/CARV-ICS-FORTH/FastMap/issues",
+    "https://github.com/CARV-ICS-FORTH/FastMap/issues/1",
+    "https://github.com/CARV-ICS-FORTH/FastMap/issues/2",
+    "https://github.com/CARV-ICS-FORTH/FastMap/tree/main/tests",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/driver/shared_defines.h",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/driver/kernel_syms.c",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/driver/main.c",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/driver/mmap_buffer_hash_table.c",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/scripts/load-it-fs.sh",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/scripts/load-it-blkdev.sh",
+    "https://raw.githubusercontent.com/CARV-ICS-FORTH/FastMap/HEAD/Makefile",
+    "https://raw.githubusercontent.com/tpapagian/tpapagian.github.io/master/files/apapag_phd_thesis.pdf"
+  ],
+  "confidence": 0.8
+}
