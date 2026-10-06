@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/jrfonseca/memtrail",
+  "one_liner": "LD_PRELOAD heap profiler and leak finder for Linux; claims much lower overhead than Valgrind Massif or Memcheck, unmeasured.",
+  "what_it_does": "A shared library (libmemtrail.so) plus a Python driver: `memtrail record ./app` preloads the library, which wraps malloc, calloc, realloc, posix_memalign, memalign, pvalloc, reallocarray and the C++ new/delete operators and streams every allocation event with its call stack to a gzip-compressed memtrail.data file. `memtrail report` then prints peak usage and leaks as call-stack trees with file:line (via addr2line) and writes JSON that gprof2dot turns into graphs. Programs can call memtrail_snapshot() from memtrail.h to mark extra snapshots; the call becomes a no-op when the library is not loaded.",
+  "how_it_is_fast": "The program runs natively instead of under dynamic binary instrumentation: only allocator calls are intercepted, by symbol interposition through LD_PRELOAD, and they forward to __libc_malloc and __libc_free. Each call captures up to 32 return addresses with libunwind (statically linked and chosen because it does not call malloc), and the events are buffered in PIPE_BUF-sized chunks and piped to a forked `gzip --fast` child, so compression runs on another core. Symbol resolution and tree building are deferred to the offline Python report step.",
+  "when_to_use": [
+    "Finding leaks or peak-memory call sites in long-running, CPU-heavy Linux programs that are too slow to finish under Valgrind Memcheck or Massif.",
+    "Unmodified binaries built with frame pointers or unwind tables, where you cannot recompile with AddressSanitizer or LeakSanitizer.",
+    "Mostly single-threaded or lightly threaded code with moderate allocation rates, since every event takes one global lock.",
+    "Taking peak and leak snapshots at chosen points in a run by calling memtrail_snapshot() from the program."
+  ],
+  "when_not_to_use": [
+    "Highly multi-threaded, allocation-heavy servers: every malloc and free takes one process-wide recursive pthread mutex, so allocations are serialized across threads.",
+    "Programs with many small allocations and tight memory: each block carries a header with a 32-entry return-address array plus list links, size and pointer (over 280 bytes on x86-64), and the library stops the program with _exit(1) once tracked bytes pass half of physical RAM.",
+    "Bug hunting for use-after-free, overflows or uninitialized reads: it only accounts allocations; use Memcheck, AddressSanitizer or Dr. Memory.",
+    "Non-Linux platforms: it relies on LD_PRELOAD, glibc's __libc_malloc and PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP; the header is a no-op elsewhere.",
+    "Cases where you need a measured overhead figure: the README gives none, and benchmark.cpp with `make bench` only times the report step."
+  ],
+  "integration": {
+    "form": "shared lib (LD_PRELOAD) plus Python 3 driver script",
+    "dependencies": "libunwind (bundled git submodule, built static), Python 3, gzip, binutils addr2line; gprof2dot for graphs",
+    "min_toolchain": "C++17 (gnu++17), g++ by default, autotools to build the bundled libunwind",
+    "platforms": "Linux with glibc; x86-64 assumed for 16-byte minimum alignment, other architectures fall back to sizeof(double) alignment",
+    "thread_safety": "thread-safe through one global recursive mutex around all bookkeeping",
+    "drop_in_for_baseline": "partial — like Valgrind it runs unmodified binaries, but it replaces only Massif- and leak-check-style accounting, not Memcheck's error detection"
+  },
+  "gotchas": [
+    "Allocations made before the library has opened its output file (for example libstdc++'s emergency pool) are marked internal and left out of totals.",
+    "Freed blocks that were already logged stay on a pending list until the next flush, so the process's real RSS under memtrail can stay above its native peak.",
+    "Allocator calls re-entered while the lock is held are marked internal and print 'memtrail: warning: recursion', so they are missing from the report.",
+    "Licensing: there is no LICENSE file and GitHub shows none, but memtrail.cpp, memtrail.h and the memtrail script carry MIT permission headers (Copyright 2011-2019 Jose Fonseca), so the code can be reused under those terms."
+  ],
+  "pick_this_over_siblings_when": "Choose it over heaptrack or bytehound when you want a small, self-contained tool with a pipe-to-gzip recorder and gprof2dot output; prefer heaptrack for multi-threaded programs (it does not serialize threads, per its README) and tracing_malloc when you want a published runtime number against Valgrind.",
+  "verified_claims_summary": "No measurement exists: the README says only 'very little runtime overhead' and that the author's workloads ran too slowly under Valgrind's dynamic binary instrumentation. The repo's benchmark.cpp drives 262,144 4-byte allocations through random 8-deep call chains, but the `make bench` target times only `memtrail report`, not the profiled run against native or Valgrind.",
+  "status_note": "Active (commits on 2026-04-26 add tests and coverage, 188 commits, 0 open issues, 89 stars); MIT terms sit in the file headers despite the missing LICENSE file, so it is usable, but the speed claim against Valgrind is unmeasured.",
+  "sources_read": [
+    "https://github.com/jrfonseca/memtrail",
+    "https://github.com/jrfonseca/memtrail/commits",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/README.md",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/memtrail.h",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/memtrail.cpp",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/memtrail",
+    "https://raw.githubusercontent.com/jrfonseca/memtrail/HEAD/benchmark.cpp"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/joadnacer/jdz_allocator",
+  "one_liner": "rpmalloc-style span allocator for Zig; claims parity with the rpmalloc Zig port and lower memory, no shown win over malloc.",
+  "what_it_does": "A general-purpose allocator written in Zig that exposes the standard std.mem.Allocator interface in two forms: JdzAllocator (no global or threadlocal state, so it fits Zig's explicit allocator style) and JdzGlobalAllocator (a singleton per config with threadlocal arenas, which needs deinitThread on every allocating thread). The build also emits three LD_PRELOAD shared libraries (libjdzglobal, libjdzshared, libjdzglobalwrap) that export malloc, free, realloc, calloc, posix_memalign and friends so C programs can use it.",
+  "how_it_is_fast": "It copies rpmalloc's design: 64 KiB spans, each holding one size class, with the span header found by masking the pointer, and size classes of 16 B granularity up to 2048 B and 256 B granularity up to 32512 B. Each arena allocates from one thread at a time while other threads may free into it; arenas keep a lock-protected span stack, a bounded MPSC span cache and large-span caches, and the global variant adds bounded MPMC global caches. Spans are mapped in batches of 64 (4 MiB plus 64 KiB padding) to amortize mmap calls.",
+  "when_to_use": [
+    "Zig 0.13 programs that want an rpmalloc-like thread-caching allocator behind std.mem.Allocator rather than GeneralPurposeAllocator.",
+    "Zig code that must pass an allocator explicitly and cannot use threadlocal state: JdzAllocator works without deinitThread calls.",
+    "Experiments comparing span allocators in mimalloc-bench through LD_PRELOAD, where its README charts can serve as a starting point.",
+    "Workloads with up to about 8 allocating threads (the default shared_arena_batch_size), where arena stealing and false sharing do not occur."
+  ],
+  "when_not_to_use": [
+    "Production C or C++ services: the author says it is not battle-tested and may error under some loads; a TSan data-race report (issue #9) and Windows free() segfaults (issue #6) are open and unanswered.",
+    "When you need a measured speedup over glibc malloc, mimalloc or jemalloc: the README text claims only parity with the rpmalloc Zig port, and mimalloc and jemalloc were never compared.",
+    "High-contention use of the default JdzAllocator: the README says it is significantly slower than rpmalloc there, and with more threads than shared_arena_batch_size arenas are stolen and false sharing follows.",
+    "Systems with pages larger than 64 KiB (some aarch64 and ppc64 kernels): not supported.",
+    "Memory-tight workloads resembling xmalloc-testN, where the global variant shows high RSS that the author was still investigating."
+  ],
+  "integration": {
+    "form": "module (Zig package via build.zig.zon) plus static lib and LD_PRELOAD shared libs",
+    "dependencies": "none (libc only for the shared libraries)",
+    "min_toolchain": "Zig 0.13.0 (master pinned to it; older Zig versions needed older commits)",
+    "platforms": "Linux tested; Windows has an open segfault report; page size must be 64 KiB or less",
+    "thread_safety": "thread_safe config flag, on by default unless single-threaded; global variant needs deinitThread per thread; open TSan data-race report (issue #9)",
+    "drop_in_for_baseline": "partial — LD_PRELOAD libraries replace malloc for C programs, but libjdzglobalwrap is needed for per-thread cleanup and the core API is Zig's Allocator interface"
+  },
+  "gotchas": [
+    "libso calloc computes size * count with no overflow check, so a huge product can wrap in ReleaseFast builds and return a buffer smaller than the caller asked for.",
+    "libjdzglobalwrap calls pthread_setspecific in the thread calling pthread_create, not in the new thread, so the destructor that calls jdz_deinit_thread fires only for threads that themselves spawn threads; leaf worker threads may never return their spans.",
+    "malloc(0) returns NULL and aligned_alloc or memalign with an invalid alignment panics instead of returning EINVAL.",
+    "src/bench.zig only times jdz, jdz-global, c_allocator and Zig GPA; the rpmalloc-zig and zimalloc numbers in the charts come from a separate setup not in the repo, and every thread uses the same PRNG seed (1337)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only for Zig projects that want an rpmalloc-like allocator in pure Zig; for C or C++ processes, Spaces, Kaname-Shiki or FastAlloc publish measured wins against glibc, jemalloc or mimalloc, and mem++ at least gives chart values versus jemalloc and mimalloc.",
+  "verified_claims_summary": "First-party charts only: mimalloc-bench via LD_PRELOAD and a Zig microbenchmark (75,000,000 allocations per thread of 1-80000 bytes, no cross-thread frees) on an 8-core i7-11800H under Linux, Zig ReleaseFast, against c_allocator (glibc malloc), Zig GPA, the rpmalloc Zig port and zimalloc. The text claims the global variant matches the rpmalloc Zig port within margin of error with less memory, and that the default variant is significantly slower than rpmalloc at high contention; chart values were not readable here.",
+  "status_note": "Stale since November 2024 (last commit 2024-11-09) with two open bug reports and no maintainer replies; MIT-licensed and small, so it can be vendored by Zig users, but treat it as experimental.",
+  "sources_read": [
+    "https://github.com/joadnacer/jdz_allocator",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/README.md",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/build.zig",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/src/jdz_allocator.zig",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/src/bench.zig",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/libso/libjdzglobal.zig",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/libso/libjdzglobalwrap.c",
+    "https://raw.githubusercontent.com/joadnacer/jdz_allocator/HEAD/libso/libjdzshared.zig",
+    "https://github.com/joadnacer/jdz_allocator/issues?q=is%3Aissue",
+    "https://github.com/joadnacer/jdz_allocator/issues/9",
+    "https://github.com/joadnacer/jdz_allocator/issues/6"
+  ],
+  "confidence": 0.6
+}
