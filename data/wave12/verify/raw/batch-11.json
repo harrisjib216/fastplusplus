@@ -1,0 +1,84 @@
+[
+  {
+    "id": "https://github.com/asmjit/asmjit",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Only evidence is pg_jitter's own benchmark page (bench/ARM64/0.3.0/BENCHMARKS_v18.md, harness tests/bench_all_backends.sh) timing pg_jitter's AsmJit backend against PostgreSQL's llvmjit on an Apple M1 Pro; compiler and build flags are not stated and the AsmJit repo has no LLVM comparison of its own, so this indirect first-party-style measurement stays at C.",
+    "corrections": {
+      "claimed_speedup": "pg_jitter benchmark page (https://github.com/vladich/pg_jitter/blob/master/bench/ARM64/0.3.0/BENCHMARKS_v18.md), JIT compilation overhead from EXPLAIN JSON: SUM_int llvmjit 22.263 ms vs asmjit 0.109 ms; GroupBy_5agg llvmjit 45.5 ms vs asmjit 0.245 ms (about 200x less compile time, derived from page data). Query time with JIT forced on: SUM_int llvmjit 68.090 ms vs asmjit 42.201 ms (interpreter 44.859 ms); GroupBy_5agg llvmjit 149.033 ms vs asmjit 98.079 ms (interpreter 117.367 ms). pg_jitter README: AsmJit compile 'hundreds of microseconds' vs LLVM 'tens to hundreds of milliseconds'; its 'up to 32% faster' for AsmJit on wide-row/deform-heavy queries is relative to the PostgreSQL interpreter, not to LLVM.",
+      "caveats": "Indirect evidence: the numbers measure pg_jitter's AsmJit backend (pg_jitter's own code generator design, no optimization passes) inside PostgreSQL, not AsmJit as a library, and the AsmJit repo carries no benchmark against LLVM. The harness forces jit_above_cost, jit_inline_above_cost and jit_optimize_above_cost to 0, so LLVM pays full optimization and inlining on every query and its compile time is inside the measured execution time; execution-only, SUM_int is about 45.8 ms llvmjit vs 42.1 ms asmjit (derived from page data). On the same page the sljit backend compiles about 2x faster than AsmJit (SUM_int 0.052 ms vs 0.109 ms), so AsmJit is not the fastest emitter there. One machine (Apple M1 Pro, macOS), ARM64 only (x86_64 marked TBD), compiler and flags not stated, dated 2026-03-24. Baseline is PostgreSQL's LLVM JIT, not a listed baseline."
+    },
+    "notes": "Numbers on the record match the pg_jitter PG18 page; I added the page's compile-time table since the metric is compile-time, and fixed the 'up to 32%' claim, which is against the interpreter. Metadata checked: Zlib, 4.6k stars, 597 forks, last commit 2026-09-22, active. Shortcomings: indirect evidence via a third-party PostgreSQL extension, LLVM forced to full optimization on every query, sljit beats AsmJit on compile time on the same page, ARM64-only single machine.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/bench/ARM64/0.3.0/BENCHMARKS_v18.md",
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/README.md",
+      "https://github.com/vladich/pg_jitter",
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/bench_all_backends.sh",
+      "https://github.com/asmjit/asmjit",
+      "https://github.com/asmjit/asmjit/commits/master",
+      "https://raw.githubusercontent.com/asmjit/asmjit/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/vladich/pg_jitter",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party benchmark with public harness (tests/bench_all_backends.sh) and stated CPU (Apple M1 Pro, Darwin 25.2.0, PostgreSQL 18.1), but compiler and build flags for pg_jitter and PostgreSQL are not stated (CMakeLists only defaults to a Release build type), so not A; no independent measurement, so C.",
+    "corrections": {
+      "claimed_speedup": "Benchmark page (https://github.com/vladich/pg_jitter/blob/master/bench/ARM64/0.3.0/BENCHMARKS_v18.md): query time with JIT forced on, SUM_int no JIT 44.859 ms, llvmjit 68.090 ms, sljit 42.401 ms, asmjit 42.201 ms, mir 45.620 ms; GroupBy_5agg no JIT 117.367 ms, llvmjit 149.033 ms, sljit 99.530 ms, asmjit 98.079 ms, mir 125.102 ms. JIT compilation overhead (EXPLAIN JSON): SUM_int llvmjit 22.263 ms vs sljit 0.052 ms, asmjit 0.109 ms, mir 0.345 ms; GroupBy_5agg llvmjit 45.5 ms vs sljit 0.069 ms, asmjit 0.245 ms, mir 1.087 ms. README (https://github.com/vladich/pg_jitter): compile time 'tens to low hundreds of microseconds' (sljit) and 'hundreds of microseconds' (AsmJit) vs LLVM 'tens to hundreds of milliseconds'; sljit '5-25% faster than the interpreter'; average speedup over the interpreter TPC-C 8%, TPC-H 6%, ecommerce 14%, OLAP 42%, CRM ~400%.",
+      "compiler_and_flags": "PostgreSQL 18.1; pg_jitter CMakeLists.txt defaults CMAKE_BUILD_TYPE to Release; compiler, compiler version and PostgreSQL build flags not stated.",
+      "caveats": "First-party benchmarks, one machine, ARM64 only (x86_64 results marked TBD), dated 2026-03-24 for release 0.3.0. The harness (tests/bench_all_backends.sh) sets jit_above_cost, jit_inline_above_cost and jit_optimize_above_cost to 0, so LLVM runs full optimization and inlining on every query and that compile time is inside the EXPLAIN ANALYZE execution time; most of the win over llvmjit is compile time (execution-only SUM_int about 45.8 ms llvmjit vs 42.3 ms sljit, derived from page data). Default thresholds would keep LLVM off these queries entirely. Per-query gains over the interpreter are small and some queries are slower (COUNT_star 0.94x for all three backends); pg_jitter.deform_cache (on by default) can reuse compiled deform code across the warmup and timed runs in one connection while LLVM recompiles, which may favour pg_jitter (not checked). The CRM benchmark is synthetic and built to show the strongest cases. Requires the author's patched forks of sljit and MIR. README calls the code beta quality. Baseline is PostgreSQL's LLVM JIT, not one of the category baselines."
+    },
+    "notes": "Record numbers match the PG18 page exactly; added the page's compile-time table and corrected compiler_and_flags. Metadata checked: Apache-2.0, 210 stars, 2 forks, 398 commits, not a fork, last commit 2026-05-03 (active). Shortcomings: first-party ARM64-only numbers, LLVM forced to full optimization on every query, small execution gains over the interpreter, flags and compiler unstated.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/bench/ARM64/0.3.0/BENCHMARKS_v18.md",
+      "https://github.com/vladich/pg_jitter",
+      "https://github.com/vladich/pg_jitter/commits/master",
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/README.md",
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/bench_all_backends.sh",
+      "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/CMakeLists.txt"
+    ]
+  },
+  {
+    "id": "https://github.com/noclip/r8",
+    "verdict": "reject",
+    "reject_reason": "other: invalid evidence; the engine recognizes the suite's own benchmark loops by function name and bytecode length and replaces the timed work with hand-written Rust or hard-coded results",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The numbers exist on the js-engines-benchmark README, but R8's interpreter (src/interpreter/interpreter.rs, added in commit 1c1b5cf 'achieve 100% benchmark domination over V8 and Bun across all 12 workloads') special-cases the suite: FusedPackageResolverLoop fires only when the loop body is 121 bytes and calls a global named 'resolveDependencies', then skips the resolver and adds a hard-coded pass_hash of 34354737 per iteration; FusedExpressPipelineLoop (body 87 bytes, global 'parseHttpRequest') never parses HTTP and computes the checksum from a closed-form length formula; similar name-keyed paths exist for 'readRowHash' and 'unmaskFrame', and FusedCryptoCallLoop swaps the benchmark's 72-byte myHash function for a native Rust copy with the seed 21661362 baked in. The timed work is not executed, so the evidence is invalid.",
+    "corrections": {
+      "claimed_speedup": "js-engines-benchmark README (https://github.com/NoClip/js-engines-benchmark): R8 total 19.43 ms vs Google V8 (TurboFan) 59.82 ms, '3.08x faster overall', per-benchmark ratios 1.38x (01_arithmetic_loop, 4.54 vs 6.25 ms) to 11.13x (11_express_pipeline, 1.00 vs 11.13 ms). The r8 README table instead lists 4.13 ms vs d8 7.82 ms for arithmetic loops. Both tables are invalid: R8 skips the timed work on benchmark-specific fast paths, and the README table predates the harness fix that removed Math.max(1, end - start) timer clamping, which is why seven R8 cells read exactly 1.00 ms.",
+      "caveats": "Rejected for invalid evidence. R8's interpreter contains benchmark-specific fast paths keyed on the js-engines-benchmark suite (exact loop-body byte lengths 36, 48, 80, 87 and 121 plus the global function names readRowHash, unmaskFrame, parseHttpRequest and resolveDependencies): FusedPackageResolverLoop adds a hard-coded per-iteration hash 34354737 instead of running the resolver and topological sort, FusedExpressPipelineLoop computes the checksum from a closed-form formula without parsing any HTTP, and FusedCryptoCallLoop replaces the benchmark's hash function (matched by a 72-byte bytecode length) with native Rust. The suite's README table was produced at commit 0c763fb, when every benchmark clamped duration with Math.max(1, end - start) and ran smaller workloads without warmup; later harness commits 2036bd2 (remove clamping, add warmup, raise workloads) and 43d143e ('verify honest execution without R8 cheats', which renamed functions back to the names R8 matches) did not update the published table. Same author owns engine and harness, both badged 'Made With AI'; no hardware, compiler or date is stated; 2 stars."
+    },
+    "notes": "Reject for invalid evidence (MQF and zokio precedents): R8 pattern-matches the benchmark suite's function names and loop byte lengths and returns hard-coded or closed-form checksums instead of executing the timed JavaScript, and the published table also predates the removal of a 1 ms timer clamp. Metadata checked: MIT, 2 stars, 0 forks, 20 commits, last commit 2026-09-19; harness repo MIT, 1 star, 27 commits, last commit 2026-09-19.",
+    "urls_opened": [
+      "https://github.com/NoClip/js-engines-benchmark",
+      "https://github.com/NoClip/js-engines-benchmark/commits",
+      "https://github.com/NoClip/js-engines-benchmark/commit/43d143e",
+      "https://github.com/NoClip/js-engines-benchmark/commit/2036bd2",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/README.md",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/02_recursive_fibonacci.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/07_crypto_hash.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/09_websocket_broadcast.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/10_postgres_row_decode.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/11_express_pipeline.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/HEAD/benchmarks/12_package_resolver.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/2036bd2/benchmarks/10_postgres_row_decode.js",
+      "https://raw.githubusercontent.com/NoClip/js-engines-benchmark/0c763fb/benchmarks/10_postgres_row_decode.js",
+      "https://github.com/NoClip/r8",
+      "https://github.com/NoClip/r8/commits",
+      "https://github.com/NoClip/r8/commit/1c1b5cf",
+      "https://raw.githubusercontent.com/NoClip/r8/HEAD/README.md",
+      "https://raw.githubusercontent.com/NoClip/r8/HEAD/src/interpreter/interpreter.rs",
+      "https://raw.githubusercontent.com/NoClip/r8/HEAD/src/interpreter/bytecode_array.rs",
+      "https://raw.githubusercontent.com/NoClip/r8/1c1b5cf/src/interpreter/interpreter.rs"
+    ]
+  }
+]
