@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/gambit/gambit",
+  "one_liner": "Scheme-to-C compiler and runtime whose executables run about 2x faster than Guile 3.0.11 on the R7RS benchmark suite.",
+  "what_it_does": "Gambit is a full Scheme system: gsc compiles Scheme (R7RS plus many SRFIs and Gambit extensions) through its Gambit Virtual Machine (GVM) intermediate form to C and then to a native executable (gsc -exe) or loadable module, and gsi is the interpreter and REPL. A JavaScript target (-target js) exists alongside C. It is not a drop-in for Guile: programs are compiled ahead of time, and Guile modules, GOOPS and Guile-specific APIs do not carry over, though portable R7RS code compiles with little change.",
+  "how_it_is_fast": "Whole-module compilation to C with --enable-single-host, which emits each Scheme module as a single C function; INSTALL.txt says this roughly doubles interpreter speed, and that GCC's computed gotos cut execution time by about 35%. With (standard-bindings), (extended-bindings) and (block) declarations the compiler can inline primitives such as + and car and treat file-local definitions as constants; proper tail calls are kept without relying on C TCO. Floating-point code is strong: in the suite Gambit beats even Chez on fft (2.6x), mbrot (1.7x) and pnpoly (1.4x) (derived from page data).",
+  "when_to_use": [
+    "AOT-compiled Scheme programs where Guile, Chicken, Cyclone, Larceny or Racket is the current choice and throughput matters: in ecraven/r7rs-benchmarks Gambit 4.9.7 is about 1.95x faster than Guile 3.0.11 (median 1.95x), 2.7x faster than Chicken 5.4.0 and 1.45x faster than Racket 9.0 by geomean (derived from page data)",
+    "Floating-point-heavy kernels (fft, mbrot, nucleic, ray, simplex, pnpoly), where Gambit is 3-5.6x faster than Guile and also ahead of Chez 10.3.0",
+    "Code using call/cc or deep continuations (ctak 23x and fibc 17x faster than Guile)",
+    "Shipping a standalone native executable or embedding Scheme in a C program, or targeting JavaScript from the same source",
+    "As the base for Gerbil Scheme, which runs on Gambit"
+  ],
+  "when_not_to_use": [
+    "When raw speed is the only criterion and Chez Scheme is an option: Chez is faster on aggregate (Gambit geomean about 0.79x of Chez speed, faster on 17 of 54 rows), and much faster on gcbench (9x), graphs (4.6x) and ctak/fibc (about 4x)",
+    "Bignum-heavy work: no GMP integration (issue #761, open bounty, reports about a 100x fixnum-to-bignum gap); pi and chudnovsky run 7.1x and 2.9x slower than Guile",
+    "String-building and allocation-heavy GC workloads: string:500000:100 is 15.6x slower than Guile (3.20 s vs 0.20 s, about the same as Chez) and gcbench 5.6x slower",
+    "Multicore parallelism: the manual says Scheme threads are managed by Gambit's runtime, not OS threads, and at most one runs at a time (an --enable-smp configure option exists but is not the default)",
+    "Very large single source files: the suite's compiler.scm failed because gcc's cc1 was killed while compiling the generated C (COMPILEERROR), and INSTALL.txt warns single-host builds with --enable-gcc-opts take about 2 GB and over 10 minutes"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "a C compiler (GCC strongly recommended for computed gotos; clang works); OpenSSL optional",
+    "min_toolchain": "GCC 3.3 or later recommended by INSTALL.txt; any C99-era compiler for the generated C",
+    "platforms": "Linux, macOS and Windows (CI badge), portable C output for other Unix-likes; JavaScript target via -target js",
+    "thread_safety": "Green (runtime-managed) SRFI-18/21 threads, at most one running per VM; hash tables are not safe for concurrent modification by Gambit threads (issue #322, open)",
+    "drop_in_for_baseline": "partial — portable R7RS programs compile with gsc, but Guile modules, GOOPS, Guile's FFI and its JIT/REPL workflow do not carry over"
+  },
+  "gotchas": [
+    "The measured numbers depend on the suite's GambitC-prelude.scm, which adds (declare (standard-bindings) (extended-bindings) (block)); Gambit's defaults are (not standard-bindings) and (not extended-bindings), so plain code without these declarations will not inline primitives and will be slower. Safe mode was kept; (not safe) and (fixnum) are faster still but change semantics.",
+    "Harness and version sensitivity: one run per benchmark (NB_RUNS=1) on an Intel i3-N305; the suite first ran a v4.9.5-78 Gambit on 2026-01-16 (after switching the default from 'gambitc' to 'gsc', and Arch renames gsc to gambitc because of a Ghostscript clash), then re-ran v4.9.7 on 2026-02-03; v4.9.7 was about 1.11x faster by geomean than the earlier build, up to 4.3x on fft and 2.5x on mbrot (derived from the two results.GambitC revisions). The current release v4.9.8 (2026-08-09) is unmeasured.",
+    "Performance depends heavily on configure options: README recommends --enable-single-host --enable-march=native --enable-dynamic-clib for best performance, and INSTALL.txt calls --enable-single-host 'highly recommended' (about 2x interpreter speed), so a plain ./configure build will be slower than the Arch package used in the suite (the archived 4.9.4 PKGBUILD and the 4.9.5 options quoted in issue #854 both use --enable-single-host and --enable-gcc-opts; the 4.9.7 PKGBUILD could not be fetched).",
+    "Open performance anomaly issue #422 (2019): ##unchecked-structure-ref measured about 7x slower than the checked ##direct-structure-ref in an indirect-call loop."
+  ],
+  "pick_this_over_siblings_when": "Pick Gambit over Bigloo or Loko when you want the fastest of the three on general Scheme code: in the same all.csv Gambit is about 1.28x faster than Bigloo 4.6a and 1.22x faster than Loko 0.12.1 by geomean (derived from page data), plus it has a C embedding story and a JS target; pick Chez Scheme (already catalogued) instead when GC-heavy or continuation-heavy throughput matters more than C output.",
+  "verified_claims_summary": "ecraven/r7rs-benchmarks (about 55 Larceny/Gabriel programs, one run each, Intel Core i3-N305, Arch Linux packages): Gambit v4.9.7 executables built with 'gsc -o <out> -exe' in safe mode beat Guile 3.0.11 (guild compile -O3) on 45 of 53 shared rows, geomean 1.95x (1.78x excluding the call/cc rows ctak, fibc and cpstak), while Chez 10.3.0 is about 1.26x faster than Gambit overall; all ratios derived from all.csv.",
+  "status_note": "Actively maintained (commits through 2026-10-02, v4.9.8 tagged 2026-08-09); dual-licensed Apache-2.0 or LGPL-2.1 per the LICENSE-2.0.txt and LGPL.txt files, so copyable, though the README itself states no licence terms.",
+  "sources_read": [
+    "https://github.com/gambit/gambit",
+    "https://github.com/gambit/gambit/commits",
+    "https://github.com/gambit/gambit/tags",
+    "https://raw.githubusercontent.com/gambit/gambit/HEAD/README.md",
+    "https://raw.githubusercontent.com/gambit/gambit/HEAD/INSTALL.txt",
+    "https://raw.githubusercontent.com/gambit/gambit/HEAD/doc/gambit.txi",
+    "https://github.com/gambit/gambit/issues?q=is%3Aissue+performance",
+    "https://github.com/gambit/gambit/issues/761",
+    "https://github.com/gambit/gambit/issues/422",
+    "https://github.com/gambit/gambit/issues/854",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/bench",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/README.org",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/index.html",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/results.GambitC",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/f6ea76c/results.GambitC",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/GambitC-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/Guile-prelude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/common.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/common-postlude.scm",
+    "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/src/string.scm",
+    "https://github.com/ecraven/r7rs-benchmarks/commits",
+    "https://github.com/ecraven/r7rs-benchmarks/commits/master/results.GambitC",
+    "https://raw.githubusercontent.com/archlinux/svntogit-community/packages/gambit-c/trunk/PKGBUILD"
+  ],
+  "confidence": 0.78
+}
