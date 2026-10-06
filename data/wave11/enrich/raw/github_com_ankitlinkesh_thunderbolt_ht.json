@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/ankitlinkesh/thunderbolt-ht",
+  "one_liner": "C++20 dependency-aware work-stealing task runtime that measures ~1.5x lower per-task cost than Taskflow 3.7 on a 4-core laptop.",
+  "what_it_does": "A task runtime behind an abstract ITaskRuntime interface: submit(callable, priority), submit_after(dependencies, callable), wait(handle), wait_all() and a blocking parallel_for(begin, end, grain, body). Two implementations share one task-lifetime core: StandardRuntime (a baseline) and ThunderboltRuntime (per-worker deques plus stealing). It is not a drop-in for Taskflow, TBB or OpenMP; code is written against its own handle-and-dependency API. The repo also contains a headless game-style simulation used as the flagship benchmark.",
+  "how_it_is_fast": "Per-worker Arora-Blumofe-Plaxton (ABP) deques, one per priority, with randomized (xorshift64) victim selection and batched draining of a global injection queue. Most of the measured per-task gain came from removing cache-line contention: hot global counters were sharded and padded, which roughly halved per-task cost. A per-thread task-slot cache (64 slots per lock acquisition) and in-place construction of the task body in its pool slot cut it further. parallel_for spawns at most one task per worker, and each task claims grain-sized chunks from a shared atomic cursor (fetch_add) instead of submitting one task per chunk.",
+  "when_to_use": [
+    "Frame-graph style workloads (game or simulation ticks) with explicit inter-stage dependencies, priorities and many small tasks per frame on a desktop or laptop CPU with 8 or fewer hardware threads.",
+    "You want explicit-task fork-join where per-task submission cost matters (thousands of tasks per call), and a measured ~1.5x lower marginal per-task cost than Taskflow explicit tasks is relevant.",
+    "Element-wise parallel loops (out[i] depends only on i) where a chunk-claiming parallel_for with a caller-chosen grain is enough.",
+    "Research or teaching: the repo documents its A/B harness (interleaved, shuffled leg order, median and IQR), its refuted hypotheses and its own measurement bugs, so it can serve as a reference for benchmarking schedulers."
+  ],
+  "when_not_to_use": [
+    "Production use where maturity matters: 0 stars, version 0.1.0, written and measured largely by an AI agent per its README, and TSan found three data races in the dispatch path only recently (fixed).",
+    "Reductions or other order-sensitive combines: parallel_for has no reduce, and the docs say a reduction over dynamically claimed chunks is unsafe under its determinism rule.",
+    "Many-core servers or NUMA machines: every measurement stops at 8 workers on one 4-core/8-thread laptop part; scaling beyond that is not measured.",
+    "When you need TBB, OpenMP or Rayon comparisons: oneTBB was deliberately never benchmarked, only Taskflow 3.7.0 and the project's own StandardRuntime.",
+    "Ecosystem needs (concurrent containers, flow graphs, GPU tasks, task cancellation): not documented as features."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at build time beyond Threads (Taskflow 3.7.0 is fetched only for benchmark targets with -DTHUNDERBOLT_REFERENCE_RUNTIMES=ON)",
+    "min_toolchain": "C++20 (concepts in public headers), CMake 3.25+; MSVC is the reference toolchain, GCC and Clang presets exist for Linux",
+    "platforms": "Windows x64 (reference, SSE2 baseline, no /arch:AVX2) and Linux with GCC or Clang (CI on both); other platforms not documented",
+    "thread_safety": "submit() is documented thread-safe and callable from inside a running task; calling wait_all() from inside a task can never return (listed in the project's own defect table).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Do not call wait_all() from inside a task: the project lists this as a case that never returns.",
+    "parallel_for grain is a caller decision with no automatic selection; grain=1 lost to Taskflow's for_each in the project's own test because every claim paid a contended fetch_add.",
+    "Externally submitted tasks go through a locked global injection queue and cost roughly 2x more per task than tasks spawned from inside a root task; the headline per-task numbers use the fork-join submission mode.",
+    "Some result files in docs/results predate the shuffled-leg-order harness fix and were taken with fixed leg order, which the README says biased readings (Taskflow explicit read 836 vs 319 ns depending on its predecessor leg)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over nexus or dpuyda/scheduling when you want dependency edges, priority deques and a documented, reproducible A/B harness in a CMake package (find_package, vcpkg overlay, Conan); pick Fork Union for minimum-overhead parallel-for dispatch, or citor or Taskflow itself when you need results on many-core hardware.",
+  "verified_claims_summary": "On an Intel Core i5-10310U (4 cores/8 threads, 15 W, ~1600 MHz sustained) with MSVC 14.51 C++20 Release, the project's own interleaved, median-of-20 harness measured 286 ns per task against 451 ns for Taskflow 3.7.0 explicit tasks (237-261 vs 355-390 ns under shuffled leg order), a partitioned parallel_for 1-19% faster than taskflow_for_each depending on task count, and a 10-stage simulation frame graph at 0.162 vs 0.195 ms/tick. The frame-graph win came from coarsening the engine's own task submission, and StandardRuntime reaches 0.196 ms/tick on the same scene; after chain fusion the margin over Taskflow is about 1.15x.",
+  "status_note": "Very active (last commit 2026-09-30) single-author, agent-built Apache-2.0 project at version 0.1.0 with CI on Windows and Linux; small enough to vendor, but treat it as experimental.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/README.md",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/docs/RESULTS.md",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/thunderbolt/api/ITaskRuntime.hpp",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/thunderbolt/runtime/ThunderboltRuntime.hpp",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/thunderbolt/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/thunderbolt/cmake/ThunderboltCompilerFlags.cmake",
+    "https://raw.githubusercontent.com/ankitlinkesh/ThunderBolt-HT/HEAD/CMakePresets.json"
+  ],
+  "confidence": 0.65
+}

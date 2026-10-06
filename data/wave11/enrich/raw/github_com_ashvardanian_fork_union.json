@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/ashvardanian/fork_union",
+  "one_liner": "NUMA-aware fork-join thread pool for C++/C/Rust/Zig with lower parallel-for dispatch latency than OpenMP, Rayon and Taskflow.",
+  "what_it_does": "A fork-join pool built for tight OpenMP-style parallel loops, not task queues. You spawn a pool once (try_spawn) and then dispatch blocking loops with for_threads, for_n (static), for_n_dynamic (dynamic) and for_slices. Unsafe broadcast/poll/join variants (unsafe_for_threads, is_complete, unsafe_join) and NUMA-aware pools and allocators (colocated_pool, distributed_pool, linux_numa_allocator, symmetric allocators) are also provided. It replaces `#pragma omp parallel for` loops, but the API is different; it does not replace task graphs, futures or nested parallelism, which it bans.",
+  "how_it_is_fast": "Workers stay resident and are woken by bumping a shared fork_generation counter; the whole pool synchronizes on three atomics (stop, fork_generation, threads_to_sync) plus one private claim cursor per worker. The hot path makes no heap allocations, no syscalls and no CAS: dynamic scheduling uses per-worker fetch_add cursors that neighbours drain in coprime order, instead of Chase-Lev CAS deques. Hot variables are padded against false sharing (128-byte padding for the adjacent-line prefetcher is discussed). Idle workers wait with PAUSE/YIELD or with hardware timed waits (x86 UMONITOR/UMWAIT/TPAUSE, Arm WFET, RISC-V Zawrs) rather than futexes.",
+  "when_to_use": [
+    "Frequent, short data-parallel loops or bulk-synchronous rounds where fork-join dispatch overhead is a large share of the time (for example N-body at N=512: 40-54 us per step on 128x Intel SPR against OpenMP 115 and Taskflow 666).",
+    "Many-core and multi-socket servers (128-192 threads) where Rayon and Taskflow dispatch collapses and you want NUMA-pinned threads plus node-local memory.",
+    "Fine-grained dynamic scheduling with very cheap items (one-vertex claims), where OpenMP schedule(dynamic,1) and Taskflow's DynamicPartitioner fell to 0.4 GTEPS in the author's connected-components run.",
+    "Mixed-language codebases that need the same pool from C++, C99, Rust (forkunion crate) and Zig.",
+    "Memory-constrained or no-exceptions environments: no allocations or exceptions on the dispatch path."
+  ],
+  "when_not_to_use": [
+    "Task graphs, futures, async I/O, work that outlives its scope, or nested/recursive parallelism: banned by design; the README itself points to Taskflow, Tokio or oneTBB for those.",
+    "Small desktop machines where the gap narrows or flips: on 24x Intel RPL Windows, Rayon roughly ties ForkUnion C++ in N-body (151/151 vs 148/143 us) and OpenMP static beats it in connected components (11.4 vs 10.0 GTEPS).",
+    "Rayon-style parallel iterators and reductions outside Rust: that layer is Rust-only; C++ gets only the for_* primitives.",
+    "When you need independently reproduced numbers: all tables are author-run, and CPU SKUs and compiler versions are not named.",
+    "Shared or oversubscribed machines where spin-waiting workers are unwelcome; timed hardware waits help, but the design is spin-based."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the C++ header (NUMA and huge pages through kernel interfaces, no libnuma); the C API links a prebuilt static or shared library that needs the C++ runtime",
+    "min_toolchain": "C++17 for the header (C++20 adds concepts and an atomic_ref waiter); C99 for the C ABI; CMake 3.21, Rust 1.84, Zig 0.16",
+    "platforms": "Linux, FreeBSD, Windows, macOS, Android, iOS; x86-64, AArch64, RISC-V (big-endian 32-bit tested per README); NUMA memory placement only on Linux, FreeBSD and Windows",
+    "thread_safety": "Dispatch is single-producer: a fork may be issued from one thread at a time, and terminate/try_spawn must not overlap running work; callbacks are noexcept.",
+    "drop_in_for_baseline": "partial — it replaces `#pragma omp parallel for` loops and Taskflow for_each-style loops with an equivalent call, but through its own API and without nested parallelism or task graphs"
+  },
+  "gotchas": [
+    "On caller_inclusive_k pools the calling thread owes one slice that runs only inside unsafe_join or the guard's join/destructor, so polling is_complete alone never completes; on exclusive pools work starts when the guard is constructed.",
+    "The pool object should be declared alignas(fu::default_alignment_k), as in the README example, to keep its atomics off shared cache lines.",
+    "The C++ benchmark binary adds -ffast-math (the Rust build cannot), and published runs use numactl --interleave=all with OMP_PROC_BIND=spread OMP_PLACES=cores; the record's '-O3 -march=native' omits these. The kernels are hand-reassociated so the language columns stay comparable.",
+    "The repo is now published as ashvardanian/ForkUnion (v3.0.4, crate 'forkunion'); older docs and links use fork_union."
+  ],
+  "pick_this_over_siblings_when": "Pick it over citor, Weave or a work-stealing pool such as Thiefpool or ThunderBolt-HT when the workload is flat data-parallel loops on many-core or NUMA hardware and dispatch latency dominates; pick citor, Nowa, chili or Spice for recursive fork-join or task parallelism, which ForkUnion does not support.",
+  "verified_claims_summary": "The author's N-body benchmark (N=512, all logical cores, 30 s fixed window, static/dynamic) shows ForkUnion C++ at 54/86 us per step against OpenMP 115/226, Rayon 483/739 and Taskflow 666/694 on 128x Intel SPR. Connected components on a ~27M-edge graph reach 192.6/77.6 GTEPS against OpenMP 53.9/0.4 on 192x Graviton 5. Builds use -O3 and target-cpu=native with no LTO (plus -ffast-math in the C++ binary); CPU SKUs and compiler versions are not named. Taskflow graphs are built once and re-run, so its numbers are dispatch cost, not graph construction.",
+  "status_note": "Actively maintained (last commit 2026-10-02, v3.0.4), Apache-2.0, used by USearch, NumKong and StringZilla; header-only and easy to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/README.md",
+    "https://raw.githubusercontent.com/ashvardanian/fork_union/HEAD/scripts/nbody.cpp",
+    "https://github.com/ashvardanian/fork_union/issues?q=is%3Aissue+label%3Abug"
+  ],
+  "confidence": 0.75
+}
