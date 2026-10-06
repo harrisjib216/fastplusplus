@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/hnes/libaco",
+  "one_liner": "Small C asymmetric-coroutine library for x86/x86-64 whose hand-written switch routine runs about 1.7x faster than Tencent libco's coctx_swap.",
+  "what_it_does": "Gives C code asymmetric coroutines: one main co per thread resumes non-main cos, and they yield back to it with aco_resume/aco_yield/aco_exit. Each non-main co runs on a standalone stack or on a shared stack that it copies into a private save buffer when it yields. The API is its own (aco_thread_init, aco_create, aco_share_stack_new) and is not a drop-in for libco's co_create/co_resume. There is no scheduler, event loop or hooked syscalls.",
+  "how_it_is_fast": "acosw.S is a minimal assembly switch that saves and restores only the Sys V ABI callee-saved registers, the stack pointer and the return address, plus, unless ACO_CONFIG_SHARE_FPU_MXCSR_ENV is defined, the x87 control word and MXCSR (fnstcw/stmxcsr). It jumps to the saved return address instead of using push/ret tricks, and unlike libco's coctx_swap it never points the stack pointer at heap memory. For shared-stack cos, aco.c copies only the live stack bytes with an inline aligned short-copy path on amd64 and falls back to memcpy for larger frames (copy-stack design).",
+  "when_to_use": [
+    "Single-threaded event loops or generators in C on Linux x86-64 or i386, where you write your own scheduler and want switch cost around 10 ns.",
+    "Millions of mostly idle coroutines with small stacks at yield points: the README runs 10,000,000 cos with a 120 B copy-stack in 2.8 GB under tcmalloc.",
+    "Replacing libco's coctx_swap in an existing design, where its ABI violation (stack pointer addressing heap memory, unsafe under signals) is a concern.",
+    "Code that needs a small, readable implementation (about 700 LOC) that is easy to vendor and audit."
+  ],
+  "when_not_to_use": [
+    "ARM, aarch64, Windows/MSVC or any non-Sys-V target: only i386 and x86-64 Sys V are supported (issues #20, #57 and #6 are open).",
+    "Shared-stack cos that yield with deep stacks: resume cost grows with copied bytes (33 ns at 8 B, 211 ns at 1000 B, 1090 ns at 7992 B in the README table).",
+    "Needing symmetric transfer, return values from yield, a scheduler, I/O integration or per-co TLS: none are provided (issues #47, #22 and #46 open).",
+    "Long-lived projects that need upstream fixes: the last release is v1.2.4 (July 2018), there are 27 open issues and the last commit was 2022."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (optional valgrind headers for ACO_USE_VALGRIND; tcmalloc used only in benchmarks)",
+    "min_toolchain": "GCC or Clang with GNU assembler (Intel syntax .S); builds with -std=c99; make.sh uses gcc -g -O2 -Wall -Werror",
+    "platforms": "Linux x86-64 and i386 (Sys V ABI) only",
+    "thread_safety": "One libaco instance per thread via __thread globals (aco_thread_init per thread); no data shared across threads, and cos must not migrate between threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Pointers to locals on a shared stack are invalid from another co sharing that stack; the README says to heap-allocate anything passed between cos.",
+    "Defining ACO_CONFIG_SHARE_FPU_MXCSR_ENV (the 10.29 ns configuration) is only correct if no code changes the FPU or MXCSR control words; without it every co keeps its own copy (10.38 ns).",
+    "A co that returns from its function instead of calling aco_exit triggers the protector, which aborts the process; errors call abort() rather than returning codes (issue #41).",
+    "Valgrind memcheck reports false positives with shared stacks; build with ACO_USE_VALGRIND or ACO_USE_ASAN when debugging, and not in release builds. The README warns to build from releases, not master."
+  ],
+  "pick_this_over_siblings_when": "Pick libaco over libco or libcopp when you want only a correct, minimal x86 switch plus copy-stacks in plain C; pick minicoro for a single-header library that also runs on ARM, Windows and WebAssembly, and libgo or libfiber when you need a scheduler with hooked I/O.",
+  "verified_claims_summary": "On one AWS c5d.large VM (RHEL 7.5, June 2018, CPU model not stated, gcc -g -O2 per make.sh, tcmalloc preloaded, shared FPU/MXCSR), acosw measured 10.29 ns per switch (20.59 ns per resume round trip, 40M switches), against 17.64 ns for libco's coctx_swap swapped into the same harness in the benchmark branch; that is 1.72x per the author (1.71x derived from page data). First-party, and only the switch routine was compared.",
+  "status_note": "Abandoned: v1.2.4 dates from July 2018 and the last commit is a 2022 merge, but it is Apache-2.0, about 700 LOC and easy to vendor for x86 Linux.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/hnes/libaco/HEAD/README.md",
+    "https://raw.githubusercontent.com/hnes/libaco/HEAD/aco.h",
+    "https://raw.githubusercontent.com/hnes/libaco/HEAD/aco.c",
+    "https://raw.githubusercontent.com/hnes/libaco/HEAD/acosw.S",
+    "https://raw.githubusercontent.com/hnes/libaco/HEAD/make.sh",
+    "https://raw.githubusercontent.com/hnes/libaco/tencent_libco_bug_report_and_coctx_swap_benchmark/README.md",
+    "https://github.com/hnes/libaco/issues"
+  ],
+  "confidence": 0.8
+}
