@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/earlgray/c4",
+  "one_liner": "86-line x86-32 template JIT for the c4 C subset; about 9.9x faster than stock Lua on a 2015 fib(34) run.",
+  "what_it_does": "c4x86.c is a single-file program that parses a small C subset (char, int, pointers, enum, sizeof, if/while/return and expression statements; no structs, floats, for or switch) into c4's stack-machine bytecode, translates that bytecode to x86-32 machine code in an executable mmap buffer, and jumps to main. It is used as a command (c4x86 prog.c [args]), not as a library: there is no embedding API, and host calls are limited to hard-coded builtins (open, read, close, printf, malloc, memset, memcmp, memcpy, mmap, dlopen, dlsym, qsort, exit) resolved through dlsym.",
+  "how_it_is_fast": "It is a template (macro-expansion) JIT: each c4 opcode becomes a fixed short x86 sequence with %eax as the accumulator and operands on the machine stack via push/pop, emitted in one pass and then patched in a second pass that fills rel32 jump and call offsets from a bytecode-to-native jitmap table. That removes the interpreter's fetch/decode/dispatch loop entirely, which is why it ran about 18.7x faster than the c4 interpreter (0.136 s vs 2.538 s, derived from page data); there is no register allocation or optimization, so it stayed about 1.8x slower than MSVC /Ox native C (0.074 s) in the same table.",
+  "when_to_use": [
+    "Studying how a minimal bytecode-to-native JIT works: the code generator is about 86 lines, and JIT.md maps every opcode to its x86 sequence.",
+    "Teaching or experimenting with JIT techniques (two-pass relocation, cdecl argument reversal, 16-byte stack alignment for native calls) on 32-bit x86 Linux with gcc -m32, or Windows with 32-bit MSVC.",
+    "Running small self-contained integer and pointer programs in the c4 subset, such as recursive fib, where it beat Lua, libtcc -run (0.151 s) and the c4 interpreter in the 2015 scriptorium table.",
+    "As a starting point for a toy-compiler project, if GPL-2.0 is acceptable."
+  ],
+  "when_not_to_use": [
+    "Embedding a scripting language in an application: there is no API, sandbox, garbage collector, error recovery or host-function registration beyond the hard-coded builtins.",
+    "Any 64-bit-only target (x86-64 without 32-bit multilib, ARM, current macOS): it is x86-32 only and casts pointers to int throughout.",
+    "Programs that divide integers, take the modulo of negative numbers or right-shift negative ints: the generated code for DIV, MOD and SHR is wrong in those cases (see gotchas).",
+    "Code that needs structs, floating point, for loops, switch, the preprocessor or multiple translation units; the c4 subset has none of them.",
+    "When raw speed is the goal: LuaJIT 2.0 (0.111 s), Terra (0.121 s) and MSVC native C (0.074 s) were faster on the same fib(34) run."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "libc plus mmap and dlfcn (libdl) on Linux and macOS; on Windows the bundled mman32.h and dlfcn32.h shims (added by r-lyeh's MSVC patch)",
+    "min_toolchain": "Plain C; gcc -m32 (needs 32-bit multilib) on Linux; 32-bit MSVC (VS2013/VS2015, built by scriptorium with cl /Ox /Oy /MT /DNDEBUG) on Windows",
+    "platforms": "x86-32 only: Linux, OS X ('known to work on Linux (and OS X?)' per JIT.md), Windows via shims; no x86-64 or ARM backend",
+    "thread_safety": "not documented; all compiler state is global and the program runs once per process",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Integer division bug: DIV emits 'pop %ecx; xchg %eax,%ecx; idiv %ecx' with no cltd/cdq, so idiv divides %edx:%eax with whatever a previous native call or MOD left in %edx, giving wrong quotients or a divide-error crash (SIGFPE); confirmed by disassembling the emitted bytes. MOD uses 'xor %edx,%edx' (zero- instead of sign-extension), so negative dividends give wrong remainders (e.g. -7 % 3 yields 0, not -1) or a divide error (-7 % 1). tests/ has no division test; fib uses neither, so the benchmark numbers are unaffected.",
+    "SHR emits a logical 'shr', while the c4 interpreter's '>>' on int is arithmetic with common compilers, so negative values shift differently under c4 and c4x86.",
+    "Unchecked limits: fixed 256 KiB pools; native code shares one 256 KiB RWX mapping with the jitmap table in its upper half with no overflow check; LEA and ENT reject frames beyond about 31 locals or params (8-bit displacement), ADJ silently truncates to an 8-bit immediate, and mmap failure is tested against 0 instead of MAP_FAILED. JIT.md is partly stale (it describes 1-byte branch offsets and native pointers stored in text cells; the code uses rel32 and the jitmap table).",
+    "Harness: scriptorium's bench.cc times whole-process system() launches (cmd.exe start, parse and JIT included), never checks the printed fib value or the exit code, and keeps the minimum of repeated recordings; fib.c's comment 'Should return 433494437' is fib(43), not fib(34) = 5702887. Fixed startup cost dilutes rather than inflates c4x86's ratio."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Terra (0.121 s, LLVM-backed with Lua metaprogramming), Pawn (0.384 s, an embeddable scripting VM) or TinyVM (0.786 s) only when the goal is to read and learn from the smallest working JIT; for real embedded scripting use Pawn, Daslang or LuaJIT, and for fast native code generation use Terra.",
+  "verified_claims_summary": "In r-lyeh's archived scriptorium suite (July 2015, AMD A10 3.8 GHz, 8 GiB, Windows 7 64-bit), c4x86 built with MSVC 'cl /Ox /Oy /MT /DNDEBUG' ran recursive fib(34) in 0.136 s per whole-process launch (mean of five launches, best recording kept), against 1.341 s for a LuaDist 'lua' taken from PATH whose version and flags are not stated, about 9.9x (derived from page data). The same table lists MSVC native C at 0.074 s, LuaJIT 2.0 at 0.111 s, libtcc -run at 0.151 s and the c4 interpreter at 2.538 s; scriptorium's c/c4jit/c4x86.c is byte-identical to EarlGray/c4 HEAD.",
+  "status_note": "Abandoned since 2015-07-26 (the last commit merges r-lyeh's MSVC support; two open issues from 2019 and 2020 have no reply); GPL-2.0, small enough to vendor for study, but it has the integer-division codegen bug above and targets only 32-bit x86.",
+  "sources_read": [
+    "https://github.com/EarlGray/c4",
+    "https://github.com/EarlGray/c4/commits/master",
+    "https://github.com/EarlGray/c4/issues?q=is%3Aissue",
+    "https://github.com/EarlGray/c4/tree/master/tests",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/README.md",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/JIT.md",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/c4x86.c",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/c4.c",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/hello.c",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/mman32.h",
+    "https://raw.githubusercontent.com/EarlGray/c4/HEAD/dlfcn32.h",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/README.md",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/run.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.cc",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/c/c4jit/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/c/c4jit/c4x86.c",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.c",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.lua",
+    "https://github.com/r-lyeh-archived/scriptorium/tree/master/c/c4jit"
+  ],
+  "confidence": 0.8
+}
