@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/mengrao/fmtlog",
+  "one_liner": "Asynchronous fmt-syntax C++ logger with about 6 ns caller-side latency per call, versus 150-400 ns for synchronous spdlog.",
+  "what_it_does": "fmtlog is a logger that takes fmtlib format strings and moves formatting and file I/O off the calling thread. Log statements are macros (FMTLOG, logi/logd/logw/loge, rate-limited logil, and FMTLOG_ONCE variants) that push a compact record into a per-thread queue; one thread must call fmtlog::poll(), or you start fmtlog::startPollingThread(interval), to decode, format and write. It is not an spdlog drop-in: there are no logger objects or sinks, just a global logger with setLogFile, setHeaderPattern, setLogCB and log-level controls.",
+  "how_it_is_fast": "It borrows NanoLog's two ideas. First, each logging thread gets its own variable-size single-producer/single-consumer ring (SPSCVarQueueOPT, 1 MB by default), so producers never contend. Second, a log site's static data (format string, level, location) is registered once in a table, and each call pushes only the table index, an rdtsc timestamp and the raw argument bytes; a per-site decode function formats the message later in poll(). Timestamps are raw TSC values that a calibrated TSCNS clock converts to nanoseconds on the backend.",
+  "when_to_use": [
+    "Latency-critical x86-64 threads (trading, market data, game servers) where a single-digit-ns log call matters more than when the message reaches disk",
+    "Code already using fmt-style format strings that wants human-readable text logs, not NanoLog's binary format that needs a decompressor",
+    "Apps that want to control the backend thread themselves: call poll() from an existing event loop or housekeeping thread",
+    "Many logging threads: per-thread SPSC queues avoid the shared-queue contention that slows spdlog async as thread count grows (quill harness: 8 ns at 4 threads vs spdlog 557 ns p50)"
+  ],
+  "when_not_to_use": [
+    "Backend throughput is what limits you: quill's table has fmtlog writing 2.69M msg/s, about the same as spdlog's 2.57M and well behind XTR (7.73M) and Quill (6.44M)",
+    "Every message must survive: by default a full queue silently drops new messages (FMTLOG_BLOCK=1 blocks instead), and open issues #109 and #117 report lost logs in multithreaded tests",
+    "You need recent fmt or MSVC/LLVM toolchains: issue #98 (fmt 10.1 compile error), #71 (VS2022) and #91 (LLVM COMDAT) are open; the code reaches into fmt::detail internals",
+    "Non-x86 targets: the SPSC queue publishes through volatile stores with no release/acquire fences, which is fine under x86 TSO but not guaranteed on weakly ordered CPUs such as aarch64, and the TSC clock falls back to a system clock call there",
+    "You need active maintenance: last commit 2025-02-13, 31 open issues including segfault (#115) and destructor core dump (#112) reports with no maintainer reply"
+  ],
+  "integration": {
+    "form": "header-only (define FMTLOG_HEADER_ONLY or include fmtlog-inl.h once) or static/shared lib via CMake",
+    "dependencies": "fmtlib (bundled as a git submodule at a pinned commit), pthread",
+    "min_toolchain": "C++17; README says GCC 10.2 and MSVC 2019 tested",
+    "platforms": "Linux and Windows documented; x86/x86-64 for the rdtsc fast path; other architectures compile against a system clock fallback, but the queue's memory ordering there is not documented",
+    "thread_safety": "Any number of threads may log; only one thread may call poll(), and not while startPollingThread is running",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Arguments passed by pointer (including std::string*, shared_ptr, unique_ptr) are read when poll() runs, not when the log call runs: a value changed in between gets logged with its new value, and a freed object leaves a dangling pointer",
+    "The first log call on a thread allocates its 1 MB queue; call fmtlog::preallocate() at thread start or that first call pays the allocation cost",
+    "Each log site costs about 50 bytes of code for its decode function plus about 50 bytes of runtime table memory; use FMTLOG_ONCE (logio etc.) for cold logs",
+    "FMTLOG_ACTIVE_LEVEL compile-time filtering applies only to the short macros (logi, logd...), not to FMTLOG(); the README says the default is INF but fmtlog.h defines FMTLOG_LEVEL_DBG"
+  ],
+  "pick_this_over_siblings_when": "Pick fmtlog over Quill or XTR when you want a small two-header fmt-based logger whose backend runs only when you call poll(); Quill matches its caller latency (6 ns p50), has higher backend throughput and is maintained, so choose Quill for production. Pick it over PlatformLab NanoLog when you want fmt syntax and readable text output and do not need a binary log plus decompressor.",
+  "verified_claims_summary": "In quill's logger_benchmarks harness (GCC 14.2, Release -march=x86-64-v3, Intel Core i5-12600 with isolated cores), the caller-thread p50 for an int,int,double message was 6 ns for fmtlog vs 271 ns for spdlog with 1 thread, and 8 vs 557 ns with 4 threads; a 16-string vector cost 774 vs 6906 ns. fmtlog's own bench.cc on a Xeon Gold 6144 (flags not stated) gives about 6.4 ns vs 156-391 ns against synchronous spdlog basic_logger_st, but backend file throughput is about the same as spdlog's (2.69 vs 2.57M msg/s).",
+  "status_note": "Stale since 2025-02-13, with open crash, lost-message and fmt-compatibility issues and no maintainer replies; MIT-licensed and small (two headers) enough to vendor with its pinned fmt submodule.",
+  "sources_read": [
+    "https://github.com/MengRao/fmtlog",
+    "https://raw.githubusercontent.com/MengRao/fmtlog/HEAD/README.md",
+    "https://raw.githubusercontent.com/MengRao/fmtlog/HEAD/fmtlog.h",
+    "https://raw.githubusercontent.com/MengRao/fmtlog/HEAD/fmtlog-inl.h",
+    "https://raw.githubusercontent.com/MengRao/fmtlog/HEAD/fmtlog.cc",
+    "https://raw.githubusercontent.com/MengRao/fmtlog/HEAD/CMakeLists.txt",
+    "https://github.com/MengRao/fmtlog/issues",
+    "https://github.com/MengRao/fmtlog/issues/117",
+    "https://github.com/MengRao/fmtlog/issues/105",
+    "https://github.com/MengRao/fmtlog/issues/98",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

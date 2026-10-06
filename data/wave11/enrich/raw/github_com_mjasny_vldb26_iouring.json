@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/mjasny/vldb26-iouring",
+  "one_liner": "VLDB'26 artifact measuring which io_uring settings speed up DBMS buffer managers and network shuffles compared with default io_uring and epoll.",
+  "what_it_does": "This is the reproduction package for Jasny, El-Hindi, Ziegler, Leis and Binnig, 'io_uring for High-Performance DBMSs: When and How to Use It' (PVLDB 19(1), 2026). It contains C++23 microbenchmarks (bench_nop, bench_buf_reg, bench_fsync, bench_sqpoll_wakeup, bench_ssd_batches, zero-copy receive, epoll and io_uring client/server), a buffer manager and a network shuffle built on liburing, a vmcache submodule, fio configs, a distexprunner experiment driver with R plotting scripts, and a PostgreSQL patch. It has no library API: the output is configuration guidance you apply to your own io_uring code.",
+  "how_it_is_fast": "The gains come from io_uring features that remove per-I/O kernel work: registered (fixed) buffers that skip page pinning and enable zero-copy DMA, registered file descriptors, SQPOLL kernel submission threads (optionally shared via IORING_SETUP_ATTACH_WQ), IOPOLL completion polling, COOP_TASKRUN, and zero-copy send and multishot or zero-copy receive for networking. The PostgreSQL patch registers the whole shared buffer pool (BufferBlocks, NBuffers*BLCKSZ) with io_uring_register_buffers, uses read_fixed/readv_fixed with sparse fixed-file slots, and runs a shared SQPOLL thread with sq_thread_idle=100. According to search snippets of the paper (the PDF was blocked), the guidelines are registered buffers for payloads above about 1 KiB, passthrough I/O for device-specific workloads, and multishot receive for messages under 1 KiB.",
+  "when_to_use": [
+    "You are designing or tuning io_uring in a storage engine or buffer manager and want measured guidance on which setup flags (SQPOLL, IOPOLL, COOP_TASKRUN, fixed buffers and files) pay off",
+    "I/O-bound OLTP where many reads miss the buffer pool (YCSB, TPC-C with SSD page loads and evictions); the paper reports the largest gains here",
+    "Network-bound shuffles with large tuples, where the snippets report zero-copy send/receive at about 2.5x over epoll",
+    "You want a ready-made PostgreSQL 18-era AIO patch showing fixed buffers plus SQPOLL in method_io_uring.c (the snippets report 14% on PostgreSQL)"
+  ],
+  "when_not_to_use": [
+    "Mostly in-memory, compute-bound workloads: the paper says the I/O path contributes little there and the optimizations have correspondingly small effect",
+    "You need a reusable library: this is study code with no API, no license file and two commits, so it can be read for reference but not copied",
+    "Stock distro kernels: experiments ran on kernels 6.15 and 6.17 built from source, with zero-copy receive bug fixes at a pinned for-next commit, and zero-copy receive needs NIC support (ConnectX-7 here)",
+    "CPU-constrained hosts: SQPOLL and IOPOLL spend dedicated cores polling to save syscalls and interrupts",
+    "Machines without AVX-512: CMakeLists.txt hard-codes -march=native -mavx512f -mavx512bw"
+  ],
+  "integration": {
+    "form": "source-drop (benchmark harness plus PostgreSQL patch; reference only)",
+    "dependencies": "liburing (submodule), Boost 1.89 fiber (FetchContent), vmcache, distexprunner, fio, PostgreSQL source tree, Nix for the experiment environment, R for plots",
+    "min_toolchain": "C++23 with -fcoroutines, GCC 13.3.0, CMake 3.20, Linux 6.15+",
+    "platforms": "Linux x86-64 with AVX-512; tested on AMD EPYC 9654P with 400 Gbit ConnectX-7 and PCIe Gen 5 SSDs",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The PostgreSQL patch selects its io_uring mode at compile time (uring_config.h RUN_MODE 6: SQPOLL with a shared SQ thread, fixed fds and fixed buffers, no IOPOLL), not through a GUC; it also force-defines IOMETHOD_IO_URING_ENABLED and IORING_SETUP_NO_MMAP in aio.h even when configure did not detect liburing",
+    "The patch is mostly clang-format reflow of PostgreSQL's files (about 4,200 lines), so the functional changes are hard to pick out; its register-buffers error message prints ret instead of rc",
+    "The patch loosens PostgreSQL's submit check from ret != num_staged_ios to ret < num_staged_ios because the strict check fails under SQPOLL",
+    "The second set(CMAKE_CXX_FLAGS ...) overwrites the first, so -Wall -Wextra are silently dropped; Release adds -O3 -flto and the build always adds -g"
+  ],
+  "pick_this_over_siblings_when": "Use liburing as the library; read this artifact to decide which liburing features to turn on for a DBMS. Unlike SPDK or XRP it keeps the kernel I/O path and gives configuration guidance rather than replacing the I/O stack.",
+  "verified_claims_summary": "According to search snippets of the PVLDB'26 paper (PDF blocked here), on an AMD EPYC 9654P with 8 PCIe Gen 5 SSDs and 400 Gbit NICs, built with GCC 13.3.0 at -O3 -flto -march=native, zero-copy with registered buffers cut cycles per byte up to 3.5x against default io_uring for large messages, zero-copy shuffling was about 2.5x faster than epoll for large tuples, YCSB throughput rose about 11% (238k tx/s), and the guidelines gave PostgreSQL's io_uring path 14%. None of these numbers are in the repository README.",
+  "status_note": "Paper artifact with two commits (last 2026-03-31) and no license file, so it is reference only; useful as a reading guide to io_uring tuning, not as a dependency.",
+  "sources_read": [
+    "https://github.com/mjasny/vldb26-iouring",
+    "https://github.com/mjasny/vldb26-iouring/tree/master/src",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/README.md",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/0001-uring-opts.patch",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/src/bench_buf_reg.cpp",
+    "https://raw.githubusercontent.com/mjasny/vldb26-iouring/HEAD/src/CMakeLists.txt",
+    "WebSearch: High-Performance DBMSs with io_uring (snippets of arxiv.org/abs/2512.04859, TU Darmstadt PDF, emergentmind; pages themselves EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.6
+}
