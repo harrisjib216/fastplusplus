@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/sustrik/libmill",
+  "one_liner": "Go-style coroutines and channels for C; in a third-party switch shootout it beats libco and sometimes Boost.Context.",
+  "what_it_does": "libmill brings Go's concurrency model to C: go(fn(...)) launches a coroutine, chmake/chs/chr and the choose block give typed channels, and msleep/fdwait/yield block cooperatively. It also includes coroutine-aware TCP, UDP, UNIX-socket, SSL, file (mfopen) and mfork wrappers. It is a single-threaded scheduler with its own API, and the same author wrote libdill as its successor.",
+  "how_it_is_fast": "On x86-64 the switch is an inline-assembly setjmp/longjmp pair that saves callee-saved registers plus rdi/rsi, with no signal mask. The go() macro relocates the stack pointer onto a heap stack inside the caller's frame with a VLA filler, so a launch costs no trampoline call. goprepare() preallocates and caches stacks (default about 256 KiB) to keep allocation out of the hot path. Other architectures fall back to sigsetjmp/siglongjmp.",
+  "when_to_use": [
+    "Single-threaded x86-64 C programs, such as small network daemons, written in Go-style CSP with channels and choose.",
+    "Cases where a ping-pong between two coroutines dominates; on LinuxMint x86-64 it switched faster than boost and libco in benchbox.",
+    "Existing libmill codebases that work and do not need threads or the libdill bundle model."
+  ],
+  "when_not_to_use": [
+    "New projects: libdill supersedes it, the last commit was 2021-02-09, and issue #196 asks for deprecation in favour of libdill.",
+    "Many concurrent coroutines: in the 1000-coroutine benchbox runs it was slower than boost on both Linux VMs (1014 vs 894 ms, 2031 vs 1021 ms), and tbox beat it in every row.",
+    "32-bit x86: on ArchLinux i386 it was slower than boost (689 vs 485 ms for 2 coroutines), since the assembly path is x86-64 only.",
+    "Multithreaded schedulers: there is no thread support; parallelism is via mfork processes.",
+    "Modern toolchains without patching: open reports include a dns.h build failure (#188), C99 'implicit declaration of asm' (#187), GCC 6.2.1 breakage (#167), an osx segfault (#189) and a tcpconnect timeout socket leak (#181)."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none; OpenSSL with --enable-ssl",
+    "min_toolchain": "GCC or Clang with GNU C extensions (statement expressions, inline asm); autotools build",
+    "platforms": "x86-64 assembly switch; other POSIX via sigsetjmp fallback; epoll on Linux, kqueue on BSD/macOS, poll fallback; no Windows",
+    "thread_safety": "Not thread-safe; one global scheduler per process (mfork for multi-process)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Coroutine functions must be marked 'coroutine' (noinline), and the go() argument is evaluated on the new stack, so complex expressions in go(...) run inside the coroutine.",
+    "The x86-64 asm macros must list ymm registers as clobbered when __AVX__ is defined. Code compiled with and without AVX in one program relies on that conditional.",
+    "Its documentation was on libmill.org, which is parked (#195); the README carries no API docs or performance numbers.",
+    "The repo publishes no benchmarks; the only numbers come from the tbox author's benchbox wiki, run in VMs with no compiler flags or CPU model."
+  ],
+  "pick_this_over_siblings_when": "Rarely: prefer libdill (same author, structured cancellation, per-thread contexts), or tbox, which beat libmill in every benchbox row. libmill makes sense only when you want the literal Go API surface in single-threaded C, or are already using it.",
+  "verified_claims_summary": "In tboox/benchbox's switch test (10M switches), with 2 coroutines libmill took 145 ms vs boost 199 ms and libco 687 ms on a LinuxMint x86-64 VM, and 525 vs 728 ms against boost on macOS x86-64. It lost to boost on an ArchLinux i386 VM (689 vs 485 ms) and in both 1000-coroutine Linux runs, while staying ahead of libco. Compiler, flags and CPU model are not stated.",
+  "status_note": "Abandoned since 2021-02-09 and effectively superseded by libdill; MIT-licensed and small enough to vendor, but expect to patch build errors on current GCC/Clang.",
+  "sources_read": [
+    "https://github.com/sustrik/libmill",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/README.md",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/libmill.h",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/cr.c",
+    "https://raw.githubusercontent.com/sustrik/libmill/HEAD/stack.c",
+    "https://github.com/tboox/benchbox/wiki/switch",
+    "https://github.com/sustrik/libmill/issues",
+    "https://github.com/sustrik/libmill/issues/179",
+    "https://github.com/sustrik/libmill/issues/196"
+  ],
+  "confidence": 0.75
+}

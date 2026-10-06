@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/sustrik/libdill",
+  "one_liner": "C structured-concurrency library with stackful coroutines; project numbers show roughly 20x cheaper switches than Go goroutines.",
+  "what_it_does": "libdill gives C programs lightweight stackful coroutines launched with the go() macro, grouped into bundles whose lifetime the caller owns (hclose cancels every coroutine in a bundle), plus channels (chmake/chsend/chrecv/choose), deadlines on every blocking call, and handles. On top of that it ships coroutine-aware network protocols: TCP, UDP, IPC, HTTP, WebSocket, SOCKS5, TLS/DTLS through OpenSSL, and happy-eyeballs connect. It is its own API, not a drop-in replacement for goroutines, Boost.Context or libco.",
+  "how_it_is_fast": "Context switches use inline-assembly setjmp/longjmp macros on x86-64 and i386 that save only callee-saved registers, with no signal mask and no glibc pointer mangling. Other architectures fall back to sigsetjmp(ctx, 0). The go() macro moves the stack pointer onto a heap stack inline (via alloca tricks), so launching a coroutine costs no function-pointer trampoline. Stacks (256 KiB each, plus an mprotect guard page) are cached up to 64 per thread, which keeps mprotect out of the create/terminate path. The scheduler is a run queue over an epoll/kqueue/poll pollset.",
+  "when_to_use": [
+    "C or C++ network servers on Linux or BSD x86-64 that want goroutine-style code with explicit cancellation and deadlines.",
+    "Workloads with very many short-lived coroutines, where create+terminate cost (44 ns on an i7 4770k per issue #30) matters.",
+    "Ports of Go-style designs to C where you want channels and choose() without a GC runtime.",
+    "Programs that want TLS, WebSocket or HTTP framing built into the coroutine I/O layer rather than added separately."
+  ],
+  "when_not_to_use": [
+    "ARM64, especially Apple M1: no assembly switch path, and issue #208 (segfault launching a coroutine on M1 macOS, in ___chkstk_darwin) is open and unanswered.",
+    "Windows: not supported (issue #226). Cygwin (#201) and Android/x86 (#211) builds also fail.",
+    "Multicore scheduling inside one scheduler: each thread has its own context, and coroutines do not migrate across threads.",
+    "Projects that need a maintained dependency: last commit 2022-08-10, 46 open issues including build failures with gcc-13.2.0 (#229) and Fedora 31 (#206), and the libdill.org documentation site is down (#221).",
+    "Code that needs strict ISO C: bundle_wait() is reported incompatible with -std=c99/c11/c90 (#194), and the go() macro relies on GNU statement expressions and inline asm."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "pthreads (unless --disable-threads); OpenSSL only with --enable-tls",
+    "min_toolchain": "GCC or Clang with GNU C extensions; autotools build (recent gcc-13.2.0 build failure reported in #229)",
+    "platforms": "x86-64 and i386 with assembly switches; other POSIX via sigsetjmp fallback (aarch64 macOS reported segfaulting); Linux epoll, BSD/macOS kqueue, poll fallback; no Windows",
+    "thread_safety": "Per-thread scheduler context (pthread TLS when DILL_THREADS); coroutines and handles are bound to the thread that created them",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The library is built with -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0, because glibc fortification panics at the go() macro's stack-pointer manipulation. Compiling your own code with fortification can trip the same check.",
+    "Fixed 256 KiB stacks with a guard page; stack overflow faults instead of growing, and very large coroutine counts cost real memory (the whisper benchmark in #30 ran 32k-100k coroutines without guard pages).",
+    "Documentation lives only on libdill.org, which is down (#221); the README just points there, so the header libdill.h is the practical reference.",
+    "The faster 13 ns / 25 ns figures come from the 'optimized-limit' inlining branch, not from master."
+  ],
+  "pick_this_over_siblings_when": "Pick libdill over minicoro, libaco or libco when you want a complete scheduler, structured cancellation and a coroutine-aware socket/TLS stack rather than a bare context-switch primitive. Pick it over its predecessor libmill for the bundle/handle model and per-thread support. Choose minicoro or Boost.Context if you need ARM64 or Windows.",
+  "verified_claims_summary": "Contributor raedwulf's 2016 analysis in issue #30 measured a 16 ns context switch and 44 ns create+terminate on libdill master on an i7 4770k (13 ns and 25 ns on the optimized-limit branch), against Go at 331 ns / 237 ns and gccgo at 825 ns / 3652 ns. On a Core 2 Duo libdill measured 46 / 37 ns per switch and 131 / 100 ns per create. Compiler, flags and Go version are not stated, and the comparison is against Go rather than a C/C++ coroutine library.",
+  "status_note": "Abandoned since 2022-08-10 (issue #227 asking whether it is abandoned has no answer) but MIT-licensed; usable on x86-64 Linux if you can fix the build on newer GCC yourself.",
+  "sources_read": [
+    "https://github.com/sustrik/libdill",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/README.md",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/libdill.h",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/ctx.c",
+    "https://raw.githubusercontent.com/sustrik/libdill/HEAD/stack.c",
+    "https://github.com/sustrik/libdill/issues/30",
+    "https://github.com/sustrik/libdill/issues",
+    "https://github.com/sustrik/libdill/issues/208",
+    "https://github.com/sustrik/libdill/issues/217"
+  ],
+  "confidence": 0.75
+}
