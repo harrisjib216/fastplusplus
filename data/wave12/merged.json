@@ -146,6 +146,42 @@
     "id": "https://github.com/paritytech/polkavm"
   },
   {
+    "name": "risechain/pevm (parallel EVM on revm)",
+    "repo_url": "https://github.com/risechain/pevm",
+    "language": "Rust",
+    "domain": "interpreters-and-vms",
+    "category": "bytecode-vms-and-wasm",
+    "baseline": "sequential revm (pevm's own execute_revm_sequential path)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Criterion (100 samples) wall time to execute one whole Ethereum block with state preloaded in memory: 85 real mainnet blocks from Frontier to Cancun, plus three mocked 1-Gigagas blocks (raw transfers, ERC20 transfers, Uniswap swaps); sequential revm versus pevm's Block-STM style parallel executor.",
+    "claimed_speedup": "Benches README: Uniswap Swaps gigagas block 413.42 ms sequential vs 18.707 ms parallel (22.1x); ERC20 Transfers 246.43 vs 60.817 ms (4.05x); Raw Transfers 159.08 vs 56.425 ms (2.82x). Mainnet blocks: 'We are currently ~2.02 times faster than sequential execution on average', max speed-up x4.32 (block 7279999, 4.54 ms vs 1.05 ms), max slow-down x0.89. Top-level README repeats '2x faster than sequential execution on average for Ethereum blocks, and 22x faster ... for a Gigagas block of independent Uniswap swaps'. In the 85-row mainnet table (counted from page data), 63 blocks are more than 5% faster, 18 are within 5% of 1.0 and 4 are slower (0.89x to 0.93x).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/risechain/pevm/HEAD/crates/pevm/benches/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "cargo bench --features global-alloc (mainnet bench) and JEMALLOC_SYS_WITH_MALLOC_CONF=thp:always,metadata_thp:always cargo bench --features global-alloc --bench gigagas; workspace Cargo.toml release profile codegen-units=1, lto=fat, panic=abort; global allocator rpmalloc on x86 and snmalloc on aarch64 for mainnet, jemalloc with THP for gigagas; concurrency level 8 on x86 / 12 on ARM; rustc version not pinned (no rust-toolchain file, edition 2024).",
+    "hardware": "AWS c7g.8xlarge, Graviton3, 32 vCPUs @ 2.6 GHz",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-06-05",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "355 stars",
+    "has_code": true,
+    "tradeoffs": "Parallel executor that still delegates VM execution to revm (an inline parallel-aware EVM is only a TODO). Speedup depends on block parallelism; falls back to sequential execution when a block self-destructs then redeploys a contract, and the concurrency level is hard-coded (8 on x86, 12 on ARM) with the README noting it ideally needs auto-tuning. Needs cmake to build snmalloc. Repo warns it is a work in progress and not production ready.",
+    "caveats": "Baseline is revm run sequentially inside pevm's own harness (force_sequential flag / execute_revm_sequential), not an independent geth or evmone run; no geth evm comparison exists. Chain state is preloaded into memory, which the authors say understates the parallel advantage versus disk-backed state. The 22x figure is a synthetic mocked gigagas block of independent Uniswap swaps with no dependencies (README says it does not represent real-world blocks); real mainnet blocks average about 2.0x with several blocks at 1.0x or slightly slower. The top-level README's 2x/22x numbers describe the legacy Block-STM design; the 'new' architecture (inline EVM, sparse trie, shreds) is listed under TODO. No rustc version is stated, so tier A rests on public bench code, the release profile in Cargo.toml and a named CPU. Parallel Go (Polygon, Sei) being slower than sequential Rust/C++ is asserted in prose with no numbers.",
+    "found_via": [
+      "seed-record pass: https://github.com/risechain/pevm README and crates/pevm/benches/README.md"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/risechain/pevm"
+  },
+  {
     "domain": "interpreters-and-vms",
     "category": "bytecode-vms-and-wasm",
     "baseline_in_list": true,
@@ -1144,6 +1180,42 @@
     "id": "https://github.com/csjh/mitey-jit"
   },
   {
+    "name": "revmc (revm AOT/JIT compiler)",
+    "repo_url": "https://github.com/paradigmxyz/revmc",
+    "language": "Rust",
+    "domain": "interpreters-and-vms",
+    "category": "bytecode-vms-and-wasm",
+    "baseline": "revm interpreter",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Criterion execution time in microseconds of three contracts (Fibonacci, Counter, WETH Contract) run through the revm interpreter versus revmc-compiled native code; the same-named fixtures (fibonacci-calldata, counter, weth) exist in the repo's crates/revmc-cli benches.",
+    "claimed_speedup": "README chart 'REVM Compiler Improvement vs. REVM Interpreter' (Execution Time, microseconds), image only: Fibonacci 19.00x, Counter 2.77x, WETH Contract 1.85x. Read from the chart image; no table or text numbers in the repo.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/paradigmxyz/revmc",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0 OR MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-03",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "289 stars; integrated into Reth per Paradigm's announcement (search snippet only)",
+    "has_code": true,
+    "tradeoffs": "Experimental JIT and AOT EVM-to-native compiler built on LLVM (needs LLVM 22, Linux or macOS only, Windows unsupported). AOT-compiled bytecode needs the revmc-builtins runtime exported in the final binary. Compile cost is paid up front (the bench has compile/translate and compile/jit cases).",
+    "caveats": "The only numbers are in a README bar-chart image (19.00x, 2.77x, 1.85x; asset https://github.com/paradigmxyz/revmc/assets/17802178/96adf64b-8513-469d-925d-4f8d902e4e0a, read by viewing the PNG); the chart states no CPU, compiler or flags, so first-party tier C. The repo's current criterion bench (crates/revmc-cli/benches/bench.rs) runs interpreter vs JIT on OSAKA-spec fixtures but commits no results (it uses a codspeed cfg), so the chart cannot be matched to a current run. No evmone comparison exists in the repo or chart even though evmone is a listed baseline. A web search snippet of the Paradigm launch post (blocked here, not opened) and of a BNB Chain blog also quote 1.85x to 19x, and the snippets mention up to 6.9x on compute-heavy workloads and only O(1-10%) gains on mainnet sync; neither page could be opened, so treat those as snippet only. The 19x Fibonacci case is a pure compute loop.",
+    "found_via": [
+      "seed-record pass: https://github.com/paradigmxyz/revmc README (chart image) and crates/revmc-cli/benches/bench.rs"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/paradigmxyz/revmc"
+  },
+  {
     "name": "RISVM",
     "repo_url": "https://github.com/bitmario/RISVM",
     "language": "C++",
@@ -2140,6 +2212,42 @@
     "id": "https://github.com/anjo76/angelscript"
   },
   {
+    "name": "AngelScript JIT Compiler (BlindMindStudios)",
+    "repo_url": "https://github.com/BlindMindStudios/AngelScript-JIT-Compiler",
+    "language": "C++",
+    "domain": "interpreters-and-vms",
+    "category": "embedded-scripting",
+    "baseline": "AngelScript bytecode interpreter (same SDK, no JIT)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "scriptorium benchmark: recursive fib(34) script (tests/fib.as) run as a whole process, wall time averaged over 5 runs, run through an AngelScript host built with and without the JIT.",
+    "claimed_speedup": "1.859 s with the JIT versus 2.039 s for the plain AngelScript interpreter, about 1.10x faster (derived from page data); Lua 5.x runs the same fib(34) in 1.341 s, so the JIT'd AngelScript is about 0.72x of Lua's speed (scriptorium column 'Relative Lua speed' 72%). Raw bench.csv rows: JIT 1.87916, 1.95594, 1.85891 s versus interpreter 2.04581, 2.08138, 2.03945 s.",
+    "evidence_tier": "B",
+    "benchmark_url": "https://github.com/r-lyeh/scriptorium",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Visual Studio 2015 RC where possible, VS2013 elsewhere; AngelScript host built with cl /Ox /Oy /MT /DNDEBUG (angelscript/make.bat); the JIT build adds /DUSE_JIT and the JIT sources.",
+    "hardware": "AMD A10 3.8 GHz (exact model not given), 8 GiB, Windows 7 64-bit",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2016-06-28",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "254 stars, 51 forks",
+    "has_code": true,
+    "tradeoffs": "x86 and x86_64 only (Windows MSVC 2010+, Linux GCC 4.6.2+), needs C++11; written for AngelScript 2.31.0 and the JIT relies on VM internals ('native script calls ... may break on angelscript updates'), so it is tied to old SDK versions; build flags such as JIT_NO_SUSPEND, JIT_FAST_REFCOUNT and JIT_ALLOC_SIMPLE trade safety features for speed.",
+    "caveats": "Gain is only about 10 percent on a single recursive-call microbenchmark. Scriptorium harness caveats: it times the whole process including startup and script compilation (bench.cc runs the command N times through system()); overhead is hard-coded to 0 ('auto overhead = 0'); script output is discarded, never checked; runs 1 to N-1 go to nul so only the last run prints; the Lua row runs a bare 'lua' from PATH (run.bat 'bench 5 lua tests\\fib.lua'), not a binary built in the repo, so the Lua baseline build is unknown; the repo's SDK marker file is .angelscript_2_29_2 while the JIT README targets 2.31.0; CPU model is a family name only, so tier A conditions are not fully met; Scriptorium is archived (r-lyeh-archived) and dated July 2015. Numbers are the JIT author's code measured by a third-party suite, not by the JIT author. Last commit June 2016.",
+    "found_via": [
+      "seed-record pass: r-lyeh/scriptorium README table (rows angelscript-jit 1.859 s and angelscript 2.039 s), then the JIT repo page"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w12-seed-d"
+    ],
+    "id": "https://github.com/blindmindstudios/angelscript-jit-compiler"
+  },
+  {
     "name": "Ant (Ant Silver JavaScript engine)",
     "repo_url": "https://github.com/theMackabu/ant",
     "language": "C",
@@ -3088,6 +3196,42 @@
       "w12-interp-gh-cpp2"
     ],
     "id": "https://github.com/samsung/escargot"
+  },
+  {
+    "name": "expr-cls (Go expression evaluator from typed closures)",
+    "repo_url": "https://github.com/guamoko995/expr-cls",
+    "language": "Go",
+    "domain": "interpreters-and-vms",
+    "category": "embedded-scripting",
+    "baseline": "expr-lang/expr and google/cel-go",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Go benchmarks of compiling the expression and of repeatedly evaluating compiled 'X+(6.0*Y)' (X=3, Y=5, struct input) with expr-cls, expr-lang/expr and cel-go; evaluation timed per call.",
+    "claimed_speedup": "README: evaluation 9.015 ns/op, 0 B/op, 0 allocs/op versus expr 172.0 ns/op (136 B/op, 6 allocs) and cel-go 267.9 ns/op (368 B/op, 6 allocs), 'evaluates expressions ~18x faster'; derived from page data 19.1x versus expr and 29.7x versus cel-go. Compilation: 1802 ns/op (31 allocs) versus expr 10928 ns/op and cel-go 36255 ns/op ('more than 6x faster'; derived 6.1x and 20.1x).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/guamoko995/expr-cls",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Go toolchain version not stated (go.mod requires go 1.24; the benchmark uses b.Loop); default go test -bench flags, linux/amd64",
+    "hardware": "AMD Ryzen 5 5600H with Radeon Graphics (12 threads), linux/amd64",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2025-09-18",
+    "maintenance_status": "stale",
+    "is_fork_of": "https://github.com/expr-lang/expr",
+    "stars_or_usage": "3 stars",
+    "has_code": true,
+    "tradeoffs": "Experimental MVP: strictly typed compiled closures taking a Go struct as input (only struct variable sources); operator set fixed, ternary and custom literals not implemented, some expr-lang/expr built-ins disabled, minimal error reporting; compile and evaluate require registering types, functions and constants through an environment package; no dynamic maps or untyped inputs.",
+    "caveats": "The benchmark code is committed but the README numbers match commit fa7cc5c (expression 'X+(6.0*Y)', cel-go evaluated), not the current HEAD: the 'Fixed constancy optimization' commit 380d646 changed tests/benchmarks/vs_bench_test.go to the constant expression '(.0+1+2+3+4+5+6+7+8+9+10)/2' and commented out the cel-go evaluation benchmark, so the README results cannot be reproduced from HEAD as committed. Comparison is not like for like: expr-cls takes a typed struct and returns float64 through closures; expr.Run takes an interface and allocates a fresh VM per call; the cel-go loop builds a map[string]interface{} on every call and evaluates through Eval, so allocation and boxing costs are counted against the baselines. Go version, -benchtime and -count unstated, single run, no variance shown. It is a fork of expr-lang/expr reusing its parser, AST and checker with the evaluator replaced. govaluate, a listed baseline, is not benchmarked. Last commit September 2025.",
+    "found_via": [
+      "seed-record pass: lead (README claims 9.015 ns/op vs expr 172.0 and cel-go 267.9) plus README, tests/benchmarks/vs_bench_test.go and the commit history of README.md and the benchmark file"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.65,
+    "assignment_ids": [
+      "w12-seed-d"
+    ],
+    "id": "https://github.com/guamoko995/expr-cls"
   },
   {
     "name": "gkurt/quickjs (performance-optimised QuickJS-NG fork)",
@@ -4358,6 +4502,42 @@
     "id": "https://github.com/php/php-src"
   },
   {
+    "name": "riscv-sbt (OpenISA RISC-V static binary translator)",
+    "repo_url": "https://github.com/OpenISA/riscv-sbt",
+    "language": "C++",
+    "domain": "interpreters-and-vms",
+    "category": "jits",
+    "baseline": "QEMU (user-mode RISC-V dynamic binary translation) and rv8",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "MiBench programs (dijkstra, crc32, rijndael, sha, adpcm, stringsearch, blowfish, basicmath, bitcount, fft, patricia, susan, lame) built for RV32, translated ahead of time to x86 with LLVM, run time measured as slowdown versus the same program built natively for x86.",
+    "claimed_speedup": "Committed result CSVs (mibench/results): geomean slowdown versus native x86 of 1.07x (abi mapping) and 1.23x (locals mapping) for the RISC-V SBT over 19 MiBench programs (derived from page data: x86-avx-gcchf.csv, 'x' columns), against QEMU 6.13x (qemu_slowdown.csv, 19 programs) and rv8 2.85x (rv8_slowdown.csv, 10 of 19 programs; the other 9 are zero-filled placeholders). Per-benchmark example: rijndael-encode 14.54x under QEMU, 4.51x under rv8. The associated SBAC-PAD 2018 paper 'Towards a High-Performance RISC-V Emulator' reportedly gives 1.12x for the SBT versus 3.16x for rv8 and 7.07x for QEMU (search-result snippet only, paper page blocked, so these three numbers are not verified against the paper).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://github.com/OpenISA/riscv-sbt/tree/master/mibench/results",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Benchmarks built with gcc -O3 for RISC-V (ilp32d hard-float ABI) and x86 per scripts/auto/config.py (GOPTS.cc and rvcc = gcc, _O = -O3, -fno-exceptions); translator built on LLVM; QEMU and rv8 run RV32 binaries statically linked.",
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2019-03-06",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "18 stars",
+    "has_code": true,
+    "tradeoffs": "Static (ahead-of-time) translator: no self-modifying code, JIT-generated code or dynamic loading of untranslated binaries; translates RV32 ELF to x86 and ARM through LLVM IR; needs a custom RISC-V toolchain and the MiBench programs rebuilt, so it is a research prototype rather than a drop-in emulator. ecall translation is limited.",
+    "caveats": "CPU model is not stated in anything reachable (the paper page is blocked in this environment), so the reproducible-hardware condition of tier A is unmet; the paper numbers (1.12x, 3.16x, 7.07x) come only from a search snippet and differ from the committed CSVs (1.07x abi / 1.23x locals, 2.85x rv8, 6.13x QEMU). The rv8 column covers only 10 of the 19 benchmarks (notes/rv8 lists basicmath crash, bitcount wrong result, fft never ends, patricia not building, susan and lame failing) so rv8 and QEMU geomeans are over different program sets; rv8 and QEMU are dynamic translators that pay translation at run time and run guest 32-bit code, while the SBT output is native x86 produced ahead of time, so this is not like for like. Same repository was previously published as lmcad-unicamp/riscv-sbt (same stars and forks). The OpenISA-input SBT results (x86-oi_slowdown.csv) are a separate translator and not this claim. Last commit March 2019.",
+    "found_via": [
+      "seed-record pass: lead snippet (MiBench slowdown 1.12x vs rv8 3.16x and QEMU 7.07x) plus https://github.com/OpenISA/riscv-sbt and its mibench/results directory"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w12-seed-d"
+    ],
+    "id": "https://github.com/openisa/riscv-sbt"
+  },
+  {
     "domain": "interpreters-and-vms",
     "category": "jits",
     "baseline_stdlib": [],
@@ -4470,6 +4650,42 @@
       "w12-jit-shootouts"
     ],
     "id": "https://github.com/asmjit/asmjit"
+  },
+  {
+    "name": "atJIT (autotuning JIT on Easy::jit)",
+    "repo_url": "https://github.com/kavon/atJIT",
+    "language": "C++",
+    "domain": "interpreters-and-vms",
+    "category": "jits",
+    "baseline": "untuned default configuration of the same code as labelled 'Default' on the author's slide (optimisation level not stated, so not shown to be clang -O3 ahead-of-time or Easy::jit)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Square matrix multiply (MatMul template kernel) tuned online by random search over compiler knobs, slide 'Matrix Multiply Random Tuning Results' with configurations Default and A to G, running time in microseconds.",
+    "claimed_speedup": "'Up to 1.48x Speedup, aka 32.7% improvement!' on matrix multiply (slide 11 of doc/slides/ANL_Summer_Status_Update.pdf); bar chart reads roughly 660 microseconds for Default and roughly 445 for configuration G (read off the chart image, not printed numbers).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/kavon/atJIT/blob/master/doc/slides/ANL_Summer_Status_Update.pdf",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2019-08-29",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "53 stars",
+    "has_code": true,
+    "tradeoffs": "Needs a source-built LLVM and Clang 8 or newer with RTTI, libdispatch, XGBoost and a clang plugin pass ('atjitc' wrapper); API is a single reoptimize() call that must be called repeatedly so the tuner can measure variants; only suitable for long-running hot kernels because tuning needs many timed runs plus JIT compile time; the Polly loop-transform knobs are deprecated (issue 15).",
+    "caveats": "The only numbers are one slide from a July 2018 status talk: a single kernel (matrix multiply), 'Default' baseline not defined, no compiler, flags, CPU model or matrix size on the slide, and the 1.48x is the best of the random configurations after tuning with tuning time and JIT compile cost not counted. The README calls the project 'an early-phase experiment in online autotuning' and gives no speedups. The repo has benchmark sources (benchmark/benchmark.cpp, matmul.h, qsort.h, spectralnorm.h, convolve.h; CMake builds atjit-benchmark-O0/O1/O2/O3 AOT variants for comparison) but no committed results, so a run would be needed to compare against clang -O3 ahead-of-time or Easy::jit. No thesis or paper with numbers was found (the 2018 LLVM Developers' Meeting talk is video only and was not opened). Last commit August 2019.",
+    "found_via": [
+      "seed-record pass: lead (atJIT own numbers), https://github.com/kavon/atJIT README, benchmark/ and doc/slides directories"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.45,
+    "assignment_ids": [
+      "w12-seed-d"
+    ],
+    "id": "https://github.com/kavon/atjit"
   },
   {
     "domain": "interpreters-and-vms",
@@ -6016,6 +6232,42 @@
     "id": "https://github.com/longbridge/quickjs-jit"
   },
   {
+    "name": "rsjsonnet (Rust jsonnet)",
+    "repo_url": "https://github.com/eduardosm/rsjsonnet",
+    "language": "Rust",
+    "domain": "interpreters-and-vms",
+    "category": "language-interpreters",
+    "baseline": "go-jsonnet (v0.22.0-rc1 per the doc; nix pin b5ef4cd9c4e24f2f14a68ef3bda0ca3079e11e78); also C++ jsonnet (d33798d4) and sjsonnet 0.6.2 in the same tables",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "hyperfine -N -w4 -m20 wall time per run of the Jsonnet CLI on 27 programs: real-world kube-prometheus manifests and GraalVM CI, C++ jsonnet perf_tests and benchmarks, and go-jsonnet builtin benchmarks (std.base64, std.foldl, std.manifestJsonEx and others).",
+    "claimed_speedup": "jrsonnet docs/benchmarks.adoc (third-party, run by the author of competing jrsonnet): Kube-prometheus manifests rsjsonnet 57.9 +/- 2.6 ms vs Go 1068.4 +/- 16.5 ms vs Scala native 204.6 +/- 2.3 ms (C++ omitted, takes hours); Realistic 1: 7.8 ms vs Go 3158.3 ms; Realistic 2: 163.4 vs Go 3160.3 ms; Graalvm CI: 68.5 vs Go 600.3 ms; Large string join: 12.4 vs Go 46.4 vs C++ 39.7 ms; Tail call: 1200.9 vs Go 2559.0 vs C++ 18460.1 ms. Derived from page data: rsjsonnet is faster than Go in all 26 shared rows (geomean about 4.8x, min 1.09x on 'Comparsion for array', max about 405x on Realistic 1) and faster than C++ in all 18 shared rows (geomean about 36x, min 1.97x); versus sjsonnet native it wins 19 of 27 rows (geomean about 1.4x) and loses 8 (for example Inheritance recursion 115.6 vs 46.7 ms).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/docs/benchmarks.adoc",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Built by nix (jrsonnet nix/rsjsonnet.nix: rustPlatform.buildRustPackage at commit 27be31532180c611383ceb2b7f03193ab1253487, repo release profile lto=true, codegen-units=1, panic=abort; go-jsonnet via buildGoModule, C++ jsonnet via its Makefile 'jsonnet' target); every implementation wrapped with --max-stack 200000; timing by hyperfine -N -w4 -m20. Compiler versions come from the flake lock, not stated in the doc.",
+    "hardware": "AMD Ryzen 9 9950X3D 16-Core Processor, 32 threads",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0 OR MIT",
+    "usability": "copyable",
+    "last_commit": "2026-05-18",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "30 stars",
+    "has_code": true,
+    "tradeoffs": "Targets Jsonnet 0.22 with a CLI similar to the official one plus two library crates (rsjsonnet-lang, rsjsonnet-front); MSRV Rust 1.85. Memory use is not measured in the doc. Pre-built binaries for Linux and Windows.",
+    "caveats": "The only numbers live in the jrsonnet repo, not in rsjsonnet's own repo or README (no own benchmarks found). The table author maintains jrsonnet, which is shown fastest: jrsonnet beats rsjsonnet in 24 of the 27 rows (derived), and rsjsonnet is labelled 'Rust (alternative)'. rsjsonnet is slower than sjsonnet (Scala native/GraalVM) in several rows and C++ jsonnet has no row on the two real-world cases (the doc says too slow, takes hours) and on several others. Rsjsonnet is only shown as one run of a wrapped CLI process, so startup is included. Tier A rests on public nix build files with pinned commits and a stated CPU; compiler versions are implicit in the flake lock. The go-jsonnet row is described as v0.22.0-rc1 while the nix file pins a 2026-03-23 commit.",
+    "found_via": [
+      "seed-record pass: https://github.com/CertainLach/jrsonnet docs/benchmarks.adoc and nix/rsjsonnet.nix, plus https://github.com/eduardosm/rsjsonnet README"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/eduardosm/rsjsonnet"
+  },
+  {
     "domain": "interpreters-and-vms",
     "category": "language-interpreters",
     "baseline_stdlib": [],
@@ -6090,6 +6342,42 @@
     "id": "https://github.com/weavefoundry/weavepy"
   },
   {
+    "name": "Bigloo Scheme",
+    "repo_url": "https://github.com/manuel-serrano/bigloo",
+    "language": "Scheme/C",
+    "domain": "interpreters-and-vms",
+    "category": "language-interpreters",
+    "baseline": "Guile 3.0.11 (guild compile -O3); Chez Scheme 10.3.0 also in the same suite (Bigloo is slower than Chez on aggregate)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "ecraven/r7rs-benchmarks: wall-clock seconds of R7RS benchmark programs, Bigloo '-O6 -call/cc -copt -O3' native executable versus Guile precompiled with guild compile -O3.",
+    "claimed_speedup": "From all.csv (derived from page data): bigloo-4.6a is faster than guile-3.0.11 on 36 of 50 shared benchmarks, geomean about 1.62x. Examples: fib:40:5 2.564524032 s vs 6.489886582 s; tak:40:20:11:1 1.762351104 vs 3.113433651; mbrot:75:1000 15.49738496 vs 22.496891153; cat:50 1.918521088 vs 15.986089402; sum1:25 0.335073792 vs 5.443149564; string:500000:100 0.438892032 vs 0.204681098 (slower than Guile); graphs:7:3 20.211041024 vs 6.8123056 (slower). Versus chez-10.3.0+r7rs the same method gives geomean about 0.63x.",
+    "evidence_tier": "B",
+    "benchmark_url": "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "bench script: bigloo '<file> -O6 -call/cc -copt -O3 -o <out>' (C backend); Guile 'guild compile -O3' with GC_INITIAL_HEAP_SIZE=100000000; Chez '--optimize-level 2 --program'; versions bigloo-4.6a, guile-3.0.11, chez-10.3.0+r7rs. C compiler and version not stated.",
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "GPL-2.0-or-later",
+    "usability": "copyable",
+    "last_commit": "2026-09-15",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "174 stars",
+    "has_code": true,
+    "tradeoffs": "Scheme to C (and JVM) compiler; per the repo LICENSE file the compiler and tools are GPL (version 2 or later) and the run-time system and libraries are under the GNU Library General Public License (version unspecified); bootstrapping the git version needs an existing Bigloo (configure downloads one if none is found). '-call/cc' build option used in the benchmark.",
+    "caveats": "Independent community suite with no stated machine, CPU, OS or date, so tier B. Bigloo has failed or crashed rows in all.csv (ctak ULIMITKILLED, mbrotZ COMPILEERROR, pi CRASHED, compiler COMPILEERROR, slatex CRASHED, chudnovsky CRASHED, equal ULIMITKILLED) which are excluded from the derived geomean. Bigloo's repo has a bench/ directory (bague, earley, fft, maze, etc.) but no committed comparison with Guile or Chez was found. Chez beats Bigloo on aggregate (about 0.63x derived), and Bigloo loses to Guile on 14 of 50 shared rows, notably graphs and string. Lua not part of the suite. Bigloo 4.6a in the suite is not necessarily the repo head.",
+    "found_via": [
+      "seed-record pass: https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv plus https://github.com/manuel-serrano/bigloo"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/manuel-serrano/bigloo"
+  },
+  {
     "domain": "interpreters-and-vms",
     "category": "language-interpreters",
     "baseline_stdlib": [],
@@ -6124,6 +6412,42 @@
       "w12-interp-shootouts"
     ],
     "id": "https://github.com/cython/cython"
+  },
+  {
+    "name": "Gambit Scheme",
+    "repo_url": "https://github.com/gambit/gambit",
+    "language": "Scheme/C",
+    "domain": "interpreters-and-vms",
+    "category": "language-interpreters",
+    "baseline": "Guile 3.0.11 (guild compile -O3); Chez Scheme 10.3.0 also in the same suite (Gambit is slower than Chez on aggregate)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "ecraven/r7rs-benchmarks: wall-clock seconds of about 55 R7RS benchmark programs (Gabriel, Kernighan and Van Wyk, Larceny set: fib, tak, ctak, mbrot, nucleic, ray, array1, cat, etc.), Gambit gsc -exe executable versus Guile precompiled with guild compile -O3.",
+    "claimed_speedup": "From all.csv (derived from page data): gambitc-v4.9.7 is faster than guile-3.0.11 on 45 of 53 benchmarks with numeric times for both under the same name, geomean about 1.95x. Examples: fib:40:5 3.46268 s vs 6.489886582 s; tak:40:20:11:1 1.968017 vs 3.113433651; mbrot:75:1000 4.223346 vs 22.496891153; nucleic:50 1.545574 vs 5.551796865; ctak:32:16:8:1 3.573319 vs 83.031008426; cat:50 2.095778 vs 15.986089402. Slower than Guile on string:500000:100 (3.197634 vs 0.204681098), pi:50:500:50:100 (0.76942 vs 0.107659156), gcbench:20:1 (8.414929 vs 1.512640708). Versus chez-10.3.0+r7rs the same method gives geomean about 0.79x (Gambit faster in 17 of 54).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "bench script: Gambit 'gsc -o <out> -exe <file>' with no extra flags (safe mode, no 'declare (not safe)'); Guile 'guild compile -O3' then run with GC_INITIAL_HEAP_SIZE=100000000; Chez '--optimize-level 2 --program'; versions in all.csv gambitc-v4.9.7, guile-3.0.11, chez-10.3.0+r7rs. Packages built by the runner (ArchLinux packaging per README).",
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0 OR LGPL-2.1",
+    "usability": "copyable",
+    "last_commit": "2026-10-02",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "1.4k stars; widely used Scheme-to-C compiler (Gerbil Scheme runs on it)",
+    "has_code": true,
+    "tradeoffs": "Compiles Scheme to C and a native executable (gsc -exe) with an interpreter and REPL (gsi). Safe mode is the benchmarked default; unsafe declarations would run faster. Dual-licensed; the repo root holds LICENSE-2.0.txt and LGPL.txt (version 2.1) and the README states no licence, so the SPDX expression is inferred from those files.",
+    "caveats": "Independent community suite, but the repo README names no machine, CPU, OS or measurement date, so tier B not A. The 1.95x geomean is a derived figure over rows matched by exact benchmark name; floating-point rows named with '35.' versus '35.0' in different implementations were not paired. Gambit's own bench/ directory commits no comparison results, and the Gambit repo makes no benchmark claim. Chez Scheme beats Gambit on aggregate (geomean about 0.79 derived), and Gambit is much slower than Guile on a few string and bignum rows. Lua was not part of the suite, so no Lua comparison is recorded. Gambit has one COMPILEERROR row ('compiler') in all.csv, excluded from the geomean.",
+    "found_via": [
+      "seed-record pass: https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv plus https://github.com/gambit/gambit"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/gambit/gambit"
   },
   {
     "domain": "interpreters-and-vms",
@@ -6202,6 +6526,42 @@
       "w12-interp-gh-cpp2"
     ],
     "id": "https://github.com/just-js/lo"
+  },
+  {
+    "name": "Loko Scheme",
+    "repo_url": "https://gitlab.com/weinholt/loko",
+    "language": "Scheme",
+    "domain": "interpreters-and-vms",
+    "category": "language-interpreters",
+    "baseline": "Guile 3.0.11 (guild compile -O3); Chez Scheme 10.3.0 also in the same suite (Loko is slower than Chez on aggregate)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "ecraven/r7rs-benchmarks: wall-clock seconds of R7RS benchmark programs, Loko ahead-of-time compiled static binary (loko -std=r7rs -ftarget=linux --compile) versus Guile precompiled with guild compile -O3.",
+    "claimed_speedup": "From all.csv (derived from page data): loko-0.12.1 is faster than guile-3.0.11 on 48 of 51 shared benchmarks with numeric results, geomean about 1.62x. Examples: tak:40:20:11:1 1.6679999828338623 s vs 3.113433651 s; fib:40:5 3.927000045776367 vs 6.489886582; ctak:32:16:8:1 19.98699951171875 vs 83.031008426; mbrot:75:1000 6.51200008392334 vs 22.496891153; cat:50 3.4140000343322754 vs 15.986089402; paraffins:23:10 1.7589999437332153 vs 3.866057371. Slower: string:500000:100 5.241000175476074 vs 0.204681098; pi:50:500:50:100 156.49200439453125 vs 0.107659156. Versus chez-10.3.0+r7rs geomean about 0.65x (Loko faster in 22 of 52). Loko's README adds an own startup claim: REPL starts in 1.2 ms +/- 0.2 ms on an AMD 3950X per hyperfine (no baseline named) and 'does fairly well in the R7RS benchmarks'.",
+    "evidence_tier": "B",
+    "benchmark_url": "https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "bench script: 'loko -std=r7rs -ftarget=linux --compile <file> --output <out>'; Guile 'guild compile -O3' with GC_INITIAL_HEAP_SIZE=100000000; Chez '--optimize-level 2 --program'; versions loko-0.12.1, guile-3.0.11, chez-10.3.0+r7rs.",
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "EUPL-1.2",
+    "usability": "copyable",
+    "last_commit": "2026-10-03",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "64 stars (GitLab)",
+    "has_code": true,
+    "tradeoffs": "Written purely in Scheme plus some assembler; AMD64 only on Linux, NetBSD or bare hardware; no FFI; fixed heap size (LOKO_HEAP); ahead-of-time compilation only (no compiler in eval); inexact numbers use IEEE single precision only (per README).",
+    "caveats": "Independent community suite with no stated machine, CPU, OS or date, so tier B. Loko has INCORRECT results on three rows (sumfp, nucleic, sum1) and a crash on earley, all excluded from the geomean; its single-precision inexact numbers may flatter floating-point rows. Pathological on bignum arithmetic: pi:50:500:50:100 takes 156.5 s versus 0.108 s for Guile. Chez beats Loko on aggregate (about 0.65x derived). The loko 0.12.1 result in all.csv may not match the current head. Lua not part of the suite.",
+    "found_via": [
+      "seed-record pass: https://raw.githubusercontent.com/ecraven/r7rs-benchmarks/master/all.csv plus https://gitlab.com/weinholt/loko README"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://gitlab.com/weinholt/loko"
   },
   {
     "name": "Numba",
@@ -7784,5 +8144,41 @@
       "w12-interp-blogs"
     ],
     "id": "https://github.com/thakeenathees/pocketlang"
+  },
+  {
+    "name": "TypeScriptCompiler (ASDAlexander77, LLVM-based TypeScript AOT/JIT)",
+    "repo_url": "https://github.com/ASDAlexander77/TypeScriptCompiler",
+    "language": "C++",
+    "domain": "interpreters-and-vms",
+    "category": "language-interpreters",
+    "baseline": "V8 (Node.js) running the same TypeScript/JavaScript; no named comparison found",
+    "baseline_in_list": true,
+    "metric": "other",
+    "workload": "No speed benchmark found. The only measurements in the repo are peak working-set memory for a ray tracer (256x256 and 512x512) and an n-body simulation under the compiler's own three memory models (-mm=gc, -mm=rc, -mm=none), which compare the compiler with itself.",
+    "claimed_speedup": "No speed numbers. README says the compiler produces native executables, WebAssembly or JIT runs 'no Node.js or JavaScript runtime required' and states no speedup against Node, V8 or Deno. Only memory figures in README and docs/memory-models.md: a ray tracer at 114 MB under -mm=none holds 4.1 MB with reference counting versus 5.8 MB with garbage collection.",
+    "evidence_tier": "D",
+    "benchmark_url": null,
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-06",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "776 stars",
+    "has_code": true,
+    "tradeoffs": "Compiles a TypeScript subset with its own semantics (strict null checks, a custom default library for JavaScript built-ins, no JS runtime) to LLVM/MLIR native executables, WebAssembly or JIT; garbage collection by default, with reference counting or no freeing selectable via -mm. Runs without Node.js, so Node APIs and npm packages are not available unless its default library provides them (not verified). Builds against LLVM/MLIR 22.1.8 (prebuilt MLIR releases exist).",
+    "caveats": "Tier D: no numeric comparison against Node, V8, Deno or any named baseline found in README, docs/ (memory-models.md and others), tslang/ or scripts/ listings, or in a web search. The README header badge says the project is developed by Claude Code. Included at tier D only because the seed list names it and it has 776 stars; a speed claim vs Node would need an independent benchmark.",
+    "found_via": [
+      "seed-record pass: https://github.com/ASDAlexander77/TypeScriptCompiler README and docs/memory-models.md"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w12-seed-c"
+    ],
+    "id": "https://github.com/asdalexander77/typescriptcompiler"
   }
 ]
