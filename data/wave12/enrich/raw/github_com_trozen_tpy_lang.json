@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/trozen/tpy-lang",
+  "one_liner": "Pre-1.0 compiler from annotated Python to C++23 binaries without GC or refcounting; no published speed numbers against CPython.",
+  "what_it_does": "TurboPython (tpy) compiles statically annotated Python (function signatures and class fields annotated, locals inferred) into C++23 and builds a native binary at -O3 with g++ 13+ or clang++ 19+. `tpy` runs a file or opens a REPL; `tpyc -o out/` emits .hpp/.cpp files, the runtime headers and a sources.cmake for an existing C++ build, and a module marked `# tpy: ext_module` builds into a CPython extension. Source stays valid Python syntax, but semantics differ: every value has one owner (storing an object still in use copies it, with a warning), integer literals and len() are overflow-checked int32, and only TurboPython source plus its standard-library subset can be imported, never CPython packages.",
+  "how_it_is_fast": "Ahead-of-time translation to plain C++: dataclasses become structs of fixed-width fields, lists are std::vector, parameters are borrowed as const& or std::string_view, and an ownership model (Own[T] moves, Rc, Arc[Mutex[T]]) replaces garbage collection and reference counting, so objects carry no header or refcount traffic. int32 is the default integer width with checked arithmetic (add_check) while plain `int` is a BigInt; generators lower to resumable frame state machines whose step result is a std::expected with an empty StopIteration value, and spawned threads run without a GIL. The developer's mandelbrot note (i7-11700K, g++-13, min of 21 runs) puts the generated scalar loop at 2.73 ms against 2.51 ms for a direct hand translation to C++, about 8% behind.",
+  "when_to_use": [
+    "New CPU-bound code you are willing to write as annotated, ownership-aware Python and ship as a standalone native binary with no Python runtime.",
+    "Generating readable C++ (.hpp/.cpp plus sources.cmake) from Python-syntax source to embed in a C++ project, calling C/C++ through @native and exposing functions back with @export(binding=\"C\").",
+    "Writing a CPython extension module in Python syntax (`# tpy: ext_module`) instead of Cython syntax, for self-contained code that imports nothing from PyPI.",
+    "Multi-threaded loops that need real OS threads with no GIL, where compile-time Send/Sync checks are wanted.",
+    "Evaluation and experiments rather than production: run the same program under CPython and tpy and byte-compare outputs, as the project's own example ports do."
+  ],
+  "when_not_to_use": [
+    "Existing Python code bases or anything importing PyPI packages (numpy, requests and so on): nothing from CPython can be imported, and stdlib coverage is partial (docs/STDLIB_ROADMAP.md: json ~72%, asyncio ~40%, itertools ~35%, collections ~15%, threading not ported).",
+    "Code where a silent wrong result is unacceptable: BUGS.md holds about 1,860 prioritized entries (155 HIGH, 948 MED, 758 LOW), hundreds tagged silent wrong output, miscompile or dangling view, plus a BFS that hangs where CPython finishes in 0.158 s; the README warns that known bugs 'can produce wrong results silently'.",
+    "When you need demonstrated speed over CPython or another Python compiler: there is no CPython timing for compiler output anywhere in the repo, and the developer's 2026-10-05 notes have it slower than Shed Skin on sieve and ant.",
+    "Code that depends on CPython reference aliasing: containers own copies, so the README's example prints `boiler-3` where CPython prints `renamed` (warned at compile time, but output changes).",
+    "Windows-native or MSVC toolchains (WSL only), or machines with only g++ 12 / clang 18 or older and no network for the [bundled] zig toolchain."
+  ],
+  "integration": {
+    "form": "module (pip package tpy-lang providing the tpy/tpyc compiler); `tpyc -o` also writes a self-contained source-drop of generated C++, runtime headers and sources.cmake",
+    "dependencies": "Python 3.12+ and a C++23 compiler (the optional [bundled] extra installs ziglang); vendored PCRE2, zlib, Mbed TLS, Howard Hinnant's date and the Mozilla CA bundle are compiled in only when re, zlib/gzip, ssl or datetime time zones are imported",
+    "min_toolchain": "Python 3.12+; C++23 plus the GCC statement-expression extension: g++ 13+ or clang++ 19+ (MSVC unsupported); builds use -O3 with no -march",
+    "platforms": "Linux and macOS; Windows through WSL only; no architecture-specific code documented",
+    "thread_safety": "No GIL: tpy.thread.spawn runs OS threads with Send/Sync checked at compile time; shared mutable state goes through Arc[Mutex[T]], RwLock, atomics or channels. Memory safety is partial: aliasing rules are not enforced, and mutating a container while a reference into it is live is only a warning.",
+    "drop_in_for_baseline": "partial — source stays valid Python syntax, but programs need annotations, ownership edits (copy(), Own[T]), int32-default integers and TurboPython-only imports, and CPython packages cannot be imported"
+  },
+  "gotchas": [
+    "Harness flaw in the Shed Skin comparison (TODO.md, measured 2026-10-05, no hardware, compiler or flags given): the sieve notes chain the stock list[bool] build at 1.66 s, the same program over list[uint8] at 1.52 s, and an unmerged one-pass stepped-slice-assignment rewrite at 1.15 s, so the quoted '1.14 s vs Shed Skin 0.66 s' is a hand-patched build; the shipped 0.6.2 compiler is about 2.5x slower than Shed Skin on sieve (derived from page data), and 0.69 s needs GLIBC_TUNABLES malloc thresholds. The ported programs also differ from Shed Skin's sources (sieve uses BigInt `int` elements; ant spells out Neumaier summation instead of sum()).",
+    "The 6,500-program test suite builds every case with no optimization flags (opt_flags=[], NDEBUG undefined) while every user build is -O3; TODO.md says optimizer-exposed undefined behaviour, such as a dangling reference the -O0 build tolerates, has no harness form.",
+    "Integer and evaluation traps: `int` is a BigInt while literals default to int32, so annotating a loop bound `Final[int]` made mandelbrot 1.7x slower (2.73 to 4.67 ms); int32 overflow stops the program instead of widening; call arguments and operands are evaluated in the C++ compiler's order, not left to right; sum() over floats is naive and differs from CPython 3.12+ by an ULP, which changed 124 of 400 output lines in the ant port until it was hand-written.",
+    "Name collision: the PyPI package 'turbopython' (ribalba/TurboPython 0.1.0) advertises 37.1x and 59.4x over pure Python, and web-search summaries attribute those numbers to tpy-lang; they belong to the other project."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Shed Skin or Codon only when you need deterministic ownership-based memory with no garbage collector, no GIL and readable C++ to embed in a C++ build; Shed Skin is faster on the developer's own sieve and ant runs and needs no annotations, and Codon has independent benchmark numbers. Prefer Cython or mypyc when the code must keep importing CPython packages, which tpy cannot do.",
+  "verified_claims_summary": "There is no benchmark of tpy output against CPython: the repo has none, tpy-lang.org was unreachable here, and tpy-examples defers per-example speedup numbers until a harness can time both runs on one machine. Developer notes only: a 15 MB, 20K-record JSON parse in tpy went from 68 to 59 ms after library changes, and the '7.6x vs CPython' figure is for hand-edited generated C++ at 23 ms with the CPython side unspecified (in a section headed 2026-03-12/18); on 2026-10-05, Shed Skin's ant ran 2.87 s under tpy against 2.58 s (Boost flat map) and 3.30 s (standard containers) under Shed Skin, and sieve 1.66 s stock against 0.66 s; mandelbrot on an i7-11700K with g++-13 ran 2.73 ms against 2.51 ms for a direct C++ translation.",
+  "status_note": "Very active (2,532 commits, last 2026-10-06, tpy-lang 0.6.2 on PyPI 2026-09-30) but pre-1.0 with breaking releases, 6 stars and 0 open issues; Apache-2.0 WITH LLVM-exception lets compiled binaries ship without the notice, yet with silent miscompiles open and only first-party developer timings, it is for evaluation, not production.",
+  "sources_read": [
+    "https://github.com/trozen/tpy-lang",
+    "https://github.com/trozen/tpy-lang/commits",
+    "https://github.com/trozen/tpy-lang/issues",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/README.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/BUGS.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/RELEASE_NOTES.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/NOTICE",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/scripts/perf/generator_frames.py",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/docs/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/docs/NATIVE_INTEROP.md",
+    "https://raw.githubusercontent.com/trozen/tpy-lang/HEAD/docs/STDLIB_ROADMAP.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/README.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/shedskin/README.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/shedskin/sieve/README.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/shedskin/sieve/sieve.py",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/shedskin/ant/README.md",
+    "https://raw.githubusercontent.com/trozen/tpy-examples/HEAD/shedskin/ant/ant.py",
+    "https://pypi.org/pypi/tpy-lang/json",
+    "https://pypi.org/pypi/turbopython/json"
+  ],
+  "confidence": 0.75
+}
