@@ -21,3 +21,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - FEX-Emu/FEX: x86 and x86-64 emulator for ARM64 with a JIT, not in data (Box64 enricher, 2026-10-06); seed candidate (baseline QEMU, like Box64 and rv8).
 - dstogov/ir: the IR JIT framework behind the PHP 8.4+ JIT; README claims code about 5% slower than gcc -O2 compiled about 40x faster (PHP JIT enricher, 2026-10-06); seed candidate.
 - TurboPython (trozen/tpy-lang): typed Python to C++ without GC, named in the Shed Skin README, benchmark claims unchecked (Shed Skin enricher, 2026-10-06); seed candidate.
+- Wastrel (Andy Wingo, codeberg.org/andywingo/wastrel): Wasm-to-C compiler supporting Wasm 3.0, snippet claims CoreMark 2-5% slower than native (w2c2 enricher, 2026-10-06); codeberg blocked here; seed candidate.
