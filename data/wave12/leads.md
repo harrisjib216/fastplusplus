@@ -28,3 +28,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - HashLink (HaxeFoundation/hashlink): Neko successor, README has no numbers (NekoVM enricher, 2026-10-06); weak lead.
 - aengelke/fadec (x86 decoder), aengelke/rellume (lifter), okitec/farmdec, the EOS VM Optimized Compiler in AntelopeIO/spring (LLVM AOT) and the Biotite static binary translator (repo unknown): leads from the Instrew and EOS VM enricher (2026-10-06).
 - jrsonnet (Rust jsonnet implementation, faster than sjsonnet on most cases in its docs/benchmarks.adoc; batch 60 verifier, 2026-10-06); seed candidate.
+- atJIT (kavon/atJIT, autotuning JIT built on Easy::jit) and ClangJIT (Hal Finkel, arXiv 1904.08555, repo not checked): leads from the Easy::jit enricher (2026-10-06).
