@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/dotnet/runtime",
+  "one_liner": "The .NET runtime's RyuJIT tiered JIT runs kostya's brainfuck interpreters 2-7x faster than Node.js, LuaJIT and PyPy, though still behind HotSpot.",
+  "what_it_does": "dotnet/runtime holds CoreCLR, the RyuJIT compiler, the base class libraries, NativeAOT and the native host components (dotnet muxer, hostfxr, nethost). Getting the speed here means writing hot code in C# (or another CLR language) instead of Lua, Python or JavaScript; it does not run those languages. A C++ program can use the code in two ways. It can host the runtime through nethost/hostfxr: hostfxr_initialize_for_runtime_config, then hdt_load_assembly_and_get_function_pointer returns a native function pointer to a static managed method. Or the C# code can be compiled ahead of time with NativeAOT.",
+  "how_it_is_fast": "C# is statically typed and has value types (structs, ref structs, ref returns). RyuJIT therefore compiles IL with a conventional optimizing pipeline (SSA, value numbering, range-check elimination, register allocation) and needs no speculative type guards. Tiered compilation emits quick Tier0 code first. A method is promoted to Tier1 after 30 calls, once a 100 ms startup-quiet period has passed (TC_CallCountThreshold, TC_CallCountingDelayMs). Long-running loops move to optimized code through on-stack replacement. Tier0 code is instrumented by default (TieredPGO=1), so Tier1 compiles with Dynamic PGO counts for inlining and layout. Generic code instantiated over value types is specialized per type; kostya's 'staged' C# brainfuck variant uses this to compile the BF program into nested generic structs at run time.",
+  "when_to_use": [
+    "You are choosing a managed or JIT language for CPU-bound, interpreter-style or branchy code and would otherwise use JavaScript, Lua or Python. On kostya's op-tree brainfuck interpreter .NET 10 takes 1.280 s, against 2.954 s for Node.js 26.5 and 9.398 s for PyPy 7.3.23.",
+    "Long-running services where tiered JIT warm-up is amortised and Dynamic PGO can specialise hot paths.",
+    "Code that benefits from runtime generic specialisation over structs (staged interpreters, expression evaluators). The kostya staged C# variant runs bench.b in 0.373 s, but it is a different program from the 1.280 s one.",
+    "A C++ application that wants a safe, garbage-collected extension or plugin layer: call managed static methods through function pointers from hostfxr, or link a NativeAOT-built library.",
+    "Startup-sensitive tools where NativeAOT is acceptable: the plb2 NativeAOT build (.NET 8, Apple M1) beat LuaJIT and PyPy on all 4 tasks and OpenJDK 20 on 3 of 4."
+  ],
+  "when_not_to_use": [
+    "Peak JIT throughput against the JVM: in kostya, Java 24 HotSpot beats .NET on every shared test (bench.b 1.191 vs 1.280 s, mandel.b 13.041 vs 15.576 s, base64 1.435 vs 2.374 s, matmul 3.057 vs 4.506 s).",
+    "You have to keep existing Lua, Python or JavaScript code: this is a different language and runtime, not a faster engine for theirs.",
+    "Memory-tight embedding: the .NET process starts at about 36.9 MiB RSS on bench.b, against 2.5 MiB for LuaJIT, and hosting means shipping or locating the runtime and hostfxr.",
+    "Short-lived processes that run only JIT Tier0 code: tier-up waits for call counting after a 100 ms quiet period (10x longer on a single-CPU process), so use ReadyToRun or NativeAOT there.",
+    "Numeric array kernels written with rectangular arrays: kostya's C# matmul (double[,]) is slower than Java, Node.js and PyPy."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": ".NET runtime (shared framework or self-contained); nethost/hostfxr for native hosting; ICU on Linux for globalization (NativeAOT can link it statically)",
+    "min_toolchain": "kostya used .NET SDK 10.0.100 (net10.0); plb2 used .NET SDK 8.0.100 with PublishAot; a C++ host only needs the C ABI of nethost/hostfxr (__stdcall on Windows)",
+    "platforms": "RyuJIT targets x64, x86, Arm32, Arm64, LoongArch64 and RISC-V64, with a WASM target in progress (src/coreclr/jit/CMakeLists.txt); Windows, Linux, macOS and FreeBSD build targets. The official OS support matrix was not read.",
+    "thread_safety": "Multi-threaded runtime; the execution engine ensures a single jitted copy of a method when several threads trigger JIT at once, and Tier1 recompiles on a background thread-pool thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The plb2 .NET numbers are NativeAOT, not RyuJIT JIT mode: every src/csharp/*.csproj sets PublishAot=true. They are also hyperfine whole-process times on an M1, so they set an AOT binary against JIT runtimes that include their startup.",
+    "Harness flaw in kostya: the LuaJIT row runs a different program (bf_jit.lua builds one closure per op over an FFI uint8 tape) from the switch-on-op tree that C#, Java, JavaScript and PyPy share. The 4.4x LuaJIT gap therefore mixes program shape with JIT quality.",
+    "Harness flaw in kostya, against .NET: C# matmul uses rectangular double[,] arrays and Java uses jagged double[][], so .NET's matmul loss (4.506 vs 3.057 s) is not a like-for-like JIT comparison. A jagged-array or Span version was not measured.",
+    "kostya times only the region between its start and stop socket notifications, so runtime startup is excluded but Tier0, OSR and Tier1 compilation are included. The base64 and JSON rows measure library code, not the JIT."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Julia or Chez Scheme for interpreter-style code. In the same kostya table it is faster on bench.b (1.280 vs 1.564 and 1.758 s) and mandel.b (15.576 vs 30.315 and 30.884 s), and it starts at far less memory than Julia (36.9 vs 244.0 MiB). Pick Julia for numeric array code, and LuaJIT or libriscv when you need a tiny embeddable engine.",
+  "verified_claims_summary": "kostya/benchmarks ran these on an Intel Xeon E-2324G with .NET SDK 10.0.100, `dotnet build -c Release` and the default tiered JIT with Dynamic PGO, timing only the benchmark region. The same op-tree brainfuck interpreter took 1.280 s on bench.b and 15.576 s on mandel.b, against Node.js 26.5 (2.954 / 34.692 s) and PyPy 7.3.23 (9.398 / 41.153 s); LuaJIT 2.1, which runs a closure-based variant, took 5.686 / 31.804 s. Java 24 was faster on every shared test. Separately, plb2 timed a NativeAOT build (.NET 8, Apple M1) against OpenJDK 20, LuaJIT and PyPy.",
+  "status_note": "Very active (commit 2026-10-06, 18.3k stars, 5k+ open issues, 678 open PRs, MIT). Using it from C++ means hosting the runtime or exporting a NativeAOT library, so 'copyable' means moving hot code to C#, not vendoring a JIT.",
+  "sources_read": [
+    "https://github.com/dotnet/runtime",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/README.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/design/coreclr/jit/ryujit-overview.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/design/features/tiered-compilation.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/design/features/OnStackReplacement.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/design/features/DynamicPgo.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/design/features/native-hosting.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/docs/workflow/requirements/linux-requirements.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/src/coreclr/inc/clrconfigvalues.h",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/src/coreclr/jit/CMakeLists.txt",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/src/coreclr/nativeaot/docs/README.md",
+    "https://raw.githubusercontent.com/dotnet/runtime/HEAD/src/coreclr/nativeaot/docs/compiling.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.cs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/brainfuck.csproj",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/brainfuck-staged.csproj",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf-staged.cs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.java",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.js",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf_jit.lua",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf3.py",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/docker/Dockerfile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.cs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.java",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/HEAD/README.md"
+  ],
+  "confidence": 0.7
+}

@@ -12,3 +12,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - lumen (lucid-softworks/lumen, Rust JS engine): 3953 on macOS v8-v7 in ahaoboy CI (QuickJS enricher, 2026-10-06); seed candidate.
 - vnmakarov/ruby rtl_mjit_branch (https://github.com/vnmakarov/ruby/tree/rtl_mjit_branch): RTL instructions plus GCC/LLVM MJIT for CRuby, README claims 6.18x geomean over Ruby 2.0 with GCC, optcarrot 2.7x (Dino enricher, 2026-10-06); vnmakarov/mir is already catalogued.
 - BEAM.com (sntran/BEAM.com): Erlang/OTP plus Elixir in one Cosmopolitan binary with docs/BENCHMARKS.md startup and fib numbers (BeamAsm enricher, 2026-10-06); seed candidate, modified runtime.
+- Topaz (topazproject/topaz, kostya fork): Ruby on RPython, beats CRuby 2.7 in kostya/jit-benchmarks (Cython enricher, 2026-10-06); seed candidate.
