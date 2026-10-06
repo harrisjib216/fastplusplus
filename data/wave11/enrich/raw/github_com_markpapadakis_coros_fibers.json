@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/markpapadakis/coros-fibers",
+  "one_liner": "Small x86-64 Linux stackful coroutine switch (libcoro-style assembly) plus a priority fiber scheduler; no baseline compared.",
+  "what_it_does": "Two APIs in one coroutines.h/coroutines.cpp pair. The low level is coro_transfer(prev, next) and coro_resume(ctx) for raw stack switches, coro_init/coro_init_with_trampoline to prepare a new stack, and coro_stack::alloc for malloc or mmap stacks with guard pages. On top sits a thread_local Fibers::scheduler with schedule(lambda, prio), yield, suspend/resume and await, using eight priority run lists; it is not a drop-in for ucontext or Boost.Context.",
+  "how_it_is_fast": "coro_transfer is about 15 instructions of hand-written assembly: push the six System V callee-saved registers (rbp, rbx, r12-r15), store rsp, load the other context's rsp, pop six registers and ret. It skips the signal-mask syscall and FPU state that swapcontext saves. The scheduler picks the next fiber in O(1) with a trailing-zeros scan of an 8-bit ready mask over intrusive doubly linked lists, and recycles fibers and stacks from free lists.",
+  "when_to_use": [
+    "Reading or borrowing a minimal x86-64 System V context switch (about 30 lines of assembly) for your own runtime.",
+    "Single-threaded, Linux x86-64 event loops that want stackful fibers with simple priorities and are willing to vendor the code.",
+    "Learning material: the comments walk through the ABI rules, the stack layout for new coroutines and how Go's scheduler compares."
+  ],
+  "when_not_to_use": [
+    "Any platform other than Linux x86-64: the header has #error for everything else.",
+    "Production use without a review: last commit 2016-08-18, 2 commits, no tests, and it depends on a bundled 'Switch' utility library (26 headers) plus valgrind headers.",
+    "Deep call chains in fibers: scheduler fibers get a 4096-byte malloc'd stack with no guard page (get_fiber calls alloc(4096) without protect).",
+    "When you need a measured comparison: pick a sibling like minicoro or libaco that benchmarks against ucontext or libco."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "bundled Switch/ headers (switch.h, switch_ll.h, switch_vector.h, timings.h and others); valgrind/valgrind.h because VALGRIND_SUPPORT is hard-defined",
+    "min_toolchain": "C++14 (Makefile uses -std=c++14 -O3); GCC/Clang inline asm and attributes",
+    "platforms": "Linux x86-64 only",
+    "thread_safety": "Scheduler and main context are thread_local, so one scheduler per OS thread; fibers cannot migrate between threads (not documented beyond that)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Bug in the low-level API: coro_init(ctx, func, arg, stack) passes func and arg to coro_init_with_trampoline, which ignores both and never writes them to the stack; the default coroInit trampoline then reads func and arg from 16(%rbp) and 8(%rbp), and its own comment says this does not work at -O1 or higher (the Makefile builds at -O3). Only the custom-trampoline path, which the fiber scheduler and the switch benchmark use, is usable.",
+    "The switch saves only the six general-purpose callee-saved registers, not the MXCSR or x87 control words that the ABI also treats as callee-saved, so code that changes rounding modes per coroutine will leak them across switches.",
+    "The benchmark behind the 58-62 million switches/s figure is in coroutines.cpp under #ifdef EXAMPLE but inside #if 0, and it calls s1.Alloc(4096) where the method is alloc, so it does not compile as shipped; the enabled example times 65,536 scheduler yields between two fibers.",
+    "The destructor's non-priority branch compares against &read instead of &ready, so building with HAVE_FIBER_PRIOS undefined fails."
+  ],
+  "pick_this_over_siblings_when": "Rarely: minicoro (9 cycles vs 352 for ucontext, cross-platform, single header) and libaco (measured against libco) cover the same niche with benchmarks and maintenance; pick coros-fibers only if you want its tiny priority scheduler as a starting point on Linux x86-64.",
+  "verified_claims_summary": "The author reports 58-62 million raw coro_transfer switches per second and 21 million per second through the fiber scheduler on an unnamed 2 GHz Xeon (about 16-17 ns and 48 ns per switch, derived from page data), with no baseline, no compiler version and no published run; the switch benchmark code exists only as disabled example code in coroutines.cpp.",
+  "status_note": "Abandoned since 2016 with 2 commits; MIT-licensed and small enough to copy, but the low-level coro_init path is broken and it needs its bundled Switch headers.",
+  "sources_read": [
+    "https://github.com/markpapadakis/coros-fibers",
+    "https://github.com/markpapadakis/coros-fibers/tree/master/Switch",
+    "https://raw.githubusercontent.com/markpapadakis/coros-fibers/HEAD/README.md",
+    "https://raw.githubusercontent.com/markpapadakis/coros-fibers/HEAD/coroutines.h",
+    "https://raw.githubusercontent.com/markpapadakis/coros-fibers/HEAD/coroutines.cpp",
+    "https://raw.githubusercontent.com/markpapadakis/coros-fibers/HEAD/Makefile"
+  ],
+  "confidence": 0.65
+}
