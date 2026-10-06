@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/struct/isoalloc",
+  "one_liner": "Security-hardened C11 malloc replacement (size-isolated zones, guard pages, canaries) that runs near glibc ptmalloc speed.",
+  "what_it_does": "IsoAlloc replaces malloc/calloc/realloc/free, either via LD_PRELOAD or DYLD_INSERT_LIBRARIES or by linking it in. A C++ build also overloads new/delete. It isolates allocations by size into 4 MB zones and adds a private-zone API (iso_alloc_new_zone, iso_alloc_from_zone, optional pointer tagging) for strict per-type isolation. Its main purpose is hardening against heap exploitation (double free, overflow, UAF), not raw speed.",
+  "how_it_is_fast": "Each zone tracks chunk state in a 2-bit-per-chunk bitmap that is scanned 64 bits at a time (with ARM NEON loops when available), so it avoids linked free lists. Several caches cut the hot path: a per-zone free-bit-slot list, a chunk-to-zone lookup table keyed on the address MSBs, a thread-local MRU zone cache (8 entries), and a thread-local free quarantine that batches frees. Default zones for 16-8192 B are created in the constructor.",
+  "when_to_use": [
+    "Client-side desktop or mobile C/C++ apps with a risky attack surface (parsers, media, browsers), where heap hardening is worth some speed and memory",
+    "Replacing glibc malloc via LD_PRELOAD (use make library_less_strict) to get double-free, canary and guard-page checks at roughly ptmalloc speed in mostly single-threaded programs",
+    "Fuzzing and testing builds, where FUZZ_MODE, ALLOC_SANITY (GWP-ASan-like sampling) and leak detection catch bugs ASan misses (wild, unaligned and double frees)",
+    "Code that wants explicit per-type heaps through private zones, optionally with ARM MTE on armv8.5-a"
+  ],
+  "when_not_to_use": [
+    "Allocation-heavy multithreaded servers: all threads share one global lock on the root; in mimalloc-bench larsonN took 1328.9 s vs about 1.0-1.2 s for jemalloc and mimalloc, and redis 7.58 vs 3.16 (je) and 2.78 (mi)",
+    "Memory-constrained processes: RSS is several times higher than jemalloc/mimalloc (cfrac 30612 KB vs 4552/2484 KB; redis 50516 vs 9492/7084 KB) because of 4 MB zones, guard pages and canaries",
+    "32-bit targets (not supported); Windows (not supported); FreeBSD has only partial support with flaky CI",
+    "When you only need speed: jemalloc or mimalloc beat it on every mimalloc-bench test except a tie on barnes",
+    "Single allocations above 4 GB (the big-zone limit)"
+  ],
+  "integration": {
+    "form": "shared lib (LD_PRELOAD/DYLD_INSERT_LIBRARIES or linked), or object files via make c_library_objects; C++ new/delete via make cpp_library",
+    "dependencies": "none beyond libc and pthreads (macOS links the Security framework)",
+    "min_toolchain": "C11 (C++17 for the C++ interface); Makefile defaults to clang with -O2 and -flto",
+    "platforms": "64-bit Linux and macOS (x86-64, arm64), Android arm64 via ndk-build, partial FreeBSD, minimal Solaris/Illumos",
+    "thread_safety": "Thread safe with THREAD_SUPPORT=1 (default): a global pthread mutex (or spinlock with USE_SPINLOCK) guards the root, plus TLS zone caches and quarantine; THREAD_SUPPORT=0 removes locking for single-threaded programs",
+    "drop_in_for_baseline": "partial: drop-in malloc replacement via LD_PRELOAD, but the default build aborts on pointers it does not own (use library_less_strict), realloc always returns a new chunk, mallopt is unsupported (#219) and macOS hooking is incomplete (#213)"
+  },
+  "gotchas": [
+    "The PERFORMANCE.md 'jemalloc' row is not a jemalloc measurement: it runs LD_PRELOAD=./libjemalloc.so build/tests, but build/tests is compiled with the IsoAlloc sources and calls iso_alloc/iso_free directly (its output even prints 'iso_alloc/iso_free'), so that row times IsoAlloc again",
+    "The malloc_cmp_test comparison uses two binaries (build/tests calling iso_* directly, with LTO, vs build/malloc_tests calling malloc), times with clock() CPU time, and runs single-threaded on an ARM64 docker container on macOS; the perf-stat section calls the same host an 'AWS t2.xlarge' while showing armv8 PMU counters",
+    "The mimalloc-bench table was produced with 'make library_benchmark', which turns off canaries, freelist randomization, pointer masking and ABORT_ON_UNOWNED_PTR, not the secure default configuration the text implies",
+    "Default build behavior: aborts on unowned pointers, returns a PROT_NONE page for malloc(0), and prints leak and usage reports from the destructor in DEBUG/LEAK_DETECTOR builds; MAX_ZONES (8192) caps the total heap and causes OOM-style aborts if exceeded"
+  ],
+  "pick_this_over_siblings_when": "Pick IsoAlloc over speed-first allocators like mimalloc-style siblings (v8malloc, FastAlloc, Kaname-Shiki) or Mesh when heap-exploit mitigation is the goal and you can accept higher RSS and poor multithreaded scaling. If raw throughput or memory footprint matters, pick one of those instead.",
+  "verified_claims_summary": "In a single-threaded micro test of about 1.8 million alloc/calloc/realloc operations (sizes 16 B-42 KB, every other one freed), the author measured IsoAlloc at 0.081 s, 1.04 s and 0.83 s vs glibc 2.31 ptmalloc at 0.66 s, 2.73 s and 1.94 s. That was on an ARM64 Ubuntu 20.04 docker container on a macOS host, clang -O2, with flags inferred from the Makefile. The 'jemalloc' row in the same table actually re-runs IsoAlloc, so it gives no jemalloc comparison, and mimalloc-bench shows IsoAlloc slower than jemalloc and mimalloc.",
+  "status_note": "Active (last commit 2026-05-06), Apache-2.0, small enough to vendor; positioned by its author as fast enough for client-side apps but not ready for performance-sensitive server workloads.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/struct/isoalloc/master/README.md",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/Makefile",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/tests/tests.c",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/include/conf.h",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/include/iso_alloc.h",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/src/iso_alloc_interfaces.c",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/MEMORY_TAGGING.md",
+    "https://raw.githubusercontent.com/struct/isoalloc/master/SECURITY_COMPARISON.MD",
+    "https://github.com/struct/isoalloc/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.75
+}

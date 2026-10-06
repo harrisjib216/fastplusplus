@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/spdk/spdk",
+  "one_liner": "Userspace, polled-mode NVMe driver and storage stack that beats kernel io_uring/libaio on IOPS per core.",
+  "what_it_does": "SPDK is a set of C libraries and apps (NVMe driver, bdev block layer, blobstore, NVMe-oF/iSCSI/vhost targets) that run the storage stack inside your process. The NVMe device is unbound from the kernel and handed to vfio-pci/uio. You then submit asynchronous commands on queue pairs (spdk_nvme_ns_cmd_read/write) and poll for completions with spdk_nvme_qpair_process_completions(). The interface is entirely different from POSIX read/write and has no filesystem.",
+  "how_it_is_fast": "It is a kernel-bypass driver: the device's PCI BAR is mapped into the process, so submissions are MMIO doorbell writes and completions are polled from host memory, with no syscalls, interrupts or context switches. Each NVMe hardware queue pair belongs to one thread and has no locks or atomics, so throughput scales linearly with dedicated cores. Data moves zero-copy via DMA into hugepage-backed buffers.",
+  "when_to_use": [
+    "Dedicated storage appliances or services (NVMe-oF target, vhost for VMs, custom KV/DB engines) that own whole NVMe SSDs",
+    "Small-block (4 KB) random I/O at high queue depth where kernel per-I/O CPU cost is the bottleneck and you want maximum IOPS per core",
+    "Low-latency devices such as Optane/P5800X-class SSDs, where software overhead dominates device latency",
+    "Applications already built around run-to-completion, thread-per-core, message-passing designs",
+    "Benchmarking a device's raw capability with spdk_nvme_perf (the docs say it gets up to 2.6x more IOPS/core than fio with the SPDK plugin)"
+  ],
+  "when_not_to_use": [
+    "You need a filesystem, page cache, or POSIX file semantics: an unbound device disappears from /dev and kernel filesystems on it are gone",
+    "Shared or general-purpose hosts where several processes or the kernel must use the same disk",
+    "Low or bursty load: polling burns 100% of the dedicated cores unless you use interrupt mode (PCIe and RDMA only, primary process only), which gives up part of the win",
+    "Environments without hugepages, IOMMU/vfio access or root setup (many containers and managed clouds)",
+    "When io_uring with polled I/O and registered buffers is already fast enough; it keeps the kernel stack and needs no device unbinding (see liburing)"
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib (--with-shared, libspdk.so); also standalone apps",
+    "dependencies": "DPDK (submodule or system), ISA-L and ISA-L crypto (default on), optional liburing, RDMA verbs, etc.; installed via scripts/pkgdep.sh",
+    "min_toolchain": "C11 (-std=gnu11), C++11 for C++ parts; GCC or clang; build is ./configure && make",
+    "platforms": "Linux and FreeBSD; x86-64, aarch64, ppc64, riscv64 and loongarch build paths exist in mk/spdk.common.mk",
+    "thread_safety": "A queue pair must only be used by one thread at a time (not enforced, violating it is undefined behavior); controller attach/detach/reset functions are documented as not thread safe; some getters are documented as thread safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "CONFIG_ARCH defaults to native, so binaries are built with -march=native and may not run on other CPUs; set the architecture explicitly for distributed builds",
+    "Setup needs hugepages plus scripts/setup.sh to bind devices to vfio-pci (preferred with an IOMMU) or uio_pci_generic; some devices misbehave under vfio-pci and need IOMMU passthrough",
+    "I/O buffers must be DMA-safe (allocated with spdk_dma_malloc or from hugepage memory), not ordinary malloc memory",
+    "Blobstore/lvol had data-corruption bugs on concurrent writes and unmaps to unallocated clusters (issues #3688, #3689, closed); the raw NVMe driver path was not implicated"
+  ],
+  "pick_this_over_siblings_when": "Pick SPDK over liburing when you can own the whole NVMe device and dedicate polling cores, and per-core IOPS matters more than keeping kernel filesystems. xNVMe offers one API over both SPDK and io_uring backends if you want to switch later, and XRP keeps the kernel path but pushes lookups into BPF.",
+  "verified_claims_summary": "The only openable numbers come from an independent fio issue (#1206) on an Intel P5800X Optane SSD, Fedora 33, kernel 5.9.16, fio 3.21. Fio io_uring 4K randwrite at iodepth 8 on one core reached 638k IOPS (2492 MiB/s), while SPDK perf reached about 4000 MB/s on one core, roughly 1.6-2x (derived from page data); no maintainer analysis or tuned io_uring settings appear in the thread. The CHEOPS '23 paper's claim that io_uring is more than an order of magnitude slower than SPDK at high load and scale is known from search snippets only (the PDF host is egress-blocked).",
+  "status_note": "Very active (v26.09 released, v27.01 in progress, last commit 2026-10-01). BSD-3-Clause and copyable, but heavy: it is a framework with DPDK underneath, not a small library to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/spdk/spdk/master/README.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/userspace.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/nvme.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/nvme_interrupt_mode.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/system_configuration.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/getting_started.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/doc/bdev.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/include/spdk/nvme.h",
+    "https://raw.githubusercontent.com/spdk/spdk/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/spdk/spdk/master/CONFIG",
+    "https://raw.githubusercontent.com/spdk/spdk/master/mk/spdk.common.mk",
+    "https://raw.githubusercontent.com/spdk/spdk/master/scripts/pkgdep.sh",
+    "https://github.com/axboe/fio/issues/1206",
+    "https://github.com/spdk/spdk/issues?q=is%3Aissue+performance"
+  ],
+  "confidence": 0.7
+}
