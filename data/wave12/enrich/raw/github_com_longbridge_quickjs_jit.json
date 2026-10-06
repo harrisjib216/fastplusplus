@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/longbridge/quickjs-jit",
+  "one_liner": "Tiered Cranelift JIT bolted onto a patched QuickJS-NG via rquickjs; 20-50x the interpreter on scalar kernels, still slower than Bun everywhere.",
+  "what_it_does": "A fork of the rquickjs Rust bindings that ships a patched QuickJS-NG v0.15.1 (about 28 integration patches adding a versioned JIT ABI, type-feedback probes, inline-frame recovery and fast native entry) plus a separate quickjs-jit-runtime crate. Embedders keep the rquickjs API (the library name stays rquickjs) and call Jit::attach(&runtime, JitConfig) or JitRuntime::builder(); compiled code is installed when the host calls jit.poll() on the runtime thread. Without an attached backend the same binary is a plain interpreter.",
+  "how_it_is_fast": "Hot functions and loops (default thresholds 32 calls / 56 loop iterations) are profiled through interpreter feedback probes and compiled on one background worker by Cranelift 0.116: a Tier 1 baseline compiler and a Tier 2 optimizing tier built on a semantic SSA IR with Int32/Float64 speculation, shape-token property guards, a bounded polymorphic inline cache, effect-free inlining, loop-invariant guard motion, OSR and deoptimization back to the interpreter. Automatic tiering runs profitability trials and demotes artifacts that do not beat the interpreter, which is why string, JSON, regexp, collection and exception scenarios end up at interpreter speed rather than slower.",
+  "when_to_use": [
+    "Rust applications already embedding rquickjs/QuickJS whose scripts spend time in numeric loops, integer/bit arithmetic, Float64 math, packed or typed-array traversal or monomorphic property access (README matrix: 22-49x the interpreter on these kernels)",
+    "Embedders that want QuickJS's small footprint and fast startup but need hot pure-JS kernels several times faster, and can call jit.poll() regularly from the runtime thread",
+    "Linux, macOS or Windows on x86_64 or aarch64, where native execution is enabled",
+    "Teams willing to pin an exact patch version (or git revision) of all quickjs-jit crates and track a fast-moving experimental project"
+  ],
+  "when_not_to_use": [
+    "Peak JavaScript throughput: Bun 1.4.0 (JavaScriptCore) beats it on all 35 scenarios, from 0.73x Bun speed on fibonacci-recursive down to 0.012x on methods-dynamic; V8 was not measured",
+    "Workloads dominated by strings, JSON, RegExp, Map/Set/BigInt, closures, exceptions or promises: the current matrix shows tied or 1-4% slower than the interpreter (json-codec 0.96x, strings-json 0.96x, collections 0.98x)",
+    "C or C++ embedders: the JIT is Rust and is consumed through rquickjs crates; taking it into a C++ host means vendoring the patched C engine plus the Rust runtime",
+    "wasm32 and other targets: the compiler feature is excluded on wasm and native execution is limited to little-endian x86_64/aarch64 on Linux, macOS and Windows",
+    "Production code that needs a stable, published release: crates.io stops at 0.12.6 (2026-09-03) while the measured 0.12.11 is git-only, and the JIT ABI rejects mismatched runtime/core/sys patch versions at startup"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "quickjs-jit, quickjs-jit-core, quickjs-jit-sys (vendored patched QuickJS-NG built with the cc crate), quickjs-jit-runtime with feature 'compiler' (cranelift-codegen/frontend/module/object/native 0.116, gimli, postcard, target-lexicon, serde, serde_json, serde_yaml, rustc-hash; libc or windows-sys)",
+    "min_toolchain": "Rust 1.87 (rust-version in Cargo.toml); benchmarks built with rustc 1.98.1 / LLVM 22.1.8; a C compiler for the vendored engine",
+    "platforms": "Native JIT: x86_64 and aarch64 on Linux, macOS and Windows (little-endian); other rquickjs targets (i686, loongarch64, musl, wasm32-wasip1/2) run interpreter-only",
+    "thread_safety": "Inherits rquickjs: a Runtime is driven from one thread; compilation runs on a background worker (1 by default) and installation and reclamation happen only in jit.poll() on the runtime thread",
+    "drop_in_for_baseline": "partial: source-compatible with rquickjs (same library name, Cargo package rename) and runs unchanged JavaScript, but the host must attach the JIT, call poll(), and pin exact matching patch versions of all crates"
+  },
+  "gotchas": [
+    "Tier-up depends on the host calling jit.poll(): the benchmark polls after every ten-call batch and warms 641 calls before timing, so an embedder that rarely polls sees slower or no tier-up; the README's own gpui-shell section shows 0.12.10 regressing a real host 8x (127.1 vs 15.1 us per compute render) while the kernel matrix looked fine.",
+    "The README and benchmarks/README still carry historical tables where the JIT beats Bun (Apple M3 scalar-loop 4.8x Bun, focused iterative Fibonacci 1.45x faster than Bun); docs/PERFORMANCE_NEXT.md says those Bun readings were inflated 1.2x-32x by a one-off JSC stall under 'bun -e' and must not be cited. Only the v3 (file-launch) matrix is valid.",
+    "The 'QuickJS' column is this repo's patched QuickJS-NG (JIT ABI compiled in, feedback probes gated off, shape header grown 64 to 72 bytes), not a stock QuickJS-NG or Bellard QuickJS build; all workloads run a fixed tiny input (workload(2000, 0)), so the 20-50x figures are per-call latencies of 2-80 us kernels.",
+    "Stability is still moving: 0.12.11 deliberately pushed exceptions-sync and for-of-array back to interpreter speed (0.21x and 0.36x of 0.12.10) to fix the host regression; development is AI-assisted (recent commits co-authored by claude and codex), and the install snippet at the top of the README still pins =0.12.2."
+  ],
+  "pick_this_over_siblings_when": "Pick it over goja-perf when the host is Rust rather than Go and you want a JIT rather than a faster interpreter, and over Graal.js, Perry or katsu when you need QuickJS's tiny embeddable footprint with hot-loop speedups rather than peak or cold-start speed; for any workload where Bun or V8 can be used, they remain faster.",
+  "verified_claims_summary": "On an Intel Core i7-13700KF (Linux, CPU 8 pinned, powersave), revision 8fa2a48 (v0.12.11) with production automatic tiering ran 23 of 35 scenarios faster than the same binary with the JIT detached (patched QuickJS-NG fd0a0210), e.g. scalar-control-flow 49.2x and fibonacci-recursive 27.1x, tied on 7 and 2-4% slower on 5, and slower than Bun 1.4.0 on all 35; latencies are medians over 30 fresh processes of 16 timed ten-call batches after 64 warmup batches, with checksums outside timing and paired bootstrap 95% intervals, built with rustc 1.98.1 / LLVM 22.1.8 release.",
+  "status_note": "Active (last commit 2026-09-30, near-daily releases by Longbridge with AI co-authors) and MIT-licensed, but experimental and only 15 stars; the benchmarked 0.12.11 must be taken from git with all crates pinned to one revision.",
+  "sources_read": [
+    "https://github.com/longbridge/quickjs-jit",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/README.md",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/README.md",
+    "https://github.com/longbridge/quickjs-jit/tree/main/benchmarks",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/batch-driver.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/run.rs",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/suites.lock",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/scalar-control-flow.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/scalar-expressions.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/fibonacci-iterative.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/fibonacci-recursive.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/float64-dense.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/quickjs-bitops.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/benchmarks/scripts/numeric.js",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/jit/Cargo.toml",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/jit/src/lib.rs",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/jit/src/config.rs",
+    "https://github.com/longbridge/quickjs-jit/tree/main/jit/src",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/sys/build.rs",
+    "https://github.com/longbridge/quickjs-jit/tree/main/sys/patches",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/sys/patches/README.md",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/docs/PERFORMANCE_NEXT.md",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/longbridge/quickjs-jit/HEAD/LICENSE",
+    "https://github.com/longbridge/quickjs-jit/issues?q=is%3Aissue",
+    "https://github.com/longbridge/quickjs-jit/commits/main",
+    "https://crates.io/api/v1/crates/quickjs-jit",
+    "https://crates.io/api/v1/crates/quickjs-jit-runtime"
+  ],
+  "confidence": 0.75
+}

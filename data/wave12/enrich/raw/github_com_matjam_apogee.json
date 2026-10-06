@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/matjam/apogee",
+  "one_liner": "Pure-Go Lua 5.5 VM with an amd64/arm64 method JIT; 0.57x C Lua 5.5's time on 17 standard benchmarks, about 3x behind LuaJIT.",
+  "what_it_does": "An embeddable Lua 5.5 implementation for Go programs (forked from Shopify/go-lua, largely rewritten) aimed at per-frame scripting in games, visualisers and audio tools. The Go API mirrors Lua 5.5's C API as methods on *lua.State with generic helpers (Arg[T], CheckUserData[T]), plus Go-specific extras: RegisterNumberFunction for allocation-free numeric callbacks, PushBuffer to share Go slices with Lua, Interrupt and SetAllocationLimit. lua.NewState() enables the JIT; lua.WithoutJIT() or APOGEE_JIT=off gives a plain interpreter.",
+  "how_it_is_fast": "A function-at-a-time JIT with hand-written amd64 and arm64 encoders (no cgo, no LLVM) compiles functions whose pc-0 or loop-head counters pass 1000, running on the interpreter's own 16-byte stack slots with inline caches for fields, native Lua-to-Lua calls and tail calls, and exits to a Go driver for Go calls, NEWTABLE, CLOSURE and generic table access. Innermost numeric loops (and, since v1.1.2, while loops, loop nests and whole small functions) become 'kernels': typed per pc, lowered through a small IR with a linear register allocator so integers and floats live in machine registers, with constant division by Hacker's Delight magic numbers, inline sqrt/sin/cos/floor/min/max bit-exact with Go, and inlining of tiny numeric Lua functions. Separately, the redesigned value, table and call representation means numbers, booleans and calls allocate nothing.",
+  "when_to_use": [
+    "Go programs that embed Lua and want it faster than C Lua on compute without cgo, e.g. per-frame game or visualiser scripts (Mandelbrot 0.20x, spectral-norm 0.33x, NBody 0.39x C Lua 5.5's time)",
+    "Numeric per-pixel or per-sample loops over Go-owned data: PushBuffer lets compiled kernels read and write a Go []float64/[]float32/[]int32/[]uint8 inline (plasma frame 0.25 ms vs 0.30 ms native Go in the bench notes)",
+    "Replacing Shopify/go-lua: about 6x less time on the standard benchmarks (geomean 5.9x C Lua's time for go-lua vs 0.57x) and no allocation per number or call",
+    "Hosts that need Lua 5.5 semantics (integer subtype, bitwise ops, <close>, global, utf8, string.pack) rather than LuaJIT's 5.1 dialect",
+    "linux or darwin on amd64 or arm64, where the JIT is enabled"
+  ],
+  "when_not_to_use": [
+    "Peak Lua speed with cgo allowed: LuaJIT 2.1 is about 3x faster on the same table (0.18x vs 0.57x C Lua's time), 5-15x on numeric loops such as Permute and spectral-norm, and has FFI",
+    "C or C++ hosts: it is a Go library; embed C Lua 5.5 or LuaJIT directly",
+    "Windows or other platforms: no JIT there, and the interpreter alone takes 1.8x C Lua 5.5's time",
+    "Scripts dominated by calls into Go, Go-called short Lua callbacks or table construction: on the embedding suite the JIT is slower than C Lua 5.5 on array fill and sum (1.00 vs 0.58 ms), sort with a comparator (3.84 vs 3.26 ms) and calls into Go (1.37 vs 1.07 ms)",
+    "Projects that need C modules, standard luac bytecode, an incremental Lua GC or a mature, widely used runtime: C modules cannot load, binary chunks are apogee's own format, and the project is weeks old (v1.0.0 on 2026-09-26) with 0 stars"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none for the library (pure Go, CGO_ENABLED=0); the bench module uses Shopify/go-lua and, with build tags, C Lua or LuaJIT via cgo",
+    "min_toolchain": "Go 1.27.1 (go.mod)",
+    "platforms": "JIT: linux and darwin on amd64 and arm64 (inline floor/ceil need SSE4.1 on amd64; inline sin/cos only below GOAMD64=v3); interpreter everywhere else Go runs, Windows included",
+    "thread_safety": "One goroutine per State; only State.Interrupt is documented as safe to call from any goroutine. Generated code cannot be preempted by Go: it spends a 65536-step budget, then returns to Go and calls runtime.Gosched so the GC can stop the world",
+    "drop_in_for_baseline": "partial: runs Lua 5.5 scripts (official 5.5 test suite passes except calls.lua's binary-chunk header check), but the host API is Go mirroring the C API, C modules cannot load, binary chunks differ, only the C locale exists and collectgarbage('count') reports Go's heap"
+  },
+  "gotchas": [
+    "Benchmark provenance is mislabelled: bench/README.md says the amd64 Apogee rows are from 2026-09-27 at commit 45b42e8, but PR #168 (2026-09-28) re-ran them after the five kernel-IR phases (#159-#167) and moved the geomean from 0.69x to 0.57x without changing that header; at 45b42e8 the same README showed 0.69x. Reproduce at v1.1.2 or later, not 45b42e8.",
+    "The C Lua 5.5 and LuaJIT baselines were not run under the stated 'taskset -c 0-5' pinning: the raw suite-results-amd64.txt shows every lua55 and luajit row at GOMAXPROCS 24 (no affinity mask) against 6 for every Go row, and they were measured two days earlier; on this dual-CCD 9900X3D the C rows could land on either CCD. Times are wall-clock, so Apogee's allocation-heavy rows (binary-trees, Havlak, CD) also get Go's concurrent collector on the other pinned cores while C Lua collects on the benchmark thread.",
+    "Kernels need type-stable numeric loops: math.min(x, 1) returns an integer and can knock a float loop out of its kernel (write 1.0); a kernel whose entry check keeps failing slows the ordinary loop, and while Go's write barrier is on, compiled code exits for pointer stores, native calls and kernels.",
+    "The M1 Pro table predates the Lua 5.5 port (compares with C Lua 5.4 at d5dba73) and was run on a busy machine; its Homebrew LuaJIT is anomalously slower than C Lua 5.4 on CD (329 vs 57.6 ms) and Json (19.3 vs 7.26 ms), which the project notes but does not explain."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FakeLua (C++ Lua JIT) when the host is Go and cgo is unwanted, over Luava when you are not on the JVM, and over goja-perf or quickjs-jit when you want Lua rather than JavaScript scripting in Go with numeric code in machine registers; choose LuaJIT instead whenever cgo and Lua 5.1 are acceptable.",
+  "verified_claims_summary": "On an AMD Ryzen 9 9900X3D (linux, Go 1.27.1, -ldflags=-funcalign=64, medians of 6 go test -bench runs), Apogee with its JIT took 0.57x the time of Arch Linux's C Lua 5.5.1 on the geometric mean of 14 Are We Fast Yet plus 3 Benchmarks Game programs (faster on all 17; 1.8x without the JIT; LuaJIT 2.1 0.18x), figures I recomputed exactly from the checked-in raw output; results are cross-checked by agreement tests, but the C rows are from an earlier, unpinned run.",
+  "status_note": "Active (v1.1.2 released 2026-10-05, about 540 commits including go-lua history, recent ones co-authored by Claude) and MIT-licensed pure Go that installs with go get, but a few weeks old with 0 stars, so treat it as experimental.",
+  "sources_read": [
+    "https://github.com/matjam/apogee",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/README.md",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/matjam/apogee/edfd3f2/bench/README.md",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/bench/standard_test.go",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/bench/suite_test.go",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/bench/suite-results-amd64.txt",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/go.mod",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/lua/jit.go",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/lua/jit_kernel.go",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/lua/vm_jit.go",
+    "https://raw.githubusercontent.com/matjam/apogee/HEAD/lua/jit_none.go",
+    "https://github.com/matjam/apogee/tree/main/lua",
+    "https://github.com/matjam/apogee/tree/main/internal/jit",
+    "https://github.com/matjam/apogee/issues?q=is%3Aissue",
+    "https://github.com/matjam/apogee/commits/main",
+    "https://github.com/matjam/apogee/pull/168",
+    "https://github.com/matjam/apogee/pull/168/files"
+  ],
+  "confidence": 0.75
+}
