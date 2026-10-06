@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/esrrhs/fakelua",
+  "one_liner": "Embeddable Lua 5.4-subset runtime that compiles scripts to C (GCC/TCC) and runs numeric kernels 30-40x faster than PUC Lua 5.4.",
+  "what_it_does": "FakeLua runs a statically analyzable subset of Lua 5.4 inside a C++23 host, aimed at game-server style 'business glue' where state lives in C++. Scripts are loaded with CompileFile/CompileString and invoked with Call(state, JIT_GCC | JIT_TCC | JIT_INTERP, \"fn\", ret, args...), so the same script can run through three backends. It is not the Lua C API: there is no lua_State stack protocol, and coroutines, metatables, require, the debug library and string-to-number coercion are missing.",
+  "how_it_is_fast": "Lua source is translated to C: a type inferencer finds parameters used in arithmetic and emits 2^k int64_t/double specializations behind a type-dispatching entry, so hot numeric code runs unboxed; table constructors with static keys become C structs accessed by fixed offsets. JIT_GCC writes the C to a temp file, runs the system `gcc -x c -shared -fPIC -O3` and dlopens the result, so GCC's own optimizations (vectorization, popcount idiom recognition, tail-call-to-loop) do the heavy lifting; JIT_TCC uses embedded TinyCC for fast compiles. Memory is a bump-pointer arena reset per frame with State::Reset() instead of a garbage collector.",
+  "when_to_use": [
+    "C++ game or real-time servers that embed short Lua-syntax logic scripts and want no GC pauses, with long-lived state kept on the C++ side",
+    "Integer and float loops and recursive numeric functions (Fibonacci, sums, bit tricks, polynomial evaluation) where the GCC backend measured 30-43x over PUC Lua 5.4",
+    "Table-heavy scripts with literal keys (struct specialization) or many short-lived tables per frame (TableChurn 9.3x via the arena)",
+    "Hosts where a system GCC is available at run time and a one-off compile at script load is acceptable; JIT_TCC for fast iteration in development"
+  ],
+  "when_not_to_use": [
+    "Existing Lua code that uses coroutines, metatables/metamethods, require, the debug library or implicit string-to-number coercion; it will not run",
+    "When LuaJIT is the incumbent: it was never compared, so no win over LuaJIT is shown",
+    "Call-dominated or tiny functions: GCD 0.45x, ToNumber 0.53x, Variadic 0.91x and StringFind 0.85x were slower than PUC Lua under JIT_GCC, and the bytecode interpreter is 1.3-7.6x slower than Lua 5.4 on algorithm rows (34x on deep tail recursion, which it does not eliminate)",
+    "Scripts that keep large data alive across frames: there is no GC, memory is reclaimed only by the per-frame arena reset",
+    "Deployments that cannot ship a C compiler or tolerate fork/exec of gcc from the host process; the repository is young and changes fast (multiple correctness fixes per week in September-October 2026)"
+  ],
+  "integration": {
+    "form": "static lib (CMake target fakelua::fakelua, find_package and pkg-config supported) plus the flua CLI",
+    "dependencies": "TinyCC (fetched from the unpinned 'mob' branch), Boost 1.90 (regex, json, container, algorithm and others), OpenSSL (find_package REQUIRED), libevent, hiredis, MariaDB Connector/C, SQLite amalgamation, lz4, zlib, zstd, yaml-cpp, pugixml, toml++, inih, all fetched by CPM; system gcc on PATH at run time for JIT_GCC; liblua5.4-dev only for tests and benchmarks",
+    "min_toolchain": "C++23 (README: GCC 11+, Clang 16+, MSVC 2022+), CMake 3.5+",
+    "platforms": "Linux, macOS and Windows (MSYS2/MinGW) per CI badges; GCC JIT is not given -march flags, so it targets the host's default ISA",
+    "thread_safety": "One State per thread; the README says each State is currently thread-local and must not be shared",
+    "drop_in_for_baseline": "partial — scripts in the supported subset run unchanged, but the embedding API (Call/CompileFile instead of the Lua C API) and the missing features (coroutines, metatables, require) make it a different runtime, not a liblua replacement"
+  },
+  "gotchas": [
+    "Harness flaw in the 2026-08-14 GCC run: the hand-written C++ reference rows are 8-18x slower than FakeLua's GCC-compiled version of the identical C loops (C++ Fibonacci n=32 60.6 ms vs 7.59 ms CPU, Sum n=5M 27.4 ms vs 1.55 ms, Popcount 5.0 ms vs 0.59 ms). Their per-step cost of about 5.5-8.6 ns fits a host binary built with per-basic-block atomic coverage counters (the project's USE_COV option adds -fprofile-update=atomic) or without optimization, not the stated Release -O3 (inference, not stated on the page). The 'GCC vs C++' column and any 'faster than C++' claim are therefore invalid. The JIT code is compiled by a separate `gcc -O3` call and Lua is the distro library, so the headline Lua ratios are not inflated by this; if anything, FakeLua's own runtime (Call dispatch, tables, strings) was slowed too.",
+    "The 'MultiReturn' benchmark (23.3x) calls inner_multi, which returns a single value, so it measures plain single-return calls rather than multiple returns.",
+    "The README's headline table (Fibonacci 297.9 ms vs 6.8 ms, Sum 33.9 ms vs 1.1 ms) does not match the raw output on benchmark/README.md (277.9 ms vs 7.59 ms CPU); use the raw rows. The regex rows used Boost.Regex, which commit a55a4bf (2026-10-03) replaced with a Lua 5.4 pattern engine, so the string-pattern ratios are obsolete in both directions.",
+    "JIT_GCC forks and execs `gcc` from PATH and writes temporary .c/.so files at script load; compile time is excluded from all benchmark numbers. TinyCC is fetched from the moving 'mob' branch, so builds are not pinned."
+  ],
+  "pick_this_over_siblings_when": "Pick FakeLua when you want Lua-syntax scripting embedded in a C++ server with C-compiler-grade numeric code and no GC, and can live with a Lua subset; pick libriscv (also libtcc-based, measured against LuaJIT) when you need sandboxed execution of arbitrary compiled guest code, or a general-purpose JIT language such as Julia or Chez Scheme when you need full language semantics rather than an embedded script layer.",
+  "verified_claims_summary": "In one Google Benchmark binary that verifies every result, FakeLua's GCC backend (generated C built with system GCC 15.1.0 at -O3, run on a loaded 2-vCPU AMD EPYC 7K62 VM on 2026-08-14) beat the distro PUC Lua 5.4 library by 36.6x on Fibonacci n=32 (277.9 ms vs 7.59 ms CPU), 30.4x on a 5M-iteration sum, 37.3x on popcount and 34.9x on a float polynomial, while table and string rows were mostly 1.0-6x and several call-bound rows were slower. A later 2026-09-16 run (EPYC 7551, GCC 16.2.0, Lua 5.4.7) covers only the bytecode interpreter, which is slower than Lua 5.4 on algorithm rows.",
+  "status_note": "Actively developed (last commit 2026-10-03, 566 commits, 0 open issues) and MIT-licensed, but very young, heavy on dependencies and still landing correctness fixes in its specializer, so pin a commit and run its tests on your scripts before relying on it.",
+  "sources_read": [
+    "https://github.com/esrrhs/fakelua",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/README.md",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_common.h",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_common.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_algo.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_function.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_table.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/benchmark/benchmark_gc.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/jit/gcc_jit.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/jit/gcc_handle.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/compile/c_gen.cpp",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/compile/c_gen.h",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/compile/c_runtime_header.h",
+    "https://raw.githubusercontent.com/esrrhs/fakelua/HEAD/src/CMakeLists.txt",
+    "https://github.com/esrrhs/fakelua/tree/master/src/jit",
+    "https://github.com/esrrhs/fakelua/issues",
+    "https://github.com/esrrhs/fakelua/commits/master",
+    "https://github.com/esrrhs/fakelua/commit/a55a4bf",
+    "https://github.com/esrrhs/fakelua/search?q=FL_INT_ADD"
+  ],
+  "confidence": 0.75
+}
