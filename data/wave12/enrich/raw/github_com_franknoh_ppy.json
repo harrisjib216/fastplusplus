@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/franknoh/ppy",
+  "one_liner": "Ahead-of-time and JIT LLVM compiler for annotated Python; 1.27x faster than warm PyPy on one Collatz kernel.",
+  "what_it_does": "PPy compiles the statically analysable part of ordinary Python (.ppy files are valid Python and run unchanged under CPython, which is the reference answer). `ppy run file.ppy` compiles the provable functions through a typed SSA IR to native code via LLVM (llvmlite) and caches the result, while everything it cannot prove keeps running on CPython; `ppy build` writes a native binary (a hybrid that embeds CPython, or `--standalone` with libc only), and `ppy emit c` / C++17 / CUDA / PTX / StableHLO emit source for other toolchains. Functions are typed with ordinary annotations plus decorators such as @ppy.pure and @ppy.opt(3); `ppy convert` and `ppy migrate` add annotations to existing code.",
+  "how_it_is_fast": "A whole-program static analysis (types, effects, value ranges) lowers proven functions to unboxed 64-bit machine code through LLVM, so loops like Collatz run as native integer arithmetic instead of interpreted bytecode. Python integer semantics are kept with overflow guards, and guard hoisting proves a loop's extreme cases once ahead of the loop so the body runs plain `mul nsw` that LLVM can strength-reduce and vectorise; `--unsafe` drops the overflow guards for C-like 64-bit wrap (bounds checks stay). Calls from Python go through a generated C wrapper (about 29 ns for two int arguments, against 30 ns for a CPython call, per the project's own table).",
+  "when_to_use": [
+    "Integer- or array-heavy pure-Python kernels (loops over int, float and array.array/Buffer data) that you want native without leaving Python syntax: the project's eight kernels run 9x to 160x faster than plain CPython.",
+    "You need exact Python integer results: `ppy run` keeps arbitrary-precision semantics via guards, whereas Numba, Cython `cdef long long` and Codon silently wrap at 64 bits.",
+    "You want one source to yield a standalone native binary or C/C++17 source (for example to vendor generated C into a C++ build), with `python file.ppy` as the correctness oracle.",
+    "Competitive-programming or batch tools on Linux where `ppy build --standalone --unsafe` matched or beat gcc/clang -O3 on 4 of 5 judge problems, largely through a faster integer reader than scanf.",
+    "Programs run many times so the one-time build (about 0.3-0.9 s cold in run_overhead.json, about 640 ms for the Collatz example) amortises."
+  ],
+  "when_not_to_use": [
+    "Arbitrary dynamic Python that you want accelerated as is: PyPy runs everything, while PPy compiles only what it can prove and leaves the rest on CPython speed (eval, star imports and failed imports stay in Python).",
+    "Tight numeric kernels where the fastest option matters: in PPy's own suite Numba leads on six of eight kernels by 10-30%, and Numba beats `ppy run` on Collatz (33.1 vs 41.6 ms).",
+    "One-shot short scripts: a cold `ppy run` costs 0.3-0.9 s of build per run_overhead.json, and even a warm cache adds a few milliseconds of start-up over plain CPython (basics example 40 ms vs 33 ms).",
+    "Production code that needs a stable compiler: pre-1.0 alpha (Development Status 3), 15 PyPI releases between 2026-09-03 and 2026-10-03, minor releases may change the language, and recent releases fixed silent wrong-result bugs.",
+    "Non-Linux or non-CPython hosts: CI runs on ubuntu-latest only, the package targets CPython 3.12-3.14, and Windows/macOS support is not documented."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python package ppy-lang; llvmlite>=0.44 through the [llvm] extra for native code (without it ppy run warns W2012 and runs on CPython); optional extras for NumPy, PyTorch, JAX, pydantic, SciPy, pandas, PyArrow; the recorded benchmark environment also lists a system cc used by PPy",
+    "min_toolchain": "CPython 3.12+ (tested on 3.12, 3.13, 3.14)",
+    "platforms": "Linux x86-64 (CI on ubuntu-latest; measurements on WSL2); other platforms not documented",
+    "thread_safety": "not documented for the compiler; the language exposes ppy.concurrent, ppy.atomic and ppy.parallel.range for native parallel code",
+    "drop_in_for_baseline": "partial: the same .py-compatible source runs under CPython and under ppy run, but it replaces PyPy only for annotated, statically analysable functions; everything else runs on CPython, not on a JIT"
+  },
+  "gotchas": [
+    "Harness gap behind the PyPy claim: no script in the repo produces the README Performance table; the README's collatz.ppy prints no timing line, and the in-repo harnesses (examples/compare.py, examples/bench_startup.py, examples/15_algorithms/compare) never run PyPy, Cython, mypyc or Nuitka, so the 52.8 ms PyPy row cannot be reproduced from the repo and its CPU is not named. Timing method: PPy's kernel is timed on its single first call per process (cached build excluded), while PyPy is labelled 'warm' and the Numba port makes one compile call first, so the asymmetry favours the baselines rather than PPy.",
+    "The fastest rows (30.8 ms, 28.8 ms with --host-cpu) use `--unsafe`, which drops overflow guards for 64-bit wrap semantics, and `--host-cpu` artifacts are not portable; only the 41.7 ms `ppy run` row keeps the Python integer semantics PyPy has.",
+    "A failed guard sends the call to the Python body ('A failed guard costs the wrapper plus a Python call', and printed output from a native call that falls back is dropped so nothing prints twice), which implies the whole call reruns on CPython: a value that overflows 64 bits late in a long kernel turns a 40 ms call into a CPython-speed one.",
+    "Correctness churn: 0.6.0 (2026-10-03) fixed a global store dropped by the Python backend's optimizer with reads folded to the first value, and 0.5.0-era fixes include a stale `len(xs)` after pop/append taking the wrong native branch and `min`/`max` in emitted C reading unwritten memory; pin an exact version (the README itself says to) and keep `python file.ppy` as the oracle."
+  ],
+  "pick_this_over_siblings_when": "Pick PPy over Numba when you need exact Python-integer results, generated C/C++ or standalone binaries, or compilation of ordinary Python data structures (str, list, dict, classes) rather than NumPy-array kernels; pick Numba when raw kernel speed and maturity matter, since it leads six of eight kernels in PPy's own suite. Unlike Cinder or the CPython copy-and-patch JIT, PPy only speeds up annotated, provable code, but there it is native-speed rather than a 1.5x-class interpreter gain.",
+  "verified_claims_summary": "The README Collatz kernel (longest chain below 300000), kernel wall time over ten fresh processes on an unnamed machine (the project's other measurements are on an Intel Core Ultra 9 386H under WSL2): `ppy run` 41.7 +/- 1.8 ms with Python integer semantics vs warm PyPy 3.11.15 at 52.8 +/- 0.5 ms (about 1.27x, derived from page data) and CPython 3.14.5 at 1068.8 ms; the reproducible eight-kernel suite has no PyPy column and shows Numba 0.67 faster than `ppy run` on Collatz (33.1 vs 41.6 ms).",
+  "status_note": "Very active but only a month old (0.1.0a1 on 2026-09-03, 0.6.0 on 2026-10-03, last commit 2026-10-03, 15 stars, single author) and MIT; treat it as an alpha compiler to pin and verify, not a vetted PyPy replacement.",
+  "sources_read": [
+    "https://github.com/franknoh/PPy",
+    "https://github.com/franknoh/PPy/tree/main/examples",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/README.md",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/docs/index.md",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/docs/guide/native-lowering.md",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/scripts/refresh.py",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/compare.py",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/bench_startup.py",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/run_overhead.json",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/README.md",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/measurements.json",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/algorithms.ppy",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/algorithms.c",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/compare/algorithms_numba.py",
+    "https://raw.githubusercontent.com/franknoh/PPy/HEAD/examples/15_algorithms/bench.py",
+    "https://pypi.org/pypi/ppy-lang/json"
+  ],
+  "confidence": 0.6
+}

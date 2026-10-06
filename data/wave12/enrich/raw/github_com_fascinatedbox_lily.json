@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/fascinatedbox/lily",
+  "one_liner": "Statically typed embeddable C interpreter; about 4.8x faster than Duktape 1.2.2 on 2015 fib(34), slower than PUC Lua.",
+  "what_it_does": "Lily is a statically typed scripting language (classes, enums with variants, generics, lambdas, match, coroutines) whose reference implementation is a C11 interpreter shipped as liblily plus a lily executable. Embedding goes through lily.h: fill a lily_config (lily_config_init), create a lily_state with lily_new_state, then lily_load_string / lily_parse_content, and call script functions with lily_call_prepare / lily_call. It is its own language, not a JavaScript or Lua replacement, so swapping it in for Duktape means rewriting scripts and bindings.",
+  "how_it_is_fast": "The type checker resolves types at parse time, so the emitter writes type-specialised 16-bit register-machine opcodes (o_int_add, o_number_add, o_compare_eq with integer/string/double fast paths) that the VM executes without dynamic type dispatch; integers are unboxed int64 in the register. Calls to a `define` are statically bound (o_call_native) rather than resolved through a global property lookup as Duktape does for fibR. Dispatch is a plain switch loop (no computed goto, no JIT); memory uses refcounting plus a tagged cycle collector for values that can form cycles (gc_start 100, gc_multiplier 4 by default).",
+  "when_to_use": [
+    "You embed a scripting layer in a C or C++ host and want static typing that rejects bad scripts at load time rather than at run time.",
+    "You need several independent interpreters in one process (each lily_state is separate; one lily_config can initialise many).",
+    "You want a sandbox switch: config.sandbox = 1 loads no predefined modules unless the host opens them, blocks library imports and makes File opens raise RuntimeError.",
+    "Integer- and call-heavy script logic where Duktape 1.x-class engines are the alternative; in the 2015 scriptorium fib(34) run Lily took 2.005 s against Duktape's 9.544 s.",
+    "You want a small, dependency-free MIT C11 codebase built with CMake that also builds on Windows (MSVC), Linux, BSD, macOS and Haiku."
+  ],
+  "when_not_to_use": [
+    "Raw speed is the goal: PUC Lua (1.341 s), LuaJIT (0.111 s with JIT, 0.521 s without), Wren (1.997 s) and AngelScript (2.039 s) were as fast or faster in the same 2015 table, and there is no newer published benchmark for Lily.",
+    "You need an existing language and ecosystem (JavaScript, Lua, Python); Lily scripts and libraries are Lily-only and the syntax has changed across releases (2.5 removed `case enum.variant` matching, a breaking change).",
+    "Deep recursion: the VM's default call-depth limit is 100 frames (vm->depth_max = 100); scripts must call sys.set_recursion_limit, and lily_config has no field for the host to raise it.",
+    "Untrusted scripts that need CPU or memory limits: sandbox mode restricts modules and file access only; no instruction-count or allocation budget hooks are documented in lily.h.",
+    "Hash tables exposed to attacker-chosen keys with the default config: the SipHash key defaults to the fixed bytes 1..16, so the host must set config.sipkey itself."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none beyond libc (links libdl on Linux and libm off Windows); CMake builds liblily as a shared library by default, static with -DBUILD_SHARED_LIBS=OFF",
+    "min_toolchain": "C11 compiler (anonymous unions), CMake 3.10+; the CMake build uses -O2 on GCC/Clang",
+    "platforms": "Windows (MSVC, MinGW), Linux, *BSD, macOS, Haiku; architecture-neutral C, no JIT",
+    "thread_safety": "not documented; separate lily_state instances do not share interpreter state, but no locking or thread guarantee is stated",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the number: scriptorium's bench.cc launches the interpreter with system() and sets overhead = 0 (the fib(0) start-up subtraction was never implemented), so start-up and parse time are inside the 2.005 s; the README table keeps each engine's minimum across sessions (Lily 2.31 s in the first logged session, Duktape 9.54 to 14.30 s); the script output is never checked; and its idx::operator< (time, else name) is not a strict weak ordering, so ranks can be misordered even though the times are right.",
+    "The baseline was handicapped by its build: Duktape 1.2.2 was compiled from scriptorium's make.bat without DUK_OPT_FASTINT, so all its arithmetic ran in doubles, and fib.js calls a global fibR through a property lookup per call while fib.lly calls a statically bound define.",
+    "The measured Lily is a pre-0.15 July 2015 snapshot (old `integer` / `string::format` syntax) linked under the old owner jesserayadkins; the current 2.5 VM is a different code base and has never been benchmarked against Duktape or QuickJS on any page read.",
+    "Errors propagate with setjmp/longjmp (lily_jump_setup in lily_vm_execute); C++ foreign functions that hold RAII objects when a Lily exception is raised will skip their destructors. Crash fixes still land in 2026 releases (closure plus high-index global #646, incomplete Hash literal #641)."
+  ],
+  "pick_this_over_siblings_when": "Pick Lily over AngelScript, Squirrel or mruby (all about 2.0-2.1 s in the same 2015 table, so speed is a wash) when you want a statically typed language with a C11 API, a built-in sandbox flag and an MIT licence; pick Daslang if you want a statically typed embedded language that is measured as fast on current benchmarks, and Lua or Luau if speed and ecosystem matter more than static types.",
+  "verified_claims_summary": "In r-lyeh's archived scriptorium shootout (July 2015, AMD A10 3.8 GHz, Windows 7 64-bit, VS2015 RC cl /Ox /Oy /MT /DNDEBUG for both), recursive fib(34) as a whole process averaged over 5 launches, best session kept: Lily 2.005 s vs Duktape 1.2.2 9.544 s (about 4.8x, derived from page data) and PUC Lua 1.341 s (Lily about 1.5x slower). The timing includes process start-up and Duktape ran without fastint.",
+  "status_note": "Actively maintained (quarterly releases, 2.5 on 2026-07-10, last commit 2026-09-22, CI and tracker on GitLab with GitHub as a copy) and MIT with no dependencies, so it is easy to vendor, but its only speed evidence is an eleven-year-old single-kernel run of a pre-1.0 build.",
+  "sources_read": [
+    "https://github.com/FascinatedBox/lily",
+    "https://github.com/FascinatedBox/lily/commits",
+    "https://github.com/FascinatedBox/lily/tree/main/src",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/README.md",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/RELEASES.md",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily.h",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily_vm.c",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily_opcode.h",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily_value.h",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily_platform.h",
+    "https://raw.githubusercontent.com/FascinatedBox/lily/HEAD/src/lily_pkg_sys.c",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/README.md",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.cc",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/bench.csv",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/run.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.lly",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.js",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/tests/fib.lua",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/lily/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/javascript/duktape/make.bat",
+    "https://raw.githubusercontent.com/r-lyeh-archived/scriptorium/HEAD/javascript/duktape/duktape.h"
+  ],
+  "confidence": 0.55
+}

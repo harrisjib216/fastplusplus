@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/bellard/mquickjs",
+  "one_liner": "Bellard's ES5-subset JavaScript engine for microcontrollers: runs scripts in about 10 kB RAM and 100 kB ROM; speed only 'comparable' to QuickJS.",
+  "what_it_does": "MQuickJS compiles and runs a strict, mostly ES5 subset of JavaScript (no array holes, no direct eval, no value boxing, ASCII-only case mapping, Date.now() only, for-of over arrays only, typed arrays included) on embedded targets. The host hands JS_NewContext one caller-owned memory buffer and the engine never calls malloc, free or printf; the standard library is compiled by a host tool (mquickjs_build.c) into C tables that can live in ROM, and mqjs can save relocatable bytecode that runs from flash via JS_RelocateBytecode/JS_LoadBytecode/JS_Run. The C API looks like QuickJS's but is not compatible: there is no JS_FreeValue, and C code must hold values through JS_PushGCRef/JS_PopGCRef because objects move.",
+  "how_it_is_fast": "The win is footprint, not throughput. A tracing, compacting garbage collector replaces QuickJS's reference counting, so objects are smaller (3 CPU words minimum) and the heap never fragments; JSValue is one machine word (31-bit ints, single code points and, on 64-bit hosts, short floats are immediate), strings are WTF-8, property keys are plain JSValues, and most built-in functions are single immediate values stored in ROM so context creation allocates almost nothing. The parser is non-recursive and the VM keeps its stack inside the same buffer, so C stack use is bounded; bytecode is generated in one pass (QuickJS runs several optimisation passes) and line/column tables are exponential-Golomb coded.",
+  "when_to_use": [
+    "Microcontrollers with tens of kB of RAM and about 100 kB of flash where QuickJS's roughly 1 MB binary and malloc-based reference-counted heap do not fit (README: mandelbrot.js runs with --memory-limit 10k).",
+    "Firmware that must not depend on libc malloc or on a growing heap: all engine memory lives in one fixed buffer you size up front, and out-of-memory becomes a JS exception.",
+    "Scripts precompiled on the host (mqjs -o, with -m32 for 32-bit targets) and executed from ROM, so the device ships no parser input and instantiation is nearly free.",
+    "Targets without an FPU: the engine carries its own small libm and an optional soft-float emulator (CONFIG_SOFTFLOAT)."
+  ],
+  "when_not_to_use": [
+    "Running existing ES2015+ code: the parser handles only var and function declarations (no let, const, arrow functions or classes), the mqjs stdlib has no Map, Set, Promise, Symbol, Proxy or BigInt, and there are no modules, custom iterators or array holes; use QuickJS or XS instead.",
+    "Throughput-bound scripting on a PC or Linux-class device: the only speed statement is 'comparable to QuickJS' with no numbers, and QuickJS itself is 15-40x slower than JIT engines on the V8 suite.",
+    "Loading untrusted bytecode: the README says bytecode is not verified and must come from trusted sources.",
+    "Hostile or fuzzer-grade input without patching: closed issues #32-#56 (Dec 2025 to Jan 2026) report heap-buffer overflows in JS_Call, get_u16 and get_u32, SEGVs in gc_mark_all, JS_GetPropertyInternal and lre_exec, and memory corruption in string_buffer_concat_str, all within the first month of the public release.",
+    "Deep C-to-JS re-entry: JS_MAX_CALL_RECURSE is 8, so more than eight nested JS_Call levels from C callbacks throw 'C stack overflow'."
+  ],
+  "integration": {
+    "form": "source-drop (mquickjs.c, dtoa.c, libm.c, cutils.c plus a stdlib header generated at build time by a host-compiled tool)",
+    "dependencies": "none at run time beyond a few libc string/math symbols (no malloc, free or printf); building needs a host C compiler to run the stdlib generator",
+    "min_toolchain": "GCC (Makefile uses gcc, GNU extensions such as __attribute__ and ##__VA_ARGS__); minimum version and C standard not documented",
+    "platforms": "32-bit and 64-bit CPUs (ARM Thumb-2 cross build via CONFIG_ARM32, x86-32, Win32/Win64 via MinGW); bytecode depends on endianness and word size",
+    "thread_safety": "not documented; all engine state lives in the caller's buffer and the source has no mutable globals outside debug builds, so one context per thread looks possible, but a context must not be shared",
+    "drop_in_for_baseline": "partial: the C API resembles QuickJS's but differs (no JS_FreeValue, moving GC with JSGCRef handles, ROM stdlib tables), and only a strict ES5-like JavaScript subset runs"
+  },
+  "gotchas": [
+    "Harness flaw behind the speed claim: 'make microbench' runs QuickJS's tests/microbench.js, but its reference comparison reads microbench.txt through the QuickJS-only std.open; mqjs defines no std object, so load_result returns null and the target prints absolute ns per test with no QuickJS column (BigInt tests and several others are also dropped). Nothing in the repository produces a QuickJS comparison, and the patched Octane lives in a bellard.org tarball that was not reachable.",
+    "The default build is size-optimised (CONFIG_SMALL=y gives -Os) while QuickJS builds at -O2; any speed comparison should set CONFIG_SMALL off or say which build was timed.",
+    "Objects move on every allocation: a JSValue held in a C local across any API call that allocates is a dangling value unless it sits in a JSGCRef; build with DEBUG_GC on a PC to force moves and catch this.",
+    "GC runs only when the heap meets the VM stack inside the buffer (the source TODO lists 'launch gc at regular intervals'), so pause length scales with the buffer size; on 32-bit targets every non-integer double is a heap-allocated box, so float-heavy code churns the heap there."
+  ],
+  "pick_this_over_siblings_when": "Pick MQuickJS over QuickJS or the XS engine (Moddable SDK) only when RAM is measured in tens of kB and an ES5 subset is acceptable; QuickJS gives near-complete ES2025 and 2.3x Duktape throughput on Linux-class hardware, and XS gives modern ECMAScript on microcontrollers with a larger footprint.",
+  "verified_claims_summary": "No measurement backs a comparison: the README states that scripts run in as little as 10 kB of RAM and that the engine needs about 100 kB of ARM Thumb-2 ROM including the C library, and that speed is 'comparable to QuickJS', with no QuickJS figures, compiler flags or hardware. The in-repo microbench target cannot print a QuickJS reference column, and one web search found no independent MQuickJS-versus-QuickJS numbers.",
+  "status_note": "Active (first public version 2025-12-22, 54 commits, latest 2026-09-26 fixing user finalizers and exception propagation in JS_CFUNC_f_f), MIT-licensed and small enough to vendor, but young: no version numbers or release tags yet (open issues #18 and #69) and a burst of fuzzer-found memory-safety bugs in its first month.",
+  "sources_read": [
+    "https://github.com/bellard/mquickjs",
+    "https://github.com/bellard/mquickjs/commits",
+    "https://github.com/bellard/mquickjs/issues",
+    "https://github.com/bellard/mquickjs/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/bellard/mquickjs/issues/37",
+    "https://github.com/bellard/mquickjs/tree/main/tests",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/README.md",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/Changelog",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/mquickjs.h",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/mquickjs.c",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/mqjs.c",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/mqjs_stdlib.c",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/example.c",
+    "https://raw.githubusercontent.com/bellard/mquickjs/HEAD/tests/microbench.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
