@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty_alloc",
+  "one_liner": "Pure-Rust rebuild of mimalloc's design; slightly fewer instructions than mimalloc, jemalloc and glibc malloc under callgrind.",
+  "what_it_does": "A general-purpose allocator that reimplements mimalloc v2.4.5's segment/page architecture in Rust, usable as a Rust #[global_allocator] (rusty_alloc-api crate), as a mi_*-compatible C ABI (rusty_alloc_ffi) or as an LD_PRELOAD malloc/free interposer (rusty_alloc_override cdylib). The same codebase also targets wasm32-unknown-unknown (via memory.grow) and no_std bare metal such as ESP32-S3, where it competes with dlmalloc and esp-alloc.",
+  "how_it_is_fast": "mimalloc's free-list sharding: 32 MiB segments sliced into 64 KiB spans, per-page local free lists, and a four-state lock-free cross-thread free protocol (loom-verified). The authors tuned the hot paths instruction by instruction: free is 21 instructions vs mimalloc's 25 (pointer-to-page resolve through a per-slice owner table in the segment header), all divisions were replaced by shifts and a reciprocal table, and the Rust GlobalAlloc methods are #[inline] so rustc's __rust_alloc shims carry the fast path.",
+  "when_to_use": [
+    "Pure-Rust projects that want a mimalloc-class allocator without a C toolchain in the build (no cc/cmake dependency).",
+    "Shipping one allocator across Linux, macOS, Windows, wasm32 and an ESP32-class MCU from a single dependency.",
+    "wasm modules with churny allocation (many live blocks of 8-512 B), where the README measures 4.9-7.3x over dlmalloc for +2,435 bytes gzipped.",
+    "ESP32-S3 firmware with RAM to spare where small-object allocation throughput matters (1.44-3.94x faster than esp-alloc 0.11 per alloc/free pair).",
+    "When you want double frees to abort rather than silently corrupt (mimalloc release builds accept them), with an opt-in encrypted free-list 'secure' mode."
+  ],
+  "when_not_to_use": [
+    "If you need wall-clock evidence: every x86 claim is a callgrind instruction count; the workspace manifest says wall-clock measurement still needs a quiet machine, and whole-program gains over mimalloc are 0-4%.",
+    "Memory-constrained MCUs: needs a 64 KiB RAM floor vs 8 KiB for esp-alloc, held 21 size classes at once vs 24, returned 357 NULLs in 50,000 hostile churn allocations vs 0, and refuses 64 KiB-aligned requests; the README itself says esp-alloc wins memory footprint by 8.5x.",
+    "wasm code dominated by large (2 KB) tight alloc/free loops, where it runs 0.55-0.83x as fast as dlmalloc.",
+    "Long-running processes that must give memory back by default: freed memory stays committed (purge_delay -1); one consumer saw 461 MB retained where the Windows heap dropped to 4 MB.",
+    "Risk-averse production use: the repository dates from 2026, has 3 stars, an open blockmap race issue (#8), and a closed issue (#37) titled 'Whatever you are trying to achieve here, please stop!'; adoption figures in the README are first-party and inconsistent."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none required beyond libc on Unix and windows-sys on Windows; optional portable-atomic for targets without native atomics",
+    "min_toolchain": "Rust 1.88 (rust-version), edition 2024; repo pins 1.97.1 for development",
+    "platforms": "x86-64 and aarch64 on Linux, macOS and Windows; wasm32-unknown-unknown; no_std ESP32-S3 (Xtensa); RISC-V bare-metal targets listed but the toolchain file says the crate does not yet build for them",
+    "thread_safety": "Thread-safe by default (per-thread heaps, lock-free cross-thread free, abandonment and adoption); bare-metal builds must set --cfg ra_single_threaded",
+    "drop_in_for_baseline": "partial — LD_PRELOAD interposer and mi_* C ABI for C/C++ programs, #[global_allocator] for Rust; not a link-time replacement for libmimalloc's full option/stat surface"
+  },
+  "gotchas": [
+    "Bare-metal builds need three settings: --cfg ra_single_threaded, --cfg ra_small_profile, and a Region<N> handed over once; without ra_small_profile it builds and links but every allocation returns null (SEGMENT_SIZE stays 32 MiB).",
+    "Size the embedded region with good_region_size()/region_for(), not a round number or a plain static [u8; N], or segments are stranded or the region is refused (FERR_MISALIGNED).",
+    "The lua callgrind numbers move about 0.26% run to run (hash seed not pinnable); only perl and sqlite counts are bit-repeatable, and the allocator-only ratio is attributed by object, so the glibc arm has no allocator-only figure.",
+    "alloc::stats() counters only exist in debug builds; the opt-in blockmap feature has an open race report under abandon/adopt at low core counts (issue #8)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Talc or rlsf when you want one mimalloc-style allocator spanning servers, wasm and an ESP32 rather than a wasm/embedded-only TLSF or arena design; on servers the C and C++ siblings (v8malloc, FastAlloc, Spaces) and upstream mimalloc itself have more mileage and wall-clock data.",
+  "verified_claims_summary": "Under callgrind with LD_PRELOAD on x86-64 Linux (CPU model and compiler flags not stated), short lua, perl and sqlite one-liner workloads ran 0.96 / 0.99 / 1.00 of mimalloc v2.4.5's whole-program instructions (0.84-0.98 of jemalloc, 0.81-0.99 of glibc malloc), with the allocator's own instructions at 0.52 / 0.81 / 0.83 of mimalloc's. Wall-clock numbers exist only for wasm32 in node (churn 4.9-7.3x vs dlmalloc, 2 KB loop 0.55-0.83x) and a Seeed XIAO ESP32-S3 at 240 MHz (1.44-3.94x vs esp-alloc 0.11).",
+  "status_note": "Very active (multiple releases since September 2026, now 2.2.x, semver-checked API) and MIT-licensed, but young, single-organisation and marketed heavily; bench scripts (bench/icount-arms.sh, oracle/build.sh) make the instruction counts reproducible on your own machine.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/crates/rusty_alloc/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/crates/rusty_alloc_api/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/bench/icount-arms.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/oracle/build.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_alloc/HEAD/rust-toolchain.toml",
+    "https://github.com/Remade-With-Rust/rusty_alloc/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.7
+}

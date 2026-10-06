@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/plasma-umass/doubletake",
+  "one_liner": "LD_PRELOAD heap-error checker (overflow, use-after-free, leaks) using checkpoint/replay; few-percent overhead versus ASan's 30%+ and Valgrind's ~17x.",
+  "what_it_does": "DoubleTake is a Linux shared library (libdoubletake.so) that you link or LD_PRELOAD into an unmodified C/C++ binary; it finds heap buffer overflows, use-after-free writes and memory leaks without recompiling with instrumentation. It interposes on __libc_start_main, malloc/free/new/delete and the libc wrappers around system calls, and on an error prints the faulting instruction's call stack plus the allocation (and free) site.",
+  "how_it_is_fast": "Evidence-based dynamic analysis: the program runs at full speed inside epochs that end only at irrevocable system calls (socket I/O, unlisted syscalls); at each epoch end it scans a bitmap of heap canaries (padding after objects, canary-filled quarantined freed objects) and looks for unreachable objects. Only if evidence is found does it roll back to the epoch snapshot and re-execute with x86 hardware watchpoints (perf_event_open, up to 4) on the corrupted words and call-site recording in the allocator. Most syscalls are classified as repeatable, recordable or deferrable so epochs stay long (most SPEC benchmarks run in 1-9 epochs).",
+  "when_to_use": [
+    "Single-threaded C/C++ batch programs on x86-64 Linux where ASan's ~2x slowdown or rebuild requirement is too expensive, e.g. running long test or input-fuzzing campaigns with checking left on.",
+    "You cannot recompile the binary (third-party or legacy code) and Valgrind Memcheck's 4.5x-42.8x slowdown is unacceptable.",
+    "Programs with few epoch-ending system calls (mostly file I/O, no sockets) and moderate malloc rates, where the report measured under 3% overhead on 14 of 19 SPEC CPU2006 benchmarks.",
+    "Leak hunting during execution rather than only at exit (it checks at every epoch boundary, ASan only at program end)."
+  ],
+  "when_not_to_use": [
+    "Multithreaded code: the tech report says the prototype is limited to single-threaded programs; the repo has pthread interposition, but open issues #11-#13 report failed rollback on PARSEC dedup, ferret, fluidanimate and kmeans.",
+    "You need read-error detection, stack/global overflows, or overflows that skip past canaries: detectors fire only on heap writes, use-after-free canaries cover only the first 128 bytes of a freed object, and non-contiguous overflows are missed.",
+    "Malloc-heavy or syscall-heavy programs: 403.gcc (canary filling of freed memory) and 464.h264ref (825 epochs) ran above 20% overhead; network servers end an epoch on every socket read.",
+    "Anything needing a maintained tool: last commit 2016-05-22, 6 open issues, built against LLVM 3.2-era toolchains; modern ASan/HWASan are actively maintained.",
+    "Non-x86-64 or non-Linux targets: relies on x86 debug registers, getcontext/setcontext and Linux /proc and perf_event_open."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libdl, pthread; bundled Heap Layers (heaplayers/); clang preferred by the Makefile",
+    "min_toolchain": "C11 / C++11; Makefile defaults to clang/clang++ (paper used LLVM 3.2)",
+    "platforms": "Linux x86-64 (an x86 32-bit build flag exists); hardware watchpoints required for pinpointing",
+    "thread_safety": "Paper prototype single-threaded only; later code interposes pthreads (MAX_ALIVE_THREADS = 128) but rollback failures on multithreaded PARSEC programs are open issues",
+    "drop_in_for_baseline": "partial — preloads into unmodified binaries like Valgrind (no ASan-style recompilation), but detects only heap write errors and leaks, not ASan's or Memcheck's full set"
+  },
+  "gotchas": [
+    "The default Makefile builds at -O0 with -DDEBUG_LEVEL=3 and leak detection (-DDETECT_MEMORY_LEAKS) commented out; build with make O=2 and adjust FEATURE_FLAGS before measuring overhead.",
+    "It replaces the heap with a fixed 8 GB user heap plus a 4 GB internal heap (xdefines.hh) in power-of-two BiBOP size classes, so allocation-size behavior and memory footprint differ from glibc; the README says the open-file limit must be raised for some programs.",
+    "The overhead numbers exclude rollback and replay time (rollback was disabled in the evaluation), so a run that finds errors costs more than reported.",
+    "Overhead figures disagree across sources: README says 2% for overflow-only, the report's introduction says 3%, and its evaluation text says no observable overhead without use-after-free detection; 4% with all three detectors is the consistent number."
+  ],
+  "pick_this_over_siblings_when": "Pick DoubleTake over AddressSanitizer when you cannot or do not want to recompile and only need heap overflow/use-after-free/leak detection on single-threaded code at near-native speed; pick Dr. Memory or Valgrind Memcheck when you need read errors, uninitialized-value tracking, multithreading or a maintained tool.",
+  "verified_claims_summary": "In the UMass tech report UM-CS-2015-018 (ICSE 2016 paper), all 19 C/C++ SPEC CPU2006 benchmarks with ref inputs, built with LLVM 3.2 clang -O2 on a 2.33GHz dual 4-core Core 2-era Xeon with Linux 3.13/glibc 2.19, ran with 4% average overhead under DoubleTake with all detectors versus over 30% for AddressSanitizer, beating ASan on 17 of 19; Valgrind Memcheck averaged about 17x on the same suite. Rollback cost was excluded and each result is the mean of three runs.",
+  "status_note": "Abandoned research prototype (last commit 2016-05-22, 21 stars, 6 open rollback/threading issues) but MIT-licensed; treat it as a reference design for checkpoint-and-replay checking rather than a production tool.",
+  "sources_read": [
+    "https://github.com/plasma-umass/DoubleTake",
+    "https://github.com/plasma-umass/DoubleTake/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/README.md",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/Makefile",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/doc/UM-CS-2015-018.pdf",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/source/libdoubletake.cpp",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/include/xthread.hh",
+    "https://raw.githubusercontent.com/plasma-umass/DoubleTake/HEAD/include/xdefines.hh"
+  ],
+  "confidence": 0.75
+}

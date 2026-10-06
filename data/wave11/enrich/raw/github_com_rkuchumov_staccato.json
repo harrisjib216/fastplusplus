@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/rkuchumov/staccato",
+  "one_liner": "Header-only C++11 work-stealing scheduler storing task objects inside its deques; lower spawn overhead than TBB 4.3 and Cilk Plus.",
+  "what_it_does": "A minimal fork-join task scheduler: you derive a class from staccato::task<T> with a void execute() method, placement-new children into memory returned by child(), call spawn() on each and wait() for them. A scheduler<T>(max_subtasks, nthreads) object owns the worker threads and runs a root task via root()/spawn()/wait(). There is no parallel_for, futures or heterogeneous task types: one scheduler serves one task type T.",
+  "how_it_is_fast": "Instead of a Chase-Lev deque of task pointers, each worker keeps a chain of fixed-size task_deque arrays (one per task-graph level) that hold the task objects themselves, so spawning a task never calls the heap allocator and finished slots are reused in LIFO order. Per-worker memory comes from a bump-style lifo_allocator with no thread safety or fragmentation handling, keeping tasks contiguous; the README shows fewer LLC misses than TBB and Cilk Plus. The deque uses relaxed atomics with explicit fences (top/bottom/nstolen counters) so it is valid on weak memory models.",
+  "when_to_use": [
+    "Recursive divide-and-conquer with tiny tasks (fib, tree search, recursive sums) where scheduler overhead dominates, which is where its fib(42) and dfs 9^9 charts show the gap over TBB and Cilk Plus.",
+    "Task graphs whose maximum fan-out per task is known at compile or design time (for example 2 for binary recursion).",
+    "As a small, readable reference implementation of a task-object-storing work-stealing deque to study or vendor.",
+    "Projects stuck on C++11 that want a dependency-free header drop."
+  ],
+  "when_not_to_use": [
+    "Memory-bound kernels (matmul, block matmul): the README says the gain there is negligible.",
+    "Irregular task graphs with unbounded or data-dependent fan-out: you must fix the maximum subtasks per task up front.",
+    "Production code needing parallel algorithms, futures, cancellation, exceptions across tasks or mixed task types: only spawn/wait on one type T exists; use oneTBB, Taskflow or libfork instead.",
+    "Anything needing maintenance: last commit 2018-06-13; open issues include the matmul benchmark consuming 128 GB+ of memory (#4) and benchmark crashes on atoi (#3), both unanswered.",
+    "Latency-sensitive or shared machines: idle workers spin in a steal loop calling std::this_thread::yield() rather than sleeping."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (pthreads via std::thread)",
+    "min_toolchain": "C++11; tested with g++ 7.2.1",
+    "platforms": "any platform with C++11 threads and atomics; benchmarked only on x86-64 Linux",
+    "thread_safety": "Scheduler is driven from one master thread (root()/spawn()/wait()); spawn/wait inside execute() are per-worker; not documented beyond that",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Not truly header-only for multi-file builds: include/lifo_allocator.hpp defines non-template, non-inline member functions (lifo_allocator::page::set_next, page::alloc, lifo_allocator::alloc, inc_tail and others) at namespace scope, so including the scheduler from two translation units gives duplicate-symbol link errors unless you patch in 'inline'.",
+    "Tasks must be constructed with placement new over child()/root() memory; allocating them any other way breaks the scheduler's memory model.",
+    "The scheduler(degree, nthreads, height) constructor rounds degree up to a power of two and preallocates per-level deques; exceeding the declared fan-out is not checked in release builds.",
+    "The TBB comparison uses blocking-style TBB tasks (wait_for_all) without continuation passing or scheduler bypass; issue #1 notes TBB's gap would shrink with those."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Nowa or Heartbeat Scheduling only when you want a tiny dependency-free C++11 header to study or vendor for fixed-fan-out recursion; for maintained, general-purpose work stealing citor, Fork Union or Taskflow-class libraries are safer, and Weave (Nim) reports similar overhead wins over TBB with more benchmarks.",
+  "verified_claims_summary": "On two Xeon E5 v4 sockets (14 cores each, 56 threads), g++ 7.2.1 -O3, Linux 4.13, the README charts show fib(42) at 56 threads about 1.6x faster than Intel Cilk Plus 7.3 and 2.4x faster than TBB 4.3, and dfs 9^9 about 2.5x and 3.4x faster (ratios read off log-scale PNG charts by the verifier, approximate), with matmul and blkmul nearly unchanged. The checked-in benchmarks/run.sh is left in a debug state (2 runs at 3-4 threads, only staccato fib enabled), so the published charts used settings that the script no longer runs by default.",
+  "status_note": "Abandoned since 2018 (37 stars, four open issues with no replies) but MIT-licensed and only about 950 lines of headers, so it is easy to vendor after adding 'inline' to the lifo_allocator definitions.",
+  "sources_read": [
+    "https://github.com/rkuchumov/staccato",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/README.md",
+    "https://github.com/rkuchumov/staccato/tree/master/include",
+    "https://github.com/rkuchumov/staccato/tree/master/benchmarks/staccato",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/include/scheduler.hpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/include/task.hpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/include/task_deque.hpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/include/worker.hpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/include/lifo_allocator.hpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/benchmarks/run.sh",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/benchmarks/staccato/fib/main.cpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/benchmarks/staccato/fib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/benchmarks/tbb/fib/main.cpp",
+    "https://raw.githubusercontent.com/rkuchumov/staccato/HEAD/benchmarks/cilk/fib/main.cpp",
+    "https://github.com/rkuchumov/staccato/issues?q=is%3Aissue",
+    "https://github.com/rkuchumov/staccato/issues/1",
+    "https://github.com/rkuchumov/staccato/issues/4"
+  ],
+  "confidence": 0.75
+}
