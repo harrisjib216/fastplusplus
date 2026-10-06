@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/goccy/wasm2go",
+  "one_liner": "Ahead-of-time WebAssembly-to-Go translator; on its author's SQL engine it beats wazero on startup and call-heavy queries, ties on long scans.",
+  "what_it_does": "A CLI and Go library (transpile.Parse/Translate/Transpile) that turns a .wasm binary into a Go package with a New() constructor and exported methods, so a C/C++ library built with the WASI SDK links into a Go program as ordinary Go code, with no wasm runtime and no cgo. It emits a native wasi_snapshot_preview1 implementation using only the Go standard library. It also supports the SIMD, exception-handling, threads (a wasm thread becomes a goroutine) and memory64 proposals. It replaces a wazero embedding, not its API: the module is fixed at generation time and callers use generated Go methods instead of wazero's Module/Function calls.",
+  "how_it_is_fast": "Calls into the module are plain Go function calls, so there is no host-guest boundary crossing and no runtime compilation at startup, which is where the large wins come from. On amd64 the current gcasm backend compiles the generated pure-Go bodies with the host Go toolchain at generation time, captures the -S listings and rewrites them into ABI0 .s files, adding fused SIMD regions, O(1) jump tables, a leaf inliner and whole-function dead-code elimination. Per the transpile.go doc comment, other architectures build the pure-Go bodies, which the author says beat the retired own-emitter assembly backend (internal/asmgen) in every configuration they measured.",
+  "when_to_use": [
+    "A Go service that embeds a large, fixed C/C++ library compiled to wasm (the GoogleSQL parser/analyzer in goccy/go-googlesql and googlesqlite is the reference user) and must stay cgo-free.",
+    "Workloads that make many short calls into the module, such as scalar SQL expressions, window functions or JSON extraction, where wazero's per-call boundary dominated (77-81x and 25-28x gaps in the author's runs).",
+    "Processes where startup matters: about 0.16-0.56 s init versus 4.35-4.67 s for wazero compiling the same 13 MB module at process start, in the author's runs.",
+    "Shipping one Go binary for linux, darwin, windows and the BSDs without a JIT or an on-disk compilation cache."
+  ],
+  "when_not_to_use": [
+    "Modules that must be loaded, swapped or sandboxed at runtime (plugins, user-supplied wasm): the module is baked into Go source at build time, so use wazero or a sibling runtime.",
+    "Long compute-bound runs inside the module: the author's TPC-H rows are within about 10% of wazero either way (0.91-1.01x), so the translation step buys little there.",
+    "Tight build budgets: go-googlesql's README reports about 76 s and 5.6 GB peak memory for a cold build of the generated code and a 63 MB binary, a cost the 'cold compile' row leaves out.",
+    "Callers that are not Go: the output is a Go package, not callable from C++; wasm2c (WABT) or w2c2 fit native hosts.",
+    "Risk-averse production use today: the project started in April 2026 (62 commits) and fixed miscompiles in July and August 2026."
+  ],
+  "integration": {
+    "form": "source-drop (generated Go package with .s files and an embedded data sidecar); the translator itself is a Go module and CLI",
+    "dependencies": "Generated code: Go standard library only (per the README's WASI section). Translator: wazero v1.11.0 (go.mod; the tests use it as a differential oracle) and golang.org/x/sys; tests need wat2wasm from WABT.",
+    "min_toolchain": "Go 1.25 (go.mod declares go 1.25.0); the amd64 assembly is derived from the host Go compiler's -S output at generation time",
+    "platforms": "amd64 assembly path (CI runs it with GOAMD64=v2); arm64 SIMD and override splices; pure-Go fallback on every other GOOS/GOARCH",
+    "thread_safety": "not documented for sharing one instance across goroutines; wasi-threads are supported, with each wasm thread mapped to a goroutine (PR #30)",
+    "drop_in_for_baseline": "partial: same wasm module and semantics, but a build-time code-generation step and a generated Go API replace wazero's runtime Instantiate/Call interface"
+  },
+  "gotchas": [
+    "The README's Performance table comes from PR #1 (2026-05-24) and predates both the asmgen backend (PR #7, 2026-06-10) that the README describes and the gcasm backend that replaced it, so the published numbers were not measured on today's code generator. The only public harness is googlesqlite's bench/runner_test.go (the same 22 queries, now wasm2go-only), and googlesqlite PR #19 re-ran the comparison with different results: select_constant 6.5x rather than 18x, q3 1.01x rather than 0.91x, startup 27x rather than 8.4x, and this run was on 'Apple M-class, macOS, Go via Rosetta'.",
+    "Harness flaw: if the README run also used an amd64 Go under Rosetta, as the sibling PR #19 run states, then wazero's runtime-generated machine code went through Rosetta's JIT translation while wasm2go's code was ahead-of-time translated. That handicaps the baseline. The 'cold compile' row times opening a connection plus SELECT 1 (init plus first query) for wasm2go against wazero's runtime compilation of the module, and it excludes the roughly 76 s Go build of the generated code.",
+    "Per the CI workflow comments, amd64 builds at the default GOAMD64=v1 run only the pure-Go fallback: the amd64 assembly splices compile only into v2+ binaries. Build with GOAMD64=v2 or higher to get the fast path.",
+    "Miscompile history: PR #25 (2026-07-10) fixed two bugs on very large modules that made generated code hang; PR #46 (2026-08-13) fixed an amd64 fused-region register clobber and loop-carry bug that produced garbage output on llama.cpp memory64 bundles; the CI notes a const-shuffle scratch clobber that reached a release. Test the generated package against wazero on your own module."
+  ],
+  "pick_this_over_siblings_when": "Pick it over wazero-family runtimes such as wazy when the module is known at build time, the host is Go, and per-call overhead or startup dominates. Pick wasm2c (WABT) or w2c2 when the host is C/C++. Pick a runtime (wazy, Wasmi, WAMR) when modules arrive at runtime or must stay sandboxed in a separate engine.",
+  "verified_claims_summary": "On the 22-query googlesqlite corpus (go test -bench, -benchtime=200ms, prepared statements re-executed in the timed loop) running the 13 MB GoogleSQL wasm module, the README reports wasm2go against a wazero build of the same module on unspecified Apple Silicon: 8.4x faster first use, 18-81x faster on short scalar, window and JSON queries, and 6-9% slower on TPC-H q1 and q3. The author's later googlesqlite PR #19 re-ran 19 of the queries under Rosetta: 1.04-2.33x on the aggregate and most mixed queries, 4-78x on the scalar, window, JSON and information_schema queries, 0.95x on q1, 1.01x on q3 and 0.91x on wildcard_table_scan. The Go version, CPU model and wazero version are not stated for either run.",
+  "status_note": "Very active (v0.5.15, 2026-09-05; 0 open issues) and MIT-licensed, but five months old with recent miscompile fixes, and the published numbers predate the current backend, so treat it as promising but young and verify output against wazero.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/README.md",
+    "https://github.com/goccy/wasm2go",
+    "https://github.com/goccy/wasm2go/tree/main/docs",
+    "https://github.com/goccy/wasm2go/tree/main/tools",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/docs/asm-overrides.md",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/go.mod",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/Makefile",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/.github/workflows/ci.yml",
+    "https://github.com/goccy/wasm2go/commits/main",
+    "https://github.com/goccy/wasm2go/commits/main/README.md",
+    "https://github.com/goccy/wasm2go/releases",
+    "https://github.com/goccy/wasm2go/issues?q=is%3Aissue",
+    "https://github.com/goccy/wasm2go/pulls?q=is%3Apr",
+    "https://github.com/goccy/wasm2go/pulls?page=2&q=is%3Apr",
+    "https://github.com/goccy/wasm2go/pull/1",
+    "https://github.com/goccy/wasm2go/pull/7",
+    "https://github.com/goccy/wasm2go/pull/25",
+    "https://github.com/goccy/wasm2go/pull/46",
+    "https://github.com/goccy/wasm2go/tree/main/internal",
+    "https://github.com/goccy/wasm2go/tree/main/transpile",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/transpile/transpile.go",
+    "https://raw.githubusercontent.com/goccy/wasm2go/HEAD/transpile/pure_only_test.go",
+    "https://github.com/goccy/go-googlesql",
+    "https://github.com/goccy/go-zetasqlite",
+    "https://github.com/goccy/googlesqlite",
+    "https://github.com/goccy/googlesqlite/tree/main/bench",
+    "https://raw.githubusercontent.com/goccy/googlesqlite/HEAD/bench/RESULTS.md",
+    "https://raw.githubusercontent.com/goccy/googlesqlite/HEAD/bench/runner_test.go",
+    "https://raw.githubusercontent.com/goccy/googlesqlite/HEAD/bench/render_results.go",
+    "https://raw.githubusercontent.com/goccy/googlesqlite/HEAD/bench/go.mod",
+    "https://github.com/goccy/googlesqlite/commits/main/bench",
+    "https://github.com/goccy/googlesqlite/pull/19",
+    "https://github.com/ncruces/wasm2go"
+  ],
+  "confidence": 0.75
+}
