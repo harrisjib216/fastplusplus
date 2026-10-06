@@ -48,3 +48,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Seed leads from the weval/jz enrichment (2026-10-06): Porffor (CanadaHonk/porffor), scriptc (vercel-labs/scriptc), TypeScriptCompiler (ASDAlexander77/TypeScriptCompiler). Life/Wago enrichment: no new leads.
 - Paper-access retier candidate: mutable (mutable-org/mutable, verified C): EDBT 2023 paper on openproceedings.org blocked here; snippets show compile-time wins over HyPer only (batch 78 verifier, 2026-10-06). Topaz: consider a repo_url override to kostya/topaz, the fork that was actually measured.
 - LC Scheme BBV JIT (bsaleil/lc, BSD-3, 33 stars): README has no baseline numbers, papers only (Higgs enricher, 2026-10-06); weak lead. 0xjojoex/evm.zig has numbers vs evmone-base and revm-int (seed-d, 2026-10-06); seed candidate.
+- goant (robomotionio/goant): pure-Go JS engine, ahaoboy Ubuntu V8 v7 score 981 vs goja 264 (Paserati enricher, 2026-10-06); seed candidate.

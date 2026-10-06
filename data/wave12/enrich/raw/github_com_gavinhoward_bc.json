@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/gavinhoward/bc",
+  "one_liner": "POSIX bc/dc in C, plus the bcl library; its bignum math beats GNU bc 1.07.1, its interpreter loop does not.",
+  "what_it_does": "A drop-in POSIX bc with GNU and BSD extensions, and a dc in the same binary (via symlink), used as the system bc in FreeBSD, macOS and Android. The same decimal arbitrary-precision math is exposed as bcl, a C library (libbcl.a) with per-thread contexts, BclNumber handles and consuming or _keep variants of add, sub, mul, div, pow and so on.",
+  "how_it_is_fast": "Numbers are stored as limbs holding 9 decimal digits (base 10^9 in int_least32_t on 64-bit; 4 digits on 32-bit) instead of GNU bc's one digit per char, so every operation touches far fewer limbs. Multiplication switches from schoolbook to Karatsuba at BC_NUM_KARATSUBA_LEN (default 32 limbs, tunable with scripts/karatsuba.py); power is exponentiation by squaring on top of that; division is Knuth Algorithm D. The interpreter itself is split into many small cross-file functions, so it needs -O3 -flto to inline them and is still slower than GNU bc on math-free loops.",
+  "when_to_use": [
+    "Shell scripts or build steps that call bc for large-number math (big powers, products of numbers with tens to millions of digits): the 1234567890^100000 test ran 15.7x faster than GNU bc in user time.",
+    "Replacing GNU bc where you also want dc, extra built-ins (abs, divmod, scientific notation input/output, a seedable PRNG) and a parser that accepts code GNU bc rejects.",
+    "Embedding decimal arbitrary-precision arithmetic in a C or C++ program via bcl when GMP's binary representation or LGPL licence is unwanted (BSD-2-Clause, pure C99, no dependencies besides pthreads).",
+    "Windows 10+ builds of bc/dc from a Visual Studio solution, which GNU bc does not provide."
+  ],
+  "when_not_to_use": [
+    "Loop-heavy scripts with little math: the 100,000,000-iteration for-loop was 37% slower than GNU bc at -O2 (22.76 s vs 16.60 s) and still 12% slower with -O3 -flto.",
+    "As a general high-performance bignum engine: it is decimal, its division is schoolbook Algorithm D and its fastest multiplication is Karatsuba (no FFT/Toom), and no comparison against GMP or MPFR is published.",
+    "If you need fresh, independent performance numbers: the only published comparison is bc 3.0.0 from 2019 on an unnamed x86_64 CPU; 7.x has no published GNU bc comparison.",
+    "Windows 7 and older: issue #98 (open, May 2026) says builds after 5.2.5 hang on input there; only Windows 10+ is supported.",
+    "Interrupting library calls with signals: bcl is not async-signal-safe; the manual says to run long calculations in a separate thread instead."
+  ],
+  "integration": {
+    "form": "static lib (bcl, built as bin/libbcl.a with ./configure.sh -a) or standalone bc/dc executables",
+    "dependencies": "none for bc/dc; bcl needs -lpthread on POSIX; optional editline/readline and NLS",
+    "min_toolchain": "C99 compiler on a POSIX 2008 + XSI system, or Visual Studio MSBuild on Windows 10+; author recommends clang with -O3 -flto",
+    "platforms": "Linux, FreeBSD, OpenBSD, NetBSD, macOS, Solaris, AIX, HP-UX (no history), Windows 10+; 9 digits per limb on 64-bit longs, 4 on 32-bit",
+    "thread_safety": "bcl is documented MT-Safe with per-thread initialization (bcl_init per thread) and thread-local contexts; numbers must not cross threads (pass bcl_string() output instead); not async-signal-safe",
+    "drop_in_for_baseline": "partial — documented as a drop-in POSIX bc and runs GNU extensions, but output wrapping, length() results and some parse behaviour differ from GNU bc by design, and dc lacks the ! command"
+  },
+  "gotchas": [
+    "Harness flaw: the add/subtract/multiply/divide benchmarks run tests/script.sh with -lq and print every result (about 0.98 to 1.96 million printed numbers per run, derived from the bc 3.0.0 scripts) into a file that is then diffed. They measure number printing and output as much as arithmetic, and GNU bc's 1.3-2.5 s of sys time, which scales with the count of printed results and is not explained on the page, inflates the wall-clock ratios; by user time the -O2 gains are only 1.19x-2.23x. The scripts live under tests/bc/scripts/ only in the 3.0.0 tree; HEAD has a different benchmarks/ folder and scripts/benchmark.sh with no published results.",
+    "Build flags matter more than usual: without LTO the cross-file helper functions (for example bc_vec_item) are not inlined, and the author found -march=native made it slower; clang is recommended over gcc (no numbers given).",
+    "bcl.h has no extern \"C\" guard, so C++ code must wrap the include itself; non-_keep math functions consume (free) their arguments even on error.",
+    "The latest releases 7.1.0 and 7.2.0 are labelled UNTESTED in NEWS.md; tested releases are offered under paid maintenance terms (MAINTENANCE-TERMS.md), and OSS-Fuzz was disabled over LeakSanitizer reports until a rebuild in August 2026 (issue #103)."
+  ],
+  "pick_this_over_siblings_when": "No sibling is a bc: the catalogued siblings (LuaJIT, PyPy, Wren and others) speed up general scripting languages, while this one only wins on bc's arbitrary-precision math. Pick it when the workload is a bc/dc script or an embedded decimal bignum calculation, and pick a sibling interpreter when the cost is in control flow rather than math.",
+  "verified_claims_summary": "First-party manuals/benchmarks.md: bc 3.0.0 vs GNU bc 1.07.1, both built with clang 9.0.1 at -O2 (then -O3 -flto -march=native and -O3 -flto) on an unnamed x86_64 Gentoo machine, best of four time -p runs. 1234567890^100000 took 0.73 s vs 11.30 s (15.7x user time); print-heavy add/multiply/divide scripts and a patched Linux timeconst.bc loop were 1.19x-2.23x faster by user time, while a 100M-iteration for-loop was 37% slower.",
+  "status_note": "Actively maintained by one author (last commit 2026-10-03, a divmod fix) but feature-complete; BSD-2-Clause, pure C99 and widely shipped (FreeBSD, macOS, Android, Gentoo, LFS; Fedora only via a COPR), so it is safe to adopt, though the two newest releases are marked UNTESTED.",
+  "sources_read": [
+    "https://github.com/gavinhoward/bc",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/README.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/manuals/benchmarks.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/manuals/algorithms.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/manuals/build.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/manuals/bcl.3.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/include/num.h",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/include/bcl.h",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/MAINTENANCE-TERMS.md",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/VERSION.txt",
+    "https://raw.githubusercontent.com/gavinhoward/bc/3.0.0/tests/script.sh",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/tests/script.sh",
+    "https://raw.githubusercontent.com/gavinhoward/bc/3.0.0/tests/bc/scripts/add.bc",
+    "https://raw.githubusercontent.com/gavinhoward/bc/3.0.0/tests/bc/scripts/multiply.bc",
+    "https://raw.githubusercontent.com/gavinhoward/bc/3.0.0/tests/bc/scripts/divide.bc",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/gavinhoward/bc/HEAD/benchmarks/bc/add.bc",
+    "https://github.com/gavinhoward/bc/issues",
+    "https://github.com/gavinhoward/bc/issues/98",
+    "https://github.com/gavinhoward/bc/issues/103",
+    "https://github.com/gavinhoward/bc/commits"
+  ],
+  "confidence": 0.72
+}

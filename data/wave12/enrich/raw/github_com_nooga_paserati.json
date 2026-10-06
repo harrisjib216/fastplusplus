@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/nooga/paserati",
+  "one_liner": "Pure-Go TypeScript/JavaScript bytecode interpreter, about 1.2-1.7x faster than goja on V8 v7; native QuickJS is about 3x faster.",
+  "what_it_does": "An experimental runtime that parses and (optionally) type-checks TypeScript and compiles it straight to bytecode for a register VM, so it also runs plain modern JavaScript (Test262 language 98.3%, built-ins 89.9% under the stricter runner policy adopted in September 2026). It ships as a CLI (paserati script.ts, REPL, -e) and as Go packages: pkg/driver exposes NewPaserati, EvalCode, RunString, RunModule, CompileProgramAsScript/InterpretChunk and builtins initializers for host functions. It is not API-compatible with goja.",
+  "how_it_is_fast": "Register-based bytecode compiled directly from the TypeScript AST, hidden-class shapes with per-site property inline caches, indexed globals, cheap ordinary call frames and tail-call optimization. There is no JIT and no compact value encoding yet: the audited build used 24-byte Values, and the project's September 2026 audit found property get at about 36% of CPU (IC lookup about 12%) on its object benchmark.",
+  "when_to_use": [
+    "Go services that must embed JavaScript or TypeScript without cgo or a Wasm runtime and currently use goja: independent V8 v7 scores are 1.52x goja on Ubuntu, 1.23x on macOS arm64 and 1.74x on Windows (ahaoboy/js-engine-benchmark, both at the same versions).",
+    "Running TypeScript source directly (no tsc step), including runtime type reflection via Paserati.reflect<T>() for JSON Schema generation.",
+    "Compute- and string-heavy scripts (Crypto, RegExp, NavierStokes, Splay rows) where its lead over goja is largest.",
+    "Experiments and tools where a young, fast-moving engine is acceptable."
+  ],
+  "when_not_to_use": [
+    "When speed matters more than staying in pure Go: C QuickJS scores 3.0x (Ubuntu), 3.3x (macOS) and 2.8x (Windows) higher on V8 v7, and the project's audit puts it at 2.98x C QuickJS's and 4.97x jitless V8's execution time.",
+    "When another pure-Go engine is acceptable: GoQuickJS (go-quickjs/go-quickjs) scored 3912 vs 1125 and ran factorial 2.42x faster in the go-js-engines-benchmark shootout, and goant scored 981 vs 401 on ahaoboy's Ubuntu run.",
+    "Call- and property-heavy object code: it is level with or slower than goja on Richards (all three ahaoboy platforms) and DeltaBlue (Ubuntu, macOS); the audit measured Richards 11.4 ms vs goja 10.5 ms.",
+    "Production embedding with untrusted or long-lived workloads: the roadmap (2026-09-05) records retained memory after Reset (78.6 MB in a probe), about 34 MB kept by global shape transitions, a 24 MiB eagerly reserved register stack, and calls itself not production-ready.",
+    "Memory-constrained hosts: the static binary is about 14-16 MB, against about 1 MB for C QuickJS."
+  ],
+  "integration": {
+    "form": "module (Go module github.com/nooga/paserati) plus a CLI binary",
+    "dependencies": "github.com/dlclark/regexp2, golang.org/x/text, github.com/rivo/uniseg, golang.org/x/perf (go.mod; the README says two)",
+    "min_toolchain": "Go 1.27.1 (go.mod at HEAD); the shootout built v0.9.13 with Go 1.27.0",
+    "platforms": "any Go target, no cgo; benchmarked on linux/amd64, darwin/arm64 and windows",
+    "thread_safety": "not documented; the roadmap asks for a single-owner policy per VM and found a data race between independent register allocators on a global diagnostic ID, so use one VM per goroutine",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the README's 'QJS' column (1.26x and 1.32x 'faster than quickjs') was, per the project's own roadmap, the modernc.org/quickjs ccgo translation, not C QuickJS; bench/hyperfine.sh also sends all output, including each engine's checksum, to /dev/null, so results are never compared. Against C QuickJS the same bench.js takes 2.371 s vs 0.810 s.",
+    "Every published third-party number (go-js-engines-benchmark and ahaoboy) measured v0.9.13 (tagged 2026-08-25), which predates fixes for a property-IC bug returning a stale ancestor value after a closer prototype gained the property (#550), a switch-case TDZ stale read (#552) and array-iterator bugs (#551), all closed 2026-09-23; the V8 v7 checks passed, but the fixed IC sits on the measured hot path and post-fix speed is not published.",
+    "The project's earlier Test262 runner counted some failures as passes (audit item A01); figures before September 2026, including 98.1%, are inflated, and the TypeScript conformance is only 41.7% by strict error codes.",
+    "Benchmarks run with type checking off (--no-typecheck or SetSkipTypeCheck(true)); with checking on, the TypeScript checker's cost is added to startup."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued siblings it is the JavaScript analogue of Wangshu (a pure-Go Lua beating gopher-lua): pick it when a Go program needs JS/TS without cgo and goja is too slow; pick katsu, lo or a V8-based runtime when you can leave Go, since all are an order of magnitude faster.",
+  "verified_claims_summary": "In go-quickjs/go-js-engines-benchmark (Apple M5 Max, Go 1.27.0, Paserati v0.9.13 with type checking off, one V8 v7 run per engine in one process) it scored 1125 vs goja 751 and ran recursive factorial(10) x1M in 515.8 ms vs 703.5 ms; ahaoboy's independent V8 v7 runs give 401/538/379 vs goja 264/436/218 on Ubuntu/macOS/Windows. The README's hyperfine microbenchmarks (1.33x and 1.14x over goja) state no hardware or Go version.",
+  "status_note": "Very active one-person project (commits daily, last 2026-10-06), MIT and pure Go so it is easy to vendor, but the author calls it experimental, most code is AI-written, the newest release tag (v0.9.13) is six weeks behind several correctness fixes, and its own roadmap says production readiness is not established.",
+  "sources_read": [
+    "https://github.com/nooga/paserati",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/README.md",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/bench/hyperfine.sh",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/bench/bench.js",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/bench/objects.js",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/go.mod",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/docs/runtime-production-roadmap.md",
+    "https://raw.githubusercontent.com/nooga/paserati/HEAD/pkg/driver/driver.go",
+    "https://github.com/nooga/paserati/commits",
+    "https://github.com/nooga/paserati/issues",
+    "https://github.com/nooga/paserati/issues?q=is%3Aissue%20state%3Aclosed%20roadmap",
+    "https://github.com/nooga/paserati/tags",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/main.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/go.mod",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/engines/paserati.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/engines/goja.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/engines/engines.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/arewefastyet-v8v7/v8-v7/run.js",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/factorial/main.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/factorial/go.mod",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/factorial/engines/paserati.go",
+    "https://raw.githubusercontent.com/go-quickjs/go-js-engines-benchmark/HEAD/factorial/engines/goja.go",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md"
+  ],
+  "confidence": 0.78
+}
