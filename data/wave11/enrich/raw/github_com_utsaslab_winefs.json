@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/utsaslab/winefs",
+  "one_liner": "Linux kernel file system for Intel Optane persistent memory that keeps 2MB hugepage mappings after aging; beats ext4-DAX, xfs-DAX, NOVA on mmap workloads.",
+  "what_it_does": "WineFS is a PMFS-derived kernel file system shipped as a loadable module inside a Linux 5.1 tree, mounted on a DAX pmem device with `mount -t winefs -o init[,strict] /dev/pmem0 /mnt/pmem0`. Applications use it through the normal POSIX and mmap interfaces, so nothing in the application changes; the point is that memory-mapped files on an aged, 75%-full file system still get 2MB hugepage mappings. A strict mode adds data consistency (comparable to NOVA or SplitFS-strict); the default relaxed mode gives metadata consistency like ext4-DAX.",
+  "how_it_is_fast": "A dual-allocation policy: files that are memory-mapped get extents from a hugepage-aligned allocator (balloc.c keeps a separate huge_aligned_block_free_tree per CPU), while other POSIX files go to a hole-filling allocator over the unaligned tree, so 2MB-aligned free extents survive fragmentation. Page faults on aligned extents are served with hugepages, which cuts page-fault and TLB-miss counts. Per-CPU journaling, per-CPU free lists and auxiliary metadata keep metadata-heavy POSIX workloads on par with or ahead of ext4-DAX and NOVA.",
+  "when_to_use": [
+    "Research or reproduction on Intel Optane DC PM (fsdax namespace, Cascade Lake with clwb) where you compare PM file systems",
+    "Memory-mapped databases or key-value stores (LMDB, mmap-mode RocksDB, persistent radix trees) on a long-lived, highly utilized PM file system where ext4-DAX/NOVA fall back to 4KB pages",
+    "Studying aging effects: the artifact comes with Geriatrix aging scripts and parse scripts for RocksDB/YCSB, LMDB, Filebench and WiredTiger",
+    "Reading a compact example of hugepage-aware extent allocation and per-CPU journaling in a DAX file system"
+  ],
+  "when_not_to_use": [
+    "Any commercial use: the license is CC BY-NC 4.0, not an open-source software license",
+    "Production data: the issue tracker has many open crash-consistency reports (non-atomic writes in strict mode #5, fast write path #16/#18, unlink #22, truncate #9/#20, evict_inode data loss #26, xattr bugs #24) with no maintainer fixes visible",
+    "Modern kernels or hardware without Optane PM: code targets Linux 5.1 and Optane was discontinued; a build report (#10) shows an undefined sched_setaffinity symbol when building the module",
+    "Clean, low-utilization file systems or POSIX-only workloads, where the paper's own summary is parity rather than a large win",
+    "VMs: the README requires a bare-metal machine"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Linux 5.1 kernel tree from the repo (FS_DAX, CRC16), ndctl to create an fsdax namespace with --align=1G",
+    "min_toolchain": "not documented (kernel toolchain for Linux 5.1; Ubuntu 16.04-20.04 or Fedora 27/30 listed)",
+    "platforms": "x86-64 with Intel Optane DC PM and clwb (Cascade Lake); bare metal, at least 4 cores and 32 GB DRAM",
+    "thread_safety": "Kernel file system; concurrent access via per-CPU journals and free lists (issue #2 reported a segfault creating 5 files on 4 cores, since closed)",
+    "drop_in_for_baseline": "partial — same POSIX/mmap interface as ext4-DAX, but needs its own kernel build and reformatting the pmem device"
+  },
+  "gotchas": [
+    "Kconfig still names the option DUOFS and the code calls itself pmfs internally; the module builds as winefs.ko from CONFIG_DUOFS",
+    "pmfs_init_free_list in balloc.c only sets start_block for two-NUMA-node machines when the CPU count is exactly 96 or 32; with two nodes and any other count start_block is left uninitialized (read from the code, not tested)",
+    "Strict mode is advertised as giving data atomicity, but open issue #5 (Hayley LeBlanc, 2021) shows an uncommitted overwrite surviving a simulated crash",
+    "Experiments.md warns absolute numbers vary with NVDIMM firmware and wear, and RocksDB YCSB run C has high variance; average several runs"
+  ],
+  "pick_this_over_siblings_when": "Pick WineFS over NOVA (linux-nova) or SplitFS when the workload is memory-mapped and the PM file system is aged or nearly full, since hugepage preservation is its whole point; MadFS or SplitFS are better fits for POSIX read/write-heavy apps, and Trio/ArckFS reports beating WineFS on LevelDB.",
+  "verified_claims_summary": "The SOSP'21 paper and artifact compare WineFS with ext4-DAX, xfs-DAX and NOVA on Linux 5.1 with Optane DC PM (2 sockets, 28 cores each, at least 500 GiB PM per socket), file systems aged to 75% with Geriatrix: up to 2x on mmap RocksDB (YCSB) and LMDB, LMDB 2x the write throughput of NOVA and 70% above ext4-DAX, and 56% lower median latency than NOVA for reads of a mmap'd radix tree (abstract figures via search snippet; paper PDF blocked here). Filebench and WiredTiger on clean file systems are parity or better. Compiler, flags and the exact CPU model are not given in the repo.",
+  "status_note": "Abandoned research code (last commit 2022-01-13) on Linux 5.1 for discontinued Optane hardware, CC BY-NC 4.0 and many open crash-consistency bugs, so it is reference only.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/utsaslab/WineFS/HEAD/README.md",
+    "https://raw.githubusercontent.com/utsaslab/WineFS/HEAD/Experiments.md",
+    "https://github.com/utsaslab/WineFS/issues?q=is%3Aissue",
+    "https://github.com/utsaslab/WineFS/issues/5",
+    "https://github.com/utsaslab/WineFS/issues/16",
+    "https://github.com/utsaslab/WineFS/tree/main/Linux-5.1/fs/winefs",
+    "https://raw.githubusercontent.com/utsaslab/WineFS/HEAD/Linux-5.1/fs/winefs/balloc.c",
+    "https://raw.githubusercontent.com/utsaslab/WineFS/HEAD/Linux-5.1/fs/winefs/Kconfig",
+    "https://raw.githubusercontent.com/utsaslab/WineFS/HEAD/Linux-5.1/fs/winefs/Makefile",
+    "WebSearch: WineFS SOSP 2021 evaluation (snippets of the abstract)"
+  ],
+  "confidence": 0.7
+}

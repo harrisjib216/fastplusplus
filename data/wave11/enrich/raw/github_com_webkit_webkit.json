@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/webkit/webkit",
+  "one_liner": "Apple's libpas: isoheap-capable malloc toolkit behind WebKit's bmalloc, faster and leaner than the bmalloc it replaced.",
+  "what_it_does": "libpas is a C toolkit for building memory allocators, not a ready malloc replacement. It provides three heap building blocks (segregated, bitfit, large) that can be configured per page size, minalign and security trade-off. In WebKit it provides all of bmalloc's API (fastMalloc, Gigacage, IsoHeap<>), and its jit_heap backs JavaScriptCore's ExecutableAllocator. Built standalone as a dylib it exposes many allocators without overriding malloc and free.",
+  "how_it_is_fast": "Segregated heaps use simple segregated storage (each page holds one size class) plus thread-local caches with per-size-class local allocators and a deallocation log, so the common alloc and free paths need no atomics or fences, just a few loads, adds and stores. Deallocation logs are flushed in batches with lock-sharing tricks that cut lock acquisitions. A scavenger thread (every 100 ms by default) decommits pages that have been empty for a while through a physical page sharing pool, which is where the memory savings over bmalloc come from. Bitfit (first-fit, one bit per minalign granule) and a cartesian-tree first-fit large heap cover the bigger sizes.",
+  "when_to_use": [
+    "You need type-segregated heaps (isoheaps), one heap per type, for use-after-free hardening, and want them cheap enough to create in large numbers",
+    "Allocation-heavy C or C++ code on Apple platforms or Linux where the allocator has to keep metadata out of line (no free-list pointers inside freed objects)",
+    "Special allocators such as executable/JIT memory (jit_heap) or MTE-tagged memory next to ordinary malloc in one library",
+    "Long-running processes that should hand empty pages back to the OS quickly (configurable decommit delay, e.g. 300 ms)"
+  ],
+  "when_not_to_use": [
+    "You want a malloc you can LD_PRELOAD or link in place of glibc malloc: libpas does not override malloc and free, and you must build your own heap config (as bmalloc does)",
+    "You need published numbers against mimalloc, jemalloc or tcmalloc: the only figures are WebKit's own (about 2% Speedometer2 and about 8% memory against bmalloc and MetaAllocator)",
+    "Toolchains other than Clang: several heap config .c files use a clang-only C extension (compound-literal field access in file-scope initializers)",
+    "You want a small vendorable allocator: it lives in the WebKit monorepo, is large, and the design leans on intricate fine-grained locking that is hard to audit"
+  ],
+  "integration": {
+    "form": "source-drop (pulled into the host project's build; standalone build.sh/CMake makes a dylib and test binaries)",
+    "dependencies": "none outside the libpas tree (pthreads); the test suite is C++",
+    "min_toolchain": "Clang required for some files; CMake 3.21+, C23 and C++23 in the standalone CMakeLists",
+    "platforms": "Darwin (macOS/iOS, arm64/arm64e, x86-64), Linux, Windows and PlayStation macros present in pas_platform.h; tuned mainly for Apple platforms",
+    "thread_safety": "thread-safe; thread-local caches plus fine-grained locks, with a scavenger thread that may suspend threads to stop their allocators",
+    "drop_in_for_baseline": "partial: it is a drop-in for bmalloc inside WebKit (PAS_BMALLOC), not for system malloc"
+  },
+  "gotchas": [
+    "The scavenger suspends threads that own thread-local caches to stop their allocators, which can surprise code that is sensitive to signals or thread suspension",
+    "Thread-local caches can grow large (inline allocator state); WebKit measured them at up to about 1% of memory and added partial TLC decommit",
+    "The bitfit heap is space-efficient but much slower than segregated heaps and has an upper size bound",
+    "The record id is the whole WebKit repository; the code is in Source/bmalloc/libpas"
+  ],
+  "pick_this_over_siblings_when": "Pick libpas over IsoAlloc when you want isoheaps with production-tested performance at browser scale and can live with a Clang-built source drop; pick Mesh or mimalloc-class allocators when you need a malloc replacement with published cross-allocator benchmarks.",
+  "verified_claims_summary": "The ReadMe says segregated heaps beat the original bmalloc at object churn and that libpas uses much less memory because it returns pages sooner, with no numbers. Documentation.md (Filip Pizlo, February 2022) adds that moving WebKit from bmalloc and MetaAllocator to libpas gave about a 2% Speedometer2 speedup and about 8% lower memory on several memory benchmarks, with no hardware, compiler or harness given; the baseline is bmalloc, not system malloc.",
+  "status_note": "Actively maintained inside WebKit (libpas commits through 2026-10-01, e.g. MTE work); BSD-2-Clause and shipped in Safari, but you have to extract it from the monorepo and write your own heap config to use it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/ReadMe.md",
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/Documentation.md",
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/CMakeLists.txt",
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/build.sh",
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/src/libpas/pas_heap.h",
+    "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/bmalloc/libpas/src/libpas/pas_platform.h",
+    "https://github.com/WebKit/WebKit/commits/main/Source/bmalloc/libpas"
+  ],
+  "confidence": 0.7
+}
