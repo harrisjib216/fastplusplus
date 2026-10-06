@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/chakra-core/chakracore",
+  "one_liner": "Microsoft's former Edge JavaScript engine with a flat C API; a JIT engine about 16-26x QuickJS on Octane v8-v7.",
+  "what_it_does": "ChakraCore is an embeddable ECMAScript engine (no DOM or Node APIs) that a C or C++ host drives through the JSRT C API: create a runtime (one GC heap), create one or more execution contexts, run scripts, and exchange values through Js* functions. It ships a small command-line host, ch, for running scripts. It is not a drop-in for QuickJS: the API, value handles and reference-management rules (JsAddRef/JsRelease) are different.",
+  "how_it_is_fast": "Multi-tier execution: deferred parsing, a bytecode interpreter that records type and call-count profiles, then a background JIT thread that promotes hot functions and loop bodies first to SimpleJit and then to FullJit optimized code, with bailout to the interpreter on mis-speculation. Memory is managed by the Recycler, a generational mark-and-sweep collector with concurrent and partial collections on a background thread. The gap over QuickJS and Duktape in the shootout is the JIT-versus-interpreter gap.",
+  "when_to_use": [
+    "A C or C++ host on x64 Linux or Windows that needs JIT-level JavaScript throughput (about 16x QuickJS on Ubuntu, 26x on Windows in this shootout) behind a stable flat C API rather than V8's C++ API.",
+    "Compute-heavy scripts (Crypto, NavierStokes, Richards in the suite run at 23-36k points versus 0.9-1.9k for QuickJS) where a 19 MB engine footprint is acceptable.",
+    "Windows hosts that want a prebuilt, MIT-licensed engine: Microsoft's NuGet package (Microsoft.ChakraCore.vc140 1.11.24) is what produced the 27267 Windows score.",
+    "Hosts that need control over threading: JIT and GC can run on background threads or be forced onto the host thread (JsRuntimeAttributeDisableBackgroundWork), and hosts can supply their own thread service."
+  ],
+  "when_not_to_use": [
+    "Peak throughput matters most: V8 scores 48107 vs 19392 on Ubuntu (about 2.5x) and 46932 vs 27267 on Windows in the same run.",
+    "macOS on Apple Silicon: the build fails to detect the target processor (issue #6860, open since 2022-11-09) and the shootout has no macOS arm64 build; README lists x86 and ARM only for Windows.",
+    "Security-sensitive embedding of untrusted code: Microsoft's security updates for 1.11 ended 2021-03-09, there has been no tagged release since v1.11.24, and master is a community 1.13.0.0-beta; JIT engines carry a larger attack surface (a --no-jit build option exists).",
+    "Small footprint or new language features: the Ubuntu build totals about 19.3 MB versus about 1 MB for QuickJS, and no community release documents ES2020+ feature support.",
+    "GC- and allocation-heavy scripts on the Linux master build: EarleyBoyer scored 7048 on Ubuntu versus 39201 for the Windows 1.11.24 build (V8 is flat across the two OSes), so expect uneven results on Linux."
+  ],
+  "integration": {
+    "form": "shared lib (default libChakraCore.so/.dylib/.dll) or static lib (build.sh --static)",
+    "dependencies": "ICU for Unicode and Intl (system ICU by default, --embed-icu to download and link it statically, or --no-icu to drop Intl); build needs clang, CMake 3.10+, and ninja or make on Linux/macOS; Visual Studio on Windows; also on vcpkg (chakracore)",
+    "min_toolchain": "C++17 (CMake sets CMAKE_CXX_STANDARD 17 after the Dec 2025 refactor #7038); clang on Linux/macOS (build.sh requires clang++); the README's Visual Studio 2015/2017 note predates the C++17 move",
+    "platforms": "x64 Linux, macOS and Windows; x86 and ARM on Windows; Linux ARM64 build fixes landed Jan 2026 but support is not documented in the README; macOS arm64 not supported (issue #6860)",
+    "thread_safety": "Rental threading: a runtime is single-threaded and can be active on only one thread at a time, but an idle runtime can move to another thread; each runtime starts background JIT and GC threads unless JsRuntimeAttributeDisableBackgroundWork is set.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The two shootout columns are different code: Ubuntu runs a stripped master build (1.13.0.0-beta, ahaoboy/ChakraCore-build: depth-1 clone, default ./build.sh Release with clang, -msse4.2, shared library, JIT on), while Windows runs Microsoft's official NuGet Microsoft.ChakraCore.vc140 1.11.24 binary (Dec 2020 release).",
+    "Harness: scripts/update.ts runs each engine once, in sequence, on one GitHub-hosted runner and records that single v8-v7 score; there are no repetitions or variance figures, so small gaps (ChakraCore 19392 vs SpiderMonkey 19137 on Ubuntu) are within noise.",
+    "Linux anomaly: the Ubuntu master build scores 7048 on EarleyBoyer and 18100 on Splay versus 39201 and 27259 for the Windows build, while other engines are flat across OSes; the cause is not documented, but it accounts for much of the lower Ubuntu total.",
+    "JSRT error model: after a script throws, the runtime is in an exception state and every API call fails with JsErrorInExceptionState until the host calls JsGetAndClearException; values kept outside the GC heap must be pinned with JsAddRef/JsRelease."
+  ],
+  "pick_this_over_siblings_when": "Pick ChakraCore over QuickJS when you need JIT throughput on x64 (16-26x here) and can afford about 19 MB, and over V8 or SpiderMonkey when a flat, stable C API and a smaller binary (19.3 MB vs 66 MB for V8 and 40.8 MB for SpiderMonkey on Ubuntu) matter more than V8's 2.5x higher score. Prefer V8 for peak speed and ongoing security support, and QuickJS or Escargot for small footprint, ARM and macOS.",
+  "verified_claims_summary": "In ahaoboy/js-engine-benchmark (Octane v8-v7 subset forked from Mozilla's arewefastyet, run 10/5/2026 on GitHub-hosted ubuntu-latest and windows-latest runners, CPU not stated, one run per engine), ChakraCore scored 19392 vs QuickJS 2026-06-04 1217 on Ubuntu (master 1.13.0.0-beta, clang Release build) and 27267 vs 1067 on Windows (Microsoft's NuGet 1.11.24 binary). Duktape scored 489 and 371 in the same runs.",
+  "status_note": "Community-maintained with a handful of commits per quarter (latest 2026-02-19: CI, clang and Linux ARM64 build fixes) but no tagged release since v1.11.24 (Dec 2020) and no Microsoft security support since 2021-03-09; MIT-licensed and buildable from source or via vcpkg, so copyable for x64 hosts that accept the security posture.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/chakra-core/ChakraCore/HEAD/README.md",
+    "https://raw.githubusercontent.com/chakra-core/ChakraCore/HEAD/build.sh",
+    "https://raw.githubusercontent.com/chakra-core/ChakraCore/HEAD/CMakeLists.txt",
+    "https://github.com/chakra-core/ChakraCore/wiki/Architecture-Overview",
+    "https://github.com/chakra-core/ChakraCore/wiki/JavaScript-Runtime-(JSRT)-Overview",
+    "https://github.com/chakra-core/ChakraCore/commits/master",
+    "https://github.com/chakra-core/ChakraCore/releases",
+    "https://github.com/chakra-core/ChakraCore/issues/6860",
+    "https://github.com/chakra-core/ChakraCore/issues?q=is%3Aissue+performance+linux",
+    "https://github.com/chakra-core/ChakraCore/issues/2299",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://github.com/ahaoboy/js-engine-benchmark",
+    "https://github.com/ahaoboy/js-engine-benchmark/tree/main/scripts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/update.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/build.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/test.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/info.json",
+    "https://github.com/ahaoboy/js-engine-benchmark/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/.github/workflows/update.yml",
+    "https://github.com/ahaoboy/js-engine-setup",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/action.yml",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-setup/HEAD/info.json",
+    "https://github.com/ahaoboy/ChakraCore-build",
+    "https://raw.githubusercontent.com/ahaoboy/ChakraCore-build/HEAD/readme.md",
+    "https://raw.githubusercontent.com/ahaoboy/ChakraCore-build/HEAD/build.sh",
+    "https://raw.githubusercontent.com/ahaoboy/ChakraCore-build/HEAD/.github/workflows/build.yml"
+  ],
+  "confidence": 0.75
+}
