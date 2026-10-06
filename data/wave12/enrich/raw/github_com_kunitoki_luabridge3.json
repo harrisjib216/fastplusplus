@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/kunitoki/luabridge3",
+  "one_liner": "C++17 Lua binding (LuaBridge fork) with per-call overhead near sol2's; faster on Lua-to-C++ calls, slower on C++-side table access.",
+  "what_it_does": "Registers C++ free functions, classes, properties, lambdas, enums and STL types into a lua_State through a fluent getGlobalNamespace(L).beginClass<T>(...).addFunction(...).endClass() builder, and exposes Lua values to C++ through LuaRef, LuaFunction<Sig> and TypeResult<T>. It is not a drop-in for sol2: the API is LuaBridge-style, and code written for vanilla LuaBridge 2 needs porting for the v3 breaking changes listed in CHANGES.md (Stack<T>::push signature, LuaResult/TypeResult returns, removed addData/addCFunction aliases). It runs on PUC Lua 5.1 to 5.5, LuaJIT 2.1, Luau 0.713 and Ravi.",
+  "how_it_is_fast": "For non-extensible classes without registered bases, __index and __newindex are C closures that carry the class's property-getter (propget), setter and method tables as upvalues (index_metamethod_simple in detail/CFunctions.h), so a property read is one raw string-keyed lua_rawget plus a getter call, with no metatable or registry walk; the propget table is checked first because it is the usual hit for instance reads. Internal tables are keyed by process-unique lightuserdata pointers via lua_rawgetp, not by string names. Classes registered with deriveClass or with __index/__newindex fallbacks use the general index_metamethod, which walks the parent list on misses.",
+  "when_to_use": [
+    "Game or app scripting where Lua calls into C++ a lot (member, static, derived-method and shared_ptr calls): the chart puts it at 0.35x to 0.7x of Sol3's time on these script-driven cases, though part of that gap is harness overhead on the Sol3 side",
+    "Projects that must support several Lua VMs from one binding layer: PUC Lua 5.1 to 5.5, LuaJIT 2.1, Luau and Ravi are all in CI",
+    "Builds with -fno-exceptions or /EHsc-: the library works with and without exceptions (Noexcept test targets for every PUC Lua and LuaJIT)",
+    "Existing vanilla LuaBridge users who want lambdas with captures, overloads, multiple inheritance, shared_ptr ownership and std containers without switching to a different binding style"
+  ],
+  "when_not_to_use": [
+    "C++-side table access in hot loops (LuaRef get/set, chained table access, global reads): Sol3 is 1.6x to 3.3x faster on table get, chained get/set and global string get in the project's own chart",
+    "Deep multiple-inheritance hierarchies on hot paths: calling two base-class methods through deriveClass<D, A, B> cost 538.9 ns per iteration, against 91.8 ns for a method on the derived class itself",
+    "Pure call-path latency versus vanilla LuaBridge: the old library is faster on 10 of 22 shared cases (c function 34.3 vs 44.2 ns, static member call 60.9 vs 88.4 ns, lambda capture 32.8 vs 45.1 ns, multi return lua 33.0 vs 48.3 ns)",
+    "If you need a drop-in replacement for sol2 code: the API, ownership model and error handling differ"
+  ],
+  "integration": {
+    "form": "header-only (also a single-header amalgamation in Distribution/LuaBridge; vcpkg port luabridge3)",
+    "dependencies": "none beyond the Lua headers and library of your chosen VM",
+    "min_toolchain": "C++17 (optional headers need C++20 for std::span, coroutines and ranges, and C++23 for std::expected and flat_map/flat_set); unit tests default to C++20 with CMake 3.10+",
+    "platforms": "any platform where the chosen Lua VM builds; CI covers Linux, macOS and Windows, plus ASAN and UBSAN builds",
+    "thread_safety": "not documented; a lua_State is not thread-safe, and registerMainThread exists for Lua 5.1 thread bookkeeping",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness flaw: userdata variable access, access large and access last time 'return b.var' (one read) for LuaBridge3 but 'b.var = b.var + 1.0 return b.var' (two reads and a write) for Sol3 and vanilla LuaBridge, so the biggest chart wins (70.2 vs 299.9 and 269.3 ns, 77.0 vs 285.7 ns, 73.4 vs 274.9 ns) are not like-for-like.",
+    "Benchmark harness flaw: LuaBridge3 and vanilla script cases call lua_getglobal plus a raw lua_pcall, while every Sol3 script case goes through lua[\"name\"]() each iteration (a proxy lookup plus a protected call under SOL_ALL_SAFETIES_ON). Sol3's own rows show about 80 ns of that overhead (c function 116.2 ns against 34.3 ns for the same C function called through a cached sol::function; derived from page data). Derived-class Sol3 cases also bind a raw C++ pointer (lua[\"obj\"] = &ab) where LuaBridge3 uses a Lua-constructed object.",
+    "The README says 'every library runs with its maximum safety settings enabled', but only Sol3 gets safety macros in Benchmarks/CMakeLists.txt (SOL_ALL_SAFETIES_ON=1, SOL_NO_EXCEPTIONS=1). LuaBridge3 builds with its defaults, which leave LUABRIDGE_STRICT_STACK_CONVERSIONS off (bool accepts nil, strings accept numbers). Four converter cases exist only for LuaBridge3, and the 'link-time optimization' wording has no matching flag in the CMake files.",
+    "If Lua is compiled as C and exceptions are enabled, a C++ exception escaping a registered lua_CFunction longjmps through C++ frames unless you define LUABRIDGE_SAFE_LUA_C_EXCEPTION_HANDLING, which Config.h says costs performance; the metatable security model is bypassed if scripts get the debug library."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sol2 when you need one binding layer across PUC Lua, LuaJIT, Luau and Ravi, an exception-free build, or mostly Lua-to-C++ call traffic. Keep sol2 when C++ code reads and writes Lua tables in hot loops, where Sol3 is 1.6x to 3.3x faster in this same chart. nanobind is the analogous choice for Python, not Lua.",
+  "verified_claims_summary": "First-party Google Benchmark v1.8.4 suite (Release build, Lua 5.4.8 compiled in, compiler and CPU not stated) measuring ns per binding operation: LuaBridge3 beats Sol3 on 20 of 30 shared cases, mainly Lua-to-C++ calls such as member call 152.4 vs 356.9 ns, but loses on C++-side table access (table chained get 69.6 vs 28.0 ns). It beats vanilla LuaBridge on 12 of 22 shared cases. The largest wins rest on a mismatched script and a Sol3-only per-call proxy overhead. The README itself only claims it 'competes directly with sol2'.",
+  "status_note": "Active (1,038 commits, last commit 2026-09-11 per the verified record, 4 open issues including a callWithHandler message bug, #263), MIT-licensed, header-only with a single-header amalgamation and a vcpkg port, so easy to vendor; v3 broke API compatibility with vanilla LuaBridge, and an open issue (#273) reports LuaResult changing twice within v3.",
+  "sources_read": [
+    "https://github.com/kunitoki/LuaBridge3",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/README.md",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Images/benchmarks.png",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/README.md",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/benchmark_common.hpp",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/benchmark_luabridge3.cpp",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/benchmark_sol3.cpp",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Benchmarks/benchmark_luabridge.cpp",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/CHANGES.md",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Source/LuaBridge/detail/CFunctions.h",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Source/LuaBridge/detail/Namespace.h",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Source/LuaBridge/detail/Config.h",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Source/LuaBridge/detail/Userdata.h",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Source/LuaBridge/detail/ClassInfo.h",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/Documentation/security/index.md",
+    "https://github.com/kunitoki/LuaBridge3/tree/master/Source/LuaBridge/detail",
+    "https://github.com/kunitoki/LuaBridge3/tree/master/Documentation",
+    "https://github.com/kunitoki/LuaBridge3/tree/master/Documentation/security",
+    "https://github.com/kunitoki/LuaBridge3/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/kunitoki/LuaBridge3/issues?q=is%3Aissue+crash+OR+performance+OR+slow",
+    "https://github.com/kunitoki/LuaBridge3/issues/194"
+  ],
+  "confidence": 0.8
+}

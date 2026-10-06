@@ -13,3 +13,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - vnmakarov/ruby rtl_mjit_branch (https://github.com/vnmakarov/ruby/tree/rtl_mjit_branch): RTL instructions plus GCC/LLVM MJIT for CRuby, README claims 6.18x geomean over Ruby 2.0 with GCC, optcarrot 2.7x (Dino enricher, 2026-10-06); vnmakarov/mir is already catalogued.
 - BEAM.com (sntran/BEAM.com): Erlang/OTP plus Elixir in one Cosmopolitan binary with docs/BENCHMARKS.md startup and fib numbers (BeamAsm enricher, 2026-10-06); seed candidate, modified runtime.
 - Topaz (topazproject/topaz, kostya fork): Ruby on RPython, beats CRuby 2.7 in kostya/jit-benchmarks (Cython enricher, 2026-10-06); seed candidate.
+- ThePhD/lua-bindings-shootout: multi-library Lua binding benchmark harness (the LuaBridge3 bench derives from it); a neutral re-run would settle the LuaBridge3 vs sol2 claims (LuaBridge3 enricher, 2026-10-06).
+- LekKit/shadow_pgt: kernel module claiming native speed on VisionFive 2, no numbers (RVVM enricher).
