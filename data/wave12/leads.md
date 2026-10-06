@@ -42,3 +42,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - eBay/tsv-utils (D): faster than frawk per core on every TSV task per frawk's own tables (frawk enricher, 2026-10-06); wave 3 csv-tabular seed candidate.
 - guamoko995/expr-cls (Go expression evaluator from typed closures): README claims 9.015 ns/op vs expr 172.0 and cel-go 267.9 on X+(6.0*Y), Ryzen 5 5600H, 3 stars, unchecked (Expr enricher, 2026-10-06).
 - tamnd/bento (Go JavaScript runtime by the katsu author; katsu enricher, 2026-10-06); weak lead.
+- AssemblyScript plus json-as (TypeScript-to-native peers named in Perry's benchmarks/README.md) and Turso (Rust SQLite rewrite, Go driver turso.tech/database/tursogo): leads from the Perry and musql enricher (2026-10-06), repos not opened.

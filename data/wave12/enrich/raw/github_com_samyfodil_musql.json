@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/samyfodil/musql",
+  "one_liner": "Pure-Go SQLite-dialect engine on its own columnar format; JIT filter/aggregate kernels beat C SQLite on read-mostly scans.",
+  "what_it_does": "musql is a from-scratch SQLite-compatible SQL engine in pure Go (no cgo). It is used through database/sql (registers as `sqlite`), through the `musqld` server that speaks Turso's Hrana protocol, or through its `engine` package directly. It runs SQLite's SQL dialect but not SQLite's file format: data lives in a `.musq` columnar segment file plus an append-only delta, and existing `.db` files must be converted with `musql-convert`. It also ships CRDT and leader replication, FTS, R-tree and JSON.",
+  "how_it_is_fast": "Most of the win comes from the storage layout. Fixed-width columns are stored contiguously, so a filter reads one `[]int64` block instead of walking SQLite's varint record headers and b-tree cell pointers (format-design.md measures 2.1 ns/row against SQLite's 114 ns/row format floor). A peephole pass (`segment_peephole.go`) spots filter-and-count, sum-over-filter, GROUP BY and ORDER BY ... LIMIT shapes in the compiled VDBE program and adds guarded fast-path opcodes. These call machine code that `internal/jit` emits at run time: AVX2 four-lane or NEON two-lane compare kernels, with a scalar fallback, mapped W^X (mmap RW, copy, mprotect RX) and entered through one Go-assembly trampoline per architecture. Bare `count(*)` is answered from the segments' recorded row counts, and top-N runs a bounded heap over an int64 block.",
+  "when_to_use": [
+    "Embedded, read-mostly Go applications that run many integer range-filter counts or sums over a table of about 100k rows or more: one-predicate filtered count 28 us vs C SQLite 2.17 ms on Apple M4, 89 us vs 6.19 ms on a Xeon D-2123IT (engine-direct API).",
+    "Simple integer GROUP BY aggregates and `ORDER BY col DESC LIMIT n` top-N over large tables (2.0-2.7x vs C SQLite).",
+    "Projects that need SQLite SQL without cgo (cross-compiles to the Go GOOS/GOARCH matrix) and accept a separate on-disk format.",
+    "Teams already on Turso/libSQL clients who want a self-hosted Hrana server, where musql's reads also beat Turso's Go driver in the published table."
+  ],
+  "when_not_to_use": [
+    "Any query shape the recogniser does not model: min/max, BETWEEN, OR, IN lists, IS NULL, LIKE, text ordering, DISTINCT, subqueries, EXISTS, UNION and OFFSET run the ordinary VDBE, which the harness's own comments put at about 3.5x slower than C SQLite on a scan. These shapes were left out of the published table.",
+    "Write-heavy workloads: the harness calls writes the engine's worst side and the published run skipped them. write-path-overlay.md measured 3,442 MB allocated for one bulk UPDATE over about 10k rows, with GC drain at 39% of CPU before cuts.",
+    "Point lookups and indexed joins: rowid lookup 1.8x slower, secondary-index equality 2.9x slower and equi-join 1.3x slower than C SQLite on the Xeon.",
+    "Applications that must open existing SQLite .db files in place or share them with C SQLite processes: conversion is required, and multi-process concurrency against a live C writer is not claimed.",
+    "Production use that needs maturity: one squashed commit (2026-10-05), 29 stars, and a run-time code generator whose linux/arm64 path format-design.md says had never run on hardware when written."
+  ],
+  "integration": {
+    "form": "Go module (`go get github.com/samyfodil/musql/driver`), plus musqld server binary or Docker image",
+    "dependencies": "github.com/coder/websocket, golang.org/x/sys, google.golang.org/protobuf; no cgo (the benchmark/differential harness is a separate module that needs cgo for mattn/go-sqlite3)",
+    "min_toolchain": "Go 1.27",
+    "platforms": "Any Go target for the engine; JIT kernels only on amd64 and arm64 under linux or darwin (AVX2 vector kernel on amd64, scalar kernel without AVX2, NEON on arm64); exercised on darwin/arm64 and amd64, linux/arm64 builds but was untested per format-design.md",
+    "thread_safety": "database/sql semantics; two musql connections in one process are covered by TestN4ConcurrentReadersAndWriters, cross-process concurrency with a live C SQLite writer is not claimed; README asks for one SQL statement per Exec/Query call",
+    "drop_in_for_baseline": "partial: SQL dialect and database/sql driver name match (import swap), but data must be converted to .musq and the JIT speedups apply only to a few read shapes"
+  },
+  "gotchas": [
+    "Harness finding: the published musql column is the engine-direct API (`musqlengine.Open` + `ReadOnlyPager.QueryArgs`, returning raw Values), while C SQLite is timed through database/sql, cgo and fmt-rendered strings. The harness also times a musql arm through database/sql (the API the README tells users to adopt), but docs/benchmarks.md does not publish that column. format-design.md section 8b measured the driver's per-statement cost at about 0.2 ms at an earlier stage and said it dwarfs the 44 us kernel, so the 70-92x filtered-count wins should not be expected through database/sql (derived from page data: about 0.2 ms plus 28 us against C's 2.17 ms would be roughly 9-10x on M4, if that older overhead figure still holds; no current driver numbers are published).",
+    "Speedups fall off a cliff when a query leaves the recognised shape. The same one-predicate count takes 9.83 ms with the fast path off vs 2.17 ms for C on M4. A bare `count(*)` falls back to 74.5 ms (M4) and 276.8 ms (Xeon) against C's 9 us and 47 us, because without the segment row-count shortcut the VDBE decodes every row. Small SQL edits such as BETWEEN for a range or an added OR move a query off the fast path.",
+    "The published run sets BENCH_SKIP to drop 17 read shapes (including min/max and BETWEEN, which sit next to the winning shapes) and all writes. C SQLite is opened with driver defaults (no cache_size or mmap_size PRAGMA), so it is an untuned baseline. The page says each workload is checked on 40 bind values before timing; in the code the check loop runs after the timing loop (5-40 values by cost) and is fatal before the table prints, so published tables did pass it.",
+    "The JIT writes machine code into mmap'd memory and jumps into it from Go through hand-written trampolines (Go's frame and LR conventions on arm64, X18 reserved on darwin). That is an unsafe surface in an otherwise memory-safe codebase, and design notes record several fast paths that silently declined or returned wrong cells until the counters and value-by-value differential checks were added."
+  ],
+  "pick_this_over_siblings_when": "Pick musql over pg_jitter, AsmJit-backed or sljit-backed PostgreSQL JITs when you need an embedded, cgo-free SQLite-dialect store in Go and your hot queries are integer filter/count/sum, GROUP BY or top-N over read-mostly data. Use those PostgreSQL JITs if you are on PostgreSQL, and stay on C SQLite for point lookups, joins, writes or arbitrary SQL shapes.",
+  "verified_claims_summary": "The author's harness TestBenchColumnarVsC ran 100,000-row, disk-backed, warm-cache reads, timed for about 200 ms each, with every arm's answers checked against C SQLite (mattn/go-sqlite3 v1.14.48, Go 1.27 toolchain per go.mod). On Apple M4 and Intel Xeon D-2123IT, musql's engine-direct API with its JIT beat C SQLite 65-92x on integer filtered counts, 7.6-8.5x on sum over a filter, 2.0-2.7x on GROUP BY and top-N, and 1.6-1.8x on whole-table count. It was at parity or 1.2-2.9x slower on rowid, secondary-index and join lookups, with non-JIT shapes and writes excluded from the run.",
+  "status_note": "Active but very young: published as a single squashed commit on 2026-10-05, 29 stars, Apache-2.0, pure Go and easy to vendor. It has a strong differential-testing culture (67,800-73,855 SQLite test-suite statements with zero wrong results), but treat it as a fast path for a narrow set of read shapes on converted data, not as a general SQLite replacement.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/README.md",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/compat-harness/bench_columnar_vs_c_test.go",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/compat-harness/bench_vs_c_test.go",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/go.mod",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/compat-harness/go.mod",
+    "https://github.com/samyfodil/musql/tree/main/compat-harness",
+    "https://github.com/samyfodil/musql/tree/main/engine",
+    "https://github.com/samyfodil/musql/tree/main/docs",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/docs/format-design.md",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/docs/segment-format-compatibility.md",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/docs/write-path-overlay.md",
+    "https://raw.githubusercontent.com/samyfodil/musql/HEAD/docs/swap-readiness.md"
+  ],
+  "confidence": 0.75
+}
