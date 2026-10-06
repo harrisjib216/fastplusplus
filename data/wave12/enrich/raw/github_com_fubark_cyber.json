@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/fubark/cyber",
+  "one_liner": "Embeddable scripting language in Zig with a C API; its 0.3 VM beat Lua and LuaJIT's interpreter on call and fiber microbenchmarks.",
+  "what_it_does": "Cyber is a scripting language with its own syntax, a bytecode VM, an optional copy-and-patch JIT and a CLI, embeddable through libcyber, a static or shared library with a C header (src/include/cyber.h: cl_vm_init, cl_vm_eval, host functions, custom allocators). It is not Lua-compatible: you adopt a new language, not a faster Lua. Master has moved well past the benchmarked 0.3 release and is now documented as statically typed, with structs, traits, generics, borrows, ARC, fibers and an in-progress C backend.",
+  "how_it_is_fast": "In 0.3 values were NaN-tagged 64-bit words in a register-based bytecode VM, and memory was managed by reference counting with a cycle detector instead of a tracing GC. The JIT uses copy-and-patch: machine-code stencils are pregenerated from C with clang's musttail (so every stencil maps operands to the same registers), and a small assembler fills the holes. That lets the JIT work on arm64 too, and JIT compilation is mostly memcpy. The benchmark's fib.cy declares `n int`, so type information is available to the compiler; how much of the fib gain that explains is not documented.",
+  "when_to_use": [
+    "A C or C++ host (game, tool, engine) that wants a small embedded scripting language with a plain C API and custom allocator hook, and can adopt a non-Lua language.",
+    "Scripts that create and resume many coroutines: on the 100,000-fiber create-and-resume test the page reported Cyber about 2.8x faster than LuaJIT and 8x faster than Lua (0.3-era, snippet only).",
+    "Call-heavy script logic: recursive fib(30) took 19 ms in Cyber's 0.3 VM versus 39 ms for Lua and 57 ms for QuickJS on an Apple M2.",
+    "Projects that want static types and deterministic reference-counted deinitialization in a scripting language rather than a tracing GC."
+  ],
+  "when_not_to_use": [
+    "You need a stable language or API: the last stable release is 0.3 (December 2023), 0.4-dev has been a pre-release since November 2024, syntax changed since 0.3 (the master libcyber example uses `a := 1`), and there are no commits since 2025-12-21.",
+    "Array or range loops: on the page's range/iterator test Cyber (12 ms) trailed Luau (10 ms) and LuaJIT (11 ms).",
+    "You need a production JIT: the master docs call it 'incomplete and unstable', x64 stencils were still being added in December 2025, and issue #111 (January 2026) asking whether the JIT works on ARM has no answer.",
+    "Existing Lua code or tooling must keep working: Cyber is not Lua-compatible, so Luau, LuaJIT or a Lua-compatible VM is the natural choice.",
+    "Programs that build cyclic object graphs: in safe mode a reference cycle is a runtime error that panics the thread at its end, not something a collector cleans up."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libcyber via `zig build lib`) plus a CLI",
+    "dependencies": "Zig toolchain to build; host side links libcyber and includes src/include/cyber.h (extern \"C\" guarded); malloc by default, mimalloc optional; JIT stencils are pregenerated with libLLVM; the CLI bundles tinyc for the in-progress C backend",
+    "min_toolchain": "Zig 0.15.2 for master (docs/build.md, ReleaseSafe recommended); any C or C++ compiler for the host",
+    "platforms": "Linux x64, macOS x64 and arm64, Windows x64, WASM (web and WASI); 0.3 JIT numbers were taken on an Apple M2, and x64 JIT stencils were added in December 2025",
+    "thread_safety": "Not documented; each CLVM owns its allocator and green-thread (CLThread) handles, so treat one VM as single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The published numbers are for the 0.3-era engine on a MacBook Pro M2 (seen only in search snippets; cyberscript.dev is blocked here). The benchmark scripts exist only at tag 0.3, since test/bench was removed from master, and they use 0.3 syntax that master's reworked, statically typed language no longer accepts.",
+    "Harness flaws in test/bench at 0.3: each script times itself with a different clock (Lua and Luau use os.clock(), which is CPU time; Cyber uses os.now(); JS uses Date.now() with 1 ms resolution), and startup and compilation are excluded. fib.cy declares `n int` while the Lua and JS versions are untyped.",
+    "The range/iterator Lua and Luau scripts fill the table from index 0, so key 0 lands in the hash part, and walk it with pairs() rather than a numeric loop. Cyber and JS use plain list iteration. That handicaps the baselines, yet Cyber still trailed Luau and LuaJIT on that test.",
+    "The Janet fiber ratio has no Janet source at tag 0.3, and the LuaJIT settings for the 'VM' rows (presumably -joff) and all runtime versions and build flags were not visible."
+  ],
+  "pick_this_over_siblings_when": "Pick Cyber over Luau or LuaJIT only if you want its typed language, fast fibers and a C API from a Zig-built library, and can live with an unreleased, idle 0.4-dev. For proven embedding Luau or LuaJIT win, and for a statically typed embedded language with independent multi-kernel numbers, Daslang is the stronger pick.",
+  "verified_claims_summary": "Cyber's own performance page (seen only through search snippets) timed script bodies on a MacBook Pro M2 against Lua, LuaJIT, Luau and QuickJS (versions and build flags not seen). Cyber 0.3's VM ran recursive fib(30) in 19 ms versus LuaJIT 21 ms, Luau 34 ms, Lua 39 ms and QuickJS 57 ms, and its JIT tied LuaJIT at 5 ms. A 100,000-coroutine test was about 2.8x faster than LuaJIT and 8x faster than Lua, but a 1,000,000-element range/iterator loop trailed Luau and LuaJIT.",
+  "status_note": "MIT-licensed and builds with Zig 0.15.2, but there are no commits since 2025-12-21 (over nine months idle as of 2026-10-06, so 'active' overstates it), the last stable release is 0.3 from December 2023 and the language has been redesigned since; treat it as experimental.",
+  "sources_read": [
+    "https://github.com/fubark/cyber",
+    "https://github.com/fubark/cyber/commits/master",
+    "https://github.com/fubark/cyber/issues",
+    "https://github.com/fubark/cyber/issues/111",
+    "https://github.com/fubark/cyber/releases",
+    "https://github.com/fubark/cyber/tree/master/examples",
+    "https://github.com/fubark/cyber/tree/master/examples/libcyber",
+    "https://github.com/fubark/cyber/blob/master/docs/build.md",
+    "https://raw.githubusercontent.com/fubark/cyber/HEAD/README.md",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/README.md",
+    "https://raw.githubusercontent.com/fubark/cyber/HEAD/docs/docs.md",
+    "https://raw.githubusercontent.com/fubark/cyber/HEAD/src/include/cyber.h",
+    "https://raw.githubusercontent.com/fubark/cyber/HEAD/examples/libcyber/main.c",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/src/value.zig",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/src/vm.zig",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fib/fib.cy",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fib/fib.lua",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fib/fib.luau",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fib/fib.js",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fiber/fiber.cy",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/fiber/fiber.lua",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/for/for.cy",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/for/for.lua",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/for/for.luau",
+    "https://raw.githubusercontent.com/fubark/cyber/0.3/test/bench/for/for.js",
+    "https://cyberscript.dev/performance.html (EGRESS_BLOCKED; content from WebSearch snippets)"
+  ],
+  "confidence": 0.55
+}

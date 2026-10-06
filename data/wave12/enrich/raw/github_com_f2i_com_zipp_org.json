@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/f2i-com/zipp.org",
+  "one_liner": "Rust JavaScript engine (plus experimental Python frontend) whose interpreter ran about 1.6x faster than QuickJS-NG on its own suite.",
+  "what_it_does": "A from-scratch ES2025 engine in Rust: hand-written parser, register bytecode, NaN-boxed VM, generational GC, inline caches and native x86-64/ARM64 JITs, shipped as a `zipp js` CLI, a Rust embedding API (`embed::ScriptState` with owned `HostValue` marshalling) and a wasm-bindgen browser package. It reports 95,671/95,680 on unmodified pinned Test262 (100% with five documented test corrections). A Python 3 frontend with a Torch subset and WebGPU/WebGL2 graph runtime is bundled but experimental; none of it is a drop-in for the QuickJS C API.",
+  "how_it_is_fast": "Values are NaN-boxed in 64 bits and the interpreter uses explicit register frames, with per-call-site inline caches guarded on receiver identity or exact shape plus version counters, and a non-moving generational nursery GC. On x86-64 a dynasm JIT offers hot loops (OSR) and functions to progressively broader tiers (SROA, unboxed INT/INT-GPR, DOUBLE register homes, boxed MEM with guarded ICs) with precise side exits to the interpreter, plus fused native map/filter kernels for callbacks. Release builds use fat LTO, one codegen unit, panic=abort and mimalloc; the Node/Bun/Deno capture also used PGO.",
+  "when_to_use": [
+    "A Rust host that needs a modern, near-complete ES2025 engine and wants more interpreter throughput than QuickJS-NG on x86-64 (0.606x of QuickJS-NG's time on 13 programs at v0.0.6, interpreter only).",
+    "Short-lived CLI scripts where process launch dominates: 7.4 ms median empty launch versus 30.4 ms Node, 43.3 ms Bun and 82.6 ms Deno in the canonical capture.",
+    "Trusted, loop- or typed-array-heavy code on x86-64 Windows or Linux with the JIT on (typedarray-math 144 ms vs Node 200 ms, map-set-heavy 672 ms vs 784 ms).",
+    "Running untrusted scripts under instruction, heap, output and wall-time budgets via the separately built interpreter-only zipp-sandbox, when speed matters less than containment.",
+    "Experiments that need Python and JavaScript in one VM instance (opt-in python-js-interop feature)."
+  ],
+  "when_not_to_use": [
+    "C or C++ hosts: there is no C API, and zipp-vm is not published on crates.io (crates.io returns 'crate zipp-vm does not exist'), so embedding means a git dependency plus your own FFI layer.",
+    "Browser/WASM deployments chosen for speed or size: the v0.0.5 WASM module took 2.107x QuickJS-NG's adjusted time, is 3.6x larger raw (5.48 MB vs 1.53 MB), and in the v0.0.6 exact-suite attempt validated only 7 of 28 script rows within its production instruction and heap limits.",
+    "Promise-, JSON- or allocation-heavy application code: async-promise-chain 1.12x and json-large 1.01x Node in the canonical capture; allocation survival 1.772x, warm router 1.674x and React-style reconcile 1.646x Node in the hostile suite.",
+    "Anything needing a mature, widely deployed engine: 6 stars, effectively one author, 0.0.x releases every few days, a forced-JIT segfault fixed on 2026-09-02 and a method-call ordering bug fixed in v0.0.15 (B280); ARM64 only has a small integer baseline JIT.",
+    "Memory- or footprint-constrained embedding: the v0.0.5 and v0.0.6 Windows release CLIs were about 7.9 MB versus 2.1 MB for the qjs binary, and the default parser bounds assume a 256 MiB interpreter thread stack."
+  ],
+  "integration": {
+    "form": "crate (git/path dependency on crates/zipp-vm; not on crates.io) plus prebuilt CLI and wasm-bindgen package",
+    "dependencies": "dynasm/dynasmrt (JIT feature), project fork of regress (zipp-regress), num-bigint, num-traits, unicode-id-start, unicode-normalization, rustc-hash, self_cell; the CLI adds mimalloc; optional zipp-pyparse and wgpu-based zipp-gpu for Python",
+    "min_toolchain": "Stable Rust, edition 2021 (no rust-version declared); benchmarks built with Rust/Cargo 1.92.0",
+    "platforms": "x86-64 Windows and Linux (mature JIT; release binaries for both); ARM64 Linux/Windows/macOS with a smaller integer baseline JIT; wasm32 and other targets interpreter-only",
+    "thread_safety": "Not documented for the native API; one ScriptState is one VM, and the security guide asks for one Worker/WASM instance per untrusted tenant",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 13-program real13 suite and the hostile suite are written by the project as acceptance tests for its own optimizations (property-ic-shapes.js says it is the acceptance benchmark for milestone M3), and the QuickJS-NG geomean includes the three 'architecture diagnostic' rows; per-row QuickJS-NG timings stay in gitignored target/comparison/results.",
+    "Harness flaw in the JIT headline: in the canonical JSON, property-ic-shapes takes 9.6 ms cold against a 7.5 ms empty launch, about 2 ms for roughly 140 million property reads and writes (5 phases x 7 receiver counts x 4,000,000), about 0.015 ns each, so the JIT must collapse or elide the loops; its 0.04x Node row measures loop elimination, not inline-cache speed, and the three diagnostics pull the all-13 ratio from 0.878x to 0.614x Node.",
+    "array_ops.rs recognizes the exact compiler output of three arrow callbacks 'used by the cross-engine WASM workload' (map x*2, filter mod 3, reduce add) in every build that is not x86-64 with the JIT (WASM and ARM64 included); the 0.095x QuickJS-NG WASM kernel result became 1.815x with those lanes off.",
+    "ZIPP_RELAXED_CALL_ORDER=1 restores the faster pre-B280 method-call lowering, which the docs call observably wrong for getters and proxy traps; enabling the `instrument` feature (execution budgets) turns the JIT off for that VM."
+  ],
+  "pick_this_over_siblings_when": "Pick Zipp over QuickJS, gkurt/quickjs or PrimJS only when the host is Rust on x86-64 and you want a faster native interpreter (or a JIT) with near-complete ES2025; for a C/C++ host, a small binary or WASM, QuickJS-NG or Escargot remain the safer choices, and V8 or SpiderMonkey if you need a mature JIT.",
+  "verified_claims_summary": "On one AMD Ryzen 9 9950X3D under Windows 11, Zipp's release-default build run as an interpreter (ZIPP_NOJIT=1; Rust 1.92.0, opt-level 3, fat LTO, no PGO) took 0.6413x (v0.0.5, 12 of 13 rows) and 0.6058x (v0.0.6, 13 of 13) of the official QuickJS-NG v0.16.2 Windows binary's startup-adjusted time on the project's 13-program suite, using six counterbalanced fresh-process repetitions and stdout checked against Node. The JIT ratios against Node v24.12.0, Bun 1.3.14 and Deno 2.6.10 (0.878x Node on the retained ten) come from a PGO build at 8229b3fc, before the B280 call-order fix; the later 14770703 capture measured 1.0025x Node on those ten.",
+  "status_note": "Very active (last commit 2026-09-29, release 0.0.21, about 2,100 commits, 0 open issues) and Apache-2.0, but a 6-star, effectively single-author 0.0.x project. It is usable from Rust only as a git dependency, and its published comparisons describe v0.0.5/v0.0.6 and pre-B280 builds, not current main.",
+  "sources_read": [
+    "https://github.com/f2i-com/zipp.org",
+    "https://github.com/f2i-com/zipp.org/commits/main",
+    "https://github.com/f2i-com/zipp.org/issues",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/README.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/DOC.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/PERF_ROADMAP.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/bench/comparison/README.md",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/bench/comparison/run_native.py",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/bench/real/property-ic-shapes.js",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/bench/real13_8229b3fc_pgo_2026-09-02.json",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/crates/zipp-vm/src/vm/array_ops.rs",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/crates/zipp-vm/Cargo.toml",
+    "https://raw.githubusercontent.com/f2i-com/zipp.org/HEAD/crates/zipp-cli/Cargo.toml",
+    "https://crates.io/api/v1/crates/zipp-vm"
+  ],
+  "confidence": 0.6
+}
