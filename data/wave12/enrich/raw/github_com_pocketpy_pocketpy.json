@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/pocketpy/pocketpy",
+  "one_liner": "Embeddable Python-subset interpreter in C11 for game scripting; about 1.2x CPython 3.8 on one old benchmark, slower than Lua.",
+  "what_it_does": "pocketpy (pkpy) is a dependency-free Python 3.x interpreter written in C11 that you embed in a C or C++ host, either as a CMake subdirectory or as a two-file amalgamation (pocketpy.h plus pocketpy.c). The host drives it through a stack-style C API (py_initialize, py_exec, py_newnativefunc, py_vectorcall) or a pybind11-like C++ binding layer; it is not a drop-in CPython replacement, since it implements a subset of the language and a selected standard library and cannot load CPython extension modules.",
+  "how_it_is_fast": "Values are a tagged struct (py_TValue) that stores ints as signed 64-bit, floats as doubles and small vectors inline, so int and float arithmetic in the switch-based bytecode loop (ceval.c) takes a type-check fast path with no allocation and no bignum overflow handling; the fast paths also skip method lookup because redefining a built-in type's methods is declared unsupported. Memory is managed by a stop-the-world mark-and-sweep collector with an adaptive threshold instead of per-object reference counting. Dropping CPython features (arbitrary-precision ints, generator expressions, try/finally, multiple inheritance, descriptors) keeps the runtime small and simple.",
+  "when_to_use": [
+    "Adding a Python-syntax scripting layer to a C or C++ game or app with no external dependencies (TIC-80, godot-pocketpy, raylib bindings and the Crescent engine use it).",
+    "Targets where embedding CPython is awkward: iOS, Android, Emscripten 32-bit, Raspberry Pi OS, 32-bit Linux boards such as Luckfox Pico, all officially tested.",
+    "Script logic built from small int and float loops and method calls, the shape of the primes benchmark where pkpy 1.2.7 ran about 1.2x faster than CPython 3.8.10 (derived from page data).",
+    "Hosts that want several isolated interpreters (16 VM slots) and background compute jobs via pkpy.ComputeThread, or reproducible floating point across platforms (the default PK_ENABLE_DETERMINISM build)."
+  ],
+  "when_not_to_use": [
+    "When raw script speed matters more than Python syntax: Lua 5.3.3 was about 1.5x faster than pkpy on the project's own primes run, and the LuaJIT sibling is faster still.",
+    "Running existing CPython code: generator expressions, try/finally and else, multiple inheritance, __slots__, descriptors, __iadd__ hooks and structural pattern matching are missing, keyword passing of non-default parameters fails, and CPython wheels and C extensions cannot load.",
+    "Arbitrary-precision integer work (hashing with big constants, crypto, exact arithmetic): ints are fixed signed 64-bit and overflow behaviour is not guaranteed.",
+    "Sharing one interpreter between native threads: only one thread may use a VM at a time, and ComputeThread workers exchange data by pickle copies.",
+    "Expecting the README's 'as fast as cpython 3.9' to hold for current releases: no published measurement covers the 2.x C11 interpreter or any CPython newer than 3.8.10."
+  ],
+  "integration": {
+    "form": "static lib (CMake add_subdirectory) or source-drop (single pocketpy.h plus pocketpy.c amalgamation)",
+    "dependencies": "none beyond the C standard library; optional mimalloc (PK_ENABLE_MIMALLOC, fetched by CMake) and optional LZ4, cute_png, msgpack and periphery modules",
+    "min_toolchain": "C11 compiler (--std=c11); on Windows only MSVC is officially supported and needs /utf-8 and /experimental:c11atomics; NDEBUG must be defined for release builds",
+    "platforms": "any platform with a C11 compiler; officially tested on Windows 64-bit, Linux 64/32-bit, macOS 64-bit, Android 64/32-bit, iOS 64-bit, Emscripten 32-bit, Raspberry Pi OS 64-bit and Luckfox Pico 32-bit",
+    "thread_safety": "One native thread per VM at a time; up to 16 independent VMs, with pkpy.ComputeThread running jobs in worker VMs and passing arguments and results by pickle",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Evidence: the only published numbers come from pkpy 1.2.7, which was the earlier C++17/STL implementation (about 14K lines, single header); the current code is a C11 rewrite, and docs/performance.md itself says the 1.2.7 results 'are not a benchmark of the current 2.x C11 interpreter'. The primes table gives one time per implementation with no run count, timing method or build flags, and primes.lua only checks the entries it actually returned, so a short result list would still pass (primes.py asserts the full list).",
+    "The CI benchmark step (scripts/run_tests.py benchmark) times one os.system wall-clock run per script, CPython first, against whatever Python the runner has, so start-up is included, there is no repetition and the results are not published in the repo; the pocketpy.dev performance page was blocked here and a search snippet only says pkpy took '47-82%' of CPython's time on fib, loop, primes and sort scripts with no versions.",
+    "Int arithmetic fast paths compute lhs + rhs, lhs - rhs and lhs * rhs directly on int64 under -O2 without -fwrapv, so overflow is C undefined behaviour rather than a Python error; the docs say not to rely on overflow exceptions. Part of the measured edge over CPython comes from skipping arbitrary-precision ints.",
+    "The default build (PK_ENABLE_DETERMINISM=ON) adds -fno-fast-math -ffp-contract=off and ships its own binary64 math kernels (src/common/dmath*.c) for cross-platform reproducibility; its speed cost is not documented. Redefining a built-in type's methods (for example int.__add__) is unsupported and can crash or give wrong results because the fast paths assume the originals."
+  ],
+  "pick_this_over_siblings_when": "Pick pocketpy over Wren or LuaJIT when the requirement is Python syntax inside a dependency-free C or C++ host, accepting that it is slower than Lua; pick the Wren sibling (faster than Lua 5.2 in its own benchmarks) or LuaJIT when speed matters more than syntax, and PyPy or CPython when you need real Python compatibility and its library ecosystem.",
+  "verified_claims_summary": "The README and docs/performance.md report one run of the primes script (Atkin sieve to 5,000,000 plus a digit trie, identical source for pkpy and CPython) on an Intel i5-12400F under WSL Ubuntu 20.04: pkpy 1.2.7 2.385 s, CPython 3.8.10 2.871 s (about 1.2x faster, derived from page data), Lua 5.3.3 1.576 s (about 1.5x faster than pkpy) and C++ (gnu++11) 0.104 s, with no compiler flags or run count stated.",
+  "status_note": "Actively maintained (2.1k stars, 221 forks, over 4,300 commits, last commit 2026-10-03, MIT) with CI on Windows, Linux, macOS and Android and production users such as TIC-80; easy to vendor as two files, but treat its speed claims as unmeasured for the current 2.x interpreter.",
+  "sources_read": [
+    "https://github.com/pocketpy/pocketpy",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/README.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/docs/features/differences.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/docs/features/ub.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/docs/features/threading.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/CMakeOptions.txt",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/.github/workflows/main.yml",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/scripts/run_tests.py",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/src/interpreter/ceval.c",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/src/interpreter/heap.c",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/HEAD/include/pocketpy/objects/base.h",
+    "https://github.com/pocketpy/pocketpy/tree/main/benchmarks",
+    "https://github.com/pocketpy/pocketpy/tree/main/src/interpreter",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/9481d653b60b81f4590a4d48f2be496f6962261e/README.md",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/9481d653b60b81f4590a4d48f2be496f6962261e/benchmarks/primes.py",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/9481d653b60b81f4590a4d48f2be496f6962261e/benchmarks/primes.lua",
+    "https://raw.githubusercontent.com/pocketpy/pocketpy/9481d653b60b81f4590a4d48f2be496f6962261e/benchmarks/primes.cpp",
+    "https://github.com/pocketpy/pocketpy/issues?q=is%3Aissue%20performance%20OR%20slow%20OR%20slower",
+    "https://github.com/pocketpy/pocketpy/issues/197",
+    "https://pocketpy.dev/performance/ (EGRESS_BLOCKED; WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}

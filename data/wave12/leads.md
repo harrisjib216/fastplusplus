@@ -18,3 +18,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Quirrel (GaijinEntertainment/quirrel): Squirrel fork in the dasProfile table, not catalogued (Luau enricher, 2026-10-06); seed candidate.
 - TinyKVM (same author as libriscv, likely github.com/varnish/tinykvm, not opened) and the Segue and ColorGuard ASPLOS 2025 SFI paper (Wasmtime/WAMR): leads from the LFI and libriscv enricher (2026-10-06).
 - ncruces/wasm2go: separate project from goccy/wasm2go, wazero numbers on a Core Ultra 7 258V in go-sqlite3 discussion #361 (batch 49 verifier, 2026-10-06); seed candidate.
+- FEX-Emu/FEX: x86 and x86-64 emulator for ARM64 with a JIT, not in data (Box64 enricher, 2026-10-06); seed candidate (baseline QEMU, like Box64 and rv8).
+- dstogov/ir: the IR JIT framework behind the PHP 8.4+ JIT; README claims code about 5% slower than gcc -O2 compiled about 40x faster (PHP JIT enricher, 2026-10-06); seed candidate.
