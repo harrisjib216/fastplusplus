@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/xenoatom/xenoatom.allocators",
+  "one_liner": "TLSF sub-allocator for .NET 8 over caller-supplied chunks; about 22% faster than CRT aligned malloc/free in its own micro-benchmark.",
+  "what_it_does": "A Two-Level Segregated Fit allocator written in C# that carves blocks out of large chunks obtained from a user-implemented IMemoryChunkAllocator (native memory, managed memory, or non-CPU memory such as GPU heaps). Allocate(size) returns a TlsfAllocation (token, address, size) and Free takes the token, not a pointer, so it is not a malloc replacement. Reset() returns every chunk to the backend.",
+  "how_it_is_fast": "Classic TLSF (Masmano et al., ECRTS 2004): a first-level bitmap over power-of-two size classes and second-level bitmaps over linear sub-bins, so finding a fitting free block is a couple of bit scans and allocation and free run in O(1) with immediate coalescing of physical neighbours. Block headers (32 bytes each) live in separate managed arrays grouped by 1024 rather than in-band, and the allocator takes no locks; in the benchmark the chunks stay cached after the first iteration, so the steady state never calls the CRT.",
+  "when_to_use": [
+    ".NET 8+ or NativeAOT code that needs deterministic O(1) allocation and free of unmanaged buffers, for example game engines, audio, or real-time loops.",
+    "Sub-allocating a large device or mapped region (GPU heap, shared memory, file-backed buffer) where headers must not be written into the managed memory itself.",
+    "Per-thread or per-subsystem arenas where one owner allocates and frees, so the missing locking costs nothing.",
+    "Workloads with mixed sizes from 64 B to a few KB with heavy churn, where coalescing keeps fragmentation bounded."
+  ],
+  "when_not_to_use": [
+    "C++ or C projects: this is a C# library; for native code pick a C or C++ TLSF or general allocator instead.",
+    "Multi-threaded shared heaps: the class is documented as not thread safe and needs an external lock, which will likely erase the 22% margin.",
+    "Many tiny allocations: the minimum allocation and alignment is 64 bytes plus 32 bytes of side metadata per block, so 8-32 byte objects waste most of their space.",
+    "Code that expects malloc/free semantics (free by pointer, realloc, calloc): none of these exist; you must keep the token.",
+    "Workloads that need memory returned to the OS: chunks are only released on Reset(), never when they become empty."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "XenoAtom.Collections (NuGet)",
+    "min_toolchain": ".NET 8 (net8.0 target), unsafe code allowed; NativeAOT compatible",
+    "platforms": "any .NET 8 platform (managed code); the published benchmark ran only on Windows x64",
+    "thread_safety": "Not thread safe; the source comments say to guard it with a lock or use one instance per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The baseline in the benchmark is NativeMemory.AlignedAlloc(size, 64) and AlignedFree, which maps to _aligned_malloc on the MSVC CRT, not plain malloc; plain malloc may be faster than the reported baseline.",
+    "Allocate throws OutOfMemoryException when the chunk allocator fails; use TryAllocate to avoid exceptions. Free throws ArgumentException on an out-of-range or already-free token.",
+    "Maximum single allocation is 4 GB; alignment must be a power of two and is fixed per allocator instance.",
+    "The backend chunk allocator is yours to write; the sample BasicChunkAllocator uses a Dictionary keyed by chunk count, which can reuse ids after a FreeChunk, so do not copy it unchanged for long-lived use."
+  ],
+  "pick_this_over_siblings_when": "Pick it over rlsf or Talc (Rust TLSF-style allocators) only when you are in .NET and need a managed API over foreign memory; for native C++ arenas, fast-alloc or obstack are closer fits, and for a general-purpose malloc replacement use one of the mimalloc-class siblings.",
+  "verified_claims_summary": "BenchmarkDotNet 0.13.12 on .NET 8.0.6 RyuJIT, AMD Ryzen 9 7950X, Windows 11: 2048 allocations of sizes drawn from {64, 96, 150, 200, 400, 1024, 4096} bytes followed by 2048 frees took 82.27 us with TLSF against 105.34 us with MSVC CRT aligned alloc/free (ratio 0.78). The TLSF side reuses its cached 64 KiB chunks, so it measures pure bookkeeping against CRT calls through interop; it is a single-threaded micro-benchmark from one run.",
+  "status_note": "Small, BSD-2-Clause and published on NuGet, with 38 commits, one open feature request and a last commit on 2026-02-23 ('Fix benchmarks'); usable as is, but outside the catalog's C++ focus.",
+  "sources_read": [
+    "https://github.com/XenoAtom/XenoAtom.Allocators",
+    "https://github.com/XenoAtom/XenoAtom.Allocators/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/XenoAtom/XenoAtom.Allocators/HEAD/readme.md",
+    "https://raw.githubusercontent.com/XenoAtom/XenoAtom.Allocators/HEAD/doc/readme.md",
+    "https://raw.githubusercontent.com/XenoAtom/XenoAtom.Allocators/HEAD/src/XenoAtom.Allocators.Bench/BenchAllocator.cs",
+    "https://raw.githubusercontent.com/XenoAtom/XenoAtom.Allocators/HEAD/src/XenoAtom.Allocators/TlsfAllocator.cs",
+    "https://raw.githubusercontent.com/XenoAtom/XenoAtom.Allocators/HEAD/src/XenoAtom.Allocators/XenoAtom.Allocators.csproj"
+  ],
+  "confidence": 0.8
+}

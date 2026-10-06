@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/xnvme/xnvme",
+  "one_liner": "Samsung's single C API for NVMe I/O over io_uring, io_uring_cmd, libaio, SPDK and more; DuckDB on it beats default sync I/O.",
+  "what_it_does": "libxnvme gives one C API (device handles, command queues, command contexts, NVMe command builders) whose backend is chosen at runtime: io_uring, io_uring_cmd passthrough, libaio and block ioctls on Linux, native drivers on FreeBSD, macOS and Windows, SPDK, and a user-space PCIe driver (uPCIe) that can do GPU peer-to-peer I/O. It is not a drop-in for pread/pwrite or a filesystem: applications submit block- or NVMe-level commands, and extra libraries cover the NVM, Zoned and KV command sets. Tools include the xnvme CLI, xnvmeperf, the homi multi-tenant daemon and the qublk ublk server.",
+  "how_it_is_fast": "Speed comes from the backends it reaches, not from new I/O machinery: asynchronous queues of up to 4096 outstanding commands with optional IOPOLL and SQPOLL polling, NVMe passthrough through io_uring_cmd that skips the block layer, and kernel bypass through SPDK or uPCIe. The xNVMe paper (Lund et al., arXiv 2411.06980, per search snippet) puts the abstraction's own cost at about 54 ns per I/O. In the CIDR 2026 DuckDB work the gain is from replacing DuckDB's synchronous file I/O with these asynchronous block paths through the nvmefs extension.",
+  "when_to_use": [
+    "You want one code path that can switch between io_uring, libaio, NVMe passthrough and SPDK at runtime, for example to benchmark or ship a storage engine across kernels and drivers.",
+    "Database or storage engines that manage raw NVMe namespaces as blocks and want queue-depth asynchronous I/O instead of synchronous pread.",
+    "Using NVMe features that file APIs hide: Zoned Namespaces, KV command set, Flexible Data Placement, or admin and vendor commands through passthrough.",
+    "GPU-initiated or peer-to-peer storage I/O (CUDA or HIP) through the uPCIe backend.",
+    "Cross-platform NVMe tooling on Linux, FreeBSD, macOS and Windows from one C codebase."
+  ],
+  "when_not_to_use": [
+    "Applications that work with ordinary files and the page cache: xNVMe works at block and command level, and its gains need raw devices or passthrough, so a filesystem user is better served by liburing directly.",
+    "When you only target Linux io_uring: liburing gives the same mechanism with one less layer and much wider ecosystem use.",
+    "Environments where you cannot unbind the device from the kernel or get raw device permissions; the SPDK and uPCIe backends need that, and they need hugepages.",
+    "If you need verified independent throughput numbers: the only quantitative claim seen here is the CIDR 2026 DuckDB result, known from search snippets.",
+    "Multi-threaded submission onto one queue: the queue helpers are documented as not thread safe."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "optional and auto-detected: liburing, libaio, libvfn, ISA-L, SPDK, CUDA, HIP; pthreads",
+    "min_toolchain": "C (gnu11), Meson 0.59 or later; built as both static and shared libraries with LTO by default on non-Windows",
+    "platforms": "Linux, FreeBSD, macOS, Windows",
+    "thread_safety": "Per-queue: xnvme_queue_get_cmd_ctx and xnvme_queue_put_cmd_ctx are documented as not thread safe; use one queue per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Queue capacity must be a power of two in the range 1 to 4096.",
+    "The backend is chosen at runtime by options, so a wrong or missing backend build (for example no liburing or SPDK found by Meson's auto features) silently leaves you with slower paths such as psync or the thread-pool emulation.",
+    "The benchmarked DuckDB gain uses the nvmefs extension, which stores data as blocks on a raw device instead of files, so the comparison is not just a different syscall.",
+    "Recent bug reports include hugepage exhaustion in the uPCIe backend and controller reference counting (both closed in mid-2026) and an open Windows fio clock-source failure."
+  ],
+  "pick_this_over_siblings_when": "Pick it over liburing or SPDK when you need one API that runs on both (and on libaio, FreeBSD, macOS and Windows) or need NVMe command sets such as ZNS, KV or FDP; for Linux-only file I/O, liburing is simpler, and for maximum single-backend IOPS, SPDK directly avoids the extra layer.",
+  "verified_claims_summary": "Per search snippets of the CIDR 2026 paper (Houlborg et al., not opened here), DuckDB with the xNVMe-based nvmefs extension had about the same query times as DuckDB's default synchronous file I/O on non-I/O-intensive queries and up to 50% lower query times (about 2x at best) on I/O-intensive aggregation and TPC-H queries. Hardware, compiler and which backend gave the best result are not known from this session.",
+  "status_note": "Actively developed by Samsung (version 0.7.5 in meson.build, 318 stars, BSD-3-Clause, last commit 2026-10-01), with CI and Coverity; usable today, but the API is still pre-1.0.",
+  "sources_read": [
+    "https://github.com/xnvme/xnvme/issues?q=is%3Aissue+label%3Abug",
+    "https://raw.githubusercontent.com/xnvme/xnvme/HEAD/README.md",
+    "https://raw.githubusercontent.com/xnvme/xnvme/HEAD/meson.build",
+    "https://raw.githubusercontent.com/xnvme/xnvme/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/xnvme/xnvme/HEAD/include/libxnvme_queue.h",
+    "https://www.vldb.org/cidrdb/papers/2026/p6-houlborg.pdf (EGRESS_BLOCKED; search snippets only)",
+    "https://arxiv.org/pdf/2411.06980 (search snippet only)"
+  ],
+  "confidence": 0.6
+}
