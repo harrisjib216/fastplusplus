@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/bytecodealliance/wasm-micro-runtime",
+  "one_liner": "Small, build-time-configurable C WebAssembly runtime whose fast interpreter beats Wasmtime's Pulley interpreter by about 1.2-1.3x geomean.",
+  "what_it_does": "Embeddable Wasm runtime library (vmlib/libiwasm) plus the iwasm CLI and the wamrc ahead-of-time compiler. You pick the execution modes at CMake time: classic interpreter, fast interpreter, AOT (.aot files produced by LLVM-based wamrc), Fast JIT, LLVM JIT, or Fast-JIT-to-LLVM-JIT tier-up. Hosts embed it through its own C API in wasm_export.h (wasm_runtime_init, load, instantiate, lookup_function, create_exec_env, call_wasm) or the standard wasm-c-api layer; it is not API-compatible with Wasmtime.",
+  "how_it_is_fast": "The fast interpreter's loader rewrites stack-based Wasm into an internal code where each instruction carries its handler's address (direct-threaded dispatch through labels-as-values/computed goto, with a switch fallback) and operands are 16-bit frame-slot offsets, so most operand-stack pushes, pops and local.get/set copies disappear. The benchmark author attributes WAMR's lead over Pulley to this load-time register-IR rewrite: Pulley's bytecode mirrors the Wasm op stream with light fusion, so it dispatches more often per Wasm op. The rewrite is also cheap at load time (0.16 ms for vtable and about 6.9 ms for xmrsplayer, against about 10 ms and 213 ms of Cranelift lowering for Pulley, iPhone 12). Fast-interp SIMD is implemented on top of the SIMDe library; for AOT, wamrc adds LLVM optimisation, x86 segment-register 'segue' addressing and static PGO.",
+  "when_to_use": [
+    "You may not generate native code (iOS/App Store, watchOS, W^X platforms) and want the fastest Wasm interpreter that still runs SIMD-128 and relaxed SIMD: on M4 E-cores WAMR fast-interp was the fastest of seven interpreters on sieve, crc32, matmul, convolution and the relaxed int8 dot product.",
+    "Dispatch-heavy guest code (call_indirect, vtable-style polymorphism, AssemblyScript graphql) where Pulley ran 1.4-2.7x WAMR's CPU time.",
+    "Microcontrollers and RTOSes (Zephyr, ESP-IDF, NuttX, VxWorks, RT-Thread): about 58.9K of text for the fast interpreter on cortex-m4f, with an option to confine all allocations to a caller-supplied buffer.",
+    "Short-lived or freshly loaded modules where Cranelift compile time would dominate, since WAMR's load step is milliseconds instead of hundreds of milliseconds.",
+    "Platforms that need precompiled native code without a JIT at runtime (wamrc AOT, execute-in-place, Intel SGX)."
+  ],
+  "when_not_to_use": [
+    "Raw MVP/scalar interpreter speed: wasm3 was faster on nearly every case it could run (geomean 1.01 vs WAMR 1.63 on M4, 1.04 vs 1.38 on A12).",
+    "Modules that need Wasm 3.0 features in the fast interpreter: no exnref, memory64 or multi-memory there; GC and typed function references exist but cost 17-42% on call-heavy workloads when enabled; upstream refuses exception handling with FAST_INTERP=1.",
+    "Component model or WASI 0.2/0.3 hosts: the core runtime has no component model; the benchmark's component-model fork ran the WASIp2 CLI component and failed every WASIp3 case, where Wasmtime and zwasm passed.",
+    "Peak throughput against a JIT: the A-tier win is interpreter against interpreter, not against Wasmtime's Cranelift output; for native speed use WAMR's AOT/LLVM JIT modes and measure them yourself.",
+    "Loading untrusted modules on an old build: the fast-interp loader had two memory-safety advisories in 2025-2026."
+  ],
+  "integration": {
+    "form": "static lib (or shared lib), built with CMake",
+    "dependencies": "none for the interpreters; SIMDe is pulled in automatically for fast-interp SIMD; LLVM for wamrc and the LLVM JIT; optional uvwasi for WASI",
+    "min_toolchain": "CMake plus a C compiler (GCC, Clang; MinGW and MSVC on Windows); minimum versions not documented",
+    "platforms": "x86-64, x86-32, ARM/Thumb, AArch64, RISC-V 32/64, Xtensa, MIPS, ARC; Linux, macOS, Windows, Android, iOS (via the darwin build), Linux SGX, Zephyr, ESP-IDF, NuttX, VxWorks, RT-Thread, AliOS-Things",
+    "thread_safety": "An exec_env must not be used by several threads at once; give each thread its own exec_env (spawn_exec_env/spawn_thread APIs, lib-pthread or wasi-threads builds); default maximum of 4 threads unless max_thread_num is set.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Speed and features are compile-time CMake choices: the fast interpreter is about 2x the classic one but holds about 2x the memory for precompiled code, and enabling Fast JIT, LLVM JIT or the source debugger silently forces the classic interpreter; memory64 works only in classic and AOT modes.",
+    "The benchmarked build is not a release: main b70d708d (WAMR-2.4.5 lacks its 364 commits) with 29 patches by the benchmark author, built with WAMR_DISABLE_HW_BOUND_CHECK=1 (software bounds checks, which also turns off native stack guard pages) as a workaround for a macOS touch_pages stack-walk bug. Patches 0028-0029 add a PROT_NONE linear-memory reservation because stock WAMR on Darwin grows memory by mmap + memcpy + munmap; that change took a growth-heavy Porffor workload from 63.6 ms to 9.7 ms on an iPhone 12, so stock builds will be slower on such workloads.",
+    "Security history: 8 published advisories since 2025, including a critical heap overflow in WASI poll_oneoff and a fast-interp loader heap overflow fixed in WAMR-2.4.5 (2026-06-29), a frame_offset_bottom overflow in the fast interpreter (2025-11) and a uvwasi symlink sandbox escape; keep up with patch releases if modules are untrusted.",
+    "The README says the project is moving from bytecodealliance/wasm-micro-runtime to github.com/wasm-micro-runtime/wasm-micro-runtime (old links redirect; the wamr.dev domain has not moved yet)."
+  ],
+  "pick_this_over_siblings_when": "Pick WAMR over wasm3 when guests use SIMD, reference types or tail calls in an actively maintained runtime that also offers AOT and JIT tiers (wasm3 is faster on scalar MVP code but runs no SIMD); pick it over wasmz, which ties it on geomean (1.59 vs 1.63 on M4) but failed six rows on wrong results, traps and crashes. For Rust hosts on x86, Wasmi v2 and Silverfir-nano executed faster than WAMR fast-interp in the wasmi-benchmarks suite (12.40 and 9.02 vs 17.07 relative to the fastest).",
+  "verified_claims_summary": "In the independent rebeckerspecialties/wasm-benchmark run of 2026-09-22, WAMR fast-interp (main plus patches, cmake Release -O3 -mcpu=apple-a12, Apple clang 21.0.0, AOT/JIT off) took 1.63x the fastest runtime's CPU time per call versus 2.09x for Wasmtime v49 Pulley (fat LTO, tail-call dispatch) on M4 Max E-cores and 1.38x versus 1.68x on an iPhone XS A12, geomean over the 17 cases all seven interpreters run, N=10; I recomputed both geomeans from the per-case tables and they match. Results are checked against a cross-runtime consensus on every one of those cases except xmrsplayer, whose expected value is unset in cases.rs, and Pulley still wins fib, fib_tail, tailcall_fsm and extended-const instantiation.",
+  "status_note": "Actively developed (last commit 2026-09-30; latest release WAMR-2.4.5 of 2026-06-29 comes from a release branch cut in 2025-07, far behind main) by a Bytecode Alliance TSC with members from Intel, Sony, Amazon, Xiaomi, Siemens and Ant Group; Apache-2.0 with LLVM exception and usable as a library today.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/doc/perf_tune.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/doc/embed_wamr.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/doc/build_wamr.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/core/iwasm/interpreter/wasm_interp_fast.c",
+    "https://github.com/bytecodealliance/wasm-micro-runtime/security/advisories",
+    "https://github.com/bytecodealliance/wasm-micro-runtime/releases",
+    "https://github.com/bytecodealliance/wasm-micro-runtime/wiki/Performance",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/docs/runtime-comparison-2026-09-22.md",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/docs/cross-runtime-pulley-vs-wamr.md",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/scripts/build-wamr.sh",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/cases.rs",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/wamr.rs",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/lib.rs"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/cataggar/wamr",
+  "one_liner": "Zig rewrite of WAMR with its own AOT/JIT compiler; about 4.9x faster CLI cold start than 'wasmtime run', 2.1x slower steady state.",
+  "what_it_does": "Ships two CLIs: wamrc compiles a .wasm module or component to a native .cwasm file, and wamr runs a .cwasm, or runs a plain .wasm directly when built with -Djit=true (in-process JIT, no artifact on disk). It also implements the Component Model and the WASI 0.2/0.3 interfaces, including a wasi:http server ('wamr serve' with TLS 1.3). Embedding goes through the Zig API or the compiler-free C header include/wamr_aot.h, which loads trusted .cwasm bytes with application-supplied page-mapping callbacks. Neither is API-compatible with upstream WAMR's wasm_export.h or with Wasmtime.",
+  "how_it_is_fast": "The cold-start lead comes from a lean one-process path. The JIT build links the compiler into wamr, compiles the module in memory with a 'fast' pass preset tuned for compile latency, and executes it through the same AOT loader and runtime, so a trivial module costs one execve and almost no compile work. The project's doc attributes wasmtime's 6.96 ms to a higher fixed per-invocation Cranelift/engine startup that a no-op module cannot amortize. The compiler is its own SSA IR (passes such as inlineSmallFunctions and promoteLocalsToSSA) with x86_64 and aarch64 backends, neither LLVM nor Cranelift, which is why steady-state code is about half as fast as Wasmtime's.",
+  "when_to_use": [
+    "One-shot CLI invocations of small modules or components where process startup dominates: 1.43 ms for a no-op module against 6.96 ms for 'wasmtime run' on an 8-vCPU EPYC 9V74 VM.",
+    "Precompiled deployments: 'wamr run' on a .cwasm started in 1.18 ms, and the AOT-only binary carries no compiler.",
+    "Zig projects that want a Zig-native runtime with Component Model and WASI 0.3 (README: 41/41 Preview 3 fixtures and 70/72 Preview 1 fixtures pass, plus the full core spec suite).",
+    "Unikraft-style or compiler-free embedding, where the host owns page tables and loads trusted .cwasm through wamr_aot.h."
+  ],
+  "when_not_to_use": [
+    "Compute-bound or long-running guests: Wasmtime ran CoreMark at 26,462.6 iter/s against 12,442.8 (AOT) and 12,002.8 (JIT .fast), about 2.1x faster; open issues #949, #985 and #986 track a further AArch64 CoreMark gap.",
+    "C/C++ hosts that want upstream WAMR: different API, no interpreter on the CLI (the interpreter is reachable only through the library), binaries of about 17 MB (AOT-only) and 25 MB (with JIT) instead of upstream's tens-of-KB microcontroller builds, and no listed MCU/RTOS targets.",
+    "Security-sensitive or production hosting of untrusted code: 5 stars, 0 forks, maintained with AI assistance, and no audit; the README itself points to Wasmtime's track record and security audits.",
+    "SIMD-heavy AOT workloads: in the 2026-05-29 optimize-mode report every SIMD AOT row was 'unsupported' (the interpreter ran them); current AOT SIMD coverage is not documented in the files read.",
+    "Modules large enough to compile for real on every run: the JIT keeps no persistent cache, so each invocation pays compile latency, which the no-op benchmark does not measure."
+  ],
+  "integration": {
+    "form": "CLI binaries (wamr, wamrc) and a Zig package; compiler-free C header include/wamr_aot.h for loading precompiled .cwasm",
+    "dependencies": "Zig toolchain plus Zig packages pinned in build.zig.zon: cataggar/wabt fork, cataggar/tls.zig and a wasip2 package (README says 'no dependencies', meaning no system libraries)",
+    "min_toolchain": "HEAD build.zig.zon sets minimum_zig_version 0.17.0 (the signed cataggar/zig 0.17.0 build, per the README banner), while the README body still says Zig 0.16; the benchmarked commit 329c29b5 required Zig 0.16.0",
+    "platforms": "x86_64 and aarch64 native code generation (Linux; README shows cross-compiles to aarch64-macos and x86_64-windows); wasm32-wasi build is interpreter-only, with no AOT/JIT, components or threads",
+    "thread_safety": "wamr_aot.h: all operations on one instance must be serialized, and an active instance must never be destroyed; otherwise not documented",
+    "drop_in_for_baseline": "partial: 'wamr run foo.wasm' mirrors 'wasmtime run' only in a -Djit=true build; flags, cache, embedding API and .cwasm format differ from Wasmtime and from upstream WAMR"
+  },
+  "gotchas": [
+    "Every number was measured with ReleaseFast although the README recommends ReleaseSafe. In the project's 2026-05-29 optimize-mode report, the ReleaseSafe wamrc aborted on CoreMark with 'IR verifier: MultipleTerminators after pass inlineSmallFunctions' (issue #631, since closed), while the ReleaseFast build compiled the same code without complaint. The IR verifier is still opt-in for the differential test suite (docs/ir-verifier-triage.md). bench_jit_coldstart.py parses only CoreMark's 'Iterations/Sec' line and never checks its CRC validation output. This harness gap touches only the throughput rows (where wamr loses anyway), not the cold-start win.",
+    "The same 2026-05-29 report shows a real workload (an Azure keyvault codegen CLI) failing in both modes: ReleaseFast trapped 'out of bounds memory access' inside a guest hash-map function, and ReleaseSafe hit a host panic 'access of union field enum_val while field variant_val is active'.",
+    "The cold-start figure is subprocess wall time for a 36-byte no-op module: 20 samples after 3 warmups on one 8-vCPU Azure VM, with the wasmtime binary taken from ~/.wasmtime/bin and its version unrecorded. No aarch64 numbers.",
+    "Only the name and fork history are shared with bytecodealliance/wasm-micro-runtime: the compiler, the .cwasm format, the CLI and the C API are new, so upstream WAMR docs, CMake flags and benchmarks do not apply, and no comparison against upstream C WAMR exists."
+  ],
+  "pick_this_over_siblings_when": "Choose upstream WAMR (bytecodealliance) for C embedding, microcontrollers, interpreters and maturity; choose this only for Zig-hosted, CLI-style AOT/JIT runs with WASI 0.3 components. zwasm (also Zig) targets the same startup-bound niche (tinygo/fib 2.0 ms against wasmtime's 7.2 ms) and adds an interpreter tier; no measurement compares the two.",
+  "verified_claims_summary": "The author's own run (2026-07-10, AMD EPYC 9V74 8-vCPU Azure VM, zig build -Djit=true -Doptimize=fast at commit 329c29b5, wasmtime version not stated) timed whole-process 'wamr run noop.wasm' with the in-process JIT at a 1.430 ms median against 6.964 ms for 'wasmtime run', about 4.9x faster. On CoreMark, Wasmtime reached 26,462.6 iter/s against 12,442.8 for wamr AOT (3 runs each), so the win is startup-only and there is no baseline against upstream C WAMR.",
+  "status_note": "Very active (last commit 2026-10-05, about 3,466 commits) but a 5-star personal fork maintained with AI assistance and now tied to a custom signed Zig 0.17.0 build; Apache-2.0 and usable, but treat it as experimental for anything beyond startup-bound CLI use.",
+  "sources_read": [
+    "https://github.com/cataggar/wamr",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/README.md",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/docs/bench/jit-cold-start-comparison-2026-07-10.md",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/docs/bench/optimize-mode-comparison-2026-05-29.md",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/docs/bench/native-linux-producer.md",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/docs/ir-verifier-triage.md",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/scripts/bench_jit_coldstart.py",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/cataggar/wamr/HEAD/include/wamr_aot.h",
+    "https://github.com/cataggar/wamr/tree/main/docs/bench",
+    "https://github.com/cataggar/wamr/tree/main/docs",
+    "https://github.com/cataggar/wamr/tree/main/src",
+    "https://github.com/cataggar/wamr/tree/main/src/compiler",
+    "https://github.com/cataggar/wamr/tree/main/src/compiler/codegen",
+    "https://github.com/cataggar/wamr/tree/main/include",
+    "https://github.com/cataggar/wamr/issues?q=is%3Aissue",
+    "https://github.com/cataggar/wamr/issues/393",
+    "https://github.com/cataggar/wamr/issues/631",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/docs/runtime-comparison-2026-09-22.md"
+  ],
+  "confidence": 0.6
+}
