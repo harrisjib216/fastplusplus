@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/bellard/quickjs",
+  "one_liner": "Fabrice Bellard's small embeddable C JavaScript interpreter; about 2.3x Duktape on the V8 v7 benchmark suite.",
+  "what_it_does": "QuickJS is a complete ES2025-level JavaScript engine (almost full spec, near 100% of test262 for those features) in a few C files with no external dependency, plus the qjs shell, the qjsc compiler that turns JS into C source holding bytecode, and a small libc/os standard library. You embed it through a plain C API (quickjs.h): JSRuntime is an isolated heap, JSContext a realm, JSValue a reference-counted value passed as ordinary C arguments. It is not API-compatible with Duktape's value-stack API, so moving an embedding over means rewriting the binding layer.",
+  "how_it_is_fast": "The compiler emits compact stack-based bytecode in one pass with no parse tree, then runs a few optimisation passes; maximum stack depth is computed at compile time so the interpreter needs no runtime stack-overflow checks. Objects share shapes, property names are interned 32-bit atoms, integers have 32-bit fast paths, holeless arrays and typed arrays have fast paths, closure variables are almost as fast as locals, and the RegExp engine is its own bytecode compiler with an explicit backtracking stack. Memory is managed by reference counting plus an occasional cycle-removal pass, and the 2026-06-04 release added a small-block allocator (Changelog: 11% faster on bench-v8) and micro-optimisations (30% faster on bench-v8).",
+  "when_to_use": [
+    "Embedding a modern-JavaScript scripting layer in a C or C++ application where binary size matters (about 1 MB qjs executable in independent 2026 CI builds; the docs cite 210 KiB of x86 code for hello world) and a JIT is not allowed or not worth it.",
+    "Replacing Duktape, MuJS or JerryScript when you need newer ECMAScript (modules, async, Proxy, BigInt, ES2025 features) and roughly 2x their interpreter throughput.",
+    "Many short-lived script instances: the docs say a runtime instance's full life cycle completes in under 300 microseconds, and qjsc can precompile scripts to bytecode so the compiler can be dropped.",
+    "Hosts that need deterministic memory release (reference counting) and per-runtime limits via JS_SetMemoryLimit, JS_SetMaxStackSize and JS_SetInterruptHandler.",
+    "Shipping self-contained executables from JS via qjsc, on Linux, macOS, FreeBSD, Windows (MinGW) or a Cosmopolitan build."
+  ],
+  "when_not_to_use": [
+    "Throughput-bound JavaScript: JIT engines score 15-40x higher on the same suite (ahaoboy CI ubuntu: V8 48107, Node 40333, QuickJS 1217), and even V8 --jitless scored 1916 vs 942 in the author's own 2019 table.",
+    "When Hermes's ahead-of-time bytecode pipeline fits better: Hermes 0.12.0 beat QuickJS on ubuntu in the 2026 CI (1530 vs 1217), though QuickJS led on macOS arm64 (1761 vs 1233) and Windows (1067 vs 941).",
+    "Running untrusted bytecode: the docs say the bytecode format is version-specific and unchecked, and fuzzing issues (#547-#550) report heap-buffer overflows in JS_ReadFunctionTag, JS_ReadFunctionBytecode and JS_DupAtom.",
+    "Hard CPU-time sandboxes for hostile code: issue #546 (open when read) reports that BigInt multiply/divide/power/toString run as single C calls between interrupt-handler polls (every 10,000 bytecode instructions), so one operation can pin a core for seconds.",
+    "Multithreaded sharing of one heap: a JSRuntime supports no multi-threading; use one runtime per thread and message passing."
+  ],
+  "integration": {
+    "form": "source-drop or static library (libquickjs.a); shared libraries on Linux/FreeBSD via the Makefile",
+    "dependencies": "none (libc, libm, pthreads; -latomic on some OSes or disable CONFIG_ATOMICS)",
+    "min_toolchain": "gcc or clang (Makefile defaults to -O2 -fwrapv, optional LTO); minimum C standard not documented",
+    "platforms": "Linux, macOS, FreeBSD, Windows via MinGW cross-compilation (documented as preliminary), Cosmopolitan; 32-bit builds use NaN boxing, 64-bit builds use 128-bit JSValues",
+    "thread_safety": "No multi-threading inside one JSRuntime; separate runtimes can run on separate threads but cannot exchange objects; class IDs are allocated globally",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every JSValue is reference counted: C code must pair JS_DupValue and JS_FreeValue exactly, and exceptions come back as JS_EXCEPTION return values that the caller must test; there is no implicit value stack as in Duktape.",
+    "Benchmark reproducibility: the Makefile's bench-v8 target runs tests/bench-v8/combined.js, but tests/bench-v8 is not in the GitHub tree (only microbench.js is), and the headline 942 vs 408 table is the author's 2019 run (QuickJS 2019-07-09, gcc 4.9.2) read here from the quickjs-zh mirror because bellard.org is blocked.",
+    "The record's 'bignum extension' and 'ES2020' notes are out of date: the 2025-04-26 release removed the bignum extensions and qjscalc and reimplemented BigInt, and the docs now claim almost complete ES2025 support.",
+    "Forks are not interchangeable on speed: in the 2026 ahaoboy CI the quickjs-ng 0.17.0 fork (the engine under rquickjs and LLRT) scored 647 vs 1217 on ubuntu, 1660 vs 1761 on macOS arm64 and 766 vs 1067 on Windows."
+  ],
+  "pick_this_over_siblings_when": "Pick QuickJS over XS (738 vs QuickJS 1138 without RegExp in the same 2019 table) or Duktape-class engines when you want the fastest small C interpreter with current ECMAScript; pick Hermes when you control an AOT bytecode build for React Native, and Escargot or PrimJS only after checking their numbers on your platform, since PrimJS scored below QuickJS in the independent 2026 CI (737 vs 1217 ubuntu, 1694 vs 1761 macOS) despite its own Octane claim.",
+  "verified_claims_summary": "On the V8 benchmark suite version 7 run by QuickJS's author in 2019 (gcc 4.9.2 -O2 on Fedora 21, Core i5 4570 at 3.2 GHz, all engines as interpreters), QuickJS 2019-07-09 scored 942 vs 408 for Duktape 2.3.0 (about 2.3x, derived from page data), winning all eight sub-tests. Independent GitHub Actions runs (ahaoboy/js-engine-benchmark, QuickJS 2026.06.04) give 1217 vs 489 on ubuntu, 1761 vs 905 on macOS arm64 and 1067 vs 371 on Windows; per the catalog's njs and Quanta entries that CI's Duktape is an unreleased 2.99.99 master built at -Os on ubuntu and macOS, which flatters QuickJS somewhat.",
+  "status_note": "Actively maintained by Fabrice Bellard (release 2026-06-04, commits through 2026-09-29 mostly spec-conformance fixes, MIT licence), small enough to vendor, with a steady stream of fuzzer-found memory-safety reports that matter only if you load untrusted bytecode or run hostile code.",
+  "sources_read": [
+    "https://github.com/bellard/quickjs",
+    "https://github.com/bellard/quickjs/commits/master",
+    "https://github.com/bellard/quickjs/tree/master/tests",
+    "https://github.com/bellard/quickjs/issues?q=is%3Aissue+CVE+OR+heap-buffer-overflow+OR+use-after-free+OR+security",
+    "https://github.com/bellard/quickjs/issues/546",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/VERSION",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/Changelog",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/TODO",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/quickjs.h",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/doc/quickjs.texi",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/README",
+    "https://raw.githubusercontent.com/bellard/quickjs/HEAD/README.md",
+    "https://raw.githubusercontent.com/quickjs-zh/QuickJS/HEAD/bench.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

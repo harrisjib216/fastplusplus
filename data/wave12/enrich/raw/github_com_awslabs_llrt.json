@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/awslabs/llrt",
+  "one_liner": "AWS Labs JavaScript runtime for Lambda (Rust plus QuickJS-NG, no JIT) that cuts Node.js 20 cold starts.",
+  "what_it_does": "LLRT is a standalone JavaScript runtime you deploy as a Lambda custom runtime (provided.al2023 bootstrap binary), a layer or a container binary; your handler stays an ES2023 module with the usual export const handler signature. It ships a subset of Node.js APIs plus many AWS SDK v3 clients built into the executable, so a function using @aws-sdk/client-dynamodb needs no bundled SDK. It is not a drop-in Node.js replacement: node:http, https, tls, worker_threads, vm and others are missing, and code must be bundled for the browser platform and transpiled ahead of time.",
+  "how_it_is_fast": "It runs on QuickJS-NG (via the rquickjs 0.14 crate), a small bytecode interpreter with no JIT, so there is no JIT warm-up or large engine to initialise. At build time llrt_core/build.rs precompiles the bundled JS (stdlib and AWS SDK clients) to QuickJS bytecode, stores it in a phf perfect-hash map inside the binary and zstd-compresses it with a trained dictionary, so startup loads bytecode instead of parsing JS. Hashing and XML parsing used by the SDK are native Rust, the binary is a static musl build with LTO, opt-level 3, codegen-units 1 and the snmalloc allocator, and LLRT_SDK_CONNECTION_WARMUP (on by default) opens SDK TLS connections in parallel during init.",
+  "when_to_use": [
+    "Short-lived, I/O-bound Lambda functions (DynamoDB/S3/SQS/SNS calls, validation, authorization, small data transformations) where cold-start latency dominates.",
+    "Low-memory Lambda configurations such as 128MB on ARM, which is where the published comparison was run (cold-start p50 Init+Function 64 ms vs 1512 ms for Node.js 20).",
+    "Functions that use AWS SDK v3 clients included in the std-sdk or full-sdk builds, so the SDK comes precompiled with the runtime instead of being bundled or loaded from disk.",
+    "Teams willing to run their code through LLRT's built-in Jest-like test runner (llrt test) before deploying, since compatibility must be checked per function."
+  ],
+  "when_not_to_use": [
+    "CPU-heavy work (large data processing, Monte Carlo simulation, loops with hundreds of thousands to millions of iterations): the README says JIT runtimes win there, and independent ahaoboy/js-engine-benchmark CI (V8 v7 suite, 2026) scores LLRT 0.9.0-beta 972 vs Node.js 26.10.0 40333 on ubuntu (about 41x lower, derived from page data), 949 vs 37405 on macOS arm64 and 609 vs 35121 on Windows; LLRT also trails Bellard's QuickJS 2026.06.04 (1217 on ubuntu).",
+    "Code that needs node:http/https/tls servers or clients, worker_threads, vm, cluster, node:test, readline, querystring or WebAssembly; these are missing or only planned.",
+    "Production systems that need a stable API: the README calls LLRT experimental and intended only for evaluation, and every release so far is a beta (latest v0.9.0-beta, 2026-09-06).",
+    "Unbundled node_modules or TypeScript run directly: LLRT requires bundling, minification and ahead-of-time transpilation to ES2023.",
+    "Windows on ARM (the Makefile marks aarch64 Windows as not yet supported)."
+  ],
+  "integration": {
+    "form": "standalone runtime binary (Lambda custom-runtime bootstrap zip, Lambda layer, container binary, or local CLI); also a Rust workspace of crates",
+    "dependencies": "none at deploy time (static musl binary with embedded SDK bytecode); building from source needs a nightly Rust toolchain, zig and cargo-zigbuild, make, zstd, Node.js with corepack/yarn and git submodules",
+    "min_toolchain": "Rust nightly-2026-08-26 (pinned in the Makefile) with cargo-zigbuild; prebuilt binaries need no toolchain",
+    "platforms": "Lambda arm64 and x86-64 (provided.al2023); Linux musl x86-64/aarch64, macOS x86-64/arm64 and Windows x86-64 builds; Windows arm64 not supported",
+    "thread_safety": "JavaScript runs on a single engine thread with an async (tokio) event loop; worker_threads is not available",
+    "drop_in_for_baseline": "partial — same handler signature and Node-style module names, but only a fraction of Node.js APIs, ES2023 only, and dependencies must be bundled for the browser platform"
+  },
+  "gotchas": [
+    "Harness gap: the README labels both screenshots 'DynamoDB Put, ARM, 128MB (example/functions/src/v3-lib.mjs)', but the repo's CDK stack (example/infrastructure/src/index.ts) deploys v3-lib.mjs only for LLRT; its Node.js 20 DynamoDB functions use v3.mjs or v3-mono.mjs with the SDK either bundled (esbuild, minified) or left to the Lambda-provided copy, and the README does not say which Node.js variant produced the 1512 ms row. The load generator that printed the percentile tables is not in the repo.",
+    "Independent user report (issue #1166, open): LLRT v0.7.0-beta at 128MB had p50 HTTP 275 ms vs 409-681 ms for four Node.js 22 SDK setups at 512MB (about 1.5x to 2.5x, derived from page data), far less than the README's 7.3x HTTP gap; the same user measured LLRT's cold-start overhead outside the Lambda-reported duration about 50 ms higher than Node.js 22 (193 vs 144 ms), so Init Duration alone flatters LLRT. The issue also notes binaries grew 2+ MB since the January 2024 screenshots, and maintainers had not replied.",
+    "The cold-start number includes LLRT-specific work beyond the engine: the AWS SDK ships as precompiled bytecode in the binary and SDK TLS connections are pre-opened during init (LLRT_SDK_CONNECTION_WARMUP=1 by default), so the gain is runtime packaging plus a no-JIT engine, not QuickJS speed alone.",
+    "Issue #959: a user saw ~200 ms LLRT function time but ~750 ms end-to-end, similar to Node.js, and suspected a Cognito RSA authorizer in front of the function; gains shrink when other layers dominate latency. Default GC threshold is 20MB (LLRT_GC_THRESHOLD_MB) and only TLS 1.2 and HTTP/1.1 are on by default."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings runs JavaScript: PyPy, GraalPy, LuaJIT, YJIT and TruffleRuby buy peak throughput with a JIT, while LLRT gives up the JIT to win cold start, so pick it only for JavaScript Lambda handlers where startup and memory dominate and pick a JIT runtime (or plain Node.js) for long-running or compute-bound code.",
+  "verified_claims_summary": "AWS Labs' own load test of a DynamoDB Put Lambda (ARM, 128MB, 64 cold starts, 20000 warm starts), shown only as two README screenshots from January 2024, gives cold-start p50 Init+Function duration 64.16 ms for LLRT vs 1511.93 ms for Node.js 20 (about 23.6x) and HTTP round trip 235.61 vs 1719.00 ms (about 7.3x); warm p50 is 14.94 vs 33.20 ms (Lambda) and 43.72 vs 62.08 ms (HTTP), all ratios derived from page data. No CPU model, Node.js deployment variant or harness code is published, and the '2x lower cost' claim has no numbers.",
+  "status_note": "Actively developed (last commit 2026-10-05, v0.9.0-beta released 2026-09-06, Apache-2.0) but still labelled experimental and evaluation-only, and the headline benchmark has not been refreshed since January 2024 despite an open request to rerun it (issue #1166).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/README.md",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/functions/src/v3-lib.mjs",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/functions/src/v3.mjs",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/functions/src/v3-mono.mjs",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/functions/build.mjs",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/functions/package.json",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/infrastructure/src/index.ts",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/example/infrastructure/package.json",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/llrt/Cargo.toml",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/llrt_core/Cargo.toml",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/llrt_core/build.rs",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/Makefile",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/lambda-server.js",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/benchmarks/llrt-ddb-put.png",
+    "https://raw.githubusercontent.com/awslabs/llrt/HEAD/benchmarks/node20-ddb-put.png",
+    "https://github.com/awslabs/llrt/tree/main/example",
+    "https://github.com/awslabs/llrt/tree/main/example/infrastructure",
+    "https://github.com/awslabs/llrt/tree/main/example/infrastructure/src",
+    "https://github.com/awslabs/llrt/issues?q=is%3Aissue+slow+OR+performance+OR+memory+leak",
+    "https://github.com/awslabs/llrt/issues/959",
+    "https://github.com/awslabs/llrt/issues/1166",
+    "https://github.com/awslabs/llrt/releases",
+    "https://github.com/awslabs/llrt/releases/tag/v0.9.0-beta",
+    "https://github.com/DelSkayn/rquickjs",
+    "https://crates.io/api/v1/crates/rquickjs-sys",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
