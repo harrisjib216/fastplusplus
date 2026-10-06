@@ -22,3 +22,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - dstogov/ir: the IR JIT framework behind the PHP 8.4+ JIT; README claims code about 5% slower than gcc -O2 compiled about 40x faster (PHP JIT enricher, 2026-10-06); seed candidate.
 - TurboPython (trozen/tpy-lang): typed Python to C++ without GC, named in the Shed Skin README, benchmark claims unchecked (Shed Skin enricher, 2026-10-06); seed candidate.
 - Wastrel (Andy Wingo, codeberg.org/andywingo/wastrel): Wasm-to-C compiler supporting Wasm 3.0, snippet claims CoreMark 2-5% slower than native (w2c2 enricher, 2026-10-06); codeberg blocked here; seed candidate.
+- treVM (arXiv 2604.27570, repo unknown): mentioned by the wasm3 enricher (2026-10-06), unverified.

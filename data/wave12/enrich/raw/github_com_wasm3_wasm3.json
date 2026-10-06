@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/wasm3/wasm3",
+  "one_liner": "Portable, dependency-free C WebAssembly interpreter; fastest of seven interpreters on scalar MVP code, about 1.6x WAMR fast-interp on Apple M4.",
+  "what_it_does": "Embeddable Wasm runtime in about a dozen C99 source files: m3_NewEnvironment / m3_NewRuntime(stack bytes) / m3_ParseModule / m3_LoadModule, link host functions with m3_LinkRawFunction, then m3_FindFunction and m3_Call or m3_CallV. Functions are compiled lazily into M3 'meta-machine' code on first lookup or call, and the new validator runs as part of that compile. It is its own C API (bindings exist for Rust, Python, Go, Zig, Swift and others), not a drop-in for WAMR's wasm_export.h or Wasmtime's API.",
+  "how_it_is_fast": "Wasm stack bytecode is translated into 'operations' that are C functions sharing one fixed signature (pc, sp, mem, r0, fp0); each ends by tail-calling the next, so the virtual registers stay in machine registers and there is no central dispatch loop (continuation-passing threaded code, enforced with musttail where the compiler supports it). The compile pass maps the stack machine onto a register-file layout with up to three operation variants per opcode by operand placement, and fuses common sequences. HEAD (after the measured v0.9.0) adds the preserve_none calling convention on x86-64 and AArch64 and fold/fuse passes (set_local folding, compare+branch fusion) that the v0.9.1-beta.1 notes credit with 10-50% speedups on many workloads.",
+  "when_to_use": [
+    "You cannot generate native code (iOS/App Store, watchOS, W^X targets, Wasm-in-Wasm) and the guest is scalar MVP code: on M4 E-cores it was fastest on 14 of the 17 shared cases and within 5% on the other three, including xmrsplayer audio (6.9 ms vs WAMR 11.9 ms and Pulley 15.7 ms per call) and AssemblyScript graphql.",
+    "Dispatch-heavy guests (call_indirect, vtable-style polymorphism): 11.7 ms vs WAMR 18.5 ms and Pulley 31.5 ms per call_indirect run on M4.",
+    "Microcontrollers and small SoCs (ESP32, nRF52, Cortex-M3/M4/M7, RISC-V, Xtensa, AVR): the README cites about 64 KB of code and 10 KB of RAM as the minimum useful system.",
+    "Plugin or scripting hosts that want a C99 library that builds in seconds with no dependencies, plus gas metering, resource caps and suspend/resume snapshots (HEAD).",
+    "Short-lived modules where Cranelift compile time would dominate: in wasmi-benchmarks on an EPYC 7763 its lazy-compile startup geomean is 2.77x the fastest versus 56.73x for WAMR fast-interp and 1634x for Wasmtime Cranelift (eager wasm3 is 51.60x, so the win comes from deferring compilation)."
+  ],
+  "when_not_to_use": [
+    "Peak throughput where a JIT or AOT is allowed: in wasmi-benchmarks on x86-64 it executes at 16.51x the fastest runtime against 1.15x for Wasmtime Cranelift and 1.05x for V8.",
+    "SIMD-128 or relaxed-SIMD guests: there is no fixed-width SIMD at all (README lists it N/A), so auto-vectorised builds fail to load; WAMR leads those rows. GC and the full threads proposal are also N/A.",
+    "Hosts that instantiate the same module many times: an IM3Module is consumed by the runtime it is loaded into and cannot be cloned (open issue #366), so each fresh instance re-parses and re-validates; extended-const instantiation cost 116-122x Pulley's time on M4.",
+    "Assuming the A-tier lead holds on x86-64: in wasmi-benchmarks (EPYC 7763, the same wasm3 v0.9.0 via the wasm3x 0.2.1 crate) it executes at 16.51x the fastest, level with WAMR fast-interp (17.07x) and behind wasmz (15.89x), Stitch (15.73x), Wasmi v2 (12.40x) and Silverfir-nano's interpreter (9.02x).",
+    "Teams that need a steady release cadence: v0.5.0 (2021) was the only release until v0.9.0 in August 2026, and the README still declares a minimal maintenance phase."
+  ],
+  "integration": {
+    "form": "static lib via CMake, or source-drop (compile source/*.c directly; the benchmark built 12 files with clang -c and ar)",
+    "dependencies": "none for the core; uvwasi or the built-in simple WASI layer optional for WASI",
+    "min_toolchain": "C99 compiler (Clang, GCC, MSVC, MinGW-w64, TinyCC, Zig, cosmocc); CMake 3.11+ for the CMake build; guaranteed tail-call dispatch needs a compiler with musttail (Clang, GCC 15)",
+    "platforms": "x86, x86-64, ARM, AArch64, RISC-V, PowerPC, MIPS, Xtensa, ARC32, AVR; Linux, Windows, macOS, FreeBSD, Android, iOS, OpenWrt, Arduino/PlatformIO/ESP-IDF MCUs, browsers (compiled to Wasm); big-endian supported",
+    "thread_safety": "Not documented in wasm3.h. Threads are listed N/A; atomics (added 2026-09-29) keep single-thread semantics, and sharing a memory between runtimes needs the separate d_m3HasThreads build option (m3_config.h).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the 'instantiation is its weak spot' figures: for the extended-const rows the benchmark times m3_NewRuntime + m3_ParseModule + m3_LoadModule + m3_FindFunction (lazy compile) + call per sample for wasm3, but only Store + Instance::new + call on a module compiled once for Pulley and WAMR (wasm3.rs vs lib.rs/wamr.rs). wasm3's API forces the re-parse, so the cost is real for users, but the 116-122x compares parse+validate+instantiate against instantiate only. The 17-case execution geomean is unaffected (load and compile are outside the timed window there).",
+    "The measured build is v0.9.0 (2026-08-24). HEAD changed the public API: m3_GetMemory and m3_GetMemorySize now take an IM3Module and size_t sizes instead of an IM3Runtime and uint32_t, so v0.9.0 bindings (including the benchmark's own) need updating; HEAD's exception handling, multi-memory, memory64 and atomics are not in v0.9.0, which failed those smoke tests.",
+    "Exception handling on HEAD has a documented lifetime hole: exception objects belong to the runtime and are released when the outermost m3_Call returns, so an exnref parked in a global or table 'outlives that and dangles' (m3_config.h).",
+    "Security history: several CVEs against v0.5.0, the only release from 2021 to 2026 (heap overflows in m3_compile.c DeallocateSlot, NewCodePage, op_Const64; CVSS up to 9.8; search snippets, NVD pages not opened). v0.9.0 adds full module validation and OSS-Fuzz fixes, so avoid distro or crate packages still pinned to 0.5.0 for untrusted modules."
+  ],
+  "pick_this_over_siblings_when": "Pick wasm3 over WAMR fast-interp and wasmz for scalar MVP guests on Apple Silicon (1.01 vs 1.63 and 1.59 geomean on M4) or when you want the smallest C dependency; pick WAMR when the guest needs SIMD or an AOT/JIT tier later. For Rust hosts on x86-64, Wasmi v2 and Silverfir-nano executed faster in wasmi-benchmarks (12.40 and 9.02 vs 16.51).",
+  "verified_claims_summary": "In the independent rebeckerspecialties/wasm-benchmark run of 2026-09-22, unpatched wasm3 v0.9.0 (Apple clang 21.0.0, -O3 -mcpu=apple-a12) took 1.01x the fastest runtime's CPU time per call versus 1.63x for WAMR fast-interp and 2.09x for Wasmtime v49 Pulley, geomean over 17 MVP/scalar cases on M4 Max E-cores (1.04 vs 1.38 vs 1.68 on an iPhone XS A12), N=10, results checked against a cross-runtime consensus; I recomputed the Pulley and WAMR M4 geomeans from the per-case table. The competing WAMR, WasmEdge and Pulley builds carried 29, 26 and 9 patches, while wasm3 ran stock.",
+  "status_note": "Active again in 2026 (v0.9.0 2026-08-24, v0.9.1-beta.1 2026-09-10, last commit 2026-09-29) though the README still says minimal maintenance; MIT-licensed, dependency-free C99 and easy to vendor, with no published GitHub security advisories or SECURITY.md.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/README.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Performance.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Interpreter.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Hardware.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Development.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Cookbook.md",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/source/wasm3.h",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/source/m3_config.h",
+    "https://raw.githubusercontent.com/wasm3/wasm3/HEAD/source/m3_config_platforms.h",
+    "https://raw.githubusercontent.com/wasm3/wasm3/v0.9.0/source/m3_config_platforms.h",
+    "https://raw.githubusercontent.com/wasm3/wasm3/v0.9.0/source/wasm3.h",
+    "https://github.com/wasm3/wasm3/commits",
+    "https://github.com/wasm3/wasm3/releases",
+    "https://github.com/wasm3/wasm3/issues",
+    "https://github.com/wasm3/wasm3/security",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/docs/runtime-comparison-2026-09-22.md",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/scripts/build-wasm3.sh",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/wasm3.rs",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/wamr.rs",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/lib.rs",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/crates/benchmark-core/src/cases.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks-plots/HEAD/data/amd-epyc-7763/lin-scale/geomean-execute.svg",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/wasm3/Cargo.toml",
+    "https://crates.io/api/v1/crates/wasm3x",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2021-Q1/README.md",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks-plots/HEAD/data/amd-epyc-7763/lin-scale/geomean-startup.svg"
+  ],
+  "confidence": 0.85
+}

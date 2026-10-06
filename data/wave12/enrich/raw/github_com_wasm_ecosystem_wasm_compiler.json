@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/wasm-ecosystem/wasm-compiler",
+  "one_liner": "BMW's single-pass C++ Wasm-to-native compiler and runtime for embedded targets; its own chart shows compiles faster than Liftoff, runs near TurboFan.",
+  "what_it_does": "A Compiler class turns .wasm bytecode into machine code plus link info (an ELF-like artifact) through integrator-supplied allocation hooks. A Runtime then instantiates that artifact from executable memory, and you call exports through typed C++ templates (getExportedFunctionByName<numReturns, Args...>); traps surface as C++ exceptions. Artifacts can be compiled ahead of time and re-instantiated, and host functions are linked either statically (address baked into the code) or dynamically. It is an embeddable compiler for C++ hosts, not a drop-in for the V8 or SpiderMonkey engines it was benchmarked against.",
+  "how_it_is_fast": "It compiles in one pass using 'Valent Blocks' (Scheidl, iCCECE 2020). Side-effect-free stack instructions are only recorded on a compile-time IR stack. When an instruction with non-stack side effects arrives (a trap, a branch, a local or global write), the pending blocks are 'condensed' into machine code whose results land in a register or stack slot. That gives expression-tree code generation without building a full IR. Linear-memory and stack-overflow checks can be delegated to the MMU: 8 GB of virtual address space is reserved, inaccessible pages are protected and a signal handler turns faults into exceptions. Recent commits add compile-time folding of constant br_if conditions and reuse of call parameters already loaded into registers. The README reports about 10 KB of extra compiler heap for a 170 KB module and a 187 kB stripped AArch64 binary for the benchmark tool, including compiler, assembler and runtime.",
+  "when_to_use": [
+    "Embedded or automotive hosts (AArch64, TriCore v1.8+, QNX, bare metal) that want native-code Wasm with a small footprint and integrator-controlled memory: two contiguous regions plus user allocation hooks.",
+    "Load-time compile cost matters but you still want near-optimising execution: on the README chart it sits right of V8 Liftoff on compile speed (0.83 vs 0.75) and well above Liftoff and SpiderMonkey Baseline on execution (0.82 vs 0.43 and 0.35).",
+    "Ahead-of-time workflows: compile once (possibly cross-compiled), store the artifact and re-instantiate it, optionally with statically linked host functions to save a lookup per call.",
+    "Codebases held to AUTOSAR C++14 or MISRA C++ (no recursion), which the project says it follows."
+  ],
+  "when_not_to_use": [
+    "Modules built by current toolchains with default flags: the README lists non-trapping float-to-int conversions as unsupported, and LLVM 20 and later enable that feature (and bulk memory) by default for the generic wasm CPU (LLVM 20.1.0 release notes, seen as a search snippet only), so build guests with -mcpu=mvp or check their features. Only MVP plus sign extension and exported mutable globals are listed; imported globals, tables and memories are listed as unsupported; tail calls only arrived in July-August 2026.",
+    "Peak throughput: on its own chart execution is below V8 TurboFan (0.8505) and native clang (0.873) and level with SpiderMonkey Ion (0.8163).",
+    "Platforms that forbid writable-then-executable memory (iOS App Store and similar) or 32-bit ARM microcontrollers: it emits native code, and the aarch32 backend is not implemented.",
+    "Decisions that need reproducible or independent numbers: there is only a first-party normalised chart with no CPU, compiler or engine versions, and the input suite (Schleifner/open-wasm-compiler-benchmark) returns 404."
+  ],
+  "integration": {
+    "form": "shared lib by default (CMake option STATIC_LIB=ON for a static lib); Bazel build also supported",
+    "dependencies": "none in production code for x86_64 and AArch64; berkeley-softfloat-3 for the TriCore backend",
+    "min_toolchain": "README says C++14; the top-level CMakeLists.txt sets CMAKE_CXX_STANDARD 17; CMake 3.15+",
+    "platforms": "x86-64, AArch64, TriCore v1.8+ (aarch32 not implemented); bare metal, Unix/Linux, macOS, QNX, Windows; MMU-based checks not available on TriCore",
+    "thread_safety": "Not documented, except that a running module can be interrupted from another thread when built with INTERRUPTION_REQUEST=1. MMU mode relies on process-wide signal handlers installed through SignalFunctionWrapper.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The charted build is not the default configuration. The benchmark guide builds vb_bench with -DINTERRUPTION_REQUEST=0 -DEAGER_ALLOCATION=1, while src/config.hpp defaults to INTERRUPTION_REQUEST 1 (the docs say it impacts performance) and EAGER_ALLOCATION 0 (the first touch of each linear-memory page goes through the signal handler). Expect a default build to run slower than the chart.",
+    "Harness flaws in scripts/benchmark/run_bench.py. Both axes come from whole-process wall time read from /usr/bin/time -p (10 ms resolution), one run per module by default, and the score is 10000 / geomean of those times. So d8 and SpiderMonkey shell startup plus JS harness load count as compile time. The 'execution' axis also includes engine startup and compilation for every engine except native. Result mismatches against native are printed, not enforced. The V8 Liftoff runs omit --no-wasm-tier-up. How scores became the 0-1 chart values is undocumented.",
+    "Static host-function linking bakes absolute addresses into the code, so on systems with ASLR you must recompile per process or use dynamic linking. Active bounds and stack checks are the default on TriCore and QNX and cost speed; ACTIVE_DIV_CHECK defaults on for AArch64.",
+    "2026 commits fix several code-generation bugs: Windows x86-64 ABI not saving 128-bit xmm registers (June), an i32.div compile crash (July), return_call stack-parameter placement and tail-jump safety (July-August), and a missing stack-fence check in builtin.tracePoint under active protection (September). Pin a recent commit; outside PRs go through BMW's internal CI."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued JITs only WasmNow targets Wasm baseline compilation too, and it has stronger published numbers against Liftoff (5-6.5x faster compiles with 39-63% faster code). Pick WARP when you need a maintained, embeddable compiler with AArch64 and TriCore backends, MISRA-style code and a tiny memory footprint, rather than a research prototype. TPDE compiles LLVM IR, not Wasm.",
+  "verified_claims_summary": "The only evidence is the README's first-party quadrant chart of normalised scores. Compile speed: WARP 0.83, SpiderMonkey Baseline 0.81, V8 Liftoff 0.75, Ion 0.10, TurboFan 0.04. Execution speed: native 0.87, TurboFan 0.85, WARP 0.82, Ion 0.82, Liftoff 0.43, SpiderMonkey Baseline 0.35. run_bench.py produced the scores by timing whole processes on the unpublished open-wasm-compiler-benchmark modules, with a clang Release build (interruption off, eager allocation) against self-built d8 and SpiderMonkey shells pinned to one thread. No CPU, OS, compiler or engine version is stated.",
+  "status_note": "Actively developed by BMW AG (113 commits on develop, last 2026-10-03, 0 open issues, 26 stars) under Apache-2.0. No GitHub releases are visible (the org's performance-monitor repo refers to wasm-compiler@3.0.3). Usable as a library today for MVP-level modules.",
+  "sources_read": [
+    "https://github.com/wasm-ecosystem/wasm-compiler",
+    "https://github.com/wasm-ecosystem/wasm-compiler/commits",
+    "https://github.com/wasm-ecosystem/wasm-compiler/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/README.md",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/src/config.hpp",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/docs/GettingStarted.md",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/docs/InfoForContributors.md",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/scripts/benchmark/Readme.md",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/scripts/benchmark/run_bench.py",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/scripts/benchmark/util/d8_harness.js",
+    "https://raw.githubusercontent.com/wasm-ecosystem/wasm-compiler/HEAD/scripts/benchmark/util/sm_harness.js",
+    "https://github.com/orgs/wasm-ecosystem/repositories",
+    "https://raw.githubusercontent.com/wasm-ecosystem/performance-monitor/HEAD/README.md"
+  ],
+  "confidence": 0.65
+}
