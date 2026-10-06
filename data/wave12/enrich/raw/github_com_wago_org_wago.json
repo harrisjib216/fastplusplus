@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/wago-org/wago",
+  "one_liner": "Pure-Go, no-cgo single-pass Wasm-to-native compiler; compiles about 3x quicker than wazero in-process and edges it on cold runs.",
+  "what_it_does": "Wago decodes, validates and compiles a Wasm module straight to amd64 or arm64 machine code from Go, with no cgo, C toolchain or interpreter tier, and runs it on its own off-heap stack. The API is its own, not wazero's: a Runtime, or the package-level Compile, gives a Compiled, which you instantiate into an Instance and call through Invoke or a resolved WasmFunc. Host functions are registered as ordinary Go functions via Imports.HostFunc. WASI and the Component Model are separate plugin modules, not part of the core. A `wago compile` CLI can also produce standalone native executables.",
+  "how_it_is_fast": "The backend (Railshot) is a single forward pass that fuses code generation and register allocation using the 'Valent-Block' technique taken from the C++ WARP engine. A compile-time symbolic operand stack holds deferred constants, local/global reads and checked memory reads, and materializes them into registers only when a value is consumed or a side effect or join forces it. There is no IR and no separate register-allocation pass, which keeps compile time and Go-heap allocation low. Serial compilation writes code directly into an RW mmap that is flipped to RX on first instantiation (W^X, no copy). Module-wide analysis is followed by optional parallel per-function workers. At run time, calls use a uniform off-heap wrapper ABI (args, linear-memory base, trap slot, results) on a separate 4 MiB native stack, and supported platforms use guard-page bounds checks.",
+  "when_to_use": [
+    "A Go service that loads Wasm plugins or per-tenant modules at run time without cgo, where compile latency matters. From the committed JSON, in-process compile is a geometric mean of 0.40 ms vs wazero's 1.23 ms on a Ryzen 7 7800X3D (0.32x) and 0.33 vs 0.77 ms on an M4 Max (derived from page data).",
+    "Short-lived processes running compute kernels for tens of milliseconds. In the hyperfine startup sweep (six Rust twins, fresh process), Wago's end-to-end time is 0.77x wazero's and 0.62x Wasmtime's on AMD64, and 0.75x and 0.74x on ARM64 (derived from page data).",
+    "Pure-Go embedding that needs post-MVP features: Core 3 families (WasmGC, exception handling, tail calls, memory64, relaxed SIMD) are listed as complete on linux/amd64, linux/arm64 and darwin/arm64.",
+    "Shipping a Wasm program as a small standalone native executable via `wago compile`."
+  ],
+  "when_not_to_use": [
+    "Long-running, steady-state compute where peak code quality decides. The study never isolates steady-state speed, and Wasmtime (Cranelift) beats Wago on several AMD64 cold-execute cases (polybench floyd-warshall 9.90 vs 14.00 ms, seidel-2d 10.28 vs 11.39, cholesky 7.63 vs 8.25, adi 8.36 vs 8.88 ms).",
+    "Tiny, very short runs, where an interpreter wins outright: wasm3 and wasmi beat Wago on AMD64 for tiny (4.28/4.15 vs 6.33 ms), dispatch, many_funcs, linked_list and several small PolyBench kernels.",
+    "Targets other than amd64/arm64 on Linux, macOS or Windows. Wago has no interpreter fallback, so 32-bit, riscv64 or js/wasm hosts cannot run modules at all.",
+    "Production code that needs API and artifact stability. Wago is beta (v0.1.0-beta.11 on pkg.go.dev, 2026-09-28; the study ran a 0.0.0 dev build), has 17 stars and two main authors, and the .wago artifact codec is already at version 6 with no backward compatibility. A codegen bug in a pure-Go JIT is a memory-safety bug inside your Go process."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys only for the core; WASI (github.com/wago-org/wasi) and the Component Model (github.com/wago-org/component-model) are optional plugin modules",
+    "min_toolchain": "Go 1.22 (go.mod); TinyGo builds are supported with documented restrictions (no cancelable native calls)",
+    "platforms": "Linux, macOS and Windows on amd64 and arm64 only. Guard-page bounds checks are available on linux/amd64, linux/arm64 and darwin/arm64, and explicit checks everywhere. FEATURES.md says the default amd64 backend expects SSSE3/SSE4.x/AVX encodings, with a wago_amd64_sse2 build tag for an SSE2 baseline.",
+    "thread_safety": "Each Instance gates its own execution with per-instance activation counts and reservations, and RuntimeConfig is immutable. WasmFunc.OpenSession sessions are documented as not safe for concurrent use, and invocation result slices are borrowed until the next call on that instance. Wasm threads and atomics are an experimental opt-in (CoreFeatureThreads).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: process startup dominates the corpus study's 'compile wall' numbers. In the committed JSON, Wago's in-process compile is a geometric mean of 0.40 ms inside a 6.42 ms wall on AMD64, about 6% (wazero 1.23 of 7.83 ms; 0.33 of 4.43 ms on ARM64). The headline wall ratios against Wasmtime, V8 and Wasmer therefore mostly compare a single-purpose Go adapter's process start with full native CLIs (derived from page data).",
+    "The 'allocated heap' column (Wago 67-110 KiB vs wazero about 1 MiB), which backs the README's 'a few kilobytes of RAM', counts Go TotalAlloc only. Wago writes native code directly into an mmap'd RW mapping and keeps runtime state in off-heap arenas, so those bytes are not counted. Peak RSS is the comparable figure: 6.77 vs 8.35 MiB on AMD64, 7.76 vs 8.90 MiB on ARM64.",
+    "The headline claims drift and none is backed by committed data: the current README says 'execute 1.9x faster than wazero'; the v0.1.0-beta.11 README on pkg.go.dev says '80% faster'; search snippets of the author's dev.to post (blocked) say '5.7x faster to compile, 70% faster at execution', and another snippet says '40% quicker'. The committed study shows 1.03-1.11x lower cold-execute latency than wazero (7.34 vs 8.11 ms AMD64, 4.77 vs 5.27 ms ARM64).",
+    "Reproducibility: at the study commit 7c382581, bench/go.mod and go.sum pin wazero v1.9.0 (toolchain go1.22.2), yet the study labels its wazero engine 'v1.12.0 adapter', and the build of the adapters and the wago CLI is not documented. On the same M4 Max, wasm3 is v0.5.0 in the corpus study and v0.9.0 in the startup sweep, and the two machines ran different Wasmtime, V8 and Wasmer versions. Open issue #826 itself notes that the cold, first-call and prepared-call phases are not yet separated in the benchmarks."
+  ],
+  "pick_this_over_siblings_when": "Over wazy (the catalogued wazero fork, within about 5-15% of Wago in the study) or wazero when compile latency and compile memory matter and you run only on amd64/arm64. Over wasm2go when modules arrive at run time rather than at build time. Over Wasmi or wasm3 once a module runs for more than a few milliseconds, since the interpreters win only the tiniest cold runs.",
+  "verified_claims_summary": "The first-party corpus study ran 63 modules (PolyBench, Embench, Sightglass, CoreMark, AssemblyScript, zlib, zstd and others) as the median of 3 fresh processes after 1 warmup, on a Ryzen 7 7800X3D pinned to CPU 7 and an Apple M4 Max. On AMD64, Wago's geometric-mean compile wall is 6.42 ms against wazero 7.83, Wasmtime 45.0.1 9.77, V8 14.44 and Wasmer 14.80 ms, and its cold execute (load, compile, instantiate, first call) is 7.34 ms against wazero 8.11 and Wasmtime 7.56 ms. In-process compile time is 0.32x wazero's on AMD64 and 0.43x on ARM64 (derived from page data). The Go toolchain and build flags are not stated.",
+  "status_note": "Very active (several commits a day, last 2026-10-06), Apache-2.0, beta with two main authors. It is usable as a Go module today, but expect API and .wago artifact churn, and treat the README's speed headline as unbacked until the website data is committed.",
+  "sources_read": [
+    "https://github.com/wago-org/wago",
+    "https://github.com/wago-org/wago/commits/main",
+    "https://github.com/wago-org/wago/issues",
+    "https://github.com/wago-org/wago/issues/826",
+    "https://github.com/wago-org/wago/tree/main/bench",
+    "https://github.com/wago-org/wago/tree/main/bench/cmd",
+    "https://github.com/wago-org/wago/tree/main/bench/internal",
+    "https://github.com/wago-org/wago/tree/main/scripts",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/README.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/FEATURES.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/ROADMAP.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/go.mod",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/go.mod",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/runtime-corpus-study.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/results/runtime-corpus-amd64.json",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/results/runtime-corpus-arm64.json",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/startup/README.md",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/startup/runtimes.json",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/startup/startup-amd64.json",
+    "https://raw.githubusercontent.com/wago-org/wago/HEAD/bench/startup/startup-arm64.json",
+    "https://raw.githubusercontent.com/wago-org/wago/7c382581d8c53f06bb53879ddf4e28db6c47ce80/bench/go.mod",
+    "https://raw.githubusercontent.com/wago-org/wago/7c382581d8c53f06bb53879ddf4e28db6c47ce80/bench/go.sum",
+    "https://raw.githubusercontent.com/wago-org/wago/7c382581d8c53f06bb53879ddf4e28db6c47ce80/go.work",
+    "https://raw.githubusercontent.com/wago-org/wago/7c382581d8c53f06bb53879ddf4e28db6c47ce80/.just/bench.just",
+    "https://pkg.go.dev/github.com/wago-org/wago"
+  ],
+  "confidence": 0.75
+}

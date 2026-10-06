@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/bytecodealliance/weval",
+  "one_liner": "Wasm partial evaluator that turns an annotated interpreter into an AOT compiler; about 3.6x over SpiderMonkey's interpreter on Richards.",
+  "what_it_does": "weval takes a WebAssembly module of an interpreter (SpiderMonkey, a Lua or a toy bytecode VM), snapshots it with Wizer, reads the specialization requests the program left in its heap, and appends interpreter functions specialized to each guest function's bytecode, patching the function pointers so the snapshot calls the compiled versions. It is a command-line tool and Rust crate (`weval weval -w -i in.wasm -o out.wasm`), not a runtime; the interpreter must be changed to include `include/weval.h`, register requests (C struct API or the C++ `weval::weval<>` wrapper with `Specialize`, `SpecializeMemory` and `Runtime` argument markers) and mark its dispatch loop with context intrinsics. Output is ordinary Wasm that runs on any engine; since 0.5.0 it also accepts components.",
+  "how_it_is_fast": "It applies the first Futamura projection: constant propagation over the interpreter's SSA (via the waffle IR) with the guest bytecode held constant, reading constant memory from the Wizer snapshot image. `weval_push_context`/`update_context` make the evaluator unroll the dispatch loop per guest pc, so each bytecode becomes straight-line code with its dispatch and operand decoding folded away. Operand-stack and locals virtualization intrinsics (`push.stack`, `read.local`, `sync.stack`) keep interpreter stack slots in Wasm SSA values instead of memory, and specialized loads and stores are elided; the engine's own compiler (Cranelift in Wasmtime) then sees ordinary code.",
+  "when_to_use": [
+    "You ship a C or C++ interpreter compiled to wasm32 (JavaScript via StarlingMonkey or ComponentizeJS, Lua, a DSL) and the target forbids runtime code generation, so a JIT is not an option.",
+    "Guest code is known at build time (bundled JS, scripts baked into a component), so it can be compiled ahead of time inside the Wizer snapshot.",
+    "Per-request isolation (wasmtime serve, edge functions) where each instance starts from a snapshot and has no time to warm up a JIT.",
+    "Using SpiderMonkey on Wasm already: StarlingMonkey (`cmake -DWEVAL=ON`) and ComponentizeJS (`--aot` / `enableAot: true`) wire it in, along with a prebuilt cache of inline-cache bodies."
+  ],
+  "when_not_to_use": [
+    "As a faster Wasm engine: it speeds up an interpreter that runs inside Wasm and does nothing for ordinary compiled C, C++ or Rust modules; for those pick a runtime from the sibling list.",
+    "Guest code that only appears at run time (eval, downloaded scripts) still runs in the unspecialized interpreter.",
+    "Interpreters you cannot or will not annotate: without the context and stack intrinsics in the dispatch loop the partial evaluator has nothing to specialize.",
+    "wasm64 or a 64-bit pointer build: the C++ wrapper static_asserts 32-bit Wasm pointers.",
+    "Tight build-time or module-size budgets: specialization runs per requested function at build time and appends a body for each, and ComponentizeJS documents a roughly 2 GB minimum stack for the weval run."
+  ],
+  "integration": {
+    "form": "CLI binary and Rust crate (`weval` 0.5.0 on crates.io; prebuilt binaries via GitHub releases and the npm package @cfallin/weval), plus the header `include/weval.h` compiled into the interpreter",
+    "dependencies": "Tool: wasmtime 46.0.1 (Cranelift), wasmtime-wizer, waffle 0.2.0, wasm-encoder/wasmparser 0.251, rayon, tokio, sqlite (for --cache), bincode, sha2. Interpreter side: weval.h only (libc malloc/free/memcpy) plus a wasi-sdk clang toolchain.",
+    "min_toolchain": "Rust edition 2021 (MSRV not documented); interpreter built with wasi-sdk clang (the repo's test uses -std=c++23; the C API is plain C)",
+    "platforms": "Output: any Wasm engine, wasm32 only. Tool: release binaries per host OS and architecture (StarlingMonkey downloads weval-<version>-<arch>-<os>.tar.xz); exact list not documented in the README.",
+    "thread_safety": "Not applicable to the output (specialized functions behave like the originals); the tool parallelizes specialization with rayon. The request list in weval.h is a global linked list with no locking, written during single-threaded Wizer initialization.",
+    "drop_in_for_baseline": "partial — the specialized module is a drop-in replacement for the interpreter's Wasm build and keeps the generic interpreter as fallback, but you must annotate the interpreter source and add a Wizer snapshot plus weval step to the build"
+  },
+  "gotchas": [
+    "The C++ wrapper `weval::weval(dest, generic, func_id, num_globals, ...)` accepts `func_id` but never stores it: `req->user_id` stays uninitialized malloc memory. The --cache key is bincode of (user_id, args, num_globals) with the generic function index skipped (`#[serde(skip)]` in src/directive.rs), so with the cache enabled, keys can be nondeterministic (cache misses) or, if two generic functions are requested with identical argument bytes and equal garbage ids, collide on one cached body. Set `user_id` yourself or use the C struct API when using --cache.",
+    "Cache entries are also keyed on the SHA-256 of the input module (pre-Wizer bytes for core modules, the snapshotted core module for components), so any rebuild of the interpreter invalidates the cache.",
+    "`StoreArg<T&>` in weval.h constructs `StoreArg<T*>(args, &value)` instead of calling it, so specializing a reference-typed argument does not compile; pass pointers. `weval::weval()` also leaks the request and argument buffer if argument encoding fails (1 MiB argument cap).",
+    "The evaluator constant-folds only integer ops (src/eval.rs has 'TODO: FP and SIMD'), so floating-point-heavy interpreter logic is transcribed rather than folded."
+  ],
+  "pick_this_over_siblings_when": "None of the sibling Wasm engines (Wasmtime-class JITs, Wasmi, WAMR, wasm3) help a JavaScript or Lua interpreter that itself runs inside Wasm; pick weval when the slow part is that guest interpreter and JIT is not allowed. Wizer, which weval embeds, only pre-initializes state and does not compile guest code; use both together.",
+  "verified_claims_summary": "StarlingMonkey PR #91 (2024-07-31) reports an Octane Richards score of 676 with the weval-compiled SpiderMonkey versus 189 for the plain interpreter, both under `wasmtime serve` with an unstated Wasmtime version and hardware (about 3.6x); the README states 3-5x without methodology. The PLDI 2025 paper reports 2.17x on SpiderMonkey's interpreter tier and 1.84x on PUC-Rio Lua (search snippet only; the PDF, arXiv and ACM pages are blocked here). Every figure is against the same interpreter without weval, not against another runtime.",
+  "status_note": "Active Bytecode Alliance project by Chris Fallin (0.5.0 on 2026-09-10 added component support; 24k crates.io downloads; StarlingMonkey pins v0.4.1); Apache-2.0 WITH LLVM-exception and usable today through StarlingMonkey or ComponentizeJS, though building it into your own interpreter takes real annotation work.",
+  "sources_read": [
+    "https://github.com/bytecodealliance/weval",
+    "https://github.com/bytecodealliance/weval/commits/main",
+    "https://github.com/bytecodealliance/weval/issues",
+    "https://github.com/bytecodealliance/weval/tree/main/src",
+    "https://github.com/bytecodealliance/weval/tree/main/tests/simple",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/include/weval.h",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/src/eval.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/src/directive.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/src/cache.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/src/component.rs",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/tests/simple/simple.cpp",
+    "https://raw.githubusercontent.com/bytecodealliance/weval/HEAD/tests/simple/Makefile",
+    "https://github.com/bytecodealliance/StarlingMonkey/pull/91",
+    "https://raw.githubusercontent.com/bytecodealliance/StarlingMonkey/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytecodealliance/StarlingMonkey/HEAD/cmake/weval.cmake",
+    "https://raw.githubusercontent.com/bytecodealliance/ComponentizeJS/HEAD/README.md",
+    "https://crates.io/api/v1/crates/weval",
+    "WebSearch snippet: 'Partial Evaluation, Whole-Program Compilation' (PLDI 2025; cfallin.org PDF and themoonlight.io review EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.75
+}
