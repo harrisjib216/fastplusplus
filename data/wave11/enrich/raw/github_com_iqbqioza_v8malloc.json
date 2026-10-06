@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/iqbqioza/v8malloc",
+  "one_liner": "Early-stage Linux malloc replacement (LD_PRELOAD) claiming parity or small wins over glibc, tcmalloc, jemalloc and mimalloc on microbenchmarks.",
+  "what_it_does": "A general-purpose C allocator for Linux that replaces the whole malloc family (malloc, free, calloc, realloc, aligned_alloc, posix_memalign, memalign, valloc, pvalloc, plus glibc __libc_* aliases and mallinfo/malloc_trim) via LD_PRELOAD or direct linking. It also exposes a v8m_* API with stats, pprof heap dumps, lifetime classification, NUMA balance, soft limits and v8m_purge(). The README status line says most allocator internals are still being implemented.",
+  "how_it_is_fast": "A four-tier path: lock-free thread-local cache, per-CPU core cache, NUMA-node pool, then a global page heap, with an MPSC remote-free queue and page-owner-CPU routing for cross-thread frees. It uses header-less per-page metadata with O(1) pointer-to-metadata lookup, a branchless lookup over 41 size classes (8 B to 2 MiB), a buddy pool behind a medium-class thread cache for 16-256 KiB, and a recycle cache that keeps freed large regions mapped. The release build relies on LTO, -fno-plt, -fno-semantic-interposition and branch hints to inline the fast path.",
+  "when_to_use": [
+    "Experimenting on Linux with a drop-in LD_PRELOAD allocator for long-running services where steady-state RSS matters (MB-05 RSS 9.13 MiB vs 19.50 tcmalloc and 27.50 jemalloc)",
+    "Workloads that repeatedly allocate very large buffers (256 MiB alloc p99 1 us vs mimalloc 160 and glibc 48 in the README)",
+    "When you want built-in heap observability (pprof dumps, lifetime histograms, NUMA balance) and are willing to benchmark it on your own workload first"
+  ],
+  "when_not_to_use": [
+    "Production use today: 1 star, self-described as in active development with most internals still being implemented, and a concurrency bug (MB-03 SEGV in v8m_core_cache_pop_batch) fixed during the very run that produced the table",
+    "Medium allocations of 16-256 KiB: about 60 ns/op vs tcmalloc's 24 ns/op on MB-01, and mixed workloads (MB-04 11.50 M ops/s vs tcmalloc 22.26 M and glibc 15.42 M)",
+    "Cross-thread producer/consumer patterns, where mimalloc and glibc lead MB-03",
+    "Non-Linux platforms, or when you need AddressSanitizer (unsupported) or ThreadSanitizer (experimental)"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "pthread, libdl; Linux kernel 5.4+",
+    "min_toolchain": "C, GCC 13+ or Clang 16+, CMake 3.25+ (lld or llvm-ar needed for clang Release static builds with thin LTO)",
+    "platforms": "Linux only: x86_64, aarch64, riscv64, ppc64le, s390x, loongarch64 (non-x86 tested under QEMU-user)",
+    "thread_safety": "thread-safe malloc replacement (thread-local and per-CPU caches, MPSC remote free); TSan runs are experimental and the suite does not pass under it",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Harness flaw: bench/CMakeLists.txt links the benchmarks against v8malloc_static whenever V8MALLOC_BUILD_STATIC is ON (the default, also used by bench-weekly.yml), and the static archive defines malloc/free in v8m_api_libc_compat.c, so the executable's own malloc calls bind to v8malloc and LD_PRELOAD of jemalloc, tcmalloc or mimalloc cannot change them. In a shared build, libv8malloc.so is a NEEDED dependency that interposes libc, so the 'glibc (system malloc)' row of bench-compare.sh also runs v8malloc. The README does not say how its competitor columns were built; the glibc column matching v8malloc almost cell for cell on MB-01 and exactly on MB-05 (9.13 MiB) is consistent with this.",
+    "MB-01 and MB-02 call clock_gettime (now_ns()) on every iteration, so the 21-32 ns/op figures include a clock read and compress real allocator differences.",
+    "AddressSanitizer bypasses v8malloc entirely (ASan interposes malloc); use Valgrind or the UBSan build instead.",
+    "The library constructor makes early mmap reservations and the shared object is built with initial-exec TLS, so it must be loaded at exec time (LD_PRELOAD or link), not dlopen()ed later."
+  ],
+  "pick_this_over_siblings_when": "Among general-purpose replacements, Mesh is the published, peer-reviewed choice for cutting RSS and FastAlloc publishes more comparison cells; pick v8malloc only to experiment with a Linux-only allocator that has built-in pprof/NUMA diagnostics, and validate its numbers yourself first.",
+  "verified_claims_summary": "The README reports single runs of in-tree microbenchmarks MB-01 to MB-06 on an 8-core Intel Core Ultra 5 236V dev container: v8malloc as a clang Release LTO build, competitors as Debian Trixie libjemalloc.so.2, libtcmalloc.so.4 and libmimalloc.so.3 under LD_PRELOAD. The clear margins are 150.5 M vs 134.9 M ops/s (glibc) at 4 threads on 64 B, 256 MiB alloc p99 of 1 us, and the lowest RSS (tied with glibc); most other wins are within the author's own noise band. As shown in the gotchas, the documented harness cannot isolate the competitor allocators, so the comparison is unreliable until the build used is documented.",
+  "status_note": "Active (171 commits, last commit 2026-04-28) and Apache-2.0, but a 1-star, self-described early-stage project whose benchmark harness has a linkage flaw; treat it as experimental.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/scripts/bench-compare.sh",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/bench/mb_01_throughput.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/bench/mb_02_scalability.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/bench/mb_05_fragmentation.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/bench/mb_06_large_latency.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/src/v8m_api.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/src/v8m_api_libc_compat.c",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/include/v8malloc/v8malloc.h",
+    "https://raw.githubusercontent.com/iqbqioza/v8malloc/HEAD/.github/workflows/bench-weekly.yml",
+    "https://github.com/iqbqioza/v8malloc/tree/main/src",
+    "https://github.com/iqbqioza/v8malloc"
+  ],
+  "confidence": 0.7
+}
