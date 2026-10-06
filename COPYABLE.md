@@ -13349,7 +13349,407 @@ SIMD Rust UTF-8/16/32 transcoder beating simdutf on most inputs, plus allocation
 
 ### runtime-and-systems
 
+#### allocators-gcs
+
+##### fast-alloc  `C++`  `MIT`  `active`  `Tier A`
+
+Small C++20 pool, stack and free-list arenas for game code; beats new/delete and malloc only on fixed-size or frame-scoped patterns.
+
+**Beats:** malloc/free and new/delete — Google Benchmark 1.9.1, 64-byte blocks, GCC 14.2.0 -O3 -march=native on an AMD Ryzen 7 PRO 8700GE (Debian 13, pinned core, median of 7): pool allocate/free 2.00 ns vs 6.03 ns operator new/delete (3.0x), stack allocate/reset 1.99 vs 4.77 ns malloc/free (2.4x), 1,000-allocation frame 1205 vs 14385 ns (11.9x, inflated by the baseline's pointer-array allocation); free list ties or loses, thread-safe pool 0.60x. The bigger 4-24x ratios come from single 0.1 s CI runs against the macOS and MSVC system allocators on hosted runners.
+
+**Known shortcoming:** Pool, stack and free-list allocators only. The Linux free-list result is 1.0x/0.76x and the thread-safe pool 0.60x (slower). The free-list benchmark is the best case (a one-block list). Release builds check block ownership with assert only. The recorded malloc 'frame' baseline timed pointer-array allocation, so the 11.9x is inflated (the README says so).
+
+**Independent measurement:** public benchmark code
+
+**How:** The pool is an intrusive singly linked free list threaded through the unused fixed-stride blocks, so allocate and deallocate are an O(1) pointer pop and push with no size-class lookup or headers. The stack allocator is a bump pointer with alignment rounding, and a whole frame is released by resetting one pointer instead of 1,000 free calls. The free-list allocator is a classic address-sorted first-fit/best-fit list with block headers and coalescing on free, which is O(n) in free-list length and only ties glibc malloc on Linux. The thread-safe pool wraps the same pool in a std::mutex.
+
+**Use it when:**
+- Many same-size objects (particles, entities, nodes) with a known upper count, where O(1) pop/push from a preallocated pool beats a general allocator's ~6 ns new/delete pair on glibc.
+- Per-frame or per-request scratch memory that is released all at once: bump allocation plus a single reset() replaces thousands of individual free() calls.
+- Windows MSVC or macOS builds, where the system allocator measured much slower (34.9 ns and 18.5 ns per 64-byte new/delete pair in CI) so even the free-list allocator came out ahead.
+- As a readable, MIT-licensed reference or starting point for writing your own game-engine arena; the core files are a few hundred lines each.
+
+**Skip it when:**
+- As a general malloc replacement: there is no global operator new hook, no size classes and fixed capacity; use mimalloc, jemalloc or another listed general allocator instead.
+- Multithreaded allocation hot paths: the thread-safe pool is a single global mutex and was slower than new/delete even uncontended on Linux (9.98 ns vs 6.03 ns, 0.60x); contention results are not published.
+- Variable-size allocation on Linux: the free list matched glibc malloc with first-fit (4.66 vs 4.67 ns) and lost with best-fit (0.76x), and that was its best case with a one-block free list; search cost grows linearly with fragmentation.
+- Code that needs destructors run on reset or pool teardown, or debug-checked ownership in Release: double frees and foreign pointers are caught only by Debug asserts.
+- Projects wanting a mature dependency: 0 stars, single author, no tagged ecosystem users.
+
+**Integration:** static lib · none for the library (Threads::Threads); Catch2 3.5.0 and Google Benchmark 1.9.1 fetched by CMake only for tests and benchmarks · C++20, CMake 3.20; CI covers GCC, Clang, Apple Clang 21 and MSVC 19.51 · any (CI on Linux, macOS arm64, Windows); -march=native is opt-in via FAST_ALLOC_NATIVE_ARCH
+
+**Vs siblings:** Pick it over general allocators like mimalloc, v8malloc or FastAlloc only when you control the allocation pattern and want an explicit fixed-size pool or frame arena; versus similar small arenas such as obstack (cleeus) or ArenaAllocator (privateMwb), it is the one with a pinned, repeated Linux benchmark, sanitizer CI on three platforms and configurable alignment.
+
+**Gotchas:**
+- Allocators return raw storage: deallocate() and reset() never run destructors, and stack allocations cannot be freed individually.
+- Invalid sizes or non-power-of-two alignments throw std::invalid_argument (also in Release), while exhaustion returns nullptr, so callers must handle both.
+- Pool and free-list deallocate validate ownership only with assert, so a pointer from the wrong pool silently corrupts the free list in Release builds.
+- The recorded frame benchmark's malloc side also allocated and released a std::vector of pointers inside the timed loop (README note; benchmarks since changed), so the 11.9x Linux frame ratio overstates the gap and new runs are not comparable.
+
+**Status:** Actively maintained (v1.2.0, 75 commits, last commit 2026-10-04) and MIT-licensed, small enough to vendor, but unproven in production with 0 stars and 0 issues.
+
+[repo](https://github.com/NotKeira/fast-alloc) · [benchmark](https://github.com/NotKeira/fast-alloc)
+
+##### Kaname-Shiki (MemoryAllocator.KanameShiki)  `C++`  `MIT`  `abandoned`  `Tier A`
+
+Small (2600-line) thread-caching general-purpose allocator for 64-bit Windows/Linux that beats the MSVC CRT malloc on its own alloc/free stress tests.
+
+**Beats:** malloc (MSVC CRT), mimalloc, tcmalloc, jemalloc — On a Core i7-8700 under Windows 10 with MSVC cl -Ox, the author's harness (Main.cpp, nine tests, 8 threads) totals 1.73 s for 0B-1KiB vs 2.33 s for the MSVC CRT malloc (about 1.35x, derived from page data) and 1.90 s for mimalloc, and 3.22 s vs 89.80 s for 2MiB-32MiB alloc+free only; with memory fill the large-block gap shrinks to 3730.7 s vs 6186.0 s and mimalloc is faster. Raw timings are in Benchmark/*.txt; the MSVC version is not stated and nobody else has reproduced them.
+
+**Known shortcoming:** Large-block allocation-only wins up to about 2800x over MSVC malloc (derived) are likely caching; with memory fill, mimalloc is faster.
+
+**Known shortcoming:** Correctness bug in src/Posix.cpp: memalign calls aligned_alloc(size, alignment) with the arguments swapped, so posix_memalign, memalign and valloc return ENOMEM or under-aligned blocks; calloc has no overflow check. The benchmark calls KanameShiki::Alloc/Free directly, so the numbers are not affected. Harness flaws: mimalloc built with -MD -LTCG while the others use the static CRT; mimalloc has 234,674 failed allocations in c4 testI; fill totals are dominated by the harness byte-check loop. Open segfault issue 3 in the cooperative profile; single-thread is slower than mimalloc (0.036 s vs 0.022 s).
+
+**Independent measurement:** public benchmark code and raw timings
+
+**Independent measurement:** code reading by enricher
+
+**How:** Size-segregated per-thread allocators: LocalPool (fixed-size pools in 8-byte classes up to 1 KiB), LocalCram (power-of-two classes up to 1 MiB) and LocalAny (one OS mapping per block above 1 MiB). Each has an own-thread free list touched with no atomics and a remote-free list split across several slots; the 'RevolverAtomic' scheme rotates an atomic index on every remote free so concurrent CAS pushes spread over different cache lines instead of contending on one head (Cache.h). Freed pools and blocks are kept in local and global reserver free lists before falling back to a mutex-protected first-fit global heap (doubly linked nodes with coalescing) and then VirtualAlloc/mmap, so repeated large alloc/free pairs avoid OS calls.
+
+**Use it when:**
+- Windows x64 programs (MSVC) whose hot path is malloc/free or new/delete churn of small blocks up to 1 KiB across 8 or so threads, where the CRT heap is the bottleneck.
+- Producer/consumer patterns where blocks are allocated on one thread and freed on another (the benchmark's testF-testI), which the per-slot remote free lists target.
+- Console or embedded-style programs that own the machine and can afford the specialized profile's 8 GiB up-front reservation in exchange for fewer OS calls.
+- As a small, readable reference design for thread-caching allocators (about 49 KB of source, MIT).
+
+**Skip it when:**
+- When mimalloc is an option: in the author's own single-thread runs mimalloc is faster (0B-1KiB alloc-only 0.022 s vs 0.036 s; with memory fill 0.209 s vs 0.223 s), and with memory fill in the 2MiB-32MiB 8-thread test mimalloc total is 3085.8 s vs 3730.7 s.
+- Long-running services that need memory returned to the OS: the large-block speedups come from caching freed blocks in reserver lists, and the specialized profile commits 8 GiB at start-up.
+- Production code that needs a maintained allocator: no commits since 2019-10-19, an open unanswered segfault report in the cooperative profile (issue #3, crash in GlobalReserver::Alloc), and the README says MinGW64 g++ and clang++ builds do not work.
+- Programs that use posix_memalign/memalign/valloc through the LD_PRELOAD shim (see gotchas), or 32-bit and pre-Haswell x86 targets (the code uses _lzcnt/_tzcnt and assumes 8-byte size_t).
+
+**Integration:** static lib (MSVC) or shared lib (g++/clang++ LD_PRELOAD); single-TU source-drop also possible · none beyond the C++ standard library and the OS (VirtualAlloc or mmap); -lpthread -latomic on Linux · C++14 (clang++ -std=c++14 in README); MSVC version not stated; g++ build needs -mlzcnt -mbmi · x86-64 only in practice (LZCNT/BMI1 intrinsics, 64-bit size_t constants); Windows 10 and Linux; MinGW64 not working
+
+**Vs siblings:** Pick it over fc_malloc or the hobby allocators (Bloodmoon001, atul-singh-as) when you need cross-thread frees and a full malloc surface on Windows with numbers against mimalloc/jemalloc/tcmalloc; pick a maintained allocator such as mimalloc or IsoAlloc instead for production, and Mesh when memory footprint matters more than speed.
+
+**Gotchas:**
+- memalign(alignment, size) in src/Posix.cpp calls aligned_alloc(size, alignment) with the arguments swapped, so posix_memalign/memalign/valloc return ENOMEM/nullptr for most size/alignment pairs and an under-aligned block when alignment exceeds size. The published benchmark does not exercise this path.
+- calloc computes nmemb * size with no overflow check, so an overflowing request returns a block smaller than asked for; realloc always allocates a new block and copies, even when shrinking.
+- The benchmark's alloc-then-immediately-free loops (testA) reward block caching: mimalloc times about 0.001 s and KanameShiki is similar, while the CRT pays OS-level costs for 2MiB-32MiB blocks (single-thread total 17.05 s vs 0.006 s). In FILL mode Main.cpp re-enables assert and checks every byte in a loop before freeing, so those totals are dominated by the harness's own memset and verify passes.
+- Builds differ: the mimalloc binary is linked with -MD -LTCG while malloc, tcmalloc, jemalloc and KanameShiki use the default static CRT; jemalloc 'segfaults frequently' on the author's MSVC build and mimalloc had 234,674 failed allocations in c4 testI (8 threads x 128 blocks of up to 32 MiB exceeds the 32 GiB machine).
+
+**Status:** Abandoned since 2019-10-19 with open crash and benchmark-source issues; MIT and small enough to vendor or study, but treat it as a reference design rather than a production allocator.
+
+[repo](https://github.com/EmuraDaisuke/MemoryAllocator.KanameShiki) · [benchmark](https://github.com/EmuraDaisuke/MemoryAllocator.KanameShiki/tree/master/Benchmark)
+
+##### SGCL  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Header-only C++20 concurrent garbage collector whose allocation path beats malloc-backed unique_ptr/shared_ptr for small objects on macOS.
+
+**Beats:** malloc via std::unique_ptr / std::shared_ptr (macOS libmalloc nano zone); also Go and Java ZGC collectors — On a Mac Studio (Apple M2 Ultra, macOS 26.5, Apple clang 21.0 -O3 -DNDEBUG, libc++, macOS nano-zone malloc), the repo's own benchmarks/ programs show a 32 B allocation at 2.8 ns on one thread vs 17.1 ns for std::unique_ptr and 16.3 ns for std::shared_ptr (about 6x), narrowing to 11.7 vs 23.2 ns on 24 threads, while 256 B on 24 threads is about 3x slower than unique_ptr (71.4 vs 23.5 ns). Binary-trees depth 21 runs in 4.43 s wall vs 12.42 s for unique_ptr, but with 9.41 vs 12.39 s process CPU and 292 vs 134 MB peak memory.
+
+**Known shortcoming:** Tested on Apple Silicon only; the baseline is the macOS nano-zone malloc and the Go/Java columns come from an older -O2 run. Slower than unique_ptr at 256 B on 24 threads (71.4 vs 23.5 ns) with higher memory (292 vs 134 MB); CPU time is closer (9.41 vs 12.39 s). tracked_ptr placement rules are strict; 7 issues, all closed.
+
+**Independent measurement:** first-party benchmarks.md
+
+**How:** Allocation is a bitmap pop from a per-thread page allocator plus one byte of state, with no lock or barrier, and freeing moves off the mutator onto a collector thread that sweeps and runs destructors. The collector is a concurrent, non-moving, generational (sticky mark bits plus card marking) mark-and-sweep with a Dijkstra insertion barrier, no stop-the-world phase and no safepoints; stacks are scanned conservatively while threads run, and the heap is traced through per-type pointer maps narrowed by elimination. Marking is parallelised over helper threads with page-order tracing and a prefetch window.
+
+**Use it when:**
+- Pointer-heavy C++ code with shared or cyclic graphs (lock-free structures, ASTs, actor/channel programs) where shared_ptr reference counting and destructor cascades cost too much: shared_ptr drop-all took 68-171 ms vs microseconds for SGCL on the shared-graph benchmark.
+- Allocation-heavy workloads of small objects (32 B) on 1-24 threads where wall time on the mutator matters more than total CPU.
+- Programs that copy pointers to shared objects across threads: 1.4-1.9 ns per copy vs 125-149 ns for contended shared_ptr.
+- Projects that want Go-style concurrency (tasks, channels) inside C++ without a separate reclamation scheme such as hazard pointers or epochs.
+- Apple Silicon macOS builds with Apple clang, the only tested platform.
+
+**Skip it when:**
+- Linux, Windows or x86-64 targets in production: the current version is built and tested on Apple Silicon only, and no number has been reproduced elsewhere.
+- Memory-constrained programs: binary-trees depth 21 peaks at 292 MB vs 134 MB for unique_ptr, and garbage waits for a cycle.
+- Many threads allocating 256 B objects: 71.4 ns vs 23.5 ns for unique_ptr on 24 threads.
+- CPU-budgeted or core-saturated systems: the win moves destruction to collector threads, so process CPU time is much closer to the baseline than wall time (9.41 vs 12.39 s at binary-trees depth 21) and collector threads compete with mutators for cores.
+- Code that needs destructors to run promptly on tracked objects, uses raw pointers as owning references, or stores pointers in std containers, unions, std::variant or std::function.
+
+**Integration:** header-only · none for the library (CMake interface target optional); on Apple systems the target links Security, CoreFoundation and, for HEIF, ImageIO/CoreGraphics/Accelerate; tests need googletest, zlib, libbz2 and OpenSSL 3 · C++20; tested only with Apple clang (21.0 in the published benchmarks); gcc on Windows discouraged · macOS on Apple Silicon tested; Linux, Windows and x86-64 written for but pending
+
+**Vs siblings:** The siblings (mimalloc-class allocators such as Kaname-Shiki or FastAlloc, pool allocators such as fast-alloc, mem++) speed up malloc/free behind the same manual or reference-counted ownership; pick SGCL when the cost you want gone is shared_ptr reference counting, destructor cascades or a reclamation scheme for shared and cyclic graphs, and you can adopt a GC pointer type. If you only need faster malloc on Linux, a sibling allocator is the safer choice.
+
+**Gotchas:**
+- A tracked_ptr may live only on a thread's own stack or inside a managed object; in a global, a std container, heap memory from new, a heap-copied lambda or a plain coroutine frame it is never scanned and its object can be collected (use root_ptr there). Alternate signal stacks, fibers and ucontext stacks are not scanned.
+- A tracked_ptr must never share storage with data (union with a value, std::variant, std::any, std::function inline storage) because per-type pointer maps are narrowed by elimination; use sgcl::variant, any, function and expected instead.
+- Destructors of tracked objects run on collector threads in no particular order; a destructor may not touch its tracked_ptr members except through if_alive().
+- The headline baseline is macOS libmalloc's nano zone; earlier runs with MallocNanoZone=0 made the unique_ptr/shared_ptr columns about a quarter slower, and the Go/Java columns come from an older -O2 run.
+
+**Status:** Very actively developed (last commit 2026-10-05) by a single author, Apache-2.0 and header-only so it is easy to vendor, but the API is pre-1.0 with stability promised only from 1.0.0, and only macOS on Apple Silicon is tested.
+
+[repo](https://github.com/pebal/sgcl) · [benchmark](https://github.com/pebal/sgcl/blob/main/docs/garbage_collector/benchmarks.md)
+
+##### XenoAtom.Allocators (TLSF)  `C#`  `BSD-2-Clause`  `active`  `Tier A`
+
+TLSF sub-allocator for .NET 8 over caller-supplied chunks; about 22% faster than CRT aligned malloc/free in its own micro-benchmark.
+
+**Beats:** C runtime malloc/free (MSVC CRT on Windows) — BenchmarkDotNet 0.13.12 on .NET 8.0.6 RyuJIT, AMD Ryzen 9 7950X, Windows 11: 2048 allocations of sizes drawn from {64, 96, 150, 200, 400, 1024, 4096} bytes followed by 2048 frees took 82.27 us with TLSF against 105.34 us with MSVC CRT aligned alloc/free (ratio 0.78). The TLSF side reuses its cached 64 KiB chunks, so it measures pure bookkeeping against CRT calls through interop; it is a single-threaded micro-benchmark from one run.
+
+**Known shortcoming:** C# library, not C++; the libc baseline is NativeMemory.AlignedAlloc (aligned_alloc), not plain malloc, and the TLSF side returns offset tokens rather than pointers.
+
+**Known shortcoming:** Additional harness caveats: the TLSF allocator reuses cached 64 KiB chunks, so steady state never calls the CRT; one run only. Not thread safe; 64 B minimum plus 32 B of side metadata per block; chunks are freed only on Reset().
+
+**Independent measurement:** public benchmark code
+
+**How:** Classic TLSF (Masmano et al., ECRTS 2004): a first-level bitmap over power-of-two size classes and second-level bitmaps over linear sub-bins, so finding a fitting free block is a couple of bit scans and allocation and free run in O(1) with immediate coalescing of physical neighbours. Block headers (32 bytes each) live in separate managed arrays grouped by 1024 rather than in-band, and the allocator takes no locks; in the benchmark the chunks stay cached after the first iteration, so the steady state never calls the CRT.
+
+**Use it when:**
+- .NET 8+ or NativeAOT code that needs deterministic O(1) allocation and free of unmanaged buffers, for example game engines, audio, or real-time loops.
+- Sub-allocating a large device or mapped region (GPU heap, shared memory, file-backed buffer) where headers must not be written into the managed memory itself.
+- Per-thread or per-subsystem arenas where one owner allocates and frees, so the missing locking costs nothing.
+- Workloads with mixed sizes from 64 B to a few KB with heavy churn, where coalescing keeps fragmentation bounded.
+
+**Skip it when:**
+- C++ or C projects: this is a C# library; for native code pick a C or C++ TLSF or general allocator instead.
+- Multi-threaded shared heaps: the class is documented as not thread safe and needs an external lock, which will likely erase the 22% margin.
+- Many tiny allocations: the minimum allocation and alignment is 64 bytes plus 32 bytes of side metadata per block, so 8-32 byte objects waste most of their space.
+- Code that expects malloc/free semantics (free by pointer, realloc, calloc): none of these exist; you must keep the token.
+- Workloads that need memory returned to the OS: chunks are only released on Reset(), never when they become empty.
+
+**Integration:** module · XenoAtom.Collections (NuGet) · .NET 8 (net8.0 target), unsafe code allowed; NativeAOT compatible · any .NET 8 platform (managed code); the published benchmark ran only on Windows x64
+
+**Vs siblings:** Pick it over rlsf or Talc (Rust TLSF-style allocators) only when you are in .NET and need a managed API over foreign memory; for native C++ arenas, fast-alloc or obstack are closer fits, and for a general-purpose malloc replacement use one of the mimalloc-class siblings.
+
+**Gotchas:**
+- The baseline in the benchmark is NativeMemory.AlignedAlloc(size, 64) and AlignedFree, which maps to _aligned_malloc on the MSVC CRT, not plain malloc; plain malloc may be faster than the reported baseline.
+- Allocate throws OutOfMemoryException when the chunk allocator fails; use TryAllocate to avoid exceptions. Free throws ArgumentException on an out-of-range or already-free token.
+- Maximum single allocation is 4 GB; alignment must be a power of two and is fixed per allocator instance.
+- The backend chunk allocator is yours to write; the sample BasicChunkAllocator uses a Dictionary keyed by chunk count, which can reuse ids after a FreeChunk, so do not copy it unchanged for long-lived use.
+
+**Status:** Small, BSD-2-Clause and published on NuGet, with 38 commits, one open feature request and a last commit on 2026-02-23 ('Fix benchmarks'); usable as is, but outside the catalog's C++ focus.
+
+[repo](https://github.com/XenoAtom/XenoAtom.Allocators) · [benchmark](https://github.com/XenoAtom/XenoAtom.Allocators)
+
+##### LLFree  `C`  `MIT`  `active`  `Tier B`
+
+Lock- and log-free page-frame allocator in C; up to 88% (4 KiB) and 98% (2 MiB) lower concurrent allocation time than Linux's buddy allocator.
+
+**Beats:** Linux kernel buddy page-frame allocator — Per the USENIX ATC 2023 abstract (read via search snippet; the usenix.org PDF is blocked here), the Rust LLFree inside Linux cut concurrent 4 KiB allocation time by up to 88% and 2 MiB allocation time by up to 98% versus the Linux buddy frame allocator, and needed 64% fewer compaction page movements; the paper data came from raw hardware not named on the pages read, with an artifact (Distinguished Artifact Award) validated on Linux 6.0-6.2.
+
+**Known shortcoming:** The paper measured the Rust llfree-rs inside Linux 6.x, not this C reimplementation; the 88%, 98% and 64% figures are search-snippet only (the USENIX PDF is blocked). The release build uses -march=native.
+
+**Independent measurement:** snippet only
+
+**How:** No locks and no log: the persistent lower allocator is a bitfield of 512 bits per 2 MiB region (one bit per 4 KiB frame), with a 2 MiB entry holding a free counter and a huge-page flag, all updated with atomic compare-exchange. An upper, volatile layer groups 2 MiB entries into trees (8 by default) and reserves a tree per core and per class (e.g. small vs huge, movable vs immovable), so cores rarely touch the same cache lines and 4 KiB allocations do not fragment 2 MiB regions. The lower layer is crash-consistent on nonvolatile memory and the upper layer is rebuilt on boot.
+
+**Use it when:**
+- Kernel or hypervisor page-frame allocation on many-core machines where the buddy allocator's zone lock contention dominates (concurrent 4 KiB and 2 MiB requests)
+- Systems that want many 2 MiB huge pages available and less compaction work (paper reports 64% fewer compaction page movements, abstract only)
+- Persistent-memory frame allocators that must survive crashes without a log (LLFREE_INIT_RECOVER)
+- Research OSes, unikernels or VM memory ballooning (HyperAlloc, EuroSys 2025, builds on it) that need a small C frame allocator
+
+**Skip it when:**
+- Userspace object allocation: it is not a malloc replacement and gives frame numbers, not pointers
+- Orders above 4 MiB (order 10) or arbitrary-size ranges: only 4 KiB to 4 MiB allocations are handled
+- You need the measured numbers to hold for this exact code: the ATC 2023 evaluation ran the Rust llfree-rs in a modified Linux 6.x, not this C reimplementation
+- Small projects wanting a stable API: 12 stars, research code whose API (classing, policy callbacks) changed recently
+
+**Integration:** static lib (make DEBUG=0 builds build/libllc.a) or source-drop into a kernel tree · none beyond C11 atomics; you provide llfree_platform.h and llfree_types.h · Clang by default (Makefile CC := clang, -std=c11); uses GNU statement expressions and C23-style 'enum : uint8_t', so GCC/Clang only · 64-bit platforms with C11 atomics; userspace std/ build on Linux; kernel integration via luhsra/llfree-linux
+
+**Vs siblings:** The siblings (mimalloc-class mallocs, TLSF, arena and pool allocators) all serve userspace objects; pick LLFree only when you are allocating physical page frames in a kernel or hypervisor, where none of them apply.
+
+**Gotchas:**
+- Release builds use -march=native, so a library built on one machine may not run on an older CPU
+- Freed frames must be returned with a matching request (order and class) in llfree_put
+- llfree_tree_stats is fast but may be inaccurate; llfree_stats scans the lower allocator for exact counts
+- Allocations can come back in a different class than requested (demotion), reported in llfree_result_t.class
+
+**Status:** Active (585 commits, last commit 2026-09-17), MIT-licensed and small enough to vendor, but research code with a moving API and few users.
+
+[repo](https://github.com/luhsra/llfree-c) · [benchmark](https://www.usenix.org/conference/atc23/presentation/wrenger)
+
+##### Mesh  `C++`  `Apache-2.0`  `active`  `Tier B`
+
+Drop-in malloc that compacts fragmented C/C++ heaps by page remapping; 16% less memory than Firefox's jemalloc, 39% on Redis.
+
+**Beats:** jemalloc (Firefox, Redis) and glibc malloc (SPEC CPU2006, Ruby) — The PLDI 2019 paper ran on an Intel i7-5600U with 16 GiB under Linux 4.18 (SPEC built with clang 4.0 -O2, Mesh with gcc 8 -O3 -flto): mean RSS on Firefox 57 Speedometer was 530 MB vs 632 MB with bundled jemalloc (16%, under 1% score loss); Redis 4.0.2 got the same 39% heap reduction as jemalloc 3.6.0 active defrag with 0.23 s of meshing vs 1.49 s of defrag; 400.perlbench peak RSS was 564 MB vs 664 MB glibc 2.26 (+3.9% runtime); SPECint geomean -2.4% memory, +0.7% time.
+
+**Known shortcoming:** Wins memory only; runtime costs +0.7% to +10.7%. 29 open issues: crashes 72, 87 and 99 (OpenJDK 16 segfault), more memory than jemalloc 5.1, Chrome and Firefox (116, 45, 67), distro build failures, no releases (114). Reserves a 64 GB virtual arena and interposes sigaction for its write barrier.
+
+**Independent measurement:** peer-reviewed paper, read from a repo copy
+
+**How:** Meshing: when two spans of the same size class have non-overlapping live objects, Mesh copies one span's objects into the other's physical page and remaps both virtual spans onto that one physical span (the arena is a memfd_create-backed shared mapping, so mmap can alias offsets), so object addresses never change. Candidate pairs come from SplitMesher, a randomized matching algorithm with a probabilistic guarantee, and shuffle vectors randomize object placement within spans at bump-pointer cost so pages stay meshable. Meshing runs concurrently, using mprotect plus a SIGSEGV handler as a write barrier, and is rate-limited (default at most every 100 ms).
+
+**Use it when:**
+- Long-running, allocation-heavy servers or browsers whose RSS grows from fragmentation (many small objects of mixed lifetimes), e.g. Redis-style caches where you would otherwise rely on jemalloc's active defragmentation.
+- You cannot change the application (no custom arenas, no defrag API) but can LD_PRELOAD an allocator on Linux or macOS.
+- Memory-constrained deployments where a few percent runtime overhead is acceptable for 15-40% lower heap size on fragmenting workloads.
+- Workloads with regular allocate/free patterns (the paper's Ruby microbenchmark), where randomized placement gives meshing room that non-randomized allocators lack.
+
+**Skip it when:**
+- You want speed: Mesh does not beat glibc or jemalloc on runtime; the paper shows +0.7% SPECint geomean, +3.9% on perlbench and +10.7% on the Ruby microbenchmark, and Redis insertion took 1.76 s vs 1.72 s with jemalloc.
+- Workloads without fragmentation or dominated by objects over 16 KiB: large objects bypass meshing, and SPECint memory only dropped 2.4% geomean.
+- Programs that install their own SIGSEGV handlers or rely on fault handling (JVMs, sanitizers, some runtimes): Mesh interposes sigaction for its write barrier, and open issues report segfaults under OpenJDK 16 (#87) and when preloaded (#72, #99).
+- Applications that depend on transparent huge pages: meshing works at 4 KiB (16 KiB on Apple Silicon) granularity and the paper notes poor interaction with THP; huge-page support is an open issue (#89).
+- Some users report higher memory than jemalloc 5.1, Chrome or Firefox (#116, #45, #67), and there are no tagged releases (#114).
+
+**Integration:** shared lib · none at runtime beyond libc; build uses Bazel wrapped in a Makefile (CMakeLists.txt also present, fetching Heap Layers and googletest) · C++17 (bumped in November 2025) · Linux and macOS on x86-64; aarch64 build flags and Apple Silicon 16 KiB pages handled in recent code; Windows work in progress; 32-bit unsupported
+
+**Vs siblings:** Pick Mesh over speed-oriented siblings such as v8malloc, FastAlloc or Spaces when fragmentation-driven RSS is the problem and you accept equal-or-slightly-slower runtime; IsoAlloc targets hardening, and libpas returns pages sooner but only inside WebKit, while Mesh is the only catalogued allocator that compacts an unmodified C/C++ heap.
+
+**Gotchas:**
+- Reserves a 64 GB virtual arena on Linux (32 GB on macOS) backed by a memfd temporary file, so strict overcommit or address-space limits can break it.
+- Meshing adds page-table entries and brief pauses (paper: max 7.5 ms on Firefox, 22 ms on Redis); tune with MESH_PERIOD_MS, MESH_BACKGROUND_THREAD or mallctl.
+- The CMake RANDOMIZATION option (0, 1 or 2) and DISABLE_MESHING change behavior; with randomization off the Ruby benchmark saved only 3%.
+- Memory must be measured as RSS including page tables (the paper used its mstat cgroup tool); allocator-reported heap sizes do not show meshing savings.
+
+**Status:** Active again (commits through 2026-03-25 fixing fork races, signal handling, aarch64 atomics), Apache-2.0, 1.9k stars, but 29 open issues including crashes and build failures on several distros and no releases.
+
+[repo](https://github.com/plasma-umass/Mesh) · [benchmark](https://github.com/plasma-umass/Mesh/blob/master/mesh-pldi19-powers.pdf)
+
+##### Ralloc  `C++`  `MIT`  `abandoned`  `Tier B`
+
+Lock-free recoverable persistent-memory malloc (LRMalloc-based); about 10x faster than PMDK libpmemobj and Makalu on allocator microbenchmarks.
+
+**Beats:** PMDK libpmemobj, Makalu — The ISMM 2020 paper (seen via search snippet, PDF blocked here) reports about 10x over Makalu and PMDK on Threadtest and Shbench and up to 37x over Makalu on Larson; the repo's own CSVs agree (Threadtest 1 thread 28.7 s vs Makalu 298 s and PMDK 1690 s; Larson 88 threads 4.8e8 ops vs Makalu 1.27e7, derived from page data), built with GCC -O3 per test/Makefile, CPU model not stated in the repo.
+
+**Known shortcoming:** Slower than jemalloc above 48 threads (transient use); abandoned since 2020. Open bugs: 12 (restart with /dev/shm), 15 (single instance only) and 16 (heap over-expansion). The repo's 'lr' baseline is Ralloc built with -DPWB_IS_NOOP, not upstream LRMalloc; the Makefile uses -O3 GCC and the CPU is still unknown.
+
+**Independent measurement:** peer-reviewed paper and repo CSVs
+
+**How:** It reuses LRMalloc's lock-free design (thread-local caches of size-class blocks, 64 KiB superblocks with CAS-updated anchors) and persists only what cannot be rebuilt (superblock descriptors and roots) with clwb/clflush plus fences, keeping free lists and thread caches transient. Instead of logging every allocation like PMDK, recovery after a crash runs a mark-and-sweep garbage collection from the persistent roots, conservative by default or guided by user-supplied filter functions, to reconstruct free lists. Position-independent offset pointers let the heap be remapped at a different address on restart.
+
+**Use it when:**
+- Persistent-memory data structures (lock-free queues, maps, trees) that need a non-blocking, crash-recoverable allocator under many threads
+- Replacing PMDK libpmemobj or Makalu allocation in a research or prototype system where allocation rate is the bottleneck
+- Small-object workloads: blocks up to about 14 KiB come from size classes (MAX_SZ = 8 KiB + 3 x 2 KiB in pm_config.hpp)
+- Systems that can tolerate a GC pass at restart in exchange for no per-allocation logging during normal operation
+- Emulated persistence on DRAM (/dev/shm) for testing persistent algorithms on machines without NVM
+
+**Skip it when:**
+- Ordinary transient heaps: the repo CSVs show it on par with jemalloc at low thread counts and 2-3x slower on Threadtest and Shbench above 48 threads
+- You need failure-atomic transactions over your own data (PMDK's tx API); Ralloc only keeps allocator metadata consistent
+- Production use: abandoned since 2020-10-23, open bug #12 on restart with /dev/shm, open issue #15 (only one Ralloc instance per application) and #16 (redundant concurrent heap expansion)
+- Pure C programs that need precise recovery: the README warns filter functions are not supported in pure C, leaving only conservative GC
+- Very high thread counts with the bundled LRMalloc build: hazard counter overflow and segfaults reported above about 72 threads (README warning)
+
+**Integration:** static lib · libjemalloc (necessary per README, used for transient allocations), pthread, libatomic; PMDK and Makalu only to run the comparison benchmarks · GCC with C++11 (Makefile builds with -O3 -fpermissive) · Linux x86-64 (clwb/clflush inline asm, MAP_SYNC DAX mapping at /mnt/pmem or /dev/shm emulation)
+
+**Vs siblings:** No catalogued sibling targets persistent memory; pick Ralloc only when allocations must survive crashes, and pick mimalloc-class allocators such as those in this category (SpeedMalloc, v8malloc, Mesh) for ordinary transient heaps, where Ralloc trails jemalloc at high thread counts.
+
+**Gotchas:**
+- The heap path is compiled in: without SHM_SIMULATING files go to /mnt/pmem/ (edit src/pm_config.hpp for another mount); RP_init defaults to a 5 GiB heap and regions grow in 1 GiB steps
+- Pointers stored in the persistent heap must be reachable from RP_set_root roots or they are reclaimed by the recovery GC after a crash
+- Conservative recovery treats any word that looks like a heap pointer as live, so it can leak blocks; precise filter functions are C++ only
+- The benchmark 'lr' build is Ralloc with -DPWB_IS_NOOP (no flushes or fences), not upstream LRMalloc; read the repo CSV labels with that in mind
+
+**Status:** Abandoned research code (last commit 2020-10-23, open restart bug #12) but MIT-licensed and small enough to vendor for persistent-memory prototypes.
+
+[repo](https://github.com/urcs-sync/ralloc) · [benchmark](https://github.com/urcs-sync/ralloc/tree/master/data)
+
+#### coroutines-fibers
+
+##### libseff  `C`  `MulanPSL-2.0`  `stale`  `Tier B`
+
+C library of shallow effect handlers on stackful coroutines; OOPSLA 2024 paper reports about 2x faster generators than Tencent libco.
+
+**Beats:** Tencent libco — The claim comes from the peer-reviewed OOPSLA 2024 paper, read only through search snippets: on an Intel Xeon Gold 6154 (Ubuntu 20.04, clang 12) the generator benchmark ran 0.66 us for libseff versus 1.33 us for libco, about 2x, and 1.7x faster than cppcoro. The repo's context-switch harness puts libco on a single shared stack, which adds a stack copy per switch, so the libco gap partly measures that configuration.
+
+**Known shortcoming:** Harness flaw: bench/context_switch_bench/libco.cpp puts libco on one shared stack (co_alloc_sharestack(1,128KB)), so each alternating switch does a free, malloc and memcpy of the stack (save_stack_buffer), which inflates the libco baseline. Makefiles default to BUILD=debug (-O0). x86-64 Linux with clang split-stack and gold only. Paper PDF blocked; numbers are snippet only.
+
+**Independent measurement:** peer-reviewed paper, snippet only
+
+**How:** Handlers are not closures and not a stack that is walked: each coroutine records its handled-effect bitmask and seff_locate_handler finds the target by checking bits up the chain of running coroutines, then a short x86-64 assembly switch (asm/seff.S) jumps to it. Default stacks are segmented (clang -fsplit-stack, with the split-stack limit kept at %fs:0x70) and freed stacklets are kept on a linked list for reuse to soften the hot-split problem; fixed-size and virtual-memory policies are build options.
+
+**Use it when:**
+- Research or systems code in C that wants exceptions, generators and user-level threads from one effect-handler mechanism
+- x86-64 Linux servers with many lightweight tasks where segmented stacks keep per-task memory small
+- Comparing effect-handler runtimes: bench/ builds libseff, libco, cppcoro, libhandler, libmprompt and cpp-effects from git submodules side by side
+- Generator-heavy code where the paper reports libseff ahead of libco and cppcoro (snippet: 1.7x vs cppcoro, 2x vs libco)
+
+**Skip it when:**
+- Anything except x86-64 Linux with clang: decls/seff_types.py accepts only x86-64, and the code relies on -fsplit-stack, the gold linker and %fs TLS offsets
+- Production use that needs maintenance or a community: 16 stars, 35 commits, last commit 2025-07-09
+- Hot paths that call small functions inside a coroutine under segmented stacks: the paper notes an empty call can be about 11x slower than a plain C call (hot split)
+- Calling libc or other code not built with -fsplit-stack from a coroutine without the provided syscall-wrapper trampolines (MAKE_SYSCALL_WRAPPER), which switch to the system stack
+- When a plain fast switch is all you need: minicoro or libaco are simpler and portable
+
+**Integration:** static lib · none at run time; build needs clang-10 (Makefile default), ld.gold and python3 to generate seff_types.h; benchmarks also need the git submodules, libc++, Boost.Context and python2.7 for cppcoro · clang with -fsplit-stack support (Makefile pins clang-10), C gnu11; benchmark harness C++17/C++20 with libc++ · x86-64 Linux only
+
+**Vs siblings:** Pick libseff over libco, libaco or minicoro only when you want effect handlers (typed effects, handler lookup, exceptions and generators from one primitive) rather than a bare switch; for a plain fast switch libaco and minicoro are more portable and simpler, and libdill or libgo are more mature runtimes.
+
+**Gotchas:**
+- Both the top-level Makefile and bench/common.mk default to BUILD := debug (-O0); pass BUILD=release (-O3 -DNDEBUG, plus -flto=thin for benchmarks) before timing anything
+- bench/context_switch_bench/libco.cpp runs both libco coroutines on one shared stack (co_alloc_sharestack(1, 128 KB)), so every alternate resume makes libco free, malloc and memcpy the used stack (save_stack_buffer in libco's co_routine.cpp); this inflates libco's switch cost relative to its private-stack mode, and it grows with the depth and padding arguments
+- The README is two lines; usage has to be learned from tests/ and the paper, whose PDF was not reachable from this session
+- Mulan PSL v2 license (Huawei copyright headers): OSI-approved and permissive, but less familiar to legal teams than MIT/BSD
+
+**Status:** Research code, stale since 2025-07-09 with 16 stars; Mulan PSL v2 and small enough to vendor, but tied to x86-64 Linux, clang split-stack and gold.
+
+[repo](https://github.com/effect-handlers/libseff) · [benchmark](https://github.com/effect-handlers/libseff/tree/master/bench)
+
 #### filesystems-and-io
+
+##### zlob  `Zig (C API)`  `MIT`  `active`  `Tier A`
+
+Zig glob(3)-compatible globbing and parallel file walker with C/Rust APIs; about 2-3x faster than Rust glob crate and walkdir.
+
+**Beats:** Rust glob crate, globset+walkdir, walkdir and ignore crates; README also claims glibc glob() is 1.2-1.7x slower — With the project's criterion harness over a Linux kernel checkout (93,638 files) on an Intel Core i7-14700K, zlob 1.x built ReleaseFast with zig 0.16.0 resolved **/*.c in 24.2 ms vs 49.2 ms for the Rust glob crate (2.0x) and shallow patterns like fs/*.c in 9.84 us vs 31.9 us (3.2x); walker rows (27.4 ms vs walkdir 90.9 ms, 2.4 ms vs ignore 8.0 ms) come from a synthetic-tree harness whose sizes do not match the README's stated 185,737 entries. No glibc glob() or C++ std::filesystem comparison is published.
+
+**Known shortcoming:** The walk table does not match the harness: the README says a real 185k-entry repo with a medium/ filter, but walk_comparison.rs builds synthetic temp trees (medium is about 8,034 entries), so the walker rows are not reproducible from the published harness and the zlob variant per row is unstated. zlob runs NOSORT against the sorted glob crate. Open issue 30 (statx ENOSYS on WSL1 gives size/mtime 0, no fallback); issue 18 reports a count mismatch (1,748 vs 1,767).
+
+**Independent measurement:** code reading by enricher
+
+**How:** The pattern is analysed first so literal prefixes prune traversal (drivers/**/*.c only opens drivers/), and common leaf shapes such as *.c or *.{c,h,zig} compile to masked 1-4 byte suffix compares done for several suffixes at once with Zig @Vector SIMD (src/suffix_match.zig). Directory listing calls getdents64 directly on Linux (with a SWAR dirent scan as of 1.6.5), getattrlistbulk on macOS and ntdll on Windows; metadata comes from statx with a requested-field mask. The walker runs one directory per task on a work-stealing pool, and results are unsorted by default (ZLOB_NOSORT in ZLOB_RECOMMENDED).
+
+**Use it when:**
+- Recursive extension globs (**/*.c, src/**/*.{rs,toml}) over large source trees, such as editor/file-finder indexing (it was built for the fff finder).
+- Replacing walkdir or ignore in Rust tools that walk big trees with .gitignore rules, especially when only size/mtime metadata is needed.
+- Filtering a large in-memory list of paths against glob patterns without touching the file system (zlob_match_paths / indices variants).
+- C code that wants glob(3) semantics plus ** and braces, and can take a Zig-built static or shared library.
+
+**Skip it when:**
+- Build systems that cannot add the Zig toolchain: the C library builds only with zig 0.16.0.
+- Programs relying on sorted glob output by default: ZLOB_RECOMMENDED omits sorting, so you must drop NOSORT and give up some of the measured speed.
+- Code needing GLOB_ALTDIRFUNC-style custom directory callbacks; path-matching mode documents that some flags (NOMAGIC, TILDE with relative paths) may not behave as expected.
+- Linux without statx (WSL1): open issue #30 says walker metadata comes back as size/mtime 0 with no error or fallback.
+- If you need the glibc glob() speedup as evidence: the README claims 1.2-1.7x (up to 10x) over glibc but publishes no table or harness for it.
+
+**Integration:** static lib · none at runtime; Zig 0.16.0 to build (Rust crate wraps the same Zig code) · zig 0.16.0 exactly (build.zig.zon minimum_zig_version 0.16.0; README says only 0.16.0) · Linux, macOS, Windows (platform-specific listing paths); no-libc targets also built (a parallel-worker segfault there was fixed 2026-08-17)
+
+**Vs siblings:** Pick zlob when the job is pattern-driven file discovery (glob or gitignore-aware walk) inside your own program; al-dente (dent) and bfs are find-style command-line tools, and ripgrep is a searcher that only uses a walker internally.
+
+**Gotchas:**
+- Walk table in the README says 'real 185k-entry repository' run with the 'medium/' filter, but rust/benches/walk_comparison.rs builds synthetic temp trees and its 'medium' tree is about 8,034 entries; the 185,737-entry numbers cannot be reproduced from the published harness as written, and the README does not say which zlob variant (serial, parallel, collect) each row is.
+- In the glob benchmark the zlob side runs with NOSORT while the glob crate yields sorted per-directory output and allocates a PathBuf per match, so part of the gap is semantics, not matching speed; the globset+walkdir 1,000x+ ratios come from walking the whole tree for shallow patterns.
+- ** does not follow directory symlinks by default (ZLOB_FOLLOW_SYMLINKS opts in with a (dev, ino) visited set), unlike the glob crate, so match counts on trees with directory symlinks differ; a nushell user reported 1,748 vs 1,767 matches for **/*.rs (issue #18, closed with PR #19).
+- README links LICENSE.md, which does not exist; the license file is LICENSE (MIT).
+
+**Status:** Actively developed (v1.6.5, last commit 2026-08-30, 230 stars), MIT-licensed and usable from C, but tied to zig 0.16.0 for builds.
+
+[repo](https://github.com/dmtrKovalenko/zlob) · [benchmark](https://github.com/dmtrKovalenko/zlob)
+
+##### BaM (Big accelerator Memory)  `C++`  `BSD-2-Clause`  `active`  `Tier B`
+
+CUDA library and kernel driver that let GPU threads issue NVMe reads and writes themselves, bypassing CPU-orchestrated storage paths.
+
+**Beats:** CPU-orchestrated GPU storage access (cudaMemcpy over POSIX I/O / GPUDirect Storage) — The README quotes the ASPLOS'23 abstract: BFS end-to-end parity (1.0x) and CC 1.49x versus CPU-orchestrated GPU storage access with up to 21.7x lower hardware cost, and 5.3x on proprietary data-analytics queries on the same hardware; compiler flags and CPU model for the paper runs are not on the page. The asplosaoe logs only show functional runs on the artifact machine (e.g. nvm-block-bench on one Intel Optane at 4.90M ops/s, 2.34 GB/s with 512 B requests; one Samsung 980 Pro at 0.80M ops/s, 3.05 GB/s with 4 KiB requests) with no baseline in the same log.
+
+**Known shortcoming:** Issue 56: bam_ptr operator[] marks pages dirty on reads, so read-only runs send spurious NVMe writes (about 35% on the Zipfian bench; workaround seq_read()). The asplosaoe logs are functional runs only, with no baseline (Optane 4.90M ops/s at 512 B; 980 Pro 0.80M ops/s at 4 KiB); the data-analytics 5.3x code is proprietary. Open segfault reports (37) and an illegal memory access in vectoradd. Kernel 5.8.x tested; the README says 6.x may break.
+
+**Independent measurement:** peer-reviewed paper
+
+**How:** GPU self-orchestrated storage access: thousands of GPU threads enqueue NVMe commands concurrently into many deep queues (128 queues x 1024 entries in the examples) using ticket-based lock-free submission (atomic fetch_add tickets in nvm_parallel_queue.h). A fine-grained GPU software cache with warp-level request coalescing (__match_any_sync) and round-robin slot allocation cuts I/O amplification, and PCIe peer-to-peer DMA moves data straight from SSD into GPU memory. The gain comes from removing CPU-GPU synchronization and staging for fine-grained, data-dependent access, not from faster per-request I/O.
+
+**Use it when:**
+- Graph analytics (BFS, CC, SSSP, PageRank) or similar data-dependent workloads whose working set exceeds GPU memory and lives on NVMe
+- You control the whole box: x86 server with PCIe P2P, Volta-or-newer datacenter GPU (V100/A100/H100) and dedicated NVMe SSDs that can be detached from the OS
+- Research or prototyping on GPU-initiated I/O where cutting host memory and CPU cost (the paper reports up to 21.7x lower hardware cost) matters as much as speed
+- Fine-grained random reads (512 B to 4 KiB) from many GPU threads, where batching through cudaMemcpy or GPUDirect Storage would amplify I/O
+
+**Skip it when:**
+- Anything that needs a filesystem: BaM reads raw NVMe blocks on an SSD unbound from the kernel driver, so datasets must first be written with its readwrite tool
+- Consumer GPUs or Tesla T4 (256 MB BAR is too small), Arm servers (open enhancement request), AMD GPUs (no ROCm support), or VMs (open question)
+- Production systems: IOMMU and ACS must be disabled, tested on Linux 5.8.x, and the README warns 6.x kernels and post-20.04 Ubuntu P2P changes may break it
+- Streaming workloads with known access patterns, where CPU-pipelined transfers are already efficient; the paper's BFS result is parity (1.0x) in time
+- When you need the data-analytics path behind the 5.3x claim: that implementation is proprietary and not in the repo
+
+**Integration:** header-only (CUDA headers in include/) plus static lib (libnvm) and an out-of-tree kernel module · CUDA 12.3+, NVIDIA driver 440.33+ with compiled kernel symbols, CMake 3.10+ with FindCUDA, git submodules (freestanding, simt atomics), custom libnvm kernel module · C++11 (CMake sets -std=c++11), GCC 5.4+, CUDA 12.3+; default GPU archs sm_70/80/90 · x86-64 Linux (tested kernel 5.8.x) with PCIe P2P and Above 4G Decoding; NVIDIA Volta or newer datacenter GPU
+
+**Vs siblings:** Pick BaM over SPDK or liburing only when the consumer of the data is a GPU kernel with data-dependent access: SPDK and io_uring keep the CPU in the I/O path, while BaM lets GPU threads drive the NVMe queues. For loading model weights into GPUs, fastsafetensors or InstantTensor are far easier to deploy.
+
+**Gotchas:**
+- bam_ptr's operator[] marks cache pages dirty even on reads, so read-only kernels can trigger spurious NVMe writes (issue #56 saw about 35% writes on a Zipfian read benchmark); use seq_read() for reads
+- BaM writes to the raw SSD; the README warns not to keep any needed data on it
+- Open reports of segfaults and errors in nvm-block-bench (#37 and others), an illegal memory access in vectoradd, and inconsistent load/store after large data volumes
+- Graph datasets used in the paper are not public; you must ask the authors
+
+**Status:** Active research artifact (last commit 2025-11-23, 17 open issues), BSD-2-Clause (inherited from Jonas Markussen's ssd-gpu-dma), copyable but tied to a narrow hardware and kernel setup.
+
+[repo](https://github.com/ZaidQureshi/bam) · [benchmark](https://github.com/ZaidQureshi/bam)
 
 ##### liburing  `C`  `MIT OR LGPL-2.1-or-later`  `active`  `Tier B`
 
@@ -13390,6 +13790,796 @@ Userspace wrapper around Linux's io_uring ring-buffer syscall interface; beats l
 **Status:** Actively maintained (latest release 2.15 per liburing.spec, commits as recently as 2026-09-11); MIT/LGPL-2.1+ dual license (one GPL-with-syscall-note kernel header excepted) and small enough to vendor.
 
 [repo](https://github.com/axboe/liburing) · [benchmark](https://www.scylladb.com/2020/05/05/how-io_uring-and-ebpf-will-revolutionize-programming-in-linux/)
+
+##### SplitFS  `C`  `Apache-2.0`  `abandoned`  `Tier B`
+
+LD_PRELOAD user-space persistent-memory file system layered on ext4 DAX; cuts POSIX data-path overhead versus ext4 DAX and NOVA.
+
+**Beats:** ext4 DAX (POSIX file I/O on persistent memory; NOVA also compared in paper) — First-party README run of micro/rw_experiment.c (gcc -O3, 4 KB sequential pwrite64 appends totalling 128 MB): ext4-DAX 0.33M vs SplitFS 1.92M appends/sec (5.8x), with the relink-on-close excluded from timing and no fsync despite the README text; CPU not named for that run. The SOSP'19 paper (peer-reviewed; PDF blocked here, not opened) and the experiments page report 4-12x lower software overhead than NOVA or ext4 DAX and up to 2x on data-intensive applications, on an Intel Xeon E3-1225 v5 with 32 GB DRAM running Ubuntu 16.04 with emulated or Optane PM.
+
+**Known shortcoming:** Harness discrepancy behind the README's 5.8x: the README says fsync at the end, but micro/rw_experiment.c has no fsync and times only the pwrite64 loop. With LEDGER_YCSB=1, DR_SIZE is 256 MB, so all 128 MB goes into one pre-mapped staging file and the relink runs at close(), outside the timer. Open issues: 64 (fio multi-thread assertion), 66 (strict-mode append recovery data loss), 67 (rename crash consistency), 75 (multithreaded TPC-C fails). Tier B rests on the SOSP 2019 paper (PDF blocked).
+
+**Independent measurement:** peer-reviewed paper, snippet only
+
+**How:** Reads and overwrites avoid the syscall and VFS path entirely by copying to and from mmapped DAX file regions. Appends are written with non-temporal stores (MOVNTI=1 in common.mk) into pre-allocated, pre-mapped staging files, and a new relink() syscall later moves those extents into the target file without copying the data. Strict mode adds an operation log in PM for atomicity.
+
+**Use it when:**
+- Research or prototyping on Intel Optane DC PMM (or memmap-emulated PM) where append- and overwrite-heavy apps such as LevelDB/YCSB or SQLite/TPC-C dominate
+- Comparing PM file-system designs: the repo ships scripts for ext4-DAX, NOVA-strict, NOVA-relaxed, PMFS and SplitFS on YCSB, TPC-C, rsync, tar, git, LMDB, Filebench and FIO
+- Studying the relink/staging-file technique for append atomicity without data copies
+- Single-process workloads on a bare-metal Ubuntu 16.04/18.04 box you can boot into the bundled 4.13 kernel
+
+**Skip it when:**
+- Anything on ordinary SSDs or NVMe: it needs DAX-capable persistent memory, and Intel has discontinued Optane
+- Production or modern kernels: it needs the patched Linux 4.13 kernel for relink (issue #46 asks about other kernels), and the last commit was 2021-12-14
+- Multi-threaded writers: open issues #64 (fio multi-thread and random writes trip an assertion in tbl_mmaps.c) and #75 (multithreaded SQLite TPC-C fails), plus #27 on multi-thread correctness
+- Crash-consistency-critical deployments: open issues #66 (strict-mode append recovery loses data when inode numbers change) and #67 (rename crash consistency)
+- Metadata-heavy workloads: the experiments page says SplitFS has a modest overhead on metadata-intensive utilities such as rsync
+
+**Integration:** shared lib · patched Linux 4.13 kernel (relink syscall), ext4 mounted with -o dax on a PM device, Boost, bundled liblfds711, glibc (calls intercepted via Quill) · gcc with -O3 -m64 (common.mk); Ubuntu 16.04/18.04; compiler version not stated · x86-64 Intel with clflush or clflushopt, bare metal (no VM), at least 32 GB DRAM and 4 cores per README
+
+**Vs siblings:** Pick SplitFS when you need unmodified POSIX applications to keep ext4 DAX as the metadata layer and want per-process consistency modes; MadFS (also user-space, up to 3.6x over ext4-DAX on concurrent workloads) is the better choice for multi-threaded writers, WineFS (same lab) for mmap-heavy apps on a kernel PM file system, and Trio/ArckFS reports beating SplitFS on LevelDB.
+
+**Gotchas:**
+- The README says the 5.8x microbenchmark appends 128 MB and does an fsync() at the end, but micro/rw_experiment.c has no fsync: it times only the pwrite64 loop with gettimeofday and calls close() after the timer. With LEDGER_YCSB=1 (as the README build step sets) DR_SIZE is 256 MB, so all 128 MB lands in one pre-mapped staging file and the relink that attaches it to the file happens at close, outside the timed region
+- The workload is pwrite64 at increasing offsets on a file opened without O_TRUNC; the README removes the file between runs, and a stale test.txt turns the appends into overwrites
+- Build-time workload switches (LEDGER_YCSB, LEDGER_TPCC and others in common.mk) change staging-file sizes and counts, so results depend on which flag the library was compiled with
+- License mismatch: the LICENSE file is Apache-2.0 but the README says UT Austin holds copyright and asks commercial users to contact the authors; the kernel/ tree is GPL
+
+**Status:** Abandoned research artifact (last commit 2021-12-14, 171 stars, several open crash and correctness issues); Apache-2.0 LICENSE file but README asks commercial users to contact UT Austin, and it is tied to Linux 4.13 and discontinued Optane hardware.
+
+[repo](https://github.com/utsaslab/SplitFS) · [benchmark](https://github.com/utsaslab/SplitFS)
+
+##### Trio / ArckFS  `C`  `Apache-2.0`  `abandoned`  `Tier B`
+
+SOSP '23 research userspace NVM file system (ArckFS) on Optane PM that outscales NOVA, WineFS, OdinFS and ext4-DAX at high core counts.
+
+**Beats:** NOVA, PMFS, WineFS, Strata, SplitFS, ODINFS (kernel and user-space NVM file systems; ext4 DAX) — The SOSP '23 paper (opened via the rs3lab.github.io repo) ran on an 8-socket, 224-core Intel Xeon Platinum 8276L with 6144GB Optane PM DIMMs, Ubuntu 20.04, Linux 5.13.13: single-thread db_bench LevelDB (100-byte values, 1M objects) shows ArckFS 1.5x-17x over ext4-DAX and 1.01x-2.0x over WineFS (derived from Table 5), FIO 2MB read/write 3.1x-25x and 2.0x-15x over other file systems, and Filebench Webproxy/Varmail 2.2x-8.0x and 2.4x-34.2x with eight NUMA nodes; customized KVFS and FPFS add 1.3x and 1.2x over ArckFS. The SOSP '25 ArckFS+ follow-up reports its bug-fixed version at 97.1%-102.1% of ArckFS throughput on Webproxy and Varmail.
+
+**Known shortcoming:** A SOSP 2025 follow-up paper reports ArckFS bugs (operation failures, crash inconsistency on inode creation); no patches in the repo. Numbers here come from search snippets only (paper host blocked).
+
+**Known shortcoming:** entry.c sets orig_chmod = dlsym(RTLD_NEXT, 'chown'), so chmod outside the mount calls chown (not in the benchmark path); the __xstat hooks miss stat() on glibc 2.33+. The SOSP '25 ArckFS+ bug fixes measure at 97.1-102.1% of ArckFS, so the later-fixed cap is arguably not needed.
+
+**Independent measurement:** snippet only
+
+**Independent measurement:** peer-reviewed paper, read from a repo copy
+
+**How:** Direct NVM access from userspace for both data and metadata removes kernel traps and VFS overhead (the paper measures NOVA and Strata spending at least 42% and 44.5% of create time in VFS and digestion). Opportunistic delegation (from OdinFS) hands large accesses to per-NUMA-node delegation threads that stripe data across Optane nodes, avoiding Optane's collapse under many concurrent or remote accesses. Per-file DRAM indexes use hash tables and radix arrays plus BRAVO reader-writer locks for scalable metadata operations.
+
+**Use it when:**
+- Research or reproduction work on Intel Optane PM in devdax mode, especially many-socket machines where NVM bandwidth collapses under concurrent kernel-FS access.
+- High thread counts (above about 16-56 threads in the authors' FIO runs) doing 4KB or larger file I/O, or 2MB sequential reads and writes where delegation parallelizes copies.
+- Metadata-heavy small-file workloads (Webproxy, Varmail-like mail spools, many open/create/delete) where the paper reports 2.2x-34.2x over kernel PM file systems.
+- Studying how to give untrusted processes direct NVM access with integrity verification, or building a customized libfs (KVFS/FPFS pattern) without kernel changes.
+
+**Skip it when:**
+- Any production system: Optane PM is discontinued, it needs a custom 5.13.13 kernel, and the SOSP '25 follow-up found implementation bugs causing occasional operation failures and possible crash inconsistencies during inode creation; the fixes live in a separate repo.
+- Low thread counts: main-claim.md says ArckFS performs similarly to or worse than others below 56 threads (4KB, one NUMA node) or 16 threads, and with one NUMA node Fileserver/Webserver results are similar across file systems.
+- Small single-threaded I/O: the paper reports ArckFS 21% slower than ArckFS without delegation on 4KB, and ArckFS-nd 21%-34% faster than ArckFS on most LevelDB workloads.
+- Hosts that constantly spawn threads or processes (k8s services): thread numbering from gettid() differences can make ArckFS panic (README known issue 4).
+- Apps whose libraries do file syscalls before the libfs initializes, or that rely on mmap, stdio or calls the libfs does not wrap.
+
+**Integration:** shared lib (LD_PRELOAD-style libsufs.so) plus out-of-tree kernel module · Intel Optane PM in devdax mode (ndctl), the bundled Linux 5.13.13 kernel, libnuma, tcmalloc_minimal, libdl; eval needs Filebench, FxMark, fio and LevelDB · gcc with -Ofast (libfs) and -O3 -mtune=native gnu99 (kernel module); scripts target Ubuntu 20.04.4 · x86-64 Linux 5.13.13 only, with Optane PM; VM and container setups only for functional testing
+
+**Vs siblings:** Pick Trio/ArckFS over NOVA, WineFS or SplitFS when the target is many-socket Optane hardware at high concurrency, or when untrusted processes need direct userspace NVM metadata access with integrity checks; MadFS is the simpler userspace PM option for ext4-DAX users, and on current hardware without Optane none of these apply, so look at SPDK, liburing or DAXFS instead.
+
+**Gotchas:**
+- entry.c resolves the passthrough chmod with dlsym(RTLD_NEXT, "chown"), so chmod on paths outside the ArckFS mount calls chown with the mode as uid and an undefined gid.
+- stat interception hooks __xstat/__fxstat/__lxstat, which glibc 2.33+ no longer routes stat() through; on newer distributions stat calls may bypass the libfs.
+- The setup grants everyone access with 'chmod 666 /dev/supremefs' as a documented hack, and kernel modules must be reinserted after every reboot.
+- Abstract's '3.1x to 17x on LevelDB' is versus ext4-DAX only (Table 5: Fill 100K 3.81 vs 1.23 ops/ms, Fill sync 291 vs 17, derived from page data); versus WineFS, the second-best, ArckFS's Table 5 gains are 1.01x to 2.0x (Read random 144 vs 142, Delete random 494 vs 245, derived from page data), not the 'up to 3.1x' the text states.
+
+**Status:** Abandoned artifact repo (last commit 2023-08-24, Apache-2.0) tied to discontinued Optane hardware and a 5.13.13 kernel; copyable code with full eval scripts for all baselines, but the bug-fixed ArckFS+ is in psb0623/trio-sosp23-ae and nothing here is production-ready.
+
+[repo](https://github.com/rs3lab/Trio) · [benchmark](https://github.com/rs3lab/rs3lab.github.io/blob/HEAD/assets/papers/2023/zhou:trio.pdf)
+
+##### XRP (BPF-KV, WiredTiger patches)  `C`  `Apache-2.0`  `abandoned`  `Tier B`
+
+OSDI'22 research kernel that lets an eBPF function in the NVMe driver chain dependent reads, beating read() and io_uring for on-disk B-tree lookups.
+
+**Beats:** read() system calls and io_uring (also SPDK) — On a 6-core i5-8500 with an Intel Optane P5800X, Linux 5.12, O_DIRECT, BPF-KV random 512 B lookups with 3 on-disk index levels got 47%-94% more throughput and 20%-34% lower p99 latency than read() across thread counts; at index depth 6 XRP's average latency was 45% above SPDK while read() was 142% above. WiredTiger 4.4.0 on YCSB (1 billion 16 B pairs, 46 GB, pread() baseline) gained up to about 1.25x throughput and up to 40% lower p99 latency, with little effect on YCSB D and E.
+
+**Known shortcoming:** Open issue 8: on flash NVMe (Xeon 4114) XRP gives 2,039 op/s against 2,497 without it, about 22% slower; issue 9: the BPF verifier rejects the WiredTiger program ('8193 jumps is too complex'); build issues 4 and 5 are unanswered. Needs a patched kernel 5.12.
+
+**Independent measurement:** peer-reviewed paper, read from a repo copy
+
+**How:** It removes the per-hop cost of the file system, block layer and syscall boundary for pointer-chasing reads: after the first I/O, follow-up reads are resubmitted from the NVMe interrupt handler. Logical-to-physical translation uses a 'metadata digest', an RCU-protected cached copy of ext4's extent status tree pushed into the driver (lookup about 96 ns per the paper). The gain grows with index depth because each extra hop adds only about 3.5-3.9 us, close to raw device latency on Optane.
+
+**Use it when:**
+- Research or prototyping of storage offload on Linux with a microsecond-latency NVMe SSD (the paper used an Intel Optane P5800X).
+- Point lookups in a large on-disk B+-tree or LSM index with several uncached levels, where each lookup is a chain of dependent 512 B reads.
+- Workloads that want kernel-bypass-like lookup latency without SPDK's busy-polling cores; the paper reports XRP matching or beating SPDK throughput at 9+ threads on 6 cores.
+- Read-mostly stores whose index file extents stay stable for seconds or longer (immutable SSTables, B-tree files with rare extent changes).
+
+**Skip it when:**
+- Production systems: it requires booting a custom 5.12.0-xrp+ kernel, the repo has 13 commits and has been idle since December 2022.
+- Ordinary flash NVMe drives with hundreds of microseconds latency: open issue #8 reports BPF-KV with XRP at 2,039 op/s vs 2,497 op/s without it (about 22% slower) on a Xeon Silver 4114 with an Intel NVMe SSD.
+- Data larger than 512 B per hop, structures needing fanout, or traversals that span multiple files; the prototype supports none of these.
+- Data buffered in the kernel page cache or mutated concurrently: XRP does not interact with the page cache and offers no locking during traversal; the application must keep its own cache and fall back to normal syscalls when a traversal fails.
+- Scans: WiredTiger YCSB E and D show no significant gain, since only the first key of a scan benefits.
+
+**Integration:** source-drop · Patched Linux 5.12 kernel (submodule), libbpf 0.1.0, clang/llvm, liburing, SPDK (for baseline variants), cmake; Ubuntu 20.04 assumed by the scripts · Not documented beyond the build scripts (gcc-multilib, clang, llvm from Ubuntu 20.04 apt); compiler flags not stated · x86-64 Linux 5.12.0-xrp+ only, ext4 only, NVMe devices (scripts hard-code /dev/nvme0n1 by default)
+
+**Vs siblings:** Pick XRP over SPDK when you want near-bypass latency for dependent B-tree lookups but cannot dedicate busy-polling cores or give up the kernel file system; pick liburing or SPDK for anything you need to ship, since XRP is a non-upstream research kernel. BaM addresses GPU-initiated storage access, a different problem.
+
+**Gotchas:**
+- Request size is fixed at 512 B and fanout is not implemented in the released prototype, although struct bpf_xrp reserves up to 16 next addresses.
+- The BPF verifier can reject real traversal code: open issue #9 reports test_wiredtiger failing to load with 'The sequence of 8193 jumps is too complex'.
+- Build is fragile: open issues #4 and #5 report Makefile and kernel build errors, and old .deb URLs had to be fixed (issue #2).
+- Latency plots come from a closed-loop generator, so XRP runs at higher throughput than read() and io_uring in those figures; chains of interrupts can also starve CPU-bound processes sharing a core under CFS (paper section 4.3).
+
+**Status:** Abandoned research artifact (last commit 2022-12-12, open build and regression issues unanswered); the Apache-2.0 user-space parts are copyable, but the kernel patch is GPL-2.0 kernel code tied to Linux 5.12.
+
+[repo](https://github.com/xrp-project/XRP) · [benchmark](https://github.com/xrp-project/XRP/blob/HEAD/XRP%20Draft.pdf)
+
+#### logging-tracing
+
+##### binlog  `C++`  `Apache-2.0`  `abandoned`  `Tier A`
+
+Asynchronous C++ logger writing structured binary logs; about 15x lower p50 call-site latency than async spdlog in Quill's harness.
+
+**Beats:** spdlog — In Quill v13's harness (odygrd/logger_benchmarks, GCC 14.2, Release -march=x86-64-v3, Intel Core i5-12600 @ 4.8 GHz on a tuned RHEL 9.4 box), logging two ints and a double took 18/119 ns at p50/p99.9 on 1 thread vs 271/360 ns for async spdlog with a file sink, and 29/445 vs 557/1106 ns on 4 threads; a vector of 16 long strings took 60 vs 6906 ns p50. The 61.79M msg/s backend throughput vs spdlog's 2.57M compares binary output with text output, which Quill itself flags as not comparable.
+
+**Known shortcoming:** p99.9 is 119/445 ns, worse than Quill, XTR and fmtlog (9-18 ns); a full queue allocates a new channel under the session mutex on the hot path (unbounded growth); the default clock is system_clock. The 61.79M vs 2.57M msg/s throughput compares binary output with text and is not like for like. Repo archived 2026-07-01; open issues 189 (compile error on Ubuntu 24.04) and 159 (ASan leak on std::exit).
+
+**Independent measurement:** public benchmark code
+
+**How:** The hot path does no text formatting: it computes the serialized size, reserves contiguous space in a single-producer single-consumer byte queue (default 1 MiB per thread-local writer), memcpy-serializes the arguments with the bundled Mserialize library, and commits with one release store of the write index. Metadata goes through a mutex only the first time a call site fires, and the number of placeholders is checked at compile time. Formatting, timestamp rendering and sorting move offline to bread, which is also why the binary-log throughput (61.79M msg/s in Quill's table) is far above text loggers.
+
+**Use it when:**
+- Latency-sensitive C++ services (trading, telemetry) where call-site cost matters and an offline decode step is acceptable
+- High-volume logging where smaller raw files help: Quill measured 177 MB binary vs 448 MB text for the same messages (35 MB vs 47 MB zipped)
+- Logging containers, tuples, optionals, enums and adapted structs without writing formatters; values (e.g. exact floats) are kept losslessly
+- Applications with a main loop or a dedicated thread that can call consume() periodically, since the library runs no hidden backend thread
+- Post-mortem debugging where recovering the last queued events from a coredump (brecovery) is valuable
+
+**Skip it when:**
+- When logs must be human-readable on disk or piped straight to text tools; every reader needs bread or the binlog reader library
+- When tail latency is the target: Quill's harness shows p99.9 of 119 ns (1 thread) and 445 ns (4 threads), against 9-18 ns for Quill, XTR and fmtlog
+- Long-lived dependency: the repository was archived read-only on 2026-07-01, with open issues such as a compile error on Ubuntu 24.04 (#189) and an ASAN-reported leak on std::exit (#159)
+- Code that logs from global destructors through the default macros (documented undefined behavior from static init order)
+- Bursty producers with a slow consumer: a full queue makes the writer allocate a new, larger channel under the session mutex on the hot path, so memory grows instead of dropping or blocking
+
+**Integration:** header-only (producer side); static lib and bread executable for reading · none for logging (links -lrt on Linux); Boost optional for tests, Google Benchmark optional for perf tests · C++14, CMake 3.1+; built and tested with recent GCC, Clang and MSVC · Linux, macOS, Windows (per README); log files use host byte order
+
+**Vs siblings:** Pick binlog over Quill, XTR or fmtlog when you want a binary log with offline decoding, coredump recovery and lossless typed values, and can accept about 18 ns p50 instead of about 6 ns and a worse p99.9; pick it over BqLog when call-site latency matters (18 vs 125 ns p50 in the same harness). For an actively maintained text logger, Quill is the safer choice.
+
+**Gotchas:**
+- Getters of adapted structs are called twice per event (once for sizing, once for serializing) and must return the same value, or behavior is undefined
+- char* arguments are logged as a single character by default, not as strings; use const char* or string_view, or opt in to treating char* as a string
+- Default timestamps use std::chrono::system_clock (about 34 ns per event in its own benchmark vs 9 ns with TSC); a TSC clock needs the _W/_C macro and session setup
+- On log rotation you must call Session::reconsumeMetadata, or the new file cannot be decoded on its own
+
+**Status:** Abandoned: archived read-only on 2026-07-01 after dependabot-only commits (last 2026-03-03), but Apache-2.0 and header-only on the producer side, so vendoring is easy; fixes for open issues will not come upstream.
+
+[repo](https://github.com/morganstanley/binlog) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+##### BqLog  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Tencent's C++ async logger with a real-time compressed binary format; much higher end-to-end throughput than spdlog async and glog.
+
+**Beats:** spdlog — In the author's Windows 11 / MSVC 14.51 Release x64 run on a Ryzen 9 9950X, 1-10 threads each logging 2M four-argument entries and flushing to disk took BqLog's compressed appender 95-507 ms versus spdlog 1.17 async 560-32,939 ms, quill 11.1 639-7,812 ms, fmtlog 672-7,934 ms and glog 0.7.1 4,485-127,550 ms; the runnable CMake project is at the benchmark_2.5.0 tag. Quill's independent Linux harness confirms BqLog beats spdlog at call-site latency (125 vs 271 ns p50, 1 thread) but ranks it below several siblings.
+
+**Known shortcoming:** Quill's independent Linux harness puts BqLog text mode at 5.49M msg/s, below Quill (6.44M) and XTR (7.73M), which contradicts BENCHMARK.md's claim that text mode beats every text logger; binary mode does 12.86M against Microsoft BinLog's 61.79M. The fast numbers come from the compressed appender only (text appender 258 vs 95 ms at 1 thread). Issue 67 (closed): SIGBUS on a full disk in v2.3.0 and earlier; issue 71 (closed, no maintainer reply): loses to fmtlog on Ubuntu.
+
+**Independent measurement:** public benchmark code and independent harness
+
+**How:** The compressed appender writes a template-based binary format (format string stored once, arguments as VLQ-encoded values, mixed UTF encoding), about 12 bytes per entry versus 65-82 bytes for text loggers, so far less formatting work and I/O. Producers copy arguments into a lock-free adaptive ring buffer (fetch_add with rollback, MISO/SISO modes) backed by memory-mapped files, and a worker thread does fused copy+hash, template caching and batched writes. The author's three-part 'Why is BqLog so fast' series documents the design.
+
+**Use it when:**
+- High-volume logging from many threads where total time to get everything on disk matters (10 threads x 2M entries: 507 ms vs spdlog async 32,939 ms in the author's run).
+- Shipped client products (games, mobile) that want verbose logs with small files: compressed output is about 6.3x smaller than text, with optional RSA2048+AES256 encryption at near-zero measured cost.
+- Mixed-language processes (C++ plus C#/Java/Python/TypeScript/Go) that want one log engine shared by every wrapper.
+- Apps that must survive crashes without losing buffered async logs: mmap-backed buffers are checksum-verified and replayed on restart.
+- Targets with tight toolchain constraints: depends only on the C library and platform APIs, builds with Android ANDROID_STL=none.
+
+**Skip it when:**
+- You need minimal call-site latency: Quill's third-party harness (i5-12600, GCC 14.2, Linux) puts BqLog at 125/190 ns p50/p99.9 for one thread, slower than Quill, XTR, fmtlog, MS BinLog and PlatformLab NanoLog (only spdlog among the common ones is slower).
+- You want human-readable files at maximum speed: in Quill's throughput table BqLog text mode does 5.49M msg/s vs Quill 6.44M and XTR 7.73M, and its binary mode (12.86M) trails MS BinLog (61.79M); the author's 'text beats everyone' result is from its own Windows/MSVC run.
+- Your logs must be grep-able or shipped to text pipelines without a decode step; the binary format may be incompatible across BqLog versions, so archives need the matching decoder.
+- Pre-2.3.1 deployments where disks can fill: issue #67 reports SIGBUS crashes and hangs on a full disk in v2.3.0 and earlier (sparse mmap files), since closed.
+- You need custom output patterns or prefixes; these were open feature requests (#47, #76) and are not documented as supported.
+
+**Integration:** static lib | shared lib | source-drop (prebuilt packages from Releases; repo no longer ships binaries) · none beyond the C standard library and platform APIs (optional JNI/NAPI for wrappers) · C++11; CMake build; benchmark built with MSVC 14.51 · Windows x64, macOS, Linux (incl. embedded), iOS, Android, HarmonyOS/OpenHarmony, FreeBSD/NetBSD/OpenBSD/Solaris; x86, x86_64, ARM32, ARM64. No prebuilt binaries for PS5/Switch.
+
+**Vs siblings:** Pick BqLog over Quill, fmtlog or XTR when end-to-end throughput, small on-disk size, encryption, crash recovery or multi-language support matter more than per-call latency; pick MS BinLog if you want a binary format with higher measured throughput in Quill's harness, and Quill or XTR for the lowest call-site latency with readable text.
+
+**Gotchas:**
+- The headline numbers are for CompressedFileAppender; the text appender is 2.7x slower than compressed at 1 thread in the author's own table (258 vs 95 ms).
+- Full-buffer behavior is configurable (discard new entries, block producers, or auto-expand); pick explicitly, since discarding drops logs silently under load.
+- buffer_size and thread_mode cannot be changed after a log is created; create_log with an existing name returns the existing object and only updates mutable fields.
+- Issue #71 reports BqLog beats fmtlog on macOS but loses on Ubuntu with no maintainer reply; the published table is Windows-only, so benchmark on your OS.
+
+**Status:** Actively developed (v2.5.0, commits in October 2026), Apache-2.0, used in Tencent's Honor of Kings; copyable via prebuilt static/dynamic libraries or source, with recent crash and disk-full bugs (#62, #67, #46) closed.
+
+[repo](https://github.com/Tencent/BqLog) · [benchmark](https://github.com/Tencent/BqLog/blob/main/docs/BENCHMARK.md)
+
+##### fmtlog  `C++`  `MIT`  `stale`  `Tier A`
+
+Asynchronous fmt-syntax C++ logger with about 6 ns caller-side latency per call, versus 150-400 ns for synchronous spdlog.
+
+**Beats:** spdlog — In quill's logger_benchmarks harness (GCC 14.2, Release -march=x86-64-v3, Intel Core i5-12600 with isolated cores), the caller-thread p50 for an int,int,double message was 6 ns for fmtlog vs 271 ns for spdlog with 1 thread, and 8 vs 557 ns with 4 threads; a 16-string vector cost 774 vs 6906 ns. fmtlog's own bench.cc on a Xeon Gold 6144 (flags not stated) gives about 6.4 ns vs 156-391 ns against synchronous spdlog basic_logger_st, but backend file throughput is about the same as spdlog's (2.69 vs 2.57M msg/s).
+
+**Known shortcoming:** Backend throughput is only at parity with spdlog (2.69 vs 2.57M msg/s); the win is caller latency. Open issues 109 and 117 (lost logs), 98 (fmt 10.1 compile failure), 115 (segfault) and 112 (destructor coredump), with no maintainer replies. The SPSC queue uses volatile with no fences, so it is safe on x86 TSO only and aarch64 ordering is unsafe. README says the default level is INF but the header defines DBG.
+
+**Independent measurement:** public benchmark code
+
+**How:** It borrows NanoLog's two ideas. First, each logging thread gets its own variable-size single-producer/single-consumer ring (SPSCVarQueueOPT, 1 MB by default), so producers never contend. Second, a log site's static data (format string, level, location) is registered once in a table, and each call pushes only the table index, an rdtsc timestamp and the raw argument bytes; a per-site decode function formats the message later in poll(). Timestamps are raw TSC values that a calibrated TSCNS clock converts to nanoseconds on the backend.
+
+**Use it when:**
+- Latency-critical x86-64 threads (trading, market data, game servers) where a single-digit-ns log call matters more than when the message reaches disk
+- Code already using fmt-style format strings that wants human-readable text logs, not NanoLog's binary format that needs a decompressor
+- Apps that want to control the backend thread themselves: call poll() from an existing event loop or housekeeping thread
+- Many logging threads: per-thread SPSC queues avoid the shared-queue contention that slows spdlog async as thread count grows (quill harness: 8 ns at 4 threads vs spdlog 557 ns p50)
+
+**Skip it when:**
+- Backend throughput is what limits you: quill's table has fmtlog writing 2.69M msg/s, about the same as spdlog's 2.57M and well behind XTR (7.73M) and Quill (6.44M)
+- Every message must survive: by default a full queue silently drops new messages (FMTLOG_BLOCK=1 blocks instead), and open issues #109 and #117 report lost logs in multithreaded tests
+- You need recent fmt or MSVC/LLVM toolchains: issue #98 (fmt 10.1 compile error), #71 (VS2022) and #91 (LLVM COMDAT) are open; the code reaches into fmt::detail internals
+- Non-x86 targets: the SPSC queue publishes through volatile stores with no release/acquire fences, which is fine under x86 TSO but not guaranteed on weakly ordered CPUs such as aarch64, and the TSC clock falls back to a system clock call there
+- You need active maintenance: last commit 2025-02-13, 31 open issues including segfault (#115) and destructor core dump (#112) reports with no maintainer reply
+
+**Integration:** header-only (define FMTLOG_HEADER_ONLY or include fmtlog-inl.h once) or static/shared lib via CMake · fmtlib (bundled as a git submodule at a pinned commit), pthread · C++17; README says GCC 10.2 and MSVC 2019 tested · Linux and Windows documented; x86/x86-64 for the rdtsc fast path; other architectures compile against a system clock fallback, but the queue's memory ordering there is not documented
+
+**Vs siblings:** Pick fmtlog over Quill or XTR when you want a small two-header fmt-based logger whose backend runs only when you call poll(); Quill matches its caller latency (6 ns p50), has higher backend throughput and is maintained, so choose Quill for production. Pick it over PlatformLab NanoLog when you want fmt syntax and readable text output and do not need a binary log plus decompressor.
+
+**Gotchas:**
+- Arguments passed by pointer (including std::string*, shared_ptr, unique_ptr) are read when poll() runs, not when the log call runs: a value changed in between gets logged with its new value, and a freed object leaves a dangling pointer
+- The first log call on a thread allocates its 1 MB queue; call fmtlog::preallocate() at thread start or that first call pays the allocation cost
+- Each log site costs about 50 bytes of code for its decode function plus about 50 bytes of runtime table memory; use FMTLOG_ONCE (logio etc.) for cold logs
+- FMTLOG_ACTIVE_LEVEL compile-time filtering applies only to the short macros (logi, logd...), not to FMTLOG(); the README says the default is INF but fmtlog.h defines FMTLOG_LEVEL_DBG
+
+**Status:** Stale since 2025-02-13, with open crash, lost-message and fmt-compatibility issues and no maintainer replies; MIT-licensed and small (two headers) enough to vendor with its pinned fmt submodule.
+
+[repo](https://github.com/MengRao/fmtlog) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+##### haclog  `C`  `MIT`  `active`  `Tier A`
+
+Plain C async printf-style logger; producer-side calls about 3.5x faster than spdlog when buffers are not full.
+
+**Beats:** spdlog — In the author's public cc_log_benchmark (Google Benchmark, 2000 iterations x 5 repetitions, struct of four integers plus a 128-char string with full metadata pattern, file output, 4 MiB per-thread buffer, GCC 14.2.1 Release, i7-10710U fixed at 3.2 GHz), haclog v0.4.0 measured 148 ns median per call at 1 thread vs spdlog v1.12.0 async 518 ns and sync 587 ns. That run never fills the buffer; in the same report's sustained min-time scenario haclog is 2-3x slower than spdlog at 1, 2 and 8 threads and only ahead at 4 threads (1495 vs 1752 ns async).
+
+**Known shortcoming:** The scenario 2 claim holds (148 vs 518 ns, buffer never fills), but in scenario 1 of the same report (buffer full) haclog is slower than spdlog: 1 thread 1590 ns against 606 (async) and 556 (sync); 8 threads 2684 against 1872 and 1235; ahead only at 4 threads (1495 vs 1752). The benchmark ran v0.4.0 (repo now 0.4.5); NanoLog (60 ns) and Quill (52 ns) beat it. Gotchas not behind the numbers: relaxed reader-position store and a non-atomic double-checked-lock pointer (risky on ARM; the x86 run is unaffected), more than 128 %s arguments shift va_args, an oversized message is dropped via haclog_debug_break.
+
+**Independent measurement:** public benchmark code
+
+**How:** Each producer thread owns a single-producer/single-consumer byte ring buffer (default 1 MiB, minimum 1 MiB) and writes only a header, the raw binary arguments and copies of %s strings into it; formatting is deferred to the backend thread. The format string is parsed once per call site into a cached 'printf primitive' (static pointer guarded by a spinlock on first use), so the hot path is a timestamp, a switch over the precomputed argument types and memcpy. The backend thread polls every thread's buffer, formats with its own vsprintf reimplementation, and sleeps 100 ns when idle.
+
+**Use it when:**
+- C or mixed C/C++ code bases that want an async logger without a C++ dependency
+- Bursty logging where the per-thread buffer rarely fills, so the producer only pays the enqueue cost (about 148 ns per call in the author's run, vs 518 ns for spdlog async)
+- Latency-sensitive threads that must not lose log lines: a full buffer blocks the producer instead of dropping
+- Applications needing printf-style formatting with plain-text output readable by tail (unlike PlatformLab NanoLog's binary log)
+
+**Skip it when:**
+- Sustained high-rate logging: in the same benchmark's min-time scenario (buffers full) haclog takes 1590 ns per call at 1 thread vs spdlog async 606 ns and spdlog sync 556 ns, and 2684 ns vs 1872 and 1235 ns at 8 threads (derived from page data), so it is slower than spdlog once the buffer fills
+- When you want the fastest async logger available: in the same shootout NanoLog (60 ns at 1 thread in scenario 2, 161 ns in scenario 1) and Quill bounded dropping (52 ns in scenario 1) beat it
+- Code that builds format strings at run time: the format must be a string literal, enforced only in C++ builds
+- Many short-lived threads: each thread allocates its own ring buffer (1 MiB minimum, 4 MiB in the benchmark) and cleanup polls in 1 ms sleeps until the backend drains it
+- Programs that need a clean shutdown of the logger: the backend thread is detached and loops forever with no stop API
+
+**Integration:** shared lib (default BUILD_SHARED_LIBS=ON) or static lib; CMake and Meson builds · none (Google Benchmark and a test library are downloaded only when benchmarks or tests are enabled) · C11 (CMake sets C and C++ standard 11); CMake 3.18.6+ or Meson · Linux, Windows (MSVC), macOS, Android per CI badges; x86-64 benchmarked only
+
+**Vs siblings:** Pick haclog over fmtlog, Quill or BinLog when the project must stay plain C or wants printf-style calls without a C++ toolchain dependency; if C++ is fine, the same author's benchmark shows NanoLog, Quill and fmtlog as fast or faster, especially under sustained load.
+
+**Gotchas:**
+- A message larger than half the per-thread buffer minus 128 bytes fails haclog_bytes_buffer_w_fc and the serializer calls haclog_debug_break() and returns, so the line is dropped (and a debug build traps).
+- Memory ordering is thin: the reader publishes its position with a relaxed store and producers read it relaxed, and the per-call-site primitive pointer uses double-checked locking on a plain (non-atomic) static; fine on x86's strong ordering, but formally a data race and worth auditing before use on ARM.
+- With more than 128 %s arguments in one message the serializer substitutes '(haclog str cache full)' without consuming the va_arg, which shifts the remaining arguments.
+- The README's hello sample calls haclog_thread_context_init() a second time where it means haclog_thread_context_cleanup(); the benchmark used tag v0.4.0 while the repo is at 0.4.5.
+
+**Status:** Active (last commit 2026-09-08, version 0.4.5, 82 stars, no open issues), MIT-licensed, small (about 30 source files) and easy to vendor, but a one-author project with first-party benchmarks only.
+
+[repo](https://github.com/MuggleWei/haclog) · [benchmark](https://github.com/MuggleWei/cc_log_benchmark)
+
+##### NanoLog (Iyengar111)  `C++`  `MIT (full text in NanoLog.hpp and NanoLog.cpp, Copyright 2016 Karthik Iyengar)`  `abandoned`  `Tier A`
+
+Small asynchronous C++11 stream-style logger; lower median caller latency than spdlog async, far behind Quill/fmtlog/PlatformLab NanoLog.
+
+**Beats:** spdlog — In the independent Quill benchmark (odygrd/logger_benchmarks, GCC 14.2, -march=x86-64-v3, i5-12600, logging two ints and a double) Iyengar NanoLog's caller latency is 106/155/491 ns at the 50th/90th/99.9th percentile with 1 thread versus spdlog 271/296/360 ns, and 73/267/1419 ns versus 557/614/1106 ns with 4 threads, so it wins the median but loses the 1-thread and 4-thread 99.9th percentile. Its own README (g++ 4.8.4, i7-2630QM, flags not given, microsecond timer) shows a 0.35 us average versus spdlog async 2.59 us at 1 thread.
+
+**Known shortcoming:** Own README timer has only microsecond resolution (p50 quantized to 0 us); std::endl flushes every line (issue 31); guaranteed mode mallocs 8 MB on the producer with unbounded growth; issue 39 reports shutdown line loss and NonGuaranteed producer blocking. The Quill-harness numbers behind tier A are unaffected.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The calling thread only encodes raw binary arguments (timestamp, thread id, file/function pointers, then typed values) into a 256-byte NanoLogLine with an inline stack buffer, so string literals are stored as pointers (zero copy) and integer/double-to-text conversion is deferred to the consumer thread. The guaranteed mode pushes into a chain of 8 MB buffers of 32768 slots claimed with one relaxed fetch_add and a per-slot release flag; the non-guaranteed mode is a fixed MPSC ring of 256-byte cache-aligned slots, each guarded by a per-slot atomic_flag spinlock. Formatting with std::ostream, timestamp printing and file I/O all happen on the single background thread.
+
+**Use it when:**
+- Legacy or C++11-only codebases that want an async file logger in two source files with no dependencies
+- Moderate-rate logging of short lines (under about 256 bytes, so no heap allocation per line) where median caller latency matters more than tail latency
+- As a readable reference design for deferred-formatting loggers (binary encode on the hot path, stringify on a worker)
+- When you can tolerate dropped lines and want a producer that never blocks on a full queue (NonGuaranteedLogger)
+
+**Skip it when:**
+- Latency-critical work today: in the Quill harness it trails Quill, fmtlog, XTR, MS BinLog and PlatformLab NanoLog by roughly 10x at the median, and its 4-thread 99.9th percentile (1419 ns) is worse than spdlog's (1106 ns)
+- When you need console sinks, custom formatting, local-time timestamps, appending to an existing file, or structured output: none are provided
+- Bursty high-volume logging in guaranteed mode: the producer that fills a buffer allocates the next 8 MB buffer in its own call, other producers spin, and memory grows without bound if the writer falls behind
+- Production systems that need a maintained project: abandoned since 2017-03-08 with 18 open issues, including #39 (2025) reporting producer blocking in NonGuaranteedLogger and lost final lines at shutdown in GuaranteedLogger
+
+**Integration:** source-drop · none (standard library only; std::thread needs -pthread) · C++11 (README benchmark built with g++ 4.8.4) · any platform with a C++11 standard library; README numbers from Linux Mint 17 on x86-64
+
+**Vs siblings:** Pick it only when you want the smallest possible C++11 async logger to vendor or study; for real speed choose PlatformLab NanoLog, Quill or fmtlog, which beat it by about 10x at the median in the same Quill harness and are maintained.
+
+**Gotchas:**
+- License: GitHub shows none and no LICENSE file exists (issue #32), but both NanoLog.hpp and NanoLog.cpp open with the full MIT License text, Copyright (c) 2016 Karthik Iyengar, so the code is copyable under MIT with that notice kept.
+- Every log line is terminated with std::endl, which flushes the ofstream per line on the writer thread (issue #31); this caps writer throughput and was not part of the caller-latency benchmark.
+- The writer thread sleeps 50 us whenever the queue is empty, timestamps come from std::chrono::high_resolution_clock at microsecond resolution and are printed in UTC via std::gmtime (issues #11, #24, #39).
+- The README benchmark timed each call with a microsecond clock, so the 50th percentile of 0 us and the 0.35 us average are quantized; the Quill harness, which reports nanoseconds, is the more reliable comparison.
+
+**Status:** Abandoned since 2017-03-08 (753 stars, 18 open issues); the MIT notice in both source files makes it copyable despite GitHub showing no license, and it is small enough to vendor and patch.
+
+[repo](https://github.com/Iyengar111/NanoLog) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+##### NanoLog (PlatformLab)  `C++`  `ISC`  `stale`  `Tier A`
+
+Binary, printf-style C++ logger from Stanford PlatformLab with about 7-14 ns call-site latency, 20-40x below spdlog.
+
+**Beats:** spdlog — Quill v13.0.0 latency harness (odygrd/logger_benchmarks, GCC 14.2 Release -march=x86-64-v3, i5-12600 on a tuned RHEL 9.4 box) logs two ints and a double. PlatformLab NanoLog measured 8/9/11 ns (p50/p90/p99.9) on 1 thread vs spdlog 271/296/360, and 14/14/21 on 4 threads vs 557/614/1106. NanoLog's own README reports 7/37 ns vs spdlog v1.1.0 214/2546 for a static string, with no compiler or CPU listed.
+
+**Known shortcoming:** Not in Quill's throughput table. Format errors can silently corrupt the log (needs -Werror=format); open bugs 64 (corrupted BufferExtend) and 28 (negative ns timestamps). Linux only, rdtsc, no ARM64 (issue 69). Last commit 2020-12-22.
+
+**Independent measurement:** public benchmark code
+
+**How:** Static log information (format string, file, line, argument types) is pulled out at compile time, either by a Python preprocessor pass or by C++17 constexpr parsing of the format string. The hot path then copies only the dynamic arguments and an rdtsc timestamp into a lock-free per-thread staging buffer (1 MB by default). A background thread compresses and deduplicates those records and writes them out with POSIX AIO, and all formatting happens offline in the decompressor (USENIX ATC'18 paper).
+
+**Use it when:**
+- Latency-critical Linux x86-64 services (trading, storage, RPC servers) where a log call has to cost about 10 ns at p50 and stay near 11-21 ns at p99.9
+- Very high log volume where small binary files and an offline decompress step are acceptable
+- Codebases already using printf-style format strings that want the C++17 library mode with no build changes beyond linking -lNanoLog -lrt -pthread
+- Multi-threaded producers: the Quill harness shows 4-thread p99.9 at 21 ns against 1106 ns for spdlog
+
+**Skip it when:**
+- You need readable text logs live (tail -f, stdout, log shippers): output is binary only, and stdout and uncompressed output are open feature requests (#51, #52)
+- Windows, macOS or ARM64 targets: the README says Linux only, the timestamps use rdtsc, and ARM64 and Windows are open issues (#69, #67)
+- You want fmt-style formatting, sinks, file rotation or multiple log files: none of these exist (rotation #63 and multiple files #62 are open requests)
+- You need an actively maintained dependency: the last commit was December 2020, and issue #70 (2023) asks whether the project is dead
+- CMake, vcpkg or Conan builds: it builds with GNU Make only, and a CMake request (#37) and package-manager request (#55) are open
+
+**Integration:** static lib (libNanoLog.a plus decompressor); the Preprocessor mode instead generates per-build library code through a Python script and NanoLogMakeFrag · pthreads, POSIX AIO (librt); Python 3.4.2+ and GNU Make 4.0+ to build; googletest submodule for unit tests · C++17, GNU g++ 7.5.0 or newer · Linux only (x86-64 in practice: rdtsc timestamps; ARM64 is open issue #69)
+
+**Vs siblings:** Pick it over fmtlog, Quill or XTR when you want printf format strings and the smallest binary logs, and accept Linux-only, binary output and no maintenance; those three match or beat its latency (6-9 ns p50) in the same harness, are maintained and write text. Against MS BinLog it has lower tail latency (11 vs 119 ns p99.9 at 1 thread), but BinLog is maintained and has the published throughput number (61.79M msg/s), while NanoLog is absent from Quill's throughput table.
+
+**Gotchas:**
+- Compile with -Werror=format: the README warns that format errors may silently corrupt the log file at runtime. The %n specifier is rejected, and "%*.d" is reported unsupported (#74)
+- The Preprocessor mode builds a library that is non-portable even between compilations of the same application, so the decompressor must come from the same build as the binary that wrote the log
+- A logging thread blocks (it does not drop records) when its 1 MB staging buffer fills. The log file is opened with O_DSYNC, so throughput depends on disk
+- Open bug reports: 'Internal Error: Corrupted BufferExtend' (#64), and the nanosecond field in formatted timestamps can be negative or drift from system time (#28)
+
+**Status:** Stale (last commit 2020-12-22, nearly 6 years, about 30 open issues with no replies, so effectively abandoned), but ISC-licensed and small enough to vendor and patch; last documented toolchain is g++ 7.5.0.
+
+[repo](https://github.com/PlatformLab/NanoLog) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+##### phuslu/log  `Go`  `MIT`  `active`  `Tier A`
+
+Zero-allocation structured JSON logger for Go, faster than zerolog, zap and log/slog in its own benchmarks.
+
+**Beats:** zap, zerolog, log/slog — The README's bench_test.go, re-run daily by a GitHub Actions workflow with Go 1.27 on an AMD EPYC 7763 runner (go test -cpu=4 -benchmem, writes to io.Discard), shows a simple JSON entry with three fields at 214.2 ns/op and 0 allocations vs zerolog 337.6, zap (sugared) 823.7 and slog 1274 ns/op, and with caller info 546.1 vs 1375, 2249 and 2155. As an slog handler at -cpu=1 it runs 590.5-702.8 ns/op vs 1282 for slog.JSONHandler.
+
+**Known shortcoming:** Go, not C++. Harness flaw: the zap rows use SugaredLogger (Infow), not the typed Logger, which inflates the zap gap; every run writes to io.Discard. README tables are stale against the embedded bench code (SlogPhus* rows missing; BenchmarkSlogPhusDisabled logs at Info, so it is not actually disabled). Open issues: ConsoleWriter crashes with many goroutines, async TSV interleave corruption, gccgo build failure.
+
+**Independent measurement:** public benchmark code
+
+**How:** Entries are appended into pooled byte buffers with hand-written JSON encoding, so the common paths do 0 allocations per call (the cpu=4 table shows 0 B/op for simple, printf, caller and any). Caller lookup and time formatting have custom fast paths, including an optional global timestamp cache (EnableTimeCache) that skips the clock read per entry, and AsyncWriter batches writes with writev under load.
+
+**Use it when:**
+- Go services that log structured JSON at high rates and want fewer allocations and less GC pressure than zap or slog's JSONHandler.
+- Code already on slog that wants a faster backend without rewriting call sites: SlogNewJSONHandler measured 143.7 vs 351.5 ns/op on go-slog's Simple case.
+- Logging with caller information on hot paths: 546.1 ns/op and 0 allocs vs zap 2249, zerolog 1375 and slog 2155.
+- Projects that want rotation, async writing and syslog/journald in one dependency-free package.
+
+**Skip it when:**
+- C++ projects: use one of the C++ logging siblings instead; this is Go only.
+- Heavy concurrent use of ConsoleWriter or mixing Logger with the async TSV logger: open issues report random crashes with ConsoleWriter across goroutines and interleaved, corrupted output.
+- gccgo builds: an open issue reports it fails to build there.
+- Workloads dominated by I/O rather than formatting: every published number writes to io.Discard, so disk or network costs are not measured.
+- Code that needs zap's ecosystem (zapcore hooks, samplers, OpenTelemetry bridges) and its typed field API.
+
+**Integration:** module · none · not documented in the README; benchmark CI uses Go 1.27 (latest patch) · any Go platform; JournalWriter is Linux, EventlogWriter Windows; gccgo reported broken
+
+**Vs siblings:** The catalogued siblings (binlog, BqLog, fmtlog, lockfreelog) are C++ loggers measured against spdlog; pick phuslog only when the program is Go and the alternative is zap, zerolog or slog's JSONHandler.
+
+**Gotchas:**
+- EnableTimeCache is global and its timestamps can go stale beyond the interval when the refresh goroutine is delayed; every entry from one refresh shares the same time.
+- AsyncWriter must be closed explicitly to flush; with DiscardOnFull=true entries are dropped when the channel fills.
+- The zap rows use the SugaredLogger (Infow with loose key-value pairs), not zap's faster typed Logger, so the zap gap is larger than it would be against zap's best API.
+- Leaving TimeFormat empty is recommended for speed; the benchmarks set RFC3339Nano on every logger for parity, and the README's result tables are snapshots that do not list every function in the embedded bench code (e.g. the SlogPhus* rows).
+
+**Status:** Actively maintained (last commit 2026-10-02), MIT-licensed and dependency-free; several concurrency bug reports around ConsoleWriter and the async TSV logger are open.
+
+[repo](https://github.com/phuslu/log) · [benchmark](https://github.com/phuslu/log)
+
+##### Quill  `C++`  `MIT`  `active`  `Tier A`
+
+Asynchronous C++17 logger whose LOG_INFO call site costs single-digit nanoseconds, about 45x below async spdlog at p50.
+
+**Beats:** spdlog — In the author's public logger_benchmarks harness (GCC 14.2, Release, -march=x86-64-v3, Intel Core i5-12600 on a tuned RHEL 9.4 with isolcpus and mitigations=off), a LOG_INFO with two ints and a double costs 6/9 ns (p50/p99.9) on one thread with Quill's bounded dropping queue versus 271/360 ns for spdlog's async_logger (8M-slot thread pool, block overflow policy, basic_file_sink_st), and 8/18 versus 557/1106 ns with 4 threads; each observation averages 20 back-to-back calls timed with serialized rdtsc. Backend throughput writing 4M messages to a file was 6.44M msg/s versus spdlog's 2.57M.
+
+**Known shortcoming:** The headline uses a bounded dropping queue at 262,144 B (2x the default), which can drop messages. Throughput is not the leader: XTR reaches 7.73M msg/s against Quill's 6.44M.
+
+**Independent measurement:** public benchmark code
+
+**How:** Each producer thread owns a lock-free single-producer/single-consumer queue, so there is no shared state or contention between logging threads. The call site stores only a timestamp (rdtsc by default), a pointer to static constexpr metadata (format string, source location), a logger pointer, a pointer to a templated decode function and a raw binary copy of the arguments; all {fmt} formatting, pattern formatting and I/O is deferred to the backend thread, which merges the per-thread queues in timestamp order. spdlog's async logger, by contrast, formats the message on the caller before queueing it.
+
+**Use it when:**
+- Latency-critical hot paths (trading, real-time control, game servers) where the caller thread must spend under ~20 ns per log call with ints, doubles and short strings.
+- Multi-threaded producers: per-thread SPSC queues keep p99.9 at 17-18 ns with 4 threads in the author's harness, where async spdlog reaches 1106 ns.
+- Logging STL containers and large strings on the hot path: vector<string> of 16 strings costs 53 ns p50 versus 6906 ns for spdlog and about 750 ns for fmtlog/XTR.
+- Projects that want human-readable text logs plus a broad feature set (rotation, JSON, backtrace ring buffer, MDC, filters, Prometheus metrics) rather than a binary log format.
+- Linux, macOS, Windows, BSD or Android targets with a C++17 compiler and packaging through vcpkg, Conan, Homebrew, Meson, Bazel or Conda.
+
+**Skip it when:**
+- Raw text throughput is the goal: in the same harness XTR writes 7.73M msg/s versus Quill's 6.44M, and MS BinLog (61.79M) and BqLog (12.86M) binary modes are far ahead if you accept offline decoding.
+- Memory-constrained processes with many logging threads: every thread gets its own queue (131,072 bytes default, growing in unbounded mode), and a third-party BqLog benchmark reported multi-GB peak use at 10 threads.
+- You need every message delivered under overload without blocking: the bounded dropping queue (used for the headline numbers) discards messages when full, and the unbounded queue trades that for memory growth.
+- Programs that log from static/global destructors or fork() after starting the backend: the README documents both as unsafe.
+- Synchronous logging where the message must be on disk before the call returns; Quill is built around a background worker and an explicit flush_log().
+
+**Integration:** header-only · none external (bundles {fmt} as the fmtquill namespace; links Threads; stdc++fs on GCC < 9) · C++17, CMake 3.12+ (experimental C++20 named module optional) · Linux, macOS, Windows, FreeBSD/BSD, Android; rdtsc clock on x86 with chrono/system clock alternatives
+
+**Vs siblings:** Pick Quill over fmtlog or XTR when you log containers or long strings (53 ns vs about 750 ns for vector<string>) or want rotation, JSON, MDC and metrics in one maintained package; pick MS BinLog or BqLog binary mode instead for maximum throughput if offline decoding is acceptable, and PlatformLab NanoLog only if you can live with its binary log and preprocessor.
+
+**Gotchas:**
+- Arguments are copied at the call site and formatted later on the backend thread, so user-defined types need a codec (or must be formatted to a string first) and STL types need their quill/std/*.h include.
+- Queue type and capacity are compile-time FrontendOptions; the README benchmark ran the bounded dropping queue at 262,144 bytes, twice the default, and benchmark builds use the macro API, which is faster than the function API (11 versus 6 ns p50).
+- Quill's own singletons are function-local statics: logging from destructors of static objects can touch destroyed state, and calling Backend::start() before fork() breaks the child.
+- Messages from different threads are reordered by timestamp on the backend with a configurable grace window, so late producers can appear out of strict order unless that window is tuned.
+
+**Status:** Actively maintained (v13 line, 3.0k stars, last commit 2026-10-04, CI on Linux/macOS/Windows/BSD with sanitizers and fuzzing), MIT-licensed and header-only, so it is easy to adopt through any major package manager.
+
+[repo](https://github.com/odygrd/quill) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+##### slick-logger  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++20 async logger: lock-free ring, formatting deferred to a writer thread; 2-5x spdlog async on producer-side throughput.
+
+**Beats:** spdlog — In the author's suite (benchmarks/benchmark_main.cpp; MSVC 19.44 /O2 C++20, Ryzen 9 5900HX, Windows 11, local NVMe; 50,000 messages x 3 runs), producer-side throughput for literal-only messages was 7.67M ops/s against spdlog 1.12.0 async 3.77M and sync 1.30M at 1 thread, and 10.96M against 1.93M and 0.49M at 8 threads; for three-argument messages it was 4.75M against 0.90M (async) at 1 thread. Both async loggers used 65,536-slot queues and were timed until the producers returned; the README table says spdlog_async used an 8,192-slot queue, but the code uses 65,536.
+
+**Known shortcoming:** Harness flaw: the thread-scaling table (9.36M vs 114K ops/s at 16 threads) pushes 100,000 messages per thread through a 65,536-slot lossy ring (overwrites, no backpressure) against the spdlog_async blocking queue, so that row is lossy against lossless, not like for like. In the main suite 50k messages fit in the queue and both async loggers are timed only until the producers return, so it measures enqueue cost. The bench README says spdlog_async has 8192 slots while the code uses 65536.
+
+**Independent measurement:** public benchmark code
+
+**How:** The calling thread only stamps the entry (timestamp, thread id, source location) and copies the arguments into a slot of a lock-free MPMC ring (slick-queue), claimed with one CAS on a shared counter. String-literal format strings are stored as pointers, and dynamic strings are copied into a separate string ring in 64-byte (cache-line) units so producers do not false-share. All std::format work and sink I/O happens later on the writer thread, which flushes once per drained batch rather than per line. Pattern rendering uses pre-parsed op lists and a per-second cached broken-down time.
+
+**Use it when:**
+- Latency-sensitive threads (trading, game loops, real-time services) where a log call should cost about 100-350 ns on the producer and never wait on disk.
+- Many producer threads logging at once: in the author's scaling harness total enqueue throughput kept rising up to 16 threads, while spdlog_async fell.
+- Several processes on one host that should write to one log through a shared-memory collector.
+- C++20 code bases that already use std::format and want spdlog-like patterns and sinks without depending on fmt.
+
+**Skip it when:**
+- When every log line must be kept: both rings are lossy and have no backpressure, so producers that outrun the writer overwrite older entries (a loss counter exists only with SLICK_LOGGER_ENABLE_LOSS_DETECTION).
+- Toolchains without C++20 std::format (needs GCC 11+, Clang 14+ or MSVC 19.29+).
+- Code that passes const char array members or locals as the format string: the literal-detection heuristic stores only a pointer, which can dangle before the writer reads it.
+- Projects that need a mature, widely deployed logger: 5 stars, 2 forks, single-vendor project.
+- Custom formatter types passed through a pre-built std::format_args: they are logged as <handle>.
+
+**Integration:** header-only · slick-queue 2.1.0+ (fetched by CMake); no fmt · C++20 with std::format: GCC 11+, Clang 14+, MSVC 19.29+; CMake 3.20+ · Windows, Linux, macOS
+
+**Vs siblings:** Pick it over Quill or fmtlog when you want std::format with no fmt dependency, Windows and MSVC as first-class targets, and a built-in multi-process shared-memory collector. Quill, NanoLog and XTR have far wider use and independent latency tables (Quill's harness), so prefer them when maturity or guaranteed delivery (Quill's blocking queue option) matters more.
+
+**Gotchas:**
+- Lossy rings: messages are dropped silently on overrun unless loss detection is compiled in. The thread-scaling table (9.36M vs 114K ops/s at 16 threads) pushes 100,000 messages per thread through a 65,536-entry ring, so slick-logger can overwrite entries while spdlog_async (default block policy) waits for its writer. That row compares lossy enqueue with lossless delivery.
+- Throughput figures stop the timer when producers return; the writer's drain and flush are outside the timed region for both async loggers. The main suite's 50,000 messages fit in a 65,536-slot queue, so it measures enqueue cost and not sustained throughput.
+- Each header-only binary (exe, .dll/.so) gets its own Logger unless you share it with Logger::set_instance(), and the host must flush() before dlclose/FreeLibrary because queued entries point at the plugin's string literals.
+- Raising a sink's min_level also drops entries that are already queued; on POSIX, shared-memory segments are never shm_unlink'ed, so cleanup is manual.
+
+**Status:** Actively maintained (v2.2.0 released 2026-09-28) and MIT-licensed, so copyable; adoption is very low (5 stars) and all numbers are first-party, from one Windows laptop.
+
+[repo](https://github.com/SlickQuant/slick-logger) · [benchmark](https://github.com/SlickQuant/slick-logger/blob/main/benchmarks/README.md)
+
+##### XTR  `C++`  `MIT`  `active`  `Tier A`
+
+C++20 low-latency logger: per-thread SPSC ring buffer plus background {fmt} consumer; about 6-10 ns call-site latency vs spdlog async's 271-360 ns.
+
+**Beats:** spdlog — The Quill author's harness (odygrd/logger_benchmarks; XTR via XTR_LOGL_TSC with io_uring off, spdlog as an async_logger with a 1-thread pool, block overflow policy and basic_file_sink_st), GCC 14.2 Release -march=x86-64-v3 on an i5-12600 with isolated cores, measured int/int/double call-site latency of 6/10 ns (p50/p99.9) for XTR against spdlog's 271/360 ns on 1 thread and 8/18 against 557/1106 ns on 4 threads, plus 7.73M against 2.57M msg/s throughput. XTR's own README shows 0.894 ns for an empty XTR_LOG (no timestamp read) and 9-10 ns for TSC variants on a Ryzen 5950X with g++ 15.3.0 and a CPU-scaling warning, with no spdlog row.
+
+**Known shortcoming:** README 0.894 ns is plain XTR_LOG with no call-site timestamp (the consumer stamps); with XTR_LOGL_TSC the Quill harness is fair. Logging a std::vector of strings costs 752-959 ns, about 10x Quill. Default macros spin when the sink is full. C++20, x86-64 Linux/FreeBSD only.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The call site only serializes a pointer to a type-specialized formatting function plus the arguments, by value, into a lock-free single-producer ring buffer (256 KiB per sink by default) owned by that sink; no allocations or system calls are made. The consumer thread busy-spins over all sinks, decodes, formats with {fmt} and writes, optionally batching through io_uring. The basic XTR_LOG macros skip the clock read entirely (the consumer stamps the record), which is where the sub-nanosecond README numbers come from.
+
+**Use it when:**
+- Trading, real-time or other hot paths that need consistent single-digit-nanosecond log calls on Linux or FreeBSD x86-64, with a core to spare for the consumer.
+- Logging scalars and short strings: in the Quill author's harness, int/int/double costs 6/10 ns at p50/p99.9 on 1 thread and large strings 7/15 ns, against spdlog's 271/360 and 247/290 ns.
+- One sink per thread, so producers never contend with each other.
+- You want built-in log-level control from outside the process (xtrctl), logrotate reopen, systemd journal output, or an io_uring file back-end.
+
+**Skip it when:**
+- Windows, macOS or ARM: only Linux and FreeBSD x86-64 are supported.
+- Logging containers or other complex types: arguments are copied and formatted, and the Quill harness puts a std::vector of 16 large strings at 752-959 ns per call (1 thread), about 10x Quill's bounded queue (53-120 ns), though still about 9x faster than spdlog.
+- Pre-C++20 toolchains (the Makefile builds with -std=c++20 and the header uses concepts).
+- CPU-constrained or power-sensitive hosts: the consumer thread spins continuously because it cannot block without a system call on the producer side.
+- You need spdlog's sink ecosystem or API compatibility.
+
+**Integration:** static lib · {fmt}; liburing optional (io_uring back-end); Catch2 and Google Benchmark only for tests and benchmarks · C++20 (GCC; README benchmark uses g++ 15.3.0, Quill harness GCC 14.2) · Linux x86-64, FreeBSD x86-64
+
+**Vs siblings:** Pick XTR over Quill or PlatformLab NanoLog when you are on Linux/FreeBSD x86-64, log mostly scalars and strings (where it ties Quill at 6-10 ns and edges NanoLog), and want io_uring, xtrctl and journal integration; pick Quill when you log STL containers (about 10x cheaper there) or need Windows/macOS.
+
+**Gotchas:**
+- Plain XTR_LOG does not read a clock at the call site: the background thread timestamps the record when it dequeues it, so timestamps are late and can be reordered relative to real events. Use XTR_LOG_TSC (about 9-10 ns in the README) or XTR_LOG_RTC when accurate time matters; the Quill harness numbers use XTR_LOGL_TSC, so they are comparable to spdlog.
+- Default macros block (spin with pause) when the sink's ring buffer is full; only the XTR_TRY_LOG variants drop, counting drops in dropped_count(). String arguments may be truncated when the sink is full, and vcopy records are dropped whole.
+- Arguments are copied by value unless wrapped in xtr::nocopy, in which case the referenced data must outlive consumption; ring capacity is the compile-time XTR_SINK_CAPACITY (256 KiB default), and changing it requires rebuilding libxtr.
+- A single-header form exists (single_include/xtr/logger.hpp), but the documented build is make/CMake through Conan and pkg-config; the logger destructor blocks until every sink created from it is destroyed.
+
+**Status:** Actively maintained single-author project (874 commits, last commit 2026-09-16, 77 stars, Conan Center package) under MIT, so copyable; small user base.
+
+[repo](https://github.com/choll/xtr) · [benchmark](https://github.com/odygrd/quill#-performance)
+
+#### profilers-and-instrumentation
+
+##### bpftime  `C++`  `MIT`  `active`  `Tier B`
+
+Userspace eBPF runtime that runs unmodified libbpf/bpftrace uprobe programs with about 13-16x lower per-hit cost than kernel uprobes.
+
+**Beats:** Linux kernel uprobe/uretprobe (the in-kernel dynamic instrumentation path used by perf probe, bpftrace and bcc) — On an Intel Core Ultra 7 258V running Linux 6.11 (results generated 2025-04-30), an empty probed function costs 2561.57 ns per call with a kernel uprobe vs 190.02 ns under bpftime (13.48x), and 3019.45 vs 187.10 ns for uretprobe (16.14x); older runs on an i7-11800H (kernel 6.2) show 3224 vs 315 ns. The benchmark build is RelWithDebInfo with LLVM 15 JIT and LTO and the harness is gcc -O3, but compiler versions are not stated; the OSDI '25 paper (not opened, egress blocked; search snippet only) reports sslsniff overhead on nginx falling from 28% with kernel eBPF to 7.4%.
+
+**Known shortcoming:** The read and write speedups are built with ENABLE_PROBE_READ_CHECK=0 and ENABLE_PROBE_WRITE_CHECK=0; map operations are slower than kernel eBPF. Build is RelWithDebInfo with an LLVM 15 JIT and LTO (test.c gcc -O3), compiler versions not stated. Open bugs: 429 (ring buffer loss) and 320 (map delete race). OSDI paper numbers are snippet only (sslsniff overhead 28% kernel vs 7.4% bpftime).
+
+**Independent measurement:** code reading by enricher
+
+**How:** Kernel uprobes plant an int3 breakpoint, so every hit costs a trap into the kernel and back; bpftime instead rewrites the function prologue with a frida-gum inline hook that jumps to a trampoline running JIT-compiled eBPF (LLVM-based llvmbpf, or ubpf) in the same address space, with no mode switch. Syscall hooks use zpoline/syscall_intercept-style binary rewriting of the text segment. bpf_probe_read/write_user become plain memory accesses (in the benchmark build the safety checks are compiled out), and maps live in Boost.Interprocess shared memory.
+
+**Use it when:**
+- Tracing hot userspace functions (malloc, SSL_read/SSL_write, request handlers) at rates where kernel uprobe cost of about 2.5-3 us per hit distorts the workload; bpftime measured about 190 ns per hit.
+- Reusing an existing libbpf or bpftrace uprobe tool unchanged, but with lower overhead, on Linux x86-64.
+- Environments without root or a modern eBPF-capable kernel (containers, older kernels), using the userspace PREVAIL verifier instead of the kernel one.
+- Embedding a sandboxed eBPF extension mechanism into your own process (nginx plugin, Redis tuning examples), where the OSDI '25 paper reports about 2% overhead for an nginx extension (search snippet).
+
+**Skip it when:**
+- System-wide observability: it only sees processes it was injected into, and it cannot read kernel data structures such as task_struct or use kernel-only helpers and kfuncs.
+- Map-heavy programs: in the same 2025 table userspace hash_map_lookup is 22152.81 ns vs 12375.69 ns kernel per 1000-op probe, and per-CPU hash and array maps are 1.3x to 4x slower; the older 2024 run shows syscall tracepoints slower in userspace (232.6 ns vs 151.8 ns).
+- Untrusted or adversarial targets: the eBPF code shares the target's address space (MPK isolation is an optional build), and the measured read/write speedups were built with ENABLE_PROBE_READ_CHECK=0 and ENABLE_PROBE_WRITE_CHECK=0.
+- Multi-threaded event streaming where loss matters: open bugs report ring-buffer data loss with multi-threaded apps (#429) and concurrent map access races on delete (#320).
+- As a sampling profiler replacement for perf: it is an instrumentation runtime, not a profiler.
+
+**Integration:** shared lib (LD_PRELOAD agent and syscall-server .so) plus CLI tools; VM also as a static library · libelf, zlib, libssl, Boost (1.74 recommended), yaml-cpp, binutils-dev, LLVM (15 in the benchmark build) for the LLVM JIT, frida-gum, libbpf, spdlog, optional PREVAIL verifier · C++20 (CMAKE_CXX_STANDARD 20), CMake 3.15+, gcc 12+ or clang 16+ recommended; tested on Ubuntu 23.04 · Linux (x86-64 is the benchmarked and documented target; CMake has arm32 handling and frida is unavailable on riscv64); macOS userspace-only build with libbpf disabled; no Windows
+
+**Vs siblings:** Pick it over funtrace or magic-trace when you want programmable eBPF probes (filters, maps, existing bcc/libbpf tools) on uninstrumented binaries without recompiling; pick funtrace for lowest per-call cost (under 10 ns) when you can recompile with instrumentation, and E9Patch when you need static binary rewriting rather than runtime injection.
+
+**Gotchas:**
+- Run `bpftime load` before `bpftime start`, or the probe is not attached; stale shared memory gives 'boost::interprocess::interprocess_exception: File exists' and needs bpftimetool cleanup or sudo.
+- Plain `cmake` defaults to a Debug build (CMAKE_BUILD_TYPE Debug, ubsan) and `make build` is Debug too; use `make release` or the benchmark target (RelWithDebInfo, LLVM JIT, LTO) before measuring.
+- The headline microbenchmark times an empty noinline function called 100,000 times with CLOCK_MONOTONIC_RAW (benchmark/test.c, gcc -O3), averaged over 10 runs; the unhooked call costs about 2.4 ns, so these are pure probe-dispatch costs, not application overhead.
+- LTO can strip symbols defined in inline assembly (open issue #83).
+
+**Status:** Actively developed (last commit 2026-10-03, 1.6k stars, MIT) with a peer-reviewed OSDI '25 paper, though about 98 open issues including 15 labelled bug.
+
+[repo](https://github.com/eunomia-bpf/bpftime) · [benchmark](https://github.com/eunomia-bpf/bpftime/tree/master/benchmark)
+
+##### Coz causal profiler  `C++`  `BSD-2-Clause`  `active`  `Tier B`
+
+Causal profiler for C/C++/Rust that predicts the whole-program effect of speeding up each line; far lower overhead than gprof.
+
+**Beats:** gprof — In the CACM 2018 version of the SOSP 2015 paper (GCC 4.9.1 -O3 -g -fno-omit-frame-pointer, 64-core four-socket AMD Opteron, 60 GB, Linux 3.14), Coz's overhead on PARSEC native inputs averaged 17.6% (min 0.1%, max 65%, under 30% for all but three), and the sole gprof comparison is one sentence: gprof can cost about 6x on ferret versus 6% for Coz. Prediction accuracy was checked on two cases (dedup predicted 9% vs 8.95% observed; ferret 21.4% vs 21.2%).
+
+**Known shortcoming:** Overhead of 17.6% on average is 2.6 startup plus 4.8 sampling plus 10.2 delays; the gprof comparison is a single sentence (ferret: 6x against 6%). Open issues: 231 (usleep gives wrong predictions), 223 (mmap samples lost), 216 (WSL2), and Rust issues 180, 193 and 197.
+
+**Independent measurement:** peer-reviewed paper, read from a repo copy
+
+**How:** Overhead stays low because Coz never instruments functions: it samples instruction pointers per thread with perf_event_open (Linux) or kperf (macOS) every 1 ms and processes samples in batches of ten. 'Virtual speedups' are made by pausing all other threads whenever the chosen line is sampled, so speeding up one line is emulated by slowing everything else, and progress-point counters are relaxed atomic increments. In the paper, the 17.6% average overhead on PARSEC splits into 2.6% startup (DWARF parsing), 4.8% sampling and 10.2% inserted delays.
+
+**Use it when:**
+- Multithreaded or pipelined C/C++/Rust servers and batch jobs where flat profiles mislead because of contention, critical paths or idle waiting (paper case studies: Memcached +9%, SQLite +25%, six PARSEC apps by up to 68% after Coz-guided fixes).
+- Long-running throughput workloads with a clear unit of work (request, query, frame) that can carry a progress point.
+- Latency questions about one transaction type, using COZ_BEGIN/COZ_END pairs.
+- When gprof's instrumentation overhead is unacceptable or it fails outright (paper: gprof about 6x on ferret vs 6% with Coz; gprof segfaults on SQLite).
+- Linux x86-64 or aarch64 hosts where perf_event_paranoid can be lowered to 1.
+
+**Skip it when:**
+- Short programs or code without an obvious progress point: Coz needs many experiments to build a profile and the README says sample apps may need several runs.
+- Interpreted or JIT languages (Python, Ruby, JavaScript); README says interpreted languages will likely never be supported.
+- Windows or WSL 2 (open issues #163 and #216), locked-down containers that forbid perf_event_open, or macOS where the private kperf API needs elevated privileges or SIP changes.
+- Code dominated by usleep or mmap page faults: open issues #231 (incorrect predictions with usleep) and #223 (samples not counted during mmap).
+- Rust release builds in some setups: open issues #180, #193 and #197 report silent failure, DWARF format errors and random lines.
+
+**Integration:** shared lib · libelfin (fetched by CMake from plasma-umass/libelfin), libdl, Python 3 for the coz CLI/viewer; optional LLM API keys only for the suggestion features · C++11, CMake 3.13; Linux kernel 2.6.32+ with perf_event_open · Linux x86-64 and aarch64 (deb/rpm packages), macOS via kperf; no Windows
+
+**Vs siblings:** Pick Coz when you want to know which line is worth optimizing in a concurrent program; Tracy, Palanteer and funtrace instrument zones or calls to show timelines, magic-trace gives Intel PT traces, and wallClockProfiler gives cheap wall-clock stack samples, but none of them predicts the end-to-end effect of a speedup.
+
+**Gotchas:**
+- Lower /proc/sys/kernel/perf_event_paranoid to 1 before profiling on Linux, or sampling does not work.
+- Build with -g (DWARF 5 is supported) and preferably -fno-omit-frame-pointer, which the paper used for accurate callchains; samples outside in-scope files are attributed to the last in-scope call site.
+- coz.h finds libcoz through a weak dlsym reference, so macros are no-ops when the program runs without coz; link with -ldl as the README instructs.
+- Command-line progress points are disabled ('did not work particularly well'); the newer `coz suggest-points` and viewer assistant send source code to an external LLM provider unless Ollama is used.
+- Benchmark sample apps (Phoenix, pbzip2) carry their own licenses, separate from the BSD-2-Clause core.
+
+**Status:** Active (last commit 2026-07-10, 4.6k stars, 43 open issues), BSD-2-Clause with prebuilt deb/rpm/tarball releases; usable as a tool, and coz.h is copyable into any project.
+
+[repo](https://github.com/plasma-umass/coz) · [benchmark](https://github.com/emeryberger/publications/blob/master/Coz-cacm2018.pdf)
+
+##### DoubleTake  `C++`  `MIT`  `abandoned`  `Tier B`
+
+LD_PRELOAD heap-error checker (overflow, use-after-free, leaks) using checkpoint/replay; few-percent overhead versus ASan's 30%+ and Valgrind's ~17x.
+
+**Beats:** Valgrind Memcheck and AddressSanitizer — In the UMass tech report UM-CS-2015-018 (ICSE 2016 paper), all 19 C/C++ SPEC CPU2006 benchmarks with ref inputs, built with LLVM 3.2 clang -O2 on a 2.33GHz dual 4-core Core 2-era Xeon with Linux 3.13/glibc 2.19, ran with 4% average overhead under DoubleTake with all detectors versus over 30% for AddressSanitizer, beating ASan on 17 of 19; Valgrind Memcheck averaged about 17x on the same suite. Rollback cost was excluded and each result is the mean of three runs.
+
+**Known shortcoming:** Paper prototype is single-threaded only; open issues 11-13 report rollback failing on PARSEC dedup, ferret, fluidanimate and kmeans. Detects heap writes only; use-after-free canaries cover the first 128 bytes. Overhead excludes rollback time. The overflow-only figure disagrees across sources (README 2%, report intro 3%, evaluation text 'no observable'); the 4% all-detectors figure is consistent. Default Makefile builds -O0 with DEBUG_LEVEL=3 and leak detection off. Abandoned since 2016-05-22.
+
+**Independent measurement:** peer-reviewed tech report, read from a repo copy
+
+**How:** Evidence-based dynamic analysis: the program runs at full speed inside epochs that end only at irrevocable system calls (socket I/O, unlisted syscalls); at each epoch end it scans a bitmap of heap canaries (padding after objects, canary-filled quarantined freed objects) and looks for unreachable objects. Only if evidence is found does it roll back to the epoch snapshot and re-execute with x86 hardware watchpoints (perf_event_open, up to 4) on the corrupted words and call-site recording in the allocator. Most syscalls are classified as repeatable, recordable or deferrable so epochs stay long (most SPEC benchmarks run in 1-9 epochs).
+
+**Use it when:**
+- Single-threaded C/C++ batch programs on x86-64 Linux where ASan's ~2x slowdown or rebuild requirement is too expensive, e.g. running long test or input-fuzzing campaigns with checking left on.
+- You cannot recompile the binary (third-party or legacy code) and Valgrind Memcheck's 4.5x-42.8x slowdown is unacceptable.
+- Programs with few epoch-ending system calls (mostly file I/O, no sockets) and moderate malloc rates, where the report measured under 3% overhead on 14 of 19 SPEC CPU2006 benchmarks.
+- Leak hunting during execution rather than only at exit (it checks at every epoch boundary, ASan only at program end).
+
+**Skip it when:**
+- Multithreaded code: the tech report says the prototype is limited to single-threaded programs; the repo has pthread interposition, but open issues #11-#13 report failed rollback on PARSEC dedup, ferret, fluidanimate and kmeans.
+- You need read-error detection, stack/global overflows, or overflows that skip past canaries: detectors fire only on heap writes, use-after-free canaries cover only the first 128 bytes of a freed object, and non-contiguous overflows are missed.
+- Malloc-heavy or syscall-heavy programs: 403.gcc (canary filling of freed memory) and 464.h264ref (825 epochs) ran above 20% overhead; network servers end an epoch on every socket read.
+- Anything needing a maintained tool: last commit 2016-05-22, 6 open issues, built against LLVM 3.2-era toolchains; modern ASan/HWASan are actively maintained.
+- Non-x86-64 or non-Linux targets: relies on x86 debug registers, getcontext/setcontext and Linux /proc and perf_event_open.
+
+**Integration:** shared lib · libdl, pthread; bundled Heap Layers (heaplayers/); clang preferred by the Makefile · C11 / C++11; Makefile defaults to clang/clang++ (paper used LLVM 3.2) · Linux x86-64 (an x86 32-bit build flag exists); hardware watchpoints required for pinpointing
+
+**Vs siblings:** Pick DoubleTake over AddressSanitizer when you cannot or do not want to recompile and only need heap overflow/use-after-free/leak detection on single-threaded code at near-native speed; pick Dr. Memory or Valgrind Memcheck when you need read errors, uninitialized-value tracking, multithreading or a maintained tool.
+
+**Gotchas:**
+- The default Makefile builds at -O0 with -DDEBUG_LEVEL=3 and leak detection (-DDETECT_MEMORY_LEAKS) commented out; build with make O=2 and adjust FEATURE_FLAGS before measuring overhead.
+- It replaces the heap with a fixed 8 GB user heap plus a 4 GB internal heap (xdefines.hh) in power-of-two BiBOP size classes, so allocation-size behavior and memory footprint differ from glibc; the README says the open-file limit must be raised for some programs.
+- The overhead numbers exclude rollback and replay time (rollback was disabled in the evaluation), so a run that finds errors costs more than reported.
+- Overhead figures disagree across sources: README says 2% for overflow-only, the report's introduction says 3%, and its evaluation text says no observable overhead without use-after-free detection; 4% with all three detectors is the consistent number.
+
+**Status:** Abandoned research prototype (last commit 2016-05-22, 21 stars, 6 open rollback/threading issues) but MIT-licensed; treat it as a reference design for checkpoint-and-replay checking rather than a production tool.
+
+[repo](https://github.com/plasma-umass/doubletake) · [benchmark](https://github.com/plasma-umass/DoubleTake/blob/master/doc/UM-CS-2015-018.pdf)
+
+#### thread-pools-work-stealing
+
+##### citor  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++20 thread pool with Chase-Lev fork-join and sub-microsecond parallelFor; tops oneTBB and Taskflow on recursive fork-join.
+
+**Beats:** oneTBB, Taskflow, OpenMP, dispenso, libfork, TooManyCooks — In tzcnt/runtime-benchmarks (Clang 21.1.7 -O3 -march=native, tcmalloc, EPYC 7742 with 64 threads and no SMT, boost on, schedutil), citor's mean ratio to the best runtime was 1.06x vs libfork 1.18x, TooManyCooks 1.32x, tbb 3.25x and taskflow 3.34x; skynet took 24932 us vs tbb 142887 us, and fib(39) took 49966 us vs tbb 215592 us and taskflow 156590 us. The suite's citor adapter is a straight port of the libfork fib/skynet code and pins citor v0.4.5 by default, while the current release is 0.6.2; citor's own Zen 5 sweep is published only as charts.
+
+**Known shortcoming:** The runtime-benchmarks citor adapter is a straight port of the libfork fib/skynet code but pins citor v0.4.5 by default; the current release is 0.6.2. Peak RSS is 2-5x its peers', partly because the Chase-Lev deque keeps every superseded buffer until destruction. Open issue 1: a member named `slots` breaks builds when Qt is in scope.
+
+**Independent measurement:** public benchmark code
+
+**How:** forkJoin uses per-worker Chase-Lev work-stealing deques (Le et al. 2013 memory orderings) in the Cilk-5 spawn-parent shape: children go on the calling worker's own deque, the last child runs inline, and the join is a per-frame pendingTasks counter, with steals biased to same-CCD victims. Fan-out dispatch puts the job descriptor on the producer's stack with no hot-path allocation, joins through per-slot done-epoch barriers, parks workers with raw futexes, and pins one worker per physical core using a sysfs topology probe. Small calls fall back to running inline on the caller with no wake-up.
+
+**Use it when:**
+- Recursive fork-join (fib, skynet, cilksort, Strassen, BVH builds) on Linux x86-64, where it had the best mean ratio (1.06x to best) in tzcnt/runtime-benchmarks on a 64-core EPYC 7742.
+- Latency-sensitive loops with many short parallel regions, where sub-microsecond empty fan-out and runPlex's spin rendezvous between phases cut per-dispatch overhead.
+- Reductions that must be bit-identical across worker counts (FixedBlockOrder or KahanCompensated determinism).
+- Single-CCD AMD Zen 4/Zen 5 desktops and workstations with workers pinned inside one shared L3, the stated design target.
+- Projects that want a header-only dependency (single_include/citor.hpp, pthread only) instead of linking oneTBB or an OpenMP runtime.
+
+**Skip it when:**
+- Barrier-bound stencils on multi-CCD AMD or Intel mesh servers: the README says these lose to OpenMP because the producer's done-epoch scan is linear in participant count.
+- Heavy-tailed reductions: parallelReduce is statically partitioned with no stealing after local completion, so oneTBB's auto_partitioner wins.
+- Memory-tight runs: peak RSS in runtime-benchmarks was 44.5 MB on fib(39) vs 11.69 MB for tbb and 51.01 MB vs 10.51 MB for libfork on nqueens.
+- nqueens- or matmul-like fork-join on many cores, where libfork and TooManyCooks were faster (nqueens 80765 us vs 69010 us; matmul(2048) 48069 us vs 44140 us).
+- I/O-bound or blocking task bodies, async futures, or non-x86 targets: it is a CPU-bound synchronous engine and only Linux and Windows x86-64 are validated.
+
+**Integration:** header-only · none beyond pthread (Threads::Threads); MSVC needs Synchronization.lib · C++20; CI uses GCC 14, Clang 19 (Clang 18 for sanitizer jobs), MSVC 2022 · Linux x86-64 (latency contract validated), Windows x86-64 (builds and tests, latency not validated); non-x86 compiles with Deadline disabled
+
+**Vs siblings:** Pick citor over Fork Union when you need recursive work stealing, deterministic reductions or scans in addition to fast parallel-for dispatch; pick it over Taskflow or Nowa-style runtimes when fork-join throughput matters, since it beat Taskflow by 3-7x on skynet and fib(39) in an outside suite.
+
+**Gotchas:**
+- ThreadPool(n) counts the calling thread, clamps to physical cores and the affinity mask, and auto-pins the producer on Linux; check pool.participants() for the real count.
+- Bodies are captured by a non-owning FunctionRef, so callables must outlive the call; the pool is non-copyable and non-movable.
+- The Chase-Lev deque keeps every superseded ring buffer until the deque is destroyed, which is one source of the higher peak RSS.
+- Open issue #1: the header declares a member named slots, which breaks compilation when Qt's slots macro is in scope; submitDetached spawns a new std::thread per call.
+
+**Status:** Actively developed (v0.6.2, last commit 2026-10-05, pre-1.0 with a stable public surface), MIT, header-only and easy to vendor; 54 stars, so production use outside the author is not documented.
+
+[repo](https://github.com/Lallapallooza/citor) · [benchmark](https://github.com/tzcnt/runtime-benchmarks)
+
+##### nexus  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++26 work-stealing thread pool with about 3x to 7x lower scheduling overhead than Taskflow and BS::thread_pool on tiny tasks.
+
+**Beats:** Taskflow, BS::thread_pool — The author ran benchmarks/bench.cpp on an Intel i7-12650H with 8 workers, GCC 16.2.1, CMake Release (-O3, no -march), taking the best of three runs on 2026-09-30. nexus reached 8.39 M tasks/s single-producer fire-and-forget vs Taskflow 1.24 and BS::thread_pool 0.40, 28.40 vs 8.62 vs 1.23 M leaves/s on depth-18 fork-join, and P50/P99 round trip 0.44/0.87 us vs 2.66/7.44 and 3.75/6.01. The same run against oneTBB was much closer (fork-join 27.39 vs 25.69, 8-producer 7.31 vs 6.53), and on a compute-bound workload at 4 threads nexus was slower than Taskflow.
+
+**Known shortcoming:** The workloads are empty tasks plus one shared atomic counter, so they measure scheduler overhead only. The latency win relies on the default 64 us spin_budget (idle workers burn cores); 8 producers plus 8 workers oversubscribe the 10-core i7-12650H; the compute-bound test at 4 threads is slower than Taskflow (3.26 vs 2.59 ms). Needs GCC 16.2+ with -fcontracts. Project about 1 month old (first commit 2026-08-27, 34 commits).
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each worker has a Chase-Lev work-stealing deque. External submissions go to a bounded global MPMC ring with an overflow chain, and task nodes come from per-thread node caches, so the hot path avoids allocation. Submit/complete accounting is sharded per thread on separate cache lines. Idle workers spin for a time budget (64 us by default) before sleeping on a futex-style atomic wait, and a wake wakes one sleeper only when no spinner is active. fork_join is work-first: it enqueues one branch and runs the other inline.
+
+**Use it when:**
+- Many sub-microsecond tasks where per-task scheduling cost dominates, such as fire-and-forget event fan-out (8.39 M tasks/s vs Taskflow 1.24 in the author's run).
+- Latency-sensitive submit-then-wait round trips on a pool kept warm: P50 0.44 us vs 2.66 us (Taskflow) when workers are still spinning.
+- Recursive divide-and-conquer with tiny leaves, where it roughly matches oneTBB (27.39 vs 25.69 M leaves/s) and beats Taskflow about 3x.
+- New C++26 codebases on GCC 16.2+ that want std::expected-based error handling, no exceptions escaping fire-and-forget tasks, and optional priorities or cancellation.
+
+**Skip it when:**
+- Anything not on GCC 16.2+ with -std=c++26 -fcontracts: Clang, MSVC and older GCC are not supported (it uses contracts and <inplace_vector>).
+- Compute-bound chunks: the author's own fixed-workload test at 4 threads has nexus at 3.26 ms vs Taskflow 2.59 ms (slower).
+- Sparse or bursty service traffic on shared machines: the 64 us spin budget keeps idle workers burning cores, and the latency win depends on it (lower spin_budget for such pools).
+- Task-graph dependencies (Taskflow's DAG model) or production use that needs maturity: the project is about one month old (first commit 2026-08-27), has 1 star and its docs are in Chinese only.
+
+**Integration:** header-only · none (Threads; optional oneTBB, Taskflow and stdexec for benchmarks and tests) · C++26, GCC 16.2+, CMake 3.28+ with Ninja for the CMake build; -fcontracts is required at compile and link time · Not documented beyond the author's Linux x86-64 run (i7-12650H); uses standard atomics and std::jthread only
+
+**Vs siblings:** Pick nexus over dpuyda/scheduling or ThunderBolt-HT when you also want futures, combinators and priorities on top of low-overhead stealing; pick Fork Union or citor for parallel-for dispatch on large many-core machines, and oneTBB when you need a mature, portable runtime (nexus's fork-join lead over it is only about 7%).
+
+**Gotchas:**
+- execute() and the f branch of fork_join require noexcept callables; submit() routes exceptions into the expected result channel, and a successful result can be taken only once.
+- fork_join does not join: both branches stay in flight after it returns, and you sync with pool wait() or your own counter, as the benchmark does with an atomic leaf count.
+- The constructor may throw on thread creation; pool::try_create() is the no-throw path. The default queue_cap is 65536 global / 256 local, and full rings spill into an overflow chain rather than rejecting work.
+- The benchmarks time empty tasks that bump one shared atomic counter, so they measure scheduler overhead, not useful throughput; 8 producers plus 8 workers on a 10-core/16-thread laptop also oversubscribe it.
+
+**Status:** Active (34 commits from 2026-08-27 to 2026-09-30) and MIT-licensed header-only code that is easy to vendor, but it is very young, has a single author and needs a bleeding-edge GCC 16.2.
+
+[repo](https://github.com/huxint/nexus) · [benchmark](https://raw.githubusercontent.com/huxint/nexus/HEAD/docs/build.md)
+
+##### ThunderBolt-HT  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+C++20 dependency-aware work-stealing task runtime that measures ~1.5x lower per-task cost than Taskflow 3.7 on a 4-core laptop.
+
+**Beats:** Taskflow v3.7.0 (explicit tasks and for_each) — On an Intel Core i5-10310U (4 cores/8 threads, 15 W, ~1600 MHz sustained) with MSVC 14.51 C++20 Release, the project's own interleaved, median-of-20 harness measured 286 ns per task against 451 ns for Taskflow 3.7.0 explicit tasks (237-261 vs 355-390 ns under shuffled leg order), a partitioned parallel_for 1-19% faster than taskflow_for_each depending on task count, and a 10-stage simulation frame graph at 0.162 vs 0.195 ms/tick. The frame-graph win came from coarsening the engine's own task submission, and StandardRuntime reaches 0.196 ms/tick on the same scene; after chain fusion the margin over Taskflow is about 1.15x.
+
+**How:** Per-worker Arora-Blumofe-Plaxton (ABP) deques, one per priority, with randomized (xorshift64) victim selection and batched draining of a global injection queue. Most of the measured per-task gain came from removing cache-line contention: hot global counters were sharded and padded, which roughly halved per-task cost. A per-thread task-slot cache (64 slots per lock acquisition) and in-place construction of the task body in its pool slot cut it further. parallel_for spawns at most one task per worker, and each task claims grain-sized chunks from a shared atomic cursor (fetch_add) instead of submitting one task per chunk.
+
+**Use it when:**
+- Frame-graph style workloads (game or simulation ticks) with explicit inter-stage dependencies, priorities and many small tasks per frame on a desktop or laptop CPU with 8 or fewer hardware threads.
+- You want explicit-task fork-join where per-task submission cost matters (thousands of tasks per call), and a measured ~1.5x lower marginal per-task cost than Taskflow explicit tasks is relevant.
+- Element-wise parallel loops (out[i] depends only on i) where a chunk-claiming parallel_for with a caller-chosen grain is enough.
+- Research or teaching: the repo documents its A/B harness (interleaved, shuffled leg order, median and IQR), its refuted hypotheses and its own measurement bugs, so it can serve as a reference for benchmarking schedulers.
+
+**Skip it when:**
+- Production use where maturity matters: 0 stars, version 0.1.0, written and measured largely by an AI agent per its README, and TSan found three data races in the dispatch path only recently (fixed).
+- Reductions or other order-sensitive combines: parallel_for has no reduce, and the docs say a reduction over dynamically claimed chunks is unsafe under its determinism rule.
+- Many-core servers or NUMA machines: every measurement stops at 8 workers on one 4-core/8-thread laptop part; scaling beyond that is not measured.
+- When you need TBB, OpenMP or Rayon comparisons: oneTBB was deliberately never benchmarked, only Taskflow 3.7.0 and the project's own StandardRuntime.
+- Ecosystem needs (concurrent containers, flow graphs, GPU tasks, task cancellation): not documented as features.
+
+**Integration:** static lib · none at build time beyond Threads (Taskflow 3.7.0 is fetched only for benchmark targets with -DTHUNDERBOLT_REFERENCE_RUNTIMES=ON) · C++20 (concepts in public headers), CMake 3.25+; MSVC is the reference toolchain, GCC and Clang presets exist for Linux · Windows x64 (reference, SSE2 baseline, no /arch:AVX2) and Linux with GCC or Clang (CI on both); other platforms not documented
+
+**Vs siblings:** Pick it over nexus or dpuyda/scheduling when you want dependency edges, priority deques and a documented, reproducible A/B harness in a CMake package (find_package, vcpkg overlay, Conan); pick Fork Union for minimum-overhead parallel-for dispatch, or citor or Taskflow itself when you need results on many-core hardware.
+
+**Gotchas:**
+- Do not call wait_all() from inside a task: the project lists this as a case that never returns.
+- parallel_for grain is a caller decision with no automatic selection; grain=1 lost to Taskflow's for_each in the project's own test because every claim paid a contended fetch_add.
+- Externally submitted tasks go through a locked global injection queue and cost roughly 2x more per task than tasks spawned from inside a root task; the headline per-task numbers use the fork-join submission mode.
+- Some result files in docs/results predate the shuffled-leg-order harness fix and were taken with fixed leg order, which the README says biased readings (Taskflow explicit read 836 vs 319 ns depending on its predecessor leg).
+
+**Status:** Very active (last commit 2026-09-30) single-author, agent-built Apache-2.0 project at version 0.1.0 with CI on Windows and Linux; small enough to vendor, but treat it as experimental.
+
+[repo](https://github.com/ankitlinkesh/ThunderBolt-HT) · [benchmark](https://github.com/ankitlinkesh/ThunderBolt-HT)
+
+##### Nowa  `C`  `MIT`  `abandoned`  `Tier B`
+
+Research C runtime for wait-free continuation-stealing fork/join, reported faster than lock-based Cilk Plus/TBB and OpenMP tasks.
+
+**Beats:** Cilk Plus and TBB lock-based continuation stealing; OpenMP tasks (libomp) — According to WebSearch snippets of the IPDPS 2021 paper (the PDF on www4.cs.fau.de is EGRESS_BLOCKED), Nowa is up to 1.64x faster than the lock-based Cilk Plus and TBB runtimes on a 256-hardware-thread machine, 1.17x on average, and 8.68x faster on average than OpenMP tasks under Clang's libomp, over a 12-benchmark fork/join suite. CPU model and compiler flags were not readable this session; run_benchmarks.sh shows 50 runs plus 1 warm-up per configuration, swept over 9 core counts.
+
+**Known shortcoming:** x86-64 GCC only (inline asm, nested functions); fixed 1024-slot deque with no overflow check; build.sh submodule uses SSH to gitlab.cs.fau.de, which fails for outsiders; no result data in the repo, and the paper numbers are snippet only (IPDPS PDF blocked).
+
+**Independent measurement:** snippet only
+
+**How:** It uses continuation stealing (work-first, as in Cilk): the parent's continuation sits in a per-worker deque and thieves resume it on a fresh stack from a pool, handled with a cactus-stack technique that swaps rsp/rbp in inline asm. Nowa's change over Fibril is replacing the lock-based THE deque protocol and the join arbitration with atomic counters, swap and CAS (the wait-free strand arbitration of the IPDPS 2021 paper), so the owner never takes a lock on pop or join. The lock-based THE protocol is kept behind -DDEQUE_USE_THE for comparison.
+
+**Use it when:**
+- Research or benchmarking of fork/join schedulers on many-core x86-64 Linux (the paper's headline is at 256 hardware threads)
+- Recursive divide-and-conquer C/C++ kernels (fib, nqueens, cholesky, strassen, quicksort) where spawn and join overhead and join contention dominate
+- As a reference implementation of wait-free continuation-stealing join to port into another runtime
+- Reproducing the IPDPS 2021 comparison against Cilk Plus, TBB and libomp with the bundled run_benchmarks.sh
+
+**Skip it when:**
+- Anything other than x86-64 with GCC: the fork and join paths use inline asm on rbp/rsp/r15, the C API relies on GCC nested functions, and it uses GCC optimize attributes
+- Production code: research prototype, a 0-star mirror of a Zenodo artifact, abandoned since 2022
+- Programs that need futures, task graphs, parallel-for or async I/O; it only supports fully-strict fork/join
+- Deep spawn nesting: the per-worker deque is a fixed 1024-slot ring (DEQUE_SIZE) with no overflow check in fibrili_push
+- Shared or oversubscribed machines: idle workers spin on random steals with sched_yield and never sleep
+
+**Integration:** static/shared lib (libfibril via autotools) plus headers · pthreads; Cilk Plus, TBB, OpenMP/libomp only for the comparison benchmarks; Fibril submodule for the baseline runtime · GCC 4.8+ (uses __atomic builtins, nested functions in C, C++ lambdas in the C++ path); autoconf 2.69, libtool · x86-64 Linux only (inline asm, mmap/madvise, pthread_attr_setstack)
+
+**Vs siblings:** Pick it over Staccato or Heartbeat Scheduling when you want to study continuation stealing with wait-free joins at very high core counts, rather than a usable library. For real C++ projects, Weave (Nim) is not an option, and a maintained pool such as citor or Fork Union is the practical choice.
+
+**Gotchas:**
+- build.sh runs 'git submodule update --init --remote' on an SSH URL (git@gitlab.cs.fau.de:i4/manycore/fibril.git), so the Fibril baseline build fails for anyone without FAU GitLab access; the Nowa library in src/ builds independently.
+- Functions that fork must carry the 'fibril' attribute (no-omit-frame-pointer), and stolen continuations run on pooled stacks of 1 MiB (PARAM_STACK_SIZE 0x100000), so deep recursion inside one strand can overflow.
+- The steal path retries a CAS in a loop (deque_steal), so the wait-free property applies to the owner's pop and the join arbitration, not to thieves.
+- The repo has no published result numbers; plots/ holds only plotting scripts, so the speedups must be taken from the paper.
+
+**Status:** Abandoned research artifact (mirror last touched 2022-10-01, 276 commits, MIT); small enough to vendor on x86-64 Linux with GCC, but treat it as a reference design rather than a dependency.
+
+[repo](https://github.com/black7375/nowa) · [benchmark](https://www4.cs.fau.de/Publications/2021/schmaus2021nowa.pdf)
 
 ### serialization-and-formats
 
@@ -45023,6 +46213,3164 @@ Allocation-free C library for Unicode NFD/NFC/NFKD/NFKC and case folding; ARM NE
 
 [repo](https://github.com/dzfrias/xxUTF) · [benchmark](https://github.com/dzfrias/xxUTF)
 
+### runtime-and-systems
+
+#### allocators-gcs
+
+##### ArenaAllocator (privateMwb)  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++20 fixed-capacity bump arena with frame rollback; about 1.2-1.8x faster per allocate() than std::pmr::monotonic_buffer_resource.
+
+**Beats:** std::pmr::monotonic_buffer_resource (stdArena in benchmarks/*/support/reference.h) — The committed comparisons are against std::pmr::monotonic_buffer_resource (not new[] as the README says): in the Google Benchmark v1.9.1 run on a 4-CPU GitHub Actions runner (clang Release, CPU model not recorded) allocate() costs 0.73 vs 1.31 ns small, 0.77 vs 1.07 ns for 256 B and 0.73 vs 1.07 ns at 64 B alignment (about 1.4-1.8x, derived from page data), while the custom-framework 1M-iteration run shows 0.62 vs 1.34 ms small. The headline reset+refill (64.7 ns vs 43.8 us) and failure-path (0.12 vs 907 ns) gaps come from release() freeing the upstream block and from exception handling, and construction is about 7x slower.
+
+**Known shortcoming:** The baseline stdArena is std::pmr::monotonic_buffer_resource (benchmarks/{custom,google}/support/reference.h), not new[], so it is compared against the C++ standard library directly. The README table matches neither committed baseline (v1.0.0.md, gv1.0.0.md). Google Benchmark run: allocate 0.73 vs 1.31 ns small, 0.77 vs 1.07 ns at 256 B. The reset-and-refill gap comes from release() freeing the 64 MiB upstream block every iteration; the failure-path gap is the std side throwing bad_alloc; construction is about 7x slower.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Classic bump-pointer (linear/monotonic) allocation: alignment is rounded with a power-of-two mask derived from countr_zero, followed by two independent bounds checks, so the hot path is a few integer ops on one cache line. There is no upstream resource, no virtual dispatch (unlike std::pmr::memory_resource::allocate) and no block chaining, which is where its edge over monotonic_buffer_resource comes from. Optional statistics compile away via if constexpr and [[no_unique_address]].
+
+**Use it when:**
+- Per-frame or per-request scratch memory with a known upper bound, reclaimed all at once with reset() or a scoped frame.
+- Hot loops doing many small, short-lived allocations (a few to a few hundred bytes) where a virtual call into std::pmr::monotonic_buffer_resource shows up.
+- Code that must treat out-of-memory as a plain nullptr branch with no exceptions (games, embedded-ish, real-time paths).
+- Over-aligned blocks (cache-line or page aligned) carved from one buffer, provided the arena is constructed with that base alignment.
+
+**Skip it when:**
+- Unknown or unbounded memory needs: capacity is fixed at construction and there is no growth or chaining.
+- Workloads that need per-object free or reuse of freed holes; destroy() never returns storage.
+- When you need std::pmr containers or an allocator-aware interface; it is not a memory_resource, so std::pmr::monotonic_buffer_resource over a fixed buffer is the drop-in choice.
+- Many short-lived arenas: construction is about 7x slower than monotonic_buffer_resource (23.4 ns vs 3.3 ns in the committed Google Benchmark run) because the buffer is allocated eagerly.
+- Shared use across threads: no synchronization is documented or present.
+
+**Integration:** header-only · none (CMake 3.20+ for the install/find_package path; Google Benchmark only for the benchmark suite) · C++20 (concepts, <bit>, [[no_unique_address]]); README lists GCC, Clang, MSVC and AppleClang as tested · any (portable C++20, no intrinsics)
+
+**Vs siblings:** Pick it over NotKeira/fast-alloc or cleeus/obstack when you want a single bounded buffer with nested RAII rollback, nullptr-on-full semantics, and a fuzzed, sanitizer-tested C++20 header; pick fast-alloc for pool (fixed-size free list) needs and a general malloc replacement such as mimalloc-class siblings for anything unbounded.
+
+**Gotchas:**
+- Preconditions are assert()-only (AP_PRE expands to assert): with NDEBUG, a ninth nested beginFrame() writes past the 8-slot frame stack, endFrame() without a matching beginFrame() underflows frameDepth_, and a request alignment above the construction alignment is silently not honored.
+- Reset + refill and failure-path speedups (hundreds to hundreds of thousands of percent) are not like-for-like: the benchmark calls monotonic_buffer_resource::release(), which returns its 64 MiB upstream block so the refill re-allocates it every iteration, and the bounded std side signals exhaustion by throwing std::bad_alloc that the loop catches.
+- The README describes the baseline as 'a naive new[] + linear-scan stdArena', but benchmarks/{custom,google}/support/reference.h define stdArena as std::pmr::monotonic_buffer_resource; and the README table's numbers match neither committed baseline (v1.0.0.md or gv1.0.0.md).
+- Several committed Google Benchmark rows (destroy_*, reset_arena, reset_std) report 0.00 ns, i.e. the work was optimized away; ignore them.
+
+**Status:** Active (v1.0.0 released 2026-07-28, commits into October 2026, 1 star, no issues filed); MIT, small and header-only, so easy to vendor, with CI for sanitizers, clang-tidy, CodeQL and ClusterFuzzLite differential fuzzing.
+
+[repo](https://github.com/privateMwb/ArenaAllocator) · [benchmark](https://github.com/privateMwb/ArenaAllocator#benchmarks)
+
+##### Bloodmoon001/memory-allocator  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++17 fixed-capacity, single-type pool with intrusive free list; about 10x faster than MSVC malloc/free on alloc-free pairs.
+
+**Beats:** malloc/free — Author-run Google Benchmark on an Intel i5-12450H, Windows 11, MSVC 2022 x64-Release (flags not stated): 1024 LIFO int alloc+free pairs take 2,731 ns vs 29,067 ns with malloc/free (about 2.7 vs 28 ns per pair), 256 std::string create+destroy take 7,240 vs 19,826 ns, and 10,000 bulk allocations take 54,860 vs 433,902 ns; the 188M vs 23M ops/s throughput row matches the bulk-10,000 row restated as items per second (derived from page data). In the bulk test the pool side releases with reset(), which re-links all 100,000 slots each iteration, while malloc frees each pointer, so the two sides do different release work.
+
+**Known shortcoming:** reset() is O(N), not O(1): it relinks all 100,000 slots every bulk iteration, so the bulk harness is biased against the pool. The 188M vs 23M ops/s throughput row restates the bulk-10,000 row. No thread safety; double free is checked only by assert (unchecked in Release).
+
+**Independent measurement:** code reading by enricher
+
+**How:** Classic fixed-size pool (segregated free list): free slots store a next pointer inside themselves, so allocation pops the list head and deallocation pushes onto it, a few loads and stores with no size lookup, no locking and no header. Storage is a contiguous inline array, so a LIFO alloc/free loop keeps reusing one hot cache line. Against Windows UCRT malloc (a heap call per request) that is enough for about 2.7 ns vs 28 ns per pair.
+
+**Use it when:**
+- Single-threaded code that churns one small object type (nodes, messages, particles) with a known upper bound on live objects.
+- Hot loops on Windows/MSVC where the CRT heap is the bottleneck and the objects never escape a single owner.
+- Embedded or no-heap settings where a static, compile-time-sized arena for one type is wanted.
+- As a teaching-sized (about 130 lines) pool to copy into a project and adapt.
+
+**Skip it when:**
+- Any multi-threaded use: there are no atomics or locks, and thread-safety is not documented.
+- Mixed sizes or types, or an unknown maximum count: capacity is the template argument N and allocate() returns nullptr when exhausted, with no growth.
+- Large N on the stack: slots_ is an inline array, so PoolAllocator<int, 100000> as used in the benchmark is 800 KB of stack, near the 1 MB Windows default.
+- Code that needs std::allocator or pmr integration, or drop-in replacement of malloc/new.
+- As evidence of beating mimalloc or glibc: only MSVC UCRT malloc was compared, and modern general allocators have thread-local fast paths for this pattern.
+
+**Integration:** header-only · none (Google Test and Google Benchmark via vcpkg only for tests/bench) · C++17 (uses std::byte); built with MSVC 2022, CMake 3.20+ for the project files · any (portable C++17; only tested on Windows 11 x64 per README)
+
+**Vs siblings:** Choose it over fast-alloc (NotKeira) or atul-singh-as/custom-memory-allocator only if you want the smallest single-header, single-type pool with create/destroy and owns(); for anything thread-safe or general-purpose, use a real allocator such as mimalloc or a TLSF like XenoAtom.Allocators, and for scoped bulk lifetime an arena such as cleeus/obstack.
+
+**Gotchas:**
+- reset() is O(N), not O(1): it re-links all N slots every call, and it does not run destructors of live objects; the destructor also leaves live objects undestroyed.
+- deallocate() checks ownership only with assert, so in Release builds a foreign pointer or a double free silently corrupts the free list.
+- allocate() returns uninitialised storage cast to T*; use create() for non-trivial types. The free-list links are accessed through reinterpret_cast without std::launder.
+- N = 0 is not rejected and the constructor then indexes slots_[N - 1].
+
+**Status:** Active but brand-new (3 commits, 0 stars, last commit 2026-09-29); MIT-licensed and tiny, so copyable, but a learning-project pool rather than a hardened allocator.
+
+[repo](https://github.com/Bloodmoon001/memory-allocator) · [benchmark](https://github.com/Bloodmoon001/memory-allocator)
+
+##### custom-memory-allocator (atul-singh-as)  `C++`  `MIT`  `active`  `Tier C`
+
+Educational C++20 fixed-size pool and first-fit free-list allocators; the pool beats macOS malloc/free on bulk 16 B allocation.
+
+**Beats:** malloc/free (macOS system allocator) — The README's sample output, measured on an unspecified macOS machine (Apple clang, -O2, Release), shows the pool completing 200000 16-byte allocations and frees in bulk in 0.89 ms against 5.68 ms for macOS malloc/free (about 6.4x, derived from page data). The free-list allocator was slower (8.06 ms), and the churn column is not usable because malloc reads 0.00 ms. The README's '5-15x' and 'FreeList clearly faster on churn' claims are not supported by its own sample.
+
+**Known shortcoming:** Harness bias: the Pool constructor prefaults its pages outside the timed loop while malloc pays first-touch faults inside it, and the 0.00 ms malloc churn is likely elided. README says both allocators assert on double free but only FreeListAllocator does; PoolAllocator::Free checks nothing. Pool also misaligns slots when blockSize is not a multiple of the alignment (bench sizes are multiples of 16, so unaffected).
+
+**Independent measurement:** code reading by enricher
+
+**How:** The pool is a classic intrusive free list (a slab allocator): each free slot's first 8 bytes point to the next free slot, so Allocate and Free are a single pointer pop or push with no size classes, locking or metadata lookup. The free-list allocator is textbook first-fit (or best-fit) over a doubly linked free list, with boundary headers holding physical prev/next links for coalescing. It walks the list linearly, so it is not a fast path.
+
+**Use it when:**
+- Single-threaded code that allocates many same-sized objects (nodes, particles, entities) and knows an upper bound on their count up front
+- Frame-style workloads that can drop everything at once with PoolAllocator::Reset()
+- As a small, readable reference for how slab and free-list allocators work before adopting a production allocator
+- Vendoring about 300 lines of MIT code when a full allocator dependency is not wanted
+
+**Skip it when:**
+- Any multithreaded allocation: neither allocator is thread-safe and there are no thread caches
+- As a general malloc replacement: FreeListAllocator was slower than macOS malloc in its own sample (8.06 ms vs 5.68 ms bulk at 16 B) and does a linear first-fit search
+- When the object count is unbounded: the pool returns nullptr once exhausted and never grows
+- Security-sensitive code: no guard pages, no poisoning, no ownership check in PoolAllocator::Free
+- Production use in general: one commit, 1 star, and the author calls it an educational/portfolio implementation
+
+**Integration:** source-drop (CMake static lib target 'allocator') · none · C++20 (CMake 3.16+); uses aligned ::operator new · any (build instructions are macOS-only; no platform-specific code seen)
+
+**Vs siblings:** Pick it only for learning, or to vendor a minimal single-threaded pool; NotKeira/fast-alloc gives a similar pool with Linux numbers on a named CPU, and Bloodmoon001/memory-allocator and privateMwb/ArenaAllocator cover the same educational niche. For anything general-purpose, use the catalogued malloc replacements (mimalloc-class allocators, IsoAlloc, Mesh).
+
+**Gotchas:**
+- The README says both allocators assert on double free, but only FreeListAllocator::Free has that assert; PoolAllocator::Free has no double-free or ownership check and silently corrupts the free list.
+- PoolAllocator rounds blockSize up only to sizeof(void*), not to the requested alignment, so a block size that is not a multiple of the alignment (e.g. 24 B with 16 B alignment) returns misaligned slots after the first one. The benchmark sizes are all multiples of 16, so they are unaffected.
+- Harness bias: the pool's constructor, outside the timed region, threads the free list through every slot and so pre-faults all pages, while the malloc bulk timing includes first-touch page faults. The churn column shows malloc at 0.00 ms, which is consistent with the compiler eliding the unused malloc/free pair, so churn comparisons are meaningless.
+- blockSize * blockCount is not checked for overflow, and FreeListAllocator stores an 8-byte offset before every user pointer plus a 48-byte header, so per-allocation overhead is large for 16 B objects.
+
+**Status:** One initial commit (2026-09-23) on a 1-star MIT repo labelled educational by its author; small enough to read and vendor, but not hardened.
+
+[repo](https://github.com/atul-singh-as/custom-memory-allocator) · [benchmark](https://github.com/atul-singh-as/custom-memory-allocator/blob/main/README.md)
+
+##### elfmalloc (allocators-rs)  `Rust`  `Apache-2.0 OR MIT`  `abandoned`  `Tier C`
+
+Rust research malloc (elfmalloc) with a C API, faster than glibc ptmalloc2 and often 2017 jemalloc on multithreaded benchmarks.
+
+**Beats:** glibc ptmalloc2 (glibc 2.19) and jemalloc (dev build, August 2017); also llalloc and rpmalloc — The authors LD_PRELOADed elfmalloc into scalloc-artifact threadtest and shbench (objects of 64 B or less, and objects of a few KB) and into an adapted rpmalloc-benchmark producer-consumer run at 1-32 threads on dual Xeon E5-2620v4 under WSL, comparing against glibc 2.19 ptmalloc2, an August 2017 jemalloc dev build, llalloc and rpmalloc. The plots are normalised to ptmalloc2 and show elfmalloc leading most configurations, with jemalloc ahead at 32 threads on small-object threadtest and llalloc ahead on shbench at low thread counts. No compiler flags or numeric ratios are given, and the page is marked work in progress.
+
+**Known shortcoming:** README says early alpha; crashes on Mac, 32-bit untested. Dirty pages are never returned to the OS (no madvise). Needs a 2018-era nightly Rust: feature gates it uses (const_size_of, old Alloc trait) have since been removed.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Size-class slabs ('Slags') with a bit-set of free objects; the claimed bit and the free count share one word so remote frees are a single fetch-or plus fetch-add with no retry loop. A per-thread, per-size-class fixed-size stack (MagazineCache front end, after Bonwick's magazines) serves most allocations and frees without atomics and batches remote frees by composing masks before the fetch-or. Global pools are bagpipes (weakly ordered concurrent bags) instead of locked lists, and free() finds an object's path by rounding the pointer down to a 2 MiB-aligned header, following scalloc's virtual-span idea.
+
+**Use it when:**
+- Research or comparison runs on 64-bit Linux where you want a scalloc-style allocator with a different global-structure design to test against.
+- Multithreaded C or C++ programs dominated by small-object churn or producer-consumer frees, where the authors' plots show it ahead of ptmalloc2 and usually ahead of 2017 jemalloc.
+- Rust projects that need a type-specific object allocator (slab-alloc, object-alloc traits) and can build with an old nightly toolchain.
+- Throughput matters more than resident memory and the process is long-running with stable allocation patterns.
+
+**Skip it when:**
+- Production use: the README calls elfmalloc 'early alpha' with 'certainly undiscovered bugs', and the project has been unmaintained since 2020.
+- Memory-constrained services: dirty pages are never returned to the OS (the design doc says there is no madvise reclamation), and threadtest and producer-consumer show clearly higher memory use than the competitors.
+- macOS, Windows or 32-bit targets: Mac 'will currently encounter bugs or crashes', 32-bit support is untested, and Windows CI was never fixed (issue #133).
+- Anyone needing a modern drop-in: mimalloc, snmalloc and current jemalloc/tcmalloc were never compared, so the 2017 lead may not hold.
+
+**Integration:** crate (elfmalloc) plus a cdylib shared lib (elfc) for LD_PRELOAD · Sibling path crates (alloc-fmt, alloc-tls, bagpipe, bsalloc, malloc-bind, mmap-alloc) plus lazy_static, libc, log 0.3, num_cpus, smallvec 0.4, sysconf · Rust nightly from about 2018 (uses feature gates allocator_api, const_fn, const_size_of, thread_local_state, core_intrinsics); exact pinned nightly not documented · 64-bit Linux (relatively complete); macOS crashes; 32-bit untested; Windows not working in CI
+
+**Vs siblings:** Mesh targets memory compaction and IsoAlloc targets hardening; pick elfmalloc only to study or benchmark a lock-free, scalloc-like Rust design that can be preloaded into C programs. For production C++ allocator replacement, a maintained sibling such as Mesh, or mimalloc outside this list, is the safer choice.
+
+**Gotchas:**
+- lib.rs relies on nightly feature gates that have since been removed or renamed (const_size_of, the old Alloc trait), so a current nightly is unlikely to build it without patches.
+- When the crate is linked into a Rust program without the use_default_allocator feature, bsalloc becomes the global heap and the README warns that other allocations get slower.
+- The c-api feature, which elfc enables, speeds up the C API at the cost of worse memory use for the Rust Alloc API.
+- It reserves a very large (many-terabyte) virtual region up front in 2 MiB pages, which can trip overcommit limits, ulimit -v or sanitizers.
+
+**Status:** Abandoned since 2020 (alpha, 2018-era nightly Rust); Apache-2.0/MIT, so it is free to copy, but it is research code to read and benchmark rather than to ship.
+
+[repo](https://github.com/ezrosent/allocators-rs) · [benchmark](https://github.com/ezrosent/allocators-rs/blob/master/info/elfmalloc-performance.md)
+
+##### FastAlloc  `C++`  `MIT`  `active`  `Tier C`
+
+Thread-caching slab allocator (C++17) that beats glibc malloc on small mixed-size alloc/free pairs and returns memory aggressively.
+
+**Beats:** glibc malloc, jemalloc 5.3.0, mimalloc 2.1.7 — The author's bench_suite (11 Larson/mimalloc-bench style workloads at 1, 2 and 4 threads, median of 5, one allocator per process, both sides called through the same function pointers) on a 2-vCPU Intel Xeon VM, GCC 14.2 -O3 -march=native + LTO, Debian 13, shows FastAlloc winning 20/33 cells vs glibc 2.41, 21/33 vs jemalloc 5.3.0 and 12/33 vs mimalloc 2.1.7. The report says contended cells are noisy and that the win/loss pattern, not the multipliers, should be quoted.
+
+**Known shortcoming:** Harness flaw: bench_suite.cpp run_overhead calls fast_alloc_purge() for FastAlloc but only malloc_trim(0) for the LD_PRELOADed jemalloc and mimalloc (no arena purge mallctl, no mi_collect) and measures right away, so '16.0 MB vs 171.8/552.2 MB retained after purge' is not like for like; the throughput cells are fair. Not a malloc drop-in: no malloc/free symbols exported, only a namespaced API plus an optional new/delete override (aligned new not covered); 16 B header per block.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Per-thread TLS bins (pthread keys on Linux, FLS on Windows) serve 512 size classes in 16-byte steps up to 8 KB without locks; misses refill in adaptive batches (16 blocks, doubling) from 16 striped global arenas of 64-128 KB slabs. Cross-thread frees go to lock-free MPSC pending queues per arena, which later refills consume directly. Blocks above 8 KB use a best-fit, splitting page-span cache (2 MB per bin, 64 MB global) carved from 4 MB mappings released with madvise(MADV_DONTNEED), so large-block cycles stay in userspace; large realloc uses mremap.
+
+**Use it when:**
+- C++ services dominated by small (16 B to 4 KB) mixed-size new/delete pairs, where the report shows 1.16-2.98x over glibc 2.41 at 1-4 threads
+- Repeated large-block (8 KB+) alloc/free cycles, measured 4.6-14.6x faster than jemalloc 5.3.0 and mimalloc 2.1.7 because spans are recycled from a userspace cache
+- Programs that need to hand memory back after a load spike and can call fast_alloc_purge() explicitly
+- Code that wants an allocator-level debug mode (canaries, poisoning, leak dump) switchable at build time
+
+**Skip it when:**
+- realloc-heavy growth patterns: 0.28x vs glibc, which grows its heap top in place
+- Steady constant-live-set churn or ramp-up against mimalloc or jemalloc (0.36-0.75x), and thread spawn/exit storms against glibc (0.48-0.62x)
+- Bulk free of millions of objects at once: free phase 185 ms vs 64 ms for glibc on 1M objects
+- When you need a process-wide malloc replacement for C libraries: there is no malloc/free interposition, only new/delete
+- Production use that needs a track record: 3 stars, single author, no releases, all numbers from one 2-vCPU VM
+
+**Integration:** static lib · none for the library (Google Test and Google Benchmark are fetched via CMake FetchContent for tests and benchmarks only) · C++17, CMake; tested with GCC 14.2, Clang and MSVC in CI · Linux and Windows on x86-64 (span pool and mremap paths are Linux-only); other architectures not documented
+
+**Vs siblings:** Pick it over v8malloc or mem++ when you want a C++17 static library with an explicit purge call and a built-in debug mode, and your workload is small-object pairs or large-block cycles; for constant-live-set churn or ramp workloads mimalloc remains faster per this repo's own matrix, and fast-alloc (NotKeira) is the simpler choice if you only need fixed pools or stack arenas.
+
+**Gotchas:**
+- The memory-retention headline (16.0 MB vs 171.8/552.2 MB for jemalloc/mimalloc after purge) is not like-for-like: bench_suite.cpp calls fast_alloc_purge() for FastAlloc but only malloc_trim(0) for the LD_PRELOADed allocators, never jemalloc's arena purge mallctl or mi_collect, and measures immediately, before their decay timers run.
+- Every small block carries a 16-byte header (USER_OFFSET = 16) and classes step by 16 B, so RSS/live was 1.08 vs glibc 0.78 in the report; calloc zeroes the whole rounded block (Calloc/10B 11.9x slower than glibc).
+- Freeing a pointer FastAlloc did not allocate (for example memory from a C library's malloc) is undefined behaviour in release builds; only FASTALLOC_DEBUG detects it.
+- The override covers plain and sized new/delete only; aligned (std::align_val_t) new/delete are not overridden and go to the system allocator.
+
+**Status:** Active as of the 2026-10-02 commits (100 commits, last one 'Restore repository to a2a342b6 baseline'), MIT-licensed and small enough to vendor, but a 3-star single-author project with raw results gitignored.
+
+[repo](https://github.com/Komal-ai417/FastAlloc) · [benchmark](https://github.com/Komal-ai417/FastAlloc/blob/main/docs/performance_report.md)
+
+##### IsoAlloc  `C`  `Apache-2.0`  `active`  `Tier C`
+
+Security-hardened C11 malloc replacement (size-isolated zones, guard pages, canaries) that runs near glibc ptmalloc speed.
+
+**Beats:** glibc malloc only (the 'jemalloc' row of PERFORMANCE.md actually times IsoAlloc) — In a single-threaded micro test of about 1.8 million alloc/calloc/realloc operations (sizes 16 B-42 KB, every other one freed), the author measured IsoAlloc at 0.081 s, 1.04 s and 0.83 s vs glibc 2.31 ptmalloc at 0.66 s, 2.73 s and 1.94 s. That was on an ARM64 Ubuntu 20.04 docker container on a macOS host, clang -O2, with flags inferred from the Makefile. The 'jemalloc' row in the same table actually re-runs IsoAlloc, so it gives no jemalloc comparison, and mimalloc-bench shows IsoAlloc slower than jemalloc and mimalloc.
+
+**Known shortcoming:** Harness bug in PERFORMANCE.md: the 'jemalloc' row runs LD_PRELOAD=./libjemalloc.so build/tests, but build/tests links the IsoAlloc sources and calls iso_alloc directly (its output prints iso_alloc/iso_free), so that row times IsoAlloc, not jemalloc. The mimalloc-bench table was built with make library_benchmark (canaries, freelist randomization, MASK_PTRS off), not the default config. The perf-stat section says 'AWS t2.xlarge' but shows armv8 counters.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each zone tracks chunk state in a 2-bit-per-chunk bitmap that is scanned 64 bits at a time (with ARM NEON loops when available), so it avoids linked free lists. Several caches cut the hot path: a per-zone free-bit-slot list, a chunk-to-zone lookup table keyed on the address MSBs, a thread-local MRU zone cache (8 entries), and a thread-local free quarantine that batches frees. Default zones for 16-8192 B are created in the constructor.
+
+**Use it when:**
+- Client-side desktop or mobile C/C++ apps with a risky attack surface (parsers, media, browsers), where heap hardening is worth some speed and memory
+- Replacing glibc malloc via LD_PRELOAD (use make library_less_strict) to get double-free, canary and guard-page checks at roughly ptmalloc speed in mostly single-threaded programs
+- Fuzzing and testing builds, where FUZZ_MODE, ALLOC_SANITY (GWP-ASan-like sampling) and leak detection catch bugs ASan misses (wild, unaligned and double frees)
+- Code that wants explicit per-type heaps through private zones, optionally with ARM MTE on armv8.5-a
+
+**Skip it when:**
+- Allocation-heavy multithreaded servers: all threads share one global lock on the root; in mimalloc-bench larsonN took 1328.9 s vs about 1.0-1.2 s for jemalloc and mimalloc, and redis 7.58 vs 3.16 (je) and 2.78 (mi)
+- Memory-constrained processes: RSS is several times higher than jemalloc/mimalloc (cfrac 30612 KB vs 4552/2484 KB; redis 50516 vs 9492/7084 KB) because of 4 MB zones, guard pages and canaries
+- 32-bit targets (not supported); Windows (not supported); FreeBSD has only partial support with flaky CI
+- When you only need speed: jemalloc or mimalloc beat it on every mimalloc-bench test except a tie on barnes
+- Single allocations above 4 GB (the big-zone limit)
+
+**Integration:** shared lib (LD_PRELOAD/DYLD_INSERT_LIBRARIES or linked), or object files via make c_library_objects; C++ new/delete via make cpp_library · none beyond libc and pthreads (macOS links the Security framework) · C11 (C++17 for the C++ interface); Makefile defaults to clang with -O2 and -flto · 64-bit Linux and macOS (x86-64, arm64), Android arm64 via ndk-build, partial FreeBSD, minimal Solaris/Illumos
+
+**Vs siblings:** Pick IsoAlloc over speed-first allocators like mimalloc-style siblings (v8malloc, FastAlloc, Kaname-Shiki) or Mesh when heap-exploit mitigation is the goal and you can accept higher RSS and poor multithreaded scaling. If raw throughput or memory footprint matters, pick one of those instead.
+
+**Gotchas:**
+- The PERFORMANCE.md 'jemalloc' row is not a jemalloc measurement: it runs LD_PRELOAD=./libjemalloc.so build/tests, but build/tests is compiled with the IsoAlloc sources and calls iso_alloc/iso_free directly (its output even prints 'iso_alloc/iso_free'), so that row times IsoAlloc again
+- The malloc_cmp_test comparison uses two binaries (build/tests calling iso_* directly, with LTO, vs build/malloc_tests calling malloc), times with clock() CPU time, and runs single-threaded on an ARM64 docker container on macOS; the perf-stat section calls the same host an 'AWS t2.xlarge' while showing armv8 PMU counters
+- The mimalloc-bench table was produced with 'make library_benchmark', which turns off canaries, freelist randomization, pointer masking and ABORT_ON_UNOWNED_PTR, not the secure default configuration the text implies
+- Default build behavior: aborts on unowned pointers, returns a PROT_NONE page for malloc(0), and prints leak and usage reports from the destructor in DEBUG/LEAK_DETECTOR builds; MAX_ZONES (8192) caps the total heap and causes OOM-style aborts if exceeded
+
+**Status:** Active (last commit 2026-05-06), Apache-2.0, small enough to vendor; positioned by its author as fast enough for client-side apps but not ready for performance-sensitive server workloads.
+
+[repo](https://github.com/struct/isoalloc) · [benchmark](https://github.com/struct/isoalloc/blob/master/PERFORMANCE.md)
+
+##### jdz_allocator  `Zig`  `MIT`  `stale`  `Tier C`
+
+rpmalloc-style span allocator for Zig; claims parity with the rpmalloc Zig port and lower memory, no shown win over malloc.
+
+**Beats:** C malloc (glibc via Zig c_allocator), Zig GeneralPurposeAllocator, rpmalloc Zig port, zimalloc — First-party charts only: mimalloc-bench via LD_PRELOAD and a Zig microbenchmark (75,000,000 allocations per thread of 1-80000 bytes, no cross-thread frees) on an 8-core i7-11800H under Linux, Zig ReleaseFast, against c_allocator (glibc malloc), Zig GPA, the rpmalloc Zig port and zimalloc. The text claims the global variant matches the rpmalloc Zig port within margin of error with less memory, and that the default variant is significantly slower than rpmalloc at high contention; chart values were not readable here.
+
+**Known shortcoming:** Zig, not C++. libso calloc multiplies size by count with no overflow check; libjdzglobalwrap calls pthread_setspecific in the parent thread, so leaf threads never deinit. Open issues: 9 (TSan data races) and 6 (Windows free segfault), no maintainer replies. src/bench.zig times only jdz, jdz-global, c and GPA; the rpmalloc-zig and zimalloc numbers come from a setup that is not in the repo. The pastebin and imgur charts were unreadable.
+
+**Independent measurement:** code reading by enricher
+
+**How:** It copies rpmalloc's design: 64 KiB spans, each holding one size class, with the span header found by masking the pointer, and size classes of 16 B granularity up to 2048 B and 256 B granularity up to 32512 B. Each arena allocates from one thread at a time while other threads may free into it; arenas keep a lock-protected span stack, a bounded MPSC span cache and large-span caches, and the global variant adds bounded MPMC global caches. Spans are mapped in batches of 64 (4 MiB plus 64 KiB padding) to amortize mmap calls.
+
+**Use it when:**
+- Zig 0.13 programs that want an rpmalloc-like thread-caching allocator behind std.mem.Allocator rather than GeneralPurposeAllocator.
+- Zig code that must pass an allocator explicitly and cannot use threadlocal state: JdzAllocator works without deinitThread calls.
+- Experiments comparing span allocators in mimalloc-bench through LD_PRELOAD, where its README charts can serve as a starting point.
+- Workloads with up to about 8 allocating threads (the default shared_arena_batch_size), where arena stealing and false sharing do not occur.
+
+**Skip it when:**
+- Production C or C++ services: the author says it is not battle-tested and may error under some loads; a TSan data-race report (issue #9) and Windows free() segfaults (issue #6) are open and unanswered.
+- When you need a measured speedup over glibc malloc, mimalloc or jemalloc: the README text claims only parity with the rpmalloc Zig port, and mimalloc and jemalloc were never compared.
+- High-contention use of the default JdzAllocator: the README says it is significantly slower than rpmalloc there, and with more threads than shared_arena_batch_size arenas are stolen and false sharing follows.
+- Systems with pages larger than 64 KiB (some aarch64 and ppc64 kernels): not supported.
+- Memory-tight workloads resembling xmalloc-testN, where the global variant shows high RSS that the author was still investigating.
+
+**Integration:** module (Zig package via build.zig.zon) plus static lib and LD_PRELOAD shared libs · none (libc only for the shared libraries) · Zig 0.13.0 (master pinned to it; older Zig versions needed older commits) · Linux tested; Windows has an open segfault report; page size must be 64 KiB or less
+
+**Vs siblings:** Pick it only for Zig projects that want an rpmalloc-like allocator in pure Zig; for C or C++ processes, Spaces, Kaname-Shiki or FastAlloc publish measured wins against glibc, jemalloc or mimalloc, and mem++ at least gives chart values versus jemalloc and mimalloc.
+
+**Gotchas:**
+- libso calloc computes size * count with no overflow check, so a huge product can wrap in ReleaseFast builds and return a buffer smaller than the caller asked for.
+- libjdzglobalwrap calls pthread_setspecific in the thread calling pthread_create, not in the new thread, so the destructor that calls jdz_deinit_thread fires only for threads that themselves spawn threads; leaf worker threads may never return their spans.
+- malloc(0) returns NULL and aligned_alloc or memalign with an invalid alignment panics instead of returning EINVAL.
+- src/bench.zig only times jdz, jdz-global, c_allocator and Zig GPA; the rpmalloc-zig and zimalloc numbers in the charts come from a separate setup not in the repo, and every thread uses the same PRNG seed (1337).
+
+**Status:** Stale since November 2024 (last commit 2024-11-09) with two open bug reports and no maintainer replies; MIT-licensed and small, so it can be vendored by Zig users, but treat it as experimental.
+
+[repo](https://github.com/joadnacer/jdz_allocator) · [benchmark](https://github.com/joadnacer/jdz_allocator)
+
+##### micromalloc  `C++`  `MIT`  `stale`  `Tier C`
+
+Low-overhead general-purpose C/C++ malloc that usually beats glibc malloc on speed while using about as little memory.
+
+**Beats:** glibc malloc — First-party plots (md/benchmarks.md) compare micro with glibc 2.17, jemalloc 5.3.0, mimalloc 1.8 and snmalloc 3.14, built with gcc 10.3.0 (flags not stated) on a Xeon Gold 5220R under CentOS 7: same-thread alloc/free of random sizes up to 500 or 5000 bytes for 1-10 threads, a cross-thread random-free test and Larson, plotting Mops/s against peak-RSS/requested-bytes. Micro is faster than glibc with similar overhead, slower than snmalloc and jemalloc, and has the lowest overhead cross-thread; no numbers are given in text. Harness note from benchs/alloc_dealloc_same_thread.cpp: every allocator runs in sequence in one process (micro first), and overhead is computed from getrusage peak RSS, which is a lifetime maximum. If the plots came from such runs, later allocators' overhead can never read lower than micro's peak. The cleanup call (micro_clear, malloc_trim, mi_heap_collect) is inside the timed region, and snmalloc gets no cleanup.
+
+**Known shortcoming:** Measurement flaw in benchs/alloc_dealloc_same_thread.cpp: all allocators run in sequence in one process with micromalloc first, and the overhead uses getrusage peak RSS, a lifetime maximum, so later allocators cannot read lower than micromalloc's peak; cleanup is inside the timed region and snmalloc gets no cleanup. This weakens the 'lowest memory overhead' claim.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Medium allocations (under 512 KiB) use a two-level radix tree of free chunks sorted by size with fine-grained locking: a true best-fit with immediate coalescing, O(1) like TLSF but exact instead of approximate. Small allocations (under 656 bytes by default) use 16-byte-spaced segregated size classes in 4 KiB-aligned blocks whose header is found by address masking, and those blocks are themselves carved from the radix tree. Threads are bound round-robin to per-core arenas instead of using thread-local caches, which keeps memory low and makes thread creation cheap (the reason it does well on Larson).
+
+**Use it when:**
+- Replacing glibc malloc (or the Windows Low-fragmentation Heap) system-wide or per-process where resident memory matters more than the last bit of throughput.
+- Many-threaded programs where glibc malloc scales negatively and per-thread caches in jemalloc/mimalloc would inflate RSS.
+- Workloads that create and destroy many short-lived threads (Larson-style servers).
+- Arena-style code that wants independent heaps freed in one call, or allocation out of a fixed buffer or a memory-mapped file.
+- Small-memory systems: memory level 0 targets machines with only a few MBs.
+
+**Skip it when:**
+- Raw allocation throughput is the goal: the README says it is usually slower than mimalloc, snmalloc, tbbmalloc and jemalloc, and the cross-thread plot shows snmalloc and jemalloc well ahead.
+- Security-sensitive or attacker-facing heaps: the README states it has no hardening against heap exploitation.
+- macOS and Android: replacement of the system allocator is untested there per the README.
+- Huge-page dependent workloads: huge pages are not supported yet.
+- Projects that need a well-tested, widely deployed allocator: single author, 33 stars, test suite described as incomplete.
+
+**Integration:** static lib, shared lib, or header-only (define MICRO_HEADER_ONLY); micro_proxy for malloc replacement · none (embeds a simplified komihash) · C++14 (CMake 3.8+); gcc, clang or msvc · Linux and most Unix systems, Windows; macOS/Android untested for replacement
+
+**Vs siblings:** Pick it over v8malloc or FastAlloc when lower RSS than glibc matters more than throughput, and over Mesh when you want low overhead without page meshing; pick a TLSF allocator like XenoAtom.Allocators or rlsf instead for a single-threaded or embedded pool with deterministic timing.
+
+**Gotchas:**
+- Memory profile is a compile-time choice (MICRO_MEMORY_LEVEL 0-4, default 2); levels 3-4 trade memory for speed, and the radix tree has a static per-arena cost that grows with the level.
+- Arena depletion (MICRO_DEPLETE_ARENAS=1, default) lowers memory at the expense of parallelism; behavior is also tunable through many MICRO_* environment variables read at startup.
+- With the file page provider, setting MICRO_PAGE_FILE_PROVIDER to a fixed filename makes spawned child processes share the same file ('certain crash' per the README); use MICRO_PAGE_FILE_PROVIDER_DIR instead.
+- All allocations are only 16-byte aligned.
+
+**Status:** Stale since late 2024 (one closed issue, single author) but MIT-licensed, dependency-free and usable header-only, so it is easy to trial via the mp LD_PRELOAD tool before committing.
+
+[repo](https://github.com/Thermadiag/micromalloc) · [benchmark](https://github.com/Thermadiag/micromalloc/blob/main/md/benchmarks.md)
+
+##### obstack (cleeus)  `C++`  `BSL-1.0`  `abandoned`  `Tier C`
+
+Pointer-bump C++ object-stack arena with destructor tracking; about 100x faster than glibc malloc in its own 2012 benchmark.
+
+**Beats:** malloc/free and new/delete (glibc-2.14.1, gcc-4.5.3 libstdc++, Linux 3.4) — arena_benchmark.cpp replays one seeded sequence of random sizes from 1 B to 4 MB (in-order, reverse and random free order) through malloc/free, new[]/delete[] and obstack, without touching the payload. On an Intel Atom N450 (gcc-4.5.3 -O2, glibc-2.14.1, Linux 3.4) the author got 272 ms vs 26,882 ms for malloc on 1 thread, and 125 ms vs 108,245 ms on 4 threads. Chunks average about 2 MB, so glibc's large-block mmap/munmap/trim path, a worst case for malloc, probably dominates the baseline. Multi-thread figures are per-thread times summed, not wall time. The README run used 1 GB total, but HEAD uses 512 MB after commit 9540299 ('lower memory usage in benchmark'), so HEAD does not reproduce the printed parameters exactly.
+
+**How:** Pointer bumping: each allocation aligns the top-of-stack pointer, writes a small chunk header (previous-chunk pointer, XOR-encrypted destructor pointer, checksum) and advances it, so no free lists are searched and no lock is taken. Freeing the top chunk rewinds the pointer past every chunk already marked destroyed; out-of-order frees only run the destructor and mark the chunk, so total work stays O(1) amortized. One arena per thread removes shared-heap contention.
+
+**Use it when:**
+- Parsers (JSON, XML, DER) or request handlers that build many short-lived objects and drop them all together or in roughly LIFO order
+- Per-thread scratch arenas where you know the peak size in advance and want no heap locking after setup
+- Code that needs destructors run for arena objects (unlike plain bump allocators), with some hardening against forged free pointers
+- Single-threaded hot loops where malloc/free of large, varied sizes shows up in profiles
+
+**Skip it when:**
+- Long-lived objects freed in random order: memory of a non-top object is not reusable until everything above it is freed, so the arena can stay full
+- Anything needing a standard allocator interface: no std::allocator/pmr adapter (README says interest faded without N2554 scoped-allocator support)
+- Unknown peak memory: capacity is fixed at construction and alloc returns NULL when it runs out, with no growth or chaining
+- Sharing one arena across threads: no internal locking
+- Production use without vetting: abandoned since 2015, C++03-era Boost code, arrays of non-POD types unsupported (TODO in header)
+
+**Integration:** static lib · Boost (utility, type_traits, static_assert headers; Boost.Random for the cookie in obstack.cpp; Boost.Thread and Boost.Test for benchmark and tests) · C++03 (built with gcc-4.5.3 in the README); CMake 2.8 · not documented (benchmarked on Linux x86)
+
+**Vs siblings:** Pick obstack over fast-alloc's pool and stack allocators when objects have mixed sizes and need destructors run on free, with out-of-order frees tolerated. SpeedMalloc is a general-purpose allocator with no public code and solves a different problem.
+
+**Gotchas:**
+- With asserts disabled, dealloc of an invalid or already-destroyed pointer makes mark_as_destructed return NULL and the code then calls that NULL destructor pointer, so the 'pointer checking' turns a bad free into a crash, not a safe no-op
+- The security cookies are seeded by XOR-ing 64 KiB of freshly new[]-ed, uninitialized heap memory (undefined behavior, weak entropy)
+- The destructor runs after memory is reclaimed in pop(); a throwing destructor is not handled (TODO in header)
+- Each object carries a chunk header plus alignment padding; size the arena with max_overhead(n), as the benchmark does
+
+**Status:** Abandoned (last commit 2015-01-06, benchmark untouched since August 2012, one open build issue from 2017), but BSL-1.0 and about 700 lines, so it is easy to vendor and modernize.
+
+[repo](https://github.com/cleeus/obstack) · [benchmark](https://github.com/cleeus/obstack)
+
+##### rlsf  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust no_std TLSF allocator with constant-time alloc/free; lower latency and far smaller code than dlmalloc on microcontrollers and wasm.
+
+**Beats:** dlmalloc (also buddy-alloc, umm_malloc, wee_alloc) — First-party FarCri.rs runs on an STM32F401 (Cortex-M4F) put rlsf's alloc/dealloc at 260-320 cycles vs 450-750 for the Rust dlmalloc crate (0.2.x, fed by a bump page source), 340-440 for buddy-alloc and 300-700 for umm_malloc (umm_malloc ignored alignment); a separate wasm build measured code size 1267 bytes vs 9613 for dlmalloc. Compiler version and flags are not given and the numbers appear only in chart alt text hosted on yvt.jp.
+
+**Known shortcoming:** Rust, not C++. The bench (stress.rs) compares against the Rust dlmalloc crate 0.2.1 behind a bump page source, not C dlmalloc; umm_malloc ignores alignment; no compiler version or flags.
+
+**Independent measurement:** first-party benchmark crate
+
+**How:** TLSF keeps segregated free lists indexed by a first level (power-of-two size class, found with leading_zeros) and a second level (SLLEN linear subdivisions, found by a rotate), with a bitmap per level so a fitting non-empty list is found with bit-scan instructions instead of a search. Every alloc and free is therefore O(1) with immediate coalescing of neighbours. rlsf caps each pool with a permanently occupied sentinel block instead of a last-block flag, which the README says simplifies the code and improves worst-case time and code size.
+
+**Use it when:**
+- Bare-metal or RTOS firmware (e.g. Cortex-M) that needs a heap with a bounded worst-case allocation time.
+- Real-time code paths where malloc latency jitter matters more than peak throughput.
+- wasm32 builds where allocator code size matters: SmallGlobalTlsf measured 1267 bytes vs 9613 for dlmalloc.
+- Managing a fixed static arena or a carve-out region (DMA buffers, shared memory) with a general-purpose allocator.
+
+**Skip it when:**
+- Multi-threaded hosted applications: no concurrent access; GlobalTlsf wraps the whole pool in one mutex, so use jemalloc, mimalloc or TCMalloc there.
+- Allocation-heavy desktop/server workloads: no small-object fast path or thread caches; the README itself says modern allocators such as glibc and jemalloc may win.
+- Programs that need memory returned to the OS: GlobalTlsf never gives pages back.
+- Targets other than unix or wasm32 without atomics if you want GlobalTlsf: elsewhere (e.g. ESP32, wasm with atomics, Windows) you must wire Tlsf/FlexTlsf into GlobalAlloc yourself (issues #4, #8 open).
+
+**Integration:** crate · cfg-if, const-default, rustversion; libc on unix · Rust 1.61 (edition 2021) · any for Tlsf/FlexTlsf (no_std); GlobalTlsf on unix and wasm32 without atomics
+
+**Vs siblings:** Pick rlsf over Talc when you want hard constant-time bounds rather than best wasm throughput (Talc's own wasm benchmarks rate it ahead of RLSF in size and speed); pick it over XenoAtom.Allocators (also TLSF) when you are in Rust/no_std rather than .NET. The other siblings target multi-threaded hosted malloc and are not alternatives on a microcontroller.
+
+**Gotchas:**
+- Maximum block size is (GRANULARITY << FLLEN) - GRANULARITY; with the README's u16/12/16 config on 32-bit that is about 64 KiB, so pick FLLEN for your largest allocation.
+- Internal fragmentation grows with free block size (README example: up to 4094 bytes worst case); SLLEN trades list count against fragmentation.
+- deallocate requires the caller to pass the original alignment; allocate/deallocate are unsafe.
+- Version 0.2.2 (2026-02-07) fixed invalid reference creation flagged by Miri and added a provenance workaround for GlobalAlloc dealloc/realloc; a Miri false-positive issue (#20) is still open.
+
+**Status:** Active (v0.2.2 in February 2026, commits through July 2026, v1 tracking issue open), MIT/Apache-2.0, small enough to vendor.
+
+[repo](https://github.com/yvt/rlsf) · [benchmark](https://github.com/yvt/rlsf)
+
+##### rusty_alloc  `Rust`  `MIT`  `active`  `Tier C`
+
+Pure-Rust rebuild of mimalloc's design; slightly fewer instructions than mimalloc, jemalloc and glibc malloc under callgrind.
+
+**Beats:** mimalloc v2.4.5 (also jemalloc, glibc malloc, dlmalloc on wasm32, esp-alloc on ESP32-S3) — Under callgrind with LD_PRELOAD on x86-64 Linux (CPU model and compiler flags not stated), short lua, perl and sqlite one-liner workloads ran 0.96 / 0.99 / 1.00 of mimalloc v2.4.5's whole-program instructions (0.84-0.98 of jemalloc, 0.81-0.99 of glibc malloc), with the allocator's own instructions at 0.52 / 0.81 / 0.83 of mimalloc's. Wall-clock numbers exist only for wasm32 in node (churn 4.9-7.3x vs dlmalloc, 2 KB loop 0.55-0.83x) and a Seeed XIAO ESP32-S3 at 240 MHz (1.44-3.94x vs esp-alloc 0.11).
+
+**Known shortcoming:** Pure-Rust reimplementation of mimalloc; not callable from C++ without the Rust toolchain. Loses on wasm at 2048 B and returns NULL in 357 benchmark cases.
+
+**Known shortcoming:** The x86 claim is callgrind instruction counts only, no wall time; whole-program gain over mimalloc is 0-4%. README install count is inconsistent (54,914 vs 27,892). Open issue 8 (blockmap race); closed issue 37 reads 'Whatever you are trying to achieve here, please stop!'.
+
+**Independent measurement:** first-party numbers
+
+**How:** mimalloc's free-list sharding: 32 MiB segments sliced into 64 KiB spans, per-page local free lists, and a four-state lock-free cross-thread free protocol (loom-verified). The authors tuned the hot paths instruction by instruction: free is 21 instructions vs mimalloc's 25 (pointer-to-page resolve through a per-slice owner table in the segment header), all divisions were replaced by shifts and a reciprocal table, and the Rust GlobalAlloc methods are #[inline] so rustc's __rust_alloc shims carry the fast path.
+
+**Use it when:**
+- Pure-Rust projects that want a mimalloc-class allocator without a C toolchain in the build (no cc/cmake dependency).
+- Shipping one allocator across Linux, macOS, Windows, wasm32 and an ESP32-class MCU from a single dependency.
+- wasm modules with churny allocation (many live blocks of 8-512 B), where the README measures 4.9-7.3x over dlmalloc for +2,435 bytes gzipped.
+- ESP32-S3 firmware with RAM to spare where small-object allocation throughput matters (1.44-3.94x faster than esp-alloc 0.11 per alloc/free pair).
+- When you want double frees to abort rather than silently corrupt (mimalloc release builds accept them), with an opt-in encrypted free-list 'secure' mode.
+
+**Skip it when:**
+- If you need wall-clock evidence: every x86 claim is a callgrind instruction count; the workspace manifest says wall-clock measurement still needs a quiet machine, and whole-program gains over mimalloc are 0-4%.
+- Memory-constrained MCUs: needs a 64 KiB RAM floor vs 8 KiB for esp-alloc, held 21 size classes at once vs 24, returned 357 NULLs in 50,000 hostile churn allocations vs 0, and refuses 64 KiB-aligned requests; the README itself says esp-alloc wins memory footprint by 8.5x.
+- wasm code dominated by large (2 KB) tight alloc/free loops, where it runs 0.55-0.83x as fast as dlmalloc.
+- Long-running processes that must give memory back by default: freed memory stays committed (purge_delay -1); one consumer saw 461 MB retained where the Windows heap dropped to 4 MB.
+- Risk-averse production use: the repository dates from 2026, has 3 stars, an open blockmap race issue (#8), and a closed issue (#37) titled 'Whatever you are trying to achieve here, please stop!'; adoption figures in the README are first-party and inconsistent.
+
+**Integration:** crate · none required beyond libc on Unix and windows-sys on Windows; optional portable-atomic for targets without native atomics · Rust 1.88 (rust-version), edition 2024; repo pins 1.97.1 for development · x86-64 and aarch64 on Linux, macOS and Windows; wasm32-unknown-unknown; no_std ESP32-S3 (Xtensa); RISC-V bare-metal targets listed but the toolchain file says the crate does not yet build for them
+
+**Vs siblings:** Pick it over Talc or rlsf when you want one mimalloc-style allocator spanning servers, wasm and an ESP32 rather than a wasm/embedded-only TLSF or arena design; on servers the C and C++ siblings (v8malloc, FastAlloc, Spaces) and upstream mimalloc itself have more mileage and wall-clock data.
+
+**Gotchas:**
+- Bare-metal builds need three settings: --cfg ra_single_threaded, --cfg ra_small_profile, and a Region<N> handed over once; without ra_small_profile it builds and links but every allocation returns null (SEGMENT_SIZE stays 32 MiB).
+- Size the embedded region with good_region_size()/region_for(), not a round number or a plain static [u8; N], or segments are stranded or the region is refused (FERR_MISALIGNED).
+- The lua callgrind numbers move about 0.26% run to run (hash seed not pinnable); only perl and sqlite counts are bit-repeatable, and the allocator-only ratio is attributed by object, so the glibc arm has no allocator-only figure.
+- alloc::stats() counters only exist in debug builds; the opt-in blockmap feature has an open race report under abandon/adopt at low core counts (issue #8).
+
+**Status:** Very active (multiple releases since September 2026, now 2.2.x, semver-checked API) and MIT-licensed, but young, single-organisation and marketed heavily; bench scripts (bench/icount-arms.sh, oracle/build.sh) make the instruction counts reproducible on your own machine.
+
+[repo](https://github.com/Remade-With-Rust/rusty_alloc) · [benchmark](https://github.com/Remade-With-Rust/rusty_alloc/blob/main/README.md)
+
+##### Spaces  `C`  `MIT`  `active`  `Tier C`
+
+Single-file C malloc replacement for Linux x86-64 with destroyable region heaps; README ranks it ahead of jemalloc on several mimalloc-bench workloads.
+
+**Beats:** jemalloc (also snmalloc, tcmalloc, Hoard in the same table) — The README table gives Spaces' own numbers on mimalloc-bench workloads built with gcc -O3 against libspaces.a (larson 124 M ops/s, malloc-large 6.0 ms per allocation, mleak 0.26 s, glibc-simple 6.9 s, xmalloc-test 10.6 M/s, mstress 6.9 s) with a rank against jemalloc, snmalloc, tcmalloc and Hoard; competitor values, the #1 allocator, CPU, core count and compiler version are not given.
+
+**Known shortcoming:** Harness flaw: bench.sh times only Spaces (wall time and RSS, stdout discarded, nonzero exits counted), builds no competitors and lacks spacesbench, so the README's rank against the other allocators is not reproducible from the repo. Makefile bench-all passes -a -T, which bench.sh rejects. The default error handler loops on getchar() with no EOF case, so it spins forever if stdin is closed.
+
+**Independent measurement:** first-party README
+
+**How:** Slabs are 64 KB-aligned, so free() finds size class, owner thread and region by masking the pointer (ptr & ~0xFFFF) with no page map or radix tree. There are 52 size classes from 8 B to 8 KB with a per-thread intrusive freelist cache (832 B in total), so same-thread malloc/free uses no atomics or locks; cross-thread frees go to a per-slab ABA-safe Treiber stack (one CAS each). Allocations above 8 KB come straight from mmap with huge-page support; slabs come from 4 MB batch regions (about one mmap per 64 slabs), and heap state is pooled across thread create/destroy.
+
+**Use it when:**
+- C or C++ programs on x86-64 Linux that want arena-style teardown (parsers, compilers, per-request heaps) and a general malloc in the same library.
+- Subsystems that need a hard memory budget enforced by the allocator (spaces_chunk_set_ceiling returns NULL or calls your handler).
+- Debugging or diagnostics where walking every live allocation in a region at run time, with no profiler or rebuild, is useful.
+- Workloads like larson (cross-thread producer-consumer) and large 5-25 MB blocks, where the README ranks it #2 among the allocators it tested.
+- Fixed-size object pools (list nodes, connection structs) through spaces_chunk_create_fixed.
+
+**Skip it when:**
+- Anything other than x86-64 Linux: the single-file distribution is pre-processed for that one target only.
+- Heavy thread churn or many threads allocating widely varying sizes: README says it ranks #6 on glibc-thread and that the slab working set does not stay cache-hot with 500 threads.
+- Memory-tight services: each slab has a 64 KB virtual footprint, the 4 KB slab header wastes about 6% per segment, and freed memory is not returned with MADV_FREE, so RSS stays high until reuse.
+- Choosing on speed alone: mimalloc-style allocators appear to rank #1 on the README's workloads, and no competitor numbers, CPU model or compiler version are published.
+- Projects needing mature, audited code: 2 commits (2026-03-23 and 2026-03-29), no releases, 64 stars.
+
+**Integration:** source-drop · none beyond libc and pthreads (uses System V shm/sem headers) · GCC (Makefile uses gcc -O3 -pthread -fPIC; uses GCC __sync builtins and pragmas); minimum version not documented · x86-64 Linux only
+
+**Vs siblings:** Pick Spaces over Mesh or IsoAlloc when you want region destroy, per-region ceilings and live-allocation walking in the same library as a fast malloc; pick a mainstream general-purpose allocator (the catalog's jemalloc/mimalloc class) or v8malloc when raw multi-threaded throughput or portability matters more, since Spaces publishes no competitor numbers and runs only on x86-64 Linux.
+
+**Gotchas:**
+- The default error handler is interactive: on double free, bad pointer or ceiling violation it prints to stderr and loops on getchar() asking Abort/Retry/Ignore; the loop has no EOF case, so with stdin closed or at end-of-file it spins forever. Install spaces_set_error_handler early in main() for servers, daemons and CI (README says the same).
+- Intrusive freelist overwrites the first 8 bytes of a freed object, and the minimum allocation is 8 bytes.
+- bench.sh only times Spaces itself (median wall time and peak RSS over 3 runs, stdout discarded, non-zero exits still counted); it builds no competitor allocators and does not include the 'spacesbench' workload, so the README ranks cannot be reproduced from the repo. The Makefile's bench-all target passes -a -T, which bench.sh does not accept.
+- Include spaces.h after <stdlib.h> and other headers that declare malloc.
+
+**Status:** Active but very young (2 commits, last 2026-03-29); MIT-licensed single file that is easy to vendor, but x86-64 Linux only and unproven outside its author's benchmarks.
+
+[repo](https://github.com/xtellect/spaces) · [benchmark](https://github.com/xtellect/spaces#performance)
+
+##### Talc  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust no_std and WebAssembly heap allocator; about 2x DLmalloc's throughput on wasm at under a third of its code size.
+
+**Beats:** DLmalloc (Rust wasm default), RLSF, Galloc, FRuSA, system allocator — First-party plots only: on WebAssembly random actions Talc (Dynamic) does about 28 alloc+dealloc actions per microsecond vs about 12 for DLmalloc and about 19.5 for RLSF, and about 12 vs 6.3 with realloc (about 2x, read off the plot), with module size about 1.6 KB vs 5.5 KB for DLmalloc. On Linux x86_64 single-threaded random actions Talc scores 1.0 relative vs RLSF 0.87-0.93 and DLmalloc 0.55-0.75, but in the multithreaded run Galloc and RLSF score above Talc at most sizes; no compiler version, flags, CPU or wasm runtime are stated.
+
+**Known shortcoming:** Open issue 56 (v5.1.1, 2026-09-24): overlapping allocations once the wasm heap passes 2 GiB (full_search_bin and try_grow_in_place compare wrapped addresses); not behind the measured numbers. Issue 44: a 1 B allocation at 4096 alignment is about 1,650x slower than dlmalloc. In the multithreaded plot Galloc and RLSF score above Talc. Wasm plot reads: about 28 vs 12 actions/us against DLmalloc (about 2x with realloc), module 1.6 KB vs 5.5 KB. Rust, not C++.
+
+**Independent measurement:** first-party plots
+
+**How:** It is a dlmalloc-style segregated free-list allocator with boundary tags and configurable size binning, which the author describes as close to TLSF (Two-Level Segregated Fit). Allocation is O(n) worst case but near-constant in practice; deallocation and in-place grow/shrink are O(1). v5 added a WasmBinning configuration tuned for wasm and cut code size, and in-place realloc can be turned off by feature to trade speed for module bytes.
+
+**Use it when:**
+- Single-threaded wasm32 modules (no atomics) currently using the default DLmalloc, where both allocation throughput and .wasm size matter
+- no_std embedded firmware or OS kernels that need a general malloc/realloc over one or more fixed memory regions, including adding or resizing heaps at runtime
+- Per-subsystem arenas in Rust via TalcCell plus allocator-api2 collections, where a lock-free !Sync allocator is enough
+- Workloads dominated by small-to-medium allocations (tens of bytes to tens of KB) with pointer-sized alignment, which is the distribution the benchmarks and design target
+
+**Skip it when:**
+- Hosted, allocation-heavy multithreaded programs: the author says jemalloc, mimalloc or the system allocator are better there, and TalcLock serializes all threads on one lock
+- Large over-aligned allocations (size much smaller than alignment): issue #44 measured 1-byte allocations at 4096-byte alignment about 1,650x slower than dlmalloc (1.22 s vs 739 us)
+- wasm heaps that can grow past 2 GiB: open issue #56 (2026-09-24, v5.1.1) reports fit checks that compare wrapped 32-bit addresses and can hand out overlapping memory
+- When minimum module size is the only goal: the author recommends lol_alloc (and RLSF SmallGlobalTlsf is comparably small)
+- Memory-tight wasm: the default wasm configuration is tuned for speed and the author estimates 10-15% higher runtime memory than alternatives
+
+**Integration:** crate · allocator-api2 0.4, lock_api 0.4 (no default features); spinning_top or another RawMutex for TalcLock · Rust 1.64 (stable by default since v5; nightly feature for core::alloc::Allocator) · any no_std target; WebAssembly sources for wasm32; benchmarks run on Linux x86_64
+
+**Vs siblings:** Pick Talc over rlsf when you want the fastest wasm/no_std allocator in the author's plots (Talc leads RLSF by about 10% single-threaded and about 1.5x on wasm alloc+dealloc) and can spend roughly 500 more bytes than rlsf's small config; neither belongs on a hosted multithreaded server, where mimalloc-class allocators or v8malloc-style designs from the catalog fit better.
+
+**Gotchas:**
+- Open issue #56: on wasm with heap addresses near 4 GiB, full_search_bin and try_grow_in_place compare wrapped addresses and can return overlapping allocations; the reported workaround is capping linear memory at 2 GiB
+- Default wasm source changed in v5.1.0 to WasmGrowAndExtend; WasmGrowAndClaim (issue #51) can use 2-10x more linear memory on repeatedly grown vectors but saves about 97 bytes of code
+- v5.0.4 fixed a chunk-tagging bug for huge chunks and an infinite-recursion bug in WasmGrowAndClaim, and raised per-allocation metadata from a u8 to a usize for allocations over 24 bytes
+- Earlier soundness bugs (Span From<&[T]> UB #33, unaligned Tag read #27, free-list corruption #53, non-Send sources #54) are closed; the crate is tested with MIRI and fuzzing but has a history of unsafe-code bugs
+
+**Status:** Actively maintained (v5.1.1, last commit 2026-09-09, 562 stars) and MIT-licensed, but an unaddressed overlapping-allocation bug (#56) above 2 GiB is open as of 2026-09-24.
+
+[repo](https://github.com/SFBdragon/talc) · [benchmark](https://github.com/SFBdragon/talc/blob/master/BENCHMARKS.md)
+
+##### v8malloc  `C`  `Apache-2.0`  `active`  `Tier C`
+
+Early-stage Linux malloc replacement (LD_PRELOAD) claiming parity or small wins over glibc, tcmalloc, jemalloc and mimalloc on microbenchmarks.
+
+**Beats:** glibc malloc, jemalloc, tcmalloc, mimalloc — The README reports single runs of in-tree microbenchmarks MB-01 to MB-06 on an 8-core Intel Core Ultra 5 236V dev container: v8malloc as a clang Release LTO build, competitors as Debian Trixie libjemalloc.so.2, libtcmalloc.so.4 and libmimalloc.so.3 under LD_PRELOAD. The clear margins are 150.5 M vs 134.9 M ops/s (glibc) at 4 threads on 64 B, 256 MiB alloc p99 of 1 us, and the lowest RSS (tied with glibc); most other wins are within the author's own noise band. As shown in the gotchas, the documented harness cannot isolate the competitor allocators, so the comparison is unreliable until the build used is documented.
+
+**Known shortcoming:** Harness flaw, inferred from the code and not run: bench/CMakeLists.txt links the benches against v8malloc_static by default (V8MALLOC_BUILD_STATIC ON, also in bench-weekly.yml), and the static archive defines malloc and free (src/v8m_api_libc_compat.c), so LD_PRELOAD rows for jemalloc, tcmalloc and mimalloc cannot change the bench's allocator. In the shared build libv8malloc.so is a NEEDED entry, so the 'glibc (system malloc)' row of bench-compare.sh also runs v8malloc. That fits the glibc column tying v8malloc on MB-01 and matching exactly on MB-05 RSS (9.13 MiB). MB-01 and MB-02 call clock_gettime every iteration; the README does not say how the competitor columns were built.
+
+**Independent measurement:** code reading by enricher
+
+**How:** A four-tier path: lock-free thread-local cache, per-CPU core cache, NUMA-node pool, then a global page heap, with an MPSC remote-free queue and page-owner-CPU routing for cross-thread frees. It uses header-less per-page metadata with O(1) pointer-to-metadata lookup, a branchless lookup over 41 size classes (8 B to 2 MiB), a buddy pool behind a medium-class thread cache for 16-256 KiB, and a recycle cache that keeps freed large regions mapped. The release build relies on LTO, -fno-plt, -fno-semantic-interposition and branch hints to inline the fast path.
+
+**Use it when:**
+- Experimenting on Linux with a drop-in LD_PRELOAD allocator for long-running services where steady-state RSS matters (MB-05 RSS 9.13 MiB vs 19.50 tcmalloc and 27.50 jemalloc)
+- Workloads that repeatedly allocate very large buffers (256 MiB alloc p99 1 us vs mimalloc 160 and glibc 48 in the README)
+- When you want built-in heap observability (pprof dumps, lifetime histograms, NUMA balance) and are willing to benchmark it on your own workload first
+
+**Skip it when:**
+- Production use today: 1 star, self-described as in active development with most internals still being implemented, and a concurrency bug (MB-03 SEGV in v8m_core_cache_pop_batch) fixed during the very run that produced the table
+- Medium allocations of 16-256 KiB: about 60 ns/op vs tcmalloc's 24 ns/op on MB-01, and mixed workloads (MB-04 11.50 M ops/s vs tcmalloc 22.26 M and glibc 15.42 M)
+- Cross-thread producer/consumer patterns, where mimalloc and glibc lead MB-03
+- Non-Linux platforms, or when you need AddressSanitizer (unsupported) or ThreadSanitizer (experimental)
+
+**Integration:** shared lib · pthread, libdl; Linux kernel 5.4+ · C, GCC 13+ or Clang 16+, CMake 3.25+ (lld or llvm-ar needed for clang Release static builds with thin LTO) · Linux only: x86_64, aarch64, riscv64, ppc64le, s390x, loongarch64 (non-x86 tested under QEMU-user)
+
+**Vs siblings:** Among general-purpose replacements, Mesh is the published, peer-reviewed choice for cutting RSS and FastAlloc publishes more comparison cells; pick v8malloc only to experiment with a Linux-only allocator that has built-in pprof/NUMA diagnostics, and validate its numbers yourself first.
+
+**Gotchas:**
+- Harness flaw: bench/CMakeLists.txt links the benchmarks against v8malloc_static whenever V8MALLOC_BUILD_STATIC is ON (the default, also used by bench-weekly.yml), and the static archive defines malloc/free in v8m_api_libc_compat.c, so the executable's own malloc calls bind to v8malloc and LD_PRELOAD of jemalloc, tcmalloc or mimalloc cannot change them. In a shared build, libv8malloc.so is a NEEDED dependency that interposes libc, so the 'glibc (system malloc)' row of bench-compare.sh also runs v8malloc. The README does not say how its competitor columns were built; the glibc column matching v8malloc almost cell for cell on MB-01 and exactly on MB-05 (9.13 MiB) is consistent with this.
+- MB-01 and MB-02 call clock_gettime (now_ns()) on every iteration, so the 21-32 ns/op figures include a clock read and compress real allocator differences.
+- AddressSanitizer bypasses v8malloc entirely (ASan interposes malloc); use Valgrind or the UBSan build instead.
+- The library constructor makes early mmap reservations and the shared object is built with initial-exec TLS, so it must be loaded at exec time (LD_PRELOAD or link), not dlopen()ed later.
+
+**Status:** Active (171 commits, last commit 2026-04-28) and Apache-2.0, but a 1-star, self-described early-stage project whose benchmark harness has a linkage flaw; treat it as experimental.
+
+[repo](https://github.com/iqbqioza/v8malloc) · [benchmark](https://github.com/iqbqioza/v8malloc)
+
+##### libpas  `C`  `BSD-2-Clause (per the Apple copyright header in libpas source files)`  `active`  `Tier D`
+
+Apple's libpas: isoheap-capable malloc toolkit behind WebKit's bmalloc, faster and leaner than the bmalloc it replaced.
+
+**Beats:** bmalloc (WebKit's previous allocator); HN thread also says it beats system malloc in WebKit and JSC — The ReadMe says segregated heaps beat the original bmalloc at object churn and that libpas uses much less memory because it returns pages sooner, with no numbers. Documentation.md (Filip Pizlo, February 2022) adds that moving WebKit from bmalloc and MetaAllocator to libpas gave about a 2% Speedometer2 speedup and about 8% lower memory on several memory benchmarks, with no hardware, compiler or harness given; the baseline is bmalloc, not system malloc.
+
+**Known shortcoming:** libpas is not a malloc override and uses a clang-only C extension in its heap config files; it needs C23/C++23 CMake. Documentation.md (Pizlo, Feb 2022) gives about 2% on Speedometer 2 and about 8% memory against bmalloc plus MetaAllocator, with no hardware or harness. The entry is the whole WebKit repo; libpas commits continue to 2026-10-01.
+
+**Independent measurement:** first-party documentation
+
+**How:** Segregated heaps use simple segregated storage (each page holds one size class) plus thread-local caches with per-size-class local allocators and a deallocation log, so the common alloc and free paths need no atomics or fences, just a few loads, adds and stores. Deallocation logs are flushed in batches with lock-sharing tricks that cut lock acquisitions. A scavenger thread (every 100 ms by default) decommits pages that have been empty for a while through a physical page sharing pool, which is where the memory savings over bmalloc come from. Bitfit (first-fit, one bit per minalign granule) and a cartesian-tree first-fit large heap cover the bigger sizes.
+
+**Use it when:**
+- You need type-segregated heaps (isoheaps), one heap per type, for use-after-free hardening, and want them cheap enough to create in large numbers
+- Allocation-heavy C or C++ code on Apple platforms or Linux where the allocator has to keep metadata out of line (no free-list pointers inside freed objects)
+- Special allocators such as executable/JIT memory (jit_heap) or MTE-tagged memory next to ordinary malloc in one library
+- Long-running processes that should hand empty pages back to the OS quickly (configurable decommit delay, e.g. 300 ms)
+
+**Skip it when:**
+- You want a malloc you can LD_PRELOAD or link in place of glibc malloc: libpas does not override malloc and free, and you must build your own heap config (as bmalloc does)
+- You need published numbers against mimalloc, jemalloc or tcmalloc: the only figures are WebKit's own (about 2% Speedometer2 and about 8% memory against bmalloc and MetaAllocator)
+- Toolchains other than Clang: several heap config .c files use a clang-only C extension (compound-literal field access in file-scope initializers)
+- You want a small vendorable allocator: it lives in the WebKit monorepo, is large, and the design leans on intricate fine-grained locking that is hard to audit
+
+**Integration:** source-drop (pulled into the host project's build; standalone build.sh/CMake makes a dylib and test binaries) · none outside the libpas tree (pthreads); the test suite is C++ · Clang required for some files; CMake 3.21+, C23 and C++23 in the standalone CMakeLists · Darwin (macOS/iOS, arm64/arm64e, x86-64), Linux, Windows and PlayStation macros present in pas_platform.h; tuned mainly for Apple platforms
+
+**Vs siblings:** Pick libpas over IsoAlloc when you want isoheaps with production-tested performance at browser scale and can live with a Clang-built source drop; pick Mesh or mimalloc-class allocators when you need a malloc replacement with published cross-allocator benchmarks.
+
+**Gotchas:**
+- The scavenger suspends threads that own thread-local caches to stop their allocators, which can surprise code that is sensitive to signals or thread suspension
+- Thread-local caches can grow large (inline allocator state); WebKit measured them at up to about 1% of memory and added partial TLC decommit
+- The bitfit heap is space-efficient but much slower than segregated heaps and has an upper size bound
+- The record id is the whole WebKit repository; the code is in Source/bmalloc/libpas
+
+**Status:** Actively maintained inside WebKit (libpas commits through 2026-10-01, e.g. MTE work); BSD-2-Clause and shipped in Safari, but you have to extract it from the monorepo and write your own heap config to use it.
+
+[repo](https://github.com/WebKit/WebKit/tree/main/Source/bmalloc/libpas) · [benchmark](https://github.com/WebKit/WebKit/blob/main/Source/bmalloc/libpas/ReadMe.md)
+
+#### coroutines-fibers
+
+##### Boost.Cobalt  `C++`  `BSL-1.0`  `active`  `Tier C`
+
+Boost library of C++20 coroutine primitives on Boost.Asio; beats asio stackful spawn and, on channels, asio::awaitable.
+
+**Beats:** Boost.Asio stackful coroutines (spawn on Boost.Context) and asio::awaitable — Author's doc/benchmarks.adoc on an i7-1185G7 with gcc 12 and clang 16 (flags not stated; bench/CMakeLists.txt turns on LTO when Boost.Context is found) runs each loop once in bench/*.cpp: cobalt is about 1.5-1.8x faster than asio stackful spawn on 50M posts but level with asio::awaitable, and 1.6-2.2x faster than asio::awaitable (derived from page data) on immediate and channel exchanges. These are single timings with no repeats.
+
+**Known shortcoming:** Single runs, flags not stated. The channel bench compares different channel designs (cobalt::channel against asio::experimental::channel with parallel_group). The docs warn of a GCC 12.1/12.2 coroutine miscompile, yet GCC 12 produced the page numbers. Open issues include a heap-use-after-free (194).
+
+**Independent measurement:** code reading by enricher
+
+**How:** Stackless C++20 coroutines avoid the separate stack and Boost.Context switch that asio's stackful spawn uses. cobalt::channel hands values over by direct symmetric transfer between the coroutines instead of posting through the executor, which is where the 1.6-2.2x channel gains over asio::awaitable come from. use_op allocates async-operation state from a small-buffer resource (4096 bytes by default, BOOST_COBALT_SBO_BUFFER_SIZE) and race/gather/join use a monotonic resource; coroutine frames come from a thread_local pmr pool. It also skips suspension when an op completes immediately (op::ready).
+
+**Use it when:**
+- Single-threaded io_context servers or clients written with Boost.Asio that want linear async code without stackful-coroutine stack memory
+- Pipelines of producer/consumer coroutines on one thread where cobalt::channel's direct hand-off beats asio::experimental::channel (500 vs 790 ms for 3M zero-size exchanges on gcc)
+- Code moving off asio::spawn/yield_context (Boost.Context) that suspends on many fast or immediate completions (1810 vs 3922 ms for 10M immediate channel ops)
+- Generators and fan-out with race/gather when you already depend on Boost 1.82+ and C++20
+
+**Skip it when:**
+- You need to suspend from nested ordinary function calls: stackless coroutines can only suspend in the coroutine body, so stackful fibers (Boost.Context, Boost.Fiber, minicoro) still fit
+- Multi-threaded executors or strands: the library assumes one executor per thread through a thread_local default; on a strand you must pass the executor by hand or get asio::bad_allocator or the wrong executor
+- Plain asio::post throughput against asio::awaitable: 2472 vs 2432 ms on gcc 12, so no gain
+- MSVC targets: the docs say all MSVC versions have a broken coroutine implementation, worked around by posting frame destruction, with overhead and non-deterministic freeing; issue #172 (access violation on MSVC) is open
+- Projects that cannot take Boost: it needs Asio, System, Intrusive, Circular Buffer and Smart Ptr, and a compiled boost_cobalt library
+
+**Integration:** static lib · Boost 1.82+ (Asio, System, Intrusive, Circular Buffer, Smart Ptr; Boost.Container for Clang < 16); OpenSSL optional for boost_cobalt_io_ssl; Threads · C++20; Clang 14, GCC 10, MSVC 19.30 (avoid GCC 12.1/12.2) · any platform Boost.Asio supports (Linux, Windows, macOS)
+
+**Vs siblings:** Pick Cobalt over libco-style switchers (libaco, libcopp, libgo) or minicoro when the code is already on Boost.Asio and you want standard C++20 coroutines with no assembly context switch or per-coroutine stack; pick those stackful libraries when you must suspend from deep call stacks or need C compatibility.
+
+**Gotchas:**
+- promise is eager and nodiscard; dropping a promise without co_await cancels it with a warning, and detaching needs a unary + (+my_task())
+- The docs warn GCC 12.1 and 12.2 miscompile coroutines with stack variables, yet the gcc numbers on the benchmark page were taken with gcc 12
+- Open bug reports: heap-use-after-free when cancelling a spawned awaitable (#194), racing a range of generators breaks them (#281), generator locals not cleaned up (#221)
+- The channel benchmark compares different channel designs (cobalt::channel<void> with gather vs asio::experimental::channel with parallel_group), not just the coroutine machinery
+
+**Status:** Actively maintained Boost library (last commit 2026-09-24), BSL-1.0, but several crash and memory-safety issues are still open and MSVC support relies on workarounds.
+
+[repo](https://github.com/boostorg/cobalt) · [benchmark](https://github.com/boostorg/cobalt/blob/develop/doc/benchmarks.adoc)
+
+##### CO2  `C++`  `BSL-1.0`  `abandoned`  `Tier C`
+
+Header-only C++14 macro emulation of N4286 stackless coroutines; resume costs about 6 ns versus 82 ns for Boost.Coroutine2.
+
+**Beats:** Boost.Coroutine2 — The README's Google Benchmark run of test/benchmark.cpp times one resume of a coroutine that suspends forever with an empty action: Boost.Coroutine2 pull_type 82 ns, CO2 6 ns, native MSVC co_await 5 ns, built with VS2015 Update 3, boost 1.63.0, 64-bit release, on an unnamed 4 x 3200 MHz CPU. That is about 13.7x versus Boost.Coroutine2 (derived from page data), but it compares a stackless switch with a stackful context switch.
+
+**Known shortcoming:** Header-only C++14 plus Boost macro state machine (switch on __COUNTER__ labels, virtual run()): stackless against stackful Boost.Coroutine2, so the comparison is not like for like (open issue 4 says as much). README says it is obsolete and points to the successor COZ (31 stars, no numbers). README table says bench_coroutine2 but the code says bench_coroutines2; a stack_allocator deallocate bug (5) was closed in 2018.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The macros turn the body into a resumable state machine: a heap frame (std::allocator by default, custom allocator via the new clause) holds the declared locals, and each suspend point is a `case __COUNTER__:` label in a switch on a stored `_co2_next` index (Duff's-device / protothread style). Resuming is one virtual run() call plus a jump through the switch, with no stack switch and no register save/restore, which is why it lands near native MSVC co_await (6 ns versus 5 ns) and far below Boost.Coroutine2's Boost.Context stack switch.
+
+**Use it when:**
+- Maintaining an existing codebase on a pre-C++20 compiler (C++14 with Boost) that already uses CO2 for generators or async tasks.
+- Generators and asynchronous continuations where every suspend point is in the coroutine body itself, not in nested calls.
+- Tiny per-coroutine memory: frames hold only the declared locals plus a small awaiter buffer, versus a full stack per Boost.Coroutine2 coroutine.
+- Bridging callback APIs (ASIO via the sister library act, PPL or TBB task_group) into await-style code on old toolchains.
+
+**Skip it when:**
+- New code: the README itself says all major compilers now support C++20 coroutines and recommends against CO2; use native co_await or the author's successor COZ (zero-allocation).
+- You need to suspend from inside nested ordinary function calls (stackful semantics): only Boost.Coroutine2/Boost.Context or fiber libraries do that.
+- Codebases that cannot tolerate heavy macro restrictions: locals crossing suspend points must be declared in CO2_BEG, no () initializers, auto needs CO2_AUTO, return/try/switch need macro replacements.
+- Projects that need a maintained dependency: repository archived 2024-10-09.
+
+**Integration:** header-only · Boost (Boost.Config, Boost.Assert, Boost.Preprocessor in the core header; Boost.Thread/Optional for the adapted headers) · C++14; benchmark run on VS2015 Update 3 with boost 1.63.0; GCC/Clang supported (statement-expression extension enables CO2_AWAIT as an expression) · any (pure C++, no assembly)
+
+**Vs siblings:** Pick CO2 over stackful switchers like libaco, libcopp, minicoro or Boost.Coroutine2 only when you want stackless, per-frame-allocated coroutines with TS-style await on a pre-C++20 compiler; if you are on C++20, Boost.Cobalt or plain co_await supersede it.
+
+**Gotchas:**
+- Awaits are statements, not expressions: CO2_AWAIT(something{temporaries}) lets temporaries die before resumption, unlike real co_await.
+- Awaiters larger than (sizeof(pointer)+sizeof(int))*2 bytes fall back to dynamic allocation; enlarge with CO2_TEMP_SIZE and define CO2_WARN_DYN_ALLOC to catch it.
+- Exceptions thrown while initializing locals propagate directly to the caller and bypass set_exception, since initialization runs before initial_suspend.
+- Benchmark compares stackless against stackful (open issue #4 says the comparison does not make sense without that context); the benchmark source names the test bench_coroutines2 while the README table prints bench_coroutine2. stack_allocator had a deallocate bug (issue #5, closed 2018).
+
+**Status:** Archived 2024-10-09 and self-declared obsolete in favour of C++20 coroutines and COZ, but BSL-1.0 and header-only, so existing users can keep vendoring it.
+
+[repo](https://github.com/jamboree/co2) · [benchmark](https://github.com/jamboree/co2)
+
+##### Coros  `C++`  `BSL-1.0`  `stale`  `Tier C`
+
+Header-only C++23 coroutine fork-join task library with a work-stealing pool; roughly ties oneTBB, beats OpenMP tasks.
+
+**Beats:** Intel oneTBB and OpenMP task runtimes (GCC libgomp, LLVM libomp); libfork is not in the graphs — README graphs (read by eye) show fib(30) time vs threads (1-16) and a 1024x1024 recursive int matmul against oneTBB, GCC libgomp and LLVM libomp: at 16 threads x86 fib Coros ~27 ms vs oneTBB ~25 ms, libomp ~140 ms, libgomp ~3000 ms; ARM fib ~22 ms vs ~27 ms oneTBB; matmul ~818 ms vs ~840 ms oneTBB. Benchmark CMake uses -std=c++23 -O3 (-fcoroutines -fopenmp for GCC, libc++ and libomp for Clang); compiler versions and CPU models are not stated, and the committed oneTBB harness pins 4 threads.
+
+**Known shortcoming:** Harness flaw: benchmarks/tbb/fib_tbb.h and mat_tbb.h hard-code tbb::task_arena arena(4) and ignore g_thread_num, so the committed oneTBB bench always runs 4 threads and the README oneTBB thread sweep is not reproducible from the repo. Idle workers busy-spin at 100% CPU (yield TODO); issue 2: the seq_cst fence in Dequeue::steal() becomes an mfence on Clang x86; MSVC unsupported.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each worker owns a Chase-Lev work-stealing deque (circular power-of-two buffer, grown 4x on overflow, after Le et al.'s correct weak-memory-model deque) storing coroutine handles; idle workers pick a random victim and scan all queues, then fall back to a shared moodycamel::ConcurrentQueue for tasks submitted from outside. Stackless coroutines make a spawn a heap-allocated coroutine frame plus a deque push, and co_await on a child uses symmetric transfer so nested waits do not grow the stack. top_ and bottom_ are padded with hardware_destructive_interference_size to avoid false sharing.
+
+**Use it when:**
+- C++23 code (GCC 13+ or Clang 17+) that wants fork-join recursion expressed with co_await instead of TBB lambdas or OpenMP pragmas
+- Very fine-grained recursive tasks (fib-style spawn trees) where OpenMP tasks, especially GCC libgomp, are orders of magnitude slower per the README graphs
+- Small codebases that want a vendorable, header-only, BSL-1.0 scheduler with exception propagation via std::expected
+- Moving work between several thread pools (wait_tasks(tp, ...) resumes the awaiting task on a named pool)
+
+**Skip it when:**
+- If oneTBB is already in use: the README graphs show parity on x86 (Coros ~27 ms vs oneTBB ~25 ms for fib(30) at 16 threads) and only modest wins on ARM
+- Latency- or power-sensitive processes: idle workers busy-spin forever (run() loops on noop_coroutine; thread yielding is a TODO), burning 100% CPU on every pool thread
+- MSVC builds (not supported) or toolchains without std::expected
+- Clang on x86 at high steal rates: open issue #2 reports the seq_cst atomic_thread_fence in Dequeue::steal() compiles to mfence and dominates matmul time
+- Long-lived pools with bursty spawning: grown deque buffers are kept in old_buffers_ until the pool is destroyed
+
+**Integration:** header-only · none (vendors moodycamel concurrentqueue.h in include/) · C++23, GCC 13+ (with -fcoroutines) or Clang 17+ (libc++); MSVC not supported · x86-64 and ARM per the README graphs; any platform with C++23 threads and atomics otherwise not documented
+
+**Vs siblings:** The other coroutines-fibers entries (minicoro, libaco, libco-style switchers, Boost.Cobalt) are context-switch or async I/O primitives; pick Coros when you need a parallel fork-join scheduler on stackless C++ coroutines, and Marl when you need stackful fibers that may block.
+
+**Gotchas:**
+- Exceptions thrown inside enqueue_tasks tasks are rethrown immediately, since nothing awaits them; Task<void> has no value()/operator*
+- Lambda coroutines with captures are unsafe once the lambda dies; pass state through coroutine parameters
+- Published harness flaw: benchmarks/tbb/fib_tbb.h and mat_tbb.h hard-code tbb::task_arena arena(4) and ignore g_thread_num, so the committed oneTBB benchmark always runs 4 threads; the oneTBB thread sweep in the README graphs cannot be reproduced from the repo as committed
+- Each harness writes 50 millisecond-resolution runs per thread count to text files; how the plotted value was derived (mean, median) is not documented, and the TBB matmul uses std::atomic<int> inputs where Coros uses plain int
+
+**Status:** Stale since 2024-09-13 with one open performance issue (#2); BSL-1.0 and header-only, so easy to vendor, but treat it as a well-built student-scale scheduler rather than a TBB replacement.
+
+[repo](https://github.com/mtmucha/coros) · [benchmark](https://github.com/mtmucha/coros)
+
+##### libaco  `C`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Small C asymmetric-coroutine library for x86/x86-64 whose hand-written switch routine runs about 1.7x faster than Tencent libco's coctx_swap.
+
+**Beats:** Tencent libco (coctx_swap) — On one AWS c5d.large VM (RHEL 7.5, June 2018, CPU model not stated, gcc -g -O2 per make.sh, tcmalloc preloaded, shared FPU/MXCSR), acosw measured 10.29 ns per switch (20.59 ns per resume round trip, 40M switches), against 17.64 ns for libco's coctx_swap swapped into the same harness in the benchmark branch; that is 1.72x per the author (1.71x derived from page data). First-party, and only the switch routine was compared.
+
+**Known shortcoming:** The 1.72x figure compares only the switch routine. x86 and i386 System V only (ARM issues 20 and 57 are open). Shared-stack resume cost grows with the copied bytes: 33 ns at 8 B, 1090 ns at 7992 B. Last release v1.2.4, July 2018.
+
+**Independent measurement:** code reading by enricher
+
+**How:** acosw.S is a minimal assembly switch that saves and restores only the Sys V ABI callee-saved registers, the stack pointer and the return address, plus, unless ACO_CONFIG_SHARE_FPU_MXCSR_ENV is defined, the x87 control word and MXCSR (fnstcw/stmxcsr). It jumps to the saved return address instead of using push/ret tricks, and unlike libco's coctx_swap it never points the stack pointer at heap memory. For shared-stack cos, aco.c copies only the live stack bytes with an inline aligned short-copy path on amd64 and falls back to memcpy for larger frames (copy-stack design).
+
+**Use it when:**
+- Single-threaded event loops or generators in C on Linux x86-64 or i386, where you write your own scheduler and want switch cost around 10 ns.
+- Millions of mostly idle coroutines with small stacks at yield points: the README runs 10,000,000 cos with a 120 B copy-stack in 2.8 GB under tcmalloc.
+- Replacing libco's coctx_swap in an existing design, where its ABI violation (stack pointer addressing heap memory, unsafe under signals) is a concern.
+- Code that needs a small, readable implementation (about 700 LOC) that is easy to vendor and audit.
+
+**Skip it when:**
+- ARM, aarch64, Windows/MSVC or any non-Sys-V target: only i386 and x86-64 Sys V are supported (issues #20, #57 and #6 are open).
+- Shared-stack cos that yield with deep stacks: resume cost grows with copied bytes (33 ns at 8 B, 211 ns at 1000 B, 1090 ns at 7992 B in the README table).
+- Needing symmetric transfer, return values from yield, a scheduler, I/O integration or per-co TLS: none are provided (issues #47, #22 and #46 open).
+- Long-lived projects that need upstream fixes: the last release is v1.2.4 (July 2018), there are 27 open issues and the last commit was 2022.
+
+**Integration:** source-drop · none (optional valgrind headers for ACO_USE_VALGRIND; tcmalloc used only in benchmarks) · GCC or Clang with GNU assembler (Intel syntax .S); builds with -std=c99; make.sh uses gcc -g -O2 -Wall -Werror · Linux x86-64 and i386 (Sys V ABI) only
+
+**Vs siblings:** Pick libaco over libco or libcopp when you want only a correct, minimal x86 switch plus copy-stacks in plain C; pick minicoro for a single-header library that also runs on ARM, Windows and WebAssembly, and libgo or libfiber when you need a scheduler with hooked I/O.
+
+**Gotchas:**
+- Pointers to locals on a shared stack are invalid from another co sharing that stack; the README says to heap-allocate anything passed between cos.
+- Defining ACO_CONFIG_SHARE_FPU_MXCSR_ENV (the 10.29 ns configuration) is only correct if no code changes the FPU or MXCSR control words; without it every co keeps its own copy (10.38 ns).
+- A co that returns from its function instead of calling aco_exit triggers the protector, which aborts the process; errors call abort() rather than returning codes (issue #41).
+- Valgrind memcheck reports false positives with shared stacks; build with ACO_USE_VALGRIND or ACO_USE_ASAN when debugging, and not in release builds. The README warns to build from releases, not master.
+
+**Status:** Abandoned: v1.2.4 dates from July 2018 and the last commit is a 2022 merge, but it is Apache-2.0, about 700 LOC and easy to vendor for x86 Linux.
+
+[repo](https://github.com/hnes/libaco) · [benchmark](https://github.com/hnes/libaco/tree/tencent_libco_bug_report_and_coctx_swap_benchmark)
+
+##### libcopp  `C++`  `MIT and BSL-1.0`  `active`  `Tier C`
+
+Cross-platform stackful coroutine library (with C++20 coroutine helpers) that switches up to about 1.65x faster than Tencent libco at 30,000 coroutines.
+
+**Beats:** Tencent libco — A 2019-09-29 gist by the libcopp maintainer reports average switch costs of 77 / 105 / 273 ns for libcopp at 1 / 1,000 / 30,000 coroutines versus 84 / 168 / 450 ns for libco with a static stack pool and 83 / 529 / 1,073 ns for libco with a 4K shared stack; the libcopp rows used 2 MB stacks while libco used 64 KB, and the libcopp-with-dynamic-stack-pool row at 64 KB (74 / 110 / 270 ns) shows the win holds at equal stack size. No CPU, compiler or flags are given, and the numbers predate the current v2 code.
+
+**Known shortcoming:** The gist rows use 2 MB stacks against libco's 64 KB, but the dynamic-stack-pool row at 64 KB (74/110/270 ns) still beats libco (84/168/450 ns). The gist is from 2019, before the v2 code, with no CPU, compiler or flags; the C++20 stackless path (5-9 ns) is far faster. The fcontext asm is copied from Boost.Context (BSL-1.0).
+
+**Independent measurement:** first-party gist
+
+**How:** Context switches use hand-written jump_fcontext/make_fcontext/ontop_fcontext assembly copied from Boost.Context (Oliver Kowalke, BSL-1.0), which saves only callee-saved registers plus the FP control words instead of the full signal-mask save that ucontext does. Each coroutine keeps its own stack, so switching never copies stack memory, unlike libco's shared-stack mode whose cost grows with stack contents (529 ns at 1,000 coroutines for a 4K shared stack). A stack pool allocator amortizes the mmap cost of creation (101 ns vs 4.1 us per create at 1,000 coroutines).
+
+**Use it when:**
+- Game or RPC servers with thousands to tens of thousands of live stackful coroutines where switch cost at scale matters (273 ns vs libco's 450 ns at 30,000 in the maintainer's gist).
+- High churn of short-lived coroutines, if you enable the stack pool: create cost drops to 101-222 ns against about 4 us for libco and plain libcopp.
+- Cross-platform code that must run on Linux, Windows (MSVC, MinGW), macOS and non-x86 targets (arm64, RISC-V, PowerPC, MIPS, s390x, LoongArch assembly provided).
+- Codebases migrating from stackful to C++20 coroutines that want one library covering both, with C++20 promises awaiting cotask::task.
+
+**Skip it when:**
+- You can use C++20 stackless coroutines directly: the same gist measures them at 5-9 ns per switch (Clang), an order of magnitude below libcopp.
+- Single-pair ping-pong switching latency is the only metric: the gap to libco is 77 vs 84 ns, and libgo measured 30 ns in the same table; minicoro and libaco report lower raw switch costs in their own benchmarks.
+- You want libco-style transparent hooking of blocking syscalls (read, connect, sleep) so existing synchronous code becomes asynchronous; libcopp has no hooks or built-in scheduler/event loop.
+- Memory-tight deployments using the defaults: plain libcopp rows used 2 MB stacks, so 30,000 coroutines reserve tens of GB of address space unless you configure smaller stacks or the pool.
+- You need a header-only drop-in: it is a compiled CMake library (copp and cotask) with assembly sources.
+
+**Integration:** static lib · none (gtest or Boost.Test optional for tests); masm needed on Windows · C++11, CMake 3.16+; C++20 coroutine features need GCC 10+, Clang 14+ (13 with -fcoroutines-ts), MSVC 1932+ · Linux, Windows (MSVC, MinGW), macOS; x86, x86-64, arm, arm64, RISC-V64, MIPS, PowerPC, s390x, LoongArch64, SPARC64 fcontext assembly
+
+**Vs siblings:** Pick libcopp over libco or libaco when you want per-coroutine stacks with a pool, a task layer and C++20 interop on many platforms including Windows; pick libaco or minicoro for the smallest raw switch in a tiny C library, libgo if you want a full scheduler with syscall hooks, and Boost.Cobalt or plain C++20 coroutines when stackless is acceptable.
+
+**Gotchas:**
+- Builds with -fstack-protector need LIBCOPP_MACRO_TLS_STACK_PROTECTOR=ON because, per the README, it changes the default context-switching logic.
+- Intel TSX use in fcontext (LIBCOPP_FCONTEXT_USE_TSX) defaults to ON; TSX is disabled by microcode on many recent Intel CPUs, so expect no benefit there.
+- Unhandled exceptions inside a coroutine are caught and rethrown when the coroutine is resumed back to the caller; SetUnhandledExceptionFilter only works with the Windows fiber context.
+- Major-version upgrades renamed types (stack_allocator_t to stack_allocator_type, coroutine_t to coroutine_type, libcopp::util to copp::util) and require value_type in task macros, so 1.x code does not compile unchanged.
+
+**Status:** Actively maintained (last commit 2026-09-15, 866 stars, CI on Linux, Windows, MinGW and macOS, packaged in vcpkg); MIT for libcopp code and BSL-1.0 for the vendored Boost.Context assembly, so it is copyable with attribution.
+
+[repo](https://github.com/owent/libcopp) · [benchmark](https://gist.github.com/owent/1842b56ac1edd5a7db54590d41af1c44)
+
+##### libdill  `C`  `MIT`  `abandoned`  `Tier C`
+
+C structured-concurrency library with stackful coroutines; project numbers show roughly 20x cheaper switches than Go goroutines.
+
+**Beats:** Go goroutines (also gccgo) — Contributor raedwulf's 2016 analysis in issue #30 measured a 16 ns context switch and 44 ns create+terminate on libdill master on an i7 4770k (13 ns and 25 ns on the optimized-limit branch), against Go at 331 ns / 237 ns and gccgo at 825 ns / 3652 ns. On a Core 2 Duo libdill measured 46 / 37 ns per switch and 131 / 100 ns per create. Compiler, flags and Go version are not stated, and the comparison is against Go rather than a C/C++ coroutine library.
+
+**Known shortcoming:** The faster 13/25 ns figures come from the optimized-limit branch, not master. Open bugs: 208 (M1 segfault), 229 (gcc 13.2.0 build failure), 194 (-std=c99 incompatibility). No Windows support; libdill.org is down (issue 221). The library is built with -D_FORTIFY_SOURCE=0 because the go() macro moves the stack pointer. No compiler or flags in the benchmark; abandoned.
+
+**Independent measurement:** first-party issue comment
+
+**How:** Context switches use inline-assembly setjmp/longjmp macros on x86-64 and i386 that save only callee-saved registers, with no signal mask and no glibc pointer mangling. Other architectures fall back to sigsetjmp(ctx, 0). The go() macro moves the stack pointer onto a heap stack inline (via alloca tricks), so launching a coroutine costs no function-pointer trampoline. Stacks (256 KiB each, plus an mprotect guard page) are cached up to 64 per thread, which keeps mprotect out of the create/terminate path. The scheduler is a run queue over an epoll/kqueue/poll pollset.
+
+**Use it when:**
+- C or C++ network servers on Linux or BSD x86-64 that want goroutine-style code with explicit cancellation and deadlines.
+- Workloads with very many short-lived coroutines, where create+terminate cost (44 ns on an i7 4770k per issue #30) matters.
+- Ports of Go-style designs to C where you want channels and choose() without a GC runtime.
+- Programs that want TLS, WebSocket or HTTP framing built into the coroutine I/O layer rather than added separately.
+
+**Skip it when:**
+- ARM64, especially Apple M1: no assembly switch path, and issue #208 (segfault launching a coroutine on M1 macOS, in ___chkstk_darwin) is open and unanswered.
+- Windows: not supported (issue #226). Cygwin (#201) and Android/x86 (#211) builds also fail.
+- Multicore scheduling inside one scheduler: each thread has its own context, and coroutines do not migrate across threads.
+- Projects that need a maintained dependency: last commit 2022-08-10, 46 open issues including build failures with gcc-13.2.0 (#229) and Fedora 31 (#206), and the libdill.org documentation site is down (#221).
+- Code that needs strict ISO C: bundle_wait() is reported incompatible with -std=c99/c11/c90 (#194), and the go() macro relies on GNU statement expressions and inline asm.
+
+**Integration:** shared lib · pthreads (unless --disable-threads); OpenSSL only with --enable-tls · GCC or Clang with GNU C extensions; autotools build (recent gcc-13.2.0 build failure reported in #229) · x86-64 and i386 with assembly switches; other POSIX via sigsetjmp fallback (aarch64 macOS reported segfaulting); Linux epoll, BSD/macOS kqueue, poll fallback; no Windows
+
+**Vs siblings:** Pick libdill over minicoro, libaco or libco when you want a complete scheduler, structured cancellation and a coroutine-aware socket/TLS stack rather than a bare context-switch primitive. Pick it over its predecessor libmill for the bundle/handle model and per-thread support. Choose minicoro or Boost.Context if you need ARM64 or Windows.
+
+**Gotchas:**
+- The library is built with -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0, because glibc fortification panics at the go() macro's stack-pointer manipulation. Compiling your own code with fortification can trip the same check.
+- Fixed 256 KiB stacks with a guard page; stack overflow faults instead of growing, and very large coroutine counts cost real memory (the whisper benchmark in #30 ran 32k-100k coroutines without guard pages).
+- Documentation lives only on libdill.org, which is down (#221); the README just points there, so the header libdill.h is the practical reference.
+- The faster 13 ns / 25 ns figures come from the 'optimized-limit' inlining branch, not from master.
+
+**Status:** Abandoned since 2022-08-10 (issue #227 asking whether it is abandoned has no answer) but MIT-licensed; usable on x86-64 Linux if you can fix the build on newer GCC yourself.
+
+[repo](https://github.com/sustrik/libdill) · [benchmark](https://github.com/sustrik/libdill/issues/30)
+
+##### libgo  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Go-style stackful coroutine runtime for C++11 with multi-thread scheduler and syscall hooks; switches faster than libco and ucontext.
+
+**Beats:** libco (Tencent), Linux ucontext — A gist by the libcopp author (2019-09-29, g++ -O2, CPU and compiler version not stated, co_yield ping-pong) measured libgo switch cost at 30 ns for one coroutine and 150 ns at 30000 coroutines vs libco (static stack pool) 84 and 450 ns and Linux ucontext 439 and 890 ns; libgo's 1000-coroutine cell prints '32 us', likely a typo, and older 2018 libgo builds were much slower.
+
+**Known shortcoming:** The default stack_size is 1 MB (config.h) while the gist's 1000+ coroutine rows used 2 MB stacks; the switch asm is vendored from boost.context; no guard page by default. Issue 292 asks whether the project is dead; crash issues 216, 248, 251 and 280 are unanswered.
+
+**Independent measurement:** first-party gist
+
+**How:** Context switches use Boost.Context's hand-written fcontext assembly (make_fcontext/jump_fcontext, copied from a vendored boost.context and renamed libgo_* at configure time), which saves only callee-saved registers instead of the signal mask and full register set that swapcontext handles. Scheduling is per-thread processors (P) with load-based work stealing; a dispatcher thread steals tasks from a P whose coroutine runs past a timeout.
+
+**Use it when:**
+- Server code on Linux that must call blocking client libraries (MySQL, Redis) from many concurrent tasks without one OS thread per connection.
+- Porting Go-style designs (goroutines plus channels) to C++11 with a built-in multi-thread scheduler.
+- Workloads with tens of thousands of mostly idle coroutines where switch latency matters more than creation cost (gist: 150 ns switch at 30000 coroutines vs libco 450 ns).
+- Replacing a ucontext-based coroutine layer on x86-64 Linux, macOS or Windows (VS2015/2017).
+
+**Skip it when:**
+- New projects wanting a maintained library: last commit 2023-03-10, open issue #292 asks whether the project is dead, and several crash reports (#216, #248, #251, #280) are unanswered.
+- Creation-heavy workloads: creating 1000 coroutines took 8.3 us vs 3.9 us for libco in the same gist.
+- Memory-tight deployments: stacks are malloc'd per coroutine at 1 MB by default (README: 1 million coroutines need about 4.5 GB); no shared-stack mode like libco's.
+- Code that relies on thread-local storage or non-reentrant TLS-based libc functions; coroutines can resume on other threads and the README warns against TLS.
+- When C++20 stackless coroutines fit: the same gist shows them faster than every stackful row.
+
+**Integration:** static lib · none at runtime (vendored boost.context sources used at configure time for the asm; Boost needed only for the tests); static_hook archive for fully static links · C++11; CMake; VS2015 or later on Windows · Linux, macOS, Windows 7+ (x86, x64); other CPUs only as far as the vendored boost.context asm selection covers them (not documented)
+
+**Vs siblings:** Pick libgo over libco, libaco or libcopp when you want a whole runtime (multi-thread scheduler, channels, libc hooks) rather than a bare switch primitive; pick minicoro or libaco instead for the lowest raw switch cost in a single thread, and Boost.Cobalt or C++20 coroutines when stackless is acceptable and maintenance matters.
+
+**Gotchas:**
+- Syscall hooking interposes libc symbols; link libgo first (and -ldl), and for static builds use -Wl,--whole-archive -lstatic_hook -lc -lpthread, or hooks silently do not apply.
+- Coroutine stacks come from std::malloc with no guard page by default (protect_stack_page = 0), so a stack overflow corrupts the heap unless you enable protect pages.
+- config.h warns that a 2 MB stack_size commits about 10x more memory than 1 MB on Linux; the gist's 1000+ coroutine rows used 2 MB stacks.
+- Build runs a b2 bootstrap inside third_party/boost.context to pick the asm file, so cross-compiling needs care.
+
+**Status:** Abandoned since March 2023 with unanswered crash reports, but MIT-licensed, packaged in vcpkg and still usable as a reference runtime.
+
+[repo](https://github.com/yyzybb537/libgo) · [benchmark](https://gist.github.com/owent/1842b56ac1edd5a7db54590d41af1c44)
+
+##### libmill  `C`  `MIT`  `abandoned`  `Tier C`
+
+Go-style coroutines and channels for C; in a third-party switch shootout it beats libco and sometimes Boost.Context.
+
+**Beats:** Boost.Context (boost) and libco in the same shootout — In tboox/benchbox's switch test (10M switches), with 2 coroutines libmill took 145 ms vs boost 199 ms and libco 687 ms on a LinuxMint x86-64 VM, and 525 vs 728 ms against boost on macOS x86-64. It lost to boost on an ArchLinux i386 VM (689 vs 485 ms) and in both 1000-coroutine Linux runs, while staying ahead of libco. Compiler, flags and CPU model are not stated.
+
+**Known shortcoming:** Slower than Boost on i386 and at 1000 coroutines, and tbox wins every row of the benchbox switch table. Deprecation request 196 is unanswered; open bugs 188, 187 and 181. Single-threaded only; no compiler or flags in the benchmark; abandoned.
+
+**Independent measurement:** first-party benchmark page
+
+**How:** On x86-64 the switch is an inline-assembly setjmp/longjmp pair that saves callee-saved registers plus rdi/rsi, with no signal mask. The go() macro relocates the stack pointer onto a heap stack inside the caller's frame with a VLA filler, so a launch costs no trampoline call. goprepare() preallocates and caches stacks (default about 256 KiB) to keep allocation out of the hot path. Other architectures fall back to sigsetjmp/siglongjmp.
+
+**Use it when:**
+- Single-threaded x86-64 C programs, such as small network daemons, written in Go-style CSP with channels and choose.
+- Cases where a ping-pong between two coroutines dominates; on LinuxMint x86-64 it switched faster than boost and libco in benchbox.
+- Existing libmill codebases that work and do not need threads or the libdill bundle model.
+
+**Skip it when:**
+- New projects: libdill supersedes it, the last commit was 2021-02-09, and issue #196 asks for deprecation in favour of libdill.
+- Many concurrent coroutines: in the 1000-coroutine benchbox runs it was slower than boost on both Linux VMs (1014 vs 894 ms, 2031 vs 1021 ms), and tbox beat it in every row.
+- 32-bit x86: on ArchLinux i386 it was slower than boost (689 vs 485 ms for 2 coroutines), since the assembly path is x86-64 only.
+- Multithreaded schedulers: there is no thread support; parallelism is via mfork processes.
+- Modern toolchains without patching: open reports include a dns.h build failure (#188), C99 'implicit declaration of asm' (#187), GCC 6.2.1 breakage (#167), an osx segfault (#189) and a tcpconnect timeout socket leak (#181).
+
+**Integration:** shared lib · none; OpenSSL with --enable-ssl · GCC or Clang with GNU C extensions (statement expressions, inline asm); autotools build · x86-64 assembly switch; other POSIX via sigsetjmp fallback; epoll on Linux, kqueue on BSD/macOS, poll fallback; no Windows
+
+**Vs siblings:** Rarely: prefer libdill (same author, structured cancellation, per-thread contexts), or tbox, which beat libmill in every benchbox row. libmill makes sense only when you want the literal Go API surface in single-threaded C, or are already using it.
+
+**Gotchas:**
+- Coroutine functions must be marked 'coroutine' (noinline), and the go() argument is evaluated on the new stack, so complex expressions in go(...) run inside the coroutine.
+- The x86-64 asm macros must list ymm registers as clobbered when __AVX__ is defined. Code compiled with and without AVX in one program relies on that conditional.
+- Its documentation was on libmill.org, which is parked (#195); the README carries no API docs or performance numbers.
+- The repo publishes no benchmarks; the only numbers come from the tbox author's benchbox wiki, run in VMs with no compiler flags or CPU model.
+
+**Status:** Abandoned since 2021-02-09 and effectively superseded by libdill; MIT-licensed and small enough to vendor, but expect to patch build errors on current GCC/Clang.
+
+[repo](https://github.com/sustrik/libmill) · [benchmark](https://github.com/tboox/benchbox/wiki/switch)
+
+##### Marl  `C++`  `Apache-2.0`  `abandoned`  `Tier C`
+
+C++11 hybrid thread/fiber task scheduler from Google; tasks that block on marl primitives yield their worker instead of stalling it.
+
+**Beats:** The repo's own std::thread plus std::mutex SingleQueue and MultiQueue executors (non_marl_bench.cpp); not oneTBB or a known library pool — The README itself has no numbers, but the gh-pages branch carries google-benchmark JSON (2020-06, release builds) for a MacBook Pro 15in 2018 (12 threads), Ubuntu and Windows 10 on a Threadripper 3990X; compiler and flags are not recorded. Against the repo's own non-marl reference executors (std::thread + std::mutex single queue, and pre-split per-thread queues) running 262144 doSomeWork tasks, marl is roughly at parity on Ubuntu (e.g. 0.293 s vs 0.297 s at 128 threads) and about 6% faster on the MacBook at 12 threads (3.35 s vs 3.55 s), but on Windows at 128 threads it takes 0.295 s vs 0.565 s single-queue and 0.651 s multi-queue (about 1.9x-2.2x, derived from page data); EventBaton task ping-pong costs about 216 ns per pass on Ubuntu, 410 ns on macOS and 635 ns on Windows (derived from page data).
+
+**How:** Per-worker task and fiber queues with work stealing (Scheduler::stealWork, random victim) and a 1 ms spin-for-work loop of nop batches before sleeping, so idle workers pick up new tasks without a kernel wake-up. Blocked tasks are parked as fibers and resumed via a hand-written register-swap routine (marl_fiber_swap in per-architecture assembly; ucontext optional via MARL_FIBERS_USE_UCONTEXT), with idle fibers pooled for reuse.
+
+**Use it when:**
+- CPU-bound task graphs where tasks wait on each other (events, wait groups) and you want a fixed number of OS threads, e.g. SwiftShader-style rendering or shader compilation pipelines.
+- Many-core machines (64-128 hardware threads) where a single mutex-protected queue starts to contend; the published Windows Threadripper 3990X run shows the gap opening at 128 threads.
+- Cross-platform code that must run on Windows, macOS, Linux, Android, iOS, Fuchsia and Emscripten with the same scheduler.
+- Code that needs Go-style WaitGroup/Event semantics in C++11 without pulling in Boost or TBB.
+
+**Skip it when:**
+- I/O-bound servers: there is no event loop or async I/O; non-marl blocking calls (accept, std::mutex held across waits, std::condition_variable) stall a worker, and blocking_call() spawns a std::thread per call (about 17-84 us in the published runs).
+- Coarse-grained tasks on a few cores: the published SomeWork runs show marl within about 1-6% of a plain std::thread + std::mutex queue at 1-64 threads, so it buys little there.
+- New projects that need upstream fixes: the repository was archived read-only on 2026-04-27.
+- Workloads wanting more than 256 worker threads (MaxWorkerThreads = 256) or tiny-memory fibers: default fiber stack is 1 MiB unless changed with setFiberStackSize.
+- If you want stackless C++20 coroutines or a structured-concurrency API; marl is stackful and callback-based.
+
+**Integration:** static lib (CMake add_subdirectory or vcpkg; MARL_BUILD_SHARED for a shared lib) · none (googletest and google benchmark only for tests/benchmarks) · C++11; CI moved to clang-18 on Linux in the final commit; VS2019 CMake integration on Windows · Windows, macOS, Linux, FreeBSD, Fuchsia, Emscripten, Android, iOS on arm, aarch64, loongarch64, mips64, ppc64, rv64, x86, x64
+
+**Vs siblings:** Pick marl over libco/libaco/libgo-style coroutine libraries when you want a multi-threaded work-stealing task scheduler with fiber-aware blocking primitives rather than raw context switches; pick Coros or Boost.Cobalt when you want C++20 coroutines, or minicoro/libaco when the cost of a single switch is what matters.
+
+**Gotchas:**
+- Forgetting scheduler.unbind() before a bound thread exits makes the Scheduler destructor block forever.
+- Holding a std::mutex while waiting on a marl primitive can deadlock: the fiber yields with the lock held.
+- Multiple Scheduler instances compete for cores; README recommends one per process, and its constructor is expensive (spawns threads).
+- Idle workers spin for up to 1 ms before sleeping, which shows up as CPU usage on otherwise idle machines.
+
+**Status:** Archived read-only by Google on 2026-04-27 with no 'finished' statement, but Apache-2.0, dependency-free and still packaged in vcpkg, so vendoring a pinned copy is reasonable.
+
+[repo](https://github.com/google/marl) · [benchmark](https://github.com/google/marl)
+
+##### minicoro  `C`  `Unlicense OR MIT-0 (public domain or MIT No Attribution)`  `stale`  `Tier C`
+
+Single-header C stackful asymmetric coroutines with a hand-written assembly switch, about 40x cheaper than ucontext on x86-64 Linux.
+
+**Beats:** POSIX ucontext (swapcontext) — First-party README table on an Intel Core i7-8750H: x86-64 Linux assembly backend 9 cycles per switch, 31 cycles init, 14 uninit, versus 352/383/14 for the library's own ucontext backend; on Windows 33/74/14 versus Windows fibers 69/10564/11167. The harness is tests/benchmark.c (10M resume/yield pairs timed with rdtsc, 100k init/uninit on pre-allocated memory), gcc with -O3 -flto -march=native -DMCO_NO_MULTITHREAD; gcc version not stated.
+
+**Known shortcoming:** The 9-cycle number excludes the thread_local path; the switch ends in an indirect jmp, not ret; no MXCSR or x87 control-word save on SysV. gcc version is not stated.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The x86-64 SysV switch (_mco_switch) is 16 instructions: it stores rip/rsp/rbp/rbx/r12-r15 into the from-buffer, loads them from the to-buffer and jumps; it saves no signal mask, so there is no sigprocmask syscall as in glibc swapcontext. The Windows variant also saves xmm6-xmm15 and the TIB stack fields. Init only lays out a stack and a context buffer (inspired by Mike Pall's Lua Coco).
+
+**Use it when:**
+- Generators, iterators or scripting-language coroutines in C where you resume and yield millions of times and ucontext's syscall per switch dominates
+- Embedding coroutines in a game engine or language runtime that must run on Windows, macOS, Linux, Android, iOS, RISC-V and the web from one file
+- Projects that need a public-domain/MIT-0 single header with custom allocator hooks and ASan/TSan/Valgrind support
+- Many coroutines with uneven stack use, with MCO_USE_VMEM_ALLOCATOR (about 8 KB physical per coroutine for 100k coroutines with ~2 MB reserved, per README)
+
+**Skip it when:**
+- C++ code that throws exceptions across a yield or relies on destructors of a suspended coroutine: the README says to avoid exceptions and to resume to completion for RAII (issue #20 asks for unwinding support, not provided)
+- When you need symmetric transfer, a scheduler, I/O integration or work-stealing: it is only a switch primitive (compare libdill, libgo, Marl)
+- If you need proof it beats Boost.Context, libco or libaco: the README only compares against its own ucontext and fiber backends
+- OpenBSD amd64 (open issue #27, crash) and WASI SDK with the asyncify backend (README says it fails)
+- Deep recursion in coroutines with default stacks: 56 KB default, overflow is only detected after the fact at yield and is otherwise undefined
+
+**Integration:** header-only · none (libc; ucontext or Windows fibers only on fallback paths) · C89 compiler for the library; thread_local/_Thread_local/__thread needed for multithreaded use · x86-64 and i686 (Linux, macOS, Windows), ARM/ARM64 (Android, iOS, macOS, Raspberry Pi), RISC-V rv32/rv64, WebAssembly via Emscripten; ucontext fallback elsewhere
+
+**Vs siblings:** Pick minicoro over libaco or libco when you need one portable, permissively licensed header that also covers Windows, ARM, RISC-V and WebAssembly; pick libdill or libgo when you want a scheduler and I/O on top, and Neco/llco if you want a similar single-file C design with a runtime included.
+
+**Gotchas:**
+- The README cycle numbers come from tests/benchmark.c built with -O3 -flto -march=native -DNDEBUG -DMCO_NO_MULTITHREAD (tests/Makefile), so the 9-cycle switch excludes the thread_local lookup of the default build; cycles are rdtsc reference ticks, not core cycles
+- The switch returns with an indirect jmp rather than ret, which defeats the return-stack predictor; a minicoro-derived fork (PavelGuzenfeld/ucoro #11) measured about 3x Boost.Context before fixing this
+- Do not use thread_local inside coroutine bodies if coroutines migrate between threads: the compiler may cache the TLS address
+- The x86-64 SysV switch does not save MXCSR or the x87 control word (Boost.Context does), so code that changes FP rounding modes inside a coroutine leaks the setting to the resumer
+
+**Status:** Stale since the 2024-12-07 commit with 7 open issues (OpenBSD crash, ASan warning, red-zone stack waste), but 993 stars, public domain or MIT-0, and one file that is easy to vendor.
+
+[repo](https://github.com/edubart/minicoro) · [benchmark](https://github.com/edubart/minicoro#benchmarks)
+
+##### tbox (coroutine switch)  `C`  `Apache-2.0`  `active`  `Tier C`
+
+glib-like C library whose stackful coroutine scheduler switches faster than Boost.Coroutine and libco in its author's benchmark.
+
+**Beats:** Boost.Context (boost), libco (Tencent), libgo(boost), libmill, libtask, Go, cloudwu coroutine, acl libfiber — The author's benchbox 'switch' test times 10,000,000 yields among 2 or 1000 coroutines: on a LinuxMint x86-64 VirtualBox VM tbox took 187 ms (2) and 400 ms (1000) vs Boost.Coroutine symmetric_coroutine 199/894 ms, libco 687/2288 ms and libmill 145/1014 ms; on macOS x86-64 tbox 205/438 ms vs boost 728/1949 ms. No CPU, compiler, flags or Boost version are given, and the boost and libco harnesses perform two context jumps per counted switch versus one for tbox (read from the benchbox sources).
+
+**Known shortcoming:** Harness flaw behind the numbers: the benchbox boost and libco tests bounce through main (two context jumps per counted switch) while the tbox and libmill tests yield coroutine to coroutine (one jump), so the 2.2-4.5x lead over Boost and 3.7-5.7x over libco is overstated by up to about 2x. The x86-64 tb_context_jump skips MXCSR and the x87 control word, unlike Boost.Context.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The context switch (tb_context_jump) is a hand-written assembly routine adapted from Boost.Context's jump_fcontext: on x86-64 it pushes the six callee-saved integer registers, swaps the stack pointer and jumps, with no syscalls and no signal-mask save. tb_coroutine_yield picks the next ready coroutine and jumps to it directly, so each yield is a single coroutine-to-coroutine switch rather than a round trip through a central resumer.
+
+**Use it when:**
+- Pure C projects that want coroutine-based network or I/O servers with built-in poller integration (epoll/kqueue/IOCP) and channels
+- Many-coroutine (around 1000) cooperative scheduling on one thread where switch cost dominates
+- Projects already using xmake or willing to take the tbox package, on x86, x86-64, ARM or ARM64
+- Embedded or cross-platform code that also benefits from tbox's other modules (micro build is about 64K)
+
+**Skip it when:**
+- You only need a context-switch primitive; minicoro, libaco or Boost.Context are far smaller dependencies than all of tbox
+- C++ code that wants a standard or Boost interface (C++20 coroutines, Boost.Context/Fiber); tbox's API is C and scheduler-centric
+- Multi-threaded work-stealing schedulers; the benchmarked scheduler runs coroutines on one thread
+- Code that changes the floating-point environment inside coroutines; the x86-64 jump routine does not save MXCSR or the x87 control word as Boost.Context's does
+- When you need a fair published comparison: the only numbers are a first-party VM benchmark from 2015-2017
+
+**Integration:** static lib (or shared lib) built with xmake; also available as an xmake package (add_requires("tbox", {configs = {coroutine = true}})) · none required for the coroutine module; optional zlib, OpenSSL/mbedTLS/PolarSSL, MySQL, SQLite3 for other modules · C99 compiler (benchbox builds with c99/cxx11); xmake build system · Windows, macOS, Linux, Android, iOS, BSD; coroutine switch assembly for x86, x86-64, ARM, ARM64
+
+**Vs siblings:** Pick tbox over libco, libgo or libfiber when you want a C coroutine runtime bundled with pollers, channels and I/O helpers in one maintained library; pick minicoro or libaco instead when you only need a tiny switch primitive, and libmill/libdill if you want a smaller C coroutine library with similar measured switch speed.
+
+**Gotchas:**
+- Benchmark asymmetry: in tboox/benchbox the tbox and libmill tests yield coroutine-to-coroutine through their schedulers (one jump per counted switch), while the boost (symmetric_coroutine called from main) and libco (co_resume from main, co_yield_ct back) tests bounce through main, doing two context jumps per counted switch; the reported 2.2x to 4.5x lead over boost and 3.7x to 5.7x over libco therefore overstates per-jump cost, roughly by up to 2x
+- libmill, measured the same scheduler-to-scheduler way, beat tbox on the LinuxMint x86-64 VM with 2 coroutines (145 ms vs 187 ms)
+- Debug builds enable assertions and memory checking; use the xmake release mode for performance
+- The x86-64 switch saves only integer callee-saved registers; floating-point control state is not preserved across switches
+
+**Status:** Actively maintained (last commit 2026-09-15, 5.1k stars, CI on Windows/Linux/macOS/Android) and Apache-2.0, but the coroutine benchmark dates from 2015-2017 and has not been rerun publicly.
+
+[repo](https://github.com/tboox/tbox) · [benchmark](https://github.com/tboox/benchbox/wiki/switch)
+
+##### coros-fibers  `C++`  `MIT`  `abandoned`  `Tier D`
+
+Small x86-64 Linux stackful coroutine switch (libcoro-style assembly) plus a priority fiber scheduler; no baseline compared.
+
+**Beats:** none named (ABI-compliant coroutine switch; libco-style) — The author reports 58-62 million raw coro_transfer switches per second and 21 million per second through the fiber scheduler on an unnamed 2 GHz Xeon (about 16-17 ns and 48 ns per switch, derived from page data), with no baseline, no compiler version and no published run; the switch benchmark code exists only as disabled example code in coroutines.cpp.
+
+**Known shortcoming:** coro_init bug: func and arg are never stored and the trampoline reads garbage from rbp (the code's own comment says it breaks at -O1 and above; the Makefile uses -O3). The measured numbers are not affected since the benchmark uses the custom-trampoline path. The switch bench lives in coroutines.cpp under #ifdef EXAMPLE inside #if 0 and does not compile (s1.Alloc vs alloc). Fiber stacks are 4096 B with no guard page; MXCSR and the x87 control word are not saved.
+
+**Independent measurement:** code reading by enricher
+
+**How:** coro_transfer is about 15 instructions of hand-written assembly: push the six System V callee-saved registers (rbp, rbx, r12-r15), store rsp, load the other context's rsp, pop six registers and ret. It skips the signal-mask syscall and FPU state that swapcontext saves. The scheduler picks the next fiber in O(1) with a trailing-zeros scan of an 8-bit ready mask over intrusive doubly linked lists, and recycles fibers and stacks from free lists.
+
+**Use it when:**
+- Reading or borrowing a minimal x86-64 System V context switch (about 30 lines of assembly) for your own runtime.
+- Single-threaded, Linux x86-64 event loops that want stackful fibers with simple priorities and are willing to vendor the code.
+- Learning material: the comments walk through the ABI rules, the stack layout for new coroutines and how Go's scheduler compares.
+
+**Skip it when:**
+- Any platform other than Linux x86-64: the header has #error for everything else.
+- Production use without a review: last commit 2016-08-18, 2 commits, no tests, and it depends on a bundled 'Switch' utility library (26 headers) plus valgrind headers.
+- Deep call chains in fibers: scheduler fibers get a 4096-byte malloc'd stack with no guard page (get_fiber calls alloc(4096) without protect).
+- When you need a measured comparison: pick a sibling like minicoro or libaco that benchmarks against ucontext or libco.
+
+**Integration:** static lib · bundled Switch/ headers (switch.h, switch_ll.h, switch_vector.h, timings.h and others); valgrind/valgrind.h because VALGRIND_SUPPORT is hard-defined · C++14 (Makefile uses -std=c++14 -O3); GCC/Clang inline asm and attributes · Linux x86-64 only
+
+**Vs siblings:** Rarely: minicoro (9 cycles vs 352 for ucontext, cross-platform, single header) and libaco (measured against libco) cover the same niche with benchmarks and maintenance; pick coros-fibers only if you want its tiny priority scheduler as a starting point on Linux x86-64.
+
+**Gotchas:**
+- Bug in the low-level API: coro_init(ctx, func, arg, stack) passes func and arg to coro_init_with_trampoline, which ignores both and never writes them to the stack; the default coroInit trampoline then reads func and arg from 16(%rbp) and 8(%rbp), and its own comment says this does not work at -O1 or higher (the Makefile builds at -O3). Only the custom-trampoline path, which the fiber scheduler and the switch benchmark use, is usable.
+- The switch saves only the six general-purpose callee-saved registers, not the MXCSR or x87 control words that the ABI also treats as callee-saved, so code that changes rounding modes per coroutine will leak them across switches.
+- The benchmark behind the 58-62 million switches/s figure is in coroutines.cpp under #ifdef EXAMPLE but inside #if 0, and it calls s1.Alloc(4096) where the method is alloc, so it does not compile as shipped; the enabled example times 65,536 scheduler yields between two fibers.
+- The destructor's non-priority branch compares against &read instead of &ready, so building with HAVE_FIBER_PRIOS undefined fails.
+
+**Status:** Abandoned since 2016 with 2 commits; MIT-licensed and small enough to copy, but the low-level coro_init path is broken and it needs its bundled Switch headers.
+
+[repo](https://github.com/markpapadakis/coros-fibers) · [benchmark](https://github.com/markpapadakis/coros-fibers/blob/master/README.md)
+
+##### llco  `C`  `Unlicense OR MIT-0 (README: Public Domain or MIT No Attribution)`  `stale`  `Tier D`
+
+Single-file C stackful coroutine switch (minicoro-derived assembly) with bring-your-own-stack; no scheduler, no benchmark against any baseline.
+
+**Beats:** none named — Nothing is measured in the llco repository; the only number is the neco README's statement that an llco-based context switch takes about 11 ns on the author's AMD Ryzen 9 5950X, with no compiler, flags, benchmark code or baseline (no ucontext, Boost.Context or minicoro comparison).
+
+**Known shortcoming:** No numbers or baseline of its own; the only figure is about 11 ns per switch on a Ryzen 9 5950X quoted in the neco README, with no libco, Boost.Context or ucontext comparison. Directional only (tier D).
+
+**Known shortcoming:** No benchmark in the repo; stale since 2024-07-25. Open issue 1 (Android NDK r27 dladdr conflict) and 2 (sanitizer support). The x86-64 SysV switch skips MXCSR and the x87 control word; the llco_current handle lives on the coroutine stack and dangles after the final switch; the README names a nonexistent uco_method.
+
+**Independent measurement:** code reading by enricher
+
+**How:** On x86-64 System V the switch is a 17-instruction hand-written routine that saves and restores only the callee-saved registers (rip, rsp, rbp, rbx, r12-r15) in a struct, with no signal-mask syscall, unlike swapcontext. Windows x64 also saves rdi, rsi, xmm6-xmm15 and the TEB stack/fiber fields; aarch64, ARM EABI, RISC-V and i386 have their own assembly. llco_switch has a fast path that skips the cleanup bookkeeping when neither side is finishing. Where no assembly exists it starts coroutines with makecontext/setcontext once and then switches with _setjmp/_longjmp rather than swapcontext.
+
+**Use it when:**
+- You are writing your own scheduler, generator or actor runtime in C and want only the stack switch, with full control over stack allocation (pool, mmap with guard pages, arena).
+- Embedded or no-malloc settings: llco itself never allocates; stacks come from the caller.
+- Portable switching across Linux, macOS, FreeBSD, iOS, Android, RISC-V, 32-bit ARM and i386 from a single .c file under a public-domain/MIT-0 license.
+- You want built-in stack unwinding (llco_unwind via _Unwind_Backtrace) to print backtraces from inside coroutines.
+
+**Skip it when:**
+- You need a scheduler, channels, sleeping or I/O: use neco (built on llco) or libdill/libmill instead.
+- You need numbers: llco ships no benchmark at all, and the only figure (about 11 ns per switch in the neco README) has no baseline or code; minicoro, whose assembly llco adapts, publishes 9 vs 352 cycles against ucontext.
+- Windows on anything but x86_64 (Windows Fibers fallback is an #error) or any Windows build that falls back to setjmp/longjmp stack switching (#error 'Windows stackjmp not supported').
+- Android NDK r27 builds: open issue #1 reports a conflicting dladdr declaration in the unwind code (workaround: -DLLCO_NOUNWIND, not documented as such).
+- Projects needing active maintenance or sanitizer support: last commit 2024-07-25, issue #2 (LLVM sanitizer support) open.
+
+**Integration:** source-drop · none (libc; libgcc unwind/dladdr for llco_unwind on GCC/Clang; emscripten fiber API on WebAssembly) · C99 or later with GCC/Clang inline asm (MSVC on Windows x64 via a byte blob in .text); Emscripten needs -sASYNCIFY · Assembly: x86-64 (Linux, macOS, Windows), aarch64, ARM EABI, RISC-V 32/64, i386; ucontext+setjmp fallback elsewhere; WebAssembly via emscripten fibers
+
+**Vs siblings:** Pick llco over minicoro when you want an even thinner layer (no coroutine object allocation, no yield/resume data stack) under a public-domain/MIT-0 license, or the same switch neco uses; pick minicoro when you want measured numbers, a status/resume API and active maintenance, and libdill or neco when you need a scheduler.
+
+**Gotchas:**
+- The struct llco handle a coroutine gets from llco_current() lives on that coroutine's own stack (llco_entry_wrap declares it locally), so it dangles once the coroutine finishes with final=true.
+- The x86-64 System V switch does not save MXCSR or the x87 control word, so FP rounding-mode changes leak between coroutines (same as minicoro).
+- Stack cleanup runs lazily on the next switch target (llco_cleanup_last); calling llco_start, llco_switch or llco_current from inside the cleanup callback aborts the process.
+- The README says uco_method(0) but the function is llco_method; the asmctx_make reserves a 128-byte red zone and requires stack_size >= 16384 or it aborts with 'stack too small'.
+
+**Status:** Stale since 2024-07-25 with two open issues (Android NDK build error, sanitizer support), but it is about 1,200 lines in one file, dual-licensed Unlicense/MIT-0 and easy to vendor; the actively maintained copy is the amalgamated llco inside neco.c.
+
+[repo](https://github.com/tidwall/llco)
+
+##### Neco  `C`  `MIT`  `active`  `Tier D`
+
+Single-file C coroutine runtime with Go-like channels, deterministic scheduler and epoll/kqueue I/O; about 11 ns switches, no baseline measured.
+
+**Beats:** none named (README claims fast switching; ucontext fallback only) — The README states that an llco-based context switch takes about 11 ns on the author's AMD Ryzen 9 5950X, with no compiler, flags, benchmark code or comparison library. The linked Bluebox repo (not part of the verified claim) shows memtier_benchmark default runs on the same CPU at 493,346 ops/s for the Neco-based Redis clone versus 207,735 ops/s for redis-server (about 2.4x, derived from page data), an application benchmark against a far larger server, not a coroutine comparison.
+
+**Known shortcoming:** No baseline measured: README gives only about 11 ns per switch on a Ryzen 9 5950X, with no libco, Boost.Context or ucontext comparison and no benchmark code. Directional only (tier D).
+
+**Known shortcoming:** neco_start switches into the new coroutine immediately; issues 10 and 12 report slow mass spawn; issue 6 (glibc below 2.30) is open; Windows and WASM lack fd I/O. The only number anywhere is about 11 ns per switch on a Ryzen 9 5950X with no baseline.
+
+**Independent measurement:** first-party README
+
+**How:** Context switches go through the bundled llco layer, a hand-written assembly register swap (callee-saved registers only, no signal-mask syscall) adapted from minicoro and Lua Coco. Scheduling is done by the bundled sco, a fair FIFO scheduler, entirely in user space. Stacks are 8 MiB mmap regions grouped with 1 MiB gaps, recycled via a stack free list and with early page release, and coroutine and channel objects are pooled; blocking writes on Linux and getaddrinfo are pushed to worker threads so the scheduler thread keeps running.
+
+**Use it when:**
+- Network servers or clients in plain C on Linux/macOS/FreeBSD where you want sequential code per connection instead of callback state machines (the author's Bluebox Redis clone is the reference design).
+- Programs with thousands to tens of thousands of mostly idle coroutines on one core.
+- Simulations or tests that need deterministic, reproducible interleaving (fair, deterministic scheduler).
+- Projects that want a single .c/.h drop-in under MIT with no external dependencies.
+
+**Skip it when:**
+- CPU-bound work that should scale across cores: one scheduler per thread, cross-thread communication only via pipes/eventfd/atomics; multithreaded scheduling is an explicit non-goal.
+- Windows or WebAssembly network code: neco_wait and fd-based I/O are not available there (no epoll/kqueue), Windows is amd64 only, and guards, CSPRNG and unwinding are missing.
+- Code that must call blocking libraries using pthread_mutex_t/pthread_cond_t from inside coroutines (README: they do not work well), or that must coexist with another event loop such as libuv (issue #5 open).
+- Bursty spawning of many coroutines: neco_start switches into the new coroutine immediately, and issues #10 (slow creation of thousands of coroutines) and #12 (about 105,050 switches for 100 spawns among 1,000 coroutines) report the cost.
+- Old glibc (< 2.30) targets: issue #6 open.
+
+**Integration:** source-drop · none beyond libc and pthreads (dlsym used for getaddrinfo threads); epoll or kqueue for I/O · C11 with <stdatomic.h> (GCC or Clang); glibc 2.30+ reported for Linux (issue #6) · Linux, macOS, FreeBSD full; Windows amd64 and WebAssembly (Emscripten -sASYNCIFY) core coroutines only
+
+**Vs siblings:** Pick Neco over libdill or libmill when you want a maintained, single-file C runtime with channels, deadlines and networking wrappers plus deterministic scheduling; pick llco or minicoro when you only need the switch primitive, and libdill when you want published switch numbers against a baseline (Go goroutines).
+
+**Gotchas:**
+- Coroutine argv pointers are valid only until the coroutine's first neco_* call; copy arguments first (README example 4).
+- Default stack is 8 MiB of virtual memory per coroutine plus 1 MiB gaps (1 MiB heap stacks on Windows/WebAssembly); guard pages need -DNECO_USEGUARDS.
+- neco_start called first from main() blocks until that coroutine and all children finish; neco_main changes program behavior slightly (see API docs).
+- Signal handling and worker threads are on by default on POSIX; disable with NECO_NOSIGNALS / NECO_NOWORKERS when embedding in a host that owns signals or threads.
+
+**Status:** Active (last commit 2026-05-30), MIT, 1.4k stars, single 8,761-line neco.c with a test suite claiming 100% coverage under sanitizers and Valgrind; six issues open, including C++ export, Windows sockets and old-glibc support.
+
+[repo](https://github.com/tidwall/neco) · [benchmark](https://github.com/tidwall/neco/blob/main/README.md)
+
+#### filesystems-and-io
+
+##### al-dente (dent)  `C`  `MIT`  `stale`  `Tier C`
+
+Small multithreaded C directory walker on raw getdents64 that prints every path; beats GNU find and fd on a synthetic tree.
+
+**Beats:** GNU find (readdir/fts directory traversal); also fd — First-party hyperfine (3 warmups, 10 runs) on a synthetic tree the README says holds 765,200 entries, with warm caches implied: dent 563.9 ms vs GNU find 3.178 s (5.64x) and fdfind -HI 1.633 s (2.90x); piping to grep for one name was 6.01x faster than find -iregex and 1.60x faster than fd. Built with gcc -O3 per the Makefile; CPU, core count, filesystem and kernel are not stated, and dent and fd ran multithreaded while find is single-threaded.
+
+**Known shortcoming:** The name length is taken from the padded d_reclen, so printed names carry 0-7 trailing NUL bytes (hence grep -a in the README) and the output is not byte-identical to find. The committed benchmark_scenario.c (DEPTH 4, BREADTH 32) builds 2,164,800 unique entries, not the claimed 765,200, so the timed tree is not reproducible from the repo. README thread docs are wrong: the real default is 10 threads, not 1000, and dirlist.h does not exist.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Worker threads (pthreads) pop directory paths from a mutex/condvar work queue, read each directory with the raw getdents64 syscall into a 256 KiB thread-local buffer, and recurse into children whose d_type is DT_DIR without ever calling stat. Output is built in a 256 KiB thread-local buffer and written with one fwrite per flush. The speedup over GNU find comes mostly from parallelism (dent's system time, 1.82 s, is over 3x its 0.56 s wall time) plus skipping per-entry libc/fts overhead.
+
+**Use it when:**
+- Dumping the full path list of a large tree (hundreds of thousands to millions of entries) on Linux, on a local filesystem that fills in d_type
+- Feeding a path list to grep or another tool when you do not need find's predicates, ordering or metadata
+- As a short, readable reference for a parallel getdents64 walker you can adapt into your own C/C++ code (MIT license)
+
+**Skip it when:**
+- Filesystems that return DT_UNKNOWN in d_type (some NFS, older XFS, reiserfs and FUSE setups): dent never stats, so it silently does not descend into those directories
+- Any use that needs find/fd features: name or type filters, depth limits, ignore files, -exec, stat-based predicates, stable output order
+- Pipelines that expect clean text paths: entry names are printed with up to 7 trailing NUL padding bytes (see gotchas), which is why the README's grep example needs -a
+- Non-Linux systems (raw getdents64 syscall)
+- Long-lived production use: single burst of commits in October 2024, no tests of output correctness against find, code written with ChatGPT per the README
+
+**Integration:** source-drop · none beyond libc and pthreads · C with GNU extensions (gcc; _GNU_SOURCE, __thread, __builtin_prefetch) · Linux only
+
+**Vs siblings:** Pick dent only when you want the smallest possible parallel getdents64 walker to copy and you control the filesystem; bfs is the catalogued choice for a find-compatible, maintained traversal tool, and lsr covers single-directory ls -l listing rather than recursive walks.
+
+**Gotchas:**
+- Name length is computed as d_reclen - offsetof(d_name) - 1, but d_reclen is padded to 8 bytes, so each printed name carries 0-7 trailing NUL bytes before the newline. Directory recursion still works (strdup stops at the first NUL), but the output is not byte-identical to find's and needs grep -a; the benchmarked output was this padded form (read from dent.c).
+- The committed benchmark_scenario.c (DEPTH 4, BREADTH 32) does not produce the README's 765,200-entry tree: it creates 1,082,400 directories and 1,082,400 unique files (the file loop sits inside the directory loop, rewriting the same 32 files 32 times), and its printed counter would read 35,719,200. The tree that was timed is therefore not reproducible from the repo as-is (computed from the source).
+- README says MAX_CONCURRENT_THREADS in dirlist.h defaults to 1000, but no such file or macro exists; the actual default is 10 threads from main.c, and the README's 'executable named dirlist' is really dent.
+- README says the project is 'provided as-is without any warranty' but the repo root has an MIT LICENSE (Copyright 2024 roy reznik); open() failures (permissions) are printed with perror and skipped.
+
+**Status:** Stale since 2024-10-03 (ten commits over two days, 18 stars, one closed issue), MIT-licensed and small enough to vendor, but fix the NUL-padding name length before relying on its output.
+
+[repo](https://github.com/royreznik/al-dente) · [benchmark](https://github.com/royreznik/al-dente)
+
+##### ayafileio  `Python (C++ native extension)`  `MIT`  `active`  `Tier C`
+
+Python async file I/O with a C++ native core on io_uring, IOCP and Dispatch I/O; beats thread-pool aiofiles on small cached reads.
+
+**Beats:** aiofiles (thread-pool async file I/O) — First-party tests/t_compare.py runs on GitHub Actions runners (Python 3.14, CPU and kernel not recorded; median of 3 one-second rounds after a 0.3 s warmup) against aiofiles at its defaults. On Linux io_uring, random cache-hot 4 KiB reads ran 19.6x-35.4x faster and small sequential reads 9.2x faster, but 4 MiB sequential writes ran 0.4x. Windows headline write figures are local, unspecified NVMe runs.
+
+**Known shortcoming:** Python library. Harness skew: aiofiles random reads do seek plus read (two executor round trips) against one read_at for ayafileio; aiofiles is buffered while ayafileio is unbuffered; reads are page-cache hot. The macOS 499K ops/s was measured on 1.11.1, whose close-path fd fix was racy (ABA, possible EBADF on an unrelated file); 1.11.2 (2026-10-06) rewrote it and the README was not re-measured. 1.11.1 also fixed a use-after-free in the aopen error path.
+
+**Independent measurement:** first-party README
+
+**How:** Each operation is submitted to a kernel completion API instead of an asyncio executor thread. Results are delivered to the event loop through an adaptive completion batcher (call_soon_threadsafe on count threshold or last in-flight op). Cache-hit fast paths resolve the future inline, so await never yields: io_uring IORING_SETUP_COOP_TASKRUN with an inline CQ peek after submit, Windows FILE_SKIP_COMPLETION_PORT_ON_SUCCESS, and macOS mincore residency check plus pread. Reads go zero-copy into a pre-built PyBytes, writes go zero-copy from a held buffer view, and a thread-local IORequest freelist avoids per-op allocation.
+
+**Use it when:**
+- asyncio services doing many small (4-64 KiB) reads of page-cache-hot files, where aiofiles' per-op executor round-trip dominates
+- Random positioned reads from many coroutines on one handle (read_at), which aiofiles cannot do without seek+read
+- Loading or writing many files concurrently from asyncio (read_bytes_many / write_bytes_many with parallel aopen), e.g. config or model-shard fan-out
+- Linux with kernel 5.19+ for the COOP_TASKRUN inline path; prebuilt wheels cover CPython 3.10-3.15 including free-threaded builds
+
+**Skip it when:**
+- Large sequential buffered writes on Linux: the README's CI run has aiofiles ahead at 4 MiB blocks (0.4x)
+- As a C++ library: there is no C++ API; use liburing directly instead
+- When you need tested, stable semantics: version 1.11.2 (2026-10-06) still fixes fd-lifetime races on macOS, and 1.11.1 fixed a use-after-free in aopen's error path. The project moves fast, with commits labelled AI-assisted.
+- Windows CI-class VMs: the windows-2022 runner measured 64 KiB sequential read at 0.79x and 4 KiB small reads at 0.62x of aiofiles
+- Cold-cache or O_DIRECT workloads: none of the published cells measure uncached storage
+
+**Integration:** module · none at runtime (prebuilt wheels); building from source needs scikit-build-core <1.1, nanobind >=2.12, CMake 3.15+, and liburing on Linux (otherwise io_uring is disabled and the thread-pool fallback is used) · Python 3.10+, C++20 compiler for source builds (built -O3 / MSVC /O2, Release) · Linux (io_uring, kernel 5.1+; x86-64, aarch64, riscv64 wheels), Windows 7+ (IOCP), macOS 10.10+ (Dispatch I/O)
+
+**Vs siblings:** Pick it over aiofiles when you are in Python asyncio and need fast small or concurrent reads. From C or C++, liburing (or LLFIO for a portable C++ API) gives the same kernel paths without the Python layer. couring is only a teaching demo of the coroutine-over-io_uring pattern.
+
+**Gotchas:**
+- The comparison is lopsided: in the random-read cell aiofiles does await seek() plus await read() (two executor round-trips per op), while ayafileio does one read_at. aiofiles runs buffered, ayafileio unbuffered. All reads hit a 256 MiB file that was just written, so they are page-cache hot.
+- README arrow figures (6.8K to 499K, 929 to 3,046 MB/s) are this library's own before/after versions; only the parenthesised ratios compare against aiofiles.
+- The macOS 499K ops/s small-read figure was measured on 1.11.1, whose close-path fd fix was itself racy (ABA on the dup'd descriptor, possible EBADF on an unrelated file). 1.11.2 rewrote it, and the README has not been re-measured since.
+- Zero-copy writes pin the caller's buffer until the future resolves; mutating it in place changes what gets written.
+
+**Status:** Very active (1.11.2 on 2026-10-06, 376 commits, MIT, PyPI wheels marked Production/Stable), but the low-level backends still get frequent race and lifetime fixes, so pin a version.
+
+[repo](https://github.com/Patchouli-CN/ayafileio) · [benchmark](https://github.com/Patchouli-CN/ayafileio)
+
+##### bfs  `C`  `0BSD`  `active`  `Tier C`
+
+Breadth-first, find-compatible directory search tool with parallel async I/O; about 3x faster than GNU find on full traversals.
+
+**Beats:** GNU find 4.6.0 / fd — Per WebSearch snippets of the author's bfs 3.0 blog post (page itself blocked): a full traversal of a ~7.6M-file home directory with -false took bfs 3.0.1 2.416 s vs GNU find 7.021 s (2.9x), bfs 2.6.3 5.307 s (2.2x) and fd 8.209 s; an early-quit search (-name kd-forest.mkv -quit) ran 427.6x faster than find and 248.7 +/- 159.3x faster than fd, a breadth-first-order effect with very high variance. CPU, compiler and flags were not visible in the snippets; the repo's bench/bench.sh (hyperfine -w2 -M20, Linux v6.5, Rust and Chromium 119 corpora) reproduces the setup but publishes no results.
+
+**Known shortcoming:** io_uring covers openat, close and statx only; getdents still uses readdir in worker threads (a TODO in ioq.c). Optimizer bugs were fixed in 4.0.8 and 4.1.4. Numbers are blog snippets: about 7.6M files, bfs 3.0.1 at 2.416 s against GNU find 7.021 s (2.9x) and fd 8.209 s; early quit 427.6x against find and 248.7 +/- 159.3x against fd.
+
+**Independent measurement:** snippet only
+
+**How:** Since 3.0 directories are opened and read asynchronously by background worker threads (default: number of CPUs, capped at 8, set with -jN) fed through a lock-free MPMC ring queue (src/ioq.c) that uses unconditional fetch-and-add instead of compare-and-swap. Since 3.1, on Linux with liburing, each worker also drives an io_uring for openat, close and statx, and stat() calls run in parallel on all platforms. Breadth-first order means -quit searches for shallow targets stop before descending into deep unrelated subtrees.
+
+**Use it when:**
+- Shell scripts or tools that shell out to find and walk large trees (home directories, monorepos, kernel or Chromium checkouts)
+- Searches for a file you expect to be near the top of a deep tree, with -print -quit
+- Queries needing per-file metadata (-size, -newer, -links, colorized output), which benefit from parallel stat
+- Linux boxes with liburing available, or macOS/BSD where the threaded path still applies
+- When you need exact find semantics (the author reports no other find passes even the POSIX subset of its test suite)
+
+**Skip it when:**
+- You need a C or C++ library API for directory walking; bfs is only a binary (bftw.c is internal, not a supported library)
+- You want gitignore-aware, regex-first search with friendly defaults; fd covers that interface (bfs needs -nohidden/-exclude)
+- Output order must match GNU find's depth-first order exactly, e.g. diffing against existing find output
+- Machines with very low open-file limits or many concurrent instances; 4.1.1 only recently started respecting system-wide limits
+- Workloads dominated by -exec of a child process, where traversal speed is not the bottleneck
+
+**Integration:** CLI binary (built with ./configure && make; packaged in most Linux distros, Homebrew, MacPorts, FreeBSD, OpenBSD) · none required beyond a C compiler, GNU make and Bash; optional libacl, libcap, libselinux, liburing, oniguruma · C23 by default since 4.1; C17 fallback if the compiler supports common extensions; needs <stdatomic.h> and pthreads · Linux, macOS, FreeBSD, OpenBSD, NetBSD, DragonFly BSD, Illumos, Android, WASIX; io_uring path Linux-only with feature probing
+
+**Vs siblings:** Pick bfs over al-dente (dent) when you need full find expression compatibility and a mature, packaged tool rather than a narrower listing utility; pick it over fd when the script already speaks find syntax or targets are shallow. For disk-usage totals, diskus, gdu or pdu are more direct.
+
+**Gotchas:**
+- Default ./configure is a debug build; benchmark or package with ./configure --enable-release or results will be slower
+- io_uring is used for openat/close/statx only; reading directory entries (getdents) still goes through readdir in worker threads (ioq.c carries a TODO for io_uring_prep_getdents)
+- Several long-lived optimizer bugs were fixed recently: 4.0.8 fixed '-user a -or -user b' being rewritten to '-user a' (since 2.0), and 4.1.4 fixed -size units being ignored by the optimizer (since 1.3.3), which could return no results
+- 3.1.2/3.1.3 fixed io_uring feature probing on older 5.x kernels; very old liburing builds were fixed in 4.0.5
+
+**Status:** Actively maintained (4.1.4 released June 29, 2026; CI and coverage), 0BSD-licensed and widely packaged, so it can be installed rather than vendored.
+
+[repo](https://github.com/tavianator/bfs) · [benchmark](https://tavianator.com/2023/bfs_3.0.html)
+
+##### diskus  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+Parallel Rust replacement for du -sh that prints one directory total; author measured 10x faster cold-cache, 2.2x warm.
+
+**Beats:** GNU du -sh — First-party hyperfine runs on the author's unnamed 8-core laptop over a private 15 GB folder (100k directories, 400k files): cold cache (drop_caches before each run) diskus 1.746 s vs du -sh 17.776 s (10.18x), warm cache 500.3 ms vs 1098.3 ms (2.20x, despite the prose saying more than 3x); CPU model, disk, filesystem, du version and diskus version are not stated.
+
+**Known shortcoming:** Open issue 27 (stack overflow on deep trees) and 38 (5x slower than du on a small tree: 115.8 vs 22.8 ms). README says Rust 1.76 while Cargo.toml says 1.80. Rust, not C++.
+
+**Independent measurement:** first-party README
+
+**How:** It runs symlink_metadata (lstat) and read_dir calls in parallel on a rayon thread pool sized at 3x the CPU count (capped at 64), recursing with into_par_iter over each directory's children, and sends sizes over a crossbeam channel to one summing thread. Oversubscribing threads keeps many metadata requests in flight so the kernel I/O scheduler can reorder them on a cold cache; GNU du issues them one at a time. Hard links are counted once through a (device, inode) HashSet, but only for files with nlink > 1.
+
+**Use it when:**
+- Getting one total size for a large tree (hundreds of thousands of files) on SSD/NVMe with a cold page cache, where serial du stalls on metadata latency
+- Scripts and prompts that only need a byte count: output switches to a bare number when piped
+- Multi-core machines; the default 3x-cores worker count was tuned for both cold and warm caches
+- Embedding a fast parallel du-style total in a Rust program through the library API
+
+**Skip it when:**
+- Small trees: issue #38 reports diskus 115.8 ms vs du -sch 22.8 ms on a ~4.5 GB build directory, because thread-pool startup dominates
+- Very deep directory nesting: open issue #27 (since 2019) reports a stack overflow from the recursive walk
+- When you need a per-subdirectory breakdown, depth limits, excludes or interactive browsing (use pdu, gdu, dust or ncdu)
+- When you need to stay on one filesystem or follow symlinks: no -x / one-file-system option, and following symlinks is an open request (#44)
+- Windows totals that must not double count: hard links and junctions are counted multiple times there by design
+
+**Integration:** crate · rayon 1.11, crossbeam-channel 0.5; clap, humansize, num-format for the CLI feature · Rust 1.80 per Cargo.toml rust-version (README still says 1.76) · Linux, macOS, Windows, Haiku and other Unix (packages for Debian, Arch, Void, Homebrew, MacPorts, NixOS)
+
+**Vs siblings:** Pick diskus over pdu, gdu or zdu when you want only a single total from the smallest tool; the gdu README itself notes diskus is faster at that, while pdu and gdu give per-directory trees and zdu reports faster runs than dust on its own trees.
+
+**Gotchas:**
+- Default count is disk usage (since v0.6); -b switches to apparent size, and v0.9.0 changed whether directory entries are counted to match du, so totals from older versions differ
+- Errors (unreadable directories, missing metadata) are hidden unless --verbose is passed, so a permission problem silently shrinks the total
+- Spawns up to 64 threads by default; on shared or throttled hosts pass --threads (-j) explicitly
+- Hard-link deduplication keeps a HashSet of every multi-link inode in memory
+
+**Status:** Maintained by the author of fd and hyperfine (v0.9.0, last commit 2026-02-14, 1.3k stars), dual MIT/Apache-2.0 and widely packaged; the deep-tree stack overflow (#27) is still open.
+
+[repo](https://github.com/sharkdp/diskus) · [benchmark](https://github.com/sharkdp/diskus)
+
+##### fastsafetensors  `Python`  `Apache-2.0`  `active`  `Tier C`
+
+Python safetensors loader with a C++17 pybind11 core that replaces mmap with parallel pread/GDS reads into GPU memory.
+
+**Beats:** safetensors loader using mmap — On 8x AMD MI300X (ROCm, fastsafetensors 0.1.15, single-GPU loads, perf/fastsafetensors_perf/perf.py), the tuned nogds path loaded GPT-2 Medium (1.4 GB) at 6.02 GB/s vs 1.28 GB/s for safetensors mmap plus .to(device), and GPT-2 (523 MB) at 2.62 GB/s vs 1.01 GB/s; a cold-cache nogds run reached only 1.24 GB/s and mmap was not run cold. The 4.8x-7.5x and 26.4 GB/s (Llama-70B, 4 GPUs, GDS) figures come from the CLOUD 2025 paper, which was not opened.
+
+**Known shortcoming:** Issue 38: the GdsFileCopier alignment path broke gpt-oss-120b weights on DGX Spark (does not touch the nogds benchmark). Issue 94: about 2x file size stays in memory after close(). The F16 bandwidth in perf.py counts output bytes, so 0.77 GB/s understates the read rate. CLOUD 2025 paper not opened.
+
+**Independent measurement:** code reading by enricher
+
+**How:** It avoids mmap and demand paging: a fixed pool of std::thread workers issues large pread calls (O_DIRECT where available) into pinned bounce buffers, alternating two buffers and GPU streams per worker so disk reads overlap host-to-device copies. With GPU Direct Storage (cuFile on CUDA, hipFile on ROCm 7.2+, DirectStorage on Windows) data goes NVMe to GPU without host staging. Tensors are instantiated lazily via DLPack, and sharding (torch.distributed broadcast/scatter) and dtype conversion run on the GPU instead of the CPU.
+
+**Use it when:**
+- Cold-starting LLM inference servers (vLLM, SGLang) where weight loading from NVMe dominates startup time
+- Multi-GPU tensor-parallel loads where CPU-side slicing of mmapped tensors is the bottleneck
+- Nodes with GPUDirect Storage or hipFile (ROCm 7.2+) and fast NVMe or parallel file systems (3FS has a dedicated reader)
+- AMD MI300X / ROCm without GDS: the nogds bounce-buffer path still beat mmap 2.6x-4.7x on the project's GPT-2 runs
+
+**Skip it when:**
+- Weights already in page cache or tmpfs: InstantTensor's sibling table shows fastsafetensors at 0.76x of plain safetensors there
+- C++ applications that want a library to link: the C++ code is a pybind11 extension with no standalone C++ API
+- Memory-constrained or unified-memory hosts that load checkpoints in a loop: issue #94 reports about 2x file size retained after close()
+- Small models on CPU-only hosts, where thread and pinned-buffer setup costs are not repaid (not benchmarked by the project)
+- When you need byte-identical, battle-tested loading on new hardware without validation: issue #38 reported corrupted gpt-oss-120b weights on DGX Spark through GdsFileCopier's alignment path (workaround noalign=True or nogds=True)
+
+**Integration:** module · Python 3.10-3.14, typer; build needs setuptools and pybind11; runtime PyTorch or Paddle; optional CUDA cuFile, ROCm hipFile, libnuma, DirectStorage DLLs, fastsafetensor-3fs-reader · C++17 compiler (C++20 /std:c++20 on Windows MSVC), Python 3.10 · Linux x86-64 with CUDA or ROCm; Windows (DirectStorage via CUDA interop); unified-memory systems such as DGX Spark; aarch64 wheels were missing per issue #82
+
+**Vs siblings:** Pick it over Run:ai Model Streamer when you want the loader already integrated into vLLM/SGLang with GDS and ROCm/hipFile support; pick InstantTensor instead if its 50 GB/s storage numbers (Qwen3-30B-A3B 1.77 s vs fastsafetensors 22.2 s) hold for your setup, and plain safetensors if weights are already cached.
+
+**Gotchas:**
+- Default owning tensors keep the whole file or chunk allocation alive: a small view can pin a large buffer; borrowed_tensors=True avoids that but tensors become invalid after close()
+- Close the buffer or exhaust the ParallelLoader/AutoLoader iterator before loader.close(); loader.close() does not close an active iterator
+- GDS registration failure silently falls back to the nogds bounce-buffer path with only a warning, so performance can drop without an error
+- Bandwidth in perf.py is output tensor bytes over wall time, so F16 conversion runs report fewer bytes (0.77 GB/s) than the file size read
+
+**Status:** Actively maintained (version 0.4.0, Apache-2.0, 167 stars, commits into October 2026) and pip-installable, but it is a Python package for PyTorch/Paddle loaders rather than a C++ library.
+
+[repo](https://github.com/foundation-model-stack/fastsafetensors) · [benchmark](https://github.com/foundation-model-stack/fastsafetensors/blob/main/docs/amd-perf.md)
+
+##### fclones  `Rust`  `MIT`  `stale`  `Tier C`
+
+Parallel, device-aware Rust duplicate file finder; 4-10x shorter wall time than jdupes, fdupes and rdfind on a 316 GB SSD scan.
+
+**Beats:** jdupes / fdupes / rdfind (duplicate finders built on POSIX read) — Author-run, page-cache-dropped scans of 1,460,720 paths (316 GB) on a Xeon E3-1505M v6 laptop with NVMe: fclones 0.12.1 34.59 s vs yadf 59.32 s, czkawka 2:09.00, rmlint 2:28.43, jdupes 1.18.2 5:01.91, fdupes 5:46.19, rdfind 5:53.07 (about 8.7x faster than jdupes and 10.2x than rdfind, derived from page data); SSD-run commands and build flags are not given, and jdupes' author has noted (blog post, search snippet only) that jdupes was run without -Q, so it did byte-for-byte confirmation that fclones skips. The older HDD table (fclones 0.9.1 vs jdupes 1.9 -Q, i7-2760QM, 7200 RPM disk) shows 19.45 s vs 1:18.47.
+
+**Known shortcoming:** Fairness gap in the SSD benchmark: jdupes ran without -Q (per the jdupes author's blog, snippet only, blog blocked), so jdupes did a byte-for-byte confirm while fclones never byte-compares (hash only, metro128 by default); the SSD commands are not published. Open bug 275 (U+2003 dropped from paths). Rust, not C++.
+
+**Independent measurement:** first-party README
+
+**How:** A staged filter: group by size, drop same-inode hard links, then hash a small prefix (4 KiB on SSD, up to 16 KiB on HDD), then a suffix, and only then the full contents, so most non-duplicates are discarded after a few KiB of I/O. Directory walking runs in parallel on rayon scopes, and each block device gets its own random-I/O and sequential-I/O thread pools sized by detected disk type (HDD forced to 1 thread). On Linux it orders HDD reads by physical extent (FIEMAP), uses posix_fadvise RANDOM/SEQUENTIAL hints and DONTNEED drop-behind, hashes with 128-bit MetroHash by default, and keeps paths prefix-compressed to cut memory.
+
+**Use it when:**
+- Deduplicating large trees (hundreds of thousands to millions of files) on NVMe/SSD where a multi-threaded scan pays off.
+- Spinning disks on Linux, where physical-offset ordering of reads helps (README HDD run: 19.45 s vs rdfind 33.70 s and jdupes 1:18.47).
+- Repeated scans of the same data set: `--cache` persists file hashes keyed by inode and metadata.
+- Pipelines that want a reviewable JSON/CSV report before any file is deleted, or reflink dedupe on Btrfs/XFS-style copy-on-write file systems.
+
+**Skip it when:**
+- When you need byte-for-byte confirmation before deletion: fclones never compares bytes and relies on a 128-bit (or wider) hash match; jdupes and fdupes confirm by default.
+- As a component inside a C++ program: it is a Rust CLI/crate with no C API.
+- Non-Linux platforms if you want the full speed: physical-placement ordering and page-cache drop-behind are Linux-only, and reflink is not supported on Windows.
+- Data that changes under open file handles (databases) when using `--cache`, since cache validity depends on mtime and length.
+- Projects that need an actively maintained tool: last commit 2025-03-03 (0.35.0 version bump), 89 open issues.
+
+**Integration:** crate · rayon, crossbeam, dashmap, sled, metrohash, blake3/xxhash-rust/sha2/sha3 (optional features), ignore, nix, fiemap (Linux), sysinfo and about 40 other crates · Rust 1.74 (edition 2021) · Linux (best, tested on Ubuntu), macOS and Windows reported to work; packaged for Snap, Homebrew, AUR, Alpine, NixOS
+
+**Vs siblings:** No sibling is a duplicate finder; fclones uses the same parallel-walk idea as gdu, diskus and pdu (disk usage) or bfs (traversal) but adds hashing and dedupe actions, so pick it when the job is finding identical file contents rather than sizing or listing trees.
+
+**Gotchas:**
+- No byte-by-byte verification: duplicates are decided by hash equality alone (default metro 128-bit, non-cryptographic); choose `--hash-fn blake3` or sha256 if adversarial collisions matter.
+- Hidden files and paths in .gitignore/.fdignore are skipped by default; pass `--no-ignore --hidden` for a full scan.
+- Hard and soft links are not counted as duplicates unless `--isolate` or `--match-links`; `--match-links` with `--symbolic-links` can delete the only real copy (README warning).
+- Open bug #275: an Em Space (U+2003) character is dropped from paths in the group phase; past bugs #148 (--unique listed non-unique files) and #99/#97 (--isolate counts) were fixed.
+
+**Status:** Stale (last commit 2025-03-03, version 0.35.0) but MIT-licensed, about 3.0k stars and widely packaged; usable as an end-user tool or Rust crate, not as copyable C++ code.
+
+[repo](https://github.com/pkolaczk/fclones) · [benchmark](https://github.com/pkolaczk/fclones/blob/HEAD/fclones/README.md)
+
+##### fcp  `Rust`  `BSD-3-Clause`  `active`  `Tier C`
+
+Parallel Rust replacement for the common cp -R cases; about 10x faster than GNU cp on a Linux kernel tree on SSD.
+
+**Beats:** GNU cp — A Criterion harness (benches/fcp_benchmark.rs: 60 s warm-up, 50 samples for the kernel tree, 100 for large files, destination removed outside the timed region) runs 'cp -R' against fcp. On an AWS a1.metal (Graviton, 16 vCPU, SSD, XFS) the Linux kernel tree took about 675 ms vs 6.02 s (about 9x) and 13x512 MB took about 8 s vs 11.3 s (1.4x). On a 2018 MacBook Pro (i9, APFS) the figures were 5.1 s vs 30 s (6x), and 4.5 ms vs 3.7 s for large files (822x, because of clones). Runs are warm-cache; compiler, run date and GNU cp version are not stated, which matters because newer coreutils cp also changed its copy path.
+
+**Known shortcoming:** Rust, not C++. The speedup is a rayon parallel copy per directory plus std::fs::copy (APFS clone gives the 822x). Open issues: 34 (deadlock on FAT32), 41 (fcp slower than cp on btrfs RAID1: 9:39 vs 8:10) and 48 (privileged mode bits kept). README says Rust 1.53 but edition 2021 needs 1.56. The copy_single self-overwrite check compares inode only, not device (not behind the numbers).
+
+**Independent measurement:** public Criterion harness
+
+**How:** Each directory is read serially, then its entries are copied in parallel with a rayon work-stealing pool (into_par_iter), so directory walking and file copies spread over all cores and the SSD sees a higher queue depth. Regular files go through Rust's std::fs::copy, which uses copy_file_range on Linux and fcopyfile/fclonefileat on macOS; on APFS that becomes a copy-on-write clone, which is where the 822x large-file number comes from. There is no custom I/O engine (no io_uring, no buffer tuning).
+
+**Use it when:**
+- Copying large trees of many small files (source checkouts, node_modules, build outputs) on NVMe/SATA SSD where cp is bound by one thread issuing syscalls.
+- macOS on APFS, where large files become near-instant clones.
+- Scripts and dev workflows that only need plain recursive copy semantics and can tolerate missing cp options.
+- Linux or macOS hosts with many cores and an SSD-backed local filesystem.
+
+**Skip it when:**
+- HDDs: the README warns that parallel copying may perform poorly on spinning disks.
+- When you need cp -p/-a semantics (timestamps, ownership, xattrs, ACLs): the code copies only mode bits via std::fs::copy and creates directories with the source mode.
+- Large-file copies on Linux: the README's own number is only 1.4x (8 s vs 11.3 s), and issue #41 reports fcp slower than cp (9:39 vs 8:10) on a btrfs RAID1 NVMe workstation.
+- FAT32 targets: issue #34 (open) reports a futex deadlock after 8-10 GB copied to a FAT32 USB drive.
+- Windows: Unix only (issue #33 closed as wontfix).
+
+**Integration:** crate · rayon 1.5, nix 0.25 (criterion and a local dev_utils crate for benches only) · README says Rust 1.53.0, but Cargo.toml uses edition 2021, which needs Rust 1.56 or newer · Unix-like only (Linux, macOS); CI and packages for Arch AUR, NixOS, Homebrew
+
+**Vs siblings:** Pick fcp over wcp or uring-sync when you want a packaged, widely distributed (Homebrew, AUR, NixOS) parallel cp with macOS clone support; wcp's io_uring engine reports a bigger large-file win on Linux (20x512 MiB in 3.97 s vs cp 8.44 s), and uring-sync targets many-file copies and network sync.
+
+**Gotchas:**
+- Errors are printed as they happen and the copy continues; only the exit code reports that something failed.
+- Mode bits, including setuid/setgid, are carried over; issue #48 (open) asks for a private security contact about preserving privileged mode bits.
+- copy_single's self-overwrite check compares only inode numbers, not device plus inode (reject_self_copies does use both), so a cross-filesystem copy whose inode numbers happen to match is refused.
+- Linux reflink (FICLONE) support is still an open request (#11); any Linux CoW benefit comes only from what copy_file_range does in the kernel.
+
+**Status:** Small, BSD-3-Clause, 857 stars, last commit 2026-04-23, but several open issues (deadlock #34, btrfs slowdown #41, security #48) have no maintainer reply; fine to use as a dev tool, not a vetted cp replacement.
+
+[repo](https://github.com/Svetlitski/fcp) · [benchmark](https://github.com/Svetlitski/fcp)
+
+##### FluxIO  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++20 io_uring (SQPOLL, fixed files and buffers) O_DIRECT block I/O engine; out-runs Boost.Asio file I/O and Go on 4 KiB writes.
+
+**Beats:** Boost.Asio C++20 file I/O and Go os.O_DIRECT with goroutines (not POSIX pread/pwrite) — First-party runs of benchmark/bench_fluxio.cpp (4 KiB O_DIRECT, 20,000-50,000 ops per point, QD 1-128, 256 MB file, thread pinned to core 2, consumer NVMe, CPU model not stated) peak at 715,827.6 IOPS sequential and 542,998.1 random write vs Go os.O_DIRECT with goroutines (239,383.5 and 248,800.8) and Boost.Asio C++20 file I/O (86,783.1 and 86,821.4), using about 200% CPU vs about 100%. The Go and Asio harnesses are not in the repo, and the sparse-file QD128 comparison quotes FluxIO's QD16 result.
+
+**Known shortcoming:** README harness flaw: the headline 'QD128 FileBlockManager 429,229.3 IOPS vs Go 29,074.7 and Asio 28,411.3' is FluxIO's QD16 row; its own Mode 2 at QD128 is 28,335.9 IOPS, the same as the baselines. bench_fluxio.cpp never checks comp.failed or the result, and register_file silently drops O_DIRECT on EINVAL.
+
+**Independent measurement:** code reading by enricher
+
+**How:** It sets up io_uring with IORING_SETUP_SQPOLL so a kernel thread polls the submission queue (no io_uring_enter per batch while it is awake), registers the file descriptors (IOSQE_FIXED_FILE) and a pool of page-aligned buffers (io_uring_register_buffers, read_fixed/write_fixed) so the kernel skips per-I/O fd lookup and page pinning. Free buffer slots come from a 128-bit bitmask allocated with ctz, and request/completion queues are cache-line-aligned SPSC rings. FileBlockManager fallocate()s 10 MB chunks with FALLOC_FL_KEEP_SIZE ahead of the write frontier (80% watermark) to cut extent allocation on sparse files.
+
+**Use it when:**
+- Linux NVMe workloads issuing many independent 4 KiB O_DIRECT reads or writes at queue depth 4-128 from one thread, e.g. a storage engine, log or block cache.
+- When you can spare a second core for the SQPOLL kernel thread in exchange for higher IOPS from a single submitting thread.
+- Write-heavy streams into preallocated files, where it measured about 0.5-0.7 M IOPS (sequential and random 4 KiB writes) on a consumer NVMe drive.
+- As a compact, readable example of SQPOLL plus fixed files and buffers to copy into your own engine (MIT, a few headers).
+
+**Skip it when:**
+- Sequential reads: it measured 278,054.8 IOPS vs Go's 302,860.5 (0.92x), and IOPS per core is roughly on par with Go once the SQPOLL thread is counted (README).
+- Requests larger than the page size (default 4096 B): each request must fit one registered buffer, so larger I/O must be split by the caller.
+- Non-Linux, buffered or non-x86 environments: io_uring and O_DIRECT only, and the code calls __builtin_ia32_rdtsc directly for timestamps.
+- Multi-threaded submission: rings are single-producer/single-consumer and the engine holds no locks.
+- Production use without your own testing: 9 commits in under a week (2026-09-30 to 2026-10-04), no CVE or issue history, and the benchmark harness does not check per-I/O results.
+
+**Integration:** header-only · liburing (optional; without it the POSIX pread/pwrite backend is used), pthread; pybind11 only for the Python module · C++20 (concepts, <bit>); README builds with g++ -std=c++20 -O3 · Linux only; io_uring backend effectively x86-64 (direct __builtin_ia32_rdtsc and pause calls); SQPOLL may need root or CAP_SYS_NICE on older kernels (README runs the benchmark with sudo)
+
+**Vs siblings:** Pick it over raw liburing when you want SQPOLL, fixed files and buffers, slot management and fallocate-ahead already wired up for 4 KiB O_DIRECT blocks; pick liburing itself (or SPDK for full userspace NVMe) when you need arbitrary request sizes, multiple threads, or measured, mature behavior.
+
+**Gotchas:**
+- The README headline 'QD128 random write with FileBlockManager 429,229.3 IOPS vs Go 29,074.7 and Asio 28,411.3' uses FluxIO's QD16 row: its own Mode 2 table shows 28,335.9 IOPS at QD128 (and 16,816.5 at QD64), the same as the Go and Asio sparse-file numbers, so the claimed fix for the ext4 inode-lock collapse is not supported at QD128.
+- bench_fluxio.cpp counts every completion as a finished op and never checks comp.failed or comp.result, so failed or short I/Os would still inflate IOPS; register_file silently reopens without O_DIRECT if the filesystem returns EINVAL, which would turn the run into page-cache I/O.
+- io_uring register_file() only opens files that already exist (it never passes O_CREAT on a missing path) and a failed open hits FLUXIO_SAFE_CHECK, which calls abort(); the POSIX backend does create the file.
+- Writes are memcpy'd into the registered buffer and reads are copied out of it on completion, so 'fixed buffers' does not mean zero-copy for the caller; the SQPOLL thread spins for 2000 ms after each burst (sq_thread_idle).
+
+**Status:** Active but brand new (9 commits, 2026-09-30 to 2026-10-04, 6 stars, no issues); MIT and small enough to vendor, but treat it as a reference design rather than a hardened dependency.
+
+[repo](https://github.com/programmingGod-byte/FluxIO) · [benchmark](https://github.com/programmingGod-byte/FluxIO)
+
+##### gdu  `Go`  `MIT`  `active`  `Tier C`
+
+Parallel Go disk usage analyzer (TUI, CLI and web UI); scans about 6.5x faster than GNU du on a cold SSD.
+
+**Beats:** GNU du -hs and ncdu — First-party hyperfine run on a 90 GB home directory (100k dirs, 400k files) on a 500 GB SSD, CPU model not stated, governor set to performance: cold cache gdu -npc 4.716 s vs du -hs 30.608 s (6.5x) and ncdu 33.163 s; warm cache 466.1 ms vs du 1255.2 ms (2.7x, derived from page data) and ncdu 2222.4 ms. Build flags are in the Makefile (-trimpath, -pgo=default.pgo, CGO_ENABLED=0), but the binary version used for the table is not stated.
+
+**How:** Each directory is read with os.ReadDir and every subdirectory is handed to a new goroutine, gated by a global semaphore of 2 x GOMAXPROCS, so many getdents/lstat calls are in flight at once and SSD queue depth is used (pkg/analyze/parallel.go). Non-interactive runs without --top/--depth use a TopDirAnalyzer that keeps only top-level totals, so memory stays flat on large trees. Disk usage comes from stat.Blocks x 512, and hard links are deduplicated by inode in a sync.Map. Release builds use profile-guided optimization (-pgo=default.pgo) with CGO disabled.
+
+**Use it when:**
+- Interactive cleanup of a large tree on SSD/NVMe where ncdu takes tens of seconds: same browse-and-delete workflow, about 7x faster cold in the README run.
+- Scripted totals where you want something faster than du -hs and can accept gdu's output format (`gdu -nps`).
+- Saving a scan to JSON or SQLite/BadgerDB and browsing it later or on another machine.
+- Machines where a single static binary with no runtime dependencies is preferred (Linux, macOS, Windows, BSD, Android arm64 builds are released).
+
+**Skip it when:**
+- Pure 'how big is this directory' speed: diskus is faster cold (4.489 s vs 4.716 s) and warm (270.8 ms vs 466.1 ms), and pdu is faster warm (299.1 ms) in gdu's own table.
+- Rotating HDDs: README says the gain is small there; use --sequential.
+- Database-backed modes when speed matters: --db=tmp.db took 44.989 s cold and 8.25 s warm, slower than du -hs (30.608 s / 1.255 s).
+- When you need a C++ library to embed: it is a Go tool, and the pkg/analyze API is not documented as stable.
+- Exact du compatibility (flags, output format, --apparent-size semantics): it is not a drop-in.
+
+**Integration:** module · Go modules: tcell/tview (TUI), cobra, logrus, badger/v4, modernc SQLite (per sqlite_modernc.go), ulikunitz/xz and others in go.mod; prebuilt static binaries need nothing · Go 1.26.0 (go.mod) · Linux, macOS (amd64/arm64), Windows (amd64/arm64), FreeBSD/NetBSD/OpenBSD, Android arm64, 32-bit ARM
+
+**Vs siblings:** Pick gdu over diskus or pdu when you want an interactive browser with deletion, JSON/DB export or a web UI rather than just the fastest total; for raw total-size speed diskus and pdu win in gdu's own benchmark, and zdu claims to beat pdu on some trees.
+
+**Gotchas:**
+- Concurrency is fixed at 2 x GOMAXPROCS; the README tables show GOMAXPROCS=80 widening cold-cache variance (3.627-9.993 s) rather than helping on average.
+- Hard links are deduplicated by inode number only (stat.Ino when Nlink > 1), not by (device, inode); not documented whether this can merge distinct files across filesystems when -x is not used.
+- Default ignore list is /proc,/dev,/sys,/run; scanning / with -i overridden can walk pseudo-filesystems.
+- Interactive and web modes can delete files; use --no-delete on shared machines, and the web UI has no authentication for browsing (bind to localhost).
+
+**Status:** Actively maintained (last commit 2026-10-05, 6.1k stars), MIT-licensed, widely packaged; a tool rather than a library, so 'copyable' means the Go source and static binaries.
+
+[repo](https://github.com/dundee/gdu) · [benchmark](https://github.com/dundee/gdu)
+
+##### InstantTensor  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+C++/Python safetensors-to-GPU loader using O_DIRECT io_uring/AIO plus NCCL all-gather; beats the safetensors loader on cold loads.
+
+**Beats:** safetensors loader (mmap-based file read to GPU); also compared with fastsafetensors and Run:ai Model Streamer — First-party docs/benchmark.md (instanttensor 0.1.4 vs safetensors 0.7.0, fastsafetensors 0.2.2, Run:ai Model Streamer 0.15.6) on H200 GPUs: from 50 GB/s storage, Qwen3-30B-A3B (61 GB, 1 GPU) loads in 1.77 s vs 57.4 s (32.4x) and DeepSeek-R1 (689 GB, 8 GPUs, TP=8/EP=8, time to slowest rank) in 15.3 s vs 160 s (10.5x); on tmpfs, 1.26 s vs 12.7 s (10.1x) and 12.1 s vs 22.6 s (1.87x). The CPU model, compiler flags and cache-drop procedure are not stated; tests/test.py is the harness.
+
+**Known shortcoming:** The test.py safetensors baseline loads to CPU and then copies to the GPU, every rank reads the full model, and the harness does not drop caches. Issue 9: copy=False ring-buffer corruption (fixed with a warning; default copy=True); issue 1: small gains on H20.
+
+**Independent measurement:** public benchmark code
+
+**How:** Reads bypass the page cache with Direct I/O (O_DIRECT) through io_uring (registered fixed files and fixed buffers, io_uring_prep_read_fixed) or libaio, with chunk size and queue depth tuned per backend, into a cudaHostRegister-pinned staging buffer. Chunks are pipelined: host read, cudaMemcpyAsync to the device on one stream, and on multi-GPU loads each rank reads only its 1/world_size slice of a chunk and ncclAllGather assembles the rest on a second stream, so 8 GPUs share the storage bandwidth instead of each reading the full model. tmpfs files use an mmap backend with worker threads.
+
+**Use it when:**
+- Cold-start loading of large LLM checkpoints (tens to hundreds of GB) onto GPUs from storage of 5 GB/s or more (README's own threshold)
+- Multi-GPU tensor/expert-parallel serving (e.g. TP=8) where every rank would otherwise read the whole checkpoint
+- Hosts whose RAM is reserved for KV-cache offload or that switch models often, so the page cache cannot hold the model
+- Loading from tmpfs to GPU, where its mmap path measured 10.1x over safetensors for a 61 GB model on one H200
+- vLLM deployments, via its documented InstantTensor loader integration
+
+**Skip it when:**
+- Warm page cache and repeated reloads of the same model: Direct I/O ignores cached pages; switch to BackendPolicy.BUFFERED or keep the default loader
+- Slow storage (single SATA SSD, network disk under ~5 GB/s): the gap shrinks; issue #1 reported small gains for Qwen3-8B/32B on an H20
+- CPU-only loading, Windows or macOS: GPU (CUDA/ROCm), Linux and PyTorch >= 2.8 are required; io_uring backends need kernel 5.6+
+- Code that needs random-access get_tensor(name) or collects tensors before use with copy=False
+- Tight GPU memory: the device ring buffer may take up to INSTANTTENSOR_MAX_FREE_MEM_USAGE (default 0.5) of free GPU memory; issue #13 reports a draft-model load failing on allocation
+
+**Integration:** module · PyTorch >= 2.8, CUDA or ROCm runtime, NCCL (via torch.distributed); vendored static liburing, libaio, pybind11, dlpack and atomic_queue; optional cuFile (GPUDirect Storage) · C++17 extension built by setuptools; Python >= 3.9; Linux kernel 5.6+ for io_uring (5.15+ recommended) · Linux x86-64 with NVIDIA (CUDA) or AMD (ROCm) GPUs
+
+**Vs siblings:** Pick it over fastsafetensors or Run:ai Model Streamer when loading large checkpoints on 1-8 GPUs from very fast storage or tmpfs: its own table shows 1.77 s vs 22.2 s (fastsafetensors) and 9.29 s (Model Streamer) for Qwen3-30B-A3B. Model Streamer remains the choice for S3/object-storage sources, which InstantTensor does not support yet (issue #15).
+
+**Gotchas:**
+- With copy=False, tensors are views into a ring buffer: consume each before the next is yielded and do not keep references after the with block; list(f.tensors()) silently corrupts data when buffer_size < total_tensor_size (issue #9, now warned about at runtime). The default is copy=True.
+- Default backend order for disk files is [URING, AIO] with O_DIRECT; buffered mode must be requested explicitly with backend=BackendPolicy.BUFFERED or INSTANTTENSOR_BACKEND=BUFFERED.
+- Pinned staging memory scales as round_up(chunk_size, page_size) * io_depth * world_size; INSTANTTENSOR_CACHE_BUFFER=1 keeps it pinned for the life of the process.
+- In tests/test.py the safetensors baseline loads each tensor to CPU and copies it to the GPU, and every rank reads the full checkpoint; the harness does not drop the page cache itself, so cold-cache conditions depend on the operator.
+
+**Status:** Active (version 0.2.1 on PyPI, last commit 2026-10-05, 83 stars, used by vLLM), Apache-2.0 and copyable, though the package is marked Development Status Alpha and several closed issues were silent-corruption and lifetime bugs.
+
+[repo](https://github.com/scitix/InstantTensor) · [benchmark](https://github.com/scitix/InstantTensor/blob/main/docs/benchmark.md)
+
+##### lsr  `Zig`  `MIT`  `active`  `Tier C`
+
+Zig ls(1) clone that batches directory open, statx and passwd/group/localtime reads through io_uring; beats GNU ls -al.
+
+**Beats:** GNU ls 9.7 (readdir/stat syscalls); also eza, lsd, uutils, busybox — First-party hyperfine runs on Linux on directories of n plain files with -al: lsr 0.1.0 took 22.1 ms vs 38.0 ms for GNU ls 9.7 at n=10,000 (1.72x, derived from page data) and 372.6 us vs 1.4 ms at n=10, with busybox 1.36.1 close at every size (32.5 ms at n=10,000); strace -c counted 848 vs 30,396 syscalls. CPU, kernel, filesystem, cache state and lsr's build mode are not stated, and the large-n runs used the version that dropped some stat tasks.
+
+**Known shortcoming:** The README table ran lsr 0.1.0, which at n=1,000 and 10,000 overflowed the 256-slot ourio ring and dropped stat tasks, so some entries got undefined metadata (issue 5, open at the time); fixed on 2026-09-19 in commit 2098707, after the numbers were published. Zig, not C++.
+
+**Independent measurement:** first-party README
+
+**How:** It submits the directory open, one statx per entry and the opens/reads of /etc/localtime, /etc/passwd and /etc/group as io_uring requests through the author's ourio library (256-entry ring), so thousands of stat calls become a few io_uring_enter syscalls (848 syscalls vs 30,396 for GNU ls at 10,000 files). It parses /etc/passwd and /etc/group itself instead of calling getpwuid/getgrgid per entry (libc lookup is only a fallback for uids not in the file), sorts a small name+kind struct before stat results arrive, and uses an arena with a 1 MiB stack-fallback buffer in release builds.
+
+**Use it when:**
+- Interactive long listings (-l) on Linux with a kernel that has io_uring statx support, where startup and per-entry syscall cost dominate
+- Small directories (tens to hundreds of files), where the README shows the largest gap: 372.6 us vs 1.4 ms for GNU ls at n=10
+- As a reference design for batching many stat-like metadata calls through io_uring in your own C/C++ tool (see liburing for the C API)
+
+**Skip it when:**
+- Scripts that depend on exact GNU ls flags or output format; the option set is smaller and output differs (icons, colors, sizes)
+- macOS/BSD: it builds and runs but gets no syscall batching, so the speed claim does not apply
+- Environments that disable io_uring (many container runtimes and hardened kernels restrict it; the HN discussion raised its security record)
+- Code that needs a library API; nothing here is callable from C++
+- Versions before the 2026-09-19 commit on directories with more than about 252 entries: entries could get dropped stat tasks and wrong metadata (issue #5)
+
+**Integration:** source-drop · ourio (author's io_uring/kqueue library), zeit (time zones), zzdoc (man page generation); all pinned in build.zig.zon; links libc · Zig 0.15.1 · Linux (io_uring path); macOS and BSD build without the batching benefit
+
+**Vs siblings:** Pick lsr when you want a faster ls -l specifically; for recursive traversal (find-style listing) bfs or al-dente are the catalogued choices, and for building your own batched-metadata code in C/C++ use liburing directly, since lsr exposes no library.
+
+**Gotchas:**
+- The benchmark table was produced with lsr 0.1.0; at n=1,000 and 10,000 that version overflowed the 256-slot ring and dropped stat tasks, so some entries showed undefined metadata (issue #5: a file printed as root/root, 0 B, 31 Dec 1969). The fix landed on 2026-09-19 ('io: keep stat batches within the ring capacity'), after the published numbers.
+- /etc/passwd is read in a single 16 KiB read and /etc/group in a single 8 KiB read; larger files are truncated, and the parser unwraps the third field of each line, so a line cut before its second colon could abort the program (read from src/main.zig; not reported as an issue).
+- Symlink targets are resolved with a blocking readlink per link (the code notes io_uring cannot do readlink), so link-heavy directories lose part of the benefit.
+- Open issue #7 reports that --help does not work as expected; a 2025-12-28 commit moved --help output to stdout.
+
+**Status:** Actively maintained (last commit 2026-09-19, fixing a ring-overflow metadata bug), MIT-licensed, about 1,400 lines of Zig; useful as a tool or as a design to copy, not as a linkable library.
+
+[repo](https://github.com/rockorager/lsr) · [benchmark](https://github.com/rockorager/lsr/blob/main/README.md)
+
+##### parallel-disk-usage (pdu)  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust disk-usage analyzer (pdu) that walks directories in parallel with rayon; about 2.2x faster than GNU du warm-cache.
+
+**Beats:** GNU du (also dust, dua, ncdu, gdu) — Project CI (deploy.yaml) runs hyperfine --warmup=1 on a GitHub-hosted ubuntu-latest runner (CPU model not stated) over an unzipped Linux v5.12 source tree plus a small hardlink tree: pdu 0.20.0 block-size 88.2 ms vs du --count-links 196.8 ms (2.23x), dust 110.9 ms, gdu 168.4 ms, ncdu 205.7 ms, dua 231.0 ms; with hardlink dedup 88.3 ms vs du 196.9 ms. This is warm cache only; there is no cold-cache or HDD number.
+
+**Known shortcoming:** The benchmark tree is unzipped Linux v5.12 source plus a small hardlink tree, hyperfine --warmup=1, warm cache only, on an ubuntu-latest runner; the measured version is 0.20.0 (crate now 0.24.0). pdu is slower than du on HDD (issue 257: 1m18s against 47s), so auto mode now drops to one thread on HDD; open issue 277: pdu is killed at random after 28-62M files (about 6 GB RSS), undiagnosed. Rust, not C++.
+
+**Independent measurement:** first-party CI hyperfine
+
+**How:** TreeBuilder recurses into each directory and maps its children through rayon's into_par_iter, so lstat (std::fs::symlink_metadata) and read_dir calls for sibling entries run on a work-stealing thread pool instead of du's single-threaded fts walk. Per-entry metadata is dropped immediately and only the size plus child names are kept; hardlink records go into a concurrent dashmap. Below --max-depth (default 10) children are summed rather than stored, which bounds the tree kept in memory.
+
+**Use it when:**
+- Interactive 'where did my disk space go' scans on SSD/NVMe or warm page cache, where parallel stat calls pay off.
+- Trees with tens of thousands or more files (the benchmark is a Linux v5.12 source checkout) on multi-core machines.
+- When you want a sorted, depth-limited chart or JSON output to pipe into other tools instead of du's flat listing.
+- When hardlinks must be counted once: --deduplicate-hardlinks cost nothing measurable in the 0.20.0 benchmark (88.3 ms vs 88.2 ms without it).
+
+**Skip it when:**
+- Spinning disks: issue #257 measured pdu at 1m18s vs du 47s on an HDD with 150,000 files because parallel traversal adds seeks; pdu now detects HDDs and drops to 1 thread, so expect no gain there.
+- Very large volumes with tens of millions of files: open issue #277 reports pdu being killed at random points after 28-62 million files (about 6 GB RSS) with no diagnosis yet.
+- Scripts that parse du's output format or need du flags (--exclude, --time, -s semantics); pdu is a different CLI.
+- Copy-on-write filesystems where reflinks matter (pdu ignores reflinks), or trees reached through symlinks (not followed).
+- C++ projects wanting an in-process library: this is a Rust crate with no C API.
+
+**Integration:** crate · rayon, dashmap, sysinfo, derive_more, itertools and other crates; clap and serde_json behind the default cli/json features · Rust edition 2024; repo pins toolchain 1.97.1 · Linux, macOS, Windows release binaries; block-size/block-count quantities and hardlink handling are POSIX-only
+
+**Vs siblings:** Pick pdu over diskus when you need a per-directory breakdown rather than one total, and over gdu when you want a non-interactive chart/JSON and its own benchmark shows it ahead (88 ms vs gdu 168 ms); zdu's own README shows pdu -H ahead of it on a 57k-file tree (14.0 ms vs 19.6 ms), so pdu is a reasonable default among the Rust du-likes.
+
+**Gotchas:**
+- --threads=auto silently becomes 1 thread when any target path is on a detected HDD (prints a warning); pass --threads=max to override.
+- Without --deduplicate-hardlinks, every hardlink is counted as real size (like du --count-links), so totals differ from plain du.
+- Hardlink dedup with several path arguments removes overlapping paths first; the JSON root is '(total)' when two or more paths are given.
+- The published benchmark is for v0.20.0 while the crate is now 0.24.0; the README has not been rerun for newer versions.
+
+**Status:** Actively maintained (v0.24.0, signed release attestations since 0.23.0, packaged in Arch extra), Apache-2.0; usable as a CLI or Rust library but not from C++.
+
+[repo](https://github.com/KSXGitHub/parallel-disk-usage) · [benchmark](https://github.com/KSXGitHub/parallel-disk-usage-0.20.0-benchmarks)
+
+##### ptar  `Go`  `MIT`  `abandoned`  `Tier C`
+
+Go CLI that archives a directory tree into N independent tar files in parallel, much faster than GNU tar on parallel filesystems.
+
+**Beats:** GNU tar — First-party README tables only: on GPFS with a hot page pool, archiving the 1.5 GB, 47K-file Linux kernel source took 6m4s with GNU tar vs 9.4 s with 64 workers (about 38.7x, derived from page data), and a 10 TB, 500K-file dataset took 10hr20m vs 44m39s with 32 workers (about 13.9x). No CPU, Go or GNU tar version, node count or scripts are given; the 1-worker run was slower than GNU tar.
+
+**Known shortcoming:** `--compression gzip` panics 'Not implemented' (the code wants 'gz'); output names are prefix.N.targz with no dot; any lstat or read error panics the whole run; absolute input paths are stored in the tar unchanged; no hard-link, sparse or xattr handling; TarMaxSize is unused; no go.mod. Go, not C++.
+
+**Independent measurement:** first-party README
+
+**How:** Scan and archive are decoupled: one godirwalk walker (unsorted readdir) feeds paths into a 1024-slot channel, and N goroutines each lstat, open, read and append files to their own archive/tar writer. On a parallel filesystem such as GPFS the gain comes from keeping many metadata and read requests in flight at once, which serial GNU tar cannot do; there is no special I/O technique (plain os.Read with a 4 KiB buffer).
+
+**Use it when:**
+- Archiving large trees (tens of thousands to millions of files) from parallel or network filesystems (GPFS, Lustre-style) where per-file latency, not bandwidth, dominates
+- HPC data migration or backup where splitting the output into many tar files is acceptable or even useful (partial recovery if one file is corrupted)
+- Uncompressed or lz4 archives, where the README's 10 TB run took 44m39s at 32 workers vs 10hr20m for GNU tar
+- Hosts with many cores and enough filesystem concurrency to feed 32-64 workers (the kernel-source run stopped improving past 64)
+
+**Skip it when:**
+- You need a single archive file or a pipe to stdout; output is always N separate tar files
+- Single local SSD or small trees: the 1-worker run (6m33s) was slower than GNU tar (6m4s), and nothing shows gains on local disks
+- Extraction speed matters: parallel decompression is listed as not done; you untar each piece yourself
+- Archives needing hard-link detection, sparse files, xattrs or ACLs: the code builds headers with Go's tar.FileInfoHeader only and does none of this
+- Production-critical jobs: abandoned since 2019, no tests, and any lstat/open/read error panics the whole process
+
+**Integration:** module (Go command-line tool, static binary via Makefile) · gopkg.in/alecthomas/kingpin.v2, github.com/karrick/godirwalk, github.com/pierrec/lz4 · Go (GOPATH-era layout, no go.mod; a modern Go toolchain needs go mod init first); version not documented · Unix-like (static CGO_ENABLED=0 build); tested only on Linux with GPFS per README
+
+**Vs siblings:** No catalogued sibling creates archives; fcp, wcp and uring-sync parallelize copying instead, and hop speeds up reading single files from an archive. Pick ptar when the goal is getting a huge tree on a parallel filesystem into tar files fast and N output files are acceptable.
+
+**Gotchas:**
+- The code accepts --compression gz, not gzip (the CLI hint says gzip, which panics 'Not implemented'), and names outputs prefix.N.targz or prefix.N.tarlz4 with no dot before the compression suffix
+- Entry names are the paths as walked, so an absolute input path yields absolute names inside the tar (GNU tar would strip the leading /)
+- A file that disappears or is unreadable between scan and archive panics and aborts the whole run, leaving partial tar files
+- Files are dealt to workers in channel order with no size balancing (TarMaxSize is declared but unused), so output files can be very uneven
+
+**Status:** Abandoned since 2019-10-31 (15 stars, 0 open issues), MIT/Expat per the README; small enough (four packages) to vendor and modernize, but treat it as a sketch rather than a hardened archiver.
+
+[repo](https://github.com/zgiles/ptar) · [benchmark](https://github.com/zgiles/ptar)
+
+##### rawscan  `C`  `Apache-2.0 OR MIT OR GPL-2.0 (author's choice; PCG code in generate_input_data.c is Apache-2.0)`  `stale`  `Tier C`
+
+Small Linux C line reader over a raw fd; about 30-40% less user CPU than fgets or getline on large inputs.
+
+**Beats:** fgets, getline (glibc stdio) — First-party README: on a Ryzen 1700 with an 11.27 GB, 55.6M-line file already in the page cache, user CPU (mean of 10 runs, nice -n-10) was 1.60 s for rawscan versus 2.61 s for glibc fgets, 2.36 s for getline and 4.38 s for grep, matching the prefix '6fffbf42'. Only user CPU is reported, not wall time; the committed harness (source/tests) compares rawscan with a hand-inlined 3-byte compare and min1stchunklen=3 against fgets/getline using strncmp, and builds getline_test without the -march=native flag the others get, so the gap includes harness differences.
+
+**Known shortcoming:** Harness asymmetry: rawscan_test uses a hand-inlined 3-byte compare with min1stchunklen=3 while fgets_test and getline_test use strncmp, and getline_test is built without -march=native; it is unknown which code version produced the 1.60 s figure. Design flaws: rs_open allocates with brk/sbrk behind malloc's back, rs_close is empty (every buffer leaks), the read count is stored in an int (unsafe above 2 GiB). Library flags from CMake: -O3 -march=native.
+
+**Independent measurement:** first-party README
+
+**How:** It bypasses stdio's double buffering by calling read(2) straight into its own buffer and returns pointers into it, copying only when a partial line must be shifted down (memmove). Delimiter search uses glibc's vectorized rawmemchr, made safe by placing a copy of the delimiter in a read-only sentinel page just past the buffer and writing a delimiter after each read's end, so the scan never needs a length check. The hot path is a small inline function that returns the pre-computed next delimiter position and peeks the following one; rawscan_static.h compiles everything into the caller's unit (10% faster than the shared library on 8-byte lines, no difference at 512+ bytes per the README).
+
+**Use it when:**
+- Linux/glibc command-line filters that scan very large files line by line and do little work per line (prefix match, field split), where per-line reader overhead dominates.
+- Inputs with untrusted or unbounded line lengths: the buffer never grows, so a giant line is returned in chunks instead of exhausting memory as getline's realloc can.
+- Records with embedded nul bytes or a non-newline delimiter (e.g. find -print0 output), which fgets handles badly.
+- Code that can work on (begin, end) byte spans without nul-terminated copies.
+
+**Skip it when:**
+- Anything multi-threaded on one stream: the README says a RAWSCAN stream must be used by a single thread.
+- Non-Linux or non-glibc targets: it needs rawmemchr, sbrk/brk and mprotect; the CMake port to BSD, macOS, Windows, clang and MSVC is untested by the author.
+- Long-lived programs that open many streams: rs_open grows the data segment with brk(2) and rs_close is an empty function, so each stream's buffer plus two pages is never freed.
+- Programs where the line reader is not the bottleneck, or where Rust's bstr is an option: the author reports bstr is as fast or faster and only matched it with hand-written inline compare code.
+- Projects needing maintenance or a track record: version 0.1.4, 6 stars, last commit 2024-09-25, no issues filed.
+
+**Integration:** shared lib (librawscan.so via CMake) or header-only (include rawscan_static.h) · glibc (rawmemchr, sbrk/brk, mprotect, sysconf) · C11 (anonymous union in rawscan.h), CMake 3.13; developed with GCC; library built with -O3 -march=native · Linux x86-64 tested; other systems not tested
+
+**Vs siblings:** None of the catalogued filesystems-and-io siblings is a line reader: liburing and SPDK speed up the I/O submission path, and diskus, gdu and fclones are whole tools. Pick rawscan when the cost is splitting already-cached data into lines in a single-threaded C filter; combine it with a faster I/O layer only if reads, not scanning, dominate.
+
+**Gotchas:**
+- rs_open allocates with sbrk/brk behind malloc's back and asserts the current break is page-aligned; man brk(2) advises against mixing these calls with malloc, and the asserts vanish under NDEBUG (CMake Release adds it).
+- Returned line pointers are invalidated by the next rs_getline when the buffer is shifted or refilled; use rs_enable_pause / rs_resume_from_pause if you need them to live longer.
+- Line end points at the delimiter byte (inclusive), and lines are not nul-terminated; a final line without a delimiter comes back as rt_full_line_without_eol.
+- The read count is stored in an int, so buffers above 2 GiB are not safe.
+
+**Status:** Stale since 2024-09-25 and a self-described learning project at v0.1.4, but about 1,000 lines of C under Apache-2.0, MIT or GPL-2.0 at the user's choice, so it is easy to vendor and fix.
+
+[repo](https://github.com/ThePythonicCow/rawscan) · [benchmark](https://github.com/ThePythonicCow/rawscan)
+
+##### ripgrep  `Rust`  `MIT OR Unlicense`  `active`  `Tier C`
+
+Recursive regex search CLI in Rust; beats GNU grep, git grep, ag and ugrep on code trees and large files.
+
+**Beats:** GNU grep, ag, git grep (mmap vs buffered read strategy) — Author's README timings on an Intel i9-12900K with the Linux kernel tree built with defconfig: rg 0.082s against git grep -P 0.273s, ag 0.443s, ugrep 0.639s and git grep -E under a UTF-8 locale 2.670s; GNU grep itself ran only in the whitelist test (0.674s vs rg 0.063s, 10.69x) and on the 13GB file (6.577s vs 1.042s, 6.31x). One run each, no compiler or build profile stated; the 2.670s figure in the record belongs to git grep, not GNU grep, and the mmap-vs-buffer split (linux_literal, subtitles_literal) is from the blog snippet only and was not checked against the blog.
+
+**How:** The Rust regex crate uses finite automata with UTF-8 decoding built into its DFA, SIMD literal prefilters and aggressive literal extraction, so Unicode stays on without the large slowdown GNU grep shows under a UTF-8 locale. Directory traversal uses a lock-free parallel recursive iterator (ignore crate), and gitignore globs are matched in one pass with a RegexSet. File I/O is chosen per call: hiargs.rs enables memory maps only when 10 or fewer paths are given and all are files, otherwise it reads incrementally into an intermediate buffer; mmaps get madvise(SEQUENTIAL) on Linux and are never used on macOS.
+
+**Use it when:**
+- Interactive or scripted search over large source trees where skipping ignored, hidden and binary files is what you want (Linux kernel tree: 0.082s vs git grep -P 0.273s, ag 0.443s)
+- Searching single huge files cached in memory with Unicode-aware patterns (13GB subtitles: 1.042s vs GNU grep 6.577s under a UTF-8 locale)
+- Patterns without usable literals on big inputs, where it still led ugrep 1.40x and LC_ALL=C GNU grep 2.08x in the README
+- As a design reference for C++ code that picks mmap vs buffered reads: mmap for a handful of large files, a reused buffer for many small files
+
+**Skip it when:**
+- You need a library callable from C++: rg is a Rust binary, and the grep-* and ignore crates have Rust APIs only
+- You need POSIX grep semantics or a tool guaranteed to exist on every machine; ripgrep does not follow POSIX and default filtering hides files grep would search (use -uuu)
+- Very high match counts, where printing dominates and the gap narrows (rg the: 6.948s vs GNU grep 15.217s, ugrep 11.721s)
+- Files that may be truncated while being searched: with memory maps on, ripgrep can abort with SIGBUS (use --no-mmap)
+- Look-around or backreferences with the default engine; these need -P (PCRE2), which is an optional build feature
+
+**Integration:** crate · Rust regex, memchr, ignore/globset and grep-* crates; PCRE2 optional (pcre2 feature) · Rust 1.96 (workspace rust-version in Cargo.toml for 15.2.0) · Linux, macOS, Windows (memory maps disabled on macOS)
+
+**Vs siblings:** Among the filesystem siblings, bfs, al-dente and lsr speed up directory walking and listing, and liburing or SPDK speed up raw block I/O; pick ripgrep when the job is searching file contents, where the regex engine and the mmap-vs-buffer policy matter more than syscall throughput.
+
+**Gotchas:**
+- Binary-file detection differs between the mmap path (checks only the start of the file) and the buffered path (checks every buffer), so results can differ unless you pass --no-mmap
+- The mmap choice is a CLI heuristic (10 or fewer paths, all regular files); the grep-searcher crate defaults to MmapChoice::never(), and MmapChoice::auto() is unsafe
+- macOS never uses memory maps: in the PR #3246 discussion the maintainer measured a 3.5GB file at 7.5s without mmap vs 26.7s with mmap plus sequential advice
+- -n (line numbers) raises the 13GB single-file time from 1.042s to 1.664s
+
+**Status:** Actively maintained (15.2.0, last commit 2026-08-04), MIT OR Unlicense, widely packaged; usable as a tool, not as a C++ library.
+
+[repo](https://github.com/BurntSushi/ripgrep) · [benchmark](https://github.com/BurntSushi/ripgrep)
+
+##### Run:ai Model Streamer  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+Concurrent C++ safetensors reader with a Python API that loads model weights to GPU faster than Hugging Face's safetensors loader.
+
+**Beats:** Hugging Face safetensors loader (mmap/read) and Tensorizer — First-party benchmarks.md (Model Streamer 0.6.0, vLLM 0.5.5, CUDA 12.4, AWS g5.12xlarge with one A10G, cold cache) loaded the 15 GB Meta-Llama-3-8B safetensors file in 14.34 s at concurrency 16 versus 47.99 s for the HF safetensors loader on GP3 (3.3x, derived from page data; about 1.05 GB/s versus 0.31 GB/s, derived from page data), 7.53 s versus 47 s on IO2 (6.2x, derived from page data), and 4.88 s versus Tensorizer's 37.36 s from S3; vLLM time-to-ready fell from 66.13 s to 35.08 s on GP3. These numbers predate the io_uring/libaio engines in current code, and no benchmark scripts, CPU model or build flags are published.
+
+**Known shortcoming:** The repo moved to dsx-ai-factory/model-streamer. Current code has io_uring_direct, io_uring_buffered, libaio_direct and sync_buffered strategies; the benchmarks predate them (v0.6.0). Issue 225: Qwen3-Next-80B MoE (75,944 tensors) loads in 125.7 s against vLLM's default 43.6 s (2.9x slower) on a B200, from forced clones and out-of-order delivery.
+
+**Independent measurement:** public benchmark code
+
+**How:** Reads are split into chunks (2 MiB default on file systems, 8 MiB on object stores) and issued concurrently, overlapping storage reads with host-to-GPU copies instead of mmap page faults or a serial read. Current versions pick a file-system strategy per host from io_uring_direct, io_uring_buffered, libaio_direct and a sync_buffered thread pool (default queue depth 512 for the async engines, 16 threads for the pool), with O_DIRECT where the mount supports it. Object storage uses many parallel ranged GETs (AWS CRT client, about 10 Gbit/s per client), and distributed mode has each rank read a slice and broadcast it over NCCL.
+
+**Use it when:**
+- Cold-start loading of large single-file or sharded safetensors checkpoints from cloud block storage (EBS GP3/IO2-class) where one reader cannot saturate the volume.
+- Loading weights directly from S3, GCS or Azure Blob without first copying to local disk, especially with multiple GPUs on NVLink using distributed streaming.
+- vLLM or PyTorch inference servers that autoscale and need short time-to-ready on x86-64 Linux.
+- Network file systems or virtiofs where per-filesystem queue depth tuning (RUNAI_STREAMER_FS_QUEUE_DEPTH="512,nfs=64") helps.
+
+**Skip it when:**
+- Mixture-of-experts checkpoints with tens of thousands of small tensors: issue #225 reports Qwen3-Next-80B (75,944 tensors, 162.7 GB) loading in 125.7 s versus 43.6 s with vLLM's default safetensors loader (2.9x slower) on a B200, from forced tensor clones and out-of-order delivery.
+- Warm page cache or very fast local NVMe/tmpfs: the published wins are against throttled cold EBS volumes, and InstantTensor's table shows this streamer at 9.29 s versus 1.77 s for InstantTensor on 50 GB/s storage.
+- Single-reader setups: at concurrency 1 it matched safetensors on GP3 (47.56 s vs 47.99 s), so the gain comes only from parallel reads.
+- Non-PyTorch frameworks or non-safetensors formats (docs say PyTorch only), and aarch64 via pip (pip install is documented for x86_64).
+
+**Integration:** module (pip wheel runai-model-streamer with a bundled C++ shared library; optional [s3], [gcs], [azure] backend packages) · PyTorch; libcurl4 and libssl for the C++ core; object-storage extras ship libstreamers3.so statically linked to libssl, libcrypto and libcurl; backend packages must match the core version exactly · C++17, built with Bazel in -c opt (-O2) inside the project devcontainer; prebuilt wheels for x86_64 Linux · Linux x86-64 (pip); aarch64 build config exists (-march=armv8-a+crc+crypto); io_uring and libaio engines probed at runtime with sync_buffered fallback
+
+**Vs siblings:** Pick it over fastsafetensors when weights sit in S3, GCS or Azure Blob or on throttled cloud block volumes and you want vLLM's built-in integration; prefer InstantTensor or fastsafetensors (GDS) for fast local NVMe or many-tensor MoE checkpoints, where this streamer was measured slower.
+
+**Gotchas:**
+- Yielded tensors live in a reused CPU (or, in distributed mode, device staging) buffer and may be overwritten under RUNAI_STREAMER_MEMORY_LIMIT or freed when the streamer closes; clone them if you keep them (issue #230 tracks owned tensors).
+- Default CPU buffer cap is 40 GB in non-distributed mode; distributed streaming needs staging buffers of twice the largest tensor per device.
+- Concurrency must be tuned per storage: the GP3 result plateaued at concurrency 4-16 (14.43-14.34 s) because the volume's 1 GiB/s limit was hit, while S3 kept improving up to 32.
+- Distributed streaming is on by default for object storage to CUDA, and every rank must pass identical tensor_names; mixing S3 and file paths in one stream_files call is not allowed.
+
+**Status:** Actively maintained (commits through 2026-10-05, 383 stars, Apache-2.0), installable from PyPI as runai-model-streamer; the repo moved to dsx-ai-factory/model-streamer in September 2026 with the old URL redirecting.
+
+[repo](https://github.com/run-ai/runai-model-streamer) · [benchmark](https://github.com/run-ai/runai-model-streamer/blob/master/docs/src/benchmarks.md)
+
+##### rust-linereader  `Rust`  `MIT`  `abandoned`  `Tier C`
+
+Small Rust buffered reader returning borrowed line slices; beats std BufRead::read_until and lines() for byte-oriented line scanning.
+
+**Beats:** Rust std BufRead::read_until / read_line / lines — The author's README run on a 976 MB, 10.3M-line XML file (Westmere Xeon 2.1 GHz, FreeBSD/ZFS, compiler and harness not published) measured next_batch 0.27 s vs raw read() 0.25 s, next_line 1.51 s, std read_until 1.94 s, read_line 2.54 s and lines() 3.23 s; a second run recorded in src/lib.rs on a 31.6 GB, 501.6M-line input gave LineReader 407.52 MB/s vs read_until 252.62 MB/s (1.61x, derived from page data). The std BufReader capacity used for the baselines is not stated, versus LineReader's 64 KiB buffer.
+
+**Known shortcoming:** Rust, not C++. The baselines' BufReader capacity is not stated while LineReader uses 64 KiB. Issue 3 is open: a truncated line looks the same as a last line without a newline. A second run in a src/lib.rs comment gives 407.52 vs 252.62 MB/s against read_until (1.61x, derived).
+
+**Independent measurement:** code reading by enricher
+
+**How:** It avoids per-line copying and allocation by borrowing from a fixed buffer, and finds delimiters with the memchr crate (memchr for the next line, memrchr to find the last complete line after each read). next_batch() skips per-line splitting entirely, so a caller with its own SIMD or parallel scanner gets whole blocks of complete lines at near raw read() speed; refill only moves the trailing partial line to the buffer start.
+
+**Use it when:**
+- Scanning large log or text files line by line as bytes (no UTF-8 validation needed) where read_until plus buf.clear() is the hot loop
+- Pipelines that can process many lines at once: next_batch() hands out multi-line blocks for your own memchr/SIMD parsing or for passing to worker threads
+- Inputs with a known maximum line length that fits comfortably within the buffer (configure with with_capacity)
+- Non-newline record separators such as NUL or tab via with_delimiter
+
+**Skip it when:**
+- Inputs with unbounded line length: lines longer than the buffer are silently split and you cannot tell a truncated line from a final line without a newline (open issue #3)
+- Code that needs owned Strings or UTF-8 validated lines: you must copy and validate yourself, which erodes the per-line gain
+- New projects that want maintained code: unmaintained since 2019 (v0.4.0); the author points to bstr for_byte_line (0.2.8+) as performing similarly without the line-length limit
+- Expecting the 7x headline per line: like-for-like next_line() was 1.51 s vs read_until 1.94 s (1.28x) on the README run
+
+**Integration:** crate · memchr 2 · not documented (Rust 2015 edition, extern crate syntax) · any
+
+**Vs siblings:** rawscan is the closest sibling (C, beats fgets/getline on CPU time); pick linereader inside Rust code for byte-line scanning, and rawscan for C/C++ programs. For a maintained Rust option compare against bstr's for_byte_line before adopting this.
+
+**Gotchas:**
+- Returned slices borrow the reader's buffer and are invalidated by the next call, so collecting lines requires to_vec()
+- Lines longer than the buffer come back as several pieces, and the only hint is the missing trailing delimiter
+- Using get_mut() on the inner reader without reset() desynchronizes buffered state
+- When the leftover fragment is longer than the consumed part, refill uses Vec::drain plus extend with a fresh zeroed Vec, an allocation on that path
+
+**Status:** Abandoned since 2019-09-13 (v0.4.0 on crates.io, about 2.0M downloads, about 289k recent), but MIT-licensed, about 400 lines with no unsafe code and a single memchr dependency, so it is easy to vendor.
+
+[repo](https://github.com/Freaky/rust-linereader) · [benchmark](https://github.com/Freaky/rust-linereader)
+
+##### SPDK  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Userspace, polled-mode NVMe driver and storage stack that beats kernel io_uring/libaio on IOPS per core.
+
+**Beats:** Linux kernel io_uring and libaio block I/O (also POSIX I/O) — The only openable numbers come from an independent fio issue (#1206) on an Intel P5800X Optane SSD, Fedora 33, kernel 5.9.16, fio 3.21. Fio io_uring 4K randwrite at iodepth 8 on one core reached 638k IOPS (2492 MiB/s), while SPDK perf reached about 4000 MB/s on one core, roughly 1.6-2x (derived from page data); no maintainer analysis or tuned io_uring settings appear in the thread. The CHEOPS '23 paper's claim that io_uring is more than an order of magnitude slower than SPDK at high load and scale is known from search snippets only (the PDF host is egress-blocked).
+
+**Known shortcoming:** The only openable numbers are fio issue 1206 (P5800X, kernel 5.9.16: io_uring 638k IOPS against SPDK perf at about 4000 MB/s on one core); the CHEOPS '23 and SYSTOR '22 PDFs are blocked (atlarge-research.com, elib.dlr.de). CONFIG_ARCH=native is the default. Blobstore corruption bugs 3688 and 3689 are closed.
+
+**Independent measurement:** snippet and fio issue
+
+**How:** It is a kernel-bypass driver: the device's PCI BAR is mapped into the process, so submissions are MMIO doorbell writes and completions are polled from host memory, with no syscalls, interrupts or context switches. Each NVMe hardware queue pair belongs to one thread and has no locks or atomics, so throughput scales linearly with dedicated cores. Data moves zero-copy via DMA into hugepage-backed buffers.
+
+**Use it when:**
+- Dedicated storage appliances or services (NVMe-oF target, vhost for VMs, custom KV/DB engines) that own whole NVMe SSDs
+- Small-block (4 KB) random I/O at high queue depth where kernel per-I/O CPU cost is the bottleneck and you want maximum IOPS per core
+- Low-latency devices such as Optane/P5800X-class SSDs, where software overhead dominates device latency
+- Applications already built around run-to-completion, thread-per-core, message-passing designs
+- Benchmarking a device's raw capability with spdk_nvme_perf (the docs say it gets up to 2.6x more IOPS/core than fio with the SPDK plugin)
+
+**Skip it when:**
+- You need a filesystem, page cache, or POSIX file semantics: an unbound device disappears from /dev and kernel filesystems on it are gone
+- Shared or general-purpose hosts where several processes or the kernel must use the same disk
+- Low or bursty load: polling burns 100% of the dedicated cores unless you use interrupt mode (PCIe and RDMA only, primary process only), which gives up part of the win
+- Environments without hugepages, IOMMU/vfio access or root setup (many containers and managed clouds)
+- When io_uring with polled I/O and registered buffers is already fast enough; it keeps the kernel stack and needs no device unbinding (see liburing)
+
+**Integration:** static lib (default) or shared lib (--with-shared, libspdk.so); also standalone apps · DPDK (submodule or system), ISA-L and ISA-L crypto (default on), optional liburing, RDMA verbs, etc.; installed via scripts/pkgdep.sh · C11 (-std=gnu11), C++11 for C++ parts; GCC or clang; build is ./configure && make · Linux and FreeBSD; x86-64, aarch64, ppc64, riscv64 and loongarch build paths exist in mk/spdk.common.mk
+
+**Vs siblings:** Pick SPDK over liburing when you can own the whole NVMe device and dedicate polling cores, and per-core IOPS matters more than keeping kernel filesystems. xNVMe offers one API over both SPDK and io_uring backends if you want to switch later, and XRP keeps the kernel path but pushes lookups into BPF.
+
+**Gotchas:**
+- CONFIG_ARCH defaults to native, so binaries are built with -march=native and may not run on other CPUs; set the architecture explicitly for distributed builds
+- Setup needs hugepages plus scripts/setup.sh to bind devices to vfio-pci (preferred with an IOMMU) or uio_pci_generic; some devices misbehave under vfio-pci and need IOMMU passthrough
+- I/O buffers must be DMA-safe (allocated with spdk_dma_malloc or from hugepage memory), not ordinary malloc memory
+- Blobstore/lvol had data-corruption bugs on concurrent writes and unmaps to unallocated clusters (issues #3688, #3689, closed); the raw NVMe driver path was not implicated
+
+**Status:** Very active (v26.09 released, v27.01 in progress, last commit 2026-10-01). BSD-3-Clause and copyable, but heavy: it is a framework with DPDK underneath, not a small library to vendor.
+
+[repo](https://github.com/spdk/spdk) · [benchmark](https://github.com/axboe/fio/issues/1206)
+
+##### TriCache  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+User-space multi-level block cache over SPDK SSDs that runs unmodified in-memory programs out-of-core, beating Linux swap and mmap.
+
+**Beats:** mmap and Linux swap (OS page cache) — Per WebSearch snippets of the OSDI'22 paper (the PDF and the project page are egress-blocked): on uk-2014 with Ligra, TriCache's speedups 'over OS swapping and FlashGraph' are given as 6.30x and 5.31x on PageRank, 26.1x and 1.46x on WCC, and 0.85x and 2.05x on BFS; the snippet's pairing is ambiguous, so which baseline the BFS 0.85x belongs to is not certain. The snippets also report up to 12.4x over mmap for LiveGraph, 2-3 orders of magnitude over mmap for out-of-core RocksDB, and up to 39.3x over swapping for GNU sort, on 2x EPYC 7742, 512 GB RAM and 8x Intel P4618 SSDs. The repo holds the scripts to reproduce these but no result numbers.
+
+**Known shortcoming:** A BFS 0.85x figure now appears in a search snippet that pairs 'OS swapping and FlashGraph' (PR 6.30x/5.31x, WCC 26.1x/1.46x, BFS 0.85x/2.05x); which baseline the 0.85x belongs to is unclear. Other snippet numbers: RocksDB 2-3 orders of magnitude over mmap and GNU sort up to 39.3x over swapping. Open issue 4: the LiveGraph SF100 run fails. The USENIX PDF was not opened.
+
+**Independent measurement:** snippet only
+
+**How:** Address translation and concurrency control are split across levels: a per-thread (or per-fiber) direct cache and a private cache serve repeated accesses to the same page without locking, and only misses reach a shared cache partitioned across dedicated server cores, each owning SSDs through SPDK (with libaio and io_uring backends also present). It uses a compact hash page table and CLOCK/LRU replacement in user space, so no page faults or kernel page-cache locks sit on the hot path. Per the paper abstract, this exploits spatial and temporal locality to make per-access storage-to-memory translation cheap enough for a virtual-memory interface.
+
+**Use it when:**
+- An existing in-memory C/C++ program must run on a dataset several times larger than DRAM and rewriting it for out-of-core is not an option.
+- Linux swap or mmap thrashes on random-access out-of-core workloads such as PageRank or WCC on large graphs, RocksDB PlainTable over mmap, or LiveGraph.
+- A dedicated server with many NVMe SSDs that can be handed to SPDK, plus spare cores for cache server threads.
+- Research or prototyping that compares against FastMap, FlashGraph or swap, where the OSDI'22 artifact scripts can be reused.
+
+**Skip it when:**
+- BFS-like traversals: per the paper snippet, the BFS result is 0.85x (a slowdown) in the swap/FlashGraph comparison.
+- Shared or production machines: the configured SSDs are reformatted repeatedly, md RAIDs on the host will be broken, and setup needs password-free sudo, unlimited memlock and transparent hugepages disabled.
+- Programs not built with clang: libcache and the instrumentation plugin need Clang (clang-13 in the scripts), and code that is not instrumented will not go through the cache.
+- Small or commodity setups: the artifact targets 2x EPYC 7742, at least 512 GB RAM and 8 SSDs; there is no evidence for laptop-scale use.
+- Long-term maintained dependencies: it is an artifact branch (osdi-ae) with 4 issues, one open (LiveGraph SF100 run fails, 2025-11-30).
+
+**Integration:** static lib (libcache) plus LLVM pass plugin; header-only C++ core (cache_header) · SPDK v21.04 with TriCache's patch (DPDK), Boost (fiber, thread), libnuma, libaio, optional liburing, OpenMP, bundled mimalloc and fadec · C++17; Clang 13 (scripts) for libcache and the plugin; CMake; built with -march=native and ThinLTO · Linux x86-64 with NVMe SSDs (tested Debian 11.1, kernel 5.10)
+
+**Vs siblings:** Pick TriCache over UMap, FastMap or vmcache when the program cannot be changed and you can recompile with Clang and give it whole SSDs. UMap needs explicit umap() regions, FastMap is a kernel patch on 4.14, and vmcache/exmap is a buffer manager you build a DBMS around. Choose SPDK or liburing directly when you control the I/O code.
+
+**Gotchas:**
+- Startup throws if CACHE_PHY_SIZE, CACHE_VIRT_SIZE, CACHE_NUM_CLIENTS, CACHE_CONFIG or CACHE_MALLOC_THRESHOLD is unset; how to size them came up in issue #1.
+- Only allocations above CACHE_MALLOC_THRESHOLD, and mmaps above the configured file threshold, are redirected into the cache; smaller ones stay in DRAM.
+- libcache replaces memcpy, memset, memcmp, strlen, read, write and other libc symbols process-wide, which can interact badly with other interposers or sanitizers.
+- Builds use -march=native, so binaries are not portable across CPUs.
+
+**Status:** Research artifact (osdi-ae default branch, last touched 2025-12-08 for dataset links), Apache-2.0 and reproducible with the bundled scripts, but intrusive and hardware-heavy; treat it as a reference design rather than a library to depend on.
+
+[repo](https://github.com/thu-pacman/TriCache) · [benchmark](https://github.com/thu-pacman/TriCache)
+
+##### uring-sync  `C++`  `MIT`  `active`  `Tier C`
+
+Linux io_uring directory copier and kTLS network sender for many-small-file trees; beats cp -r locally and rsync -az over SSH.
+
+**Beats:** cp -r (read/write syscalls); rsync over SSH for network — First-party, apparently single runs on an unnamed laptop NVMe (Ubuntu 24.04, kernel 6.14, compiler and CPU not stated, build flags -O3 -march=native from the Makefile), cold cache: cp -r 22.7 s vs 5.4 s for 100K files of about 100 KB (4.2x) and 7.67 s vs 5.14 s for 100K files of about 4 KB +/-75% (1.5x); 60 s vs 19 s on GCP pd-standard and about 2.15x on pd-balanced. Over the public internet to a GCP VM, the sender-side time for 9.7 GB / 100K files was 165 s with kTLS vs 390 s for rsync -az over SSH (2.36x, the README's "58% faster" is time saved) and 16.4 s vs 24.8 s for 589 MB, with plaintext over an SSH tunnel at 366 s.
+
+**Known shortcoming:** Security bug: the HELLO message sends the PSK secret in cleartext before kTLS and the nonces are cleartext too, so a passive sniffer can derive the AES-128-GCM keys; NETWORK_DESIGN.md still claims sniffing is protected. Benchmarks: sender-side `time` skips receiver completion; rsync -az compressed /dev/urandom data, inflating the baseline; the bench timing includes rm -rf. The fallback read/write path ignores the short-write result (src/main.cpp).
+
+**Independent measurement:** code reading by enricher
+
+**How:** Local mode scans the tree, sorts files by inode number, then runs a per-file state machine (openat, statx, openat, splice in/out or read/write, close, close) on one io_uring per worker with 64 files in flight by default, so opens, I/O and closes for many files overlap and are submitted in batches; data moves file to pipe to file with IORING_OP_SPLICE and the chunk size is auto-tuned from the file-size distribution. Network mode uses plain blocking read/send per file (the io_uring network path cannot be combined with --tls) with AES-128-GCM done in the kernel via kTLS, so user CPU stays near zero (0.3-0.4 s user vs rsync's 4 s on the same data).
+
+**Use it when:**
+- Copying trees of 10^4-10^6 small or medium files (ML datasets, 4-200 KB each) between local NVMe or cloud block volumes on Linux 5.7+.
+- Cold-cache bulk copies where per-file syscall latency dominates and a single thread with a deep queue (-j 1 -q 64) can keep the device busy; on network block storage use -j 4 -q 128.
+- One-shot bulk push of a dataset to a cloud VM you control, where you can run the receiver yourself and ssh/rsync CPU cost is the bottleneck.
+- As a readable reference for an io_uring per-file state machine with buffer and pipe pools (about 1,400 lines of C++20).
+
+**Skip it when:**
+- Whenever confidentiality matters on the network path: the HELLO message carries the pre-shared secret in cleartext before kTLS is turned on, and both HKDF nonces also travel in cleartext, so a passive observer can derive the AES-128-GCM keys (docs/NETWORK_DESIGN.md nonetheless lists network sniffing as protected); treat --tls as obfuscation and tunnel over SSH or WireGuard instead.
+- Incremental sync, resume, or preserving owners, timestamps, xattrs, hard links or symlinks: only regular files and mode bits are copied, every file is re-sent, and nothing is fsynced.
+- Small network transfers: on 10K x 6 KB (60 MB) the kTLS mode was slower than rsync (2.98 s vs 2.63 s), and --splice with kTLS was 2.9x slower than read/send.
+- Non-Linux platforms or kernels older than 5.7 (IORING_OP_SPLICE), or kernels without CONFIG_TLS.
+- Production use without review: 10 commits, 4 stars, no releases, no issue tracker activity, a single author.
+
+**Integration:** source-drop · liburing, fmt, OpenSSL libcrypto (HKDF for kTLS keys); gtest for unit tests · C++20 (GCC 10+ or Clang 12+); Makefile builds with -O3 -march=native · Linux only: io_uring 5.1+, IORING_OP_SPLICE 5.7+, kTLS TX 4.13+ / RX 4.17+; authors measured on Ubuntu 24.04, kernel 6.14
+
+**Vs siblings:** Against fcp and wcp (both parallel cp replacements that beat cp -r), pick uring-sync only if you specifically want a single-thread io_uring design or the built-in network sender; fcp reports about 10x on a kernel tree and wcp has a broader benchmark table, both with more users. Against copy-fast it is the more complete tool, and liburing is the library it is built on if you want to write your own.
+
+**Gotchas:**
+- The read/write fallback in src/main.cpp advances the file offset by the read size, not by the write completion's result, so a short write would silently leave a hole; a read returning 0 before the expected size (file shrank during copy) would loop forever. Neither path is hit in the normal splice mode on regular files, but there is no post-copy size check.
+- The receiver prints the secret to stdout on start and compares it with a plain string compare; the secret is also passed on the command line, so it shows up in ps and shell history.
+- The sender exits right after writing ALL_DONE without waiting for the receiver to acknowledge or flush, so `time` on the sender (how all network numbers were taken) excludes the receiver's tail of writes, while rsync's time includes remote completion.
+- Benchmark data comes from /dev/urandom, so rsync -az spent CPU compressing incompressible data, which inflates the rsync baseline; tests/perf/lib/common.sh also times `rm -rf` of the previous destination inside each cp and uring-sync run and never syncs dirty pages, so writeback is outside the measured time for both tools.
+
+**Status:** Ten commits from one author between late 2025 and 2026-01-07, MIT-licensed, no releases or issues; small enough to read and adapt for local copies, but its network encryption is not secure as written.
+
+[repo](https://github.com/VincentDu2021/uring_sync) · [benchmark](https://github.com/VincentDu2021/uring_sync/blob/main/docs/BENCHMARKS.md)
+
+##### vmcache (with exmap)  `C++`  `MIT`  `active`  `Tier C`
+
+Single-file C++20 database buffer manager that uses virtual memory for page translation; beats mmap-based LMDB and WiredTiger on TPC-C.
+
+**Beats:** mmap-based buffer management (and OS page cache) — The SIGMOD'23 paper (snippets only; the TUM, TUHH, TU Braunschweig and ACM copies are egress-blocked here) compares vmcache and vmcache+exmap with LeanStore, WiredTiger and mmap-based LMDB on TPC-C and random lookups: in memory vmcache reaches almost 90 M lookups/s and about 3 M TPC-C txn/s, WiredTiger trails significantly and LMDB does not scale on TPC-C, and out of memory exmap adds about 60% on random lookups, though LeanStore stays faster there. The repo has the driver and the Makefile flags but no results, hardware or CPU model.
+
+**Known shortcoming:** Snippet numbers: in memory about 90M lookups/s and about 3M TPC-C txn/s; exmap about +60% on out-of-memory random lookups; LeanStore is still faster out of memory. The 67% and 35% figures remain unconfirmed. Makefile flags g++ -O3 -std=c++20. No free-space management, fixed 4 KB pages, issue 1 (2 MB pages) closed without a documented fix.
+
+**Independent measurement:** snippet only
+
+**How:** Page IDs map straight to virtual addresses, so hot-path page access needs no hash-table lookup or pointer swizzling; correctness comes from optimistic version-validated latches in a 64-bit atomic state word per page. Eviction is a clock over a lock-free resident-page hash set and drops frames in batches (BATCH, default 64) with madvise(MADV_DONTNEED). With the optional exmap kernel module, page allocation and freeing go through per-thread ioctl batches on a VMA the kernel does not manage, which avoids Linux's TLB-shootdown and page-table locking bottlenecks during eviction.
+
+**Use it when:**
+- Building or studying a storage engine whose working set exceeds RAM on fast NVMe, where you want mmap-like pointer access without mmap's uncontrolled eviction and write-back
+- In-memory or mostly-cached OLTP workloads: the paper (snippet) reports almost 90 M lookups/s and about 3 M TPC-C transactions/s with a 128 GB pool
+- Out-of-memory random reads on Linux where you can load a kernel module: exmap adds about 60% over plain vmcache by sidestepping kernel eviction scalability limits (snippet)
+- As an MIT-licensed reference for optimistic latching and virtual-memory-based page translation to port into your own engine
+
+**Skip it when:**
+- Out-of-memory random lookups where peak steady-state throughput matters: the paper snippet says vmcache is substantially slower than LeanStore there because it is bound by the kernel
+- Workloads that delete data: storage free-space management is an open TODO and allocCount only grows, so pages are never reused on disk
+- Environments where you cannot set vm.overcommit_memory=1 or load kernel modules (exmap uses a kallsyms workaround for non-exported symbols and has no LICENSE file)
+- Heavy lock contention: latches spin; C++ wait/notify is listed as a TODO
+- Non-Linux platforms: depends on Linux mmap/madvise semantics, libaio and O_DIRECT
+
+**Integration:** source-drop · libaio; optional exmap kernel module (tuhhosg/exmap, MODULE_LICENSE GPL, no LICENSE file) · C++20 (Makefile: g++ -DNDEBUG -O3 -std=c++20 -fnon-call-exceptions -fasynchronous-unwind-tables) · Linux x86-64 (tested by the authors); needs a block device or file opened with O_DIRECT
+
+**Vs siblings:** Pick vmcache over UMap or FastMap when you are writing a DBMS and want the engine, not the kernel, to decide eviction and I/O, with an MIT license; pick TriCache or UMap when you need to accelerate an unmodified mmap-based application instead of rewriting its storage layer.
+
+**Gotchas:**
+- VIRTGB must be at least the device size and larger values need vm.overcommit_memory=1; running out of virtual pages exits with 'VIRTGB is too low'
+- Page size is a compile-time 4096; issue #1 reports that switching to 2MB pages made the B-tree allocate far too many pages (closed without a documented fix)
+- Built with -fnon-call-exceptions because optimistic reads can touch evicted pages and restart via exceptions; keep those flags if you vendor the code
+- Default BLOCK is /tmp/bm, a regular file, so default runs do not measure a raw NVMe device
+
+**Status:** Research code with recent commits (2025-09-09) and an MIT license; small enough (one 1,855-line vmcache.cpp plus TPC-C headers) to vendor, but missing storage free-space management.
+
+[repo](https://github.com/viktorleis/vmcache) · [benchmark](https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/_my_direct_uploads/vmcache.pdf)
+
+##### wcp  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Experimental io_uring recursive file copier for Linux, about 2-3x faster than GNU cp -r on the author's NVMe box.
+
+**Beats:** GNU cp (cp -r); rsync also shown — On the author's machine (64 GB RAM, Samsung NVMe SSD, Linux 5.8, CPU and compiler not stated, CMake Release build), wcp copied 20 x 512 MiB files in 3.97 s vs 8.44 s for cp -r, 7,000 x 1 MiB files in 2.64 s vs 8.29 s, and 200,000 x 1 KiB files in 3.92 s vs 9.23 s (rsync 8.09 s). There is no benchmark script, the page-cache state is not stated, and an independent user (issue #13) saw it slower than cp.
+
+**Known shortcoming:** The code is C++17, not C. No fsync anywhere: source reads use O_DIRECT while destination writes go to the page cache, with the cache state unstated. The 1 KiB row's MiB/s is inflated about 4x (200.51 stated against 49.8 derived from page data); the seconds column is consistent, so it is a reporting artifact, not a copy bug. Open issue 13 (slower than cp on Ubuntu 20.04.1) and 14 (named pipes break it); uses a minimum 1 GiB buffer.
+
+**Independent measurement:** first-party README
+
+**How:** All reads and writes go through io_uring (bundled liburing) as linked read-then-write submissions (IOSQE_IO_LINK), so many files are in flight at once without a syscall per operation, and directory walking runs alongside the copying. Source files are opened with O_DIRECT, which bypasses the page cache on reads, into one large aligned buffer pool of max(RAM/10, 1 GiB) split into 128 MiB blocks. The author's own summary is 'a lot of CPU, as much RAM as I can get away with, and 100% non-portable'.
+
+**Use it when:**
+- Bulk copies of many small files (thousands to hundreds of thousands of 1 KiB-1 MiB files) on a fast NVMe SSD under Linux 5.6+, where cp's per-file synchronous syscalls dominate
+- Large sequential copies (hundreds of MiB per file) where the author measured about 2.1x cp's throughput
+- One-off interactive copies where an accurate progress bar and ETA matter
+- As reference code for an io_uring copy pipeline (linked read/write SQEs, O_DIRECT alignment handling) to build into your own tool
+
+**Skip it when:**
+- Anything needing cp's options: no -p/-a, so ownership, timestamps and xattrs are not preserved, and there are no flags at all
+- Production or scripted use: the author says it is probably not robust enough for daily use, issue #14 (named pipes break it) is open, and earlier issues reported segfaults and SIGTRAP
+- Non-Linux systems, kernels older than 5.6, or older distributions (open build failures on CentOS 7.4 and Debian, issues #12 and #10)
+- Memory-constrained machines: it allocates at least 1 GiB (10% of physical RAM) of copy buffers up front
+- Other hardware: open issue #13 reports wcp slower than cp on Ubuntu 20.04.1 AMD64
+
+**Integration:** CLI tool (CMake build; also a wcp_lib static library) · liburing (vendored), pthreads · C++17 (the record's language field says C, but the code is C++17), CMake 3.11+, Linux kernel 5.6+ (tested on 5.8) · Linux only (x86-64; ARM build fixed in issue #9)
+
+**Vs siblings:** liburing is the io_uring library wcp is built on; pick wcp when you want a ready-made copier, and liburing when you are building your own I/O path. parallel-disk-usage is the same kind of parallel tree-walk speedup applied to du, not to copying.
+
+**Gotchas:**
+- No fsync anywhere in the source: destination writes are buffered, so timings with 64 GB RAM partly measure filling the page cache (cp -r does not fsync either); the README does not say whether caches were dropped between runs, and wcp's O_DIRECT reads skip a warm source cache that cp could use
+- The 200,000 x 1 KiB row reports 200.51 MiB/s, but 200,000 KiB in 3.92 s is about 49.8 MiB/s (derived from page data); the files/s and seconds columns agree with each other, so the MiB/s column for small files looks inflated, probably by counting padded O_DIRECT block sizes
+- The README headline 'up to 70% faster' understates its own table (2.1-3.1x on wall time, derived from page data)
+- Errors in source files (FIFOs, unreadable files) are reported but can stop the status display (issue #14)
+
+**Status:** Abandoned since 2021-05-21 (issues from 2021-2024 left open) but MIT-licensed and about 1,500 lines of C++, so small enough to read or vendor as a reference io_uring copy pipeline.
+
+[repo](https://github.com/wheybags/wcp) · [benchmark](https://github.com/wheybags/wcp)
+
+##### wudream813/fastio  `C++`  `MIT`  `active`  `Tier C`
+
+Single-header C++17 fast integer reader/writer for competitive programming: mmap plus 2-digit lookup tables, about 7-8x faster than std::cin.
+
+**Beats:** std::cin / std::cout (also scanf/printf, fread, getchar_unlocked as rows in the same table) — First-party runs on a shared 2-core Intel Xeon @2.60 GHz VM (model not stated), g++ 14.2 -O2, 100 MiB of about 9.98 million 9-digit integers in a warm /tmp file, median of 3 after a warm-up with checksums checked: read std::ifstream 489.6 ms vs fastio 66.5 ms (7.4x), write std::ofstream 469.5 ms vs 94.3 ms (5.0x) in make benchlib; make benchvar gives cin 565 ms vs 70.7 ms and cout 473 ms vs 155 ms. Unsyncing cin does not help here (578 ms), so the win is parsing and formatting, measured on page-cached data rather than disk I/O.
+
+**Known shortcoming:** The win is parsing a page-cached /tmp file, not I/O. The README tables disagree with each other (66.5/70.7 ms read; 94.3/123.6/132/155 ms write). The mmap plus sentinel code and the benchmark checksums were checked; no correctness bug.
+
+**Independent measurement:** public benchmark code
+
+**How:** For a regular file on stdin the Reader reserves an anonymous region, maps the file into it with MAP_FIXED|MAP_POPULATE and fills a trailing anonymous page with 0xFF sentinels, so the whitespace-skip and digit loops run without bounds checks. Integers are parsed two characters at a time through a 65536-entry uint16 table (v = v*100 + tbl[w] - 1) in a fixed unrolled sequence, with branchless sign handling and an optional 8-byte SWAR fold (FASTIO_SWAR8) for long 64-bit values. The Writer formats through a 10000-entry table of packed 4-digit ASCII words, computes 4-digit groups with independent constant divisions, stores them with one 16-byte SSE movups, and keeps a module-level fixed buffer with an index cursor so GCC keeps the cursor in a register; the hot path is forced always_inline.
+
+**Use it when:**
+- Competitive programming or batch tools that read or write millions of decimal integers from redirected files (100 MiB of 9-digit ints: about 66-71 ms vs 490-565 ms for cin/ifstream)
+- Single-file submissions to online judges on Linux with GCC, where you can paste one header
+- Large integer output where cout or printf formatting dominates (about 94-155 ms vs 470 ms for cout on 100 MiB)
+- Input you control and can promise properties of (non-negative, fixed separators, known digit count) to unlock the compile-time fast options (reported 40% further on reads)
+
+**Skip it when:**
+- General file I/O, binary data or throughput-bound disk reads: the gain is decimal parsing and formatting, not faster I/O syscalls
+- Code that mixes this with scanf/cin on the same stream: the buffers do not see each other's consumed bytes
+- Interactive problems unless you flush after each round or build with FASTIO_STREAM; FASTIO_INPUT_MAX blocks until EOF
+- MSVC or non-GNU toolchains if you need __int128; Windows loses the mmap path (auto-disabled) and falls back to fread
+- Production code needing iostream formatting, locales, error reporting on malformed input, or a stable versioned API (3 stars, single author)
+
+**Integration:** header-only · none (POSIX mmap/read on Unix; SSE intrinsics on x86 unless FASTIO_NO_WRITE_SSE) · C++17; tested with g++ 14.2 -O2 (GCC-specific pragmas and always_inline; __int128 is a GNU extension) · Linux/Unix with mmap for the fastest path; pipes, terminals and Windows fall back to read()/fread streaming; write SSE path is x86-only with a scalar fallback
+
+**Vs siblings:** None of the catalogued filesystems-and-io siblings (liburing, SPDK, file_io_benchmark, fcp and the rest) parse text; pick fastio when the bottleneck is decimal integer parsing and formatting on stdin/stdout, and pick liburing or file_io_benchmark-style unbuffered reads when the bottleneck is raw bytes from storage.
+
+**Gotchas:**
+- Compile-time options are promises about the data: FASTIO_INPUT_MAX silently drops input beyond the limit, FASTIO_OUTPUT_MAX overruns the heap buffer if exceeded, and FASTIO_NO_WS_SKIP or FASTIO_ASSUME_UNSIGNED produce wrong values on non-conforming input.
+- The author's own note says FASTIO_OUTPUT_MAX was once recommended for large output and was about 15% slower (24.5 MB output: 57 ms vs 49 ms streaming); keep it for tiny outputs only.
+- Buffered output is flushed by the destructor; _Exit() or a crash loses it, and reading -1 into an unsigned type is not treated specially.
+- The README's headline figures (69 ms / 132 ms), the benchvar table (70.7 / 155 ms), the benchlib table (66.5 / 94.3 ms) and the report.html table (65.3 / 123.6 ms) disagree; the author notes plus or minus 15% noise on a shared 2-core VM.
+
+**Status:** Actively developed by one author (last commit 2026-09-25, 3 stars, MIT, v1.3.0 features), with a CI workflow running self-tests and an 8 MiB quick benchmark; small enough to vendor as one header.
+
+[repo](https://github.com/wudream813/fastio) · [benchmark](https://github.com/wudream813/fastio)
+
+##### xNVMe  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Samsung's single C API for NVMe I/O over io_uring, io_uring_cmd, libaio, SPDK and more; DuckDB on it beats default sync I/O.
+
+**Beats:** DuckDB default synchronous file I/O (psync) — Per search snippets of the CIDR 2026 paper (Houlborg et al., not opened here), DuckDB with the xNVMe-based nvmefs extension had about the same query times as DuckDB's default synchronous file I/O on non-I/O-intensive queries and up to 50% lower query times (about 2x at best) on I/O-intensive aggregation and TPC-H queries. Hardware, compiler and which backend gave the best result are not known from this session.
+
+**Known shortcoming:** The claim is snippet only (CIDR paper on vldb.org blocked): up to 50% lower query time, about 2x at best, against DuckDB's default sync I/O, hardware unknown; an arXiv snippet gives about 54 ns overhead per I/O. Queue ctx get/put is documented as not thread safe; queue capacity must be a power of 2 between 1 and 4096; v0.7.5, pre-1.0.
+
+**Independent measurement:** snippet only
+
+**How:** Speed comes from the backends it reaches, not from new I/O machinery: asynchronous queues of up to 4096 outstanding commands with optional IOPOLL and SQPOLL polling, NVMe passthrough through io_uring_cmd that skips the block layer, and kernel bypass through SPDK or uPCIe. The xNVMe paper (Lund et al., arXiv 2411.06980, per search snippet) puts the abstraction's own cost at about 54 ns per I/O. In the CIDR 2026 DuckDB work the gain is from replacing DuckDB's synchronous file I/O with these asynchronous block paths through the nvmefs extension.
+
+**Use it when:**
+- You want one code path that can switch between io_uring, libaio, NVMe passthrough and SPDK at runtime, for example to benchmark or ship a storage engine across kernels and drivers.
+- Database or storage engines that manage raw NVMe namespaces as blocks and want queue-depth asynchronous I/O instead of synchronous pread.
+- Using NVMe features that file APIs hide: Zoned Namespaces, KV command set, Flexible Data Placement, or admin and vendor commands through passthrough.
+- GPU-initiated or peer-to-peer storage I/O (CUDA or HIP) through the uPCIe backend.
+- Cross-platform NVMe tooling on Linux, FreeBSD, macOS and Windows from one C codebase.
+
+**Skip it when:**
+- Applications that work with ordinary files and the page cache: xNVMe works at block and command level, and its gains need raw devices or passthrough, so a filesystem user is better served by liburing directly.
+- When you only target Linux io_uring: liburing gives the same mechanism with one less layer and much wider ecosystem use.
+- Environments where you cannot unbind the device from the kernel or get raw device permissions; the SPDK and uPCIe backends need that, and they need hugepages.
+- If you need verified independent throughput numbers: the only quantitative claim seen here is the CIDR 2026 DuckDB result, known from search snippets.
+- Multi-threaded submission onto one queue: the queue helpers are documented as not thread safe.
+
+**Integration:** shared lib · optional and auto-detected: liburing, libaio, libvfn, ISA-L, SPDK, CUDA, HIP; pthreads · C (gnu11), Meson 0.59 or later; built as both static and shared libraries with LTO by default on non-Windows · Linux, FreeBSD, macOS, Windows
+
+**Vs siblings:** Pick it over liburing or SPDK when you need one API that runs on both (and on libaio, FreeBSD, macOS and Windows) or need NVMe command sets such as ZNS, KV or FDP; for Linux-only file I/O, liburing is simpler, and for maximum single-backend IOPS, SPDK directly avoids the extra layer.
+
+**Gotchas:**
+- Queue capacity must be a power of two in the range 1 to 4096.
+- The backend is chosen at runtime by options, so a wrong or missing backend build (for example no liburing or SPDK found by Meson's auto features) silently leaves you with slower paths such as psync or the thread-pool emulation.
+- The benchmarked DuckDB gain uses the nvmefs extension, which stores data as blocks on a raw device instead of files, so the comparison is not just a different syscall.
+- Recent bug reports include hugepage exhaustion in the uPCIe backend and controller reference counting (both closed in mid-2026) and an open Windows fio clock-source failure.
+
+**Status:** Actively developed by Samsung (version 0.7.5 in meson.build, 318 stars, BSD-3-Clause, last commit 2026-10-01), with CI and Coverity; usable today, but the API is still pre-1.0.
+
+[repo](https://github.com/xnvme/xnvme) · [benchmark](https://www.vldb.org/cidrdb/papers/2026/p6-houlborg.pdf)
+
+##### zdu  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Parallel Rust disk-usage CLI with a dust-style tree chart; 2.7-10x faster than dust, mixed against pdu.
+
+**Beats:** dust and pdu (disk usage tools built on parallel stat/readdir) — Author's hyperfine runs with warm page cache on 32 logical cores (CPU not named): on Linux, zdu 19.6/143.8/402.7 ms vs dust 1.2.4 at 202.2 ms/388.2 ms/1.118 s and pdu 0.21.1 -H at 14.0/228.3/1401 ms for 57k, 509k and 1.2M files; on Windows 10/NTFS 2.7-7.4x over dust 1.2.3 and 2.0-6.2x over pdu 0.24.0 without -H. Release build uses LTO and codegen-units=1; no other flags or harness published.
+
+**Known shortcoming:** No benchmark script and no CPU model. The README links pdu to XAMPPRocky/pdu, but the versions (0.21.1, 0.24.0) and the -H flag match KSXGitHub/parallel-disk-usage. Loses to pdu -H on ~/.cargo (14.0 vs 19.6 ms). Rust, not C++.
+
+**Independent measurement:** first-party README
+
+**How:** The walk runs as flat rayon scope tasks (no recursion): each directory is read once into a Vec, entries are processed with into_par_iter clamped to a 64-entry minimum leaf, and each subdirectory spawns its own task that bubbles its node up via an atomic pending counter. Hard-link dedup uses a 256-shard Mutex<HashSet<(inode, device)>> sharded on the inode, which the source says cut /nix/store from 818 ms to 631 ms versus a device-keyed shard; directories are classified from readdir d_type instead of an extra stat. On Windows, DirEntry::metadata() reuses the FindNextFile data so plain entries need no per-file stat.
+
+**Use it when:**
+- Interactive disk-usage inspection where you want dust's tree chart but faster on large trees (hundreds of thousands to millions of files).
+- Link-heavy trees such as /nix/store, where the README shows 402.7 ms vs pdu -H 1.401 s and dust 1.118 s.
+- Windows/NTFS scans: README shows 2.7-7.4x over dust and 2.0-6.2x over pdu on 7.6k-163k file trees.
+- Many-core machines with warm page cache, the only setting measured (32 logical cores).
+
+**Skip it when:**
+- Small trees on Linux: pdu -H beat it on ~/.cargo (14.0 ms vs 19.6 ms).
+- When you need a library to embed in a C++ program; this is a Rust binary.
+- Cold-cache or spinning-disk scans: not benchmarked; diskus and gdu siblings publish cold-cache numbers.
+- When you need exact GNU du semantics: allocated size is capped heuristically (blocks*512 replaced by size rounded to blksize when it exceeds that by more than 65536 blocks), and Windows counts plain-file hard links once per link.
+- Production use requiring maturity: 0 stars, first commits and release all in September 2026.
+
+**Integration:** crate · rayon, clap, regex, serde/serde_json, chrono, lscolors, nu-ansi-term, terminal_size, config-file, ctrlc, stfu8, thousands, unicode-width; on Windows filesize and winapi-util · Rust 1.85 (edition 2024) · Linux/Unix and Windows (both benchmarked); macOS not documented
+
+**Vs siblings:** Pick zdu over pdu (parallel-disk-usage) when you want dust's tree output, are on Windows, or scan link-heavy trees; pick pdu for small Linux trees and diskus when you only need a single total, since diskus publishes cold-cache numbers and zdu does not.
+
+**Gotchas:**
+- The README links pdu to XAMPPRocky/pdu, but the versions benchmarked (0.21.1, 0.24.0) and the -H/--deduplicate-hardlinks flag match KSXGitHub/parallel-disk-usage.
+- No benchmark script is published; the tables give hyperfine means only, with no CPU model or variance.
+- Every regular entry's (inode, device) goes into the dedup set in default mode, not only entries with link count above 1, so memory grows with file count; -s (apparent size) skips dedup.
+- zdu renders a full tree while pdu prints a flat list, so the comparison is not output-equivalent (README argues this favors pdu).
+
+**Status:** Active (88 commits, last 2026-09-18) but brand-new with 0 stars; MIT OR Apache-2.0, installable with cargo install, usable as a CLI tool rather than copyable library code.
+
+[repo](https://github.com/lxl66566/zdu) · [benchmark](https://github.com/lxl66566/zdu#benchmark)
+
+##### libuv io_uring file backend  `C`  `MIT`  `active`  `Tier D`
+
+libuv's optional Linux io_uring path for uv_fs_* calls, replacing threadpool hand-off; off by default since 1.49.
+
+**Beats:** libuv threadpool file I/O — The only number is in the 1.45 commit d2c31f4 and PR #3952: a reviewer saw more than 8x throughput reading small chunks from /dev/zero versus libuv's own threadpool path; no hardware, kernel, compiler or harness is given. It measures dispatch overhead, not storage throughput.
+
+**Known shortcoming:** The only number is a PR 3952 reviewer remark of more than 8x reading small chunks from /dev/zero against the threadpool, with no hardware or method; it measures dispatch overhead, not storage. In 1.53 file io_uring is off by default: the docs say UV_LOOP_USE_IO_URING_SQPOLL enables it, but src/unix/linux.c uv__use_io_uring() also needs UV_USE_IO_URING=1 (the code comment is wrong too). The uv__iou_fs_close constant 0x050A00 is labelled 5.16.0 but is 5.10.0, so io_uring close is skipped on 5.15.90+ longterm kernels. The entry is the whole libuv repo.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each request becomes one io_uring submission-queue entry on a 64-entry ring created with IORING_SETUP_SQPOLL, so a kernel polling thread picks it up without a syscall and without waking a userland worker thread; completions arrive through the ring's CQ, which is registered with the loop's epoll fd. This removes the threadpool's queue lock, thread wake-up and result hand-back per request, which dominates for small, cache-hot operations.
+
+**Use it when:**
+- Linux servers (kernel 5.13+, ideally 6.1+) doing many small uv_fs_read/uv_fs_write/uv_fs_stat calls where threadpool hand-off overhead, not the device, is the bottleneck
+- Programs that saturate libuv's default 4-thread pool with file requests and would otherwise raise UV_THREADPOOL_SIZE
+- Embedders who control process start-up and can set both the loop option and the UV_USE_IO_URING=1 environment variable
+- Processes that never change privileges (no setuid/setgid after loop start)
+
+**Skip it when:**
+- Default builds: since 1.49 file ops go to the threadpool unless the loop is configured with UV_LOOP_USE_IO_URING_SQPOLL and the env var is set, so there is nothing to gain without opting in
+- Processes that drop privileges with setuid(): CVE-2024-22017 showed io_uring ops kept the old credentials when the ring existed before setuid()
+- CPU-constrained or containerised hosts: SQPOLL runs a kernel polling thread per ring (idle timeout 10 ms) and older kernels (<5.10.186) had a 100% CPU sqpoll bug
+- Android, 32-bit ARM, ppc64/ppc64le and hppa below 6.1.51: io_uring is hard-disabled in source
+- Large-block or device-bound I/O where the syscall path is not the bottleneck; the only published number is a /dev/zero microbenchmark
+
+**Integration:** static lib | shared lib (CMake or autotools) · none (raw io_uring syscalls; no liburing) · C11-capable compiler (uses _Atomic); CMake or autotools · io_uring path: Linux x86-64/aarch64 and other 64-bit arches, kernel >= 5.10.186 with IORING_FEAT_RSRC_TAGS (5.13+); libuv itself: Linux, macOS, Windows, BSDs, AIX, z/OS
+
+**Vs siblings:** Pick it when the code is already on libuv (or Node.js) and you want io_uring for file ops without rewriting around liburing; use liburing directly for custom submission control, registered buffers or O_DIRECT, and SPDK when you need to bypass the kernel block layer entirely.
+
+**Gotchas:**
+- Docs (fs.rst) say the loop option alone enables io_uring, but uv__use_io_uring() in src/unix/linux.c returns false for SQPOLL when UV_USE_IO_URING is unset, and the code comment there claims the opposite ('unset or a positive number'); in practice both the option and UV_USE_IO_URING=1 are needed
+- Fallback is silent: a full 64-entry ring, writes with nbufs > IOV_MAX, an old kernel, or a failed ring setup all route to the threadpool with no error, so measure before assuming the fast path is active; reads with nbufs > IOV_MAX are capped to IOV_MAX (short read)
+- Per-op kernel gates: close needs >= 6.1 (code constant 0x050A00 is labelled 5.16.0 but is 5.10.0, so 5.15.90+ longterm kernels also skip io_uring close), ftruncate needs 6.9, link/mkdir/rename/symlink/unlink need 5.15, cancel needs 6.0
+- Node.js ships the same default (threadpool) and documents UV_USE_IO_URING=1 as the opt-in; the epoll_ctl batching ring is separate and always on since 1.50
+
+**Status:** libuv is actively maintained (1.53.0 released 2026-09-24, MIT); the io_uring file path is kept and still extended (cancel support in 1.53) but has been opt-in since 1.49 after CVE-2024-22017 and SQPOLL bugs.
+
+[repo](https://github.com/libuv/libuv) · [benchmark](https://github.com/libuv/libuv/commit/d2c31f429b87b476a7f1344d145dad4752a406d4)
+
+##### LLFIO  `C++`  `Apache-2.0 OR BSL-1.0`  `active`  `Tier D`
+
+Low-level, zero-copy, race-free C++17 file and memory-map i/o library; no head-to-head numbers against POSIX read/write.
+
+**Beats:** POSIX read/write (physical device latency used as reference) — The README gives about 100 ns of software overhead per i/o on Linux and 99th-percentile QD1 4 KiB direct read latencies of 30 us (Linux), 37 us (Windows) and 70 us (FreeBSD) on NVMe, set beside manufacturer device latencies; no baseline library, compiler, flags or exact hardware are tied to those figures. The repo's fs_probe_results.yaml carries raw latency profiles (for example AMD Threadripper PRO 5975WX, Linux 5.15, RAID0 Samsung PM9A1 on XFS: direct QD1 4 KiB read p99 about 96 us), which are device characterisations, not comparisons.
+
+**Known shortcoming:** No head-to-head numbers anywhere; fs_probe_results.yaml holds only device latency profiles (Threadripper PRO 5975WX, PM9A1 XFS, direct QD1 4K read p99 about 96 us). io_uring is still on the Readme todo list and multiplex.hpp is an interface stub only. Open Windows bugs 160 and 121.
+
+**Independent measurement:** public benchmark code
+
+**How:** The design target is near-zero software overhead per i/o: no malloc, no exceptions and no whole-machine memory copy on the i/o path, path_view instead of allocated std::filesystem::path, and thin wrappers over pread/pwrite-style syscalls (the README says about 100 ns per i/o on Linux, syscall included). It exposes O_DIRECT and seven kernel caching modes, plus memory-mapped scatter-gather i/o with large and huge page support, so you can pick the caching and copy behaviour per handle. It does not add a faster algorithm on top of the OS; the gain is avoiding the allocation, copying and locking that iostreams and std::filesystem add.
+
+**Use it when:**
+- Storage engines or databases that do 4 KiB direct (O_DIRECT) i/o on NVMe or Optane and need per-op overhead well under the device latency.
+- Portable code across Linux, Windows and FreeBSD that wants memory-mapped files, sparse files, hole punching and large/huge pages through one API.
+- Filesystem algorithms that must be race-free against concurrent renames (anchored path_handle opens, no stored paths).
+- Builds with exceptions and RTTI disabled that still need rich error codes (original NT kernel error codes are preserved).
+
+**Skip it when:**
+- You need an async submission-queue backend: Linux io_uring support is still on the README's todo list and multiplex.hpp is only an interface sketch; use liburing or SPDK directly.
+- You want a measured speedup over read/write or std::fstream: the project publishes overhead and device latency figures only, never a comparison against another library.
+- Mac OS deployments: the README says it is less well tested there.
+- Header-only use on Windows without status_code or a shared ntkernel error category: Build.md warns error-code comparisons can randomly fail.
+- Small tools that just read a few files: the API surface is large and the build pulls in QuickCppLib and Outcome via a CMake bootstrap.
+
+**Integration:** header-only, static lib or shared lib (selectable; also vcpkg 'llfio' and prebuilt release binaries) · QuickCppLib and Outcome (fetched by the CMake bootstrap); git submodules ntkernel-error-category and wg14_signals; an STL with working <filesystem> · C++17 with std::filesystem; CMake 3.9+; CI covers GCC and Clang on Linux, Xcode, Visual Studio (Android NDK and MinGW build only) · Linux, Windows, FreeBSD, Mac OS (less tested), Android/iOS build-only; README targets kernels back to Linux 2.6.32 and Windows 8.1
+
+**Vs siblings:** Pick LLFIO over liburing or SPDK when you want a portable, synchronous, race-free file and mmap abstraction across Linux and Windows rather than a Linux-only async queue; for raw IOPS at high queue depth liburing or SPDK are the measured options. Unlike FastMap or UMap it does not replace the kernel mmap path, it wraps it.
+
+**Gotchas:**
+- Header-only mode on Windows can produce binaries where semantic error-code comparisons fail; define LLFIO_EXPERIMENTAL_STATUS_CODE=1 or link the prebuilt library.
+- map_handle's page cache does not self-trim; you must call trim_cache() or allocations accumulate.
+- Open Windows bugs: mapped_temp_inode leaks space (#160) and map(section, reserve) does not work (#121); algorithm::traverse relies on vector<list<move-only>> (#98).
+- Clone with --recursive and do an out-of-tree build or the CMake build fails; Build.md itself is flagged as inaccurate for POSIX (#111).
+
+**Status:** Active (last commit 2026-08-24), dual Apache-2.0/BSL-1.0, mature and in production use per the README, but the standardisation effort was abandoned in 2025 and io_uring remains unimplemented.
+
+[repo](https://github.com/ned14/llfio) · [benchmark](https://github.com/ned14/llfio)
+
+#### logging-tracing
+
+##### fastrace  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust timeline-tracing library (successor to minitrace) whose span creation costs 19-151x less than tokio-tracing in its own benchmark.
+
+**Beats:** tokio-tracing — Per its results README, the authors ran cargo criterion on the compare bench on four 8-vCPU AWS EC2 instances (m4 Broadwell, m5 Skylake, m5a Zen, m6g Graviton2; Ubuntu 20.04) to time one root span plus N child spans. On m4.2xlarge fastrace took 0.44 us, 0.75 us, 3.4 us and 27.8 us for 1, 10, 100 and 1000 spans, against 8.2 us, 46 us, 423 us and 4.19 ms for tokio-tracing (19x to 151x) and 5.5 us to 1.52 ms for rustracing. The rustc version is not recorded, and in fastrace's case the span export cost lands on a background thread, not on the timed thread.
+
+**Known shortcoming:** README tables come from an old cargo-criterion bench on Ubuntu 20.04 EC2 with the rustc version unrecorded; the current benches/compare.rs is divan and covers tokio-tracing only, so the rustracing column is not reproducible from HEAD. Export runs on a background collector thread, outside the timed path. tail_sampled and max_spans_per_trace are now deprecated no-ops although the README still sells tail sampling; no per-trace span cap.
+
+**Independent measurement:** code reading by enricher
+
+**How:** LocalSpan keeps child spans in a thread-local stack with no locking or atomics when a local parent is set; spans that cross threads or await points use the heavier, thread-safe Span. Timestamps come from the fastant crate (TSC-based clock), and finished span batches go to a background collector thread that calls the reporter every report_interval (default 1 s), so the instrumented thread does not serialize or export anything. Without the 'enable' feature the macros compile away entirely.
+
+**Use it when:**
+- Instrumenting hot paths in Rust libraries or servers (KV stores, query engines, storage layers) where tracing overhead per span must stay in the hundreds of nanoseconds or below.
+- Library crates that want to ship tracing hooks that cost nothing unless the final application enables them.
+- Request-scoped traces exported to OpenTelemetry backends via fastrace-opentelemetry, with axum, tonic, tower, reqwest or poem integrations.
+- Workloads with many short child spans per request (100 to 1000 spans), where the README gap over tokio-tracing is widest.
+
+**Skip it when:**
+- C or C++ codebases: it is Rust-only with no C API; C++ users need a different tracer.
+- You need per-span verbosity levels, tracing-subscriber's layer/filter ecosystem or structured event logging as the primary output: fastrace has no 'level' concept and no logging macros of its own.
+- Long-lived or endless root spans: spans are reported when the root is dropped, so a root that never ends never reports.
+- Toolchains older than Rust 1.91 (MSRV 1.91.0, edition 2024).
+
+**Integration:** crate · fastant, fastrace-macro, parking_lot, pin-project, rand, rtrb, serde (plus opentelemetry crates when fastrace-opentelemetry is used) · Rust 1.91.0 (edition 2024) · any Rust target; benchmarked on x86-64 (Intel Broadwell, Skylake, AMD Zen) and arm64 (AWS Graviton2)
+
+**Vs siblings:** The catalogued siblings (binlog, BqLog, fmtlog, lockfreelog) are C++ loggers compared against spdlog, so they solve a different problem. Pick fastrace only for span-based distributed tracing in Rust; for low-latency C++ logging use fmtlog or binlog.
+
+**Gotchas:**
+- LocalSpan::enter_with_local_parent does nothing silently when no local parent is set, so a missing set_local_parent() call drops spans without an error.
+- Span records created before set_reporter() are ignored, and flush() must be called before exit or buffered spans are lost.
+- The README sells a tail-sampling design, but Config::tail_sampled, max_spans_per_trace and report_before_root_finish are deprecated no-ops in 0.7.x, so there is no per-trace span cap against runaway memory.
+- The README tables come from an older criterion 'compare' bench (results/*.txt from cargo-criterion on Ubuntu 20.04 EC2, including rustracing); the current benches/compare.rs is a divan harness against tokio-tracing with an OpenTelemetry layer only, so the rustracing column cannot be reproduced from HEAD.
+
+**Status:** Actively maintained (0.7.19, commits into 2026, used by Databend and Apache OpenDAL); Apache-2.0, so it is safe to adopt in Rust projects, but it has no value for C++ code.
+
+[repo](https://github.com/fast/fastrace) · [benchmark](https://github.com/fast/fastrace)
+
+##### llcpp  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Header-only C++17 synchronous binary logger: writes format string plus raw argument bytes, about 4x lower median latency than spdlog.
+
+**Beats:** spdlog — Author's README, Ubuntu 16.04.03, Clang 5.0.1 with --std=c++1z -flto -O3, logging to /tmp on an SSD, CPU not stated: median per-call 165 ns vs spdlog 729 ns at 1 thread and 173 vs 1100 ns at 4 threads, total 0.42 s vs 0.95 s (1 thread) and 1.61 s vs 1.91 s (4 threads), while spdlog has the better 99th percentile; spdlog wrote formatted text and llcpp wrote binary, and the harness lives only in a blog post that is blocked here.
+
+**Known shortcoming:** Likely log corruption behind the 4-thread numbers: the 4 KB thread_local cache flushes mid-line into a shared FILE*, so lines from several threads can interleave. Other threads' caches are never flushed at destruction (up to 4 KB lost each), same-type loggers share one cache per thread, and p99 is worse than spdlog. Read from logging.hpp, not run.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The format string is captured at compile time through a GNU string-literal operator template, parsed by constexpr template metaprogramming into a tuple of per-argument serializers, and type-checked statically, so the call site does no parsing, no allocation and no number-to-text conversion. Each call memcpy's the format bytes and argument bytes into a 4 KB thread_local buffer in file_logger and only calls fwrite when that buffer fills. The speed is mostly from skipping text formatting (binary vs text comparison) and from batching writes.
+
+**Use it when:**
+- Linux/macOS service where logs are shipped through a pipeline anyway and a post-processing decode step is acceptable.
+- Single-threaded hot paths that log a few integers and short strings per line and want sub-200 ns median call cost without a background thread.
+- Embedded or constrained code that needs zero allocation per log call and compile-time format/argument type checking.
+- As a small reference design for compile-time format parsing with UDL templates, to copy and harden.
+
+**Skip it when:**
+- Multi-threaded logging to one file: the per-thread 4 KB buffer is flushed mid-line when the next part does not fit, so pieces of a line from different threads can interleave in the shared FILE*, which breaks the sequential binary stream the parser expects (from reading logging.hpp; not run).
+- When tail latency matters: its own table shows 99th percentile 2058 ns vs spdlog 973 ns (1 thread) and 7501 vs 1373 ns (4 threads), because the thread that fills the buffer pays the fwrite.
+- When you need human-readable logs on disk, floating-point or %p/%c specifiers (only %d, %u, %x, %s), log-level filtering, rotation, or async sinks.
+- MSVC or any compiler without the GNU string-literal operator template extension; prefix code also uses POSIX localtime_r/gmtime_r.
+- Production use in general: README says proof-of-concept, last commit 2017-11-03, error handling is marked TODO.
+
+**Integration:** header-only · none (Python for the decoder script) · C++17; tested on Clang 5.0.1 (Ubuntu) and Apple Clang 900; needs GNU UDL template extension · Linux, macOS (POSIX time functions); little-endian assumed by the binary format
+
+**Vs siblings:** Pick it only if you want a tiny, synchronous, allocation-free header to study or fork; for real use, Quill, fmtlog, PlatformLab NanoLog or binlog are maintained, thread-safe, async, and report far lower call-site latency (single-digit to tens of ns) on the same spdlog comparison.
+
+**Gotchas:**
+- The 4 KB cache is a static thread_local member per file_logger template instantiation, so two loggers of the same type on one thread share one buffer and a flush goes to whichever logger's file triggered it.
+- Only the destroying thread's buffer is flushed in ~file_logger; up to 4 KB of each other thread's last lines is lost at exit unless that thread logs enough to trigger a flush.
+- The full format string is written for every line (no string-table id), so files are larger than NanoLog-style dictionary logs; %s writes a 4-byte length plus bytes, %Ns pads or truncates to N bytes.
+- %ld/%lld widths are derived from the count of 'l' (4 bytes per 'l'), which assumes LP64 long; the decoder must match the writer's platform.
+
+**Status:** Abandoned proof-of-concept (last commit 2017-11-03, 2 open feature-request issues) but MIT-licensed and about ten small headers, so easy to vendor and fix if the binary-log model fits.
+
+[repo](https://github.com/blapid/llcpp) · [benchmark](https://github.com/blapid/llcpp)
+
+##### low-latency-log  `Rust`  `Apache-2.0 (some code from logflume under MIT, LICENSE-LOGFLUME)`  `stale`  `Tier C`
+
+Small async Rust file logger with deferred formatting; higher backend throughput than spdlog-rs, fast_log, ftlog in its own harness.
+
+**Beats:** quill (C++), spdlog-rs, fast_log, ftlog — First-party runs in BENCHMARK.md: median per-call cost 58 ns (1 thread) on an M3 Max with Rust 1.78.0, against spdlog-rs 252 ns, fast_log 275 ns, ftlog 341 ns and C++ quill 22 ns, and drain throughput of 4.563 M msgs/s against quill 2.88, spdlog-rs 2.605, fast_log 1.741 and ftlog 1.688; on a 4-core Tencent Cloud Xeon Gold 6231C (Rocky 9.3, Rust 1.79.0), 112 ns median and 2.609 M msgs/s against spdlog-rs 592 ns / 1.478 and quill 36 ns / 2.24. All logs went to /dev/shm, single runs, quill compiler and flags not stated.
+
+**Known shortcoming:** Correctness bug in the output, not in the measured numbers: the sub-second timestamp is written without zero padding (src/lib.rs write_date_time_str, '.{}'), and the size-rollover check uses metadata(&p) with a bare filename. Quill has the faster median on both machines; the throughput numbers come from different harnesses (tcmalloc, a 1M queue for low-latency-log). Rust, not C++.
+
+**Independent measurement:** public benchmark code
+
+**How:** The calling thread does no formatting: the macro reads SystemTime and a cached thread-id string, boxes a closure that captures the arguments by move, and pushes it on a bounded crossbeam channel (128K entries by default). The background thread runs `format!` inside that closure, caches the seconds part of the time stamp so chrono formatting happens once per second, writes through a 1 MiB BufWriter with ufmt, and busy-polls with a 1 us (500 ns in the bench) sleep when the queue is empty. The design follows logflume and Quill's deferred-formatting idea, but with a heap-allocated closure per message rather than Quill's encoded argument buffer.
+
+**Use it when:**
+- Rust services that log moderate rates (a few million lines per second at most) to local files and want the formatting cost moved off the request thread.
+- When spdlog-rs, fast_log or ftlog is your current choice and its 250-600 ns median call cost shows up in profiles; this crate measured 58 ns (M3 Max) and 112 ns (Xeon Gold 6231C) median in the same harness.
+- Single-process tools where a fixed line format and file rolling by time or size are all you need.
+- As a small (about 900 lines) reference to read or vendor for a deferred-formatting logger in Rust.
+
+**Skip it when:**
+- If you need the lowest hot-path latency: C++ Quill was 2-3x faster at the median (22 vs 58 ns on M3 Max, 36 vs 112 ns on Xeon) and the README itself only claims comparable p99.9.
+- Strict allocation-free or bounded-latency hot paths: every call heap-allocates a boxed closure, and a full bounded queue makes the caller block in crossbeam send rather than drop.
+- Structured or JSON logging, multiple sinks, runtime level changes, custom line formats or non-file outputs: none exist (fixed format, compile-time level features).
+- Arguments that borrow non-'static data: the macro moves arguments into a 'static closure, so references to locals do not compile and large values are moved into the queue.
+- Long-lived projects needing maintenance: 26 commits, 2 stars, no activity since 2024-08-22, README TODOs (format! optimization, custom formats) still open.
+
+**Integration:** crate · chrono, core_affinity, crossbeam-channel, log, once_cell, ufmt, symlink, gettid, cfg-if · Rust 2021 edition; benchmarks built with Rust 1.78.0 and 1.79.0 · Linux and macOS measured; uses a symlink to the latest file and gettid, other platforms not documented
+
+**Vs siblings:** The catalogued siblings (Quill, BqLog, fmtlog, NanoLog, XTR, binlog) are C or C++ and all report lower per-call latency; pick low-latency-log only when you are in Rust and want something simpler than wrapping a C++ logger, accepting that Quill itself measured faster at the median in this repo's own table.
+
+**Gotchas:**
+- Time stamp bug in src/lib.rs write_date_time_str: the sub-second part is written as `.{}` of the nanosecond remainder without zero padding, so 5,000,000 ns after a second prints ".5000000" (reads as 0.5 s); lines cannot be sorted or parsed by fractional time.
+- open_writer_if_needed reads the existing file size with metadata(&p) on the bare file name instead of the folder-joined path, so size-based rollover starts from 0 after a restart unless the process cwd is the log folder; rollover is also only checked when the second changes.
+- The guard returned by init() must be kept; dropping it stops the logger for the whole process, and finish() can run only once, so the logger cannot be restarted.
+- Throughput numbers come from different harnesses: the Rust crates share bench/src/common (4M messages, tcmalloc global allocator, LLL with a 1M-entry queue and Logger::finish to drain), while quill was run from its own backend_throughput binary with an unstated build and message format.
+
+**Status:** Stale since 2024-08-22 with 2 stars, but Apache-2.0 (plus MIT-licensed logflume code) and small enough to vendor and fix the time-stamp padding yourself.
+
+[repo](https://github.com/WANG-lp/low-latency-log) · [benchmark](https://github.com/WANG-lp/low-latency-log/blob/main/BENCHMARK.md)
+
+##### lwlog  `C++`  `MIT`  `active`  `Tier C`
+
+C++17 policy-based logger with allocation-free log calls and an SPSC/MPSC ring-buffer async mode; README claims 2.5-20x over spdlog.
+
+**Beats:** spdlog — First-party picobench tables in the README compare lwlog with spdlog in four modes over 8 to 8192 messages: sync 7.4x at 8 messages falling to 2.5x at 8192; async blocking 16x at 8 messages and 540x at 4096, where spdlog's row jumps to 565 us/op, which suggests queue saturation rather than steady state; async nonblocking 20.7x falling to 2.4x. The 237-319x 'buffered' table pits buffered lwlog against unbuffered spdlog. No compiler, flags, CPU or benchmark source is published.
+
+**Known shortcoming:** The picobench harness is missing from the repo (Sandbox has only a timer demo); the big sync ratios come from buffered_flush_policy (4 MiB) against the default fflush per call. The async queue keeps a raw const char* format pointer, so runtime strings can dangle, and the overwrite_last policy looks racy from code reading.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Log calls format into fixed-size pre-allocated buffers whose sizes are template parameters (pattern 256, message 128, argument 64, 4 args by default), so no heap allocation per call. The pattern is parsed once when set and compiled into a list of formatters, so the call site only substitutes values. Async mode is a bounded ring buffer (default 1024 slots) with cache-line-aligned read/write indices; SPSC uses plain atomics, the thread-safe variant takes an atomic_flag spinlock on enqueue (MPSC), and the worker thread spins with an adaptive waiter. Producers enqueue only the format-string pointer, source metadata and argument strings converted to chars; formatting happens on the worker.
+
+**Use it when:**
+- Single-producer async logging to console or file where call-site latency matters and messages fit the static buffer limits
+- Embedded or real-time code that must avoid heap allocation in the logging path
+- Projects that already pick sinks and policies at compile time and want spdlog-like {} formatting without the fmt dependency
+- Buffered sync logging to a stream where losing unflushed lines on crash is acceptable
+
+**Skip it when:**
+- Messages or arguments longer than the configured limits (128-byte message, 64-byte argument, 4 arguments by default); the limits are fixed at compile time
+- Many producer threads: the MPSC queue is a spinlock around a ring buffer, not a lock-free multi-producer queue, and no multi-thread benchmark is published
+- When you need reproducible evidence: the picobench harness used for the README tables is not in the repository (Sandbox/ holds only a timer demo), and no compiler, flags or CPU are given
+- Drop-in replacement for spdlog call sites or for nanosecond-class loggers such as Quill, fmtlog or NanoLog
+- Package-manager consumers: no Conan or vcpkg package (open issue #39)
+
+**Integration:** static lib · none (Threads only) · C++17, CMake 3.16 · Windows x64 (MSVC, MinGW, Clang), Linux x64 (GCC, Clang, Intel icx) and arm64 (GCC, Clang), macOS x64 (Apple Clang), per README CI table
+
+**Vs siblings:** Pick lwlog over Quill, fmtlog or NanoLog when you want a small, readable, allocation-free codebase with spdlog-like patterns and compile-time policies, and can live without their published, reproducible nanosecond-level latency numbers. For multi-threaded hot paths, Quill or fmtlog have better evidence.
+
+**Gotchas:**
+- Async mode queues the raw const char* format string, not a copy, so a format string built at runtime (for example std::string::c_str()) must outlive the worker thread processing it
+- Default flush policy is immediate_flush_policy (fflush after every log); the large README sync speedups come from buffered_flush_policy (4 MiB stream buffer) and lose unflushed lines on a crash
+- overwrite_last_overflow_policy advances the read index from the producer while the worker may be extracting the same slot; from code reading this looks racy, so prefer block or discard_new
+- The default overflow policy busy-waits with CPU pause when the 1024-slot queue is full, and the worker spins via an adaptive waiter, so expect a burning core under load
+
+**Status:** Active (last commit 2025-12-25, v1.3.0 in CMakeLists, 353 stars), MIT-licensed, five open issues and none of them bugs; small enough to vendor, but its performance claims are unreproducible first-party numbers.
+
+[repo](https://github.com/ChristianPanov/lwlog) · [benchmark](https://github.com/ChristianPanov/lwlog#benchmarks)
+
+##### Serenity Logger  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Alpha C++20 synchronous logger (console, file, rotating targets) whose own crude benchmark beats spdlog's single-threaded sinks.
+
+**Beats:** spdlog — First-party README table dated 05Jul22: one thread logging a 400-byte string, Serenity FileTarget 215.981 ns vs spdlog basic_file_sink_st 1125.735 ns (about 5.2x), RotatingTarget 627.968 vs spdlog rotating_file_sink_st 2919.572 ns (about 4.6x), console 5.656 vs 10.837 ns (about 1.9x, but with both loggers at level off) (ratios derived from page data); compiler, flags, CPU and spdlog version not stated, and the harness was apparently built with MSVC on Windows.
+
+**Known shortcoming:** Harness flaw: the console rows (5.656 vs 10.837 ns) time only the disabled-level check, with both loggers set to level off. The README table (1M iterations, C string) predates the checked-in Benchmark.cpp (2M iterations, string_view). The file win is mostly a 4 MB vector buffer (Win64) against spdlog's stdio fwrite. Effectively Windows and MSVC only: FileHelper.cpp defines Write for non-Windows but calls WRITE, uses _O_BINARY and the MSVC-internal path::_Remove_filename_and_separator; CloseImpl checks close() != 1, so errors are never reported.
+
+**Independent measurement:** public benchmark code
+
+**How:** The file targets format straight into a std::vector<char> owned by the target and only issue a raw _write/write call when that buffer reaches pageSize (4 MB on Win64, 2 MB on Win32, 64 KB elsewhere), so syscalls are rare compared with spdlog's FILE*-based basic_file_sink. The pattern is pre-compiled once into a format string, the time breakdown is cached and refreshed only when the second changes, and the level check is a plain enum compare before any work.
+
+**Use it when:**
+- Single-threaded Windows/MSVC program that logs large volumes of text to one file and can tolerate up to several MB of unwritten log on a crash
+- Learning or experimenting with a small, readable logger codebase built on C++20 concepts and jthread
+- Writing a home-grown sink and wanting a reference for buffer-then-bulk-write file output
+
+**Skip it when:**
+- Any production use: the README calls it an alpha learning project and the last commit was 2023-03-25
+- Linux or macOS builds: FileHelper.cpp defines a 'Write' macro for non-Windows while the code calls WRITE, uses Windows-only _O_WRONLY/_O_BINARY flags and the MSVC STL internal path::_Remove_filename_and_separator, and CI is a single msvc.yml workflow
+- Latency-critical or multi-threaded hot paths: logging is synchronous on the calling thread; async front ends such as Quill, fmtlog, NanoLog or XTR are an order of magnitude cheaper per call
+- Crash-safe logging: with the default never-flush policy up to a full page buffer (4 MB on Win64) is lost if the process dies
+- Code that already depends on spdlog's API, sinks, registry or pattern flags
+
+**Integration:** static lib · none by default (bundled ArgFormatter); optional fmtlib or MSVC <format>; CMake with CPM for benchmarks · C++20; MSVC is the only toolchain exercised by CI (msvc.yml); <format> backend needs MSVC · Windows (MSVC); Linux/macOS code paths present but the non-Windows file I/O macros do not match the call sites
+
+**Vs siblings:** Rarely: lwlog and fmtlog also beat spdlog with maintained code and published harnesses, and Quill, XTR or PlatformLab NanoLog are far cheaper on the hot path via async back ends. Choose Serenity only as a small synchronous single-threaded Windows file logger to study or vendor.
+
+**Gotchas:**
+- The console benchmark rows measure nothing but the disabled-level check: both Serenity and spdlog console loggers were set to level off, so 5.656 ns vs 10.837 ns is a branch, not output
+- The current bench/src/Benchmark.cpp runs 2,000,000 iterations and passes a std::string_view (its comment says string_view is faster than the C string), whereas the README table says 1,000,000 iterations of a C-style string, so the published numbers predate the checked-in harness
+- The file speedup largely compares buffer sizes: Serenity holds up to 4 MB (Win64) in a vector before one _write, versus spdlog's stdio-buffered fwrite; front-erasing the vector after each page write is a memmove
+- FileHelper::CloseImpl tests close() != 1, so close errors are never reported
+
+**Status:** Abandoned alpha (last commit 2023-03-25, 3 stars) under MIT; copyable in principle but effectively Windows/MSVC-only and not production-ready.
+
+[repo](https://github.com/USAFrenzy/Serenity_Logger) · [benchmark](https://github.com/USAFrenzy/Serenity_Logger#statistics)
+
+#### profilers-and-instrumentation
+
+##### AddressSanitizer (LLVM compiler-rt)  `C++`  `Apache-2.0 WITH LLVM-exception`  `active`  `Tier C`
+
+Compiler-instrumented memory-error detector in Clang/GCC; about 2x slowdown where Valgrind Memcheck costs about 20x.
+
+**Beats:** Valgrind Memcheck — Google's 2013 run on SPEC CPU2006 C/C++ (Clang 3.3 r179094, -O2 -fsanitize=address -fno-omit-frame-pointer vs plain -O2, Xeon W3690 @ 3.47 GHz) gave average slowdown 1.93x, median 1.86x, range 1.12x (462.libquantum) to 3.79x (400.perlbench). The Memcheck 20x and Dr. Memory 10x figures in the comparison table are cited from the Dr. Memory paper, not measured on the same machine.
+
+**Known shortcoming:** The Valgrind 20x figure is quoted from the Dr. Memory paper and was not measured on the same machine; the entry is the whole llvm-project monorepo (docs now in clang/docs/AddressSanitizer.md). The google/sanitizers entry for the same tool and numbers was folded into this one.
+
+**Independent measurement:** public benchmark code
+
+**How:** Compile-time instrumentation instead of dynamic binary translation: each load/store gets an inline shadow-memory check, Shadow = (Mem >> 3) + 0x7fff8000 on x86-64, with 8 application bytes mapped to 1 shadow byte and a slow path only when the shadow byte is nonzero. The allocator surrounds blocks with poisoned redzones and holds freed memory in a poisoned quarantine; stack and globals get compiler-inserted redzones. Stopping at the first error lets the compiler emit about 5% faster and smaller code.
+
+**Use it when:**
+- CI and test runs of C/C++ code you can rebuild, where Memcheck's slowdown makes full test suites or fuzzing impractical
+- Fuzzing (libFuzzer, AFL) and long integration tests where a 1.1x-3.8x slowdown (SPEC CPU2006 range) is affordable
+- Hunting stack and global buffer overflows and use-after-return, which Memcheck does not detect
+- Linux, macOS, Android, FreeBSD, NetBSD, iOS Simulator and Windows 8.1+ builds with Clang, or GCC 4.8+
+
+**Skip it when:**
+- You need uninitialized-read detection: ASan does not do it; use MemorySanitizer or Memcheck
+- You cannot recompile the program or its libraries: bugs inside uninstrumented code are mostly missed (only intercepted libc calls are checked); Memcheck or Dr. Memory work on the binary
+- Statically linked executables (not supported) or memory-tight environments: more real memory (worse for small allocations), up to 3x stack, and 16+ TB of mapped virtual address space that breaks ulimit -v
+- Production binaries: the docs say the runtime was not built with security constraints and may compromise the executable
+
+**Integration:** compiler flag plus runtime library shipped with Clang (compiler-rt) and GCC (libasan) · Clang with compiler-rt or GCC 4.8+; llvm-symbolizer for symbolized reports · Clang/LLVM 3.1+ or GCC 4.8+ · Linux, macOS, iOS Simulator, Android, NetBSD, FreeBSD, Windows 8.1+ (Windows port less well supported); x86, ARM, PPC per the comparison page
+
+**Vs siblings:** Pick ASan over Dr. Memory, RetroWrite or Valgrind-style tools whenever you control the build: it is the fastest general detector with the broadest bug coverage of the three (stack/global OOB). Pick DoubleTake when even 2x is too much and end-of-epoch detection suffices; pick Dr. Memory or Memcheck for binaries you cannot rebuild. It is the same tool as the google/sanitizers entry.
+
+**Gotchas:**
+- Do not link with -Wl,-z,defs or -Wl,--no-undefined (link errors unless -shared-libasan); final link must go through clang/gcc, not ld
+- Clang and GCC ASan implementations are incompatible; code and runtimes from the two cannot be mixed
+- Container-overflow checks (annotated std::vector etc.) can give false positives in partially instrumented binaries; disable with ASAN_OPTIONS=detect_container_overflow=0
+- This record's id is the whole llvm-project monorepo and the catalog already has 'AddressSanitizer (google/sanitizers)' with the same numbers; the two entries describe the same tool
+
+**Status:** Actively developed inside LLVM and shipped with every Clang and GCC; Apache-2.0 WITH LLVM-exception, used as a compiler feature rather than copied code.
+
+[repo](https://github.com/llvm/llvm-project) · [benchmark](https://github.com/google/sanitizers/wiki/AddressSanitizerComparisonOfMemoryTools)
+
+##### aw-backtrace  `C++`  `ISC`  `active`  `Tier C`
+
+Async-signal-safe, crash-free DWARF (.eh_frame) backtracer from the gperftools maintainers that unwinds faster than libgcc and LLVM libunwind.
+
+**Beats:** libgcc _Unwind_Backtrace and LLVM libunwind (stack unwinders used by profilers) — On the author's recursion-test.cc microbenchmark (clang, bazel -c opt, -march=native, -fno-omit-frame-pointer, unnamed CPU), a cached aw_backtrace step costs about 9.0-9.7 ns versus 52.3-58.6 ns for glibc backtrace()/libgcc and 275.9-292.4 ns for LLVM libunwind; with the cache disabled and -fomit-frame-pointer it is 69.5-76.1 ns versus 121.9-133.6 ns and 491.8-525.2 ns. These are first-party numbers from the README with no hardware stated.
+
+**Known shortcoming:** The headline numbers are mostly cache hits: recursion-test.cc reuses the same few eval_ast call sites against a 4096-entry global seqlock cache; with the cache off the gain over libgcc is about 1.8x. The libgcc baseline is glibc backtrace(). No CPU and no clang version stated. Source SPDX is 0BSD while LICENSE is ISC.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The main lever is a single global, fixed-size (4096 entries, 8-way buckets) cache of compressed per-PC unwind info with a seqlock per bucket and second-chance eviction; lookups are load-only and nothing ever waits (a busy bucket is a miss, a contended insert is dropped), which keeps it async-signal-safe. Module lookup uses glibc's _dl_find_object instead of dl_iterate_phdr, and a fast-path parser/interpreter handles the common subset of DWARF CFI. Stack VMA bounds for validation come from the PROCMAP_QUERY ioctl (Linux 6.11+) and are cached per thread.
+
+**Use it when:**
+- Sampling CPU profilers or heap/allocation profilers that take many backtraces per second on Linux glibc x86-64 and want to drop the frame-pointer requirement.
+- Backtraces from inside signal handlers (SIGPROF, SIGSEGV crash handlers) or malloc hooks, where libgcc's unwinder can deadlock or crash on bad unwind info.
+- Hot code with recurring call sites (the cache-hit case): about 9 ns per frame versus about 53-59 ns for glibc backtrace() through libgcc in the author's microbenchmark.
+- Codebases already using gperftools, which vendors it and exposes it through its existing stack-trace APIs.
+
+**Skip it when:**
+- Non-Linux or non-glibc systems (musl, macOS, Windows), or glibc older than 2.35: _dl_find_object is required; i386, RISC-V and 32-bit ARM are planned but not supported.
+- Programs that dlopen and dlclose plugins: only modules present at startup (main binary, LD_PRELOAD, initial DT_NEEDED) are cached, so frames in later-loaded code take the slower uncached path.
+- Builds that already keep frame pointers and only need plain PCs: the README's own trivial frame-pointer backtracer is about 10x faster (about 0.6-1.2 ns per frame).
+- Projects that need a stable API/ABI or a CMake/make install: version 0.0.1, first public release 2026-09-01, Bazel-only build, API explicitly pre-release.
+- Exception unwinding: it only captures backtraces and does not replace the _Unwind_RaiseException personality machinery.
+
+**Integration:** static lib (Bazel module aw-backtrace 0.0.1) or source-drop; also vendored inside gperftools · none for the core library (glibc 2.35+); abseil, googletest and lua are dev-only dependencies for tests and perf-convert · C++20 (author says C++17 is possible on request), GCC or Clang; Bazel build · Linux glibc 2.35+ on x86-64 (main focus) and aarch64 (less tested); best performance with Linux 6.11+ PROCMAP_QUERY, otherwise falls back to reading /proc/pid/maps
+
+**Vs siblings:** Pick it over the ClickHouse libunwind stack-trace cache when you want a standalone, async-signal-safe unwinder you can link without forking LLVM libunwind; ClickHouse's patch is the better reference if you must keep the libunwind API or need exception unwinding. Tools such as Tracy, bytehound or heaptrack ship their own unwinding; aw-backtrace is the component you would build such a profiler on.
+
+**Gotchas:**
+- The headline numbers come from recursion-test.cc, which unwinds the same handful of eval_ast call sites over and over, so nearly every lookup hits the cache; with the cache off (-DTESTING_NO_CACHE) it is about 28.6-29.4 ns per frame with frame pointers and about 70-76 ns without, versus libgcc's about 122-134 ns (about 1.8x faster).
+- The libgcc baseline is glibc backtrace() (which goes through libgcc's _Unwind_Backtrace) and the LLVM libunwind baseline is the same binary with LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libunwind.so.1; no CPU model or clang version is given, and timing uses clock() over 10240 iterations.
+- Without PROCMAP_QUERY (kernels before 6.11) VMA bound discovery reads /proc/pid/maps, which the README says is slower and scales poorly with the number of VMAs.
+- Source files carry SPDX 0BSD headers while the LICENSE file is ISC; both are permissive. The author discloses that Gemini and Claude helped write and review the code.
+
+**Status:** Active (72 commits, last on 2026-09-25, no issues filed yet) and ISC/0BSD-licensed, so it can be copied, but it is a 0.0.1 pre-release with an unstable API and a Bazel-only build.
+
+[repo](https://github.com/gperftools/aw-backtrace) · [benchmark](https://github.com/gperftools/aw-backtrace/blob/master/README.md)
+
+##### ClickHouse libunwind stack-trace cache (llvm-project fork)  `C++`  `Apache-2.0 (ClickHouse); the libunwind fork is under Apache-2.0 WITH LLVM-exception (not rechecked)`  `active`  `Tier C`
+
+ClickHouse's patched LLVM libunwind with a lock-free per-IP cache of decoded DWARF rules; 4.8-7.3x faster repeated stack traces.
+
+**Beats:** LLVM libunwind before the change (stack unwinder used by ClickHouse's sampling profiler) — First-party before/after in ClickHouse PR #122834, using Google Benchmark (src/Common/benchmarks/stack_trace.cpp) against the previous LLVM libunwind in the same fork, on a Ryzen 9 7950X3D and a Graviton4. Repeated stacks: 8594 to 1351 ns (x86-64) and 22480 to 3093 ns (AArch64) per 45-frame capture. Throw/catch at depth 16: 4.76x and 5.81x. Cache-miss call sites: 1.18x and 1.10x. Signal-handler samples: 1.41x and 1.82x. The compiler and flags are not stated.
+
+**Known shortcoming:** The cache is a 4096-slot direct-mapped seqlock table that is never invalidated and assumes no code unloading. The cached path (applyCachedRule, DwarfInstructions.hpp line 297) calls getRegister(returnAddressRegister) without a range check, so a malformed CIE aborts the process; the PR's AI reviewer flagged it and it is still in the merged code. The repo id is the whole ClickHouse monorepo, the code lives in the ClickHouse/llvm-project fork.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Stock libunwind finds and interprets each frame's FDE twice per step (once for the proc info, once to compute the caller's registers). The fork stores the result in a static, direct-mapped table of 4096 slots keyed by instruction pointer (Fibonacci hashing; return addresses and plain IPs get distinct keys). Each slot is a seqlock: a lookup that races a write misses, and a racing insert is dropped. There are no locks or allocation, so it is safe in signal handlers. A hit copies only the half of the compact rule (saved registers, CFA register and offset) that the caller needs and applies it with a short applyCachedRule path. getReg also short-circuits IP and SP instead of going through the non-inlined getRegister switch.
+
+**Use it when:**
+- You already build against LLVM libunwind on Linux x86-64 or AArch64 and capture stack traces on every exception or log event (repeated call stacks: 6.4-7.3x per 45-frame capture).
+- Exception-heavy C++ servers where throw/catch cost is dominated by unwinding (4.8-5.8x at depth 16 in the PR's microbenchmark).
+- In-process sampling profilers that unwind from a signal handler and need a lock-free, allocation-free unwinder (1.4-1.8x per sample at depth 0).
+- Processes that never dlclose code, as in ClickHouse, which stubs dlopen/dlclose.
+
+**Skip it when:**
+- Programs that unload shared objects or JIT and free code: entries are never invalidated, so a reused address can return a stale rule. The PR says a general-purpose unwinder would need dlclose hooks.
+- Mostly-unique stacks: with call sites that miss the cache the gain is only 1.10-1.18x.
+- macOS, Windows, 32-bit or other architectures: the cache compiles out there (Apple is excluded on purpose because frameworks can unload).
+- Toolchains on libgcc's unwinder or nongnu libunwind: it is a patch to the LLVM libunwind sources, not a drop-in library.
+- Memory-tight processes: the table adds 0.72 MiB of .bss on x86-64 and 1.12 MiB on AArch64.
+
+**Integration:** source-drop · none beyond libunwind itself (vendor libunwind/src from ClickHouse/llvm-project; DwarfRuleCache.hpp, edits to UnwindCursor.hpp, DwarfInstructions.hpp, DwarfParser.hpp, config.h) · not documented (ClickHouse builds with recent Clang; the code uses __atomic builtins and constexpr) · Linux x86-64 and AArch64 (ELF, dl_iterate_phdr); everywhere else the code is byte-identical to the baseline
+
+**Vs siblings:** Choose it over aw-backtrace when you need full DWARF unwinding (exceptions, code without frame pointers) inside LLVM libunwind rather than a separate frame-pointer backtrace library. aw-backtrace's cache-hit unwind step (about 9-10 ns) is cheaper but covers only backtraces. Unlike Tracy or Perforator, this is not a profiler; it lowers the unwind cost that such profilers and exception handling pay.
+
+**Gotchas:**
+- Rules are cached only for FDEs in loaded modules and are never invalidated; the design depends on code never being unloaded.
+- Direct-mapped with 4096 slots: a colliding insert overwrites the slot, so deep or very varied stacks thrash it. Rules that need DWARF expressions, or that save more than 12 registers (24 on AArch64), are never cached.
+- In the merged code (3807b16), applyCachedRule calls registers.getRegister(rule.returnAddressRegister) without the range check, while the uncached path skips an out-of-range return-address register. A malformed CIE could therefore abort the process (_LIBUNWIND_ABORT 'unsupported x86_64 register') once the rule is cached; an AI reviewer flagged this on PR #122834. It affects only bad unwind info and does not change the measured numbers.
+- On AArch64, frames with return-address signing (PAC) or MTE tagging go through the slower expandRule plus applyRule path even on a cache hit.
+
+**Status:** Merged 2026-10-01 into ClickHouse master (26.10) and actively maintained as part of ClickHouse. Reusable only by vendoring the Apache-2.0 WITH LLVM-exception libunwind sources from ClickHouse/llvm-project and keeping its no-unload assumption.
+
+[repo](https://github.com/ClickHouse/ClickHouse) · [benchmark](https://github.com/ClickHouse/ClickHouse/pull/122834)
+
+##### funtrace  `C++`  `BSD-2-Clause`  `stale`  `Tier C`
+
+Small flight-recorder function call tracer for C/C++ on x86-64 Linux; author reports 4.5-18x lower per-call cost than XRay and uftrace.
+
+**Beats:** LLVM XRay and uftrace function tracers (not perf, gprof or Valgrind) — The author's own microbenchmark gives under 10 ns per instrumented call or return, 6x faster than an LLVM XRay flight-recorder-logging microbenchmark, 15-18x faster than XRay basic logging and 4.5x faster than uftrace; the README gives no hardware, compiler version or harness, and the repo's simple-example/run.sh runs only funtrace's own four builds, not the XRay/uftrace comparison.
+
+**Known shortcoming:** Thread-exit bug (not on the hot path): current_time_ms() calls cpu_cycles_per_second() every time instead of using the cached cpu_freq. When CPUID 0x15 gives no frequency it runs popen('dmesg | grep ...') and may usleep 100 ms, holding the global mutex on each thread exit and in the GC thread; likely cause of open issue 4 (a 32 ms run becomes 5500 ms, with pauses at pthread_join), though that cause is the enricher's inference and the issue is unanswered. The per-call ns numbers are not affected. Hot path: masked thread_local pointer, 16-byte {ptr, rdtsc} store.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The hook is a few instructions: load the thread_local write pointer, AND it with a wraparound mask (the buffer is aligned to twice its size so clearing one bit wraps it, and a zero mask disables tracing with one branch), store a 16-byte {code pointer | flag bits, rdtsc} entry, bump the pointer. There is no locking, no formatting and no syscalls on the hot path, the runtime lives in the executable so TLS access is a register+offset, and the -pg hooks are hand-written assembly that avoid clobbering argument registers. Decoding and symbolization are deferred to the offline funtrace2viz.
+
+**Use it when:**
+- Debugging tail-latency outliers in a C++ server: time each request with funtrace_time() and keep a snapshot of the slowest one.
+- You can rebuild the program with instrumentation flags and want a full call timeline per thread rather than perf's averaged samples.
+- You want to read trace data out of a core dump to see what each thread did just before a crash.
+- Counting exact call frequencies with the bundled funcount (about as fast as funtrace, thread-safe unlike gprof) to decide what to exclude.
+- You need a tracer small enough to audit or port (about 1K LOC runtime, BSD-2-Clause).
+
+**Skip it when:**
+- You cannot recompile, or need to trace a plugin or Python extension loaded by an uninstrumented host: the runtime must be linked into the executable.
+- Non-x86-64 or non-Linux targets: the hot path uses __rdtsc and the docs cover x86/Linux only.
+- Programs that create and destroy many threads: thread exit takes a global lock (documented), and open issue #4 reports a program going from 32 ms to 5500 ms with pauses on pthread_join.
+- Sampling-style whole-program CPU profiles: without culling short hot functions (NOFUNTRACE, -funtrace-instr-thresh) the overhead of tracing every call is large and the 1 MB per-thread buffer covers only about 16K recent calls.
+- Statically linked libstdc++ is not handled by the exception hooks (open issue #5 proposes -Wl,-wrap flags).
+
+**Integration:** source-drop (funtrace.cpp, funtrace_pg.S, funtrace.h) plus compiler wrapper scripts and a Rust decoder · none at runtime beyond pthreads; decoder built with Rust (or prebuilt release); viztracer for viewing · stock gcc or clang; XRay shared-library support needs clang with -fxray-shared (late 2024); program must be linked as C++ · x86-64 Linux
+
+**Vs siblings:** Pick it over Tracy or Palanteer when you want automatic per-function tracing from compiler hooks instead of manual zones, and over magic-trace when you are not on Intel PT hardware or want snapshots triggered from inside the program; bpftime targets uprobe-based instrumentation without recompiling.
+
+**Gotchas:**
+- Likely cause of the open slowdown issue, found in funtrace.cpp: current_time_ms() divides by cpu_cycles_per_second() on every call instead of the cached cpu_freq. When CPUID leaf 0x15 gives no frequency (ECX=0), that function runs popen("dmesg | grep ..."), and if dmesg yields nothing (restricted dmesg) it sleeps 100 ms; this happens on each thread exit while holding the global mutex, and in the GC thread. The per-call hot path is not affected.
+- Tail-call artifacts with gcc -pg and XRay, and 'everyone returned' artifacts when an untraced function catches an exception, except with gcc -finstrument-functions.
+- gcc -pg mode cannot link shared objects with -Wl,--no-undefined, and passing -pg to the linker makes the program write gmon.out.
+- The -funtrace-instr-thresh / no-trace filters post-process compiler assembly text heuristically; the author flags this as hacky for production. Trace entries can be out of order or missing near the buffer wrap because writeout is racy.
+
+**Status:** Stale since 2025-03-23 with two open, unanswered issues (#4 slowdown, #5 static libstdc++), but BSD-2-Clause and small enough to vendor and patch.
+
+[repo](https://github.com/yosefk/funtrace) · [benchmark](https://github.com/yosefk/funtrace)
+
+##### magic-trace  `OCaml`  `MIT`  `active`  `Tier C`
+
+Intel PT tracer recording every function call at about 40 ns resolution, with 2-10% overhead, below perf -g call-graph sampling.
+
+**Beats:** perf -g (and perf sampling flame graphs) — The project wiki (first-party, no benchmark code, CPU model or workload named) says traced applications run 2-10% slower, mostly near 2%, with a ~10 us stall per snapshot, and that overhead is lower than perf -g and higher than perf -glbr. The perf comparison is qualitative only; the ~40 ns resolution comes from the README.
+
+**Known shortcoming:** Intel PT snapshot tracer, not embeddable C++ code. Linux only, Skylake or newer, no AMD or ARM, most VMs excluded, exceptions unsupported. 42 open issues, including perf parse breakage (324, 311, 283) and multi-thread trouble (236, 274). The perf -g comparison is qualitative only.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Intel PT has the CPU write a compressed branch trace to memory in hardware, so there is no per-call instrumentation and no interrupt-driven stack walk like perf -g's frame-pointer or DWARF unwinding. magic-trace drives perf in snapshot mode and only decodes the ring buffer when a trigger fires, so the steady-state cost is mainly memory bandwidth (hundreds of Mbps) and each snapshot stalls the app for about 10 us. Timing resolution is configurable, trading detail for lower bandwidth.
+
+**Use it when:**
+- Tail-latency hunting in production: put a stop-indicator call where a request or scheduler cycle runs long, and see every call that led up to it.
+- Short functions (tens of ns to a few us) that a sampling profiler never catches, for example the 70 ns case in the README testimonials.
+- Native C, C++, Rust or OCaml binaries on bare-metal Intel Skylake-or-newer Linux hosts (tested on Skylake, Ice Lake, Tiger Lake).
+- Pre-crash history: snapshot at program exit to see the last milliseconds of control flow, not just the final stack.
+
+**Skip it when:**
+- AMD, ARM or non-Linux machines, and most VMs (KVM with kernel 5.0+ needed for guests): Intel PT only.
+- Whole-run aggregate profiles or flame graphs over minutes: it only keeps a ~10 ms window per snapshot; use perf record or a sampling profiler.
+- Memory-bandwidth-bound workloads: PT output competes for bandwidth, and saturation leads to paused tracing and decode errors.
+- Code paths that rely on exceptions (unsupported per the platforms wiki), or Python beyond its C frames.
+
+**Integration:** prebuilt binary or .deb (OCaml source, built with dune) · Linux perf with Intel PT support (perf 5.4+ for snapshot on exit, 5.5+ for better kernel tracing); kernel 3.10+; root for -trace-include-kernel · none to use (release binary); building needs OCaml per the wiki build instructions · Linux x86-64 on Intel Skylake or newer (Broadwell works with ~1 us resolution); no AMD or ARM
+
+**Vs siblings:** Pick it over Tracy or funtrace when you cannot add instrumentation or recompile and need every call in a short window; pick Tracy or funtrace for full-run timelines with explicit zones, or Coz when the question is which code to optimize for end-to-end throughput.
+
+**Gotchas:**
+- The tracee pauses about 10 us per snapshot, so trigger after the user-visible work finishes, as the wiki advises.
+- Decode errors usually mean PT saturated memory bandwidth; lowering timing resolution reduces overhead.
+- Fragile against perf output format changes: open issues include perf parsing exceptions (#324, #311, #257) and a perf-version cpu-clock incompatibility (#283).
+- Kernel frames show as '[untraced]' unless run as root with -trace-include-kernel; Docker containers can break symbol lookup through /proc/pid/exe (#307).
+
+**Status:** Actively maintained by Jane Street (MIT, 6.3k stars, last commit 2026-05-29), shipped as release binaries; usable as a tool, not as code to embed in a C++ project.
+
+[repo](https://github.com/janestreet/magic-trace) · [benchmark](https://github.com/janestreet/magic-trace/wiki/Overhead)
+
+##### MicroProfiler (micro-profiler)  `C++`  `MIT`  `active`  `Tier C`
+
+Low-overhead real-time instrumenting C/C++ profiler; README chart shows 6-7x less slowdown than AQtime and the VS instrumenting profiler.
+
+**Beats:** AQtime Performance Profiler and Visual Studio Instrumenting Profiler (instrumenting profilers) — A first-party README chart shows 7-Zip compressing at 3,140 KB/s unprofiled, 840 KB/s under MicroProfiler, 135 KB/s under AQtime and 116 KB/s under the Visual Studio instrumenting profiler (about 6.2x and 7.2x faster than those profilers, 3.7x slower than unprofiled, derived from page data); 7-Zip version, input, compiler flags and CPU are not documented.
+
+**Known shortcoming:** The README chart has no methodology and the profiler is still 3.7x slower than an unprofiled run (derived). Open VS2022 freeze and deadlock issues (83, 85, 86, 87) and negative times (57); buffers_queue::flush blocks the profiled thread when the analyzer lags.
+
+**Independent measurement:** first-party chart
+
+**How:** The enter/exit hooks (_penter/_pexit or __cyg_profile_func_enter/exit, hand-written assembler on MSVC x86/x64) only append a (timestamp, callee) record into a per-thread buffer; a per-thread shadow return stack handles nesting and tail calls. Full buffers are handed through a lock-free circular queue to a separate analyzer thread that aggregates statistics, so the profiled thread never builds call trees itself (the v1.7 queue rewrite cut atomic bus-locking about 250x and overhead by up to 35% x86 / 42% x64). A start-up calibration times instrumented vs plain empty calls and subtracts the measured per-call overhead from reported times.
+
+**Use it when:**
+- Windows/MSVC C++ applications that must stay interactive while profiled (GUI, games, servers) where AQtime or the VS instrumenting profiler make them unusable
+- You want exact call counts and per-function inclusive/exclusive times live, without recording and post-processing large trace files
+- Profiling a selected subset of translation units: add /GH /Gh (or -finstrument-functions) only to the .cpp files of interest
+- Remote profiling of a Linux or Windows process from a frontend on another machine over sockets
+- Legacy targets: the README says it runs on Windows XP and supports Visual Studio 2005 onward
+
+**Skip it when:**
+- Overall overhead still matters: on the README's 7-Zip chart throughput drops from 3,140 KB/s to 840 KB/s (about 3.7x slower, derived from page data); sampling profilers (perf, VTune, Tracy sampling) cost far less on call-heavy code
+- Code dominated by tiny non-inlined functions, where hook cost dominates and times can come out distorted or negative (open issue #57; issue #64 opened to discuss instrumentation distortion)
+- Builds you cannot recompile; the 'Profile Process...' attach mode needs /hotpatch and /functionpadmin or -fpatchable-function-entry builds and was labelled very beta
+- Teams on recent Visual Studio 2022: open issues report freezes on attach (#86), non-working context menu (#83), build failure on VS 2022 17.4 LTSC (#85) and a deadlock at start (#87)
+- You need a timeline/trace view of individual events; it aggregates statistics (flat list plus callstack view since v2.0.651) rather than recording a frame timeline like Tracy
+
+**Integration:** shared lib · none at runtime (collector DLL/.so plus debug symbols); building from source needs MSVC 2010+ and the Visual Studio SDK on Windows, CMake/conan files are present for other builds · MSVC 2010+ (/GH /Gh); GCC or Clang with -finstrument-functions on Linux; VS integration for Visual Studio 2005-2022 · Windows x86 and x64 (XP and later), Linux collector; frontend also builds on macOS
+
+**Vs siblings:** Pick it over Tracy when you want automatic per-function statistics for every function in chosen files without adding zone macros, and over funtrace when you need live aggregated statistics in a Visual Studio pane on Windows rather than a trace file; pick funtrace or Tracy when per-call cost (under 10 ns or 2.25 ns per zone documented there) or timelines matter more.
+
+**Gotchas:**
+- When the analyzer thread falls behind and no empty trace buffer is free, buffers_queue::flush() blocks the profiled thread until one is returned, so overhead can spike under heavy call rates
+- On Linux some binaries do not bind the hook functions; the README says to run with LD_PRELOAD=<profiler .so> and to set LD_LIBRARY_PATH to the collector directory
+- calls_collector.cpp must be compiled without SSE/SSE2 code generation (comment in the source) if you build it yourself
+- Windows services or other-user processes need the MICROPROFILERFRONTEND="sockets|127.0.0.1:6100" environment variable and the profiler directory on the system PATH
+
+**Status:** Active (last commit 2026-03-16, latest release v2.0.651) and MIT-licensed, but 18 open issues include several Visual Studio 2022 freezes and integration failures.
+
+[repo](https://github.com/tyoma/micro-profiler) · [benchmark](https://github.com/tyoma/micro-profiler/blob/master/README.md)
+
+##### Tracy Profiler  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+Hybrid instrumentation plus sampling frame profiler for C/C++ with nanosecond rdtsc timestamps and a remote GUI; no measured win over perf, gprof or Valgrind.
+
+**Beats:** No perf, gprof or Valgrind comparison; manual compares profiled versus unprofiled run only — First-party manual table: etcpak compressing a 16384x16384 image on 12 threads with the 4x4 block function instrumented (16777216 zones per image) took 110.9 vs 148.2 ms (ETC1) and 212.4 vs 250.5 ms (ETC2) clean versus profiled, which the manual reports as 2.25 ns per zone; compiler, flags and CPU are not stated and no other profiler was measured. Because the division uses wall time across 12 parallel threads, the per-thread cost is closer to 27 ns per zone (derived from page data), consistent with an independent 28-29 ns report.
+
+**Known shortcoming:** No external baseline: the manual compares only profiled against unprofiled runs (2.25 ns per zone, etcpak); the overhead table names no CPU or flags. Kept as a notable project (16.9k stars, BSD-3-Clause).
+
+**Known shortcoming:** The manual's 2.25 ns per zone divides a wall-time difference (37.7 ms) by 16,777,216 zones while 12 threads run in parallel; the real per-thread cost is about 27 ns per zone (derived from page data), matching issue 192 (28-29 ns per span on a Ryzen 9 3950X, GCC 9.3 -O3). The headline is overstated about 12x. Issue 775 (ON_DEMAND static TracyLockable deadlock, closed); events are buffered without bound until the viewer connects.
+
+**Independent measurement:** first-party manual and issue
+
+**How:** Each zone begin/end writes a 32-byte item into a thread-local 128-item queue buffer with an inline rdtsc timestamp and a pointer to a static source-location struct; the manual's x64 listing shows about 20 instructions and no locks on the hot path. Heavy work (string resolution, compression, symbol lookup) is deferred to a background thread and to the server, which also reduces network bandwidth.
+
+**Use it when:**
+- Games and other frame-based real-time apps where you need to see which frame stuttered and why, across threads, not just aggregate hot spots
+- Native C/C++ (also C API, Lua, Python, Fortran) code you can rebuild with TRACY_ENABLE and zone macros
+- Profiling on a remote or mobile device (Android, iOS, consoles via platform layer) with the viewer on a desktop
+- Correlating CPU zones with GPU work, lock contention, allocations and context switches in one timeline
+- Long captures with millions of zones where per-event cost of tens of ns is acceptable
+
+**Skip it when:**
+- You cannot rebuild or annotate the binary and only want whole-program sampling: perf or a pure sampler needs no build change
+- Very fine-grained zones (sub-100 ns functions) where an event cost of roughly 25-30 ns per zone (issue #192; derived figure below) distorts what you measure
+- Virtual machines or cloud instances: the manual warns of reduced timestamp precision and missing invariant TSC
+- macOS/iOS: the manual says the overhead is higher, TRACY_NO_EXIT is unsupported and OpenGL cannot be profiled
+- Hard limits matter: 65534 source locations, 64 threads per lock, 1.6-day sessions, 16 million unique call stacks, little-endian 48-bit address space only
+
+**Integration:** source-drop (add public/TracyClient.cpp, or CMake/Meson target Tracy::TracyClient as static or shared lib); viewer is a separate CMake-built app · client: none beyond pthread and libdl on Unix (libexecinfo on BSD; optional libunwind, libdebuginfod); server build needs network and git at CMake configure time to fetch its libraries · C++11; MSVC, GCC or Clang (MSVC Edit and Continue /ZI must be off) · Windows (x86, x64, ARM64), Linux (x86, x64, ARM, ARM64), Android, FreeBSD, WSL, macOS x64, iOS, QNX; x86 needs invariant rdtsc (Sandy Bridge or later); little-endian only
+
+**Vs siblings:** Pick Tracy over Palanteer or MicroProfiler when you need GPU zones, broad platform coverage and a mature viewer; pick funtrace when you want automatic function-level tracing under 10 ns per call, and magic-trace or perf when you cannot add instrumentation.
+
+**Gotchas:**
+- The manual's 2.25 ns per zone is wall-clock difference divided by zones while 12 threads ran in parallel; per-thread cost is about 12x that, roughly 27 ns per zone (derived from page data), which matches the 28-29 ns per span a user measured on a Ryzen 9 3950X with GCC 9.3 -O3 -flto -march=native (issue #192, open, rdtsc about 70% of time).
+- Without TRACY_ON_DEMAND the client buffers all events in memory until a viewer connects and never releases that memory (can reach gigabytes); on-demand mode adds bookkeeping cost per event.
+- TRACY_ENABLE must be defined for every translation unit; TRACY_ENABLE=0 still enables it because only definedness is checked.
+- ON_DEMAND with a static TracyLockable deadlocked during static initialization (issue #775, closed); the client also listens on all interfaces and broadcasts on the LAN by default (TRACY_ONLY_LOCALHOST, TRACY_NO_BROADCAST).
+
+**Status:** Very actively maintained (commits in October 2026, 16.9k stars), BSD-3-Clause and copyable; the master branch is the development line with no stability guarantee, so pin a release tag and keep client and viewer versions matched because the network protocol changes between releases.
+
+[repo](https://github.com/wolfpld/tracy) · [benchmark](https://github.com/wolfpld/tracy/blob/master/manual/tracy.tex)
+
+##### wallClockProfiler  `C++`  `Public-Domain (no_copyright.txt)`  `active`  `Tier C`
+
+Single-file C++ 'poor man's profiler' that drives GDB to sample wall-clock stacks, with far less slowdown than callgrind.
+
+**Beats:** Valgrind callgrind — First-party README: on the author's single-threaded fseek-heavy test program (source in testProgram/), sampling at 20 Hz slowed it by about 12%, while valgrind --tool=callgrind --collect-systime=yes ran it 11x slower (160 s vs 14 s). The callgrind output shows an i386 eglibc 2.19 system; CPU, compiler flags and repeat counts are not given.
+
+**Known shortcoming:** Samples the current thread only (issue 7) and misses disk I/O in D state (issue 12: 2 samples against about 90 expected), which weakens the wall-clock claim; direct-run mode picks its target via the first pidof PID. Test program source is in testProgram/.
+
+**Independent measurement:** code reading by enricher
+
+**How:** It does not instrument or emulate the program: the target runs natively and is stopped only at each sample. The loop is usleep(1e6/rate), then -exec-interrupt or kill(pid, SIGINT), -stack-list-frames over GDB's MI interface, then -exec-continue. Overhead therefore scales with the sampling rate rather than with instructions executed, which is why it is far cheaper than callgrind's dynamic binary translation.
+
+**Use it when:**
+- Single-threaded Linux programs whose time goes to blocking calls (seeks, sockets, sleeps, lock waits) that on-CPU profilers such as perf or gperftools attribute badly.
+- Short-term sampling of a live process that GDB can attach to (often needs root), e.g. a few hundred samples from a loaded server.
+- Machines where only g++ and gdb are available: one .cpp file, built with plain g++, no other dependencies.
+- Low sampling rates (around 20 Hz) when you are hunting one dominant hotspot; the author reports 12% slowdown at that rate.
+
+**Skip it when:**
+- Multithreaded programs: it lists frames for the current thread only (open issue #7, 'It doesn't work for multithreading').
+- Disk-bound code in uninterruptible sleep: GDB cannot stop a process in D state, so those intervals get few or no samples (open issue #12 saw 2 samples instead of about 90 for a 900 ms 1 GB read at 99 Hz).
+- High-rate or low-overhead production profiling: every sample is a full ptrace stop plus a GDB MI round trip; perf-style or eBPF samplers cost far less per sample.
+- When you need exact call counts or instruction-level cost: the output is a sample histogram, not callgrind-style exact counts.
+
+**Integration:** source-drop · gdb on PATH (run with --interpreter=mi), pidof, POSIX/Linux headers · any g++ (README: g++ -o wallClockProfiler wallClockProfiler.cpp); no standard version stated · Linux (fork/pipe/kill, pidof, GDB); other platforms not documented
+
+**Vs siblings:** Pick it over magic-trace or Coz when you have only gdb and g++ on a box, want blocking time attributed to call stacks, and the target is single-threaded. magic-trace (Intel PT, 2-10% overhead) and Coz (causal estimates for multithreaded code) are stronger tools when their requirements are met.
+
+**Gotchas:**
+- In direct-run mode it finds the target with pidof <name> and takes the first PID printed, so another process with the same name can be picked.
+- The real sample rate is below the requested one: the interval is usleep plus the GDB interrupt/stack/continue round trip, not a fixed timer.
+- The target sees SIGINT on each sample in direct-run mode; programs with their own SIGINT handlers or other signals need --ignore= (added in December 2025 and February 2026 commits).
+- Per-function totals add a stack's count once for every frame naming that function, so recursive functions can show more than 100%.
+
+**Status:** Lightly maintained (last commits 2026-02-10, merging signal-ignore PRs; five issues open, including multithreading and D-state sampling) and public domain via no_copyright.txt, so the single file is easy to vendor.
+
+[repo](https://github.com/jasonrohrer/wallClockProfiler) · [benchmark](https://github.com/jasonrohrer/wallClockProfiler)
+
+##### bytehound  `Rust`  `Apache-2.0 OR MIT`  `abandoned`  `Tier D`
+
+LD_PRELOAD heap profiler for Linux recording every allocation with full backtraces, positioned as a cheaper heaptrack/massif alternative.
+
+**Beats:** heaptrack and Valgrind massif/DHAT — No measurement exists: the README only says its custom unwinding makes it 'a lot cheaper than other similar tools, potentially up to orders of magnitude faster in some cases', without naming a baseline, hardware or workload. The heaptrack/Valgrind comparison comes from the author's Hacker News comments (search snippets only), and issue #55 asking for a heaptrack comparison has no answer.
+
+**Known shortcoming:** Still no numbers anywhere; issue 55 (heaptrack comparison) is unanswered. Open crash issues 93, 114 and 131. Toolchain pinned to nightly-2022-10-13. Program allocations still go to glibc with a tracking id appended; mimalloc is used only for the profiler's own internals. Rust, not C++.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The speed claim rests on custom unwinding from koute's not-perf crates (nwind): per-thread and global backtrace caches deduplicate stacks (16384 and 327680 entries by default), and a 'shadow stack' mode, on by default, is described as a more intrusive, faster unwinding algorithm; turning it off 'will on average significantly slow down unwinding'. Allocations are still served by the real glibc (or jemalloc) allocator with a small tracking id appended to each block, and the profiler's own memory comes from a vendored mimalloc. The 0.10.0 release notes say CPU overhead on allocation-heavy multithreaded programs dropped by up to about 80%, but no comparison against heaptrack or Valgrind is published.
+
+**Use it when:**
+- Finding leaks, peak-memory culprits, temporary-allocation churn or fragmentation in C, C++ or Rust programs on Linux without recompiling
+- Long-running services, using MEMORY_PROFILER_CULL_TEMPORARY_ALLOCATIONS to keep only allocations that live longer than a threshold (default 10 s)
+- Profiling on memory-constrained targets (AMD64, ARM, AArch64, MIPS64) by streaming data to another machine
+- Rust programs using the jemallocator crate on AMD64, which heaptrack-style malloc hooks miss
+- When you want scriptable analysis (Rhai) or want to export into the heaptrack GUI
+
+**Skip it when:**
+- If you need a measured overhead guarantee: the project publishes no numbers against heaptrack, massif or DHAT
+- macOS, Windows or any non-Linux target
+- When you need a maintained tool: last commit 2023-07-28, 44 open issues including segfaults under LD_PRELOAD (#93), aarch64 unwind-table failures (#114) and infinite recursion when glibc's __tls_get_addr calls malloc (#131, 2025)
+- Programs that fork without exec, or that rely heavily on longjmp/setjmp: child tracking after fork is a reported problem (#80) and longjmp is only partially supported
+- Very long full-detail captures: data files can exceed RAM at analysis time and the strip subcommand itself can run out of memory (#113)
+
+**Integration:** shared lib · Building needs GCC, Rust nightly (rust-toolchain pins nightly-2022-10-13; README says only 1.62 or newer) and Yarn for the web GUI; runtime needs only LD_PRELOAD · Rust 1.62 nightly (pinned nightly-2022-10-13) · Linux on AMD64, ARM, AArch64, MIPS64 (MIPS64 needs an out-of-tree perf_event_open kernel patch); jemalloc profiling AMD64-only
+
+**Vs siblings:** Pick it over heaptrack when you need jemalloc-aware profiling, temporary-allocation culling for multi-day runs, remote streaming or scriptable analysis; pick heaptrack (maintained by KDE) or memtrail when you want an actively maintained tool, and tracing_malloc if you need a published wall-time comparison against Valgrind.
+
+**Gotchas:**
+- Each allocation is enlarged by an internal tracking id stored at the end of the usable block, so the profiled program's memory layout and malloc_usable_size results differ from an unprofiled run.
+- The fast shadow-stack unwinder is intrusive; past releases fixed crashes from calling backtrace and from exceptions under it, and it can be disabled with MEMORY_PROFILER_USE_SHADOW_STACK=0 at a large unwinding cost.
+- By default it embeds the program binary and all loaded libraries into the output file (MEMORY_PROFILER_WRITE_BINARIES_TO_OUTPUT=1), which inflates files and can leak binaries if the .dat is shared.
+- SIGUSR1 and SIGUSR2 handlers are installed by default and will collide with programs that use those signals.
+
+**Status:** Abandoned since 2023-07-28 (last release 0.11.0) but dual Apache-2.0/MIT licensed with 4.8k stars; building needs the pinned 2022 nightly Rust toolchain.
+
+[repo](https://github.com/koute/bytehound) · [benchmark](https://github.com/koute/bytehound)
+
+##### heapusage  `C++`  `BSD-3-Clause`  `active`  `Tier D`
+
+LD_PRELOAD/DYLD_INSERT_LIBRARIES heap-error and leak checker covering a small subset of Valgrind Memcheck without CPU emulation.
+
+**Beats:** Valgrind Memcheck — Nothing was measured. The README says only that Heapusage 'has less performance impact than Valgrind' and is meant for applications that cannot run at Valgrind slowdown speed; no benchmark, compiler, flags or hardware are given.
+
+**Known shortcoming:** No numbers and no baseline comparison; the README makes only qualitative claims. Kept as a notable project (111 stars); directional only (tier D).
+
+**Known shortcoming:** Default error mode costs 2+ pages, an mprotect and a backtrace per malloc, all under one global std::mutex; it can hit vm.max_map_count and misses overflows that stay inside the 2*sizeof(void*) padding.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The program runs natively; only allocator calls are intercepted, unlike Valgrind, which runs the whole program on a synthetic CPU. Overflow and use-after-free detection use an electric-fence style page allocator: each block is page-aligned via posix_memalign with a PROT_NONE guard page right after it, and freed blocks are mprotect'ed PROT_NONE in a FIFO quarantine (default 10% of physical RAM), so bad accesses fault in hardware and are reported from a SIGSEGV/SIGBUS handler. The speed comes from not instrumenting loads and stores, not from making the allocator itself cheap: every allocation captures a backtrace() of up to 20 frames under one global std::mutex.
+
+**Use it when:**
+- Finding leaks (`-t leak`) in a large program that is too slow to run under Valgrind, on a debug build.
+- Embedded Linux on x86, amd64 or aarch64, or macOS, where Valgrind is unavailable or badly supported (it cannot run on current Apple Silicon macOS).
+- Catching heap overflows past the end of a block and use-after-free in a binary you cannot rebuild with -fsanitize=address.
+- Taking leak snapshots of a long-running process on demand with `-s SIGUSR1`.
+
+**Skip it when:**
+- Allocation-heavy or multithreaded code under the default `error` tool: each malloc costs at least two pages, two mprotect calls and a backtrace under a global mutex, so slowdown can be large and memory use can grow by orders of magnitude for small objects. No overhead numbers are published.
+- When you need uninitialized-read detection, stack or global overflow checks, or underflow (before-start) detection; Memcheck or ASan cover these and Heapusage does not ('scribble' mode only makes such bugs more likely to show).
+- Code that allocates through aligned_alloc, memalign, posix_memalign, valloc or pvalloc, or relies on malloc_usable_size; these are not intercepted.
+- When you can rebuild: ASan/LSan (about 2x slowdown) finds more bug classes with exact reports.
+- Third-party macOS apps without the get-task-allow entitlement, because DYLD_INSERT_LIBRARIES injection is refused.
+
+**Integration:** shared lib · pthread, libdl; bundled backward-cpp (MIT); optional binutils-dev (libbfd), libdw or libdwarf for file:line in stack traces · C++11, CMake 3.0+ · Linux 2.6.31+ on x86, amd64, aarch64; macOS 10.12+ (tested on macOS 15.7 and Ubuntu 24.04)
+
+**Vs siblings:** Pick it over AddressSanitizer or DoubleTake when you cannot recompile, and over Dr. Memory when you need macOS or aarch64 Linux support. For heap profiling rather than error finding, heaptrack or bytehound fit better, and tracing_malloc is the sibling with an actual measured speedup over Valgrind.
+
+**Gotchas:**
+- Guarding allocations makes many mprotect regions; large programs can hit /proc/sys/vm/max_map_count, and the tool then exits and tells you to raise it.
+- Once the quarantine (10% of RAM by default, `-q`) is full, the oldest freed blocks are really released and later use-after-free on them is no longer detected.
+- Blocks are padded to 2*sizeof(void*), so overflows of a few bytes into that padding are not caught; only accesses that reach the guard page fault.
+- Leak reports can include memory from system libraries (for example printf buffers) that would be freed at library teardown.
+
+**Status:** Actively maintained (v2.39, last commit 2026-07-12, no open issues) and BSD-3-Clause, so it is fine to use or vendor; there is no performance evidence, so treat the speed claim as directional only.
+
+[repo](https://github.com/d99kris/heapusage) · [benchmark](https://github.com/d99kris/heapusage)
+
+##### memtrail  `C`  `MIT (permission headers in memtrail.cpp, memtrail.h and the memtrail script, Copyright 2011-2019 Jose Fonseca; no LICENSE file)`  `active`  `Tier D`
+
+LD_PRELOAD heap profiler and leak finder for Linux; claims much lower overhead than Valgrind Massif or Memcheck, unmeasured.
+
+**Beats:** Valgrind Memcheck and Massif — No measurement exists: the README says only 'very little runtime overhead' and that the author's workloads ran too slowly under Valgrind's dynamic binary instrumentation. The repo's benchmark.cpp drives 262,144 4-byte allocations through random 8-deep call chains, but the `make bench` target times only `memtrail report`, not the profiled run against native or Valgrind.
+
+**Known shortcoming:** No numbers or baseline comparison anywhere, and no license file at the repo root. Kept as a notable project (89 stars); directional only (tier D).
+
+**Known shortcoming:** Still no overhead measurement: make bench times only the report step. One global recursive mutex serializes all mallocs, the per-block header is over 280 B, and the program is forced to _exit(1) past half of physical RAM.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The program runs natively instead of under dynamic binary instrumentation: only allocator calls are intercepted, by symbol interposition through LD_PRELOAD, and they forward to __libc_malloc and __libc_free. Each call captures up to 32 return addresses with libunwind (statically linked and chosen because it does not call malloc), and the events are buffered in PIPE_BUF-sized chunks and piped to a forked `gzip --fast` child, so compression runs on another core. Symbol resolution and tree building are deferred to the offline Python report step.
+
+**Use it when:**
+- Finding leaks or peak-memory call sites in long-running, CPU-heavy Linux programs that are too slow to finish under Valgrind Memcheck or Massif.
+- Unmodified binaries built with frame pointers or unwind tables, where you cannot recompile with AddressSanitizer or LeakSanitizer.
+- Mostly single-threaded or lightly threaded code with moderate allocation rates, since every event takes one global lock.
+- Taking peak and leak snapshots at chosen points in a run by calling memtrail_snapshot() from the program.
+
+**Skip it when:**
+- Highly multi-threaded, allocation-heavy servers: every malloc and free takes one process-wide recursive pthread mutex, so allocations are serialized across threads.
+- Programs with many small allocations and tight memory: each block carries a header with a 32-entry return-address array plus list links, size and pointer (over 280 bytes on x86-64), and the library stops the program with _exit(1) once tracked bytes pass half of physical RAM.
+- Bug hunting for use-after-free, overflows or uninitialized reads: it only accounts allocations; use Memcheck, AddressSanitizer or Dr. Memory.
+- Non-Linux platforms: it relies on LD_PRELOAD, glibc's __libc_malloc and PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP; the header is a no-op elsewhere.
+- Cases where you need a measured overhead figure: the README gives none, and benchmark.cpp with `make bench` only times the report step.
+
+**Integration:** shared lib (LD_PRELOAD) plus Python 3 driver script · libunwind (bundled git submodule, built static), Python 3, gzip, binutils addr2line; gprof2dot for graphs · C++17 (gnu++17), g++ by default, autotools to build the bundled libunwind · Linux with glibc; x86-64 assumed for 16-byte minimum alignment, other architectures fall back to sizeof(double) alignment
+
+**Vs siblings:** Choose it over heaptrack or bytehound when you want a small, self-contained tool with a pipe-to-gzip recorder and gprof2dot output; prefer heaptrack for multi-threaded programs (it does not serialize threads, per its README) and tracing_malloc when you want a published runtime number against Valgrind.
+
+**Gotchas:**
+- Allocations made before the library has opened its output file (for example libstdc++'s emergency pool) are marked internal and left out of totals.
+- Freed blocks that were already logged stay on a pending list until the next flush, so the process's real RSS under memtrail can stay above its native peak.
+- Allocator calls re-entered while the lock is held are marked internal and print 'memtrail: warning: recursion', so they are missing from the report.
+- Licensing: there is no LICENSE file and GitHub shows none, but memtrail.cpp, memtrail.h and the memtrail script carry MIT permission headers (Copyright 2011-2019 Jose Fonseca), so the code can be reused under those terms.
+
+**Status:** Active (commits on 2026-04-26 add tests and coverage, 188 commits, 0 open issues, 89 stars); MIT terms sit in the file headers despite the missing LICENSE file, so it is usable, but the speed claim against Valgrind is unmeasured.
+
+[repo](https://github.com/jrfonseca/memtrail) · [benchmark](https://github.com/jrfonseca/memtrail)
+
+#### thread-pools-work-stealing
+
+##### chili  `Rust`  `MIT OR Apache-2.0`  `stale`  `Tier C`
+
+Rust port of Spice: heartbeat-scheduled fork-join join() with far lower per-join overhead than rayon::join on fine-grained recursion.
+
+**Beats:** Rayon (rayon::join) — First-party divan benchmarks summing a balanced binary tree of u64 nodes: on a Ryzen 7 4800HS (8 cores), 13.6 ms vs 58.1 ms for rayon::join at 16.7M nodes and 101.8 ms vs 497.2 ms at 134M nodes; on an Apple M1, 11.2 ms vs 40.5 ms at 16.7M nodes; at 1K nodes chili beats Rayon (3.4 us vs 51.1 us) but is about 2x slower than sequential code. Rust version and flags are not stated, and Rayon is called from outside its pool.
+
+**Known shortcoming:** Open issue 39: Receiver::recv calls park() once, so a spurious wakeup can read the value early (unsoundness, not on the benchmark path). The bench calls rayon::join outside the Rayon pool (cold inject), which inflates the Rayon 1K-node figure of 51.1 us; the 134M/67M rows are not in benches/overhead.rs; the README overhead table says 1.8 ns where the main table says 1.8 us. Rust, not C++.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Heartbeat scheduling (Acar et al., the Spice design): join pushes the left job on a thread-local queue and runs the right closure directly. Only when a heartbeat flag, set by a dedicated timer thread every heartbeat_interval, is seen does the thread move its oldest queued job to a shared, mutex-protected BTreeMap that idle workers take from. The heartbeat flag is checked only on every 64th join, or when the local queue holds fewer than 3 jobs; other joins run both closures sequentially. So almost every join costs a few stack operations, with no atomic deque operations or wakeups.
+
+**Use it when:**
+- Deep recursive divide-and-conquer with very cheap leaves where you cannot easily pick a grain size (tree sums, recursive slice splits); the README's 16.7M-node tree sum runs in 13.6 ms vs 58.1 ms for rayon::join on a Ryzen 7 4800HS.
+- Code where rayon::join overhead dominates and you only need binary fork-join, not parallel iterators.
+- Workloads where single-thread overhead matters: the README reports about 2x the sequential time at 1K nodes, roughly flat from 1 to 8 threads.
+- Pure-Rust projects that accept a small crate with unsafe internals (MIT OR Apache-2.0, no runtime dependencies).
+
+**Skip it when:**
+- Small inputs where sequential code wins: at 1023 nodes chili is 0.53x (Ryzen) and 0.46x (M1) of the sequential baseline.
+- Long-running or blocking leaf work without inner joins: work is only shared at join points, so a thread stuck in a long leaf never offers its queued jobs (open issue #33, 'Why is heartbeat not preemptive?').
+- Code that needs Rayon's ecosystem (par_iter, scope, spawn, install, rayon-core compatibility); spawn(fn) (#20) and rayon-core compatibility (#12) are open requests.
+- Many-core machines with high share rates: every shared job goes through one global Mutex<LockContext>, and there is no published scaling data beyond 8 cores.
+- Production code that needs a clean soundness record: open issue #39 (June 2026) reports that Receiver::recv calls thread::park() once and then reads the result under a SAFETY comment, although park can return spuriously, so the value may be read before the sender has written it.
+
+**Integration:** crate · none (divan and rayon are dev-dependencies for benches) · Rust 2021 edition; uses std::num::NonZero (stable since Rust 1.79) · any std platform (std threads, Mutex, Condvar, park/unpark); benchmarked on x86-64 (Ryzen 7 4800HS) and aarch64 (Apple M1)
+
+**Vs siblings:** Pick chili over Spice when you are in Rust rather than Zig, since it is the same heartbeat design; pick it over Fork Union or Weave when the work is irregular recursive fork-join rather than flat parallel-for loops; the C++ deepsea-inria/heartbeat prototype is the research reference for the same idea.
+
+**Gotchas:**
+- The pool spawns available_parallelism - 1 workers plus a heartbeat thread; the calling thread is the remaining worker. Issue #21 (heartbeat thread using too much CPU while idle) was fixed in March 2025.
+- Sequential fallback order: join_seq runs b before a, so side effects in the two closures can happen in either order. The doc comment says the heartbeat check is skipped 'every 16 calls' but the code uses 64.
+- The README's overhead table gives the 1023-node baseline as 1.8 ns where the main table gives 1.8 us, and the 134M-node (Ryzen) and 67M-node (M1) rows are not in benches/overhead.rs, which only runs 10 and 24 layers (1023 and 16,777,215 nodes).
+- In benches/overhead.rs the Rayon variant calls rayon::join from the divan bench thread, outside any Rayon pool, so each iteration pays Rayon's cold inject-and-wait path; this inflates Rayon's small-tree time (51.1 us at 1023 nodes) compared with calling from inside pool.install.
+
+**Status:** Stale since May 2025 (crate 0.2.1, 721 stars) and has an open unsoundness report (#39), but it is small, dual MIT/Apache-2.0, and its core is about 1,100 lines of Rust that you can audit or vendor.
+
+[repo](https://github.com/dragostis/chili) · [benchmark](https://github.com/dragostis/chili)
+
+##### Fork Union  `C++ (also C, Rust, Zig)`  `Apache-2.0`  `active`  `Tier C`
+
+NUMA-aware fork-join thread pool for C++/C/Rust/Zig with lower parallel-for dispatch latency than OpenMP, Rayon and Taskflow.
+
+**Beats:** OpenMP, Rayon, Taskflow — The author's N-body benchmark (N=512, all logical cores, 30 s fixed window, static/dynamic) shows ForkUnion C++ at 54/86 us per step against OpenMP 115/226, Rayon 483/739 and Taskflow 666/694 on 128x Intel SPR. Connected components on a ~27M-edge graph reach 192.6/77.6 GTEPS against OpenMP 53.9/0.4 on 192x Graviton 5. Builds use -O3 and target-cpu=native with no LTO (plus -ffast-math in the C++ binary); CPU SKUs and compiler versions are not named. Taskflow graphs are built once and re-run, so its numbers are dispatch cost, not graph construction.
+
+**How:** Workers stay resident and are woken by bumping a shared fork_generation counter; the whole pool synchronizes on three atomics (stop, fork_generation, threads_to_sync) plus one private claim cursor per worker. The hot path makes no heap allocations, no syscalls and no CAS: dynamic scheduling uses per-worker fetch_add cursors that neighbours drain in coprime order, instead of Chase-Lev CAS deques. Hot variables are padded against false sharing (128-byte padding for the adjacent-line prefetcher is discussed). Idle workers wait with PAUSE/YIELD or with hardware timed waits (x86 UMONITOR/UMWAIT/TPAUSE, Arm WFET, RISC-V Zawrs) rather than futexes.
+
+**Use it when:**
+- Frequent, short data-parallel loops or bulk-synchronous rounds where fork-join dispatch overhead is a large share of the time (for example N-body at N=512: 40-54 us per step on 128x Intel SPR against OpenMP 115 and Taskflow 666).
+- Many-core and multi-socket servers (128-192 threads) where Rayon and Taskflow dispatch collapses and you want NUMA-pinned threads plus node-local memory.
+- Fine-grained dynamic scheduling with very cheap items (one-vertex claims), where OpenMP schedule(dynamic,1) and Taskflow's DynamicPartitioner fell to 0.4 GTEPS in the author's connected-components run.
+- Mixed-language codebases that need the same pool from C++, C99, Rust (forkunion crate) and Zig.
+- Memory-constrained or no-exceptions environments: no allocations or exceptions on the dispatch path.
+
+**Skip it when:**
+- Task graphs, futures, async I/O, work that outlives its scope, or nested/recursive parallelism: banned by design; the README itself points to Taskflow, Tokio or oneTBB for those.
+- Small desktop machines where the gap narrows or flips: on 24x Intel RPL Windows, Rayon roughly ties ForkUnion C++ in N-body (151/151 vs 148/143 us) and OpenMP static beats it in connected components (11.4 vs 10.0 GTEPS).
+- Rayon-style parallel iterators and reductions outside Rust: that layer is Rust-only; C++ gets only the for_* primitives.
+- When you need independently reproduced numbers: all tables are author-run, and CPU SKUs and compiler versions are not named.
+- Shared or oversubscribed machines where spin-waiting workers are unwelcome; timed hardware waits help, but the design is spin-based.
+
+**Integration:** header-only · none for the C++ header (NUMA and huge pages through kernel interfaces, no libnuma); the C API links a prebuilt static or shared library that needs the C++ runtime · C++17 for the header (C++20 adds concepts and an atomic_ref waiter); C99 for the C ABI; CMake 3.21, Rust 1.84, Zig 0.16 · Linux, FreeBSD, Windows, macOS, Android, iOS; x86-64, AArch64, RISC-V (big-endian 32-bit tested per README); NUMA memory placement only on Linux, FreeBSD and Windows
+
+**Vs siblings:** Pick it over citor, Weave or a work-stealing pool such as Thiefpool or ThunderBolt-HT when the workload is flat data-parallel loops on many-core or NUMA hardware and dispatch latency dominates; pick citor, Nowa, chili or Spice for recursive fork-join or task parallelism, which ForkUnion does not support.
+
+**Gotchas:**
+- On caller_inclusive_k pools the calling thread owes one slice that runs only inside unsafe_join or the guard's join/destructor, so polling is_complete alone never completes; on exclusive pools work starts when the guard is constructed.
+- The pool object should be declared alignas(fu::default_alignment_k), as in the README example, to keep its atomics off shared cache lines.
+- The C++ benchmark binary adds -ffast-math (the Rust build cannot), and published runs use numactl --interleave=all with OMP_PROC_BIND=spread OMP_PLACES=cores; the record's '-O3 -march=native' omits these. The kernels are hand-reassociated so the language columns stay comparable.
+- The repo is now published as ashvardanian/ForkUnion (v3.0.4, crate 'forkunion'); older docs and links use fork_union.
+
+**Status:** Actively maintained (last commit 2026-10-02, v3.0.4), Apache-2.0, used by USearch, NumKong and StringZilla; header-only and easy to vendor.
+
+[repo](https://github.com/ashvardanian/fork_union) · [benchmark](https://github.com/ashvardanian/fork_union)
+
+##### inkooboo/thread-pool-cpp  `C++`  `MIT (MPMCBoundedQueue is BSD-2-Clause, Dmitry Vyukov)`  `abandoned`  `Tier C`
+
+Header-only C++11 thread pool with per-worker Vyukov MPMC queues; reposts jobs about 20x faster than an asio io_service pool.
+
+**Beats:** boost::asio thread pool — The README shows one example run of benchmark/benchmark.cpp: 16 concurrent chains each reposting a job 1,000,001 times, 61.7-70.3 ms per chain versus 1,381.6-1,393.2 ms with an author-written boost::asio io_service pool using hardware_concurrency threads (about 20x, derived from page data); no compiler, flags, Boost version or CPU are given. The workload favours this design: a repost from a worker lands in that worker's own lock-free queue, while the asio pool funnels everything through one shared io_service queue.
+
+**Known shortcoming:** The benchmark favours the design: a repost lands in the worker's own queue while the asio pool uses one shared io_service queue. The destructor drops queued tasks (open issue 32, also 17 and 27); idle workers poll with a 1 ms sleep (20); a DLL-global deadlock (29); post() throws when the 1024-slot queue is full; exceptions are swallowed; the move constructors (*this = rhs) will not compile if used; steals only from the neighbour i+1.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each worker has its own Dmitry Vyukov bounded MPMC ring buffer (per-cell sequence numbers, one CAS per push/pop, cache-line padding), so a post from a worker thread goes to that worker's own queue with no shared lock. Posts from non-worker threads are spread round-robin with a relaxed atomic counter. FixedFunction avoids heap allocation per task. An idle worker steals one task at a time from a single fixed neighbour (worker i+1) and otherwise sleeps 1 ms.
+
+**Use it when:**
+- Many tiny fire-and-forget tasks where std::function allocation and a mutex-guarded shared queue dominate cost
+- Tasks that repost continuations from inside workers (actor-style or chained callbacks), which stay on the local queue
+- Projects that want a small, dependency-free, header-only C++11 pool they can vendor and modify
+- Callables with captures under 128 bytes (static_assert enforced) or a custom FixedFunction size via ThreadPoolImpl
+
+**Skip it when:**
+- Latency-sensitive work after idle periods: idle workers poll with a 1 ms sleep, so wake-up latency is up to ~1 ms and idle threads burn CPU (issue #20)
+- When you need every posted task to run at shutdown: the destructor stops workers immediately and drops queued tasks (open issue #32, also #17 and #27)
+- Bursty producers: the per-worker queue is bounded, and post() throws std::runtime_error when the chosen worker's queue is full
+- Fork-join or recursive divide-and-conquer workloads: no join/wait primitive and stealing is from one neighbour only; use a real work-stealing scheduler (TBB, Taskflow, libfork) instead
+- Projects needing maintenance: last commit 2018-02-06, open issues include a deadlock when used as a global in a DLL (#29)
+
+**Integration:** header-only · none (boost::asio only for the optional benchmark comparison; googletest for tests) · C++11 (CMake builds with -std=c++11) · any platform with std::thread and thread_local
+
+**Vs siblings:** Pick it over nexus or dp::thread_pool only when you need a tiny C++11-compatible, header-only fire-and-forget pool you will vendor and patch yourself; for fork-join or parallel-for, Fork Union, citor or a Taskflow/TBB-class scheduler are better documented and maintained, and nexus publishes comparisons against Taskflow and BS::thread_pool rather than an author-written asio pool.
+
+**Gotchas:**
+- All exceptions thrown by tasks are silently swallowed by a catch(...) in the worker loop.
+- Move constructors of ThreadPoolImpl, Worker and MPMCBoundedQueue are written as '*this = rhs;' with rhs a named rvalue reference, which cannot bind to the move-assignment operator; they fail to compile if instantiated, so treat the pool as non-movable.
+- Work stealing is a single ring: worker i only steals from worker i+1, one task at a time, from the FIFO end of an MPMC queue, so imbalance spreads slowly.
+- Queue size must be a power of two (>= 2) or the constructor throws std::invalid_argument; Worker::stop uses a relaxed store on the running flag.
+
+**Status:** Abandoned since February 2018 (585 stars, 127 forks, not archived) with open bugs on shutdown task loss and DLL-global deadlock, but MIT plus BSD-2-Clause and about 600 lines, so it is easy to vendor and fix.
+
+[repo](https://github.com/inkooboo/thread-pool-cpp) · [benchmark](https://github.com/inkooboo/thread-pool-cpp)
+
+##### poolSTL  `C++`  `BSD-2-Clause OR BSL-1.0 OR MIT`  `stale`  `Tier C`
+
+Header-only thread-pool implementation of the C++17 parallel algorithms; about 5x over sequential and roughly on par with TBB-backed std::execution::par.
+
+**Beats:** std::execution::par (native C++17 parallel algorithms; backing runtime not stated) — Author's Google Benchmark run on an Apple M1 Pro (6P+2E) with GCC 13 (benchmark CMake Release flags -O3 -DNDEBUG; native par from libstdc++ linked to TBB when found) on 100M-int arrays (10M shuffled ints for sort) gives about 4-5x over sequential. Against std::execution::par it ties on all_of and sort, is 1.7x faster on exclusive_scan (11.6 vs 19.8 ms), and is 10-20% slower on for_each, transform and reduce.
+
+**Known shortcoming:** Sort falls back to one sequential std::sort on runs of equal keys: the 2-way quicksort partition with a middle-element pivot cannot split them (open issue 39). The README CPU column counts only the caller thread. Native par here is TBB-linked libstdc++.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Plain static chunking: the range is split into about one chunk per pool thread (some algorithms use an extra split factor), each chunk becomes a std::future task, and results are combined on the calling thread. sort is a parallel quicksort that partitions with the middle element as pivot until leaves are about n/(2*threads), then runs std::sort on each leaf; the first partitions also run 2-way parallel (partition_p2). A pairwise-merge mergesort variant also exists. Nothing is vectorised or work-stolen; the gain is ordinary multicore parallelism with low dependency cost.
+
+**Use it when:**
+- You need std::execution::par semantics on Apple Clang, libc++, Emscripten or old GCC, where native parallel algorithms are missing or need TBB.
+- You want parallel for_each/transform/reduce over large random-access ranges (millions of elements) without linking TBB or OpenMP.
+- Shipping a library that must build anywhere: single amalgamated header, C++11 minimum, CI on GCC 7+, Clang 5+, Apple Clang, MSVC, MinGW and Emscripten.
+- Sorting large arrays of mostly distinct keys, especially with pluggable_sort plus pdqsort (71.7 ms vs 113 ms for TBB-backed std::sort(par) on 10M shuffled ints in the README run).
+- Choosing parallel vs sequential at runtime by input size with par_if.
+
+**Skip it when:**
+- If native TBB-backed std::execution::par is available: in the author's own run poolSTL is slower on for_each (18.7 vs 15.3 ms), transform (17.4 vs 15.3), reduce (4.06 vs 3.38) and early-exit find_if (0.405 vs 0.230 ms), and wins only on exclusive_scan.
+- Inputs with many duplicate keys: the 2-way quicksort partition (comp(x, pivot)) cannot split a run of equal keys, so the range falls back to one sequential std::sort; open issue #39 reports single-core sorting of a 40M mostly-zero vector.
+- Nested parallelism or task graphs: the README forbids nested parallel calls and the pool has no dependencies or work stealing (see the sibling task schedulers instead).
+- Non-random-access iterators (lists, input streams): not supported.
+- Algorithms outside the implemented subset (no inclusive_scan, merge, unique and others); they are added on request.
+
+**Integration:** header-only · none (bundles alugowski/task-thread-pool); -lpthread on GCC/Clang 8 or older, -pthread on Emscripten · C++11; C++17 for exclusive_scan, transform_reduce and the other C++17-only algorithms; CI on GCC 7+, Clang 5+, Apple Clang, MSVC, MinGW, Emscripten · any platform with std::thread (Linux, macOS, Windows, WebAssembly via Emscripten)
+
+**Vs siblings:** Pick poolSTL when you want standard-algorithm syntax (std::sort, std::reduce with a policy) and portability without TBB. Fork Union, citor or dp::thread_pool are lower-overhead schedulers with their own APIs, better suited to fine-grained or nested parallelism, but none of them implement the std:: parallel algorithms.
+
+**Gotchas:**
+- In the README Google Benchmark table the CPU column for poolstl::par (for example 0.044 ms for for_each) counts only the waiting caller thread, because work runs on pool threads; compare real_time.
+- POOLSTL_STD_SUPPLEMENT is labelled 'USE AT YOUR OWN RISK! THIS IS A HACK!': it injects poolstl::par as std::execution::par when native support is missing, and POOLSTL_STD_SUPPLEMENT_NO_INCLUDE is needed to avoid pulling in <execution> (and its TBB link) where TBB is absent.
+- Quicksort pivot is the middle element without median-of-3 or 3-way partitioning, so the parallel speedup depends on the key distribution (see issue #39).
+- Open issue #40: building with GCC -Wshadow produces many warnings.
+
+**Status:** Stale since mid-2024 with two open issues, but triple-licensed (BSD-2-Clause, MIT or BSL-1.0), header-only and CI-tested on many toolchains, so safe to vendor as a portability fallback.
+
+[repo](https://github.com/alugowski/poolSTL) · [benchmark](https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/README.md)
+
+##### Scheduling (dpuyda)  `C++`  `MIT OR Apache-2.0`  `stale`  `Tier C`
+
+Header-only C++20 work-stealing thread pool and task-graph runner, under 600 lines, benchmarked faster than Taskflow on fine-grained tasks.
+
+**Beats:** Taskflow — The author's Google Benchmark run (Scheduling commit ae8a367 vs Taskflow, built from benchmarks/taskflow.cmake at v3.7.0; compiler and flags not stated; hardware reported inconsistently as an 'Intel Xeon i7-1165G7' with 32 CPUs on Debian 12) shows wall time of 1,661 ms vs 15,058 ms for recursive Fibonacci(35) and 4,158 ms vs 9,951 ms for a 33,554,432-task linear chain, but Scheduling was slower on the matrix-multiplication task graph at every size; large sizes were single-iteration runs.
+
+**Known shortcoming:** Harness flaws: the Taskflow matmul allocates 3 matrices inside the timed loop while Scheduling allocates outside (favours Scheduling, which still loses); the CPU-time column counts the main thread only; scripts/build.sh sets no CMAKE_BUILD_TYPE so flags are unknown. Undocumented races: all non-worker threads push into one owner-only Chase-Lev deque (index 0); thread_local index_ is shared by every ThreadPool; int top_/bottom_ overflow after 2^31 steals.
+
+**Independent measurement:** code reading by enricher
+
+**How:** One Chase-Lev work-stealing deque per worker (the lock-free deque copied from Google Filament, made growable with Taskflow's Array buffer) plus one extra queue for non-worker threads; the queue is chosen through a thread_local index instead of a thread-id map. When a task finishes, the first successor whose predecessor count hits zero runs inline on the same worker (continuation passing), so a linear chain never touches a queue. The recursive Fibonacci pattern uses Wait(predicate), which helps by running queued tasks instead of creating Taskflow-style subflow graphs, which is where most of the 9x gap comes from.
+
+**Use it when:**
+- Many tiny fire-and-forget tasks or recursive fork-join code on a single pool, where per-task overhead dominates (recursive Fibonacci was about 9x faster than Taskflow 3.7 subflows at n=35 in the author's run).
+- Long dependency chains or sparse DAGs of small tasks, where inline execution of the ready successor avoids queue traffic (linear chain of 33.5M tasks: 4.16 s vs 9.95 s).
+- Projects that want a tiny, readable, vendorable scheduler (one header, no dependencies) and are on C++20.
+- Statically linked binaries on Linux, macOS or Windows (CI covers GCC 13, Clang, MSVC, with TSAN/ASAN/UBSAN jobs).
+
+**Skip it when:**
+- Data-parallel loops or coarse task graphs: the matrix-multiplication task graph was slower than Taskflow at every size (2048: 4,134 ms vs 3,970 ms; 256: 8.20 ms vs 4.13 ms), and there are no built-in parallel algorithms.
+- Shared libraries or plugins: the README states dynamic linking is unsupported because of the static thread_local queue index.
+- Several threads that are not pool workers submitting concurrently, or more than one ThreadPool in a process: all non-worker threads push into the same owner-only Chase-Lev deque (index 0), and the thread_local index is shared by every ThreadPool instance, so a worker of one pool submitting to another pool pushes into that pool's queue i (racing its owner, or out of range if the second pool is smaller). Neither case is documented as safe.
+- Power- or CPU-sensitive deployments: idle workers spin through 100 steal attempts before blocking, keep spinning while any task is outstanding, and Wait(predicate) is a pure busy loop.
+- Projects needing exceptions, priorities, futures or long-term maintenance: an exception escaping a task terminates the program (no handling in Execute), there are no releases, and the last commit is from November 2024.
+
+**Integration:** header-only · none (Google Benchmark, Taskflow v3.7.0 and GoogleTest are fetched only for the benchmarks/tests) · C++20 (concepts, std::atomic wait/notify); CMake 3.21 for the bundled CMakeLists · any platform with C++20 threads and atomic wait; CI on Ubuntu (GCC 13, Clang), macOS, Windows MSVC
+
+**Vs siblings:** Pick it over nexus or ThunderBolt-HT when you need explicit dependency graphs with cancellation in one small, dependency-free C++20 header; pick Fork Union for parallel-for dispatch, and libfork, citor or Staccato when fork-join performance is the main goal and you want evidence measured against more than Taskflow.
+
+**Gotchas:**
+- Task objects in a graph must not move or be destroyed until the pool finishes them (reserve the vector first); README issue #33 reported its own graph example printing 0 for every result (closed Oct 2024) and #35 a dangling reference in an example.
+- Recursive Wait(predicate), as in the Fibonacci example, grows the stack with recursion depth; the README warns it can overflow.
+- Deque indices top_/bottom_ are std::atomic<int> while Array::Get/Put take size_t; top_ only ever increases, so a queue that sees more than about 2^31 steals in one pool lifetime overflows a signed int. Old buffers after a resize are kept until the pool is destroyed.
+- Benchmark harness asymmetries: Google Benchmark's CPU-time column counts only the main thread, so the CPU-time charts (e.g. matmul 11.9 ms vs 29.5 ms) say nothing about worker CPU use; the Taskflow matmul loop allocates the three n x n matrices inside the timed loop while the Scheduling loop allocates them once outside, which favours Scheduling yet it still loses; scripts/build.sh sets no CMAKE_BUILD_TYPE, and the README does not state the build type or flags used.
+
+**Status:** Stale (last commit November 2024, 37 commits, no releases, issue #38 about tasks_count_ accounting unanswered since November 2025), but MIT-licensed with Apache-2.0 Filament code and small enough to vendor and audit.
+
+[repo](https://github.com/dpuyda/scheduling) · [benchmark](https://github.com/dpuyda/scheduling)
+
+##### Spice  `Zig`  `0BSD`  `active`  `Tier C`
+
+Zig fork/join library using heartbeat scheduling; sub-nanosecond fork/join overhead versus Rayon's ~15 ns per join.
+
+**Beats:** Rayon (cross-language comparison) — Author's single make bench run (August 2024, commit 0b697d6, Zig 0.14.0-dev ReleaseFast versus rustc 1.77.2 with Criterion) on a Google Cloud c4-standard-16 (16 vCPUs, CPU model not stated): summing a 100M-node balanced tree took 3.93 ns/node with Spice on 1 thread against a 3.63 ns Zig baseline, and 0.36 ns at 16 threads; Rayon took 22.99 ns on 1 thread against a 7.48 ns Rust baseline, and 1.64 ns at 16 threads. On a 1000-node tree Rayon became about 60x slower than its baseline at 32 threads while Spice stayed flat. Each library is compared with its own language's baseline, and those baselines differ by 2x.
+
+**Known shortcoming:** Zig only, no C ABI. Zero tests, @panic error handling, author not developing it further. Open issue 10 (a thread waiting on a stolen slow job is not woken for new work, so the pool can degenerate) and issue 8 (O(workers) job scan under a global mutex); forked results are capped at 32 bytes. HEAD needs Zig 0.16-dev (std.Io) while the bench ran commit 0b697d6 on Zig 0.14-dev.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Heartbeat scheduling (Acar, Charguéraud, Rainey): instead of making every fork stealable, a heartbeat thread flips a per-worker atomic flag about every 100 us, and only then does the worker promote its oldest queued fork into a shared job. Between heartbeats a fork is a push onto a branch-free, sentinel-headed intrusive doubly-linked list on the stack with no atomics, and an unclaimed join is a pop plus a direct, inlinable static call, so the code compiles close to the sequential version. The heartbeat path is marked cold so it costs no registers, Task state is passed as function parameters so LLVM keeps it in registers, and coordination uses a single uncontended mutex with condition waits and no spinning.
+
+**Use it when:**
+- Recursive divide-and-conquer in Zig (tree walks, quicksort-style recursion) where each leaf does only nanoseconds of work and Rayon-style per-join overhead would dominate.
+- Code that runs on inputs of unpredictable size: on a 1000-node tree Spice stays at sequential speed instead of slowing down, because nothing gets shared before the first heartbeat.
+- Shared or busy machines where you want idle worker threads to sleep rather than spin.
+- As a reference design for building a low-overhead heartbeat scheduler in C or C++; the whole runtime is one readable file under 0BSD.
+
+**Skip it when:**
+- Production or safety-critical code: the author calls it a research project with zero test coverage, heavy use of @panic for errors, and no plans for active development.
+- Large coarse-grained workloads that need the best scaling: Rayon scaled 14x at 16 threads against Spice's 11x, because each worker shares at most one job per heartbeat.
+- Data-parallel loops over arrays or slices: there is no parallel-for or iterator API, only fork/join on recursive functions.
+- Mixes of slow and fast tasks: open issue #10 describes how a thread waiting on a stolen slow job is not woken for new work, so the pool can degenerate.
+- C++ projects that need a native library: it is Zig-only with no C ABI layer, so use from C++ means writing and exporting your own wrapper.
+
+**Integration:** module · none for the library (parg is a lazy dependency only for the example) · Current HEAD targets Zig 0.16.0-dev (uses std.Io; last commit supports 0.16.0-dev.2915); the published benchmark used commit 0b697d6 on Zig 0.14.0-dev.564 · any target Zig's std.Thread supports; benchmarked only on x86-64 Linux (and an M3 Pro anecdote)
+
+**Vs siblings:** Pick Spice over chili (its Rust port) only if you write Zig or want the original reference code; pick it over Fork Union or citor only for fine-grained recursive fork/join, since those are C++ libraries with parallel-for APIs and broader benchmarks. For C++ heartbeat scheduling the deepsea-inria/heartbeat prototype is the closest catalogued sibling.
+
+**Gotchas:**
+- Every fork must be followed by join or tryJoin, and a null result from join means you must run the work yourself; misuse is not checked and the README warns that 'weird things could happen'.
+- A forked function's result is limited to 32 bytes (4 u64 words); larger return types are a compile error.
+- Finding a ready job is an O(workers) scan under the global mutex (open issue #8), and the heartbeat thread visits workers round-robin, so each worker's effective heartbeat interval stays near 100 us however many workers there are.
+- The code tracks Zig dev releases (std.Io API), so it breaks across Zig versions; pin a commit that matches your compiler.
+
+**Status:** Described by the author as a research project with no active feature work, but commits through 2026-03-22 keep it building on Zig 0.16-dev; 0BSD and about 500 lines, so easy to vendor or port.
+
+[repo](https://github.com/judofyr/spice) · [benchmark](https://github.com/judofyr/spice)
+
+##### Staccato  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Header-only C++11 work-stealing scheduler storing task objects inside its deques; lower spawn overhead than TBB 4.3 and Cilk Plus.
+
+**Beats:** Intel TBB 4.3 and Intel Cilk Plus 7.3 — On two Xeon E5 v4 sockets (14 cores each, 56 threads), g++ 7.2.1 -O3, Linux 4.13, the README charts show fib(42) at 56 threads about 1.6x faster than Intel Cilk Plus 7.3 and 2.4x faster than TBB 4.3, and dfs 9^9 about 2.5x and 3.4x faster (ratios read off log-scale PNG charts by the verifier, approximate), with matmul and blkmul nearly unchanged. The checked-in benchmarks/run.sh is left in a debug state (2 runs at 3-4 threads, only staccato fib enabled), so the published charts used settings that the script no longer runs by default.
+
+**Known shortcoming:** Header bug: lifo_allocator.hpp has non-inline out-of-class definitions, so including it in two or more translation units gives duplicate-symbol link errors. The TBB fib baseline is blocking style with no continuation passing (issue 1), so the TBB gap is likely overstated. benchmarks/run.sh is left in a debug configuration (2 runs, 3-4 threads). Open issues 3 (atoi crash) and 4 (matmul needs 128 GB+) were never answered.
+
+**Independent measurement:** first-party charts
+
+**How:** Instead of a Chase-Lev deque of task pointers, each worker keeps a chain of fixed-size task_deque arrays (one per task-graph level) that hold the task objects themselves, so spawning a task never calls the heap allocator and finished slots are reused in LIFO order. Per-worker memory comes from a bump-style lifo_allocator with no thread safety or fragmentation handling, keeping tasks contiguous; the README shows fewer LLC misses than TBB and Cilk Plus. The deque uses relaxed atomics with explicit fences (top/bottom/nstolen counters) so it is valid on weak memory models.
+
+**Use it when:**
+- Recursive divide-and-conquer with tiny tasks (fib, tree search, recursive sums) where scheduler overhead dominates, which is where its fib(42) and dfs 9^9 charts show the gap over TBB and Cilk Plus.
+- Task graphs whose maximum fan-out per task is known at compile or design time (for example 2 for binary recursion).
+- As a small, readable reference implementation of a task-object-storing work-stealing deque to study or vendor.
+- Projects stuck on C++11 that want a dependency-free header drop.
+
+**Skip it when:**
+- Memory-bound kernels (matmul, block matmul): the README says the gain there is negligible.
+- Irregular task graphs with unbounded or data-dependent fan-out: you must fix the maximum subtasks per task up front.
+- Production code needing parallel algorithms, futures, cancellation, exceptions across tasks or mixed task types: only spawn/wait on one type T exists; use oneTBB, Taskflow or libfork instead.
+- Anything needing maintenance: last commit 2018-06-13; open issues include the matmul benchmark consuming 128 GB+ of memory (#4) and benchmark crashes on atoi (#3), both unanswered.
+- Latency-sensitive or shared machines: idle workers spin in a steal loop calling std::this_thread::yield() rather than sleeping.
+
+**Integration:** header-only · none (pthreads via std::thread) · C++11; tested with g++ 7.2.1 · any platform with C++11 threads and atomics; benchmarked only on x86-64 Linux
+
+**Vs siblings:** Pick it over Nowa or Heartbeat Scheduling only when you want a tiny dependency-free C++11 header to study or vendor for fixed-fan-out recursion; for maintained, general-purpose work stealing citor, Fork Union or Taskflow-class libraries are safer, and Weave (Nim) reports similar overhead wins over TBB with more benchmarks.
+
+**Gotchas:**
+- Not truly header-only for multi-file builds: include/lifo_allocator.hpp defines non-template, non-inline member functions (lifo_allocator::page::set_next, page::alloc, lifo_allocator::alloc, inc_tail and others) at namespace scope, so including the scheduler from two translation units gives duplicate-symbol link errors unless you patch in 'inline'.
+- Tasks must be constructed with placement new over child()/root() memory; allocating them any other way breaks the scheduler's memory model.
+- The scheduler(degree, nthreads, height) constructor rounds degree up to a power of two and preallocates per-level deques; exceeding the declared fan-out is not checked in release builds.
+- The TBB comparison uses blocking-style TBB tasks (wait_for_all) without continuation passing or scheduler bypass; issue #1 notes TBB's gap would shrink with those.
+
+**Status:** Abandoned since 2018 (37 stars, four open issues with no replies) but MIT-licensed and only about 950 lines of headers, so it is easy to vendor after adding 'inline' to the lifo_allocator definitions.
+
+[repo](https://github.com/rkuchumov/staccato) · [benchmark](https://github.com/rkuchumov/staccato)
+
+##### Weave  `Nim`  `MIT OR Apache-2.0`  `stale`  `Tier C`
+
+Nim task- and data-parallel runtime that uses message-passing work-requesting; claims 3-10x less scheduling overhead than TBB and GCC OpenMP.
+
+**Beats:** Intel TBB, GCC OpenMP, Cilk — Only the README headline was found: 'as low as 3x to 10x less overhead than Intel TBB and GCC OpenMP on overhead-bound benchmarks', backed by a public benchmark suite (fibonacci, DFS, nqueens, heat, matmul, BPC, SPC, ...) but no result tables, compiler versions or CPU models in the repo pages read.
+
+**Known shortcoming:** Nim only, no C++ API; only the README headline claim, no tables. Open issues: 201 (fails on Nim 2.0.0 and later), 171 (crash on recent Nim), 130 and 149 (livelocks).
+
+**Independent measurement:** first-party headline only
+
+**How:** It follows Andreas Prell's Tasking 2.0 design: idle workers send steal requests over SPSC/MPSC channels and busy workers answer them (work-requesting), instead of thieves touching shared Chase-Lev deques. Thieves adapt between steal-one and steal-half, loops are split lazily only when a steal request arrives (adaptive lazy loop splitting, no grain size), and task memory comes from a thread-local pool with a lookaside buffer modelled on mimalloc/snmalloc, with lock-free batching MPSC channels. Optional lazy Flowvar allocation (-d:WV_LazyFlowvar) cuts overhead by at least 2x more on very fine-grained tasks, per the README.
+
+**Use it when:**
+- Nim programs with very fine-grained recursive parallelism (fib, DFS, nqueens style trees) where TBB-like runtimes need about 10,000 cycles per task to break even; Weave targets tasks from about 2,000 cycles
+- Nested parallel loops where you do not want to tune grain size or partitioning (lazy splitting handles it)
+- Dataflow or pipeline graphs expressed with FlowEvents on top of the same scheduler
+- Research or teaching on message-passing schedulers, or targets without good atomics (the design only needs channels)
+
+**Skip it when:**
+- C++ codebases: there is no C++ API; you would have to write the parallel code in Nim
+- Nim 2.x: open issues #201 (task compilation fails for Nim >= 2.0.0, type mismatch on gcsafe), #200 (README examples do not compile) and #171 (recent Nim makes Weave crash)
+- Code that blocks or sleeps inside tasks: scheduling is cooperative, so a blocked worker starves steal requests and others spin
+- Production systems that need proven correctness: README marks it experimental, only one of two complex sync primitives was formally verified, and there are open livelock/deadlock bugs (#130 parallelFor livelock, #149 syncScope stall, #161 background submits go missing)
+- GC-managed Nim types in tasks: not tested; pass raw pointers instead
+
+**Integration:** module · Nim stdlib plus the synthesis nimble package · Nim >= 1.2.0 (nimble); broken on Nim >= 2.0.0 per issue #201 · Linux, macOS, Windows on x86, x86-64, ARM64 (CI-tested with C and C++ backends); any pthread target; Windows 32-bit needs MSVC, not MinGW
+
+**Vs siblings:** Pick Weave only if you write Nim and want TBB/Cilk-class task parallelism with dataflow tasks; for C++ work, Staccato and Nowa compare against TBB/Cilk with published numbers, and Fork Union covers low-overhead parallel-for.
+
+**Gotchas:**
+- Forgetting init(Weave)/exit(Weave) gives nil pointer exceptions on spawn
+- With -d:WV_LazyFlowvar, Flowvars must be at most machine-word size and cannot be returned, or you hit stack smashing or crashes
+- syncScope does not compile in C++ backend mode inside a for loop (Nim issue 14118); awaitable loops are not barriers for grandchildren tasks
+- benchmarks/README lists histogram and logsumexp parallel reductions as pathological cases with a suspected bug in parallel reductions
+
+**Status:** Stale since 2023-12-09 with open compile failures on Nim 2.x; MIT or Apache-2.0, useful mainly as a Nim library or a reference design for work-requesting schedulers.
+
+[repo](https://github.com/mratsim/weave) · [benchmark](https://github.com/mratsim/weave)
+
+##### dp::thread_pool (DeveloperPaul123/thread-pool)  `C++`  `MIT`  `active`  `Tier D`
+
+Header-only C++20 thread pool with per-worker mutex queues and stealing; first-party bench shows ~7% over BS::thread_pool 3.5.
+
+**Beats:** BS::thread_pool (bshoshany/thread-pool), task_thread_pool, riften::Thiefpool — Author's nanobench run on a Ryzen 7 5800X under Windows (MSVC table; clang table via WSL also published, flags not stated) puts dp::thread_pool with std::move_only_function about 3% ahead of its std::function variant and about 7-10% ahead of BS::thread_pool_light 3.5.0, level with riften::Thiefpool, and behind task_thread_pool on the small cases; the timed loop measures task submission, not completion, and the 'NxN' sizes are really sqrt(N)-sided matrices.
+
+**Known shortcoming:** Benchmark flaw in benchmark/source/matrix_multiplication.cpp: the providers return void and the results vector stays empty, so the timed loop only enqueues detached tasks and never waits; ms/op is submission throughput, not completion time. Matrix sizes are mislabelled (multiply_array uses sqrt(size), so '256x256' is 16x16 and '1024x1024' is 32x32). Baseline is the old bshoshany 3.5.0 thread_pool_light. Open issue 57: deadlock on recursive tasks.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each worker owns a std::deque guarded by a std::mutex plus a std::counting_semaphore; enqueue picks a target worker round-robin from a mutex-protected 'priority queue' of worker ids and signals that worker. Idle workers drain their own queue from the front, then steal one task from the back of a peer's queue, looping while an atomic unassigned-task counter is positive. The speed edge over BS::thread_pool comes mostly from per-worker queues (less contention than one shared queue) and from std::move_only_function avoiding the shared_ptr<promise> that std::function forces for enqueue(); there is no lock-free deque.
+
+**Use it when:**
+- You want a small, readable, MIT, header-only C++20 pool to vendor, with futures or detached tasks.
+- Many independent, flat tasks submitted from one producer thread (the shape the benchmarks exercise).
+- Toolchains with std::move_only_function (C++23 library: MSVC 2022, recent libstdc++/libc++), where enqueue avoids a shared_ptr allocation per task.
+- You need a per-thread init callback (constructor takes an init function receiving the worker id).
+
+**Skip it when:**
+- Recursive or nested parallelism where tasks wait on child futures: issue #57 (open, labelled bug) documents deadlock when all workers block in .get(); use a work-stealing fork-join runtime instead.
+- Very fine-grained tasks or many producers: every enqueue takes two mutexes (the round-robin id queue and the target deque) and wakes a semaphore; task_thread_pool already beats it on small tasks in the author's own clang table (109.7% vs 100% at the 8-element case).
+- When you need a parallel_for, priorities, cancellation of running tasks, or scheduling against TBB/OpenMP/Taskflow class runtimes; none were benchmarked.
+- If you need evidence of end-to-end task completion speed: the published matrix benchmark times only submission (see gotchas).
+
+**Integration:** header-only · none (benchmarks pull nanobench, doctest, function2 and the compared pools via CPM) · C++20 (concepts, std::jthread, std::counting_semaphore, std::atomic::wait); README lists Visual Studio 2022, Clang 10+, GCC 11+, CMake 3.25+ · any platform with a C++20 standard library; CI on Ubuntu and Windows
+
+**Vs siblings:** Pick it over riften::Thiefpool when you want a simpler mutex-based header that the author maintains and that matches Thiefpool within ~1-2% in the shared harness; pick nexus, Fork Union or a fork-join runtime (chili-style, Heartbeat, Nowa) for fine-grained or recursive work, where this pool's two-mutex submit path and blocking futures are weak points.
+
+**Gotchas:**
+- Benchmark harness flaw: in benchmark/source/matrix_multiplication.cpp the provider lambdas return void, so the results vector stays empty and each nanobench epoch only enqueues 25k-100k detached tasks and returns without waiting for them; the ms/op figures measure submission throughput (with earlier epochs' backlog still running), not time to finish the work.
+- The labels overstate the work: multiply_array uses sqrt(a.size()) as the side length, so '256x256' is a 16x16 int matmul (8 is 2x2, 1024 is 32x32); argument vectors are copied into each task.
+- Baseline is old: the benchmark pins bshoshany/thread-pool 3.5.0 and uses BS::thread_pool_light, not the current BS::thread_pool releases.
+- enqueue_detach swallows exceptions silently; constructor throws std::invalid_argument for 0 threads; destructor waits for all queued tasks.
+
+**Status:** Active (last commit 2026-09-10, release 0.7.0, 568 stars, account renamed from DeveloperPaul123 to ptsouchlos); MIT and small enough to vendor, but the speed claim rests on a submission-only first-party benchmark.
+
+[repo](https://github.com/DeveloperPaul123/thread-pool) · [benchmark](https://github.com/DeveloperPaul123/thread-pool#benchmarks)
+
 ### serialization-and-formats
 
 #### binary-schemas
@@ -56576,6 +60924,131 @@ Bison-style generator that emits pthreads-parallel operator-precedence parsers, 
 
 [repo](https://github.com/PAPAGENO-devels/papageno) · [benchmark](https://re.public.polimi.it/retrieve/handle/11311/971391/67830/papaj-final.pdf)
 
+### runtime-and-systems
+
+#### filesystems-and-io
+
+##### FastMap  `C`  `LGPL-2.1`  `stale`  `Tier B`
+
+Linux 4.14 kernel module replacing the mmap page-fault and eviction path for fast block devices; 3.7-7x more page faults/s than mmap at high thread counts.
+
+**Beats:** mmap (Linux kernel memory-mapped I/O path) — Author-run measurements (ATC'20 paper, restated in Papagiannis's PhD thesis) on Linux 4.14.72, CentOS 7.3, 2x Xeon E5-2630 v3 (32 hyper-threads) and 4x Xeon E5-4610 v3 (80 hyper-threads), 256 GB DDR4, Intel Optane P4800X, null_blk and pmem: random page-fault IOPS 3.7x/6.6x (read/write) over Linux mmap at 32 threads and 4.7x/7x at 80 threads; 11.89x read IOPS only with SPF patches; Ligra BFS 3.31x on Optane, 5.27x on pmem; Kreon YCSB about 2x on average; MonetDB TPC-H +6.06%. Compiler and flags not stated; the random page-fault microbenchmarks (tests/rand_threads_read.c, tests/rand_threads_write.c) are in the repo.
+
+**Known shortcoming:** Issue 2 reports a kernel panic on writes (unanswered); NUM_FREELISTS only supports 1, 32 or 80 (#error otherwise, issue 1 crashes on 256 cores); uses kallsyms_lookup_name so it does not build on kernel 5.7+; README cache example says 4GB but means 4MB; LICENCE is LGPL-2.1 while MODULE_LICENSE says GPL. The headline 11.8x needs out-of-tree SPF kernel patches.
+
+**Independent measurement:** peer-reviewed paper and author thesis
+
+**How:** Per the author's PhD thesis (chapter 4, based on the ATC'20 paper): it removes the centralized contention points of the Linux mmap path by keeping separate clean and dirty trees per core (radix and red-black trees, pages assigned to cores round-robin), uses full per-page reverse mappings instead of Linux object-based rmap to cut CPU work on eviction, and runs a dedicated DRAM cache with per-core free lists and clean queues plus batched TLB shootdowns. It also raises device queue depth, and adds a user-set read-ahead to pre-map pages for sequential access.
+
+**Use it when:**
+- Research or reproduction work on mmap-heavy applications (mmap-based key-value stores such as Kreon, graph processing with Ligra, an mmap'd heap for Silo) on Optane-class NVMe where page-fault throughput, not the device, is the bottleneck.
+- Many threads (16-80) taking random page faults on one mapping, where Linux mmap stops scaling beyond about 8 threads on the authors' 32-core box.
+- Out-of-memory datasets on a fast block device where you can dedicate a fixed DRAM cache to the mapping.
+- A machine you can pin to Linux 4.14 (the evaluated kernel is 4.14.72) and where crashing the kernel is acceptable.
+
+**Skip it when:**
+- Any production system: open issue #2 (2022) reports a kernel panic on random writes (rand_threads_write) on 4.14.123 with no maintainer reply.
+- Modern kernels: the module resolves unexported symbols with kallsyms_lookup_name, which kernels from 5.7 on no longer export, and the README only supports 4.14.
+- Machines whose core count is not 32 or 80: NUM_FREELISTS is hard-coded to 32 in shared_defines.h and mmap_buffer_hash_table.c only has tables for 1, 32 or 80 (otherwise '#error NUM_FREELISTS number is not supported!'); issue #1 reports a crash on a 256-core server.
+- Mostly sequential workloads: the thesis reports only 6.06% average gain on MonetDB TPC-H.
+- If you can change the application's I/O model: io_uring or SPDK (siblings) avoid the page-fault path entirely and are maintained.
+
+**Integration:** module · Linux 4.14 kernel source/headers; userspace ioctl tools in the repo; WrapFS (included) for the file-system mode · Kernel build toolchain for Linux 4.14 (compiler not documented) · Linux 4.14 only; evaluated on x86-64 Intel Xeon (E5-2630 v3, E5-4610 v3)
+
+**Vs siblings:** Pick FastMap over UMap (userfaultfd, user space) or TriCache when the application must keep using kernel mmap semantics and you can run a 4.14 kernel module; pick vmcache/exmap, UMap, liburing or SPDK for anything maintained or on a current kernel.
+
+**Gotchas:**
+- The README's cache-size example is wrong: perma_mmap_buf_size=1024 is 1024 4 KB pages, i.e. 4 MB, not the 4 GB it states; the default in main.c is PAGES_16G (16 GB of DRAM reserved at load).
+- The headline 11.8x (11.89x in the thesis) needs out-of-tree Speculative Page Fault kernel patches modified for FastMap; stock FastMap without SPF gives 4.7x (read) and 7x (write) on 80 threads, and 3.7x / 6.6x on 32 threads, all on null_blk, which discards I/O.
+- The 5.27x figure is Ligra BFS on a DRAM-backed pmem block device (21.9 s vs 4.15 s); on the Optane SSD the same run is 3.31x (21.3 s vs 6.42 s).
+- Licensing is mixed: the LICENCE file is LGPL-2.1, but main.c declares MODULE_LICENSE("GPL").
+
+**Status:** Research prototype, stale since 2021-09-29 with two unanswered crash/scalability issues; LGPL-2.1 code is copyable, but it is tied to Linux 4.14 and is useful mainly as a design reference.
+
+[repo](https://github.com/CARV-ICS-FORTH/FastMap) · [benchmark](https://www.usenix.org/conference/atc20/presentation/papagiannis)
+
+#### profilers-and-instrumentation
+
+##### Dr. Memory  `C++`  `LGPL-2.1-only (drfuzz and drltrace modules BSD)`  `active`  `Tier B`
+
+DynamoRIO-based memory error checker for unmodified binaries; about 2x faster than Valgrind Memcheck on SPEC CPU2006 per its CGO 2011 paper.
+
+**Beats:** Valgrind Memcheck — The README states Dr. Memory beats Valgrind on SPEC CPU2006 on Linux and points to a bar chart from the peer-reviewed CGO 2011 paper (Bruening and Zhao); search snippets of that paper give a 2x average and up to 4x per-benchmark speedup over Memcheck, with Memcheck failing on 434.zeusmp and 447.dealII. CPU, compiler flags and the Valgrind version were not visible because the paper and chart hosts are blocked; independent support comes from the sanitizers comparison table (Dr. Memory about 10x vs Memcheck about 20x slowdown).
+
+**Known shortcoming:** ARM supports pattern mode only; 57 open Performance issues; latest release cronbuild-2.6.20434 (2024-12-13). The paper numbers (2x average, 4x maximum) are snippet only: burningcutlery.com and commit.csail.mit.edu are blocked.
+
+**Independent measurement:** snippet only
+
+**How:** It keeps shadow memory for every application byte and inlines a fast path for the common shadow check into DynamoRIO's code cache, dropping to a slow path only for uncommon cases (the paper per search snippets describes these fastpath/slowpath instrumentation optimizations as the source of the 2x average gain over Memcheck). It replaces malloc with its own allocator instead of wrapping it (-replace_malloc, on by default). Cheaper modes trade coverage for speed: -light and -no_check_uninitialized skip definedness tracking, -pattern uses sentinel values around heap blocks instead of shadow memory, -leaks_only checks leaks only, and -persist_code caches instrumented code across runs.
+
+**Use it when:**
+- Memory-error checking of Windows binaries, especially closed-source or third-party ones you cannot rebuild with AddressSanitizer: Valgrind does not run on Windows.
+- Linux x86/x86-64 CI jobs where Valgrind Memcheck is too slow and recompiling with ASan is not possible.
+- Hunting uninitialized reads in binaries, which ASan does not detect (MSan needs a full instrumented rebuild).
+- Fast smoke runs with -light or -leaks_only when only unaddressable accesses or leaks matter.
+
+**Skip it when:**
+- When you can recompile: the sibling AddressSanitizer pages list about 2x slowdown for ASan vs about 10x for Dr. Memory and 20x for Memcheck.
+- When you need current, documented performance numbers: the only head-to-head data is the 2011 paper against the Valgrind of that time, and its chart is on a blocked host.
+- AArch64/ARM or macOS 64-bit: optionsx.h notes only pattern mode is supported on ARM (no uninitialized-read checks); 64-bit coverage gaps are open issues (e.g. #1632 byte-to-byte shadowing for 64-bit).
+- Programs heavy in SIMD code: issues #1525 and #1562 note xmm operations still go through the slow path, and issue #1188 reports a 29x slowdown on wrf from 185M uninitialized-value events.
+- If you need a stable release cadence: releases are automated cronbuild packages (latest cronbuild-2.6.20434, December 2024) and the tracker has about 1,000 open issues.
+
+**Integration:** shared lib · DynamoRIO (a dynamorio directory in the repo tree; prebuilt packages include everything) · not documented in the README (CMake build; binary packages recommended) · Windows, Linux, Mac, Android on IA-32, AMD64 and ARM (README); ARM limited to pattern mode
+
+**Vs siblings:** Pick Dr. Memory over AddressSanitizer when you cannot rebuild the target or need uninitialized-read checks on Windows, and over RetroWrite (binary-rewriting ASan, benchmarked on Linux SPEC CPU2006) when the binary is on Windows; if recompiling is possible, ASan is several times faster.
+
+**Gotchas:**
+- -pattern and -unaddr_only disable uninitialized-read checks; -no_check_uninitialized also lowers leak-identification accuracy (optionsx.h).
+- With -no_check_uninitialized, unaligned accesses and stack-relative references are not checked unless -check_alignment / -check_stack_access are set, so some overflows can be missed.
+- Symbol processing can dominate startup on large Windows apps (issue #2175: msvcr120d.dll 40 s even with symcache; #1447 online symbolization bottleneck).
+- License is LGPL-2.1-only for the core; drfuzz and drltrace are BSD.
+
+**Status:** Maintained at a low pace (last commit 2025-12-12, automated cronbuild releases, 57 open Performance-labelled issues), LGPL-2.1 so usable as an external tool without licensing concerns.
+
+[repo](https://github.com/dynamorio/drmemory) · [benchmark](https://github.com/DynamoRIO/drmemory/blob/master/README.md)
+
+##### E9Patch  `C++`  `GPL-3.0-only`  `active`  `Tier B`
+
+Static x86_64 ELF binary rewriter that skips control-flow recovery; more robust and scalable than Dyninst-style rewriters, but not faster.
+
+**Beats:** Dyninst — The PLDI 2020 paper ran the prototype on SPEC2006 (non-PIE, Ubuntu 16.04 default gcc/g++/gfortran) on a Xeon Silver 4114 2.20 GHz: empty instrumentation of all jumps cost +110.81% runtime and of all heap writes +64.71%, with about 113% on Chrome and 46% on Firefox (Dromaeo DOM). The Dyninst (~70%), PEBIL (+62%) and Multiverse (+60.48%) figures are quoted from those tools' papers, not measured side by side, and the paper itself says inlining rewriters generally perform better; the README says today's -O2 output is sometimes 2x faster than the prototype, which is unmeasured here.
+
+**Known shortcoming:** Not faster than the incumbent rewriters: the PLDI 2020 paper reports +110.81% (A1) and +64.71% (A2) overhead on SPEC2006 (Xeon Silver 4114), while the Dyninst, PEBIL and Multiverse figures it cites come from their own papers and were not run side by side. The paper says inlining rewriters are faster; E9Patch trades speed for robustness.
+
+**Known shortcoming:** Clean ABI skips SSE/AVX save and 16-byte alignment; coverage is not guaranteed in default mode; -100 mode breaks programs' own SIGILL handlers; CET is an open issue (55); no 32-bit support (16). Chrome overhead about 113%, Firefox about 46%.
+
+**Independent measurement:** peer-reviewed paper, read from a repo copy
+
+**How:** It does not relocate code or recover control flow: each patched instruction is replaced in place by a jump to a trampoline, using instruction punning plus three tactics from the PLDI 2020 paper (T1 padded jumps, T2 successor eviction, T3 neighbour eviction) to find valid rel32 offsets, so jump targets are preserved and rewriting is safe without a CFG. Physical page grouping packs scattered trampolines into shared file-backed pages to limit RAM and file-size bloat. The speed story is rewrite scalability (Chrome and libxul.so over 100 MB rewritten) rather than lower runtime overhead; the current E9Tool adds -O1/-O2/-O3 optimizations and an optional -CFR mode that uses heuristic control-flow recovery for faster output binaries.
+
+**Use it when:**
+- Instrumenting or patching x86_64 Linux binaries you cannot recompile, especially very large ones (browsers, big shared libraries) where CFG-based rewriters fail or are too slow
+- Robustness matters more than overhead: binary hot-patching, hardening (e.g. low-fat pointer heap-write checks) or fuzzing instrumentation on stripped or mixed-language (C, C++, Fortran, assembly) code
+- Sparse instrumentation (a few call sites, malloc calls, specific instructions), where the extra two jumps per patch site matter little
+- Building your own tool on a programmable backend (E9Tool matching language, call trampolines, plugins) under GPL-3.0
+
+**Skip it when:**
+- When runtime overhead is the priority: the paper's empty instrumentation costs +110.81% on all jumps and +64.71% on heap writes on SPEC2006, versus cited figures of about 70% for Dyninst, +62% for PEBIL and +60.48% for Multiverse (inlining rewriters)
+- Non-x86_64 or non-ELF targets: 32-bit support is an open feature request (#16)
+- Binaries that mix code and data in .text or need full coverage of single-byte instructions (ret, push, pop): the linear disassembler and the tactics have documented limits; -100 mode falls back to SIGILL handlers and breaks programs that install their own SIGILL handler
+- Binaries with very large static .bss on non-PIE builds (gamess, zeusmp in the paper) that exhaust address space for trampolines
+- CET shadow-stack environments: compatibility is an open issue (#55)
+
+**Integration:** static lib · zlib (build.sh also checks for xxd and markdown); prebuilt release binaries available · gcc/g++ and make (C++); not otherwise documented · x86_64 Linux ELF (PIE and non-PIE executables and shared objects)
+
+**Vs siblings:** Pick it over RetroWrite when the binary is non-PIE, C++ or Fortran, or too large for symbolization-based reassembly, accepting higher overhead; pick bpftime or funtrace instead when you only need probes or function tracing and low per-event cost matters.
+
+**Gotchas:**
+- The clean call ABI does not save x87/MMX/SSE/AVX registers and does not guarantee 16-byte stack alignment; patch code built outside e9compile.sh that touches SIMD or calls libc can corrupt state or crash.
+- Coverage is not guaranteed in the default mode: some instructions may silently stay unpatched (1098 of about 1.05e7 failed in the paper), so counts-based tools can under-report.
+- File size grows with trampolines (+57.43% for all-jumps instrumentation in the paper with page grouping; +2239.83% without it); higher -c compression levels trade file size for thousands of mmap calls at load.
+- -CFR mode is faster but heuristic and may introduce rewriting errors; the default mode is the one the authors call official for benchmarking.
+
+**Status:** Actively maintained (last commit 2026-06-28, 1.2k stars, 4 open issues) and used by several research tools; GPL-3.0 with some MIT files, so linking it into a closed tool needs care, but patched output binaries are standalone.
+
+[repo](https://github.com/GJDuck/e9patch) · [benchmark](https://raw.githubusercontent.com/gaoxiang9430/gaoxiang9430.github.io/HEAD/papers/PLDI20.pdf)
+
 ### serialization-and-formats
 
 #### binary-schemas
@@ -60843,6 +65316,410 @@ SQL/HTTP full-text and analytics search database, C++ core, positioned as a fast
 **Status:** Actively maintained (record's last_commit is current, large nightly/CI test matrix in .github/workflows) and free to install via package manager, Docker, or source build; GPL-3.0 licensing is the main friction point for proprietary embedding rather than any maturity concern.
 
 [repo](https://github.com/manticoresoftware/manticoresearch) · [benchmark](https://manticoresearch.com/blog/manticore-alternative-to-elasticsearch/)
+
+### runtime-and-systems
+
+#### allocators-gcs
+
+##### halloc  `C++`  `GPL-2.0 or OpenIB BSD (dual, per LICENSE.txt)`  `abandoned`  `Tier C`
+
+Kepler-era CUDA device-side slab allocator (hamalloc/hafree) for small blocks, built to beat in-kernel CUDA malloc on throughput.
+
+**Beats:** CUDA device-side malloc (in-kernel allocator) — First-party only: the README claims more than 1.5 billion mallocs/s and more than 1 billion malloc/free pairs/s for 16-byte allocations by tens of thousands of threads with more than 100 MiB allocated on a K20X, and calls this 'much higher' than other GPU allocators without giving CUDA-malloc or competitor numbers. Perf drivers (throughput, phase-throughput and others) are in tst/perf. Independent comparisons exist in the Gelado-Garland 2019 and Winter et al. 2021 papers, but those were blocked here; snippets only.
+
+**Known shortcoming:** Pre-Volta warp intrinsics; issue 3 reports hangs on a TITAN V; the makefile targets sm_20/30/35 only. Minor init bug: memset(sbs, 0xff, ...) should target sb_counters (not on the timed path). The independent numbers are snippet only (research.nvidia.com blocked); memmansurvey lists Halloc as working only in its sync build.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Memory is split into 4 MiB slabs (superblocks), each serving one size class. Size classes are 2x or 3x a power-of-two unit, from 16 to 3072 bytes. Free chunks are tracked in per-slab bit arrays. A thread picks a starting chunk by hashing a warp-aggregated per-size counter, claims it with one atomicOr, and on collision re-probes with a size-specific hash step, so threads spread over the slab instead of contending on a list head. Slabs move between free, sparse, roomy and busy sets by occupancy thresholds (0.012, 0.6, 0.835). The leader lane of a warp swaps in a new head slab for every lane of the same size, and hafree is a single atomicAnd on the bit array plus a counter decrement.
+
+**Use it when:**
+- Kernels that make many small (16-256 B) device-side allocations from tens of thousands of threads, such as dynamic graphs, per-thread lists or particle buffers, on Kepler/Pascal-class GPUs.
+- Replacing in-kernel CUDA malloc when allocation throughput is the bottleneck and the heap stays well below its reserved capacity.
+- Research baselines: it is one of the standard allocators in GPU allocator surveys (Winter et al. PPoPP 2021, memmansurvey).
+
+**Skip it when:**
+- Volta and newer GPUs with stock code: it uses the pre-CUDA-9 warp intrinsics (__ballot, __any, __shfl, PTX without .sync) and warp-synchronous loops. Issue #3 reports hangs on a TITAN V (CUDA 10.2) for sizes above 256 B at 10K threads and above 32 B at 100K threads, and the memmansurvey port notes the masks 'are quite hard to translate to modern CUDA' and it only works in its sync build.
+- Modern CUDA toolkits without makefile edits: it builds for sm_20/sm_30/sm_35 only (sm_20 was dropped in CUDA 9 and sm_30 in CUDA 11), and issue #1 reports the build failing on an empty bin/ directory.
+- Heaps that run near full: search snippets of later papers say halloc fails to allocate beyond about 50% utilization (not verified here, papers blocked).
+- Allocations above 3 KiB: they go to CUDA's own allocator and get no speedup.
+- Workloads that need to resize the heap or release memory: there is no way to grow after ha_init, and ha_shutdown is a no-op.
+
+**Integration:** static lib · CUDA toolkit (device runtime malloc for large blocks); tests use thrust · CUDA 5.0+ (tested 6.5), nvcc with -rdc=true; README requires compute capability 2.0+ · NVIDIA GPUs; tested on CC 3.5 (K20X, K40); user report of tests passing on GTX 1070 (sm_61, CUDA 10.1) after makefile edits; hangs reported on Volta (sm_70)
+
+**Vs siblings:** It is the only GPU device-side general allocator among the catalogued siblings. LLFree targets the Linux kernel page allocator and the others are CPU mallocs, so pick halloc only for in-kernel CUDA allocation on pre-Volta hardware (or after porting to *_sync intrinsics).
+
+**Gotchas:**
+- ha_init calls cudaDeviceSetCacheConfig(cudaFuncCachePreferL1) for the whole device and sets cudaLimitMallocHeapSize to the 25% remainder, which silently changes the behaviour of the rest of your program.
+- Licence correction: LICENSE.txt offers a choice of GPL-2.0 or the OpenIB.org BSD licence (Forschungszentrum Juelich, 2015), so the code can be used under BSD terms, not only GPL-2.0.
+- Host-side init bug in halloc.cu: `memset(sbs, 0xff, MAX_NSBS * sizeof(uint))` targets sbs instead of the just-malloc'd sb_counters, so counters for unreserved slab slots are left uninitialized. It looks harmless for slabs actually reserved, and it does not touch the measured fast path.
+- Size classes are 2u/3u steps, so internal waste is up to about a third (for example 49 B rounds to 64 B); the library was tuned with -Xptxas -maxrregcount=64 and -dlcm=cg, and the register count matters for occupancy of the calling kernel.
+
+**Status:** Abandoned since 2015-01-28 and dual GPL-2.0/BSD-licensed, so copyable; usable on Kepler/Pascal, needs a warp-intrinsic port for Volta+ and a makefile update for current CUDA.
+
+[repo](https://github.com/canonizer/halloc) · [benchmark](https://github.com/canonizer/halloc)
+
+#### coroutines-fibers
+
+##### libcr  `C++`  `AGPL-3.0`  `stale`  `Tier C`
+
+Stackless, macro-based C++17 coroutines and protothreads with 1:N and M:N schedulers; 3 ns switches versus 2.5 us kernel thread handoffs.
+
+**Beats:** kernel (OS thread) task switches — The README reports, on an Intel Core i7-8700 in release mode, 335 MHz (3 ns) per thread-unsafe coroutine switch, 80 MHz (12 ns) thread-safe in one thread and 166 MHz (6 ns) thread-safe across 12 threads, against about 400 kHz (2.5 us) for kernel thread synchronisation handoffs (about 837.5x). The coroutine numbers come from the companion repo sm2coin/libcr-test (yield loops over N coroutines, -O3 -mtune=native in release, compiler version not stated), but that tool contains no kernel-thread benchmark, so the 2.5 us baseline has no published code; no comparison with Boost.Context, libco or other coroutine libraries is given.
+
+**Known shortcoming:** The coroutine numbers come from sm2coin/libcr-test (-O3 -mtune=native in release, compiler version not stated); libcr-test has no kernel-thread benchmark, so the 2.5 us baseline has no published code. GCC and Clang only (specific.hpp has an #error without __GNUC__). AGPL-3.0.
+
+**Independent measurement:** first-party README
+
+**How:** Each coroutine stores only a resume address: suspension points save a label address with GCC's labels-as-values (&&label) and resume with a computed goto (goto *ip), so a switch is an indirect jump with no stack swap or register save. Nothing is allocated dynamically and no stack is reserved, so a coroutine is 56 bytes on 64-bit (8 bytes for a bare protothread) and nested coroutines can be embedded in, or unioned inside, the parent's state. The thread-unsafe sync scheduler avoids atomics entirely, which is why it is about 4x faster than the mt variant in a single thread.
+
+**Use it when:**
+- Very many small cooperative tasks (state machines, protocol handlers) on memory-limited Linux boards where a 64 KiB+ stack per fiber is unaffordable.
+- Single-threaded event loops where switch cost dominates and the GCC/Clang computed-goto requirement is acceptable.
+- M:N designs that need coroutines to migrate between worker threads, using the cr::mt or HybridScheduler variants.
+- AGPL-compatible projects (or internal research code) that want a compact, allocation-free scheduler to study or vendor.
+
+**Skip it when:**
+- Closed-source or permissively licensed products: AGPL-3.0 copyleft also covers network use.
+- MSVC builds: specific.hpp hits '#error "Compiler not supported!"' without __GNUC__.
+- Code that needs to yield from deep inside ordinary (non-coroutine) call chains or call third-party blocking code: it is stackless, so every suspendable frame must itself be a libcr coroutine.
+- New C++20 code: native stackless coroutines give similar memory benefits without the macro syntax and the restriction on locals across suspension points.
+- Teams that need a maintained dependency: 81 commits, 5 stars, a 2020-2025 gap in commits, and the README warns that breaking changes are still made.
+
+**Integration:** static lib · sm2coin timer submodule (depend/timer), pulled by CMake running git submodule init/update; pthread for the mt parts · C++17, GCC or Clang (labels-as-values extension); CMake 2.6+ · any GCC-supported target (no OS-specific code per README); MSVC unsupported
+
+**Vs siblings:** Pick libcr over stackful libraries such as libaco, libco-style libcopp or libdill when per-task memory matters more than the convenience of yielding from arbitrary calls; minicoro or libaco are simpler to adopt and license-friendlier when stacks are affordable, and CO2 is the closer stackless alternative with a published comparison against Boost.Coroutine2.
+
+**Gotchas:**
+- Native local variables do not survive CR_YIELD/CR_AWAIT/CR_CALL; anything live across a suspension must be declared in CR_STATE.
+- Exceptions are a custom error/no-error flag (CR_THROW), not C++ exceptions; CR_FINALLY must not contain return, throw, yield or await.
+- The library's CMakeLists hard-codes -Werror and -g, and release mode (-DLIBCR_RELEASE=ON) adds -O2 -mtune=native; the 2025-04-09 commit fixed a build break on a newer compiler, so expect warnings-as-errors breakage on new toolchains.
+- CMake runs git submodule commands at configure time and copies headers into the source tree's include/ directory.
+
+**Status:** Stale (two small commits in April 2025 after a gap since December 2020), AGPL-3.0 and small enough to vendor, but GCC/Clang only and still described by its author as evolving with breaking changes.
+
+[repo](https://github.com/sm2coin/libcr) · [benchmark](https://github.com/sm2coin/libcr)
+
+##### libfiber (iqiyi)  `C`  `LGPL-3.0`  `active`  `Tier C`
+
+C stackful coroutine runtime with libc network hooks; first-party echo-server chart shows about 1.6-1.7x libco's QPS.
+
+**Beats:** libco (Tencent) — A first-party bar chart (res/benchmark.png) shows echo-server QPS at 100 to 1000 connections: libfiber about 232k at 100 and 178k at 1000, against libco about 147k and 106k (about 1.6-1.7x, derived from page data), with libmill and a Go server in between. No hardware, OS, compiler or flags are given; the libco and libmill server sources are in the repo's benchmark/ directory and the client is acl's lib_fiber/samples/client2.
+
+**Known shortcoming:** Custom x86-64 asm setjmp switch, Boost fcontext on ARM, shared stack Linux-only, libc hooks. The benchmark is an echo-server QPS with no hardware or flags stated. Open issue 54: Windows memory leak.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Context switches on x86-64 use a hand-written inline-assembly setjmp/longjmp (x86_jmp.h, the Makefile default USE_JMP_DEF) that saves only callee-saved registers, rsp and the resume address; ARM builds use Boost.Context's jump_fcontext, and ucontext is only a fallback. Linux builds compile with -DSHARE_STACK, so fibers created with go_share or the share-stack attribute run on one shared stack and copy only their used portion on switch, which cuts memory at high fiber counts. I/O waits go straight to the per-thread epoll/kqueue/io_uring loop through the hooked syscalls, so a blocked fiber costs one event registration rather than a thread.
+
+**Use it when:**
+- Network servers or clients in C or C++ on Linux/BSD/macOS that want sequential code with thousands of concurrent connections
+- Making existing blocking client libraries (MySQL driver, DNS lookups via getaddrinfo) coroutine-friendly without patching them, through the libc hooks
+- Windows applications, including MFC/WTL GUI apps, that want coroutine-style networking on the GUI message pump or iocp
+- Projects already on the acl framework that want its HTTP server, master/worker process model and fiber pools
+- Memory-tight services with very many mostly idle fibers, using shared-stack mode on Linux
+
+**Skip it when:**
+- When you need raw switch speed for generators or compute-only coroutines: the tboox benchbox switch page lists libfiber(acl) slower than boost and tbox, and minicoro, libaco or tbox are leaner
+- When LGPL-3.0 is not acceptable for static linking into a closed product
+- When you need work-stealing across cores: the scheduler is single-threaded, one scheduler per thread, with no migration of fibers between threads
+- When global symbol interposition of close/read/write/connect/epoll is unwelcome (other libraries, sanitizers, or your own hooks in the same process)
+- When you want a header-only or small dependency: it is a built C library with a large API, and the C++ convenience pieces lean on the acl codebase
+
+**Integration:** static lib · none for the C core (links -ldl -lpthread); optional liburing when built with HAS_IO_URING=yes; C++ HTTP server and fiber_pool samples need acl (lib_acl_cpp) · C compiler with GNU inline asm on x86-64 (gcc or clang); C++11 for go_fiber.hpp lambdas; Visual Studio solutions (vc2012-2015, built with vc2019) on Windows; MinGW-w64 mentioned in issue #41 · Linux, FreeBSD, macOS, Windows; x86-64 custom asm switch, arm/arm64 via Boost.Context fcontext
+
+**Vs siblings:** Pick libfiber over libco or libgo when you want a maintained (2026 commits) hook-based network coroutine runtime that also covers Windows iocp/GUI and io_uring; pick libaco, minicoro or tbox when you only need the fastest bare context switch and no I/O runtime.
+
+**Gotchas:**
+- Shared-stack fibers are not available when Boost.Context jumps are used (arm/arm64 builds, and the code #errors if both are set), so the memory-saving mode is x86-64 Linux only in practice.
+- The README's own server sample has a Windows-only typo (timeout *= 1000 on an undeclared name), and on Windows the hooks are absent, so code must call acl_fiber_recv/acl_fiber_send explicitly.
+- Open issue #54 (Feb 2026) reports a memory leak on Windows; closed issue #26 reported a leak in fiber_timer::start().
+- Benchmark compares whole echo-server samples (libfiber vs libmill, libco and a Go program) with no CPU, OS, compiler or flags, so it measures event-loop plus syscall-hook overhead, not context-switch cost.
+
+**Status:** Active (last commit 2026-01-04, 817 stars) and copyable under LGPL-3.0; it tracks acl-dev/acl lib_fiber, which is where most development happens.
+
+[repo](https://github.com/iqiyi/libfiber) · [benchmark](https://github.com/iqiyi/libfiber)
+
+##### TurboRoutine  `C`  `GPL-3.0`  `active`  `Tier C`
+
+Small x86-64 Linux C library for stackful coroutines with an assembly context switch; README claims about 70x faster round trips than swapcontext.
+
+**Beats:** POSIX ucontext (swapcontext) — First-party README table only: on an Intel Core i5-7200U under WSL2 with gcc 13.3 -O2, a resume-plus-yield round trip takes about 30 ns versus about 2 us for glibc swapcontext (about 70x) and about 83 us for a two-thread condition-variable handoff. The switch benchmark source is not in the repo (src/main.c is a self-checking demo of 256 coroutines on 4 workers), and the README itself says WSL2 inflates the syscall cost of both baselines.
+
+**Known shortcoming:** The switch benchmark source is missing from the repo. CET shadow stack is disabled for the whole binary, co_destroy has no double-free or state check, and fs/TLS are not switched on migration.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The switch is a hand-written assembly routine that saves only the callee-saved registers (rbx, rbp, r12-r15) plus MXCSR and the x87 control word on the current stack, swaps rsp through the 64-byte header, and returns. Unlike glibc swapcontext it makes no sigprocmask system call. The running coroutine is found by masking rsp, since every 64 KB slot is aligned to 64 KB and the header sits at the top: (rsp | 0xFFFF) - 63. This takes two instructions, reads no thread-local storage, and lets GCC hoist co_current() out of loops, so the co_checkpoint() fast path is a load, a decrement, a store and a branch.
+
+**Use it when:**
+- x86-64 Linux C code that needs generators or pipelines yielding from deep call stacks, where ucontext's per-switch syscall shows up
+- Slicing long CPU-bound loops (graph traversals, as in the author's TurboGraph) into short cooperative pieces on a worker pool, with one co_checkpoint() line per loop
+- Work-stealing or migrating schedulers, where a coroutine is resumed on a thread other than the one that started it (header lookup uses rsp, not TLS)
+- Projects that want gdb backtraces through switches (full CFI) and valgrind memcheck/callgrind support for coroutine stacks
+- GPL-3.0-compatible codebases small enough to vendor three files
+
+**Skip it when:**
+- Anything outside x86-64 System V Linux: no AArch64, macOS or Windows port
+- Code needing deep recursion or large stack frames: stacks are fixed at 64 KB minus a 4 KB guard page (compile-time constant in CoroAbi.h)
+- When you want an established, faster or permissively licensed switch: minicoro (9 cycles per switch), libaco, Boost.Context or libdill; TurboRoutine is GPL-3.0 with 1 star and 11 commits
+- When you need a scheduler, I/O awaiting or channels out of the box: README lists these as roadmap, not implemented
+- Switching from signal handlers, or binaries that require CET shadow stacks (the .S file deliberately drops the SHSTK marking, which disables it for the whole linked binary)
+
+**Integration:** static lib · none (POSIX threads; valgrind headers optional) · C11, gcc (GNU assembler with Intel syntax; uses __has_include and __attribute__((cleanup))) · x86-64 Linux only (System V ABI)
+
+**Vs siblings:** Pick it over minicoro or libaco only if you specifically want TLS-free header lookup from rsp (cheap migration across a thread pool) plus built-in co_checkpoint slicing, and GPL-3.0 is fine; for raw switch speed minicoro (9 cycles vs 352 for ucontext) and libdill (about 16 ns) report better numbers, and libaco and libcopp are far more mature.
+
+**Gotchas:**
+- fs (the TLS base) is not switched: after migration errno, pthread_self() and _Thread_local variables belong to the new thread; README says to hold no lock or thread-local address across a yield, but does not discuss TLS addresses the compiler itself may keep across the co_yield call.
+- co_destroy does not check state or double release: destroying a running coroutine or releasing a slot twice silently corrupts the free list. Resuming a DONE coroutine traps on ud2.
+- co_yield, co_current and co_checkpoint are only valid on a coroutine stack; calling them on a normal thread stack masks rsp into an unrelated address (use co_pool_contains() to check).
+- Linking the assembly object drops the GNU property note, so CET shadow stack is disabled for the whole binary, not only the coroutine code.
+
+**Status:** Active (last commit 2026-09-18) but a one-person project with 1 star, 11 commits and no issues filed; GPL-3.0 and about 400 lines, so easy to read and vendor if the license fits.
+
+[repo](https://github.com/giangian2/TurboRoutine) · [benchmark](https://github.com/giangian2/TurboRoutine)
+
+#### filesystems-and-io
+
+##### DAXFS  `C`  `GPL-2.0`  `active`  `Tier C`
+
+Linux kernel filesystem on DAX memory with lock-free CAS overlay; authors report up to 2.68x tmpfs random-write throughput.
+
+**Beats:** tmpfs (kernel in-memory file system, POSIX read/write) — The authors' arXiv preprint 2604.01620 (seen only through search-result snippets; arxiv.org and alphaxiv are egress-blocked) reports that on single-host DRAM-backed DAX DaxFS beats tmpfs on all write workloads, up to 2.68x random-write throughput at 4 threads, and 1.18x random-read throughput at 64 KB; hardware, kernel, compiler and fio parameters were not visible. The same snippet describes cross-host validation only under QEMU-emulated CXL 3.0, with '>99% CAS accuracy', a wording that does not obviously match its 'no lost updates' claim.
+
+**Known shortcoming:** Numbers come from write-path code that was fixed after the April 2026 preprint (O_APPEND on May 30, generic_write_checks on Aug 16); issue 26 says daxfs_write_iter takes no inode_lock (unserialised i_size, which may help write throughput against tmpfs). The snippet says '>99% CAS accuracy' next to 'no lost updates', which is inconsistent. Open: 19 (full-table O(n) lookup), 20 (big-endian CAS hang), 21 (bounds check covers the start offset only), 23 (no cache-line flush), 28 (rename not crash-atomic); the cxl3 backend is unvalidated. Paper snippet only.
+
+**Independent measurement:** snippet only
+
+**How:** Reads are direct loads from the DAX region with no page-cache copy. Writes go to a copy-on-write hash overlay: an open-addressing, linear-probing table of 16-byte buckets claimed with cmpxchg (FREE to USED), and entries come from a bump allocator advanced with atomic fetch-and-add, so there is no journal, no log and no lock between writers in one coherence domain. A direct-mapped shared page cache with a CAS-driven FREE/PENDING/VALID state machine and clock eviction serves backing-file data to all participants.
+
+**Use it when:**
+- Several kernel instances on one cache-coherent machine (multikernel) that must share one read-mostly tree, such as a container base image or LLM model weights, without N copies in memory
+- Zero-copy CPU or GPU access to file data held in a dma-buf or DMA heap
+- Concurrent small random writes from several threads to an in-memory filesystem, where the authors measured up to 2.68x tmpfs throughput at 4 threads on DRAM-backed DAX
+- Research or prototyping on CXL shared-memory filesystems, as a lock-free alternative to famfs's single-master model
+
+**Skip it when:**
+- Block devices or SSDs: the design needs byte-addressable DAX memory and cannot run on block storage
+- Real multi-host CXL deployments today: the cxl3 backend is a scaffold, and COHERENCE.md says multi-host operation is unsupported until a validation gate passes on CXL 3.0 hardware
+- Workloads that need strict POSIX write semantics or crash durability: issue #26 reports unserialised i_size updates in daxfs_write_iter() (no inode_lock), #28 says replace-rename is not crash-atomic, and #23 says daxfs_mem_sync() does not flush cache lines
+- Large or growing writable data sets: the overlay hash table size is fixed at creation, files are capped at about 1M pages (4 GB) by the 20-bit page offset (#22, reported as -ENOSPC), and lookups degrade to a full-table scan once the table fills (#19)
+- Big-endian machines (#20: CAS loops never terminate) and setups that need device nodes, FIFOs or sockets (no mknod)
+
+**Integration:** Linux kernel module (out-of-tree, built with make) plus user-space tools mkdaxfs and daxfs-inspect · Linux 5.11+ with CONFIG_FS_DAX; DAX-capable memory (pmem, CXL, DMA heap or dma-buf, or a physical range via /dev/mem) · Kernel build environment for the target kernel (5.11+); exact compiler not documented · Linux; coherence primitives described in terms of x86 LOCK CMPXCHG; little-endian only in practice (issue #20)
+
+**Vs siblings:** Pick DAXFS over NOVA, WineFS or SplitFS when the need is sharing one in-memory filesystem across kernel instances or a dma-buf with lock-free concurrent writers, rather than durable persistent-memory storage for a single kernel; MadFS and SplitFS are user-space PM file systems for one host and do not offer a shared namespace.
+
+**Gotchas:**
+- The overlay table and pool are sized at mkdaxfs time (-O, -B); the pool is never compacted, and a full table makes every new page cost a full-table scan (issue #19).
+- The default mem_model=coherent means one coherence domain; selecting mem_model=cxl3 on ordinary DRAM only exercises plumbing and validates nothing about cross-host coherence.
+- The performance numbers come from the April 2026 preprint, before May-August 2026 write-path fixes (O_APPEND honoured in the overlay write path, generic_write_checks() and s_maxbytes added), so the measured write path did less checking than the current one.
+- Mounting an image from untrusted sources should use the validate mount option; issue #21 reports daxfs_mem_ptr() bounds-checks only the start offset of a read span.
+
+**Status:** Active but single-maintainer (all recent commits by congwang-mk, last 2026-08-16), 102 stars, 11 open issues including six labelled bugs; GPL-2.0 kernel code is copyable but needs a kernel build and a DAX setup.
+
+[repo](https://github.com/multikernel/daxfs) · [benchmark](https://arxiv.org/abs/2604.01620)
+
+##### NOVA (linux-nova)  `C`  `GPL-2.0`  `abandoned`  `Tier C`
+
+Research Linux kernel file system for persistent memory; per-inode logs beat ext4-DAX, xfs-DAX, PMFS and btrfs on write-heavy workloads.
+
+**Beats:** ext4-DAX, xfs-DAX, PMFS, Ext4-data, Btrfs (kernel file systems on NVM) — The FAST'16 paper (Xu and Swanson) measured NOVA on Intel's Persistent Memory Emulation Platform (dual-socket Xeon emulating STT-RAM and PCM latencies with DRAM) and reports 22% to 216x higher throughput than ext4-DAX, xfs-DAX, PMFS, ext4 and btrfs on write-intensive workloads, and 3.1x to 13.5x over equally consistent ext4-data and btrfs; the paper PDF was blocked here, so these figures come from search snippets of the abstract and evaluation, and the README itself states only that NOVA beats other DAX file systems in almost all cases.
+
+**Known shortcoming:** 53 open issues, many of them crash-consistency or data-loss bugs: 152 (data leak on a crash during truncate), 125 (st_nlink), 121 (append), 156 (snapshot cleaner hang). Linux 5.1 and x86-64 only, not production ready. Numbers are snippet only (paper PDFs blocked); measured on PMEP emulation hardware.
+
+**Independent measurement:** snippet only
+
+**How:** It is a log-structured file system with one metadata-only log per inode instead of a global log, so updates to different files proceed in parallel and garbage collection stays cheap; file data lives outside the log and is updated copy-on-write, giving atomic writes without double-writing data through a journal. Multi-inode operations use small fixed-length per-CPU journals, and free space and inode tables are split into per-CPU allocation regions and stripes. Lookup structures (a per-file radix tree, red-black trees) are kept in DRAM and rebuilt from the NVMM logs, which can be scanned by many threads in parallel during recovery.
+
+**Use it when:**
+- Research or evaluation on persistent memory (Optane DC PMem or memmap-emulated pmem) where you need a strongly consistent file system that is faster than ext4-DAX or xfs-DAX on write-intensive, metadata-heavy workloads such as Filebench fileserver or varmail.
+- As the standard comparison baseline for new PM file systems: MadFS, SplitFS and WineFS all report against NOVA.
+- Workloads that need atomic file data updates and crash consistency without paying ext4 data-journaling or btrfs costs (the paper reports 3.1x to 13.5x over file systems with equally strong guarantees).
+- Studying log-structured, per-CPU NVMM file system design; fs/nova and Documentation/filesystems/nova.txt describe the layout in detail.
+
+**Skip it when:**
+- Production systems: the README says it is not ready for production use, and 53 open issues include crash-consistency and data-loss bugs (data leak on crash during truncate, wrong st_nlink after crash during unlink, unreadable file after crash during append, a kernel hang in the snapshot cleaner).
+- Anything that needs a current kernel: the newest branch is Linux 5.1 (others 4.13 to 5.0) and the last commit was 2022-02-21; porting to a modern kernel is on you.
+- Small sub-page overwrites: copy-on-write of whole 4 KB pages makes them slower than in-place DAX file systems, which the README names as the main exception to its speedups.
+- Non-x86-64 machines, setups needing xattrs/ACLs, quotas, mkfs/fsck tooling, or moving a file system between machines with different CPU counts, all listed as missing.
+- Hardware without persistent memory: on block SSDs it has no role, and Optane PMem itself is discontinued, so most users will run it on DRAM emulation.
+
+**Integration:** module · Full Linux kernel source tree (5.1 master) with CONFIG_LIBNVDIMM, CONFIG_BLK_DEV_PMEM, CONFIG_FS_DAX and CONFIG_NOVA_FS; selects CRC32 and LIBCRC32C · Whatever builds Linux 5.1 (older GCC era); not documented beyond the kernel's own requirements · x86-64 Linux only; needs NVMM/pmem hardware or memmap emulation
+
+**Vs siblings:** Pick NOVA over SplitFS or MadFS when you want an in-kernel file system with atomic data and metadata and no user-space library; choose WineFS instead for memory-mapped workloads (it reports up to 2x over NOVA there), and MadFS for concurrent appends from user space.
+
+**Gotchas:**
+- No mkfs: the first `mount -o init` formats the device, and a later mount without init recovers it; remounting with a different option set may fail.
+- While a file is DAX-mmap'd, its data is not covered by NOVA's parity protection; the program owns that data until it is unmapped.
+- Mounted snapshots are not write-protected; the docs tell users not to write after mounting a snapshot.
+- Protection features cost speed and are switchable (data_parity=0, metadata_csum=0, inplace_data_updates=1, wprotect); compare configurations carefully when reading benchmark results.
+
+**Status:** Abandoned research code (last commit 2022-02-21, Linux 5.1, 53 open issues) under GPL-2.0, self-described as not production ready; useful as a research baseline rather than a dependency.
+
+[repo](https://github.com/NVSL/linux-nova) · [benchmark](https://github.com/NVSL/linux-nova)
+
+##### RFUSE  `C`  `GPL-2.0`  `active`  `Tier C`
+
+FAST '24 research FUSE replacement: per-core shared-memory ring channels and hybrid polling; about 2.27x FUSE random-read throughput (paper snippet).
+
+**Beats:** FUSE (libfuse kernel-userspace channel) — Per a search snippet of the FAST '24 paper (usenix.org PDF blocked here), RFUSE with StackFS on a 2-socket 80-core machine with a PCIe 4.0 NVMe SSD and Linux 5.15.0 reached 2.27x the random-read throughput of stock FUSE, with sequential I/O at parity with ext4. The repo's claims.md states the expected trends (RFUSE beats FUSE on random fio, scale_fio, FxMark and Filebench, near ext4) but contains no numbers.
+
+**Known shortcoming:** The 2.27x random-read figure is from a search snippet only (usenix.org paper blocked); claims.md gives trends without numbers. Builds as fuse.ko and replaces stock FUSE. The hybrid poll spins for up to 50 us (RFUSE_COMP_MAX_IDLE).
+
+**Independent measurement:** snippet only
+
+**How:** Per-core ring channels (io_uring-style submission/completion rings, RFUSE_NUM_IQUEUE of them) remove the single global request queue and its lock contention, and avoid inter-NUMA traffic for metadata-heavy parallel work. Hybrid polling cuts context switches and wake-ups: in rfuse_comp.c the kernel side checks for completion and calls schedule() in a loop for up to RFUSE_COMP_MAX_IDLE = 50 us before it sleeps, which pays off for short metadata operations. Shared-memory rings also cut request copying between kernel and user space.
+
+**Use it when:**
+- Research or reproduction of FUSE-overhead work on a Linux 5.15 test machine you control (kernel rebuild and module swap are acceptable).
+- Many-core boxes (the artifact ran on 80 cores) with fast NVMe where stock FUSE's single queue limits random-I/O or metadata scalability.
+- Benchmarking an existing libfuse 3 filesystem against a faster transport without porting it, since the FUSE API is kept unchanged.
+- Pass-through or stackable filesystems (StackFS-like) where random reads and metadata ops dominate.
+
+**Skip it when:**
+- Production systems or distro kernels: it needs a patched 5.15.0 kernel build and replaces the in-tree fuse module; users report 'Invalid module format' and build errors (issues #1, #3).
+- Sequential I/O: the artifact's own claims say FUSE, RFUSE and ext4 perform similarly there because of the page cache.
+- Small machines: the authors note results may differ on fewer cores and older PCIe; the ring count is a compile-time constant (80 by default).
+- Unprivileged or containerized deployments where loading a custom kernel module is not allowed.
+- Comparisons with newer upstream mechanisms (FUSE passthrough, FUSE over io_uring in Linux 6.14+): none are made in the repo.
+
+**Integration:** kernel module + shared lib · patched Linux 5.15.0 kernel (included), librfuse (libfuse 3.10.5 fork, meson/ninja), build-essential, kernel-package and related packages per README · Linux 5.15.0, meson >= 0.42, GCC toolchain able to build the 5.15 kernel · Linux x86_64 (tested on Ubuntu 20.04.5, 2x40-core CPUs, PCIe 4.0 NVMe)
+
+**Vs siblings:** No catalogued sibling accelerates FUSE itself: pick RFUSE when the filesystem must stay a FUSE daemon, and liburing or SPDK when you control the I/O path directly instead of going through a userspace filesystem.
+
+**Gotchas:**
+- RFUSE_NUM_IQUEUE must be edited by hand in both lib/librfuse/include/rfuse.h and driver/rfuse/rfuse.h to match the core count before building.
+- The RFUSE driver builds as fuse.ko, so it replaces stock FUSE on the machine rather than running beside it.
+- Hybrid polling spins (schedule() loop) for up to 50 us per request before sleeping, trading CPU time for latency.
+- Latency-breakdown numbers (Figures 2 and 7) need debug builds with -DDEBUG timestamp printk, so do not benchmark throughput with those builds.
+
+**Status:** Research artifact with occasional maintenance (last commit 2025-05-08, all four issues closed by Dec 2024), GPL-2.0 kernel code; usable for experiments, not as a maintained production FUSE replacement.
+
+[repo](https://github.com/snu-csl/rfuse) · [benchmark](https://github.com/snu-csl/rfuse)
+
+##### UMap  `C++`  `LGPL-2.1`  `active`  `Tier C`
+
+LLNL user-space mmap replacement built on userfaultfd; beats Linux mmap for large-page, out-of-core reads with tuned paging.
+
+**Beats:** mmap (Linux system mmap service) — All numbers are first-party and come from paper snippets (PDFs on osti.gov, arxiv.org and web.cels.anl.gov are blocked here): 1.22-1.9x over an optimized kernel-based service across intra-node concurrency, 1.2-1.5x over system mmap on Ligra applications, and about 2.5x over mmap at 8 MiB UMap pages on NVMe/Optane, with UMap ahead only above 64 KiB pages. Hardware, kernel and compiler were not visible in the snippets, and the repo has no benchmark code (applications are in LLNL/umap-apps).
+
+**Known shortcoming:** Open issues 71 (data miscompares: a page is dirty without a dirty mark during eviction) and 91 (ENOMEM past about 900 regions), not tied to the paper numbers. Default build is Debug with logging on. The roughly 2.5x over mmap at 8 MiB pages is a snippet number, and UMap wins only above 64 KiB pages.
+
+**Independent measurement:** snippet only
+
+**How:** Faults are delivered as userfaultfd messages and resolved by pools of filler and evictor threads, with decoupled fault queues, configurable read-ahead and load balancing across workers. The UMap page size is independent of the 4 KiB system page (UMAP_PAGESIZE), so one fault can pull megabytes in a single bulk read; fewer faults and larger transfers are where the gain over kernel mmap comes from. Eviction uses high/low watermarks on a bounded buffer instead of the global page cache.
+
+**Use it when:**
+- Out-of-core, read-mostly scans or graph analytics (Ligra BFS-style) over files much larger than RAM on NVMe or Optane, where coarse paging pays off
+- Workloads that tolerate large UMap pages (64 KiB and up; the paper snippet reports the best result at 8 MiB pages)
+- HPC codes that want per-application control of page size, read-ahead, buffer size and worker counts without kernel changes
+- Datasets split over many files or a remote store, via SparseStore or a custom Umap::Store
+
+**Skip it when:**
+- Small-page random access: per the paper snippet UMap only overtakes mmap when the page size exceeds 64 KiB
+- Shared mappings or multi-process sharing: UMAP_SHARED is not supported
+- Containers with Docker's default seccomp profile, or hosts where vm.unprivileged_userfaultfd=0 and you are not root
+- Write-heavy or correctness-critical data without testing: open issue #71 reports pages changing without being marked dirty (eviction miscompare under umapsort, 128 threads); write mode needs kernel >= 5.7 and 5.7-5.9 can hang on writes
+- Programs creating many mappings: open issue #91 reports ENOMEM from UFFDIO_REGISTER past about 900 regions; LGPL-2.1 may also rule it out for static linking
+
+**Integration:** shared lib | static lib (CMake) · Linux kernel headers with userfaultfd; no other libraries · C++11, C99, CMake >= 3.5.1 · Linux only; kernel >= 4.3 read-only, >= 5.7 read/write (>= 5.10 preferred); any architecture with userfaultfd
+
+**Vs siblings:** Pick UMap when you need an unmodified kernel and a library-only, mmap-shaped API with tunable large pages; FastMap and vmcache/exmap claim larger gains over mmap but need a kernel module or custom kernel, and TriCache targets transparent caching of whole applications rather than explicit mappings.
+
+**Gotchas:**
+- Default CMake build type is Debug and ENABLE_LOGGING defaults to On; build with -DCMAKE_BUILD_TYPE=Release before measuring
+- Write-protect (read/write) mode is chosen at compile time from the build host's kernel headers; a binary built against 5.10 headers fails at runtime on an older kernel, and some distros (Ubuntu 20.04.2) ship headers that hide the feature
+- UMAP_BUFSIZE defaults to 90% of free memory and filler/evictor counts default to hardware_concurrency each, so an untuned process can grab most of RAM and many threads
+- Tuning is by environment variables (UMAP_PAGESIZE, UMAP_BUFSIZE, UMAP_PAGE_FILLERS, UMAP_PAGE_EVICTORS, watermarks), read at runtime start, not per region by default
+
+**Status:** Recent commits on develop (last 2026-07-21) but the issue tracker is quiet, with 2018-2022 bugs (#71 data miscompares, #91 ENOMEM) still open; LGPL-2.1, small enough to build from source on Linux.
+
+[repo](https://github.com/LLNL/umap) · [benchmark](https://github.com/LLNL/umap)
+
+#### profilers-and-instrumentation
+
+##### heaptrack  `C++`  `GPL-2.0-or-later`  `active`  `Tier D`
+
+Linux heap profiler using LD_PRELOAD and libunwind; much lower time and memory overhead than Valgrind massif (no published numbers).
+
+**Beats:** Valgrind Massif — No measurement exists: the README only says heaptrack's time and memory overhead is 'significantly lower' than Valgrind massif, that it does not serialize threads and that it does not slow non-allocating CPU work. The author's blog post (found by search, not opened) gives only rough estimates, so the tier stays D.
+
+**Known shortcoming:** README's 'not serialized' covers application code only: every allocation still takes one global lock in libheaptrack. README says C++11/Qt5 but CMakeLists needs C++17, CMake 3.16 and Qt 6.5; no clang-ASan support; the old gold linker gives bogus backtraces; no page or stack profiling.
+
+**Independent measurement:** code reading by enricher
+
+**How:** The application runs natively instead of on Valgrind's serializing JIT: a preload library interposes malloc, free, calloc, realloc, posix_memalign, aligned_alloc, valloc, dlopen and dlclose, plus mimalloc and Boehm GC hooks, through dlsym(RTLD_NEXT), so only allocation calls pay any cost. Each event captures a backtrace with libunwind's unw_backtrace using a per-thread unwind cache (cache size 1024), deduplicates it into a TraceTree of instruction pointers (sorted children, binary-searched) and emits one compact hex line (+ size index ptr / - ptr) to a pipe. Symbolization and aggregation happen later in the separate heaptrack_interpret process, and a timer thread samples timestamps and RSS from /proc/self/statm.
+
+**Use it when:**
+- Heap profiling of large or long-running multi-threaded C/C++ (or Rust/D) applications on Linux that are impractical to run under massif's serialization.
+- Finding allocation hotspots and temporary allocations (malloc directly followed by free), which massif's pre-aggregated output cannot show.
+- Attaching to an already running process to see what is allocating right now (needs gdb).
+- Embedded targets: record a raw trace with --raw on the device and interpret it on a host with --sysroot and debug paths.
+- CPU-heavy code with few allocations, where heaptrack adds almost nothing because it only intercepts allocator calls.
+
+**Skip it when:**
+- Allocation-heavy hot loops: every malloc/free takes a global lock, unwinds the stack and writes a line, so programs that allocate millions of times per second still slow down noticeably (no overhead numbers are published).
+- Pool or arena allocators that bypass malloc, or page-level and stack accounting: massif's --pages-as-heap and stack profiling cover these, while heaptrack needs code annotations and cannot profile the stack.
+- Non-Linux targets: the collector is Linux-only (FreeBSD has code paths); only heaptrack_print and heaptrack_gui build on macOS.
+- Binaries built with clang's ASan (unsupported), or code linked with old gold linkers, where libunwind produces bogus backtraces that crash the GUI with out-of-memory.
+- Hour-long captures you need to browse quickly: the data format cannot be seeked, so large profiles load slowly and zooming the timeline reloads them.
+
+**Integration:** shared lib · collector: libunwind (or unwind tables), Boost iostreams and program_options, zlib, optionally zstd, elfutils, libdl, pthread, gdb for attach; GUI: Qt 6.5+, KDE Frameworks, optional KDiagram · C++17 and CMake 3.16 per CMakeLists.txt (the README's C++11, CMake 2.8.9 and Qt 5 lines are out of date) · Linux (x86-64, ARM, embedded via --raw); analyzers also build on macOS
+
+**Vs siblings:** Choose heaptrack over bytehound when you want a mature, distro-packaged C/C++ heap profiler with a GUI and an attach mode; bytehound claims cheaper unwinding but likewise publishes no numbers. Choose it over memtrail or heapusage when you need full allocation timelines and flame graphs rather than just leak reports.
+
+**Gotchas:**
+- The README's 'multi-threaded applications are not serialized' means the program code; allocator calls from all threads still contend on one global lock inside libheaptrack.
+- Backtraces need debug symbols and frame unwinding info; release builds without debug info give unresolved frames, and Rust needs debug = true in the workspace Cargo.toml.
+- The GitHub repo is a mirror: patches go to invent.kde.org/sdk/heaptrack and bugs to bugs.kde.org.
+- Unwind depth is capped at 64 frames (Trace::MAX_SIZE) and can be lowered for speed; deeper stacks are truncated.
+
+**Status:** Actively maintained by KDE and KDAB (version 1.6.80 in CMakeLists, commits through 2026-10-02); the collector is GPL-2.0-or-later with LGPL-2.1+ parts, fine for use as a tool though not for vendoring into proprietary code.
+
+[repo](https://github.com/KDE/heaptrack) · [benchmark](https://github.com/KDE/heaptrack)
+
+#### thread-pools-work-stealing
+
+##### riften::Thiefpool (ConorWilliams/Threadpool)  `C++`  `MPL-2.0`  `abandoned`  `Tier C`
+
+Small C++20 work-stealing thread pool on Chase-Lev deques; about 8% faster than BS::thread_pool in one third-party matmul benchmark.
+
+**Beats:** BS::thread_pool (bshoshany/thread-pool) — The only numbers come from dp::thread_pool's own nanobench matrix-multiplication comparison on a Ryzen 7 5800X (Windows, Clang via WSL and MSVC, flags not stated). Thiefpool scored 98.3-99.0% of dp::thread_pool versus 90.2-94.5% for BS::thread_pool (1024x1024: 52.80 vs 57.14 ms/op, about 8% faster, derived from page data), and it trailed task_thread_pool at 8x8 to 256x256. The repo's own bench.cpp (10M enqueues of an atomic increment, three workloads) publishes no results.
+
+**Known shortcoming:** Open issue 4: execute() uses a non-atomic count++ and calls the owner-only Chase-Lev emplace from the caller thread, so multi-producer enqueue is a data race. Open issue 2: a worker sleeps while a pending task waits behind a long task. An exception in an enqueue_detach task calls std::terminate. The single-producer benchmark against dp::thread_pool is unaffected.
+
+**Independent measurement:** code reading by enricher
+
+**How:** Each worker owns a lock-free riften::Deque (Chase-Lev work-stealing deque) of fu2::unique_function tasks, a move-only type-erased function with small-buffer storage. Tasks are dealt round-robin to the deques, and a lightweight semaphore (adapted from Preshing's) wakes the target worker. Workers take from their own deque first; after 100 spins with their own deque empty they steal from a random deque (xoroshiro128**). They keep spinning while a global in-flight counter is above zero. enqueue avoids std::packaged_task type erasure by using a NullaryOneShot wrapper.
+
+**Use it when:**
+- A single producer thread submits many small, independent tasks and wants lower per-task overhead than a mutex-and-condition-variable pool such as BS::thread_pool.
+- Fire-and-forget jobs where enqueue_detach skips the std::future allocation.
+- C++20 codebases using CPM.cmake that want a tiny pool (one header plus function2 and riften::Deque).
+- Coarse parallel chunks (e.g. 256x256 to 1024x1024 matmul tiles) where it measured 52.80 vs 57.14 ms/op against BS::thread_pool.
+
+**Skip it when:**
+- Submitting from several threads or from inside tasks: execute() bumps a non-atomic counter and calls the deque's owner-only emplace from the caller's thread. That is a data race unless one thread does all the enqueuing (open issue #4, no maintainer reply).
+- Tasks that block on or depend on later tasks: a worker can go back to sleep while another worker's deque holds a pending task (open issue #2, 'Deadlock due to lack of cross thread signalling').
+- Latency- or power-sensitive services: woken workers busy-spin and steal until the global in-flight count reaches zero.
+- Fork-join or recursive parallelism: there is no task-local spawn/join; choose libfork, chili or Fork Union style schedulers.
+- Small-task workloads where dp::thread_pool or task_thread_pool measured faster (e.g. 8x8 matmul: 172.33 ms vs task_thread_pool 154.74 ms). The project has been abandoned since 2023-03-26.
+
+**Integration:** header-only · function2 (Naios/function2 4.1.0), riften::Deque (ConorWilliams/ConcurrentDeque v1.1.0), Threads; fetched via CPM.cmake · C++20 (std::jthread, std::stop_token, concepts); CMake 3.14+ · any with C++20 threads; the semaphore has Windows, macOS and POSIX backends
+
+**Vs siblings:** Pick it over BS::thread_pool-style pools only when one thread submits many independent tasks and the C++20 dependency is fine. dp::thread_pool measured 1-2% faster in the same benchmark and is maintained, and Fork Union or citor are the better choice for parallel-for or fork-join throughput.
+
+**Gotchas:**
+- The in-flight counter is decremented before a task runs, so workers sleep while a long task is still executing. A task enqueued to that busy worker's deque waits for it to finish (issue #2).
+- Exceptions from enqueue tasks go into the std::future. An exception thrown by an enqueue_detach task escapes the worker thread and calls std::terminate (no try/catch in the worker loop).
+- Each deque keeps every buffer it outgrows in a _garbage vector until the pool is destroyed, so memory after a burst is not returned.
+- MPL-2.0: file-level copyleft; modified pool files must stay MPL.
+
+**Status:** Abandoned: last commit 2023-03-26, v2.1.1, two open concurrency issues (#2, #4) with no maintainer reply. It is small enough to vendor under MPL-2.0 if you keep submission on one thread.
+
+[repo](https://github.com/ConorWilliams/Threadpool) · [benchmark](https://raw.githubusercontent.com/DeveloperPaul123/thread-pool/HEAD/benchmark/results/benchmark_results_clang.md)
 
 ### serialization-and-formats
 

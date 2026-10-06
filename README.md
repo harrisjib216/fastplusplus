@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1545 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 174 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [COPYABLE.md](COPYABLE.md): 1669 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 193 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 29 candidates that failed verification.
 
-Tiers across both lists: A 389, B 313, C 946, D 71.
+Tiers across both lists: A 408, B 332, C 1037, D 85.
 
 ## Evidence tiers
 
@@ -63,7 +63,12 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | regex-engines | 9 | 2 | 3 | 4 | 0 |
 | parsing-and-text | text-search-and-indexing | 9 | 3 | 0 | 6 | 0 |
 | parsing-and-text | unicode-utf8 | 16 | 6 | 0 | 10 | 0 |
-| runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
+| runtime-and-systems | allocators-gcs | 28 | 4 | 4 | 18 | 2 |
+| runtime-and-systems | coroutines-fibers | 18 | 0 | 1 | 14 | 3 |
+| runtime-and-systems | filesystems-and-io | 46 | 1 | 9 | 33 | 3 |
+| runtime-and-systems | logging-tracing | 16 | 11 | 0 | 5 | 0 |
+| runtime-and-systems | profilers-and-instrumentation | 20 | 0 | 5 | 10 | 5 |
+| runtime-and-systems | thread-pools-work-stealing | 16 | 3 | 1 | 11 | 1 |
 | serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |
 | serialization-and-formats | json | 51 | 21 | 3 | 26 | 1 |
 | serialization-and-formats | reflection-and-codegen | 8 | 3 | 1 | 4 | 0 |

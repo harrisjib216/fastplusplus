@@ -1,6 +1,6 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-05)
+## Unfinished work (resume here first; updated 2026-10-06)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
 extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
@@ -44,14 +44,17 @@ all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFEREN
    current bcdec (would make it A). Harness re-runs that would settle disputes: HarfBuzz
    benchmark-shape with -Dkbts=enabled on kb v2.28, pillow-lunasvg against a release-profile
    resvg, libblur and kornia-rs against a pinned OpenCV build.
-6. **Waves 11-12** are set up but not launched: 76 assignments across 10 categories (wave 11
-   runtime: allocators-gcs, coroutines-fibers, filesystems-and-io, logging-tracing,
-   profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
-   bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters). Re-render b1/b2 before
-   launching so each known list is current. In a cloud session give every agent
-   `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
-   Algolia and arXiv. Weekly usage limit: ten Opus agents at once were killed on 2026-10-04
-   (reset 15:00 UTC); the wave finished the next day at ten agents without a kill.
+6. **Wave 11 closed 2026-10-06** (144 verified, 143 enriched; see CLAUDE.md Status). Open wave 11 follow-ups
+   in `data/wave11/leads.md`: seed leads tidwall/bluebox (Neco Redis clone, about 2.4x over redis-server) and the
+   dsx-ai-factory/model-streamer repo move; the RetroWrite (hexhive) enrichment, whose enricher was stopped by
+   a safety classifier (ask the user before relaunching); no seed pass was run. Paper-access retiers (need an
+   environment that reaches usenix.org, arXiv, ACM, IEEE): Exgen-Malloc, SpeedMalloc, LWMalloc, LLFree,
+   Dr. Memory (commit.csail.mit.edu/papers/2011/bruening-cgo11-drmemory.pdf), Coz via the CACM copy, RFUSE,
+   TriCache, UMap, NOVA, WineFS, SplitFS, vmcache, xNVMe, DAXFS, libseff, Nowa, Heartbeat, RetroWrite, SPDK.
+7. **Wave 12** (languages: bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters) is set up
+   but not launched. Re-render b1/b2 before launching so each known list is current. In a cloud session give
+   every agent `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
+   Algolia and arXiv. Weekly usage limit: ten Opus agents at once ran a whole wave on 2026-10-06 without a kill.
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 

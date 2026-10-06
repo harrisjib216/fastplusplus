@@ -160,11 +160,26 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - Enricher findings that change a record (baseline, numbers, caveats) go in a retier file even
   when the tier stays; add_decisions.py only applies the override fields.
 
-## Status (2026-10-05)
+## Status (2026-10-06)
 
-- Waves 1-10 are finished. Lists after the 2026-10-05 session: COPYABLE 1545, REFERENCE 174,
-  REJECTED 29. The next open work is in QUEUE.md "Unfinished work" (wave 10 seed leads and
-  paper-access retiers in data/wave10/leads.md; then waves 11-12).
+- Waves 1-11 are finished except the open items below. Lists after the 2026-10-06 session: COPYABLE 1669,
+  REFERENCE 193, REJECTED 29. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads,
+  the RetroWrite enrichment and paper-access retiers in data/wave11/leads.md; then wave 12).
+- Wave 11 (runtime-and-systems) closed 2026-10-06 in one cloud session: searches b1-b8 for all 6 categories
+  (48 raw files; b7/b8 on WebSearch snippets since blogs and HN were blocked) , 147 merged, 49 verify batches,
+  144 verified after three duplicate folds (A 19, B 19, C 92, D 14; copyable 125, reference 17, mixed 2;
+  allocators-gcs, coroutines-fibers, filesystems-and-io, logging-tracing, profilers-and-instrumentation,
+  thread-pools-work-stealing). Six verifier rejects were overridden to keep with shortcomings (Neco, llco,
+  heapusage, Tracy, memtrail, E9Patch: no baseline or not faster); none rejected for invalid evidence.
+  Duplicates: ForkUnion (second id), Morgan Stanley binlog (hyphenated id), google/sanitizers (same tool and
+  numbers as the llvm-project ASan entry). Retier file data/wave11/verify/raw/retier-01.json (24 entries):
+  up to A ThunderBolt-HT; to B Trio (SOSP paper from a repo mirror) and FastMap (author thesis from a repo
+  mirror); to C obstack A, v8malloc A (competitor columns probably ran v8malloc itself), Marl D; to D
+  fc_malloc (benchmarked a different file with bugs), dp::thread_pool (timed submission, never waited), hop
+  (startup-dominated), memtrail; claim or licence corrections for ripgrep, zlob, NanoLog (Iyengar111, MIT),
+  IsoAlloc ('jemalloc' row timed IsoAlloc), tbox, Tracy (2.25 ns/zone overstated 12x), ArenaAllocator, FluxIO
+  and others. Open: RetroWrite has no enrich file (its enricher was stopped by a safety classifier mid-write,
+  shortcomings recorded from its report; ask the user before relaunching), no seed pass was run.
 - Wave 10 (media-and-graphics) closed 2026-10-05 across three cloud sessions (2026-10-03 to
   2026-10-05): searches b1-b8 for all 5 categories (40 raw files; b7/b8 on WebSearch snippets plus
   github.com, HN and blogs blocked) plus seed-a..d (32 lead projects); 276 merged, 103 verify
@@ -228,3 +243,8 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   correctness bug behind the measured numbers, write a retier file rather than only a
   shortcoming. Paper PDFs on an author's USERNAME.github.io repo (and hpcrl/ICS2025-webpage) are
   reachable through raw.githubusercontent.com even when the site itself is blocked.
+- Decision ids must exist in verified.json: two decisions were recorded under mistyped ids (rusty_alloc,
+  aw-backtrace) and had to be re-keyed; check ids against the verified list before recording (the scratchpad
+  adddec.py wrapper refuses unknown ids). Hyphen, underscore and case variants of one repo (fork_union and
+  forkunion, morgan-stanley and morganstanley) slip past merge: scan verified ids with punctuation stripped
+  before enrichment. Never `git add` a whole raw directory while agents run; stage named finished files.
