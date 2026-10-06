@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/liam0205/wangshu",
+  "one_liner": "Pure-Go embeddable Lua 5.1 VM with NaN-boxing, a Wasm tier and a native method JIT; 2-18x faster than gopher-lua on numeric scripts.",
+  "what_it_does": "Runs Lua 5.1 scripts inside Go programs without cgo, as a replacement for gopher-lua. The API is its own (wangshu.Compile returns an immutable Program; Program.Run, Program.Call and State.CallInto execute it on a per-goroutine State), plus an arena column container so a host can hand []float64/[]int64 columns to a script in one boundary crossing. Execution tiers are chosen by build tag: P1 interpreter (default), P3 Wasm via wazero, or P4 native method JIT on amd64/arm64; scripts that cannot be promoted fall back to P1 with byte-identical output.",
+  "how_it_is_fast": "Values are NaN-boxed 64-bit words in a self-managed arena instead of gopher-lua's interface-boxed values with switch dispatch, which gives the P1 interpreter its 1.3-5.5x. With the wangshu_p4 and wangshu_profile tags, protos that cross a heat threshold (200 entries, plus back-edge sampling) and pass shape checks are compiled to machine code in W^X mmap pages, with byte-level templates for FORLOOP, inline-cached table access (ArrayHit/NodeHit), direct segment-to-segment calls for self-recursion, self-tail-call loops and inline SQRTSD/FSQRT-style math intrinsics; generated code runs on its own spill stack with preemption checks at back edges to coexist with the Go runtime.",
+  "when_to_use": [
+    "Go services embedding Lua whose scripts are numeric loops or recursive kernels (rule engines, feature transforms, simulations) and that can enable the P4 build tags on linux or darwin amd64/arm64.",
+    "Batch processing where the host can pass whole columns through the arena and keep the loop inside Lua (one Program.Call per batch) rather than calling Lua per item.",
+    "Pure-Go, cgo-free builds that need cross-compilation and must not link C Lua or LuaJIT.",
+    "When byte-for-byte Lua 5.1.5 output parity matters: the project gates CI on differential tests against the official 5.1.5 binary and runs nightly differential fuzzing."
+  ],
+  "when_not_to_use": [
+    "Per-item Go-to-Lua calls with the allocating Call API: CallOnly runs at 0.41-0.47x of gopher-lua's speed on amd64 and the batch Predicate/Transform rows are 0.86-1.03x; only the zero-alloc CallInto path wins (up to 1.52x).",
+    "Call-heavy or table-shuffling scripts on the default P1 build: fib is 0.87x and fannkuch 0.77x of gopher-lua without the JIT tier.",
+    "Hosts that need Lua 5.2+ features, io.open/popen, require/module/package, string.dump, getfenv/setfenv or most of the debug library; all are listed exemptions.",
+    "Locked-down deployments (strict seccomp, SELinux deny_execmem, PaX MPROTECT) or platforms other than linux/darwin amd64/arm64: P4 cannot map executable pages and silently stays on the interpreter.",
+    "When you need LuaJIT-class speed: no Wangshu-versus-LuaJIT or PUC Lua timings are published, although a comparison harness exists (scripts/bench-vs-luajit.sh)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none for the default P1 build (pure Go, no cgo); P3 uses github.com/tetratelabs/wazero v1.12.0; golang.org/x/sys v0.44.0 is listed as indirect",
+    "min_toolchain": "Go 1.27.0 (go.mod go directive; older toolchains refuse to build)",
+    "platforms": "linux/amd64, linux/arm64, darwin/arm64 tested; P4 JIT only on linux/darwin amd64 and arm64 with executable mmap allowed; other GOOS/GOARCH compile via pure-Go stubs but are not exercised",
+    "thread_safety": "Program is immutable and shareable across States; each goroutine needs its own State (States are not shared across goroutines, so the tier on/off switch is per State).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness note: the P4 cells in the pure-VM micro rows (Simple, Arith, Loop) are not JIT code; scripts/bench-readme-table.sh runs the plain _Wangshu benchmark under the P4 build because a vararg top-level chunk never promotes, so those cells are the interpreter with profiling hooks. The gopher-lua denominator is also measured only in the earlier P1 go test pass, not interleaved with the P3/P4 passes on the same shared runner.",
+    "The timed benchmark loops check only for errors, not results; correctness of the benchmarked scripts relies on separate oracle tests (TestRealWorld_OracleParity skips when lua5.1 is not installed) and the CI differential and fuzz jobs.",
+    "Promotion needs both build tags (wangshu_p4 wangshu_profile); without wangshu_profile, heat sampling is compiled out and a 'P4' build runs the interpreter. Check TierStatsSnapshot().Promoted > 0 and alert on StuckCompileFailed.",
+    "Open bugs as of 2026-10-04: a script that allocates only through host functions never triggers GC (#297), and arena capacity only grows under large-block churn (#296); each promoted proto also costs a 64 KiB spill stack plus code pages."
+  ],
+  "pick_this_over_siblings_when": "Pick Wangshu over LuaJIT when the host is Go and cgo is ruled out; when cgo is acceptable, LuaJIT (and LuaAOT for ahead-of-time Lua 5.4) remain the speed references, since Wangshu publishes no numbers against either. Among pure-Go options, Apogee (catalogued under JITs, a Lua 5.5 VM measured against C Lua and LuaJIT) is the alternative if you need 5.x semantics beyond 5.1.",
+  "verified_claims_summary": "In one GitHub Actions round (2026-07-10, Go 1.27.0, go test -benchtime=2s -count=3 -cpu=1, median), on an Intel Xeon Platinum 8573C runner the P4 method JIT in production auto mode was 18.0x faster than gopher-lua v1.1.2 on HeavyArith, 17.7x on HeavyFloatloop, 14.5-15.0x on n-body and spectral-norm, 9.35x on fib(24) and 1.89x on binary-trees, with smaller peaks on Azure Cobalt 100 (up to 14.2x) and macOS arm64 (up to 11.3x). gopher-lua is the only timing baseline; PUC Lua 5.1.5 is used only as the correctness oracle.",
+  "status_note": "Very active (1,244 commits, last commit 2026-10-04, nightly differential fuzzing) and Apache-2.0, but young (8 stars, 1 fork); the README says it runs in production at the author's company, while the P3 and P4 tiers are still release-candidate quality and the trace JIT (P5) is not implemented.",
+  "sources_read": [
+    "https://github.com/Liam0205/wangshu",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/HEAD/README.en.md",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/HEAD/README.md",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/HEAD/go.mod",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/HEAD/scripts/bench-readme-table.sh",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/HEAD/.github/workflows/bench-readme-table.yml",
+    "https://github.com/Liam0205/wangshu/tree/master/benchmarks",
+    "https://github.com/Liam0205/wangshu/tree/master/benchmarks/heavy",
+    "https://github.com/Liam0205/wangshu/tree/master/benchmarks/realworld",
+    "https://github.com/Liam0205/wangshu/tree/master/benchmarks/vsluajit",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/go.mod",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/realworld_bench_test.go",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/realworld_gibbous_jit_test.go",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/realworld_test.go",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/heavy/heavy_bench_test.go",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/heavy/heavy_gibbous_jit_test.go",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/testdata/fib.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/testdata/fannkuch.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/testdata/nbody.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/testdata/spectralnorm.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/realworld/testdata/binarytrees.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/heavy/testdata/heavy_arith.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/heavy/testdata/heavy_recursion.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/heavy/testdata/heavy_floatloop.lua",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/benchmarks/vsluajit/bench.lua",
+    "https://github.com/Liam0205/wangshu/tree/master/scripts",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/scripts/bench-vs-luajit.sh",
+    "https://github.com/Liam0205/wangshu/tree/master/docs",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/docs/embedding-tiers.md",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/docs/design/roadmap.md",
+    "https://raw.githubusercontent.com/Liam0205/wangshu/master/docs/design/p4-method-jit/implementation-progress.md",
+    "https://github.com/Liam0205/wangshu/issues?q=is%3Aissue+luajit",
+    "https://github.com/Liam0205/wangshu/issues/112",
+    "https://github.com/Liam0205/wangshu/issues"
+  ],
+  "confidence": 0.7
+}

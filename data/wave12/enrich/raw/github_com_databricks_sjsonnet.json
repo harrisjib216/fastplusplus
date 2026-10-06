@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/databricks/sjsonnet",
+  "one_liner": "Databricks' Scala Jsonnet interpreter (JVM, Scala Native, GraalVM, Scala.js); about 5-9x faster than go-jsonnet on real-world configs.",
+  "what_it_does": "Sjsonnet evaluates Jsonnet configuration files to JSON or YAML. It ships as a CLI (executable JAR plus prebuilt Scala Native and GraalVM native-image binaries) whose flags follow the jsonnet/go-jsonnet CLI (-J, -V, --ext-code, --tla-*, -m, -y, -S), as a Maven library for Java/Scala (com.databricks:sjsonnet_2.12/_2.13/_3, entry point SjsonnetMain.main0 or Interpreter.interpret), and as a Scala.js CommonJS module with interpret and interpretAsync (Promise-based import loader). It is a separate implementation, not a build of libjsonnet, so embedding from C/C++ is not an option.",
+  "how_it_is_fast": "Parsing uses Fastparse; a single StaticOptimizer pass then resolves variables to symbol-table indices and rewrites the AST, and the optimised tree is kept in a reusable parse cache. Lazy values are memoised thunks (Lazy caches its result on first use, which the README contrasts with google/jsonnet), and the whole std library is written as Scala intrinsics instead of the Jsonnet-coded std that C++ jsonnet interprets, which is where the C++ reference loses 20-1000x on std-heavy cases. The Eval hierarchy is kept to two implementors so the JVM JIT can inline Eval.value bimorphically; the native build uses Scala Native release-full mode with full LTO, and the GraalVM binary is an ahead-of-time native image.",
+  "when_to_use": [
+    "CI or build pipelines that render large Jsonnet trees (kube-prometheus, GraalVM CI style) where go-jsonnet takes 0.6-1.1 s per entry point and C++ jsonnet takes hours: Sjsonnet's native binaries ran them in 65-205 ms in jrsonnet's runs.",
+    "JVM services that evaluate Jsonnet repeatedly: embed the Interpreter with a shared DefaultParseCache so JIT warm-up and parsing are paid once (the README's 0.10 s vs 6.5 s go-jsonnet figure is this warm-daemon mode).",
+    "One-shot command-line use where a JVM is unwanted: use the GraalVM or Scala Native release binary (GraalVM CI 65.1 / 69.6 ms) rather than the JAR, which adds about 1 s of JVM start-up.",
+    "Recursion- and inheritance-heavy configs: Inheritance recursion 46.7 ms vs go-jsonnet 444.7 ms and C++ 1216.9 ms, Realistic 1 12.7 ms vs go-jsonnet 3158.3 ms, and here it also beats jrsonnet (160.1 ms on Inheritance recursion).",
+    "Browser or Node tooling that needs a Jsonnet evaluator: the Scala.js build with interpretAsync loads imports through fetch."
+  ],
+  "when_not_to_use": [
+    "When the fastest available evaluator is the goal: jrsonnet (Rust) is 2.0x faster on GraalVM CI and 4.7x on kube-prometheus in its own table and faster on most micro cases; Sjsonnet's own 2026-05-13 gap report still has kube-prometheus 1.68x behind jrsonnet.",
+    "Many tiny evaluations each in a fresh process: the Scala Native binary has a start-up floor of about 2.4 ms (go-jsonnet about 1.4 ms, jrsonnet about 0.75 ms on the same trivial inputs), and the plain JAR about 1 s.",
+    "std.foldl-driven string concatenation in the 0.6.x releases: Foldl string concat 328.6 ms and std.foldl 80.0 ms vs jrsonnet 3.7 ms and 2.2 ms (later releases added an object-merge fast path for foldl, not measured independently).",
+    "Windows hosts wanting a native binary (none published, open issue #391) or JVMs older than Java 17 (required since 0.7.0).",
+    "Byte-for-byte parity with Jsonnet 0.22 std edge cases on older releases: divergences in std.reverse, splitLimit, clamp, setUnion, slice, makeArray, substr, base64 and manifestIni/manifestToml were filed in April-May 2026 and closed by June 2026, and pre-0.5.5 releases had broken assertion logic (issue #526)."
+  ],
+  "integration": {
+    "form": "Maven library (Scala 2.12/2.13/3), standalone JAR, Scala Native and GraalVM native-image CLI binaries, Scala.js CommonJS module",
+    "dependencies": "fastparse 3.1.1, ujson 4.4.3, pprint, scalatags, scala-collection-compat; the JVM CLI adds os-lib, mainargs, xz, lz4-java, snakeyaml and re2j; the Native build adds scala-native-crypto and scala-yaml",
+    "min_toolchain": "Java 17+ to run (since 0.7.0); builds with Mill for Scala 2.12.21, 2.13.18 and 3.3.8, Scala Native 0.5.12, Scala.js 1.20.2, GraalVM CE 25 for the native image",
+    "platforms": "any JVM; native release binaries for linux-x86_64, linux-arm64 and darwin-arm64 (as named in jrsonnet's nix/sjsonnet.nix); no Windows binary; browsers and Node via Scala.js",
+    "thread_safety": "An individual Interpreter is single-threaded; independent interpreters may run concurrently in one JVM after issue #1047 (shared renderer scratch buffers, the std singleton's field caches and parse-cache values were unsafe) was closed via PR #1052 in 2026; older releases should not share a parse cache across threads.",
+    "drop_in_for_baseline": "partial: the CLI takes the jsonnet/go-jsonnet flags and is meant to produce the same output, but it is a separate JVM/Scala implementation with its own std, not a libjsonnet ABI replacement, and std edge cases have diverged in the past"
+  },
+  "gotchas": [
+    "Unit error in the catalogued claim: in jrsonnet's docs/benchmarks.adoc the Tail call, Inheritance function recursion, String strips, Big object, std.manifestJsonEx, std.manifestTomlEx, std.parseInt and std.substr tables are in microseconds, not milliseconds (Tail call is 2.4 ms vs C++ 18.5 ms; Big object 3.8 ms vs 16.2 ms). Ratios are unaffected, but every case where Sjsonnet trails go-jsonnet (about 2.4-2.6 ms vs 1.4 ms) is one of these near-empty runs, so those losses measure process start-up rather than evaluation speed.",
+    "The README's 65x/670x numbers compare a warm long-lived JVM daemon with cold go-jsonnet and C++ subprocesses on an internal Databricks file; the public MainBenchmark (JMH, 4 forks, 30 warm-up and 40 measured iterations) now points at test_suite/stdlib.jsonnet, so that figure cannot be reproduced from the repository.",
+    "jrsonnet's harness (hyperfine -N -w4 -m20, all binaries wrapped with --max-stack 200000 under ulimit -s 65535) does not compare outputs between implementations; it timed Sjsonnet 0.6.2 (current release 0.7.5, whose 0.7.0 notes claim 40% faster) against go-jsonnet and C++ jsonnet v0.22.0-rc1 builds, not the 0.20.0 versions named in the record's baseline field, and skipped the Mimir case because Sjsonnet failed it ('Field does not exist', issue #829, fixed by PR #832).",
+    "Default --max-stack is 500 frames; deeply recursive programs need -Xss (JVM) or SCALANATIVE_THREAD_STACK_SIZE plus a larger --max-stack. The repo's RegressionBenchmark only prints golden-output mismatches to stderr instead of failing."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (LuaJIT, PyPy, Codon and the other interpreters) speed up general-purpose languages, and no other Jsonnet evaluator is catalogued yet, so pick Sjsonnet whenever the workload is Jsonnet and the baseline is go-jsonnet or C++ jsonnet. Prefer it over jrsonnet (a seed lead, faster on most cases) mainly when you need in-process JVM or Scala.js embedding or the inheritance-heavy patterns where Sjsonnet wins.",
+  "verified_claims_summary": "jrsonnet's docs/benchmarks.adoc (hyperfine with 4 warm-ups and at least 20 runs per command, AMD Ryzen 9 9950X3D, nix-built go-jsonnet and C++ jsonnet v0.22.0-rc1 at default flags) ran Sjsonnet 0.6.2's Scala Native and GraalVM release binaries one process per run: GraalVM CI 69.6 ms vs go-jsonnet 600.3 ms (8.6x) and kube-prometheus 204.6 ms vs 1068.4 ms (5.2x), with C++ jsonnet too slow to run on real-world inputs. On the C++ perf_tests and benchmarks, Sjsonnet native beat C++ jsonnet on every case C++ completed (for example Simple recursive call 18.0 vs 78.8 ms, Inheritance recursion 46.7 vs 1216.9 ms; ratios derived from page data).",
+  "status_note": "Actively maintained by Databricks (commits to 2026-09-28, release 0.7.5 on 2026-09-23, steady perf and correctness PRs), Apache-2.0, published on Maven Central and as release binaries, so it is directly usable.",
+  "sources_read": [
+    "https://github.com/databricks/sjsonnet",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/readme.md",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/docs/perf-gap-vs-jrsonnet.md",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/bench/resources/README.md",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/build.mill",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/bench/src/sjsonnet/bench/MainBenchmark.scala",
+    "https://raw.githubusercontent.com/databricks/sjsonnet/HEAD/bench/src/sjsonnet/bench/RegressionBenchmark.scala",
+    "https://github.com/databricks/sjsonnet/tree/master/bench/src/sjsonnet",
+    "https://github.com/databricks/sjsonnet/tree/master/bench/src/sjsonnet/bench",
+    "https://github.com/databricks/sjsonnet/releases",
+    "https://github.com/databricks/sjsonnet/commits",
+    "https://github.com/databricks/sjsonnet/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/databricks/sjsonnet/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/databricks/sjsonnet/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/databricks/sjsonnet/issues/829",
+    "https://github.com/databricks/sjsonnet/issues/51",
+    "https://github.com/databricks/sjsonnet/issues/1047",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/docs/benchmarks.adoc",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/benchmarks.nix",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/sjsonnet.nix",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/cpp-jsonnet.nix",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/nix/go-jsonnet.nix",
+    "https://raw.githubusercontent.com/CertainLach/jrsonnet/HEAD/README.adoc",
+    "https://github.com/eduardosm/rsjsonnet"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/deepmind/s6",
+  "one_liner": "DeepMind's archived decorator-driven JIT library for CPython 3.7; first-party 7-9.5x on Richards, 5x slower on unpack_sequence.",
+  "what_it_does": "S6 is a CPython extension (built with CMake and pybind11) that JIT-compiles Python functions without patching CPython's source: you import s6 and wrap an entry function with @s6.jit, and while that call runs S6 swaps the interpreter's frame-evaluation hook so the function and everything it calls go through S6's own interpreter and, once hot, compiled code. s6.inspect(fn) exposes the strongjit IR, is_compiled, force_compile, deoptimize and an IR evaluator for debugging. It only supports CPython 3.7 built with frame pointers and is meant to be built inside the project's Docker image.",
+  "how_it_is_fast": "S6's ceval-like interpreter collects type feedback, and an Oracle counts executed bytecodes to pick hot code objects for asynchronous compilation. Bytecode is translated to strongjit, an SSA IR with block arguments; optimisation passes run on it, functions are specialised on the type of their first argument behind guards with deoptimisation back to CPython frames, and boxed int/float/bool arithmetic is unboxed. Attribute and global loads use V8-style hidden classes (class IDs hidden in the top 20 bits of a dict's ma_version_tag or a type's tp_flags) so they become guarded fixed-slot loads, and attributes that never change are treated as constants; the IR is lowered to x86-64 machine code with asmjit.",
+  "when_to_use": [
+    "Studying how to build a V8-style JIT (hidden classes, SSA IR, deoptimisation) as a CPython library: the README is a detailed design write-up and the C++ source is Apache-2.0.",
+    "Object-oriented pure-Python hot loops (method calls, attribute access) on a CPython 3.7 you control: Richards is the case with the first-party 7x (100 iterations) and 9.5x (internal machines) figures.",
+    "Pure-Python floating-point code such as the raytrace benchmark (3-4.5x first-party), where unboxing applies.",
+    "x86-64 Linux setups that can rebuild CPython 3.7 with -fno-omit-frame-pointer and run the Docker build."
+  ],
+  "when_not_to_use": [
+    "Anything needing support or a current Python: the repository was archived on 2023-07-05 with a single import commit, DeepMind stopped work on it, and only CPython 3.7 is supported.",
+    "Code dominated by C-API calls such as NumPy: the README says these are bottlenecked by C API call time.",
+    "Large functions or heavy tuple/list unpacking: unpack_sequence ran 5x slower (0.2x) because the hot loop stays in S6's own interpreter, which is slower than ceval.c; the README advises splitting big functions.",
+    "Stock distribution CPython builds: without frame pointers JIT compilation 'might crash', and the --wrap=PyFrame_FastToLocalsWithError link step is not in the release, so compilation 'might misbehave'; pyperf segfaults under S6 (benchmark docstrings).",
+    "Non-x86-64 hosts: code generation targets x86 only."
+  ],
+  "integration": {
+    "form": "Python C++ extension module (pybind11) built from source with CMake/Ninja; Docker image recommended",
+    "dependencies": "CPython 3.7 shared library, abseil-cpp, asmjit, pybind11, pybind11_abseil, re2, udis86, cppitertools, googletest (pinned via FetchContent in src/CMake/deps.cmake), protobuf from the system",
+    "min_toolchain": "C++17, clang (Dockerfile uses clang 13), CMake 3.16.3+, CPython 3.7 configured with --enable-shared and built with -fno-omit-frame-pointer",
+    "platforms": "x86-64 Linux (Ubuntu 20.04 Docker image); no other targets",
+    "thread_safety": "not documented; the design relies on the GIL (type modifications 'stop the world', which the README calls easy because of the GIL), and compilation runs asynchronously from the Oracle",
+    "drop_in_for_baseline": "partial: no CPython source changes and only a @s6.jit decorator on the entry point, but it needs a frame-pointer CPython 3.7 build plus S6's own build, and some workloads run slower"
+  },
+  "gotchas": [
+    "Harness flaw: @s6.jit is applied at import time (in the Richards class body and on module-level functions), and the decorator calls Initialize(adopt_types=true), which adopts all existing types, swaps the generic tp_setattro of every adoptable type for S6's GenericSetAttrUsingClasses (string interning plus a class attribute-map lookup) and hooks PyType_Type.tp_new. The 'Default Python 3.7' baseline in richards.py, raytrace.py and the unpack_sequence scripts is therefore timed on a CPython already instrumented by S6, not stock CPython; Richards' attribute-store-heavy loop pays the wrapper, which can inflate the reported speedup by an unmeasured amount.",
+    "Each script times one wall-clock run per mode (time.time() or perf_counter), baseline first and S6 second in the same process, with no repetitions; richards.py discards _run's correctness result (holdCount 9297 / qpktCount 23246), so a wrong result would still print a speedup, and its default is 50 iterations while the README quotes 100. The S6 time includes JIT warm-up and compilation.",
+    "Specialisation is on the first argument's type only; hidden classes are not used for objects with custom __getattr__/__setattr__ or a negative tp_dictoffset, and any dict change made outside S6 resets the class ID to 0, dropping that object off the fast path.",
+    "The public numbers come from 'internal dev machines' with no CPU or build named; the Docker baseline CPython is the unpinned 3.7 branch built without PGO and with frame pointers kept."
+  ],
+  "pick_this_over_siblings_when": "Pick S6 only as a design reference: for running code, Cinder's CinderX extension (actively released for CPython 3.14, 1.5-3.8x over its own interpreter) or CPython's built-in copy-and-patch JIT (about 7-8% geomean, supported) are the practical CPython JITs, and Numba or Hana Jit fit numeric kernels better.",
+  "verified_claims_summary": "First-party only: the README reports Richards about 7x over 'the default Python 3.7 interpreter' at 100 iterations 'depending on your hardware' and 9.5x on unnamed internal dev machines, raytrace 3-4.5x, and unpack_sequence 0.2x (slow variant) or 0.97x (fast variant). The numbers come from single-run scripts in src/benchmarks that time the baseline and then the S6 run in the same process; the public build is clang 13 against a non-PGO, frame-pointer CPython 3.7, and no independent reproduction was found.",
+  "status_note": "Abandoned: archived 2023-07-05 after one Copybara import commit (2022-09-14) and tied to CPython 3.7; Apache-2.0 (src/LICENSE and per-file headers), so the code can be copied, but in practice it is a reference design rather than a usable dependency.",
+  "sources_read": [
+    "https://github.com/deepmind/s6",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/README.md",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/build.sh",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/LICENSE",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/CMake/deps.cmake",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/benchmarks/richards.py",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/benchmarks/raytrace.py",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/benchmarks/unpack_sequence_fast.py",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/benchmarks/unpack_sequence_slow.py",
+    "https://github.com/deepmind/s6/tree/main/src",
+    "https://github.com/deepmind/s6/tree/main/src/python",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/python/api.cc",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/api.cc",
+    "https://github.com/deepmind/s6/tree/main/src/runtime",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/runtime/interposer.cc",
+    "https://github.com/deepmind/s6/tree/main/src/classes",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/classes/object.cc",
+    "https://raw.githubusercontent.com/deepmind/s6/HEAD/src/classes/getsetattr.cc"
+  ],
+  "confidence": 0.75
+}

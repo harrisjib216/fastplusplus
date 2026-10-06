@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/kienpc1234/luava",
+  "one_liner": "Pure-Java Lua 5.4 engine with a tiered Lua-to-JVM-bytecode JIT; 1.2x to 19x faster than the LuaJ 3.0.1 interpreter.",
+  "what_it_does": "Embeds Lua 5.4 in a JVM application: lexer, parser, register bytecode VM, a tiered JIT, sandboxing (instruction limits, timeouts, a Java-access allowlist) and annotation or reflection based Java interop. The API is LuaState-centric (eval, compile, call, set/setLive, registerFunction, registerModule) and is not LuaJ's Globals/LuaValue API, so moving from LuaJ means rewriting the host glue. It passes the 31 runnable PUC-Rio 5.4.9 test files and ships on Maven Central as io.github.kienpc1234:luava with ASM shaded in.",
+  "how_it_is_fast": "The interpreter keeps numbers and booleans unboxed in three parallel stacks (long[] raw bits, byte[] type tags, LuaValue[] references). Hot protos (50 calls, or 8192 loop back-edges with on-stack replacement) that pass a static subset analysis are translated with ASM into one static JVM method per Lua function, loaded as a hidden class, with unboxed long flow, direct INVOKESTATIC self-recursion and type guards that deopt back to the interpreter at the current pc; HotSpot C2 then inlines and register-allocates that code. Coroutines run on JDK 21 virtual threads instead of LuaJ's platform threads, which accounts for the 19x coroutine result. eval caches the compiled proto tree by chunk name plus source, so a repeated eval of the same script keeps its JIT state.",
+  "when_to_use": [
+    "A JVM service or game server already embedding LuaJ whose scripts are numeric loops, recursive functions or string/table building and you can afford a host-API rewrite.",
+    "You need Lua 5.4 semantics (integer subtype, //, bitwise operators, <close>) on the JVM; LuaJ only implements 5.2.",
+    "Multi-tenant hosts running untrusted scripts that need instructionLimit or timeout plus a Java-access allowlist (note the JIT is bypassed while those guards are active).",
+    "Coroutine-heavy scripts on the JVM: 200k yield/resume pairs took 234.7 ms against LuaJ's 4549.9 ms in the project's harness.",
+    "Long-running processes that eval the same script repeatedly, where tier-up and C2 warm-up are amortized."
+  ],
+  "when_not_to_use": [
+    "Raw Lua speed outside the JVM: use PUC Lua or LuaJIT; the project's own committed report (2026-09-11, pre-JIT build) had Luava 4x to 114x slower than C Lua 5.4, and the current JIT has no published head-to-head with C Lua or LuaJIT.",
+    "Short-lived CLI runs or first-request-latency-sensitive paths: the README measures the first eval of a small script at about 47 ms versus 13 ms for LuaJ, unless you call JitCompiler.prewarm.",
+    "Scripts dominated by metatable OOP, closures or string patterns: the gains there are 1.2x to 1.4x over an interpreter, and code using coroutines, debug hooks, instructionLimit or timeout never enters JIT code.",
+    "Hosts that need native C Lua modules (.so via LUA_CPATH) or os.execute-driven tooling; both are out of scope.",
+    "Production use that needs a stable API or track record: version 0.2.5, API may change before 1.0, 2 stars, one author, and two commits in the two days before the 0.2.5 release fixed 12 conformance gaps and six core and stdlib bugs found by differential testing against PUC Lua."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (ASM 9.7 shaded into the jar as org.luava.shaded.asm)",
+    "min_toolchain": "JDK 21+ (no --enable-preview, no JNI/FFM); Maven 3.9+ or Gradle only to build from source",
+    "platforms": "any JVM 21+",
+    "thread_safety": "A LuaState must be used from one host thread; concurrent top-level eval on one state is not supported. Separate states share no globals, but the JIT compiler (single background thread, synchronized tryCompile) and the 512-entry compiled-code LRU cache are process-wide.",
+    "drop_in_for_baseline": "partial — same language role as LuaJ and mirrors java.proxy/luajava.createProxy, but the embedding API differs (LuaState instead of Globals) and the language is Lua 5.4 rather than 5.2"
+  },
+  "gotchas": [
+    "Harness asymmetry: Bench.java calls st.eval(code) on one LuaState, and LuaState caches the compiled proto tree by chunk name plus source, so timed Luava iterations skip lexing, parsing and compilation and start with already-JIT-compiled kernels; LuaJBench.java calls globals.loadfile(file) every iteration, re-reading and re-compiling the file. For these millisecond-scale tasks this is a small bias toward Luava, not a reversal, but it contradicts the 'both re-evaluate the source each iteration' reading.",
+    "The baseline is LuaJ's interpreter: LuaJBench.java uses JsePlatform.standardGlobals() without installing LuaJ's luajc Lua-to-Java-bytecode compiler, so JIT-versus-interpreter is what was measured; weak asserts in the closures (sum > 0), OOP (acc > 0) and string-concat (length > 100000) tasks check little.",
+    "Running from exploded classes (IDE, mvn exec) without ASM on the classpath silently disables the JIT; since 0.2.5 a one-time stderr notice is printed. Benchmark only the packaged jar.",
+    "The README table has no CPU model, JDK build or committed results file, and the coroutine task is run unpinned while the others are taskset-pinned to one core."
+  ],
+  "pick_this_over_siblings_when": "Pick Luava when the host is a JVM and you want Lua 5.4 with sandboxing and Java interop; Apogee (Go, Lua 5.5, measured against C Lua and LuaJIT) and FakeLua (beats PUC Lua 5.4) are the choices outside the JVM, and plain LuaJIT stays faster for standalone Lua.",
+  "verified_claims_summary": "With JIT tier-up made synchronous (-Dluava.jit.sync=true), JDK 21+, G1 and -Xmx1g, a paired order-flipped harness (median of best-of-10 after 6 warm-up evals) put Luava ahead of the LuaJ 3.0.1 interpreter on all 10 small Lua tasks, from 1.21x (closures, OOP metatables) to 10.41x (fib(35): 243.8 ms vs 2538.6 ms) and 19.39x (coroutines); no CPU model is given. Against C Lua the only numbers are older: the 2026-09-11 pre-JIT report shows C Lua 5.4 at 794.76 ms for fib(35) and 43.80 ms for 200k coroutine switches, so the current JIT is about 3.3x faster than C Lua on fib but about 5.4x slower on coroutines (derived from page data, different runs and builds).",
+  "status_note": "Active (release 0.2.5 'Concord' on 2026-09-29, frequent commits) and MPL-2.0, so it can be embedded in proprietary JVM software while edits to Luava's own files stay open; still pre-1.0 with a single author and 2 stars.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/README.md",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/docs/USAGE.md",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/pom.xml",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/harness/interleave.sh",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/harness/Bench.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/harness/LuaJBench.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/harness/BASELINE.txt",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/harness/FINDINGS.txt",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/results/benchmark_report_20260911_201214.md",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/01_arith_loop.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/02_fibonacci.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/03_table_ops.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/04_string_concat.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/05_closures.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/06_coroutines.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/07_hash_table.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/08_oop_metatables.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/09_string_pattern.lua",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/benchmarks/lua/10_sieve.lua",
+    "https://github.com/KienPC1234/luava/tree/master/src/main/java/org/luava/runtime/jit",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/jit/JitCompiler.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/jit/JitCodeCache.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/jit/JitCode.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/jit/JitRuntime.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/jit/LuaToJvmTranslator.java",
+    "https://raw.githubusercontent.com/KienPC1234/luava/master/src/main/java/org/luava/runtime/LuaState.java",
+    "https://github.com/KienPC1234/luava/issues",
+    "https://github.com/KienPC1234/luava/commits/master"
+  ],
+  "confidence": 0.6
+}
