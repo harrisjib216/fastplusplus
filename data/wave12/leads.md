@@ -36,3 +36,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - revmc (README chart is an image only) and ncruces/wasm2go (go-sqlite3 discussion #361): wasm gh-any search leads (2026-10-06).
 - ml-rust/splintr (LLM BPE tokenizer on the regexr backend, claims unchecked; regexr enricher, 2026-10-06); weak lead.
 - klippa-app/go-pdfium experimental/BENCHMARKS.md (wazero vs wazy on 144 PDFs; wazy enricher, 2026-10-06); seed candidate for a wazy cross-check.
+- polkavm-ffi (rotkonetworks/romio): third-party C FFI for PolkaVM, 25 downloads (PolkaVM enricher, 2026-10-06); weak lead.

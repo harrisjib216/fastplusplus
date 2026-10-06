@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/neopallium/s1vm",
+  "one_liner": "Proof-of-concept safe-Rust WebAssembly interpreter that compiles functions to nested closures; beat 2021-era wasmi 2.6x on fib, lost to wasm3.",
+  "what_it_does": "s1vm loads a .wasm file (parsed with bwasm/parity-wasm), compiles every function into a tree of boxed Rust closures, and runs exported functions through VM::load_file and VM::call with integer Value arguments; a small CLI takes the file, the function name and integer arguments. The crate is #![forbid(unsafe_code)]. Only about twenty opcodes are compiled (block/loop/if/else/br/br_if/return, call, local.get/set/tee, i32/i64 const, add, sub, lt_s, eq, eqz); every other opcode, including memory loads and stores, globals, mul/div, floats, br_table, call_indirect, drop and select, hits todo!() and panics while the module loads, and host-function imports are also todo!(). It is not a drop-in for wasmi: different API, no imports, no linear memory.",
+  "how_it_is_fast": "Closure compilation (closure-threaded code): instead of a fetch-decode match loop, control flow is rebuilt into blocks and each opcode becomes a Box<dyn Fn> closure, so there is no program counter and no single unpredictable dispatch branch. At compile time a symbolic operand stack (Input::Local, Input::Const, Input::Op) folds stack-machine sequences such as local.get / i32.const / i32.add into one closure, removing most runtime value-stack pushes and pops, the same idea wasm3 uses. Local 0 travels as a Rust argument (l0) instead of a stack slot, and since a February 2022 commit functions with zero or one parameter and no locals, which is exactly fib's shape, skip stack-frame setup entirely.",
+  "when_to_use": [
+    "As a design reference for writing a fast interpreter in safe Rust: closure compilation plus compile-time operand folding, in about 1,800 lines.",
+    "Running tiny integer-only, call-heavy wasm kernels (fib-like recursion, simple counting loops) inside a codebase that forbids unsafe code, where you are prepared to add the missing opcodes yourself.",
+    "As a starting point for a fork: MIT-licensed, few dependencies, no JIT and no platform-specific code."
+  ],
+  "when_not_to_use": [
+    "Any real-world wasm module: no linear memory, globals, floats, mul/div, br_table, call_indirect, drop/select or host imports, so loading such a module panics.",
+    "Untrusted input: unsupported opcodes, block nesting deeper than 4 and malformed control flow are panics (todo!, unreachable!, panic!) rather than errors, and the stated CPU/memory resource limits were never built.",
+    "When speed matters most: wasm3 is about 2x faster on the same fib test, and the wasmi baseline has been replaced by register-based engines (v0.32, then 2.0) that the 2021 numbers say nothing about.",
+    "Anything needing maintenance: abandoned since 2022-05-07, the crates.io release (0.1.1, 2021-04-30) predates the 2022 fixes, and it depends on parity-wasm, which is archived and marked deprecated and unmaintained."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "bwasm 0.1.1 and parity-wasm 0.41 (parity-wasm is archived and deprecated)",
+    "min_toolchain": "Rust 2018 edition; no rust-version declared",
+    "platforms": "any target with Rust std (pure safe Rust, no JIT, no SIMD)",
+    "thread_safety": "Not documented. VM::call takes &mut self and the compiled functions are Box<dyn Fn> without Send/Sync bounds, so a State cannot be moved or shared across threads even though the README says a State can be shared between instances; use one VM per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark provenance: the README numbers (2021-04-30) come with no harness, CPU, compiler flags or wasmi/wasm3 versions; fib.wasm 'used in benchmark' was committed only on 2022-02-21, two days after wasmi's author asked in issue #1 how to reproduce the results, and the measured code predates the 0-1-parameter fast path (2022-02-22) and the May 2022 fixes to loops, sub-blocks, local initialisation and multi-parameter calls. His reproduction in issue #1 (fib(25)) had s1vm at 9.67 ms vs wasmi_v0 21.34 ms and wasmi_v1 12.97 ms, a lead of about 1.34x over the then-new wasmi engine, not 2.6x.",
+    "Call-path bugs outside fib's shape (from reading the code, not run): a compiled call to a function with one or fewer parameters always pops one operand as the argument, so calling a zero-parameter function steals an unrelated operand; a one-parameter call passes its argument only in l0 and never pushes it, yet Function::call runs push_frame(1, locals) when the callee has locals, which fails with a spurious StackOverflow trap when the caller's frame has no spare value (and truncates a caller slot when it does). VM::call reads params[0], so calling an exported zero-parameter function panics.",
+    "The deferred Input scheme reads a local only when the consuming closure runs, and local.set/local.tee do not flush pending reads, so 'local.get 0; local.get 0; i32.const 1; i32.add; local.set 0; return' returns the new value instead of the old one; if/else blocks that yield a value leave both branch values on the compile-time operand stack outside the conditional. fib.wat avoids every one of these patterns.",
+    "Functions on the fast path push no frame, so the 1M-value stack limit never checks recursion depth; each wasm call nests several Rust closure calls on the native stack, so very deep recursion would overflow the Rust thread stack and abort instead of trapping (inferred from the code). Cargo.toml declares MIT/Apache-2.0 but only the MIT text is in the repository."
+  ],
+  "pick_this_over_siblings_when": "Only as a study or fork base: wasm3 (C) runs the same fib about 2x faster and is a complete interpreter, and Wasmi is the maintained Rust choice with a newer register-based engine. Pick s1vm over them only if you need a tiny #![forbid(unsafe_code)] code base whose closure-compilation design you intend to extend yourself.",
+  "verified_claims_summary": "The README (2021-04-30) lists wall times for the recursive fib.wasm at n=35 and n=41: s1vm 1.29 s and 22.5 s against wasmi (the 2021 stack-machine engine, version not stated) 3.31 s and 57.6 s, about 2.6x faster (derived from page data), while wasm3 took 0.66 s and 9.8 s, about 2x faster than s1vm. No CPU, compiler flags (the release profile leaves LTO and codegen-units commented out), engine versions or timing command are given.",
+  "status_note": "Abandoned since 2022-05-07 (25 commits, 16 stars, one open issue asking how to reproduce the benchmark); MIT-licensed and small enough to vendor, but it is a proof of concept that only runs fib-like integer code, so its value is the design rather than a usable runtime.",
+  "sources_read": [
+    "https://github.com/Neopallium/s1vm",
+    "https://github.com/Neopallium/s1vm/tree/master/src",
+    "https://github.com/Neopallium/s1vm/commits",
+    "https://github.com/Neopallium/s1vm/issues",
+    "https://github.com/Neopallium/s1vm/issues/1",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/README.md",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/Ideas.md",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/fib.wat",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/for_loop.wat",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/compiler.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/vm.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/stack.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/function.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/module.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/value.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/error.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/memory.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/export.rs",
+    "https://raw.githubusercontent.com/Neopallium/s1vm/HEAD/src/bin/main.rs",
+    "https://crates.io/api/v1/crates/s1vm",
+    "https://crates.io/api/v1/crates/parity-wasm",
+    "https://crates.io/api/v1/crates/bwasm",
+    "https://github.com/paritytech/parity-wasm"
+  ],
+  "confidence": 0.6
+}
