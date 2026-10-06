@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/perl11/cperl",
+  "one_liner": "Diverged Perl 5 fork with types, faster signatures and FNV1a hashing; about 6% faster than perl 5.30.0 on PerlBench.",
+  "what_it_does": "cperl is a fork of the perl5 interpreter (started at cPanel in 2015, later maintained by Reini Urban) that shipped 'c' releases alongside perl5 5.22 to 5.30. It claims to run '99.9%' of perl5 code; CPAN works, though some modules need patches from the rurban/distroprefs repo. On top of perl5 it adds core types, typed signatures, classes and roles, a builtin FFI, the B::C compiler and security hardening. You use it as a replacement `cperl` binary, not as a library.",
+  "how_it_is_fast": "Signatures bind arguments straight from the stack without also filling @_ (documented as 2x faster calls), and subs with a `my (...) = @_;` prologue are promoted to signatures automatically. Ops get type-specialised variants for arithmetic, padsv and sassign, constant subs are inlined without an empty prototype, static method calls are turned into plain function calls, and `for (0..$#a)` loops use an unchecked element op with no bounds check. Hashes default to FNV1a with move-to-front collision chains and a 90% fill rate, and strict, attributes, DynaLoader, XSLoader and Config are rewritten in C/XS to cut startup. The benchmarked builds also used clang -O3 -march=native with thin LTO.",
+  "when_to_use": [
+    "A legacy code base pinned to Perl 5.22-5.30 that can swap interpreters and wants small gains on hash- and string-heavy code: at 5.30, cperl's per-test ratios are hash/get 1.29x, string/base64 1.29x, array/copy 1.26x, string/htmlparser 1.25x and re/w 1.21x.",
+    "Perl 5.22 deployments: 5.22.5c vs perl 5.22.4 is the release pair with the clearest gain (1.12x geomean, 27 of 41 tests faster, regex group 1.59x).",
+    "Code that already uses typed signatures or coretypes and accepts cperl's semantics (for example an empty @_ in subs with signatures).",
+    "As a reference for interpreter techniques (type-specialised ops, unchecked array access in counted loops, signature binding without @_) to port into another VM."
+  ],
+  "when_not_to_use": [
+    "Any new or security-sensitive deployment: the repository has been archived read-only since 2023-06-01, the last commit is from 2022-07-29 and the last release 5.30.0c from 2019-07-06, so it misses every perl5 fix and feature after 5.30.",
+    "Code dominated by sub calls: at 5.30, cperl is slower than perl5 on call/1arg (0.82x), call/0arg (0.85x) and call/empty (0.87x), and the arith group is 0.96x.",
+    "If you need a gain that holds across releases: cperl 5.24.4c, 5.26.5c and 5.28.2c score 0.99x, 1.00x and 0.98x of the matching perl5 releases in the same run, despite their -O3/-march=native builds.",
+    "Workloads that need CPAN modules without cperl patches (autovivification, TryCatch and Catalyst::Runtime are listed for 5.28.0c), the -d debugger with signatures (documented as mostly broken), or Test2.",
+    "Untrusted hash keys where you want a keyed hash: the default is unkeyed FNV1a with move-to-front chains, and flood protection relies on collision handling and security warnings; open issue #115 reports restricted Storable hashes broken under the PERL_PERTURB_KEYS_TOP strategy."
+  ],
+  "integration": {
+    "form": "interpreter binary built from source (static libperl.a in the benchmarked builds); prebuilt el6/el7, Debian sid, macOS and Windows packages were published on perl11.github.io",
+    "dependencies": "A C compiler and the perl5 Configure toolchain; libffi for the builtin FFI (the 5.30c build links -lffi)",
+    "min_toolchain": "Not documented; the benchmarked builds used gcc 7.2.0/8.2.0/8.3.0 and clang 7.0.1",
+    "platforms": "Developed and tested on 64-bit Linux and darwin; Windows smoked with mingw, cygwin and MSVC 10/12 (32- and 64-bit); BSDs and Solaris tested only before releases (STATUS page)",
+    "thread_safety": "Same interpreter model as perl5; every benchmarked build was non-threaded (-Uuseithreads), and perlcperl.pod calls native threads 'not fixable', favouring Coro",
+    "drop_in_for_baseline": "partial — runs most perl5 code, but @_ is empty in subs with signatures, illegal prototypes die, base @ISA and Config are read-only, core modules such as Test::More are stricter about types, and some CPAN modules need distroprefs patches"
+  },
+  "gotchas": [
+    "Harness confound behind the 1.06x: the CONFIG-5.30c.txt recorded for the benchmarked cperl binary shows a pre-release development build (git_branch=smoke/relprep, commit b745599 'cperl-5.29.2-464', -Dusedevel), not the 5.30.0c tag released three weeks later. It was configured for BOLT post-link optimisation (archname x86_64-linux-bolt@b745599, perlpath cperl5.30.0-nt-bolt, llvm-ar from an llvm-bolt build tree, -Wl,-q to keep relocations) and built with clang 7 -O3 -g -march=native thin LTO, without -fwrapv and with -fstack-protector. perl 5.30.0 was built with gcc 8.3 -O2, -fwrapv and -fstack-protector-strong. The gap therefore mixes toolchain and flags with source changes; cperl 5.28.2c, configured the same way, was 0.98x of perl 5.28.2.",
+    "Single PerlBench run (2019-06-14) with no repetitions or error bars. Some of the 5.30 wins come from a perl5 regression rather than cperl gains: perl5 hash/get fell from 146 (5.28) to 107 (5.30) while cperl stayed at 129-138, which yields the 1.29x on that test.",
+    "The README's 'about 15%x faster than perl5 overall' and the STATUS page's '20%' and '>2x faster than 5.14' have no supporting run. The same page gives 1.40x over perl 5.14 (geomean of the 41 tests), and that baseline was a -O1 -g build (path perl5.14.4-nt@g).",
+    "Behaviour differs from perl5: @_ is not populated in subs with signatures, Test::More::skip arguments are type-checked at compile time, use base @ISA is read-only, and a plain `my (...) = @_;` prologue may be rewritten into a signature."
+  ],
+  "pick_this_over_siblings_when": "No other Perl implementation is among the catalogued siblings. Next to PyPy (about 6.5x over CPython on kostya bench.b) or YJIT (about 2x over the CRuby interpreter), cperl's gain over its own baseline is small and varies by release, so pick it only when you must stay on Perl 5.22-5.30 semantics and want a CPAN-compatible interpreter with types and signatures.",
+  "verified_claims_summary": "In the project's own PerlBench page (one run on 2019-06-14, 41 micro-tests, Linux x86_64 host 'reini' on Debian kernel 4.19.0-5, CPU model not stated, scores relative to perl 5.6.2 = 100), cperl 5.30.0c averages 142.9 vs perl 5.30.0's 134.8: a 1.06x geomean, faster on 26 tests, slower on 13, tied on 2 (derived from page data). cperl was a BOLT-configured clang -O3 -march=native LTO dev build, while perl5 was gcc 8.3 -O2. At 5.24, 5.26 and 5.28 cperl scored 0.99x, 1.00x and 0.98x of perl5.",
+  "status_note": "Abandoned: archived read-only on 2023-06-01, last commit 2022-07-29, last release 5.30.0c (2019-07-06); GPL-1.0+ or Artistic licensed, so it is usable as a source of interpreter-optimisation ideas, not as a supported Perl.",
+  "sources_read": [
+    "https://github.com/perl11/cperl",
+    "https://github.com/perl11/cperl/commits/master",
+    "https://github.com/perl11/cperl/releases",
+    "https://github.com/perl11/cperl/issues?q=is%3Aissue%20is%3Aopen%20label%3Abug",
+    "https://raw.githubusercontent.com/perl11/cperl/HEAD/README",
+    "https://raw.githubusercontent.com/perl11/cperl/HEAD/pod/perlcperl.pod",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/STATUS.html",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/index.html",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/index.html",
+    "https://github.com/perl11/perl11.github.io/tree/master/cperl/bench-all",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/CPU_FACTOR",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/CONFIG-5.30.txt",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/CONFIG-5.30c.txt",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/CONFIG-5.28.txt",
+    "https://raw.githubusercontent.com/perl11/perl11.github.io/HEAD/cperl/bench-all/CONFIG-5.28c.txt"
+  ],
+  "confidence": 0.8
+}
