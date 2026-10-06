@@ -1,0 +1,42 @@
+{
+  "id": "https://github.com/janestreet/magic-trace",
+  "one_liner": "Intel PT tracer recording every function call at about 40 ns resolution, with 2-10% overhead, below perf -g call-graph sampling.",
+  "what_it_does": "Attaches to a running Linux process (or launches one) without code changes, records all control flow into an Intel Processor Trace ring buffer, and on a trigger snapshots the last ~10 ms and rebuilds a timeline of call stacks. Triggers are Ctrl+C, program exit, or a call to a chosen symbol (-trigger SYMBOL, -trigger '?' fuzzy picker, or the default magic_trace_stop_indicator). Output is a trace.fxt.gz opened in magic-trace.org, a lightly modified Perfetto UI running in the browser. It is not a drop-in for perf -g: it answers 'what exactly happened in these milliseconds' rather than 'where does time go on average'.",
+  "how_it_is_fast": "Intel PT has the CPU write a compressed branch trace to memory in hardware, so there is no per-call instrumentation and no interrupt-driven stack walk like perf -g's frame-pointer or DWARF unwinding. magic-trace drives perf in snapshot mode and only decodes the ring buffer when a trigger fires, so the steady-state cost is mainly memory bandwidth (hundreds of Mbps) and each snapshot stalls the app for about 10 us. Timing resolution is configurable, trading detail for lower bandwidth.",
+  "when_to_use": [
+    "Tail-latency hunting in production: put a stop-indicator call where a request or scheduler cycle runs long, and see every call that led up to it.",
+    "Short functions (tens of ns to a few us) that a sampling profiler never catches, for example the 70 ns case in the README testimonials.",
+    "Native C, C++, Rust or OCaml binaries on bare-metal Intel Skylake-or-newer Linux hosts (tested on Skylake, Ice Lake, Tiger Lake).",
+    "Pre-crash history: snapshot at program exit to see the last milliseconds of control flow, not just the final stack."
+  ],
+  "when_not_to_use": [
+    "AMD, ARM or non-Linux machines, and most VMs (KVM with kernel 5.0+ needed for guests): Intel PT only.",
+    "Whole-run aggregate profiles or flame graphs over minutes: it only keeps a ~10 ms window per snapshot; use perf record or a sampling profiler.",
+    "Memory-bandwidth-bound workloads: PT output competes for bandwidth, and saturation leads to paused tracing and decode errors.",
+    "Code paths that rely on exceptions (unsupported per the platforms wiki), or Python beyond its C frames."
+  ],
+  "integration": {
+    "form": "prebuilt binary or .deb (OCaml source, built with dune)",
+    "dependencies": "Linux perf with Intel PT support (perf 5.4+ for snapshot on exit, 5.5+ for better kernel tracing); kernel 3.10+; root for -trace-include-kernel",
+    "min_toolchain": "none to use (release binary); building needs OCaml per the wiki build instructions",
+    "platforms": "Linux x86-64 on Intel Skylake or newer (Broadwell works with ~1 us resolution); no AMD or ARM",
+    "thread_safety": "not documented; open issues report split traces without --per-thread (#236) and stop-indicator trouble in multi-threaded apps (#274)",
+    "drop_in_for_baseline": "partial: same attach-to-a-pid workflow as perf and it drives perf underneath, but it produces snapshot timelines, not sampled call-graph profiles"
+  },
+  "gotchas": [
+    "The tracee pauses about 10 us per snapshot, so trigger after the user-visible work finishes, as the wiki advises.",
+    "Decode errors usually mean PT saturated memory bandwidth; lowering timing resolution reduces overhead.",
+    "Fragile against perf output format changes: open issues include perf parsing exceptions (#324, #311, #257) and a perf-version cpu-clock incompatibility (#283).",
+    "Kernel frames show as '[untraced]' unless run as root with -trace-include-kernel; Docker containers can break symbol lookup through /proc/pid/exe (#307)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Tracy or funtrace when you cannot add instrumentation or recompile and need every call in a short window; pick Tracy or funtrace for full-run timelines with explicit zones, or Coz when the question is which code to optimize for end-to-end throughput.",
+  "verified_claims_summary": "The project wiki (first-party, no benchmark code, CPU model or workload named) says traced applications run 2-10% slower, mostly near 2%, with a ~10 us stall per snapshot, and that overhead is lower than perf -g and higher than perf -glbr. The perf comparison is qualitative only; the ~40 ns resolution comes from the README.",
+  "status_note": "Actively maintained by Jane Street (MIT, 6.3k stars, last commit 2026-05-29), shipped as release binaries; usable as a tool, not as code to embed in a C++ project.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/janestreet/magic-trace/HEAD/README.md",
+    "https://github.com/janestreet/magic-trace/wiki/Overhead",
+    "https://github.com/janestreet/magic-trace/wiki/Supported-platforms,-programming-languages,-and-runtimes",
+    "https://github.com/janestreet/magic-trace/issues?q=is%3Aissue+is%3Aopen"
+  ],
+  "confidence": 0.75
+}

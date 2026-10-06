@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/jamboree/co2",
+  "one_liner": "Header-only C++14 macro emulation of N4286 stackless coroutines; resume costs about 6 ns versus 82 ns for Boost.Coroutine2.",
+  "what_it_does": "Gives pre-C++20 compilers N4286-style (co_await draft) stackless coroutines: generators, recursive generators, tasks, shared/lazy tasks and async sync primitives (event, mutex, work_group, when_all/when_any). A coroutine is an ordinary function whose body sits between CO2_BEG(return_type, (captures), locals...) and CO2_END, with CO2_AWAIT/CO2_YIELD/CO2_SUSPEND/CO2_RETURN macros in place of keywords. It is not a drop-in for Boost.Coroutine2: the interface follows the coroutine TS (promise_type, coroutine_traits, awaiters), and coroutine<> is move-only rather than a raw handle.",
+  "how_it_is_fast": "The macros turn the body into a resumable state machine: a heap frame (std::allocator by default, custom allocator via the new clause) holds the declared locals, and each suspend point is a `case __COUNTER__:` label in a switch on a stored `_co2_next` index (Duff's-device / protothread style). Resuming is one virtual run() call plus a jump through the switch, with no stack switch and no register save/restore, which is why it lands near native MSVC co_await (6 ns versus 5 ns) and far below Boost.Coroutine2's Boost.Context stack switch.",
+  "when_to_use": [
+    "Maintaining an existing codebase on a pre-C++20 compiler (C++14 with Boost) that already uses CO2 for generators or async tasks.",
+    "Generators and asynchronous continuations where every suspend point is in the coroutine body itself, not in nested calls.",
+    "Tiny per-coroutine memory: frames hold only the declared locals plus a small awaiter buffer, versus a full stack per Boost.Coroutine2 coroutine.",
+    "Bridging callback APIs (ASIO via the sister library act, PPL or TBB task_group) into await-style code on old toolchains."
+  ],
+  "when_not_to_use": [
+    "New code: the README itself says all major compilers now support C++20 coroutines and recommends against CO2; use native co_await or the author's successor COZ (zero-allocation).",
+    "You need to suspend from inside nested ordinary function calls (stackful semantics): only Boost.Coroutine2/Boost.Context or fiber libraries do that.",
+    "Codebases that cannot tolerate heavy macro restrictions: locals crossing suspend points must be declared in CO2_BEG, no () initializers, auto needs CO2_AUTO, return/try/switch need macro replacements.",
+    "Projects that need a maintained dependency: repository archived 2024-10-09."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost (Boost.Config, Boost.Assert, Boost.Preprocessor in the core header; Boost.Thread/Optional for the adapted headers)",
+    "min_toolchain": "C++14; benchmark run on VS2015 Update 3 with boost 1.63.0; GCC/Clang supported (statement-expression extension enables CO2_AWAIT as an expression)",
+    "platforms": "any (pure C++, no assembly)",
+    "thread_safety": "not documented for coroutine objects; task scheduling across threads is shown with PPL/TBB examples, and co2::mutex/event are coroutine-level sync primitives",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Awaits are statements, not expressions: CO2_AWAIT(something{temporaries}) lets temporaries die before resumption, unlike real co_await.",
+    "Awaiters larger than (sizeof(pointer)+sizeof(int))*2 bytes fall back to dynamic allocation; enlarge with CO2_TEMP_SIZE and define CO2_WARN_DYN_ALLOC to catch it.",
+    "Exceptions thrown while initializing locals propagate directly to the caller and bypass set_exception, since initialization runs before initial_suspend.",
+    "Benchmark compares stackless against stackful (open issue #4 says the comparison does not make sense without that context); the benchmark source names the test bench_coroutines2 while the README table prints bench_coroutine2. stack_allocator had a deallocate bug (issue #5, closed 2018)."
+  ],
+  "pick_this_over_siblings_when": "Pick CO2 over stackful switchers like libaco, libcopp, minicoro or Boost.Coroutine2 only when you want stackless, per-frame-allocated coroutines with TS-style await on a pre-C++20 compiler; if you are on C++20, Boost.Cobalt or plain co_await supersede it.",
+  "verified_claims_summary": "The README's Google Benchmark run of test/benchmark.cpp times one resume of a coroutine that suspends forever with an empty action: Boost.Coroutine2 pull_type 82 ns, CO2 6 ns, native MSVC co_await 5 ns, built with VS2015 Update 3, boost 1.63.0, 64-bit release, on an unnamed 4 x 3200 MHz CPU. That is about 13.7x versus Boost.Coroutine2 (derived from page data), but it compares a stackless switch with a stackful context switch.",
+  "status_note": "Archived 2024-10-09 and self-declared obsolete in favour of C++20 coroutines and COZ, but BSL-1.0 and header-only, so existing users can keep vendoring it.",
+  "sources_read": [
+    "https://github.com/jamboree/co2",
+    "https://raw.githubusercontent.com/jamboree/co2/HEAD/README.md",
+    "https://raw.githubusercontent.com/jamboree/co2/HEAD/test/benchmark.cpp",
+    "https://raw.githubusercontent.com/jamboree/co2/HEAD/include/co2/coroutine.hpp",
+    "https://github.com/jamboree/co2/issues?q=is%3Aissue",
+    "https://github.com/jamboree/co2/issues/4",
+    "https://github.com/jamboree/co2/issues/5",
+    "https://github.com/jamboree/coz"
+  ],
+  "confidence": 0.8
+}
