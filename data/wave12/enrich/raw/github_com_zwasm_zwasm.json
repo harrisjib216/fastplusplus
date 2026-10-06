@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/zwasm/zwasm",
+  "one_liner": "Zig WebAssembly runtime (interpreter, single-pass JIT, AOT) that starts short WASI guests 2.2-3.6x faster than wasmtime, with less memory.",
+  "what_it_does": "zwasm runs WebAssembly 3.0 modules (all 9 proposals) with WASI 0.1, 0.2 (Component Model, on by default) and opt-in 0.3 async, through three engines: a tree-walking interpreter, a single-pass JIT for arm64 and x86_64, and AOT .cwasm artifacts. The CLI mirrors wasmtime's shape (zwasm run, zwasm compile), and it embeds through a Zig API (Engine/Module/Instance/Linker) or the standard wasm-c-api header (include/wasm.h, byte-identical to upstream) plus its own wasi.h and zwasm.h. It is a separate runtime, not a library you swap under wasmtime's Rust API.",
+  "how_it_is_fast": "There is no optimizing tier: the JIT lowers each function in one pass with a small register pool, so instantiation costs about 2-3 ms per process instead of paying Cranelift compile time up front, and AOT .cwasm skips codegen at load. Resident memory stays at 2-5 MB because there is no multi-pass compiler state and, for AOT and the interpreter, no JIT code buffers. The same design makes sustained compute 1.5-3.9x slower than Cranelift (13.7x on base64).",
+  "when_to_use": [
+    "Short-lived CLI, scripting or serverless invocations where each process runs a small WASI guest for a few milliseconds and cold start dominates.",
+    "Memory-constrained hosts running many small guests in separate processes (2-5 MB peak RSS per process on the TinyGo/ClojureWasm fixtures).",
+    "You want WASI 0.2 components or WASI 0.3 native async from a compact C-embeddable runtime that is not wasmtime.",
+    "Ship .cwasm artifacts built ahead of time with zwasm compile and run them with the lowest load latency."
+  ],
+  "when_not_to_use": [
+    "Compute-heavy or long-running guests: wasmtime, wasmer and wazero are 1.5-3.9x faster on fib2, sieve, matrix and heapsort and 13.7x faster on base64; issue #500 reports QuickJS fib(30) at 7.59 s on the zwasm JIT vs 0.108 s on wasmtime (about 70x, mostly spill traffic).",
+    "You need a fast interpreter: an independent harness (rebeckerspecialties/wasm-benchmark, M4 Max E-cores) puts the zwasm interpreter at 8.47x the fastest runtime's CPU time, against wasm3 1.01 and WAMR 1.63, and the interpreter has no SIMD.",
+    "Many instances of one large module in-process: the C API recompiles the module per instance (issue #499: 35 MiB RSS and 155 ms per extra JIT instance of a 1.5 MB module), and the independent harness found GC structs are never collected while an instance lives.",
+    "Hostile guests on the JIT before open safety bugs close: frames over 16 KiB crash the process instead of trapping on x86_64 Linux (#495), and temporaries live across call_ref or table.grow can be silently clobbered (#505, wrong result with no error).",
+    "Platforms beyond macOS aarch64, Linux x86_64/aarch64 and Windows x86_64; Linux aarch64 is cross-built and not in the per-release test gate."
+  ],
+  "integration": {
+    "form": "CLI binary, static lib (libzwasm.a with wasm.h, wasi.h, zwasm.h) or Zig module via build.zig.zon; Rust bindings in the separate zwasm-rust-sdk crates",
+    "dependencies": "none at runtime; building from source needs Zig 0.16.0 and wasm-tools (generates the spec-test module)",
+    "min_toolchain": "Zig 0.16.0 (pinned); any C toolchain that can link the static library for C/C++ hosts",
+    "platforms": "macOS aarch64, Linux x86_64, Linux aarch64 (cross-built, not release-gated), Windows x86_64 (MSVC ABI); JIT on arm64 and x86_64 only",
+    "thread_safety": "Not documented in general; Instance.interrupt() is documented as callable from another thread to stop a running guest.",
+    "drop_in_for_baseline": "partial: hosts written against the standard wasm-c-api (wasm.h) can relink against libzwasm, and the CLI follows 'wasmtime run' usage, but WASI setup uses zwasm's own wasi.h and there is no wasmtime Rust-API compatibility"
+  },
+  "gotchas": [
+    "The memory claim '4-12x less, uniform across the WASI guests' holds only for the AOT row on fib and tak; derived from the same table, tinygo/sieve is 2.4-6.9x for AOT, and the JIT (the default engine) ranges 1.9-8.9x across fixtures.",
+    "Harness detail: every row times a whole process with hyperfine --shell=none on guests with about 8 KB of code, so the startup table measures process start plus engine init; the zwasm-aot row runs a precompiled .cwasm while wasmtime is run without a cache flag (its CLI cache defaults to off, per search snippets of the wasmtime docs), so compare zwasm-jit (2.2-2.6x faster than wasmtime) for a like-for-like cold start.",
+    "Metering defaults differ by surface: the Zig API instantiates with finite fuel and memory budgets, but a C API instance starts unmetered (per a 2026-09-29 docs commit), so set the zwasm_instance_* limits explicitly for untrusted code.",
+    "Building with -Dengine=interp did not remove the JIT from libzwasm.a in v2.7.0 (the independent harness patched it out: 17.6 MB to 5.1 MB); v2 is Apache-2.0 with no ABI compatibility with the MIT-licensed v1 line."
+  ],
+  "pick_this_over_siblings_when": "Pick zwasm over wasm3 or WAMR when you need Wasm 3.0 plus WASI 0.2/0.3 components and short cold-start runs rather than interpreter throughput (wasm3 is about 8x faster per call in the independent harness); WAMR in Zig (cataggar/wamr) reports a lower in-process cold start (1.43 ms vs wasmtime 6.96 ms) if you only need core Wasm, and Wasmi leads startup for Rust embedders.",
+  "verified_claims_summary": "On one Apple M4 Pro with zwasm built ReleaseFast by Zig 0.16.0 and comparators pinned by Nix (wasmtime 43.0.1, wazero 1.11.0, wasmer 5.0.4, WasmEdge 0.16.1 interpreter), hyperfine (5 runs, 3 warmups) timed whole '<runtime> run' processes on four tiny TinyGo/ClojureWasm guests: zwasm took 2.0-2.9 ms against 6.3-7.2 ms for wasmtime and wazero, about 12 ms for wasmer and 16 ms for WasmEdge, with 2.1-5.1 MB peak RSS against 8.6-27.5 MB. The same doc shows zwasm 1.5-13.7x slower than wasmtime once startup is amortized, so the result is a cold-start and footprint win only.",
+  "status_note": "Very active (v2.7.0 released 2026-09-13, commits through 2026-10-05) and Apache-2.0, but among its 60 open issues, reports filed on 2026-10-01 include silent JIT miscompilation (#505) and a crash-instead-of-trap (#495), so pin a release and prefer the interpreter or AOT path for untrusted guests until they close.",
+  "sources_read": [
+    "https://github.com/zwasm/zwasm",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/scripts/run_bench.sh",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/bench/results/aot_coldstart.md",
+    "https://github.com/zwasm/zwasm/tree/main/bench/runners",
+    "https://github.com/zwasm/zwasm/tree/main/bench/runners/wasm/tinygo",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/bench/runners/wasm/tinygo/fib.wasm",
+    "https://raw.githubusercontent.com/zwasm/zwasm/HEAD/bench/runners/wasm/tinygo/sieve.wasm",
+    "https://github.com/zwasm/zwasm/issues",
+    "https://github.com/zwasm/zwasm/issues/500",
+    "https://github.com/zwasm/zwasm/issues/505",
+    "https://github.com/zwasm/zwasm/issues/495",
+    "https://github.com/zwasm/zwasm/issues/499",
+    "https://github.com/zwasm/zwasm/commits/main",
+    "https://raw.githubusercontent.com/rebeckerspecialties/wasm-benchmark/HEAD/docs/runtime-comparison-2026-09-22.md",
+    "https://docs.wasmtime.dev/cli-options.html (search snippet only)",
+    "https://github.com/cataggar/ghr/issues/143 (search snippet only)"
+  ],
+  "confidence": 0.7
+}

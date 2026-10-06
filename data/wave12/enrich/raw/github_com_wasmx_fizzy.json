@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/wasmx/fizzy",
+  "one_liner": "Dependency-free C++17 WebAssembly 1.0 interpreter whose eager parse-and-instantiate beats Cranelift JIT runtimes and WAMR fast-interp on startup.",
+  "what_it_does": "Fizzy is a pedantic, deterministic WebAssembly 1.0 (MVP) interpreter from Ipsilon, aimed at blockchain-style embedding: binary format only, no text format, no proposals. It is a static library with a public C API (fizzy_parse, fizzy_instantiate / fizzy_resolve_instantiate with host-function imports, fizzy_execute), an internal C++ API, a CMake package (fizzy::fizzy) and a Rust crate; optional runtime metering (ticks) and a call-depth bound are exposed through an ExecutionContext. It is not a drop-in for the Wasmtime/Wasmer/wasm-c-api embedding APIs.",
+  "how_it_is_fast": "Parsing and validation run in one pass (the spec's validation algorithm with a control-frame stack) that emits a compact internal code: opcodes and their immediates in one byte array, with branch targets and stack-drop counts resolved at parse time so execution keeps no control stack. Each function's maximum operand-stack height is precomputed, so arguments, locals and operand stack share one allocation (128-byte inline buffer, heap above that). There is no code generation, so startup is a linear parse, which is why its startup geomean is 83-92x lower than Wasmer and Wasmtime with Cranelift JIT compilation (derived from page data); execution is a plain switch-dispatch loop, with metering compiled in or out by a template parameter.",
+  "when_to_use": [
+    "Short-lived modules where parse + validate + instantiate dominates and you would otherwise pay JIT compile time (Wasmtime/Wasmer Cranelift startup geomean ~1500-1600x the fastest runtime vs Fizzy 17.8x on EPYC 7763).",
+    "Deterministic contract execution that needs per-instruction gas metering, a call-depth bound and a hard memory cap from a small, heavily tested C++17 codebase.",
+    "Embedding a WebAssembly 1.0 engine into a C or C++ host with no third-party dependencies, via a C API or CMake find_package.",
+    "Modules that use only WebAssembly 1.0 features and small-to-medium code sections (it won bz2, coremark, argon2 and erc20 startup against V8 on EPYC)."
+  ],
+  "when_not_to_use": [
+    "Compute-heavy or long-running guest code: execution geomean is 45.6x the fastest runtime vs WAMR fast-interp 17.1x and V8 1.05x on EPYC 7763, and Fizzy's own v0.5.0 table shows wasm3 0.4.7 at 26% of Fizzy's execution time.",
+    "Modules that need post-MVP features (bulk memory, SIMD, multi-value, reference types, tail calls); the wasmi-benchmarks harness skips Fizzy on its bulk-ops, fibonacci-tail and counter-param execute tests.",
+    "Running WASI programs: fizzy-wasi implements only a limited subset of wasi_snapshot_preview1 over uvwasi, failed the libsodium suite (no poll_oneoff), and has open memory-corruption reports (#857 invalid write in fd_write, #858 invalid read) unanswered since 2024-08.",
+    "Very large modules or when startup is the only metric: lazy validators start faster (Wasmi v2 lazy x1.37, Wasm3 lazy x2.77) and V8 beat Fizzy on ffmpeg (35 ms vs 215 ms) and spidermonkey (11 ms vs 52 ms).",
+    "Projects that need an actively maintained engine: no code changes since 2023-03-03, and big-endian targets are rejected at CMake configure time."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (uvwasi only for the optional fizzy-wasi tool; test tools pull dependencies through Hunter)",
+    "min_toolchain": "C++17, CMake 3.15; GCC 15/libstdc++ 15 and libc++ 19+ (Xcode 16) need small source shims (missing <algorithm> include, std::char_traits<unsigned char>)",
+    "platforms": "little-endian only; x86-64 and 32-bit x86 (SSE2 required for compliant floats); aarch64 macOS ran in wasmi-benchmarks via the fizzyx bindings, but upstream issue #709 'Support Apple Silicon natively' is still open",
+    "thread_safety": "not documented; ExecutionContext is described as per execution thread and an Instance owns its mutable memory and globals, so do not share an Instance across threads without external locking",
+    "drop_in_for_baseline": "partial — same job as Wasmtime/Wasmer/WAMR (load, link host functions, call exports) but its own C API, at most one result per function and only function imports in the fizzyx Rust bindings; no wasm-c-api support (issue #696 open)"
+  },
+  "gotchas": [
+    "Each WebAssembly call recurses into execute() on the native C++ stack, up to CallStackLimit = 2048 nested calls before trapping; size host thread stacks for that depth.",
+    "Fizzy does not touch the floating-point environment: the host must keep round-to-nearest and must not enable FP exception traps (feenableexcept), or results become non-compliant or unpredictable; x87 builds need -msse2 -mfpmath=sse.",
+    "fizzy_instantiate caps linear memory at 256 MB (4096 pages) by default unless memory_pages_limit is raised (max 65536 pages = 4 GB); memory is a zero-filled std::basic_string<uint8_t> allocated at instantiate.",
+    "Upstream no longer builds unmodified on GCC 15 (capi.cpp uses std::transform without <algorithm>) or libc++ 19+ (no char_traits<unsigned char>); the fizzyx crate force-includes a compat_shim.hpp, and you would need the same patch."
+  ],
+  "pick_this_over_siblings_when": "Pick Fizzy over wasm3, WAMR or Wasmi when you want a dependency-free C++17 interpreter with gas metering, strict spec conformance and fast eager startup, and execution speed is secondary; wasm3 and WAMR fast-interp run code roughly 2.7-4x faster, Wasmi (lazy) and DLR-FT wasm-interpreter start faster, and toywasm or submilli-wasm give similar startup with more proposal support.",
+  "verified_claims_summary": "In Robin Freyler's wasmi-benchmarks startup suite (criterion timing of parse + validate + instantiate of 7 modules through his fizzyx Rust bindings; Fizzy built by cmake-rs, which resolves the Cargo bench profile to CMAKE_BUILD_TYPE=Release, i.e. -O3 -DNDEBUG without LTO, C++ compiler version not stated), Fizzy's geomean on an AMD EPYC 7763 was 17.83x the per-case fastest runtime versus WAMR fast-interp 56.73x, V8 33.27x, Wasmer Cranelift 1484x and Wasmtime Cranelift 1634x. The harness unwraps Module::new, so each reported time is a successful parse, not an early error; the win is startup only, and execution on the same suite is about 2.7x slower than WAMR fast-interp.",
+  "status_note": "Dormant: the last code change was 2023-03-03 (last release 0.8.0, 2022-06-28, also the latest fizzy crate), later commits are README-only and 2024 security reports are unanswered; Apache-2.0, dependency-free and small enough to vendor if you carry the GCC 15/libc++ 19 build patches.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/README.md",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/CMakeLists.txt",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/execute.cpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/parser_expr.cpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/instantiate.cpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/stack.hpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/execution_context.hpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/limits.hpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/lib/fizzy/module.hpp",
+    "https://raw.githubusercontent.com/wasmx/fizzy/HEAD/include/fizzy/fizzy.h",
+    "https://github.com/wasmx/fizzy/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/wasmx/fizzy/issues/857",
+    "https://github.com/wasmx/fizzy/commits/master",
+    "https://crates.io/api/v1/crates/fizzy",
+    "https://crates.io/api/v1/crates/fizzyx",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/runtimes/fizzy/lib.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/benches/criterion/startup.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wasmi-labs/fizzyx/HEAD/crates/fizzyx-sys/build.rs",
+    "https://raw.githubusercontent.com/wasmi-labs/fizzyx/HEAD/crates/fizzyx-sys/shim/compat_shim.hpp",
+    "https://raw.githubusercontent.com/wasmi-labs/fizzyx/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/wasmi-labs/fizzyx/HEAD/README.md",
+    "https://raw.githubusercontent.com/rust-lang/cmake-rs/HEAD/src/lib.rs"
+  ],
+  "confidence": 0.75
+}

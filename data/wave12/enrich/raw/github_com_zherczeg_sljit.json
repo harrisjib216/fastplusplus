@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/zherczeg/sljit",
+  "one_liner": "Portable low-level C JIT assembler; as pg_jitter's PostgreSQL backend it compiles queries in microseconds, not LLVM's tens of milliseconds.",
+  "what_it_does": "SLJIT is a C99 library that exposes a platform-independent low-level IR (LIR), a portable assembler, which it translates straight to machine code for x86, ARM, RISC-V, s390x, PowerPC, LoongArch and MIPS. You call sljit_emit_enter, sljit_emit_op1/op2, jumps and labels on a compiler object, then sljit_generate_code returns a callable function pointer and sljit_free_code releases it. It is not a drop-in for LLVM: there is no IR optimizer and no register allocator, so the host project writes its own code generator (PCRE2's regex JIT and pg_jitter's expression compiler are built this way).",
+  "how_it_is_fast": "Compile speed comes from doing almost nothing beyond instruction selection: the LIR maps nearly one-to-one onto native instructions, with no SSA construction, optimization passes or register allocation (registers and stack are managed by the caller). It adds 'complex instructions' (compare-and-branch, select, function enter/return) that it can lower well per CPU without static analysis. In pg_jitter the speedup over llvmjit is mostly avoided LLVM optimization and emission time; the generated code runs close to PostgreSQL's interpreter speed (median about 1.11x faster) rather than beating LLVM-optimized code by much.",
+  "when_to_use": [
+    "Translating bytecode, query expressions or regexes to machine code where compile latency matters more than peak code quality (per-query or per-pattern JIT).",
+    "You need one code generator for many CPUs, including s390x, PowerPC, LoongArch, MIPS and 32-bit ARM/x86, which AsmJit does not cover.",
+    "Embedding a small, dependency-free JIT in a C or C++ project; it can be built as a hidden all-in-one unit (SLJIT_CONFIG_STATIC) so its symbols never leak.",
+    "Short-running database or filter workloads: in pg_jitter on an M1 Pro, sljit compile overhead was 0.04-0.46 ms per query versus 17-405 ms for PostgreSQL's LLVM JIT outside the 1000-column cases."
+  ],
+  "when_not_to_use": [
+    "You want an optimizing compiler: there is no register allocation, inlining or loop optimization, so long-running hot loops are better served by LLVM, Cranelift or a tiered JIT.",
+    "You need a high-level IR or C-like front end; consider MIR or a copy-and-patch compiler instead of hand-writing register-level LIR.",
+    "You rely on debuggers, profilers or C++ exceptions unwinding through JIT frames: unwind/backtrace support is an open proposal (issue #356) and pg_jitter registers Win64 unwind data itself.",
+    "Big-endian AArch64, PowerPC64 debug builds, ARMv6 and RVV SIMD have open correctness or crash issues (#376, #366, #188, #271).",
+    "Functions needing more than 3 machine-word arguments through the ABI-compatible call path (documented limit)."
+  ],
+  "integration": {
+    "form": "source-drop (compile sljit_src/sljitLir.c as one translation unit, or #include it with SLJIT_CONFIG_STATIC)",
+    "dependencies": "none beyond libc and the OS virtual-memory API (mmap/VirtualAlloc, pthreads or Windows mutex for the executable allocator)",
+    "min_toolchain": "C99 compiler (C or C++); GNU Make for tests and examples, CMake only as a Windows/MSVC fallback",
+    "platforms": "x86 32/64, ARM 32 (v6, v7, Thumb2)/64, RISC-V 32/64, s390x, PowerPC 32/64, LoongArch 64, MIPS 32/64 (III, R1); an Alpha 64 backend was added in August 2026; SIMD and atomics only on some targets",
+    "thread_safety": "Header states the compiler is thread-safe: use one sljit_compiler per thread; the shared executable-memory allocator takes a global mutex unless SLJIT_SINGLE_THREADED is set.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the measured numbers: the three Wide1K rows behind the headline 21,000-29,000x compile ratio show sljit compiling less (0.05 ms, below Wide300's 0.25 ms) with execution equal to the interpreter, consistent with the old pg_jitter deform cap that current source says 'incorrectly disabled profitable 1000-column sparse deform'; LLVM there compiled a full 1000-column deform. Without those rows the ratio is 220x to 1,040x, median about 480x (derived from page data).",
+    "The benchmark gives llvmjit jit_inline_above_cost and jit_optimize_above_cost of 0 (full optimization every query) while pg_jitter backends get 500000; pg_jitter's sljit path also adds emission time to both generation_counter and emission_counter, so EXPLAIN's Total double-counts sljit emission (conservative for sljit).",
+    "SLJIT_DEBUG and SLJIT_VERBOSE default to 1 in sljitConfig.h, so an unconfigured build carries assertions; set them to 0 (via sljitConfigPre.h) for production speed.",
+    "Register types are strict: feeding an intptr_t register to a 32-bit op (or a float to a double op) is undefined and can crash on some CPUs (e.g. MIPS-64); valgrind needs --smc-check=all."
+  ],
+  "pick_this_over_siblings_when": "Pick sljit over AsmJit when you need targets beyond x86-64/AArch64 or the fastest possible emission (pg_jitter: about 1.5-6x less compile time than its AsmJit backend), and AsmJit when you want richer x86/ARM instruction coverage and slightly faster generated code on hash joins; pick TPDE or a copy-and-patch compiler (WasmNow, PochiVM) when your input is LLVM IR or Wasm rather than a bytecode you lower by hand.",
+  "verified_claims_summary": "pg_jitter's own suite on an Apple M1 Pro (PostgreSQL 18.1, 108 queries on 0.1-1M-row tables, JIT forced on, median of 3) shows its sljit backend spending 0.04-0.46 ms in JIT compilation versus 17-2,043 ms for PostgreSQL's LLVM JIT run at full optimization, and beating llvmjit's end-to-end time on 106 of 108 queries. Against the plain interpreter it is a median 1.11x faster but slower on 27 queries, so the win is compile latency, not code quality; the numbers measure pg_jitter's code generator on the vladich/sljit fork (upstream as of February 2026 plus two SIMD-opcode commits), not sljit alone.",
+  "status_note": "Actively maintained (last commit 2026-09-30, 886 commits, 1.1k stars, 16 open issues), BSD-2-Clause and dependency-free, so it is easy to vendor; the version macro still reads 0.95 (pre-1.0) and the repo keeps an API_CHANGES log, so pin a commit when vendoring.",
+  "sources_read": [
+    "https://github.com/zherczeg/sljit",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/README.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/sljit_src/sljitLir.h",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/sljit_src/sljitConfig.h",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/sljit_src/sljitConfigInternal.h",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/sljit_src/sljitUtils.c",
+    "https://github.com/zherczeg/sljit/tree/master/docs",
+    "https://github.com/zherczeg/sljit/tree/master/docs/general",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/README.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/general/introduction.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/general/architecture.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/general/getting-started/setup.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/general/use-cases/overview.md",
+    "https://raw.githubusercontent.com/zherczeg/sljit/HEAD/docs/general/use-cases/bytecode-interpreters.md",
+    "https://github.com/zherczeg/sljit/commits/master",
+    "https://github.com/zherczeg/sljit/issues",
+    "https://github.com/vladich/sljit",
+    "https://github.com/vladich/sljit/commits",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/README.md",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/bench/ARM64/0.3.0/BENCHMARKS_v18.md",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/bench_comprehensive.sh",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/tests/parse_explain_json.py",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/build.sh",
+    "https://github.com/vladich/pg_jitter/tree/master/src",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_sljit.c",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_deform_jit.c",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_common.c",
+    "https://raw.githubusercontent.com/vladich/pg_jitter/HEAD/src/pg_jitter_common.h"
+  ],
+  "confidence": 0.55
+}
