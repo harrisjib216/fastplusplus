@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/pkolaczk/fclones",
+  "one_liner": "Parallel, device-aware Rust duplicate file finder; 4-10x shorter wall time than jdupes, fdupes and rdfind on a 316 GB SSD scan.",
+  "what_it_does": "Command-line tool (plus a Rust library crate and a separate GUI) that finds groups of identical files and then removes, moves, hard/soft-links or reflink-dedupes the redundant copies. `fclones group` writes a report (text, fdupes-compatible, CSV or JSON) and `remove`/`link`/`move`/`dedupe` read that report from stdin, so finding and deleting are separate steps with a `--dry-run` option. It is not a C++ library and not a drop-in for any POSIX I/O API.",
+  "how_it_is_fast": "A staged filter: group by size, drop same-inode hard links, then hash a small prefix (4 KiB on SSD, up to 16 KiB on HDD), then a suffix, and only then the full contents, so most non-duplicates are discarded after a few KiB of I/O. Directory walking runs in parallel on rayon scopes, and each block device gets its own random-I/O and sequential-I/O thread pools sized by detected disk type (HDD forced to 1 thread). On Linux it orders HDD reads by physical extent (FIEMAP), uses posix_fadvise RANDOM/SEQUENTIAL hints and DONTNEED drop-behind, hashes with 128-bit MetroHash by default, and keeps paths prefix-compressed to cut memory.",
+  "when_to_use": [
+    "Deduplicating large trees (hundreds of thousands to millions of files) on NVMe/SSD where a multi-threaded scan pays off.",
+    "Spinning disks on Linux, where physical-offset ordering of reads helps (README HDD run: 19.45 s vs rdfind 33.70 s and jdupes 1:18.47).",
+    "Repeated scans of the same data set: `--cache` persists file hashes keyed by inode and metadata.",
+    "Pipelines that want a reviewable JSON/CSV report before any file is deleted, or reflink dedupe on Btrfs/XFS-style copy-on-write file systems."
+  ],
+  "when_not_to_use": [
+    "When you need byte-for-byte confirmation before deletion: fclones never compares bytes and relies on a 128-bit (or wider) hash match; jdupes and fdupes confirm by default.",
+    "As a component inside a C++ program: it is a Rust CLI/crate with no C API.",
+    "Non-Linux platforms if you want the full speed: physical-placement ordering and page-cache drop-behind are Linux-only, and reflink is not supported on Windows.",
+    "Data that changes under open file handles (databases) when using `--cache`, since cache validity depends on mtime and length.",
+    "Projects that need an actively maintained tool: last commit 2025-03-03 (0.35.0 version bump), 89 open issues."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon, crossbeam, dashmap, sled, metrohash, blake3/xxhash-rust/sha2/sha3 (optional features), ignore, nix, fiemap (Linux), sysinfo and about 40 other crates",
+    "min_toolchain": "Rust 1.74 (edition 2021)",
+    "platforms": "Linux (best, tested on Ubuntu), macOS and Windows reported to work; packaged for Snap, Homebrew, AUR, Alpine, NixOS",
+    "thread_safety": "Internally multi-threaded; library-level thread-safety guarantees not documented",
+    "drop_in_for_baseline": "partial — `-o fdupes` output format mimics fdupes, but the CLI and the two-step group/remove workflow differ from jdupes, fdupes and rdfind"
+  },
+  "gotchas": [
+    "No byte-by-byte verification: duplicates are decided by hash equality alone (default metro 128-bit, non-cryptographic); choose `--hash-fn blake3` or sha256 if adversarial collisions matter.",
+    "Hidden files and paths in .gitignore/.fdignore are skipped by default; pass `--no-ignore --hidden` for a full scan.",
+    "Hard and soft links are not counted as duplicates unless `--isolate` or `--match-links`; `--match-links` with `--symbolic-links` can delete the only real copy (README warning).",
+    "Open bug #275: an Em Space (U+2003) character is dropped from paths in the group phase; past bugs #148 (--unique listed non-unique files) and #99/#97 (--isolate counts) were fixed."
+  ],
+  "pick_this_over_siblings_when": "No sibling is a duplicate finder; fclones uses the same parallel-walk idea as gdu, diskus and pdu (disk usage) or bfs (traversal) but adds hashing and dedupe actions, so pick it when the job is finding identical file contents rather than sizing or listing trees.",
+  "verified_claims_summary": "Author-run, page-cache-dropped scans of 1,460,720 paths (316 GB) on a Xeon E3-1505M v6 laptop with NVMe: fclones 0.12.1 34.59 s vs yadf 59.32 s, czkawka 2:09.00, rmlint 2:28.43, jdupes 1.18.2 5:01.91, fdupes 5:46.19, rdfind 5:53.07 (about 8.7x faster than jdupes and 10.2x than rdfind, derived from page data); SSD-run commands and build flags are not given, and jdupes' author has noted (blog post, search snippet only) that jdupes was run without -Q, so it did byte-for-byte confirmation that fclones skips. The older HDD table (fclones 0.9.1 vs jdupes 1.9 -Q, i7-2760QM, 7200 RPM disk) shows 19.45 s vs 1:18.47.",
+  "status_note": "Stale (last commit 2025-03-03, version 0.35.0) but MIT-licensed, about 3.0k stars and widely packaged; usable as an end-user tool or Rust crate, not as copyable C++ code.",
+  "sources_read": [
+    "https://github.com/pkolaczk/fclones",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/README.md",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/Cargo.toml",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/src/device.rs",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/src/hasher.rs",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/src/file.rs",
+    "https://raw.githubusercontent.com/pkolaczk/fclones/HEAD/fclones/src/walk.rs",
+    "https://github.com/pkolaczk/fclones/tree/main/fclones/src",
+    "https://github.com/pkolaczk/fclones/issues?q=is%3Aissue+label%3Abug",
+    "https://www.jodybruchon.com/2020/07/11/a-challenger-appears-fclones-fastest-duplicate-scanner-ever-its-complicated/ (EGRESS_BLOCKED; WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}

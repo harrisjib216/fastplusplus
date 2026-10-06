@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/plasma-umass/coz",
+  "one_liner": "Causal profiler for C/C++/Rust that predicts the whole-program effect of speeding up each line; far lower overhead than gprof.",
+  "what_it_does": "Coz runs an unmodified, debug-info binary under `coz run --- ./prog` (libcoz is preloaded) and reports, per source line, how much end-to-end throughput or latency would improve if that line were made faster. You mark units of work with `COZ_PROGRESS` / `COZ_PROGRESS_NAMED` (throughput) or `COZ_BEGIN` / `COZ_END` pairs (latency, via Little's Law) from the single header coz.h, then view results with `coz plot` in a browser or as text. It is not a drop-in for gprof: it needs progress points and answers 'what should I optimize' rather than 'where does time go'.",
+  "how_it_is_fast": "Overhead stays low because Coz never instruments functions: it samples instruction pointers per thread with perf_event_open (Linux) or kperf (macOS) every 1 ms and processes samples in batches of ten. 'Virtual speedups' are made by pausing all other threads whenever the chosen line is sampled, so speeding up one line is emulated by slowing everything else, and progress-point counters are relaxed atomic increments. In the paper, the 17.6% average overhead on PARSEC splits into 2.6% startup (DWARF parsing), 4.8% sampling and 10.2% inserted delays.",
+  "when_to_use": [
+    "Multithreaded or pipelined C/C++/Rust servers and batch jobs where flat profiles mislead because of contention, critical paths or idle waiting (paper case studies: Memcached +9%, SQLite +25%, six PARSEC apps by up to 68% after Coz-guided fixes).",
+    "Long-running throughput workloads with a clear unit of work (request, query, frame) that can carry a progress point.",
+    "Latency questions about one transaction type, using COZ_BEGIN/COZ_END pairs.",
+    "When gprof's instrumentation overhead is unacceptable or it fails outright (paper: gprof about 6x on ferret vs 6% with Coz; gprof segfaults on SQLite).",
+    "Linux x86-64 or aarch64 hosts where perf_event_paranoid can be lowered to 1."
+  ],
+  "when_not_to_use": [
+    "Short programs or code without an obvious progress point: Coz needs many experiments to build a profile and the README says sample apps may need several runs.",
+    "Interpreted or JIT languages (Python, Ruby, JavaScript); README says interpreted languages will likely never be supported.",
+    "Windows or WSL 2 (open issues #163 and #216), locked-down containers that forbid perf_event_open, or macOS where the private kperf API needs elevated privileges or SIP changes.",
+    "Code dominated by usleep or mmap page faults: open issues #231 (incorrect predictions with usleep) and #223 (samples not counted during mmap).",
+    "Rust release builds in some setups: open issues #180, #193 and #197 report silent failure, DWARF format errors and random lines."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libelfin (fetched by CMake from plasma-umass/libelfin), libdl, Python 3 for the coz CLI/viewer; optional LLM API keys only for the suggestion features",
+    "min_toolchain": "C++11, CMake 3.13; Linux kernel 2.6.32+ with perf_event_open",
+    "platforms": "Linux x86-64 and aarch64 (deb/rpm packages), macOS via kperf; no Windows",
+    "thread_safety": "Designed for multithreaded programs: intercepts pthread_create and pthread blocking calls; progress-point counters use relaxed atomics",
+    "drop_in_for_baseline": "partial — unlike gprof it needs no -pg rebuild and runs on a -g binary, but useful output requires adding progress-point macros and the output is a causal profile, not a flat profile or call graph"
+  },
+  "gotchas": [
+    "Lower /proc/sys/kernel/perf_event_paranoid to 1 before profiling on Linux, or sampling does not work.",
+    "Build with -g (DWARF 5 is supported) and preferably -fno-omit-frame-pointer, which the paper used for accurate callchains; samples outside in-scope files are attributed to the last in-scope call site.",
+    "coz.h finds libcoz through a weak dlsym reference, so macros are no-ops when the program runs without coz; link with -ldl as the README instructs.",
+    "Command-line progress points are disabled ('did not work particularly well'); the newer `coz suggest-points` and viewer assistant send source code to an external LLM provider unless Ollama is used.",
+    "Benchmark sample apps (Phoenix, pbzip2) carry their own licenses, separate from the BSD-2-Clause core."
+  ],
+  "pick_this_over_siblings_when": "Pick Coz when you want to know which line is worth optimizing in a concurrent program; Tracy, Palanteer and funtrace instrument zones or calls to show timelines, magic-trace gives Intel PT traces, and wallClockProfiler gives cheap wall-clock stack samples, but none of them predicts the end-to-end effect of a speedup.",
+  "verified_claims_summary": "In the CACM 2018 version of the SOSP 2015 paper (GCC 4.9.1 -O3 -g -fno-omit-frame-pointer, 64-core four-socket AMD Opteron, 60 GB, Linux 3.14), Coz's overhead on PARSEC native inputs averaged 17.6% (min 0.1%, max 65%, under 30% for all but three), and the sole gprof comparison is one sentence: gprof can cost about 6x on ferret versus 6% for Coz. Prediction accuracy was checked on two cases (dedup predicted 9% vs 8.95% observed; ferret 21.4% vs 21.2%).",
+  "status_note": "Active (last commit 2026-07-10, 4.6k stars, 43 open issues), BSD-2-Clause with prebuilt deb/rpm/tarball releases; usable as a tool, and coz.h is copyable into any project.",
+  "sources_read": [
+    "https://github.com/plasma-umass/coz",
+    "https://raw.githubusercontent.com/plasma-umass/coz/HEAD/README.md",
+    "https://raw.githubusercontent.com/plasma-umass/coz/HEAD/include/coz.h",
+    "https://raw.githubusercontent.com/plasma-umass/coz/HEAD/CMakeLists.txt",
+    "https://github.com/plasma-umass/coz/issues",
+    "https://raw.githubusercontent.com/emeryberger/publications/HEAD/Coz-cacm2018.pdf"
+  ],
+  "confidence": 0.75
+}
