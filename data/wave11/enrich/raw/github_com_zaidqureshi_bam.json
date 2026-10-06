@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/zaidqureshi/bam",
+  "one_liner": "CUDA library and kernel driver that let GPU threads issue NVMe reads and writes themselves, bypassing CPU-orchestrated storage paths.",
+  "what_it_does": "BaM (ASPLOS'23) maps NVMe submission and completion queues into GPU-visible memory so CUDA kernels can fetch data from SSDs on demand, without a CPU round trip per request. Applications use a header-only CUDA C++ layer in include/ (page_cache.h, bam_ptr, the bam::array abstraction) that checks a GPU-resident software cache and issues NVMe commands on a miss. This is a different interface, not a file API: the SSD is unbound from the Linux NVMe driver and accessed as raw blocks through a custom libnvm kernel module (/dev/libnvm*).",
+  "how_it_is_fast": "GPU self-orchestrated storage access: thousands of GPU threads enqueue NVMe commands concurrently into many deep queues (128 queues x 1024 entries in the examples) using ticket-based lock-free submission (atomic fetch_add tickets in nvm_parallel_queue.h). A fine-grained GPU software cache with warp-level request coalescing (__match_any_sync) and round-robin slot allocation cuts I/O amplification, and PCIe peer-to-peer DMA moves data straight from SSD into GPU memory. The gain comes from removing CPU-GPU synchronization and staging for fine-grained, data-dependent access, not from faster per-request I/O.",
+  "when_to_use": [
+    "Graph analytics (BFS, CC, SSSP, PageRank) or similar data-dependent workloads whose working set exceeds GPU memory and lives on NVMe",
+    "You control the whole box: x86 server with PCIe P2P, Volta-or-newer datacenter GPU (V100/A100/H100) and dedicated NVMe SSDs that can be detached from the OS",
+    "Research or prototyping on GPU-initiated I/O where cutting host memory and CPU cost (the paper reports up to 21.7x lower hardware cost) matters as much as speed",
+    "Fine-grained random reads (512 B to 4 KiB) from many GPU threads, where batching through cudaMemcpy or GPUDirect Storage would amplify I/O"
+  ],
+  "when_not_to_use": [
+    "Anything that needs a filesystem: BaM reads raw NVMe blocks on an SSD unbound from the kernel driver, so datasets must first be written with its readwrite tool",
+    "Consumer GPUs or Tesla T4 (256 MB BAR is too small), Arm servers (open enhancement request), AMD GPUs (no ROCm support), or VMs (open question)",
+    "Production systems: IOMMU and ACS must be disabled, tested on Linux 5.8.x, and the README warns 6.x kernels and post-20.04 Ubuntu P2P changes may break it",
+    "Streaming workloads with known access patterns, where CPU-pipelined transfers are already efficient; the paper's BFS result is parity (1.0x) in time",
+    "When you need the data-analytics path behind the 5.3x claim: that implementation is proprietary and not in the repo"
+  ],
+  "integration": {
+    "form": "header-only (CUDA headers in include/) plus static lib (libnvm) and an out-of-tree kernel module",
+    "dependencies": "CUDA 12.3+, NVIDIA driver 440.33+ with compiled kernel symbols, CMake 3.10+ with FindCUDA, git submodules (freestanding, simt atomics), custom libnvm kernel module",
+    "min_toolchain": "C++11 (CMake sets -std=c++11), GCC 5.4+, CUDA 12.3+; default GPU archs sm_70/80/90",
+    "platforms": "x86-64 Linux (tested kernel 5.8.x) with PCIe P2P and Above 4G Decoding; NVIDIA Volta or newer datacenter GPU",
+    "thread_safety": "Designed for massive concurrency from GPU threads (atomic ticket queues, per-page atomic state); host-side thread safety not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "bam_ptr's operator[] marks cache pages dirty even on reads, so read-only kernels can trigger spurious NVMe writes (issue #56 saw about 35% writes on a Zipfian read benchmark); use seq_read() for reads",
+    "BaM writes to the raw SSD; the README warns not to keep any needed data on it",
+    "Open reports of segfaults and errors in nvm-block-bench (#37 and others), an illegal memory access in vectoradd, and inconsistent load/store after large data volumes",
+    "Graph datasets used in the paper are not public; you must ask the authors"
+  ],
+  "pick_this_over_siblings_when": "Pick BaM over SPDK or liburing only when the consumer of the data is a GPU kernel with data-dependent access: SPDK and io_uring keep the CPU in the I/O path, while BaM lets GPU threads drive the NVMe queues. For loading model weights into GPUs, fastsafetensors or InstantTensor are far easier to deploy.",
+  "verified_claims_summary": "The README quotes the ASPLOS'23 abstract: BFS end-to-end parity (1.0x) and CC 1.49x versus CPU-orchestrated GPU storage access with up to 21.7x lower hardware cost, and 5.3x on proprietary data-analytics queries on the same hardware; compiler flags and CPU model for the paper runs are not on the page. The asplosaoe logs only show functional runs on the artifact machine (e.g. nvm-block-bench on one Intel Optane at 4.90M ops/s, 2.34 GB/s with 512 B requests; one Samsung 980 Pro at 0.80M ops/s, 3.05 GB/s with 4 KiB requests) with no baseline in the same log.",
+  "status_note": "Active research artifact (last commit 2025-11-23, 17 open issues), BSD-2-Clause (inherited from Jonas Markussen's ssd-gpu-dma), copyable but tied to a narrow hardware and kernel setup.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/README.md",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/asplosaoe/README.md",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/include/page_cache.h",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/include/nvm_parallel_queue.h",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/asplosaoe/nvm_block_bench_1_sam.log",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/asplosaoe/nvm_block_bench_1_intel.log",
+    "https://raw.githubusercontent.com/ZaidQureshi/bam/HEAD/asplosaoe/nvm_bfs_bench_1_intel.log",
+    "https://github.com/ZaidQureshi/bam/tree/master/include",
+    "https://github.com/ZaidQureshi/bam/issues",
+    "https://github.com/ZaidQureshi/bam/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/ZaidQureshi/bam/issues/56"
+  ],
+  "confidence": 0.7
+}

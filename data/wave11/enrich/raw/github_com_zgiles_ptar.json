@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/zgiles/ptar",
+  "one_liner": "Go CLI that archives a directory tree into N independent tar files in parallel, much faster than GNU tar on parallel filesystems.",
+  "what_it_does": "ptar walks an input directory and spreads its entries across N worker goroutines, each writing its own valid GNU-format tar file (prefix.0.tar, prefix.1.tar, ...); untarring all of them recreates the original tree. It is a command-line tool (ptar -c -t N -f prefix input), not a library and not a drop-in for tar's single-archive output. Optional per-file index files (offset, size, SHA-1, name) and gzip or lz4 compression per output file.",
+  "how_it_is_fast": "Scan and archive are decoupled: one godirwalk walker (unsorted readdir) feeds paths into a 1024-slot channel, and N goroutines each lstat, open, read and append files to their own archive/tar writer. On a parallel filesystem such as GPFS the gain comes from keeping many metadata and read requests in flight at once, which serial GNU tar cannot do; there is no special I/O technique (plain os.Read with a 4 KiB buffer).",
+  "when_to_use": [
+    "Archiving large trees (tens of thousands to millions of files) from parallel or network filesystems (GPFS, Lustre-style) where per-file latency, not bandwidth, dominates",
+    "HPC data migration or backup where splitting the output into many tar files is acceptable or even useful (partial recovery if one file is corrupted)",
+    "Uncompressed or lz4 archives, where the README's 10 TB run took 44m39s at 32 workers vs 10hr20m for GNU tar",
+    "Hosts with many cores and enough filesystem concurrency to feed 32-64 workers (the kernel-source run stopped improving past 64)"
+  ],
+  "when_not_to_use": [
+    "You need a single archive file or a pipe to stdout; output is always N separate tar files",
+    "Single local SSD or small trees: the 1-worker run (6m33s) was slower than GNU tar (6m4s), and nothing shows gains on local disks",
+    "Extraction speed matters: parallel decompression is listed as not done; you untar each piece yourself",
+    "Archives needing hard-link detection, sparse files, xattrs or ACLs: the code builds headers with Go's tar.FileInfoHeader only and does none of this",
+    "Production-critical jobs: abandoned since 2019, no tests, and any lstat/open/read error panics the whole process"
+  ],
+  "integration": {
+    "form": "module (Go command-line tool, static binary via Makefile)",
+    "dependencies": "gopkg.in/alecthomas/kingpin.v2, github.com/karrick/godirwalk, github.com/pierrec/lz4",
+    "min_toolchain": "Go (GOPATH-era layout, no go.mod; a modern Go toolchain needs go mod init first); version not documented",
+    "platforms": "Unix-like (static CGO_ENABLED=0 build); tested only on Linux with GPFS per README",
+    "thread_safety": "not applicable (CLI); each worker owns its tar writer, shared state is channels only",
+    "drop_in_for_baseline": "partial - output tar files are GNU-tar readable, but the CLI and one-archive-per-run model differ from tar"
+  },
+  "gotchas": [
+    "The code accepts --compression gz, not gzip (the CLI hint says gzip, which panics 'Not implemented'), and names outputs prefix.N.targz or prefix.N.tarlz4 with no dot before the compression suffix",
+    "Entry names are the paths as walked, so an absolute input path yields absolute names inside the tar (GNU tar would strip the leading /)",
+    "A file that disappears or is unreadable between scan and archive panics and aborts the whole run, leaving partial tar files",
+    "Files are dealt to workers in channel order with no size balancing (TarMaxSize is declared but unused), so output files can be very uneven"
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling creates archives; fcp, wcp and uring-sync parallelize copying instead, and hop speeds up reading single files from an archive. Pick ptar when the goal is getting a huge tree on a parallel filesystem into tar files fast and N output files are acceptable.",
+  "verified_claims_summary": "First-party README tables only: on GPFS with a hot page pool, archiving the 1.5 GB, 47K-file Linux kernel source took 6m4s with GNU tar vs 9.4 s with 64 workers (about 38.7x, derived from page data), and a 10 TB, 500K-file dataset took 10hr20m vs 44m39s with 32 workers (about 13.9x). No CPU, Go or GNU tar version, node count or scripts are given; the 1-worker run was slower than GNU tar.",
+  "status_note": "Abandoned since 2019-10-31 (15 stars, 0 open issues), MIT/Expat per the README; small enough (four packages) to vendor and modernize, but treat it as a sketch rather than a hardened archiver.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/README.md",
+    "https://github.com/zgiles/ptar",
+    "https://github.com/zgiles/ptar/tree/master/pkg",
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/Makefile",
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/cmd/ptar/main.go",
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/pkg/ptar/ptar.go",
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/pkg/scanner/scanner.go",
+    "https://raw.githubusercontent.com/zgiles/ptar/HEAD/pkg/index/index.go"
+  ],
+  "confidence": 0.7
+}
