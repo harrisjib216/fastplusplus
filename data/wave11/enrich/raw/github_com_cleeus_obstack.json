@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/cleeus/obstack",
+  "one_liner": "Pointer-bump C++ object-stack arena with destructor tracking; about 100x faster than glibc malloc in its own 2012 benchmark.",
+  "what_it_does": "A fixed-capacity memory arena (boost::arena::obstack) that allocates objects and POD arrays from one pre-allocated block and keeps them as a stack. alloc<T>(args...) placement-constructs T with up to 10 constructor arguments, alloc_array<T>(n) allocates POD arrays, dealloc(p) destroys an object, and dealloc_all() or the destructor unwinds everything. It is not a malloc or std::allocator replacement: it returns NULL when the arena is full and only reclaims memory in LIFO order.",
+  "how_it_is_fast": "Pointer bumping: each allocation aligns the top-of-stack pointer, writes a small chunk header (previous-chunk pointer, XOR-encrypted destructor pointer, checksum) and advances it, so no free lists are searched and no lock is taken. Freeing the top chunk rewinds the pointer past every chunk already marked destroyed; out-of-order frees only run the destructor and mark the chunk, so total work stays O(1) amortized. One arena per thread removes shared-heap contention.",
+  "when_to_use": [
+    "Parsers (JSON, XML, DER) or request handlers that build many short-lived objects and drop them all together or in roughly LIFO order",
+    "Per-thread scratch arenas where you know the peak size in advance and want no heap locking after setup",
+    "Code that needs destructors run for arena objects (unlike plain bump allocators), with some hardening against forged free pointers",
+    "Single-threaded hot loops where malloc/free of large, varied sizes shows up in profiles"
+  ],
+  "when_not_to_use": [
+    "Long-lived objects freed in random order: memory of a non-top object is not reusable until everything above it is freed, so the arena can stay full",
+    "Anything needing a standard allocator interface: no std::allocator/pmr adapter (README says interest faded without N2554 scoped-allocator support)",
+    "Unknown peak memory: capacity is fixed at construction and alloc returns NULL when it runs out, with no growth or chaining",
+    "Sharing one arena across threads: no internal locking",
+    "Production use without vetting: abandoned since 2015, C++03-era Boost code, arrays of non-POD types unsupported (TODO in header)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Boost (utility, type_traits, static_assert headers; Boost.Random for the cookie in obstack.cpp; Boost.Thread and Boost.Test for benchmark and tests)",
+    "min_toolchain": "C++03 (built with gcc-4.5.3 in the README); CMake 2.8",
+    "platforms": "not documented (benchmarked on Linux x86)",
+    "thread_safety": "Not thread-safe; intended as one arena per thread",
+    "drop_in_for_baseline": "partial — replaces malloc/new only where objects are freed in bulk or LIFO order; different API (alloc<T>, alloc_array<T>, dealloc)"
+  },
+  "gotchas": [
+    "With asserts disabled, dealloc of an invalid or already-destroyed pointer makes mark_as_destructed return NULL and the code then calls that NULL destructor pointer, so the 'pointer checking' turns a bad free into a crash, not a safe no-op",
+    "The security cookies are seeded by XOR-ing 64 KiB of freshly new[]-ed, uninitialized heap memory (undefined behavior, weak entropy)",
+    "The destructor runs after memory is reclaimed in pop(); a throwing destructor is not handled (TODO in header)",
+    "Each object carries a chunk header plus alignment padding; size the arena with max_overhead(n), as the benchmark does"
+  ],
+  "pick_this_over_siblings_when": "Pick obstack over fast-alloc's pool and stack allocators when objects have mixed sizes and need destructors run on free, with out-of-order frees tolerated. SpeedMalloc is a general-purpose allocator with no public code and solves a different problem.",
+  "verified_claims_summary": "arena_benchmark.cpp replays one seeded sequence of random sizes from 1 B to 4 MB (in-order, reverse and random free order) through malloc/free, new[]/delete[] and obstack, without touching the payload. On an Intel Atom N450 (gcc-4.5.3 -O2, glibc-2.14.1, Linux 3.4) the author got 272 ms vs 26,882 ms for malloc on 1 thread, and 125 ms vs 108,245 ms on 4 threads. Chunks average about 2 MB, so glibc's large-block mmap/munmap/trim path, a worst case for malloc, probably dominates the baseline. Multi-thread figures are per-thread times summed, not wall time. The README run used 1 GB total, but HEAD uses 512 MB after commit 9540299 ('lower memory usage in benchmark'), so HEAD does not reproduce the printed parameters exactly.",
+  "status_note": "Abandoned (last commit 2015-01-06, benchmark untouched since August 2012, one open build issue from 2017), but BSL-1.0 and about 700 lines, so it is easy to vendor and modernize.",
+  "sources_read": [
+    "https://github.com/cleeus/obstack",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/README.md",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/arena_benchmark.cpp",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/obstack.hpp",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/obstack.cpp",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/cleeus/obstack/HEAD/max_alignment_type.hpp",
+    "https://github.com/cleeus/obstack/commits/master/arena_benchmark.cpp",
+    "https://github.com/cleeus/obstack/issues"
+  ],
+  "confidence": 0.75
+}

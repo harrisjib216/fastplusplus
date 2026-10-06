@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/boostorg/cobalt",
+  "one_liner": "Boost library of C++20 coroutine primitives on Boost.Asio; beats asio stackful spawn and, on channels, asio::awaitable.",
+  "what_it_does": "Boost.Cobalt gives single-threaded async code a set of coroutine types on top of Boost.Asio: eager promise, lazy task, generator, Go-style channel, plus race/gather/join/wait_group, a cobalt::main entry point and wrappers for asio I/O objects (sockets, timers, files, SSL). It is a different interface from asio::spawn/yield_context and asio::awaitable, though tasks can be turned into asio operations with spawn and any asio async op can be awaited through cobalt::use_op.",
+  "how_it_is_fast": "Stackless C++20 coroutines avoid the separate stack and Boost.Context switch that asio's stackful spawn uses. cobalt::channel hands values over by direct symmetric transfer between the coroutines instead of posting through the executor, which is where the 1.6-2.2x channel gains over asio::awaitable come from. use_op allocates async-operation state from a small-buffer resource (4096 bytes by default, BOOST_COBALT_SBO_BUFFER_SIZE) and race/gather/join use a monotonic resource; coroutine frames come from a thread_local pmr pool. It also skips suspension when an op completes immediately (op::ready).",
+  "when_to_use": [
+    "Single-threaded io_context servers or clients written with Boost.Asio that want linear async code without stackful-coroutine stack memory",
+    "Pipelines of producer/consumer coroutines on one thread where cobalt::channel's direct hand-off beats asio::experimental::channel (500 vs 790 ms for 3M zero-size exchanges on gcc)",
+    "Code moving off asio::spawn/yield_context (Boost.Context) that suspends on many fast or immediate completions (1810 vs 3922 ms for 10M immediate channel ops)",
+    "Generators and fan-out with race/gather when you already depend on Boost 1.82+ and C++20"
+  ],
+  "when_not_to_use": [
+    "You need to suspend from nested ordinary function calls: stackless coroutines can only suspend in the coroutine body, so stackful fibers (Boost.Context, Boost.Fiber, minicoro) still fit",
+    "Multi-threaded executors or strands: the library assumes one executor per thread through a thread_local default; on a strand you must pass the executor by hand or get asio::bad_allocator or the wrong executor",
+    "Plain asio::post throughput against asio::awaitable: 2472 vs 2432 ms on gcc 12, so no gain",
+    "MSVC targets: the docs say all MSVC versions have a broken coroutine implementation, worked around by posting frame destruction, with overhead and non-deterministic freeing; issue #172 (access violation on MSVC) is open",
+    "Projects that cannot take Boost: it needs Asio, System, Intrusive, Circular Buffer and Smart Ptr, and a compiled boost_cobalt library"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Boost 1.82+ (Asio, System, Intrusive, Circular Buffer, Smart Ptr; Boost.Container for Clang < 16); OpenSSL optional for boost_cobalt_io_ssl; Threads",
+    "min_toolchain": "C++20; Clang 14, GCC 10, MSVC 19.30 (avoid GCC 12.1/12.2)",
+    "platforms": "any platform Boost.Asio supports (Linux, Windows, macOS)",
+    "thread_safety": "Single-threaded per executor by design; one kernel thread per io_context; cobalt::thread runs a separate event loop per thread",
+    "drop_in_for_baseline": "partial — awaits any asio async operation via cobalt::use_op and can spawn tasks onto asio executors, but coroutines must be rewritten from yield_context or asio::awaitable to cobalt::promise/task"
+  },
+  "gotchas": [
+    "promise is eager and nodiscard; dropping a promise without co_await cancels it with a warning, and detaching needs a unary + (+my_task())",
+    "The docs warn GCC 12.1 and 12.2 miscompile coroutines with stack variables, yet the gcc numbers on the benchmark page were taken with gcc 12",
+    "Open bug reports: heap-use-after-free when cancelling a spawned awaitable (#194), racing a range of generators breaks them (#281), generator locals not cleaned up (#221)",
+    "The channel benchmark compares different channel designs (cobalt::channel<void> with gather vs asio::experimental::channel with parallel_group), not just the coroutine machinery"
+  ],
+  "pick_this_over_siblings_when": "Pick Cobalt over libco-style switchers (libaco, libcopp, libgo) or minicoro when the code is already on Boost.Asio and you want standard C++20 coroutines with no assembly context switch or per-coroutine stack; pick those stackful libraries when you must suspend from deep call stacks or need C compatibility.",
+  "verified_claims_summary": "Author's doc/benchmarks.adoc on an i7-1185G7 with gcc 12 and clang 16 (flags not stated; bench/CMakeLists.txt turns on LTO when Boost.Context is found) runs each loop once in bench/*.cpp: cobalt is about 1.5-1.8x faster than asio stackful spawn on 50M posts but level with asio::awaitable, and 1.6-2.2x faster than asio::awaitable (derived from page data) on immediate and channel exchanges. These are single timings with no repeats.",
+  "status_note": "Actively maintained Boost library (last commit 2026-09-24), BSL-1.0, but several crash and memory-safety issues are still open and MSVC support relies on workarounds.",
+  "sources_read": [
+    "https://github.com/boostorg/cobalt/blob/develop/doc/benchmarks.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/readme.md",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/doc/benchmarks.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/doc/compiler.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/doc/design/thread_local.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/doc/reference/config.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/doc/index.adoc",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/bench/post.cpp",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/bench/immediate.cpp",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/bench/channel.cpp",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/bench/parallel.cpp",
+    "https://raw.githubusercontent.com/boostorg/cobalt/develop/include/boost/cobalt.hpp",
+    "https://github.com/boostorg/cobalt/issues?q=is%3Aissue+bug"
+  ],
+  "confidence": 0.75
+}

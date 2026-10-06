@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/alugowski/poolstl",
+  "one_liner": "Header-only thread-pool implementation of the C++17 parallel algorithms; about 5x over sequential and roughly on par with TBB-backed std::execution::par.",
+  "what_it_does": "Provides execution policies poolstl::par, poolstl::seq and poolstl::par_if(bool) that you pass to std:: algorithms such as for_each, transform, sort, stable_sort, find_if, reduce, transform_reduce, exclusive_scan, copy, fill, count and partition, which then run on an internal task_thread_pool. par.on(pool) selects your own pool. Extras: iota_iter, for_each_chunk (a per-chunk workspace), and pluggable_sort, which parallelises any sequential sort such as pdqsort. With POOLSTL_STD_SUPPLEMENT defined it aliases itself as std::execution::par on toolchains that lack native support (Apple Clang, libc++, GCC 8 or older, Emscripten).",
+  "how_it_is_fast": "Plain static chunking: the range is split into about one chunk per pool thread (some algorithms use an extra split factor), each chunk becomes a std::future task, and results are combined on the calling thread. sort is a parallel quicksort that partitions with the middle element as pivot until leaves are about n/(2*threads), then runs std::sort on each leaf; the first partitions also run 2-way parallel (partition_p2). A pairwise-merge mergesort variant also exists. Nothing is vectorised or work-stolen; the gain is ordinary multicore parallelism with low dependency cost.",
+  "when_to_use": [
+    "You need std::execution::par semantics on Apple Clang, libc++, Emscripten or old GCC, where native parallel algorithms are missing or need TBB.",
+    "You want parallel for_each/transform/reduce over large random-access ranges (millions of elements) without linking TBB or OpenMP.",
+    "Shipping a library that must build anywhere: single amalgamated header, C++11 minimum, CI on GCC 7+, Clang 5+, Apple Clang, MSVC, MinGW and Emscripten.",
+    "Sorting large arrays of mostly distinct keys, especially with pluggable_sort plus pdqsort (71.7 ms vs 113 ms for TBB-backed std::sort(par) on 10M shuffled ints in the README run).",
+    "Choosing parallel vs sequential at runtime by input size with par_if."
+  ],
+  "when_not_to_use": [
+    "If native TBB-backed std::execution::par is available: in the author's own run poolSTL is slower on for_each (18.7 vs 15.3 ms), transform (17.4 vs 15.3), reduce (4.06 vs 3.38) and early-exit find_if (0.405 vs 0.230 ms), and wins only on exclusive_scan.",
+    "Inputs with many duplicate keys: the 2-way quicksort partition (comp(x, pivot)) cannot split a run of equal keys, so the range falls back to one sequential std::sort; open issue #39 reports single-core sorting of a 40M mostly-zero vector.",
+    "Nested parallelism or task graphs: the README forbids nested parallel calls and the pool has no dependencies or work stealing (see the sibling task schedulers instead).",
+    "Non-random-access iterators (lists, input streams): not supported.",
+    "Algorithms outside the implemented subset (no inclusive_scan, merge, unique and others); they are added on request."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (bundles alugowski/task-thread-pool); -lpthread on GCC/Clang 8 or older, -pthread on Emscripten",
+    "min_toolchain": "C++11; C++17 for exclusive_scan, transform_reduce and the other C++17-only algorithms; CI on GCC 7+, Clang 5+, Apple Clang, MSVC, MinGW, Emscripten",
+    "platforms": "any platform with std::thread (Linux, macOS, Windows, WebAssembly via Emscripten)",
+    "thread_safety": "Algorithms may be called concurrently on disjoint data through the shared default pool, which starts on first use; nested parallel calls are not supported. Concurrent calls sharing the pool were not separately documented.",
+    "drop_in_for_baseline": "partial — same std:: algorithm calls with poolstl::par in place of std::execution::par (or a full alias via POOLSTL_STD_SUPPLEMENT), but only a subset of algorithms and random-access iterators only"
+  },
+  "gotchas": [
+    "In the README Google Benchmark table the CPU column for poolstl::par (for example 0.044 ms for for_each) counts only the waiting caller thread, because work runs on pool threads; compare real_time.",
+    "POOLSTL_STD_SUPPLEMENT is labelled 'USE AT YOUR OWN RISK! THIS IS A HACK!': it injects poolstl::par as std::execution::par when native support is missing, and POOLSTL_STD_SUPPLEMENT_NO_INCLUDE is needed to avoid pulling in <execution> (and its TBB link) where TBB is absent.",
+    "Quicksort pivot is the middle element without median-of-3 or 3-way partitioning, so the parallel speedup depends on the key distribution (see issue #39).",
+    "Open issue #40: building with GCC -Wshadow produces many warnings."
+  ],
+  "pick_this_over_siblings_when": "Pick poolSTL when you want standard-algorithm syntax (std::sort, std::reduce with a policy) and portability without TBB. Fork Union, citor or dp::thread_pool are lower-overhead schedulers with their own APIs, better suited to fine-grained or nested parallelism, but none of them implement the std:: parallel algorithms.",
+  "verified_claims_summary": "Author's Google Benchmark run on an Apple M1 Pro (6P+2E) with GCC 13 (benchmark CMake Release flags -O3 -DNDEBUG; native par from libstdc++ linked to TBB when found) on 100M-int arrays (10M shuffled ints for sort) gives about 4-5x over sequential. Against std::execution::par it ties on all_of and sort, is 1.7x faster on exclusive_scan (11.6 vs 19.8 ms), and is 10-20% slower on for_each, transform and reduce.",
+  "status_note": "Stale since mid-2024 with two open issues, but triple-licensed (BSD-2-Clause, MIT or BSL-1.0), header-only and CI-tested on many toolchains, so safe to vendor as a portability fallback.",
+  "sources_read": [
+    "https://github.com/alugowski/poolSTL",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/README.md",
+    "https://github.com/alugowski/poolSTL/tree/main/include/poolstl",
+    "https://github.com/alugowski/poolSTL/issues?q=is%3Aissue",
+    "https://github.com/alugowski/poolSTL/issues/39",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/include/poolstl/internal/ttp_impl.hpp",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/include/poolstl/internal/utils.hpp",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/include/poolstl/internal/thread_impl.hpp",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/include/poolstl/algorithm",
+    "https://github.com/alugowski/poolSTL/tree/main/benchmark",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/benchmark/utils.hpp",
+    "https://raw.githubusercontent.com/alugowski/poolSTL/HEAD/benchmark/algorithm_bench.cpp"
+  ],
+  "confidence": 0.8
+}

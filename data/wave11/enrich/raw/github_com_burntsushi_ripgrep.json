@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/burntsushi/ripgrep",
+  "one_liner": "Recursive regex search CLI in Rust; beats GNU grep, git grep, ag and ugrep on code trees and large files.",
+  "what_it_does": "ripgrep (rg) is a line-oriented recursive search tool that honors .gitignore/.ignore/.rgignore, skips hidden and binary files by default, and supports file-type filters, context, replacements, non-UTF-8 encodings, compressed files and optional PCRE2. It is a command-line tool, not a C++ library; its pieces ship as Rust crates (grep-searcher, grep-regex, ignore, globset). For a C++ project the reusable parts are the tool itself and its I/O policy: memory-map a few explicitly named files, use buffered reads for directory walks.",
+  "how_it_is_fast": "The Rust regex crate uses finite automata with UTF-8 decoding built into its DFA, SIMD literal prefilters and aggressive literal extraction, so Unicode stays on without the large slowdown GNU grep shows under a UTF-8 locale. Directory traversal uses a lock-free parallel recursive iterator (ignore crate), and gitignore globs are matched in one pass with a RegexSet. File I/O is chosen per call: hiargs.rs enables memory maps only when 10 or fewer paths are given and all are files, otherwise it reads incrementally into an intermediate buffer; mmaps get madvise(SEQUENTIAL) on Linux and are never used on macOS.",
+  "when_to_use": [
+    "Interactive or scripted search over large source trees where skipping ignored, hidden and binary files is what you want (Linux kernel tree: 0.082s vs git grep -P 0.273s, ag 0.443s)",
+    "Searching single huge files cached in memory with Unicode-aware patterns (13GB subtitles: 1.042s vs GNU grep 6.577s under a UTF-8 locale)",
+    "Patterns without usable literals on big inputs, where it still led ugrep 1.40x and LC_ALL=C GNU grep 2.08x in the README",
+    "As a design reference for C++ code that picks mmap vs buffered reads: mmap for a handful of large files, a reused buffer for many small files"
+  ],
+  "when_not_to_use": [
+    "You need a library callable from C++: rg is a Rust binary, and the grep-* and ignore crates have Rust APIs only",
+    "You need POSIX grep semantics or a tool guaranteed to exist on every machine; ripgrep does not follow POSIX and default filtering hides files grep would search (use -uuu)",
+    "Very high match counts, where printing dominates and the gap narrows (rg the: 6.948s vs GNU grep 15.217s, ugrep 11.721s)",
+    "Files that may be truncated while being searched: with memory maps on, ripgrep can abort with SIGBUS (use --no-mmap)",
+    "Look-around or backreferences with the default engine; these need -P (PCRE2), which is an optional build feature"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "Rust regex, memchr, ignore/globset and grep-* crates; PCRE2 optional (pcre2 feature)",
+    "min_toolchain": "Rust 1.96 (workspace rust-version in Cargo.toml for 15.2.0)",
+    "platforms": "Linux, macOS, Windows (memory maps disabled on macOS)",
+    "thread_safety": "Multi-threaded CLI (parallel directory walk and search); library crates follow Rust Send/Sync rules",
+    "drop_in_for_baseline": "partial — covers most grep options and is a drop-in for interactive use, but defaults to recursive, gitignore-filtered search and is not POSIX grep"
+  },
+  "gotchas": [
+    "Binary-file detection differs between the mmap path (checks only the start of the file) and the buffered path (checks every buffer), so results can differ unless you pass --no-mmap",
+    "The mmap choice is a CLI heuristic (10 or fewer paths, all regular files); the grep-searcher crate defaults to MmapChoice::never(), and MmapChoice::auto() is unsafe",
+    "macOS never uses memory maps: in the PR #3246 discussion the maintainer measured a 3.5GB file at 7.5s without mmap vs 26.7s with mmap plus sequential advice",
+    "-n (line numbers) raises the 13GB single-file time from 1.042s to 1.664s"
+  ],
+  "pick_this_over_siblings_when": "Among the filesystem siblings, bfs, al-dente and lsr speed up directory walking and listing, and liburing or SPDK speed up raw block I/O; pick ripgrep when the job is searching file contents, where the regex engine and the mmap-vs-buffer policy matter more than syscall throughput.",
+  "verified_claims_summary": "Author's README timings on an Intel i9-12900K with the Linux kernel tree built with defconfig: rg 0.082s against git grep -P 0.273s, ag 0.443s, ugrep 0.639s and git grep -E under a UTF-8 locale 2.670s; GNU grep itself ran only in the whitelist test (0.674s vs rg 0.063s, 10.69x) and on the 13GB file (6.577s vs 1.042s, 6.31x). One run each, no compiler or build profile stated; the 2.670s figure in the record belongs to git grep, not GNU grep, and the mmap-vs-buffer split (linux_literal, subtitles_literal) is from the blog snippet only and was not checked against the blog.",
+  "status_note": "Actively maintained (15.2.0, last commit 2026-08-04), MIT OR Unlicense, widely packaged; usable as a tool, not as a C++ library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/README.md",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/FAQ.md",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/GUIDE.md",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/crates/searcher/src/searcher/mmap.rs",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/crates/searcher/src/searcher/mod.rs",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/crates/core/flags/defs.rs",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/crates/core/flags/hiargs.rs",
+    "https://raw.githubusercontent.com/BurntSushi/ripgrep/HEAD/benchsuite/benchsuite",
+    "https://github.com/BurntSushi/ripgrep/pull/3246"
+  ],
+  "confidence": 0.75
+}

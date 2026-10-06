@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/christianpanov/lwlog",
+  "one_liner": "C++17 policy-based logger with allocation-free log calls and an SPSC/MPSC ring-buffer async mode; README claims 2.5-20x over spdlog.",
+  "what_it_does": "A spdlog-style logger: you create a logger with sinks (stdout, stderr, file, custom) and call info/debug/critical with {}-style placeholders and a user-defined pattern with colors, alignment, topics and custom attributes. The logger type is a long template: buffer limits, sync or async execution policy, flush policy, threading policy and a compile-time sink list (runtime sinks also supported). Convenience aliases cover the common cases, with _mt variants for thread safety. It is not source-compatible with spdlog.",
+  "how_it_is_fast": "Log calls format into fixed-size pre-allocated buffers whose sizes are template parameters (pattern 256, message 128, argument 64, 4 args by default), so no heap allocation per call. The pattern is parsed once when set and compiled into a list of formatters, so the call site only substitutes values. Async mode is a bounded ring buffer (default 1024 slots) with cache-line-aligned read/write indices; SPSC uses plain atomics, the thread-safe variant takes an atomic_flag spinlock on enqueue (MPSC), and the worker thread spins with an adaptive waiter. Producers enqueue only the format-string pointer, source metadata and argument strings converted to chars; formatting happens on the worker.",
+  "when_to_use": [
+    "Single-producer async logging to console or file where call-site latency matters and messages fit the static buffer limits",
+    "Embedded or real-time code that must avoid heap allocation in the logging path",
+    "Projects that already pick sinks and policies at compile time and want spdlog-like {} formatting without the fmt dependency",
+    "Buffered sync logging to a stream where losing unflushed lines on crash is acceptable"
+  ],
+  "when_not_to_use": [
+    "Messages or arguments longer than the configured limits (128-byte message, 64-byte argument, 4 arguments by default); the limits are fixed at compile time",
+    "Many producer threads: the MPSC queue is a spinlock around a ring buffer, not a lock-free multi-producer queue, and no multi-thread benchmark is published",
+    "When you need reproducible evidence: the picobench harness used for the README tables is not in the repository (Sandbox/ holds only a timer demo), and no compiler, flags or CPU are given",
+    "Drop-in replacement for spdlog call sites or for nanosecond-class loggers such as Quill, fmtlog or NanoLog",
+    "Package-manager consumers: no Conan or vcpkg package (open issue #39)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (Threads only)",
+    "min_toolchain": "C++17, CMake 3.16",
+    "platforms": "Windows x64 (MSVC, MinGW, Clang), Linux x64 (GCC, Clang, Intel icx) and arm64 (GCC, Clang), macOS x64 (Apple Clang), per README CI table",
+    "thread_safety": "Per policy: single_threaded_policy (default aliases) is not thread-safe; multi_threaded_policy and _mt aliases lock sinks with a mutex; async thread-safe mode uses a spinlock-guarded MPSC ring buffer",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Async mode queues the raw const char* format string, not a copy, so a format string built at runtime (for example std::string::c_str()) must outlive the worker thread processing it",
+    "Default flush policy is immediate_flush_policy (fflush after every log); the large README sync speedups come from buffered_flush_policy (4 MiB stream buffer) and lose unflushed lines on a crash",
+    "overwrite_last_overflow_policy advances the read index from the producer while the worker may be extracting the same slot; from code reading this looks racy, so prefer block or discard_new",
+    "The default overflow policy busy-waits with CPU pause when the 1024-slot queue is full, and the worker spins via an adaptive waiter, so expect a burning core under load"
+  ],
+  "pick_this_over_siblings_when": "Pick lwlog over Quill, fmtlog or NanoLog when you want a small, readable, allocation-free codebase with spdlog-like patterns and compile-time policies, and can live without their published, reproducible nanosecond-level latency numbers. For multi-threaded hot paths, Quill or fmtlog have better evidence.",
+  "verified_claims_summary": "First-party picobench tables in the README compare lwlog with spdlog in four modes over 8 to 8192 messages: sync 7.4x at 8 messages falling to 2.5x at 8192; async blocking 16x at 8 messages and 540x at 4096, where spdlog's row jumps to 565 us/op, which suggests queue saturation rather than steady state; async nonblocking 20.7x falling to 2.4x. The 237-319x 'buffered' table pits buffered lwlog against unbuffered spdlog. No compiler, flags, CPU or benchmark source is published.",
+  "status_note": "Active (last commit 2025-12-25, v1.3.0 in CMakeLists, 353 stars), MIT-licensed, five open issues and none of them bugs; small enough to vendor, but its performance claims are unreproducible first-party numbers.",
+  "sources_read": [
+    "https://github.com/ChristianPanov/lwlog",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/README.md",
+    "https://github.com/ChristianPanov/lwlog/issues",
+    "https://github.com/ChristianPanov/lwlog/tree/master/Sandbox",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/Sandbox/Benchmark.h",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/Sandbox/Sandbox.cpp",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/CMakeLists.txt",
+    "https://github.com/ChristianPanov/lwlog/tree/master/lwlog/include",
+    "https://github.com/ChristianPanov/lwlog/tree/master/lwlog/include/details",
+    "https://github.com/ChristianPanov/lwlog/tree/master/lwlog/include/policy",
+    "https://github.com/ChristianPanov/lwlog/tree/master/lwlog/include/details/bounded_queue",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/lwlog/include/logger_impl.h",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/lwlog/include/policy/log_policy_impl.h",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/lwlog/include/policy/concurrency_policy.h",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/lwlog/include/policy/flush_policy.h",
+    "https://raw.githubusercontent.com/ChristianPanov/lwlog/HEAD/lwlog/include/details/bounded_queue/bounded_queue_impl.h"
+  ],
+  "confidence": 0.7
+}
