@@ -43,3 +43,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - guamoko995/expr-cls (Go expression evaluator from typed closures): README claims 9.015 ns/op vs expr 172.0 and cel-go 267.9 on X+(6.0*Y), Ryzen 5 5600H, 3 stars, unchecked (Expr enricher, 2026-10-06).
 - tamnd/bento (Go JavaScript runtime by the katsu author; katsu enricher, 2026-10-06); weak lead.
 - AssemblyScript plus json-as (TypeScript-to-native peers named in Perry's benchmarks/README.md) and Turso (Rust SQLite rewrite, Go driver turso.tech/database/tursogo): leads from the Perry and musql enricher (2026-10-06), repos not opened.
+- risechain/pevm (parallel EVM on revm): README claims 2x average over sequential revm on Ethereum blocks and 22x on a Gigagas Uniswap block, numbers in crates/pevm/benches/README.md (revm enricher, 2026-10-06, not read); seed candidate.

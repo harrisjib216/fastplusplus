@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/bluealloy/revm",
+  "one_liner": "The standard Rust EVM; about 2.8x faster than Geth's EVM on evm-bench, but slower than C++ evmone.",
+  "what_it_does": "A Rust implementation of the Ethereum Virtual Machine that serves two roles: an executor (set block and tx environments, run transactions against a Database, get the result and state diff) and a framework for EVM variants such as Optimism through Context, Handler and Inspector traits. The core call is Context::mainnet().with_block(block).with_db(db).build_mainnet() then evm.transact(tx), or inspect_tx(tx) with a tracer. It is split into crates (interpreter, precompile, database, handler, inspector, statetest-types) plus the revme binary for running Ethereum state tests. It is a Rust library, so replacing Geth's EVM means moving that execution into Rust or using bindings such as pyrevm.",
+  "how_it_is_fast": "A central loop dispatches each opcode through a 256-entry function-pointer instruction table, charging static gas from a separate gas table with an unchecked subtraction before the call. Legacy bytecode is padded so the trailing byte is STOP, which lets the program counter advance without bounds checks, and the JUMPDEST bitmap is computed once per contract with SIMD scanning on x86 and aarch64 (scalar fallback). Memory is a shared buffer reused across call frames, and release builds use thin LTO and panic=abort. An optional LLVM JIT (revmc) lives in a separate repo and is not part of the measured numbers.",
+  "when_to_use": [
+    "A Rust codebase that needs a production EVM for block building, transaction simulation, tracing, testing (Foundry-style) or zkVM guests.",
+    "Replacing go-ethereum's EVM in a non-Go stack where 2-3x interpreter speed matters: evm-bench shows 1.8x (ERC-20 approval-transfer) up to 3.1x (ten-thousand-hashes) over Geth.",
+    "Building an L2 or custom chain that needs handler hooks, custom precompiles or custom opcodes on a widely audited base.",
+    "When ecosystem compatibility matters: Reth, Foundry, Optimism, Risc0 and Succinct all build on it."
+  ],
+  "when_not_to_use": [
+    "Maximum single-thread interpreter speed in a C or C++ host: evmone is 1.285x faster on the same evm-bench table (66 ms vs 84.8 ms).",
+    "Code that needs a stable API: majors arrive every month or two (42.0.0 in July 2026, 43.0.0 on 2026-08-26), and the MSRV (1.91.0) follows recent stable Rust.",
+    "Parallel block execution out of the box: revm executes sequentially; parallel layers such as pevm build on top of it.",
+    "Pure Go stacks, where Geth avoids an FFI boundary and its overhead."
+  ],
+  "integration": {
+    "form": "crate (crates.io revm 43.0.3, about 9.9M downloads)",
+    "dependencies": "alloy primitives and related crates; default features also pull secp256k1 (libsecp256k1), c-kzg and blst C libraries plus the tracer feature; std is a feature, so no_std works with default-features = false",
+    "min_toolchain": "Rust 1.91.0 (rust-version of 43.0.3)",
+    "platforms": "Any Rust target; SIMD jumpdest analysis on x86/x86-64 and aarch64 with scalar fallback elsewhere",
+    "thread_safety": "Not documented in the README; each Evm owns its Context and database, and the repo does not document sharing one instance across threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in evm-bench: the revm runner times only Interpreter::run of the deployed contract against revm's DummyHost (a mock host with an in-memory storage map, cleared after each run), while the Geth runner times a full evm.Call against a real StateDB with snapshot and revert. Geth's rows therefore include host and state-journal costs that revm's rows skip, so the 2.8x overstates the gap for full-transaction execution by an unknown amount.",
+    "The runner code in the repo is not the code behind the table: the table was last updated 2022-12-17, but the revm runner now pins revm-interpreter rev 3fda52e with clap 4.5.3 (a 2024 bump), Geth is pinned at v1.10.25, and no CPU or toolchain is recorded. revm has gone through dozens of major versions since.",
+    "Open issue #3776 (June 2026): Miri found undefined behavior reachable through safe public bytecode cursor APIs in revm-interpreter 35.0.1 (Jumps::absolute_jump and relative_jump, Immediates::read_u16, read_offset_u16/i16, read_slice) when callers pass out-of-range offsets; the normal interpreter keeps the invariants, but custom instruction code calling these APIs can trigger it.",
+    "The framework API changes between majors (Context, Handler and Inspector traits were reworked), so code written against older revm examples often does not compile on 43.x."
+  ],
+  "pick_this_over_siblings_when": "Pick revm over evmone when the host is Rust and you need the framework (handlers, inspectors, L2 variants) or Reth/Foundry compatibility; pick evmone for the fastest measured interpreter in a C/C++ host. evm2 claims up to 2x over revm and Guillotine's own table shows it matching or beating revm on some cases, but both are young, so revm stays the choice for production maturity.",
+  "verified_claims_summary": "Third-party evm-bench (Ziyad Edher) table dated 2022-12-17, summed over five Solidity workloads: revm 84.8 ms vs Geth 235 ms, about 2.8x faster (derived from page data); per workload from 1.8x (ERC-20 approval-transfer, 9.6 vs 17 ms) to 3.1x (ten-thousand-hashes, 4.2 vs 13.2 ms; snailtracer 53 vs 163 ms), with evmone at 66 ms. revm was built with cargo run -r and Geth with go run; CPU, compiler versions and the revm version are not stated.",
+  "status_note": "Very active (last commit 2026-10-01, 43.0.3 released 2026-09-24, 2.2k stars, 2,535 commits), MIT-licensed and the de facto Rust EVM; production-ready, but expect breaking changes each major.",
+  "sources_read": [
+    "https://github.com/bluealloy/revm",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/README.md",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/revm/Cargo.toml",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/interpreter/Cargo.toml",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/interpreter/src/interpreter.rs",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/interpreter/src/instructions.rs",
+    "https://raw.githubusercontent.com/bluealloy/revm/HEAD/crates/bytecode/src/legacy/analysis.rs",
+    "https://github.com/bluealloy/revm/tree/main/crates/bytecode/src",
+    "https://github.com/bluealloy/revm/security/advisories",
+    "https://github.com/bluealloy/revm/issues?q=is%3Aissue+performance",
+    "https://github.com/bluealloy/revm/issues/3776",
+    "https://github.com/bluealloy/revm/issues/2363",
+    "https://crates.io/api/v1/crates/revm",
+    "https://raw.githubusercontent.com/ziyadedher/evm-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/ziyadedher/evm-bench/HEAD/runners/revm/src/main.rs",
+    "https://raw.githubusercontent.com/ziyadedher/evm-bench/HEAD/runners/revm/Cargo.toml",
+    "https://raw.githubusercontent.com/ziyadedher/evm-bench/HEAD/runners/geth/runner.go",
+    "https://github.com/risechain/pevm"
+  ],
+  "confidence": 0.75
+}
