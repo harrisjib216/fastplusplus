@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/ned14/llfio",
+  "one_liner": "Low-level, zero-copy, race-free C++17 file and memory-map i/o library; no head-to-head numbers against POSIX read/write.",
+  "what_it_does": "LLFIO is a portable file i/o and filesystem library (the former Boost.AFIO v2 and the abandoned WG21 P1031 proposal) built around a hierarchy of handle types: path_handle, directory_handle, file_handle, mapped_file_handle, section_handle and map_handle. It gives noexcept scatter-gather reads and writes returning Outcome result types, anchored race-free (no TOCTOU) path opens, byte-range and shared filesystem mutexes, deadlines and cancellation, and generic filesystem algorithms (directory traversal, summary, reliable deletion, content cloning). It replaces raw POSIX/Win32 calls or std::fstream and std::filesystem with a different interface; it is not a drop-in.",
+  "how_it_is_fast": "The design target is near-zero software overhead per i/o: no malloc, no exceptions and no whole-machine memory copy on the i/o path, path_view instead of allocated std::filesystem::path, and thin wrappers over pread/pwrite-style syscalls (the README says about 100 ns per i/o on Linux, syscall included). It exposes O_DIRECT and seven kernel caching modes, plus memory-mapped scatter-gather i/o with large and huge page support, so you can pick the caching and copy behaviour per handle. It does not add a faster algorithm on top of the OS; the gain is avoiding the allocation, copying and locking that iostreams and std::filesystem add.",
+  "when_to_use": [
+    "Storage engines or databases that do 4 KiB direct (O_DIRECT) i/o on NVMe or Optane and need per-op overhead well under the device latency.",
+    "Portable code across Linux, Windows and FreeBSD that wants memory-mapped files, sparse files, hole punching and large/huge pages through one API.",
+    "Filesystem algorithms that must be race-free against concurrent renames (anchored path_handle opens, no stored paths).",
+    "Builds with exceptions and RTTI disabled that still need rich error codes (original NT kernel error codes are preserved)."
+  ],
+  "when_not_to_use": [
+    "You need an async submission-queue backend: Linux io_uring support is still on the README's todo list and multiplex.hpp is only an interface sketch; use liburing or SPDK directly.",
+    "You want a measured speedup over read/write or std::fstream: the project publishes overhead and device latency figures only, never a comparison against another library.",
+    "Mac OS deployments: the README says it is less well tested there.",
+    "Header-only use on Windows without status_code or a shared ntkernel error category: Build.md warns error-code comparisons can randomly fail.",
+    "Small tools that just read a few files: the API surface is large and the build pulls in QuickCppLib and Outcome via a CMake bootstrap."
+  ],
+  "integration": {
+    "form": "header-only, static lib or shared lib (selectable; also vcpkg 'llfio' and prebuilt release binaries)",
+    "dependencies": "QuickCppLib and Outcome (fetched by the CMake bootstrap); git submodules ntkernel-error-category and wg14_signals; an STL with working <filesystem>",
+    "min_toolchain": "C++17 with std::filesystem; CMake 3.9+; CI covers GCC and Clang on Linux, Xcode, Visual Studio (Android NDK and MinGW build only)",
+    "platforms": "Linux, Windows, FreeBSD, Mac OS (less tested), Android/iOS build-only; README targets kernels back to Linux 2.6.32 and Windows 8.1",
+    "thread_safety": "not documented per handle; the v2 redesign removed all internal use of multiple threads and shared_ptr, so synchronise shared handles yourself",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Header-only mode on Windows can produce binaries where semantic error-code comparisons fail; define LLFIO_EXPERIMENTAL_STATUS_CODE=1 or link the prebuilt library.",
+    "map_handle's page cache does not self-trim; you must call trim_cache() or allocations accumulate.",
+    "Open Windows bugs: mapped_temp_inode leaks space (#160) and map(section, reserve) does not work (#121); algorithm::traverse relies on vector<list<move-only>> (#98).",
+    "Clone with --recursive and do an out-of-tree build or the CMake build fails; Build.md itself is flagged as inaccurate for POSIX (#111)."
+  ],
+  "pick_this_over_siblings_when": "Pick LLFIO over liburing or SPDK when you want a portable, synchronous, race-free file and mmap abstraction across Linux and Windows rather than a Linux-only async queue; for raw IOPS at high queue depth liburing or SPDK are the measured options. Unlike FastMap or UMap it does not replace the kernel mmap path, it wraps it.",
+  "verified_claims_summary": "The README gives about 100 ns of software overhead per i/o on Linux and 99th-percentile QD1 4 KiB direct read latencies of 30 us (Linux), 37 us (Windows) and 70 us (FreeBSD) on NVMe, set beside manufacturer device latencies; no baseline library, compiler, flags or exact hardware are tied to those figures. The repo's fs_probe_results.yaml carries raw latency profiles (for example AMD Threadripper PRO 5975WX, Linux 5.15, RAID0 Samsung PM9A1 on XFS: direct QD1 4 KiB read p99 about 96 us), which are device characterisations, not comparisons.",
+  "status_note": "Active (last commit 2026-08-24), dual Apache-2.0/BSL-1.0, mature and in production use per the README, but the standardisation effort was abandoned in 2025 and io_uring remains unimplemented.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ned14/llfio/develop/Readme.md",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/Build.md",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/programs/fs-probe/fs_probe_results.yaml",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/.gitmodules",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/include/llfio/v2.0/multiplex.hpp",
+    "https://raw.githubusercontent.com/ned14/llfio/develop/include/llfio/v2.0/map_handle.hpp",
+    "https://github.com/ned14/llfio/tree/develop/include/llfio/v2.0",
+    "https://github.com/ned14/llfio/tree/develop/include/llfio/v2.0/detail/impl/posix",
+    "https://github.com/ned14/llfio/issues?q=is%3Aissue+is%3Aopen+bug"
+  ],
+  "confidence": 0.7
+}
