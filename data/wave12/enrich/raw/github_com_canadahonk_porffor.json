@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/canadahonk/porffor",
+  "one_liner": "Ahead-of-time JavaScript/TypeScript compiler emitting C and native binaries; first-party V8-suite score beats QuickJS and Node --jitless, not JIT engines.",
+  "what_it_does": "Porffor (`porf`) compiles a JavaScript or TypeScript program ahead of time into C (`porf c foo.js -o foo.c`) or straight into a native executable (`porf native foo.js -o foo`), bundling its own runtime, builtins and garbage collector into the output, so nothing is interpreted or JIT-compiled at run time. `porf foo.js` compiles to a temporary binary and runs it, and there is a REPL. It is a separate engine with partial ECMAScript coverage, not an embeddable library and not a drop-in for Node, QuickJS or V8.",
+  "how_it_is_fast": "Whole-program AOT compilation: a parser and semantic pass feed one flat IR tree (compiler/ir.js, constant folding at construction, no later lowering passes) that render.js prints as C, which the system C compiler then optimizes at -O3 with -flto by default. Options on by default (compiler/prefs.js) are indirectCalls, optUnused, optTypes, ctHash, closures, lazyObjects and ic, i.e. unused-code and type-driven optimizations plus what the names suggest are lazy object materialization and inline caches; values are a {f64 val; i32 type} struct, and memory comes from a 4 GiB reserved arena with 32-bit object references and a mark-based collector with minor and full cycles. With no interpreter or JIT warm-up the output starts quickly and stays small (README: hello world compiled in 105 ms to a 33.7 KB binary), but it has no runtime profiling or speculative optimization, which is why JIT engines stay far ahead on throughput.",
+  "when_to_use": [
+    "You want a single small native binary from a JS/TS program for CLI tools, serverless or embedded targets, with no Node, Bun or QuickJS runtime shipped beside it.",
+    "Startup time and binary size matter more than peak throughput, for example short-lived commands that a JIT never warms up for.",
+    "You would otherwise run under an interpreter-only engine (QuickJS, Node --jitless, Bun without JIT), where the first-party V8-suite numbers put Porffor ahead (about 1.86x QuickJS, 1.14x Node jitless, derived from a snippet).",
+    "You want generated C you can inspect, patch or cross-compile (release CI builds the compiler with zig cc for Linux and macOS on x64 and arm64; the runtime has a WASI code path)."
+  ],
+  "when_not_to_use": [
+    "Throughput-bound long-running code: JIT-enabled Node and Bun score 13 to 17x higher on the same V8 suite (snippet), and issue #262 measured property access in a 1-billion-iteration loop about 12x slower than V8 in Chrome.",
+    "Programs that need full ECMAScript or web APIs: open issues include no iterator objects (Map/Set iterators return arrays, for...of ignores Symbol.iterator, #375), no Proxy (#145), no dynamic import() (#345), no ReadableStream (#349) or crypto.getRandomValues (#347), and correctness bugs around classes and function reassignment (#356, #357, #389, #400).",
+    "Production use: releases are labelled alpha (alpha 15 on 2026-10-02), the compiler was 'almost entirely rewritten' in July 2026 (issue #344), and CI gates releases only on 108 self-host test262 harness passes; the last full test262 figure in test262/history.json is 67.45 percent (34,211 of 50,718) from 2026-03-06, before the rewrite.",
+    "Heaps above 4 GiB (the arena reserve is 1<<32 with 32-bit references; 64 MiB on WASI) or Windows hosts (no Windows release binary is built)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Compiler is distributed as the porffor npm package or install script with prebuilt binaries; producing native output needs a system C compiler (cc, $CC or --compiler; zig cc for --musl). Generated programs link only libm (uWebSockets is pulled in for the native fetch server mode).",
+    "min_toolchain": "not documented; CI builds with Node 24, LLVM 21 and zig 0.16.0, and generated C uses C11 features such as _Generic and _Thread_local",
+    "platforms": "Release binaries for linux-x64, linux-arm64, linux-x64-musl, linux-arm64-musl, darwin-x64, darwin-arm64; generated C has a WASI path; no Windows release",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — runs ordinary JS/TS sources without changes when they stay inside the supported subset, but it is a whole-program compiler producing a binary, not a replacement engine you can embed like QuickJS, and unsupported features fail at compile or run time"
+  },
+  "gotchas": [
+    "The V8-suite numbers (Porffor 6,646, Node no-JIT 5,828, Bun no-JIT 4,464, QuickJS 3,564) are first-party, seen only in a search snippet of porffor.dev (blocked here) with no date, hardware or versions; since the compiler was almost entirely rewritten in July 2026, they may describe the earlier Wasm-based compiler.",
+    "Harness caveat: bench/v8-v7.js uses V8's base.js, whose final score is the geometric mean of only the suites that completed; a suite that throws (including a failed result check) is reported as ERROR and left out rather than scored zero. Whether Porffor completes all eight suites (RegExp, EarleyBoyer and others) in the published run cannot be checked, since no results or logs are committed, and a 'builtins/regexp: basic search' commit landed only on 2026-09-30.",
+    "`porf foo.js` recompiles the program through the C compiler on every invocation (single-file builds pipe C to cc with no cache), so time scripts by building once with `porf native` and running the binary.",
+    "Some speed options trade spec compliance: --fast-length is a 'non-compliant optimization', and a --safe mode exists to 'error on unsafe Porffor features', meaning the default build accepts them."
+  ],
+  "pick_this_over_siblings_when": "Choose Porffor over scriptc or katsu when the input is general JavaScript rather than a typed TypeScript subset and you want inspectable C output; choose lumen (about 2.2x QuickJS on macOS arm64 in ahaoboy/js-engine-benchmark) or plain Node/V8 when you need a full engine with better measured throughput, and LLRT when the goal is fast Lambda cold starts with a fuller runtime.",
+  "verified_claims_summary": "Porffor's own site reports a V8 benchmark suite (v8-v7) composite score of 6,646 against 5,828 for Node with the JIT disabled, 4,464 for Bun without JIT and 3,564 for QuickJS (about 1.14x and 1.86x, derived from the snippet), with JIT-enabled Node and Bun 13 to 17x higher; engine versions, C compiler, flags, hardware and date are not available, and the repo commits the suite but no results.",
+  "status_note": "Very active (alpha releases several times a week, last commit 2026-10-02, about 3,220 commits) and MIT-licensed, but alpha-quality after a mid-2026 rewrite, with a narrowing but real ECMAScript gap; usable today for small self-contained JS/TS tools, not for code that needs full spec conformance.",
+  "sources_read": [
+    "https://github.com/CanadaHonk/porffor",
+    "https://github.com/CanadaHonk/porffor/commits",
+    "https://github.com/CanadaHonk/porffor/tree/main/bench",
+    "https://github.com/CanadaHonk/porffor/tree/main/compiler",
+    "https://github.com/CanadaHonk/porffor/tree/main/runtime",
+    "https://github.com/CanadaHonk/porffor/tree/main/test262",
+    "https://github.com/CanadaHonk/porffor/tree/main/.github/workflows",
+    "https://github.com/CanadaHonk/porffor/issues",
+    "https://github.com/CanadaHonk/porffor/issues/262",
+    "https://github.com/CanadaHonk/porffor/issues/344",
+    "https://github.com/CanadaHonk/porffor/releases",
+    "https://github.com/CanadaHonk/porffor/wiki",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/README.md",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/.github/workflows/ci.yaml",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/test262/history.json",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/bench/v8-v7.js",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/runtime/index.js",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/compiler/prefs.js",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/compiler/index.js",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/compiler/ir.js",
+    "https://raw.githubusercontent.com/CanadaHonk/porffor/HEAD/compiler/render.js",
+    "https://porffor.dev/ (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.6
+}
