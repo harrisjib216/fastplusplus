@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/clickhouse/clickhouse",
+  "one_liner": "ClickHouse's patched LLVM libunwind with a lock-free per-IP cache of decoded DWARF rules; 4.8-7.3x faster repeated stack traces.",
+  "what_it_does": "ClickHouse's fork of llvm-project (contrib/llvm-project, commit 3807b16) adds DwarfRuleCache.hpp to libunwind, so walking a frame whose rule is cached skips the FDE lookup and CFI interpretation. The API is unchanged: _Unwind_Backtrace, unw_step and C++ exception unwinding all use it transparently. It is turned on at compile time by _LIBUNWIND_USE_DWARF_RULE_CACHE in config.h, only for Linux x86-64 and AArch64. The same PR also fixes a DW_CFA_remember_state stack overflow on small fiber stacks (also sent upstream as llvm/llvm-project#226964).",
+  "how_it_is_fast": "Stock libunwind finds and interprets each frame's FDE twice per step (once for the proc info, once to compute the caller's registers). The fork stores the result in a static, direct-mapped table of 4096 slots keyed by instruction pointer (Fibonacci hashing; return addresses and plain IPs get distinct keys). Each slot is a seqlock: a lookup that races a write misses, and a racing insert is dropped. There are no locks or allocation, so it is safe in signal handlers. A hit copies only the half of the compact rule (saved registers, CFA register and offset) that the caller needs and applies it with a short applyCachedRule path. getReg also short-circuits IP and SP instead of going through the non-inlined getRegister switch.",
+  "when_to_use": [
+    "You already build against LLVM libunwind on Linux x86-64 or AArch64 and capture stack traces on every exception or log event (repeated call stacks: 6.4-7.3x per 45-frame capture).",
+    "Exception-heavy C++ servers where throw/catch cost is dominated by unwinding (4.8-5.8x at depth 16 in the PR's microbenchmark).",
+    "In-process sampling profilers that unwind from a signal handler and need a lock-free, allocation-free unwinder (1.4-1.8x per sample at depth 0).",
+    "Processes that never dlclose code, as in ClickHouse, which stubs dlopen/dlclose."
+  ],
+  "when_not_to_use": [
+    "Programs that unload shared objects or JIT and free code: entries are never invalidated, so a reused address can return a stale rule. The PR says a general-purpose unwinder would need dlclose hooks.",
+    "Mostly-unique stacks: with call sites that miss the cache the gain is only 1.10-1.18x.",
+    "macOS, Windows, 32-bit or other architectures: the cache compiles out there (Apple is excluded on purpose because frameworks can unload).",
+    "Toolchains on libgcc's unwinder or nongnu libunwind: it is a patch to the LLVM libunwind sources, not a drop-in library.",
+    "Memory-tight processes: the table adds 0.72 MiB of .bss on x86-64 and 1.12 MiB on AArch64."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libunwind itself (vendor libunwind/src from ClickHouse/llvm-project; DwarfRuleCache.hpp, edits to UnwindCursor.hpp, DwarfInstructions.hpp, DwarfParser.hpp, config.h)",
+    "min_toolchain": "not documented (ClickHouse builds with recent Clang; the code uses __atomic builtins and constexpr)",
+    "platforms": "Linux x86-64 and AArch64 (ELF, dl_iterate_phdr); everywhere else the code is byte-identical to the baseline",
+    "thread_safety": "Lock-free and signal-safe per the code comments: seqlock slots, racing lookups miss, racing inserts are dropped; the PR reports 8M concurrent captures in testing",
+    "drop_in_for_baseline": "partial: same libunwind API and ABI, but you must vendor the patched fork and accept the no-code-unloading assumption"
+  },
+  "gotchas": [
+    "Rules are cached only for FDEs in loaded modules and are never invalidated; the design depends on code never being unloaded.",
+    "Direct-mapped with 4096 slots: a colliding insert overwrites the slot, so deep or very varied stacks thrash it. Rules that need DWARF expressions, or that save more than 12 registers (24 on AArch64), are never cached.",
+    "In the merged code (3807b16), applyCachedRule calls registers.getRegister(rule.returnAddressRegister) without the range check, while the uncached path skips an out-of-range return-address register. A malformed CIE could therefore abort the process (_LIBUNWIND_ABORT 'unsupported x86_64 register') once the rule is cached; an AI reviewer flagged this on PR #122834. It affects only bad unwind info and does not change the measured numbers.",
+    "On AArch64, frames with return-address signing (PAC) or MTE tagging go through the slower expandRule plus applyRule path even on a cache hit."
+  ],
+  "pick_this_over_siblings_when": "Choose it over aw-backtrace when you need full DWARF unwinding (exceptions, code without frame pointers) inside LLVM libunwind rather than a separate frame-pointer backtrace library. aw-backtrace's cache-hit unwind step (about 9-10 ns) is cheaper but covers only backtraces. Unlike Tracy or Perforator, this is not a profiler; it lowers the unwind cost that such profilers and exception handling pay.",
+  "verified_claims_summary": "First-party before/after in ClickHouse PR #122834, using Google Benchmark (src/Common/benchmarks/stack_trace.cpp) against the previous LLVM libunwind in the same fork, on a Ryzen 9 7950X3D and a Graviton4. Repeated stacks: 8594 to 1351 ns (x86-64) and 22480 to 3093 ns (AArch64) per 45-frame capture. Throw/catch at depth 16: 4.76x and 5.81x. Cache-miss call sites: 1.18x and 1.10x. Signal-handler samples: 1.41x and 1.82x. The compiler and flags are not stated.",
+  "status_note": "Merged 2026-10-01 into ClickHouse master (26.10) and actively maintained as part of ClickHouse. Reusable only by vendoring the Apache-2.0 WITH LLVM-exception libunwind sources from ClickHouse/llvm-project and keeping its no-unload assumption.",
+  "sources_read": [
+    "https://github.com/ClickHouse/ClickHouse/pull/122834",
+    "https://github.com/ClickHouse/ClickHouse/pull/122834/files",
+    "https://github.com/ClickHouse/llvm-project/pull/131",
+    "https://raw.githubusercontent.com/ClickHouse/ClickHouse/HEAD/src/Common/benchmarks/stack_trace.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/ClickHouse/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ClickHouse/llvm-project/3807b16/libunwind/src/DwarfRuleCache.hpp",
+    "https://raw.githubusercontent.com/ClickHouse/llvm-project/3807b16/libunwind/src/UnwindCursor.hpp",
+    "https://raw.githubusercontent.com/ClickHouse/llvm-project/3807b16/libunwind/src/DwarfInstructions.hpp",
+    "https://raw.githubusercontent.com/ClickHouse/llvm-project/3807b16/libunwind/src/config.h",
+    "https://raw.githubusercontent.com/ClickHouse/llvm-project/3807b16/libunwind/src/Registers.hpp"
+  ],
+  "confidence": 0.75
+}

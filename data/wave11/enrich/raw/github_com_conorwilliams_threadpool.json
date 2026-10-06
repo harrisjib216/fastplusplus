@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/conorwilliams/threadpool",
+  "one_liner": "Small C++20 work-stealing thread pool on Chase-Lev deques; about 8% faster than BS::thread_pool in one third-party matmul benchmark.",
+  "what_it_does": "A header-only thread pool, riften::Thiefpool. enqueue(f, args...) returns a std::future, and enqueue_detach(f, args...) runs a void callable without allocating a future's shared state. Arguments are copied, as with std::async. The destructor requests stop and joins the std::jthread workers. The interface is close to BS::thread_pool's submit, but it is not source-compatible and has no wait_for_tasks, parallel-loop or pause helpers.",
+  "how_it_is_fast": "Each worker owns a lock-free riften::Deque (Chase-Lev work-stealing deque) of fu2::unique_function tasks, a move-only type-erased function with small-buffer storage. Tasks are dealt round-robin to the deques, and a lightweight semaphore (adapted from Preshing's) wakes the target worker. Workers take from their own deque first; after 100 spins with their own deque empty they steal from a random deque (xoroshiro128**). They keep spinning while a global in-flight counter is above zero. enqueue avoids std::packaged_task type erasure by using a NullaryOneShot wrapper.",
+  "when_to_use": [
+    "A single producer thread submits many small, independent tasks and wants lower per-task overhead than a mutex-and-condition-variable pool such as BS::thread_pool.",
+    "Fire-and-forget jobs where enqueue_detach skips the std::future allocation.",
+    "C++20 codebases using CPM.cmake that want a tiny pool (one header plus function2 and riften::Deque).",
+    "Coarse parallel chunks (e.g. 256x256 to 1024x1024 matmul tiles) where it measured 52.80 vs 57.14 ms/op against BS::thread_pool."
+  ],
+  "when_not_to_use": [
+    "Submitting from several threads or from inside tasks: execute() bumps a non-atomic counter and calls the deque's owner-only emplace from the caller's thread. That is a data race unless one thread does all the enqueuing (open issue #4, no maintainer reply).",
+    "Tasks that block on or depend on later tasks: a worker can go back to sleep while another worker's deque holds a pending task (open issue #2, 'Deadlock due to lack of cross thread signalling').",
+    "Latency- or power-sensitive services: woken workers busy-spin and steal until the global in-flight count reaches zero.",
+    "Fork-join or recursive parallelism: there is no task-local spawn/join; choose libfork, chili or Fork Union style schedulers.",
+    "Small-task workloads where dp::thread_pool or task_thread_pool measured faster (e.g. 8x8 matmul: 172.33 ms vs task_thread_pool 154.74 ms). The project has been abandoned since 2023-03-26."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "function2 (Naios/function2 4.1.0), riften::Deque (ConorWilliams/ConcurrentDeque v1.1.0), Threads; fetched via CPM.cmake",
+    "min_toolchain": "C++20 (std::jthread, std::stop_token, concepts); CMake 3.14+",
+    "platforms": "any with C++20 threads; the semaphore has Windows, macOS and POSIX backends",
+    "thread_safety": "Workers are concurrent, but enqueue/enqueue_detach are safe only from a single thread (non-atomic round-robin counter; Chase-Lev push is owner-only). Not documented in the README.",
+    "drop_in_for_baseline": "partial: future-returning enqueue similar to BS::thread_pool::submit, but no wait-all, parallel loops, pause or resize, and no multi-producer submission"
+  },
+  "gotchas": [
+    "The in-flight counter is decremented before a task runs, so workers sleep while a long task is still executing. A task enqueued to that busy worker's deque waits for it to finish (issue #2).",
+    "Exceptions from enqueue tasks go into the std::future. An exception thrown by an enqueue_detach task escapes the worker thread and calls std::terminate (no try/catch in the worker loop).",
+    "Each deque keeps every buffer it outgrows in a _garbage vector until the pool is destroyed, so memory after a burst is not returned.",
+    "MPL-2.0: file-level copyleft; modified pool files must stay MPL."
+  ],
+  "pick_this_over_siblings_when": "Pick it over BS::thread_pool-style pools only when one thread submits many independent tasks and the C++20 dependency is fine. dp::thread_pool measured 1-2% faster in the same benchmark and is maintained, and Fork Union or citor are the better choice for parallel-for or fork-join throughput.",
+  "verified_claims_summary": "The only numbers come from dp::thread_pool's own nanobench matrix-multiplication comparison on a Ryzen 7 5800X (Windows, Clang via WSL and MSVC, flags not stated). Thiefpool scored 98.3-99.0% of dp::thread_pool versus 90.2-94.5% for BS::thread_pool (1024x1024: 52.80 vs 57.14 ms/op, about 8% faster, derived from page data), and it trailed task_thread_pool at 8x8 to 256x256. The repo's own bench.cpp (10M enqueues of an atomic increment, three workloads) publishes no results.",
+  "status_note": "Abandoned: last commit 2023-03-26, v2.1.1, two open concurrency issues (#2, #4) with no maintainer reply. It is small enough to vendor under MPL-2.0 if you keep submission on one thread.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ConorWilliams/Threadpool/HEAD/README.md",
+    "https://raw.githubusercontent.com/ConorWilliams/Threadpool/HEAD/benchmark/bench.cpp",
+    "https://raw.githubusercontent.com/ConorWilliams/Threadpool/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ConorWilliams/Threadpool/HEAD/include/riften/thiefpool.hpp",
+    "https://raw.githubusercontent.com/ConorWilliams/Threadpool/HEAD/include/riften/semaphore.hpp",
+    "https://raw.githubusercontent.com/ConorWilliams/ConcurrentDeque/HEAD/include/riften/deque.hpp",
+    "https://github.com/ConorWilliams/Threadpool/issues?q=is%3Aissue",
+    "https://github.com/ConorWilliams/Threadpool/issues/2",
+    "https://github.com/ConorWilliams/Threadpool/issues/4"
+  ],
+  "confidence": 0.75
+}
