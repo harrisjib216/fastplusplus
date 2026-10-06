@@ -27,3 +27,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ykjit/ykcbf (yk-enabled interpreter) and the yk-benchmarks mruby awfy suite (yklua enricher, 2026-10-06); weak leads.
 - HashLink (HaxeFoundation/hashlink): Neko successor, README has no numbers (NekoVM enricher, 2026-10-06); weak lead.
 - aengelke/fadec (x86 decoder), aengelke/rellume (lifter), okitec/farmdec, the EOS VM Optimized Compiler in AntelopeIO/spring (LLVM AOT) and the Biotite static binary translator (repo unknown): leads from the Instrew and EOS VM enricher (2026-10-06).
+- jrsonnet (Rust jsonnet implementation, faster than sjsonnet on most cases in its docs/benchmarks.adoc; batch 60 verifier, 2026-10-06); seed candidate.
