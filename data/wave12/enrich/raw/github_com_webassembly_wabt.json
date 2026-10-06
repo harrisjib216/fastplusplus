@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/webassembly/wabt",
+  "one_liner": "wasm2c translates a Wasm module to portable C; compiled natively, it outran Wasmtime, Wasmer and V8 on libsodium.",
+  "what_it_does": "wasm2c (one tool in the WebAssembly Binary Toolkit) reads a .wasm binary and writes a C99 source file and header (C11 when the module uses threads/atomics). You compile that output with any C compiler together with the small runtime in wasm2c/wasm-rt-impl.c and wasm-rt-mem-impl.c, then call wasm2c_<mod>_instantiate() and the exported functions as plain C functions (w2c_<mod>_<export>(instance, ...)); imports are C functions the host must define. It is a build-time translator, not a runtime API like Wasmtime's or Wasmer's: no loading of modules at run time, no JIT.",
+  "how_it_is_fast": "Ahead-of-time translation hands the whole module to an optimizing C compiler (clang or gcc at -O2/-O3, optionally -march=native and LTO), so the code gets the same register allocation, inlining and vectorization as native C. On 64-bit hosts linear memory is reserved with mmap and protected by guard pages, so most loads and stores need no explicit bounds check (an empty inline-asm FORCE_READ keeps the compiler from deleting loads that must trap); call_indirect uses a pointer-equality fast path on the function type before a cold slow path. An optional Segue mode (Linux/FreeBSD x86-64, clang 9+, -mfsgsbase, WASM_RT_ALLOW_SEGUE) keeps the linear-memory base in the %gs segment register.",
+  "when_to_use": [
+    "Sandboxing a C/C++/Rust library inside a native host (the Firefox sandbox use case discussed in issue #2046) where you can add a build step and want near-native speed: 2.36x native geomean vs Wasmtime 3.46x on the 2022-12 libsodium suite.",
+    "CPU-bound modules known at build time (crypto, codecs, parsers) on x86-64 or aarch64 Linux/macOS where guard-page bounds checks are available.",
+    "Targets where a JIT is not allowed or no Wasm runtime exists but a C compiler does: the output is portable C99 with a small runtime.",
+    "When you want to reuse your existing C toolchain, sanitizers, profilers and debuggers on Wasm code."
+  ],
+  "when_not_to_use": [
+    "Modules that arrive at run time (plugins, user uploads): every module needs a C compile, and wasm2c itself took about 1 minute (Ryzen 7950X) to over 3 minutes (Apple M3) on one Firefox build module (issue #2343).",
+    "When WAMR AOT is an option: in the same 2022-12 run iwasm AOT was at par (wasm2c used 1.03x iwasm's time geomean, slower on 31 of 61 tests).",
+    "Modules needing proposals the README table marks unsupported in wasm2c: relaxed-simd, function-references, wide-arithmetic (and GC, which is not in the table; issue #2348 'Plan for GC and beyond' is open).",
+    "Memory64 modules, 32-bit hosts, or builds that cannot install a SIGSEGV handler: wasm-rt.h falls back to explicit bounds checks (BOUNDS_CHECK), and on Windows or without the signal handler to stack-depth counting, which costs speed.",
+    "If you need a full runtime with WASI built in: the generated code expects the host to supply WASI imports (the Dhrystone example links uvwasi and libuv)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Generated code: libc and libm (pthreads for shared memory); WASI needs a host implementation such as uvwasi. The wasm2c tool itself: CMake 3.16+ build of WABT.",
+    "min_toolchain": "Generated code: C99 (C11 for threads/atomics); Segue needs clang 9+. Building WABT: C++20 (CMAKE_CXX_STANDARD 20), CMake 3.16.",
+    "platforms": "Any C99 target; guard-page bounds checks need a 64-bit host with mmap and gcc/clang (or clang-cl since a 2026-09 commit); Segue only Linux/FreeBSD x86-64 with clang; big-endian (s390x) supported with stack counting.",
+    "thread_safety": "Module instances are separate structs; each extra host thread that runs Wasm code must call wasm_rt_init_thread()/wasm_rt_free_thread() (per-thread trap and stack state, after the race fixes tracked in issue #2046). Shared memories use a lock for memory.grow.",
+    "drop_in_for_baseline": "partial: runs the same .wasm modules as Wasmtime/Wasmer/V8, but replaces their runtime embedding API with generated C functions and a compile step; WASI and other imports must be provided by the host."
+  },
+  "gotchas": [
+    "Spec conformance at -O2/-O3 needs extra flags (wasm2c/README.md): GCC 11 '-fno-optimize-sibling-calls -frounding-math -fsignaling-nans', clang 14 '-fno-optimize-sibling-calls -frounding-math'; without them signalling NaNs survive, OOB-trapping dead loads can be deleted and infinite recursion may not trap (issue #1925). The repo's own Dhrystone/Segue benchmark Makefile compiles with plain -O3 and none of these flags, and the 2022-12 libsodium results do not say which flags were used.",
+    "The default build installs a SIGSEGV handler for guard-page traps and stack exhaustion; hosts with their own signal handling must coordinate or set WASM_RT_SKIP_SIGNAL_RECOVERY (then an OOB access may abort instead of trapping). Without the handler, stack depth counting traps at WASM_RT_MAX_CALL_STACK_DEPTH (default 500), which deep-recursive modules can hit.",
+    "Doc drift: wasm2c/README.md says 'cd wasm2c/benchmarks/segue && make', but the directory is wasm2c/benchmarks/dhrystone; the top-level proposal table leaves threads blank for wasm2c although wasm2c/README.md documents shared memories and atomics.",
+    "Benchmark caveats from the 2022-12 CSVs (recomputed this session): wasm2c was slower than Wasmtime on 2 of 61 tests (auth3 1.32x, keygen 1.43x) and recorded times below native on verify1 and sodium_utils, which points to run-to-run noise in this harness; the CSVs carry no unit, CPU, compiler or flags. The 2026 figures (0.814x Wasmtime, 0.887x Wasmer, search snippet of the blocked 00f.net post) used wide-arithmetic support the author added himself: the upstream README marks wide-arithmetic unsupported in wasm2c and no wasm2c wide-arithmetic PR by him appears in the repo."
+  ],
+  "pick_this_over_siblings_when": "Pick wasm2c over w2c2 when you want the spec-tracking reference translator (exceptions, tail calls, memory64, multi-memory, SIMD) maintained in the WebAssembly org with production use in Firefox; pick it over WAMR AOT or aWsm when you want plain C output you can build with your own compiler and toolchain rather than a separate AOT compiler, accepting that WAMR AOT matched it on libsodium.",
+  "verified_claims_summary": "In Frank Denis's 2022-12 libsodium suite (61 tests, per-test times in jedisct1/webassembly-benchmarks/2022-12/res), wasm2c output compiled natively took 0.68x Wasmtime's, 0.71x Wasmer Cranelift's, 0.82x Wasmer LLVM's and 0.61x Node/V8's time by geomean (derived from page data; 2.36x native vs Wasmtime 3.46x); CPU, C compiler and flags are not stated in the results repo, and the C compile step is not timed.",
+  "status_note": "Actively maintained in the WebAssembly org (wasm2c fixes on 2026-09-16 and 2026-10-05), Apache-2.0; the generated C plus two runtime files are easy to vendor into any build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/wasm2c/README.md",
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/README.md",
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/wasm2c/wasm-rt.h",
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/src/template/wasm2c.declarations.c",
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/wasm2c/benchmarks/dhrystone/Makefile",
+    "https://raw.githubusercontent.com/WebAssembly/wabt/HEAD/CMakeLists.txt",
+    "https://github.com/WebAssembly/wabt/tree/main/wasm2c",
+    "https://github.com/WebAssembly/wabt/commits/main",
+    "https://github.com/WebAssembly/wabt/issues?q=is%3Aissue+wasm2c+performance",
+    "https://github.com/WebAssembly/wabt/issues/2343",
+    "https://github.com/WebAssembly/wabt/issues/1925",
+    "https://github.com/WebAssembly/wabt/issues/2046",
+    "https://github.com/WebAssembly/wabt/pulls?q=is%3Apr+wide+arithmetic",
+    "https://github.com/WebAssembly/wabt/pulls?q=is%3Apr+author%3Ajedisct1",
+    "https://github.com/jedisct1/webassembly-benchmarks/tree/master/2022-12",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/wasm2c.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/wasmtime.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/iwasm.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/native.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/node.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/wasmer-cranelift.csv",
+    "https://raw.githubusercontent.com/jedisct1/webassembly-benchmarks/HEAD/2022-12/res/wasmer-llvm.csv",
+    "https://00f.net/2026/07/08/webassembly-compilation-to-c-2026/ (search snippet only, host blocked)"
+  ],
+  "confidence": 0.75
+}

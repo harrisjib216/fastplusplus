@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/wren-lang/wren",
+  "one_liner": "Tiny embeddable class-based scripting VM in C; fastest on method-dispatch benchmarks, slower than Lua 5.4 elsewhere.",
+  "what_it_does": "Wren is a dynamically typed, class-based scripting language with fibers, implemented as a small VM in C (README: under 4,000 semicolons) meant for embedding in applications. The host creates a VM with wrenNewVM(&config), runs source with wrenInterpret(vm, module, source), calls Wren methods through handles (wrenMakeCallHandle/wrenCall) and exchanges values through a slot API; host functionality is exposed as foreign methods and classes. It is a different language and C API from Lua or Python, not a drop-in replacement.",
+  "how_it_is_fast": "Values are NaN-tagged 8-byte doubles, so numbers, bools and null are unboxed. Classes are declared statically with private fields, so field access is a fixed slot offset known at compile time, and copy-down inheritance plus arity-overloaded signatures make a method call a single lookup in the receiver class's method table with no argument-count check. The interpreter loop uses computed-goto dispatch on GCC/Clang (author: 5-10% gain; switch fallback on MSVC), and a Lua-style single-pass compiler emits bytecode while parsing.",
+  "when_to_use": [
+    "Embedded scripting dominated by object method calls and dynamic dispatch: on an independent 2023 re-run (Ryzen 9 5950X) method_call took 0.079 s vs Lua 5.4.4 0.121 s, Ruby 3.0.5 0.104 s, Python 3.11.3 0.171 s.",
+    "Games or apps that want a class-based language with fibers in a VM small enough to read and patch, on platforms where JIT compilation is not allowed.",
+    "Hosts that run several isolated interpreters at once: the C implementation has no global state, so separate VMs can run concurrently on different threads.",
+    "Projects that need to compile the interpreter as C99 or C++98 with no dependencies beyond the C standard library (and libm)."
+  ],
+  "when_not_to_use": [
+    "Recursion- or arithmetic-heavy scripts: in the same 2023 re-run Lua 5.4.4 ran recursive Fibonacci in 0.087 s vs Wren 0.148 s, and an i7-12700H run (discussion #1183) had Lua 5.4.6 at 0.085 s vs Wren 0.131 s and 0.33 s vs 0.56 s on the for-loop benchmark.",
+    "Allocation-heavy code: on binary trees Wren 0.4 (0.141 s) was slower than Lua 5.4 (0.139 s), Python 3.11 (0.137 s), Ruby 3.0 (0.116 s) and LuaJIT -joff (0.074 s) in the 2023 re-run.",
+    "Hash maps with numeric keys: discussion #1183 measured map_numeric at 0.728 s for Wren vs 0.431 s for CPython 3.9.18.",
+    "Running untrusted script source: five fuzzer-reported memory-safety bugs in the compiler (heap/stack/global buffer overflows, NULL dereference; issues #1217-#1221, January 2026) are open, and deep recursion is not checked (issue #939: memory grows until the OOM killer sends SIGKILL).",
+    "When you need a large ecosystem or standard library, or a JIT: Wren has a small standard library (README), and LuaJIT even in -joff mode beat it on binary trees and Fibonacci in both the original and the 2023 runs."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the C standard library; libm must be linked explicitly on Linux and BSD",
+    "min_toolchain": "C99 or C++98; computed-goto dispatch needs GCC or Clang (disabled for MSVC without clang)",
+    "platforms": "any platform with IEEE-754 doubles (NaN tagging; WREN_NAN_TAGGING=0 switches to a larger struct representation)",
+    "thread_safety": "No global state; multiple VMs can run concurrently on different threads. Sharing one VM across threads is not documented as safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the published numbers: the page (doc/site/performance.markdown) uses about-2014 baselines (Lua 5.2.3, Python 2.7.5/3.3.4, Ruby 2.0.0) and best-of-10 times; each script times itself with a different clock (Wren clock()/CLOCKS_PER_SEC, Lua os.clock and Python time.process_time are CPU time, Ruby Time.now is wall time); the current .py scripts call time.process_time (changed by PR #844 in 2021), which Python 2.7 does not have, so the page's Python 2.7.5 rows cannot be reproduced with today's scripts; DeltaBlue exists only for Wren, Python and Dart (delta_blue.lua.inprogress), so its win is over Python only.",
+    "The map_numeric benchmark is not like-for-like against Lua: the Lua script fills keys 1..2,000,000 in order, which Lua stores in a table's array part, while Wren uses its hash Map.",
+    "A refreshed performance page with modern baselines (PR #1164 by asb, Ryzen 9 5950X, median of 10, Lua 5.4.4, LuaJIT 2.1.0-beta3, Python 3.11.3, Ruby 3.0.5) has been open and unreviewed since 2023-04-10; it keeps Wren's method-call and DeltaBlue wins but shows Wren slowest on binary trees and behind Lua 5.4 and Ruby 3.0 on Fibonacci.",
+    "The embedding API is unchecked in release builds (wrong slot or argument counts are undefined behaviour), calling a Wren method handle from inside a foreign method is an open issue (#1169), and hard limits apply: 16 parameters per method, 255 fields per class, 65,536 module variables (wren_common.h)."
+  ],
+  "pick_this_over_siblings_when": "Pick Wren over LuaJIT or pocketpy when you want a class-based language with fibers in a tiny VM and your scripts are dominated by method calls, where it beat LuaJIT -joff, Lua 5.4 and CPython 3.11; for numeric, recursive or allocation-heavy scripts LuaJIT (even with the JIT off) or plain Lua 5.4 is faster.",
+  "verified_claims_summary": "On the author's 2.3 GHz Core i7 MacBook Pro (no compiler or flags stated, best of 10, startup excluded) Wren beat Lua 5.2.3, Python 2.7.5/3.3.4 and Ruby 2.0.0 on method call (0.12 s vs Lua 0.35 s), DeltaBlue (Python only), binary trees and Fibonacci, while LuaJIT 2.0.2 -joff won binary trees and Fibonacci. An independent 2023 re-run on a Ryzen 9 5950X against Lua 5.4.4, Python 3.11.3 and Ruby 3.0.5 keeps only the method-call (0.079 s vs Lua 0.121 s) and DeltaBlue (0.086 s vs Python 0.107 s) wins.",
+  "status_note": "Slow-moving but not abandoned: latest release still 0.4.0, commits only in February-March 2025 and November 2025 after a gap since September 2022, MIT and easy to vendor; the headline speed claim holds only against the old baselines and should be narrowed to method dispatch against current Lua, Python and Ruby.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/README.md",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/doc/site/performance.markdown",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/doc/site/embedding/index.markdown",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/util/benchmark.py",
+    "https://github.com/wren-lang/wren/tree/main/test/benchmark",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/README.md",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/method_call.wren",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/method_call.lua",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/method_call.py",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/method_call.rb",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/fib.wren",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/fib.lua",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/fib.py",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/fib.rb",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/binary_trees.wren",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/binary_trees.lua",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/binary_trees.py",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/binary_trees.rb",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/map_numeric.wren",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/map_numeric.lua",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/test/benchmark/map_numeric.py",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/src/vm/wren_core.c",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/src/vm/wren_common.h",
+    "https://raw.githubusercontent.com/wren-lang/wren/HEAD/src/include/wren.h",
+    "https://github.com/wren-lang/wren/issues?q=is%3Aissue+is%3Aopen+crash",
+    "https://github.com/wren-lang/wren/issues/939",
+    "https://github.com/wren-lang/wren/commits/main",
+    "https://github.com/wren-lang/wren/releases",
+    "https://github.com/wren-lang/wren/discussions/1183",
+    "https://github.com/wren-lang/wren/pulls?q=is%3Apr+benchmark",
+    "https://github.com/wren-lang/wren/pull/1164",
+    "https://github.com/wren-lang/wren/pull/1164/files",
+    "https://raw.githubusercontent.com/asb/wren/update-benchmarks/doc/site/performance.markdown",
+    "https://muxup.com/2023q2/updating-wrens-benchmarks (EGRESS_BLOCKED; search snippets only, superseded by the branch file above)"
+  ],
+  "confidence": 0.8
+}
