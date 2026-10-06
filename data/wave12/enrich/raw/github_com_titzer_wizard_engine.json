@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/titzer/wizard-engine",
+  "one_liner": "Research WebAssembly engine in Virgil whose in-place interpreter sets up code about 6x cheaper than wasm3 or WAMR-fast, but executes slower.",
+  "what_it_does": "Wizard is a WebAssembly virtual machine for teaching and research, written in Virgil, with three execution tiers: a portable V3 interpreter, a hand-written x86-64 fast interpreter (fast-int) and a single-pass compiler (spc). It supports Wasm 3.0 features (GC, SIMD, tail calls, exception handling, memory64, stack switching), runs .bin.wast spec tests and offers monitors and tracing for instrumentation. It ships as a standalone command-line engine (wizeng), not as a C or C++ library, so it does not drop in for wasm3 or WAMR in an embedding.",
+  "how_it_is_fast": "The OOPSLA 2022 design interprets Wasm bytecode in place instead of rewriting it into an internal format: during validation it builds only a side table of branch targets (delta pc, value count, pop count, side-table delta), so the setup step costs a few nanoseconds per input byte and the original bytecode is the executable code. The fast interpreter is hand-written x86-64 assembly with a dispatch table, which the README puts at nearly 40x the portable interpreter.",
+  "when_to_use": [
+    "Startup-dominated or run-once Wasm modules where translation cost and memory for translated code matter more than steady-state speed (the artifact's four shortest kernels, 12-19 ms total, are where Wizard ties WAMR-fast and beats V8 TurboFan).",
+    "Research on interpreters, instrumentation and dynamic analysis: monitors, probes, Whamm and Wasm-R3 build on Wizard, and in-place execution keeps bytecode offsets meaningful for tooling.",
+    "Experimenting with new Wasm proposals (stack switching, GC, wide arithmetic) in a small codebase that builds in under a second.",
+    "Teaching how a Wasm engine is structured, on x86-64 Linux for the fast tiers."
+  ],
+  "when_not_to_use": [
+    "Raw interpreter throughput: on the same 24 PolyBenchC kernels wasm3 is about 2.5x and WAMR fast-interp about 1.55x faster (geomean), so Wizard only beats WAMR classic (about 1.1x) and ties the JSC LLInt.",
+    "Embedding in a C or C++ host: Wizard is a Virgil program with no C API; WAMR, wasm3 or Wasmi are libraries.",
+    "Platforms other than x86-64 Linux when speed matters: the fast interpreter and the single-pass compiler exist only on x86-64-linux; other targets (32-bit x86 Linux and Darwin, JVM, Wasm) get the slow V3 interpreter.",
+    "Programs that need full WASI or Wasm threads: WASI preview 1 is incomplete (issue #4, open since 2022) and the threads proposal is not implemented (issue #155).",
+    "Production SIMD workloads: open 2026 issues report x86-64 interpreter SIMD miscompilations (#648 extract_lane_u not zero-extended, #649 storeN_lane wrong address, #650 i8x16.ne corrupts a local)."
+  ],
+  "integration": {
+    "form": "standalone engine binary (wizeng) built from Virgil source",
+    "dependencies": "Virgil compiler (titzer/virgil), built from source with make because Wizard tracks new Virgil features",
+    "min_toolchain": "current Virgil (aeneas) built from its repository; no C/C++ toolchain needed",
+    "platforms": "x86-64-linux (fast interpreter, single-pass compiler, native memories); x86-linux, x86-darwin (32-bit), JVM jar and Wasm with the V3 interpreter only",
+    "thread_safety": "not documented; the Wasm threads proposal is unimplemented (issue #155)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The setup ratios mix measurement methods (artifact run-translation-experiments.bash and patches): Wizard's 3-4 ns/byte is the difference between two builds' validation timers (with and without side-table construction), so it excludes validation; WAMR-fast is likewise a delta over WAMR classic, so the 6.5x versus WAMR-fast is like for like, but wasm3's CompileFunction timer and the JSC LLInt and V8 Liftoff counters time the whole per-function translation including decoding, so the 5.8x versus wasm3 and 37x versus JSC overstate the gap. Timers are gettimeofday microseconds summed per function.",
+    "The space ratio (0.35 bytes per input byte) is computed under a hypothetical encoding: exp_validate_only.patch counts 2 bytes for a 'possible compressed entry' (delta pc and target fit in 7 bits, no values moved) and 16 bytes otherwise, while the measured build and current src/engine/Sidetable.v3 store every branch entry as four 32-bit ints (16 bytes). The real side-table footprint is larger, up to 8x the counted side-table bytes if no entry compresses.",
+    "Execution times are whole-process wall times (btime) that include engine startup and translation; the benchmarked Wizard build (exp_fast_config.patch) also disabled value tagging and SIMD, which the default build enables.",
+    "All numbers come from July 2022 snapshots (Wizard 158d26f, wasm3 9dcfce27, WAMR db210fbc, the wasm3 and WAMR binaries instrumented with timers); the current Wizard, which now has a single-pass compiler, has no published comparison."
+  ],
+  "pick_this_over_siblings_when": "Pick Wizard over wasm3 or the WAMR fast interpreter when setup cost, translated-code memory or instrumentability matter more than throughput; pick wasm3 for the fastest interpreter on these kernels, and Wasmi or the csjh in-place interpreter when you need startup-oriented interpretation as an embeddable library.",
+  "verified_claims_summary": "Recomputed this session from the OOPSLA 2022 artifact's raw data (24 PolyBenchC 4.2.1 kernels, 100 runs each, Intel Core i7-8700K, Linux 4.15; compiler versions and Wasm build flags not stated): median translation cost 3.98 ns per Wasm byte for Wizard versus 22.95 (wasm3), 25.92 (WAMR fast), 144.93 (V8 Liftoff) and 147.73 (JSC LLInt), and translated-code size 0.350 versus 2.419, 3.800, 2.950 and 1.038 bytes per input byte. For execution, Wizard's time is 2.52x wasm3's, 1.55x WAMR-fast's, 0.91x WAMR classic's, 1.01x the JSC LLInt's, and 6.7x and 8.1x those of V8 Liftoff and TurboFan (geomeans, derived from page data), so the win is setup and memory, not throughput.",
+  "status_note": "Very active (commits up to 2026-10-06, 514 stars, Apache-2.0) and well suited to research, but it is a Virgil engine binary without a C/C++ API, its fast tiers are x86-64-Linux-only, and its published performance data is from a 2022 build.",
+  "sources_read": [
+    "https://github.com/titzer/wizard-engine",
+    "https://raw.githubusercontent.com/titzer/wizard-engine/HEAD/README.md",
+    "https://raw.githubusercontent.com/titzer/wizard-engine/HEAD/doc/Building.md",
+    "https://raw.githubusercontent.com/titzer/wizard-engine/HEAD/Design.md",
+    "https://raw.githubusercontent.com/titzer/wizard-engine/HEAD/src/engine/CodeValidator.v3",
+    "https://raw.githubusercontent.com/titzer/wizard-engine/HEAD/src/engine/Sidetable.v3",
+    "https://github.com/titzer/wizard-engine/issues",
+    "https://github.com/titzer/oopsla22-artifact",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/README.md",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/common.bash",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/run-execution-experiments.bash",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/run-translation-experiments.bash",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/summarize-execution.bash",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/README.md",
+    "https://github.com/titzer/oopsla22-artifact/tree/master/src/patches",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wasm3.exp_instrumentation.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wamr.exp_instrumentation.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wamr.exp_classic.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wizard.exp_validate_only.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wizard.exp_validate_only_no_sidetable.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wizard.exp_fast_config.patch",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wasm3.main.git.log",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wamr.main.git.log",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/src/patches/wizard.main.git.log",
+    "https://raw.githubusercontent.com/titzer/oopsla22-artifact/HEAD/data-linux-4.15-i7-8700K/ (execution.<kernel>.<engine> for 7 engines and translation.<kernel>.<engine>.us/.bytes for 5 engines, 24 kernels, 408 files)"
+  ],
+  "confidence": 0.65
+}

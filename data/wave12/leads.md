@@ -50,3 +50,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - LC Scheme BBV JIT (bsaleil/lc, BSD-3, 33 stars): README has no baseline numbers, papers only (Higgs enricher, 2026-10-06); weak lead. 0xjojoex/evm.zig has numbers vs evmone-base and revm-int (seed-d, 2026-10-06); seed candidate.
 - goant (robomotionio/goant): pure-Go JS engine, ahaoboy Ubuntu V8 v7 score 981 vs goja 264 (Paserati enricher, 2026-10-06); seed candidate.
 - RealNeGate/Cuik (TB backend, named by MiniVM's README as its JIT base): unverified (MiniVM enricher, 2026-10-06); weak lead.
+- Paper-access retier lead: mutable via the independent ADC 2023 study arXiv 2311.04692 (PostgreSQL LLVM JIT vs mutable) (mutable enricher, 2026-10-06).
