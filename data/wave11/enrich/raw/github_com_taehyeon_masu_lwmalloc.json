@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/taehyeon-masu/lwmalloc",
+  "one_liner": "618-line single-file C malloc for embedded Linux, injected via LD_PRELOAD; paper claims up to 53% faster than glibc ptmalloc.",
+  "what_it_does": "Research allocator from an IEEE Internet of Things Journal 2025 paper that replaces malloc, calloc, realloc and free in a whole process when lwmalloc.c is built as a shared object and loaded with LD_PRELOAD. There is no header, no prefixed public API to link against, and no other entry points (no posix_memalign, aligned_alloc, memalign, malloc_usable_size or mallinfo; issue #3 asks for mallinfo).",
+  "how_it_is_fast": "Small requests (up to 120 bytes) go to per-size singly linked bins carved from 4 KiB sbrk chunks, so they allocate and free in O(1) with an 8-byte header. Larger blocks use boundary tags (header plus footer) and 62 segregated free lists searched first-fit. Frees next to a free neighbour are parked on a buffer list and merged lazily on the next large malloc or realloc (deferred coalescing), which skips work that ptmalloc does on every free. There are no locks, arenas, tcache or per-thread state, which is where both the small footprint and the single-threaded speed come from.",
+  "when_to_use": [
+    "Single-threaded C programs on 64-bit embedded Linux boards (the paper names Raspberry Pi 4 and Jetson Orin Nano) where glibc malloc's code size or overhead matters.",
+    "Experiments comparing allocator policies (deferred coalescing, small-chunk pools) against ptmalloc on small devices.",
+    "Reading material: the whole allocator fits in one 618-line file built on the classic CS:APP implicit/segregated-list design."
+  ],
+  "when_not_to_use": [
+    "Any multi-threaded process: all free lists and the heap pointer are unsynchronized globals with no locks, so concurrent malloc/free will corrupt the heap.",
+    "32-bit targets: word sizes are hard-coded (WSIZE 8, DSIZE 16) instead of sizeof(size_t)/sizeof(void*), and issue #2 (open, no reply) reports a segfault of the bundled test on a 32-bit Allwinner ARM SoC, even though the paper lists a Raspberry Pi Zero W.",
+    "Code that needs 16-byte alignment (SSE/NEON vectors, long double, max_align_t): ALIGNMENT is 8.",
+    "Programs that call posix_memalign, aligned_alloc or memalign (common in C++ runtimes and media libraries): those still go to glibc, and passing such pointers to the preloaded free() is undefined behaviour.",
+    "Anything shipped: there is no license (issue #1, open since 2025-09-04, unanswered), so the code cannot legally be reused."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none (libc sbrk, memset, memcpy)",
+    "min_toolchain": "not documented; Makefile uses gcc -O2 -fPIC. The code returns values from void functions and stores NULL through a size_t pointer, which GCC 14's default errors (-Wreturn-mismatch, -Wint-conversion) reject, so newer compilers may need -fpermissive or older -std flags",
+    "platforms": "Linux with sbrk; effectively 64-bit only (see 32-bit issue #2)",
+    "thread_safety": "none: no locking anywhere in lwmalloc.c",
+    "drop_in_for_baseline": "partial — LD_PRELOAD replacement for malloc/calloc/realloc/free only; no aligned allocation, malloc_usable_size, mallinfo, malloc_trim or thread support"
+  },
+  "gotchas": [
+    "Memory is never returned to the OS: the heap only grows via sbrk, and small-object chunks are never merged back into the large-block pool.",
+    "Error handling is broken in places: lw_mem_init and lw_sbrk compare sbrk's result to NULL instead of (void *)-1, lw_sbrk ignores sbrk failure, and lw_calloc reads the header of the returned pointer before its NULL check and does not check nmemb*size for overflow.",
+    "The Makefile builds liblwmalloc.so while the README tells you to preload lwmalloc.so.",
+    "The bundled test.c discards realloc's return value and then frees the old pointer, which is a double free under LWMalloc (a 4-to-8-byte realloc moves the block); in lw_realloc the branch that merges both neighbours is unreachable because the preceding 'if (!next_alloc)' already catches that case."
+  ],
+  "pick_this_over_siblings_when": "Pick LWMalloc over rlsf or Talc only for single-threaded 64-bit Linux processes you can LD_PRELOAD and only for study, since it has no license; for a licensed small-footprint allocator with real-time bounds rlsf (TLSF, 260-320 cycles vs dlmalloc 450-750) is the safer choice, and for general multi-threaded use any of the jemalloc/mimalloc-class siblings apply.",
+  "verified_claims_summary": "Only press-release and news snippets were reachable: up to 53% shorter execution time and 23% lower memory use than glibc ptmalloc on real applications on Raspberry Pi Zero W, Raspberry Pi 4 and Jetson Orin Nano, with 530 lines and 20 KB vs ptmalloc's 4838 lines and 116 KB. The IEEE paper, its workloads, compiler flags and glibc version could not be read, and the repo has no benchmark code, so none of this could be checked.",
+  "status_note": "10 commits, 93 stars, last commit 2026-07-07, three open issues (license, 32-bit segfault, mallinfo) with no maintainer replies; unlicensed and not thread-safe, so reference only.",
+  "sources_read": [
+    "https://github.com/taehyeon-masu/lwmalloc",
+    "https://raw.githubusercontent.com/taehyeon-masu/lwmalloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/taehyeon-masu/lwmalloc/HEAD/Makefile",
+    "https://raw.githubusercontent.com/taehyeon-masu/lwmalloc/HEAD/lwmalloc.c",
+    "https://raw.githubusercontent.com/taehyeon-masu/lwmalloc/HEAD/test.c",
+    "https://github.com/taehyeon-masu/lwmalloc/issues",
+    "https://github.com/taehyeon-masu/lwmalloc/issues/1",
+    "https://github.com/taehyeon-masu/lwmalloc/issues/2",
+    "https://github.com/taehyeon-masu/lwmalloc/issues/3",
+    "WebSearch snippets: https://www.eurekalert.org/news-releases/1096402, https://www.cnx-software.com/2025/09/03/lwmalloc-lightweight-dynamic-memory-allocator-for-embedded-systems/ (fetch EGRESS_BLOCKED), https://ieeexplore.ieee.org/document/10883044/"
+  ],
+  "confidence": 0.75
+}

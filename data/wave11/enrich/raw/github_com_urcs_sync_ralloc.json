@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/urcs-sync/ralloc",
+  "one_liner": "Lock-free recoverable persistent-memory malloc (LRMalloc-based); about 10x faster than PMDK libpmemobj and Makalu on allocator microbenchmarks.",
+  "what_it_does": "A malloc/free-style allocator for byte-addressable nonvolatile memory (Intel Optane-class DAX files under /mnt/pmem, or /dev/shm when built with SHM_SIMULATING). The C API is RP_init(id, size), RP_malloc, RP_free, RP_calloc, RP_realloc, RP_set_root/RP_get_root (up to 1024 persistent roots), RP_recover and RP_close; after a crash, RP_init reports a restart and RP_recover rebuilds allocator state. It is not a drop-in for PMDK's transactional object API: it gives crash-consistent allocation metadata, not failure-atomic updates of your data.",
+  "how_it_is_fast": "It reuses LRMalloc's lock-free design (thread-local caches of size-class blocks, 64 KiB superblocks with CAS-updated anchors) and persists only what cannot be rebuilt (superblock descriptors and roots) with clwb/clflush plus fences, keeping free lists and thread caches transient. Instead of logging every allocation like PMDK, recovery after a crash runs a mark-and-sweep garbage collection from the persistent roots, conservative by default or guided by user-supplied filter functions, to reconstruct free lists. Position-independent offset pointers let the heap be remapped at a different address on restart.",
+  "when_to_use": [
+    "Persistent-memory data structures (lock-free queues, maps, trees) that need a non-blocking, crash-recoverable allocator under many threads",
+    "Replacing PMDK libpmemobj or Makalu allocation in a research or prototype system where allocation rate is the bottleneck",
+    "Small-object workloads: blocks up to about 14 KiB come from size classes (MAX_SZ = 8 KiB + 3 x 2 KiB in pm_config.hpp)",
+    "Systems that can tolerate a GC pass at restart in exchange for no per-allocation logging during normal operation",
+    "Emulated persistence on DRAM (/dev/shm) for testing persistent algorithms on machines without NVM"
+  ],
+  "when_not_to_use": [
+    "Ordinary transient heaps: the repo CSVs show it on par with jemalloc at low thread counts and 2-3x slower on Threadtest and Shbench above 48 threads",
+    "You need failure-atomic transactions over your own data (PMDK's tx API); Ralloc only keeps allocator metadata consistent",
+    "Production use: abandoned since 2020-10-23, open bug #12 on restart with /dev/shm, open issue #15 (only one Ralloc instance per application) and #16 (redundant concurrent heap expansion)",
+    "Pure C programs that need precise recovery: the README warns filter functions are not supported in pure C, leaving only conservative GC",
+    "Very high thread counts with the bundled LRMalloc build: hazard counter overflow and segfaults reported above about 72 threads (README warning)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "libjemalloc (necessary per README, used for transient allocations), pthread, libatomic; PMDK and Makalu only to run the comparison benchmarks",
+    "min_toolchain": "GCC with C++11 (Makefile builds with -O3 -fpermissive)",
+    "platforms": "Linux x86-64 (clwb/clflush inline asm, MAP_SYNC DAX mapping at /mnt/pmem or /dev/shm emulation)",
+    "thread_safety": "Lock-free and thread-safe; threads should be created through RP_pthread_create (pm_thread_create) so thread caches are handled",
+    "drop_in_for_baseline": "partial - malloc-like RP_* calls replace pmemobj_alloc/Makalu allocation, but roots, recovery and filter functions differ and PMDK transactions have no equivalent"
+  },
+  "gotchas": [
+    "The heap path is compiled in: without SHM_SIMULATING files go to /mnt/pmem/ (edit src/pm_config.hpp for another mount); RP_init defaults to a 5 GiB heap and regions grow in 1 GiB steps",
+    "Pointers stored in the persistent heap must be reachable from RP_set_root roots or they are reclaimed by the recovery GC after a crash",
+    "Conservative recovery treats any word that looks like a heap pointer as live, so it can leak blocks; precise filter functions are C++ only",
+    "The benchmark 'lr' build is Ralloc with -DPWB_IS_NOOP (no flushes or fences), not upstream LRMalloc; read the repo CSV labels with that in mind"
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling targets persistent memory; pick Ralloc only when allocations must survive crashes, and pick mimalloc-class allocators such as those in this category (SpeedMalloc, v8malloc, Mesh) for ordinary transient heaps, where Ralloc trails jemalloc at high thread counts.",
+  "verified_claims_summary": "The ISMM 2020 paper (seen via search snippet, PDF blocked here) reports about 10x over Makalu and PMDK on Threadtest and Shbench and up to 37x over Makalu on Larson; the repo's own CSVs agree (Threadtest 1 thread 28.7 s vs Makalu 298 s and PMDK 1690 s; Larson 88 threads 4.8e8 ops vs Makalu 1.27e7, derived from page data), built with GCC -O3 per test/Makefile, CPU model not stated in the repo.",
+  "status_note": "Abandoned research code (last commit 2020-10-23, open restart bug #12) but MIT-licensed and small enough to vendor for persistent-memory prototypes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/src/ralloc.hpp",
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/src/BaseMeta.hpp",
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/src/pm_config.hpp",
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/src/pfence_util.h",
+    "https://raw.githubusercontent.com/urcs-sync/ralloc/HEAD/test/Makefile",
+    "https://github.com/urcs-sync/ralloc/issues?q=is%3Aissue",
+    "https://github.com/urcs-sync/ralloc/issues/16",
+    "https://github.com/urcs-sync/ralloc/issues/17"
+  ],
+  "confidence": 0.7
+}

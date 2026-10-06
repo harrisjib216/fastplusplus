@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/thepythoniccow/rawscan",
+  "one_liner": "Small Linux C line reader over a raw fd; about 30-40% less user CPU than fgets or getline on large inputs.",
+  "what_it_does": "Reads delimiter-terminated lines (any delimiter byte, e.g. '\\n' or '\\0') from an already open file descriptor using one fixed-size buffer chosen at rs_open(fd, bufsz, delim). rs_getline() returns a RAWSCAN_RESULT holding begin/end pointers into that buffer plus a type (full line, line without trailing delimiter, start/within/end of a line too long for the buffer, paused, eof, error). It is not a drop-in for fgets/getline: there is no FILE*, no copy into a caller buffer, no nul termination, and returned pointers can be invalidated by the next call unless the pause/resume feature is enabled.",
+  "how_it_is_fast": "It bypasses stdio's double buffering by calling read(2) straight into its own buffer and returns pointers into it, copying only when a partial line must be shifted down (memmove). Delimiter search uses glibc's vectorized rawmemchr, made safe by placing a copy of the delimiter in a read-only sentinel page just past the buffer and writing a delimiter after each read's end, so the scan never needs a length check. The hot path is a small inline function that returns the pre-computed next delimiter position and peeks the following one; rawscan_static.h compiles everything into the caller's unit (10% faster than the shared library on 8-byte lines, no difference at 512+ bytes per the README).",
+  "when_to_use": [
+    "Linux/glibc command-line filters that scan very large files line by line and do little work per line (prefix match, field split), where per-line reader overhead dominates.",
+    "Inputs with untrusted or unbounded line lengths: the buffer never grows, so a giant line is returned in chunks instead of exhausting memory as getline's realloc can.",
+    "Records with embedded nul bytes or a non-newline delimiter (e.g. find -print0 output), which fgets handles badly.",
+    "Code that can work on (begin, end) byte spans without nul-terminated copies."
+  ],
+  "when_not_to_use": [
+    "Anything multi-threaded on one stream: the README says a RAWSCAN stream must be used by a single thread.",
+    "Non-Linux or non-glibc targets: it needs rawmemchr, sbrk/brk and mprotect; the CMake port to BSD, macOS, Windows, clang and MSVC is untested by the author.",
+    "Long-lived programs that open many streams: rs_open grows the data segment with brk(2) and rs_close is an empty function, so each stream's buffer plus two pages is never freed.",
+    "Programs where the line reader is not the bottleneck, or where Rust's bstr is an option: the author reports bstr is as fast or faster and only matched it with hand-written inline compare code.",
+    "Projects needing maintenance or a track record: version 0.1.4, 6 stars, last commit 2024-09-25, no issues filed."
+  ],
+  "integration": {
+    "form": "shared lib (librawscan.so via CMake) or header-only (include rawscan_static.h)",
+    "dependencies": "glibc (rawmemchr, sbrk/brk, mprotect, sysconf)",
+    "min_toolchain": "C11 (anonymous union in rawscan.h), CMake 3.13; developed with GCC; library built with -O3 -march=native",
+    "platforms": "Linux x86-64 tested; other systems not tested",
+    "thread_safety": "Not thread-safe per stream (README); rs_open also calls brk, which is not safe while other threads use malloc",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "rs_open allocates with sbrk/brk behind malloc's back and asserts the current break is page-aligned; man brk(2) advises against mixing these calls with malloc, and the asserts vanish under NDEBUG (CMake Release adds it).",
+    "Returned line pointers are invalidated by the next rs_getline when the buffer is shifted or refilled; use rs_enable_pause / rs_resume_from_pause if you need them to live longer.",
+    "Line end points at the delimiter byte (inclusive), and lines are not nul-terminated; a final line without a delimiter comes back as rt_full_line_without_eol.",
+    "The read count is stored in an int, so buffers above 2 GiB are not safe."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued filesystems-and-io siblings is a line reader: liburing and SPDK speed up the I/O submission path, and diskus, gdu and fclones are whole tools. Pick rawscan when the cost is splitting already-cached data into lines in a single-threaded C filter; combine it with a faster I/O layer only if reads, not scanning, dominate.",
+  "verified_claims_summary": "First-party README: on a Ryzen 1700 with an 11.27 GB, 55.6M-line file already in the page cache, user CPU (mean of 10 runs, nice -n-10) was 1.60 s for rawscan versus 2.61 s for glibc fgets, 2.36 s for getline and 4.38 s for grep, matching the prefix '6fffbf42'. Only user CPU is reported, not wall time; the committed harness (source/tests) compares rawscan with a hand-inlined 3-byte compare and min1stchunklen=3 against fgets/getline using strncmp, and builds getline_test without the -march=native flag the others get, so the gap includes harness differences.",
+  "status_note": "Stale since 2024-09-25 and a self-described learning project at v0.1.4, but about 1,000 lines of C under Apache-2.0, MIT or GPL-2.0 at the user's choice, so it is easy to vendor and fix.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/README.md",
+    "https://github.com/ThePythonicCow/rawscan/tree/master/source",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/include/rawscan.h",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/include/rawscan_static.h",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/lib/rawscan.c",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/CMakeLists.txt",
+    "https://github.com/ThePythonicCow/rawscan/tree/master/source/tests",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/tests/fgets_test.c",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/tests/getline_test.c",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/tests/rawscan_test.c",
+    "https://raw.githubusercontent.com/ThePythonicCow/rawscan/HEAD/source/tests/rawscan_static_test.c",
+    "https://github.com/ThePythonicCow/rawscan/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/tencent/bqlog",
+  "one_liner": "Tencent's C++ async logger with a real-time compressed binary format; much higher end-to-end throughput than spdlog async and glog.",
+  "what_it_does": "A cross-platform logging engine with a C++11 core and wrappers for Java/Kotlin, C#, Python, Node.js/ArkTS, Go and Unreal/Unity. You create a named log object from a properties-style config string (bq::log::create_log), attach console, text-file or compressed-file appenders, and call log.info(\"fmt {}\", args) with std::format-style placeholders (no positional indices or time formatting). It is not a drop-in for spdlog: different API, config format and output; compressed files need BqLog's decoder (bq::tools::log_decoder or the BqLog_LogDecoder CLI).",
+  "how_it_is_fast": "The compressed appender writes a template-based binary format (format string stored once, arguments as VLQ-encoded values, mixed UTF encoding), about 12 bytes per entry versus 65-82 bytes for text loggers, so far less formatting work and I/O. Producers copy arguments into a lock-free adaptive ring buffer (fetch_add with rollback, MISO/SISO modes) backed by memory-mapped files, and a worker thread does fused copy+hash, template caching and batched writes. The author's three-part 'Why is BqLog so fast' series documents the design.",
+  "when_to_use": [
+    "High-volume logging from many threads where total time to get everything on disk matters (10 threads x 2M entries: 507 ms vs spdlog async 32,939 ms in the author's run).",
+    "Shipped client products (games, mobile) that want verbose logs with small files: compressed output is about 6.3x smaller than text, with optional RSA2048+AES256 encryption at near-zero measured cost.",
+    "Mixed-language processes (C++ plus C#/Java/Python/TypeScript/Go) that want one log engine shared by every wrapper.",
+    "Apps that must survive crashes without losing buffered async logs: mmap-backed buffers are checksum-verified and replayed on restart.",
+    "Targets with tight toolchain constraints: depends only on the C library and platform APIs, builds with Android ANDROID_STL=none."
+  ],
+  "when_not_to_use": [
+    "You need minimal call-site latency: Quill's third-party harness (i5-12600, GCC 14.2, Linux) puts BqLog at 125/190 ns p50/p99.9 for one thread, slower than Quill, XTR, fmtlog, MS BinLog and PlatformLab NanoLog (only spdlog among the common ones is slower).",
+    "You want human-readable files at maximum speed: in Quill's throughput table BqLog text mode does 5.49M msg/s vs Quill 6.44M and XTR 7.73M, and its binary mode (12.86M) trails MS BinLog (61.79M); the author's 'text beats everyone' result is from its own Windows/MSVC run.",
+    "Your logs must be grep-able or shipped to text pipelines without a decode step; the binary format may be incompatible across BqLog versions, so archives need the matching decoder.",
+    "Pre-2.3.1 deployments where disks can fill: issue #67 reports SIGBUS crashes and hangs on a full disk in v2.3.0 and earlier (sparse mmap files), since closed.",
+    "You need custom output patterns or prefixes; these were open feature requests (#47, #76) and are not documented as supported."
+  ],
+  "integration": {
+    "form": "static lib | shared lib | source-drop (prebuilt packages from Releases; repo no longer ships binaries)",
+    "dependencies": "none beyond the C standard library and platform APIs (optional JNI/NAPI for wrappers)",
+    "min_toolchain": "C++11; CMake build; benchmark built with MSVC 14.51",
+    "platforms": "Windows x64, macOS, Linux (incl. embedded), iOS, Android, HarmonyOS/OpenHarmony, FreeBSD/NetBSD/OpenBSD/Solaris; x86, x86_64, ARM32, ARM64. No prebuilt binaries for PS5/Switch.",
+    "thread_safety": "Log calls are thread-safe in sync and async modes; arguments are copied into the ring buffer during the call, so the only rule is that no other thread may modify a parameter while the call is in progress. Calling a synchronous flush from a console callback deadlocks.",
+    "drop_in_for_baseline": "partial — same {}-style format strings as spdlog/fmt, but a different logger API, config-string setup, no positional or time format specs, and binary output for the fast path"
+  },
+  "gotchas": [
+    "The headline numbers are for CompressedFileAppender; the text appender is 2.7x slower than compressed at 1 thread in the author's own table (258 vs 95 ms).",
+    "Full-buffer behavior is configurable (discard new entries, block producers, or auto-expand); pick explicitly, since discarding drops logs silently under load.",
+    "buffer_size and thread_mode cannot be changed after a log is created; create_log with an existing name returns the existing object and only updates mutable fields.",
+    "Issue #71 reports BqLog beats fmtlog on macOS but loses on Ubuntu with no maintainer reply; the published table is Windows-only, so benchmark on your OS."
+  ],
+  "pick_this_over_siblings_when": "Pick BqLog over Quill, fmtlog or XTR when end-to-end throughput, small on-disk size, encryption, crash recovery or multi-language support matter more than per-call latency; pick MS BinLog if you want a binary format with higher measured throughput in Quill's harness, and Quill or XTR for the lowest call-site latency with readable text.",
+  "verified_claims_summary": "In the author's Windows 11 / MSVC 14.51 Release x64 run on a Ryzen 9 9950X, 1-10 threads each logging 2M four-argument entries and flushing to disk took BqLog's compressed appender 95-507 ms versus spdlog 1.17 async 560-32,939 ms, quill 11.1 639-7,812 ms, fmtlog 672-7,934 ms and glog 0.7.1 4,485-127,550 ms; the runnable CMake project is at the benchmark_2.5.0 tag. Quill's independent Linux harness confirms BqLog beats spdlog at call-site latency (125 vs 271 ns p50, 1 thread) but ranks it below several siblings.",
+  "status_note": "Actively developed (v2.5.0, commits in October 2026), Apache-2.0, used in Tencent's Honor of Kings; copyable via prebuilt static/dynamic libraries or source, with recent crash and disk-full bugs (#62, #67, #46) closed.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/README.md",
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/docs/BENCHMARK.md",
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/docs/FAQ.md",
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/docs/API_REFERENCE.md",
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/docs/INTEGRATION_GUIDE.md",
+    "https://raw.githubusercontent.com/Tencent/BqLog/HEAD/docs/PERFORMANCE_DESIGN.md",
+    "https://github.com/Tencent/BqLog/issues?q=is%3Aissue",
+    "https://github.com/Tencent/BqLog/issues/71",
+    "https://github.com/Tencent/BqLog/issues/67",
+    "https://raw.githubusercontent.com/odygrd/quill/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

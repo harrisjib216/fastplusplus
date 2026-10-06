@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/tyoma/micro-profiler",
+  "one_liner": "Low-overhead real-time instrumenting C/C++ profiler; README chart shows 6-7x less slowdown than AQtime and the VS instrumenting profiler.",
+  "what_it_does": "An instrumenting function profiler: you compile the code of interest with MSVC /GH /Gh or GCC/Clang -finstrument-functions and link the micro-profiler collector library, and per-function call counts, exclusive/inclusive times and parent/child call trees stream to a frontend while the program runs. The frontend runs inside Visual Studio (one-click 'Enable Profiling' on a project) or standalone, and can attach over sockets to a remote or Linux process. It is not a drop-in replacement for any library API; it replaces the profiler tool in the workflow.",
+  "how_it_is_fast": "The enter/exit hooks (_penter/_pexit or __cyg_profile_func_enter/exit, hand-written assembler on MSVC x86/x64) only append a (timestamp, callee) record into a per-thread buffer; a per-thread shadow return stack handles nesting and tail calls. Full buffers are handed through a lock-free circular queue to a separate analyzer thread that aggregates statistics, so the profiled thread never builds call trees itself (the v1.7 queue rewrite cut atomic bus-locking about 250x and overhead by up to 35% x86 / 42% x64). A start-up calibration times instrumented vs plain empty calls and subtracts the measured per-call overhead from reported times.",
+  "when_to_use": [
+    "Windows/MSVC C++ applications that must stay interactive while profiled (GUI, games, servers) where AQtime or the VS instrumenting profiler make them unusable",
+    "You want exact call counts and per-function inclusive/exclusive times live, without recording and post-processing large trace files",
+    "Profiling a selected subset of translation units: add /GH /Gh (or -finstrument-functions) only to the .cpp files of interest",
+    "Remote profiling of a Linux or Windows process from a frontend on another machine over sockets",
+    "Legacy targets: the README says it runs on Windows XP and supports Visual Studio 2005 onward"
+  ],
+  "when_not_to_use": [
+    "Overall overhead still matters: on the README's 7-Zip chart throughput drops from 3,140 KB/s to 840 KB/s (about 3.7x slower, derived from page data); sampling profilers (perf, VTune, Tracy sampling) cost far less on call-heavy code",
+    "Code dominated by tiny non-inlined functions, where hook cost dominates and times can come out distorted or negative (open issue #57; issue #64 opened to discuss instrumentation distortion)",
+    "Builds you cannot recompile; the 'Profile Process...' attach mode needs /hotpatch and /functionpadmin or -fpatchable-function-entry builds and was labelled very beta",
+    "Teams on recent Visual Studio 2022: open issues report freezes on attach (#86), non-working context menu (#83), build failure on VS 2022 17.4 LTSC (#85) and a deadlock at start (#87)",
+    "You need a timeline/trace view of individual events; it aggregates statistics (flat list plus callstack view since v2.0.651) rather than recording a frame timeline like Tracy"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none at runtime (collector DLL/.so plus debug symbols); building from source needs MSVC 2010+ and the Visual Studio SDK on Windows, CMake/conan files are present for other builds",
+    "min_toolchain": "MSVC 2010+ (/GH /Gh); GCC or Clang with -finstrument-functions on Linux; VS integration for Visual Studio 2005-2022",
+    "platforms": "Windows x86 and x64 (XP and later), Linux collector; frontend also builds on macOS",
+    "thread_safety": "Multithreaded targets supported: per-thread trace buffers, per-thread statistics and thread filter in the UI",
+    "drop_in_for_baseline": "partial - same workflow as other compiler-hook instrumenting profilers (recompile with /GH /Gh), but its own collector library and frontend replace AQtime or the VS profiler UI"
+  },
+  "gotchas": [
+    "When the analyzer thread falls behind and no empty trace buffer is free, buffers_queue::flush() blocks the profiled thread until one is returned, so overhead can spike under heavy call rates",
+    "On Linux some binaries do not bind the hook functions; the README says to run with LD_PRELOAD=<profiler .so> and to set LD_LIBRARY_PATH to the collector directory",
+    "calls_collector.cpp must be compiled without SSE/SSE2 code generation (comment in the source) if you build it yourself",
+    "Windows services or other-user processes need the MICROPROFILERFRONTEND=\"sockets|127.0.0.1:6100\" environment variable and the profiler directory on the system PATH"
+  ],
+  "pick_this_over_siblings_when": "Pick it over Tracy when you want automatic per-function statistics for every function in chosen files without adding zone macros, and over funtrace when you need live aggregated statistics in a Visual Studio pane on Windows rather than a trace file; pick funtrace or Tracy when per-call cost (under 10 ns or 2.25 ns per zone documented there) or timelines matter more.",
+  "verified_claims_summary": "A first-party README chart shows 7-Zip compressing at 3,140 KB/s unprofiled, 840 KB/s under MicroProfiler, 135 KB/s under AQtime and 116 KB/s under the Visual Studio instrumenting profiler (about 6.2x and 7.2x faster than those profilers, 3.7x slower than unprofiled, derived from page data); 7-Zip version, input, compiler flags and CPU are not documented.",
+  "status_note": "Active (last commit 2026-03-16, latest release v2.0.651) and MIT-licensed, but 18 open issues include several Visual Studio 2022 freezes and integration failures.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tyoma/micro-profiler/HEAD/README.md",
+    "https://github.com/tyoma/micro-profiler",
+    "https://github.com/tyoma/micro-profiler/issues",
+    "https://github.com/tyoma/micro-profiler/issues/64",
+    "https://github.com/tyoma/micro-profiler/tree/master/collector/src",
+    "https://raw.githubusercontent.com/tyoma/micro-profiler/HEAD/collector/src/calls_collector.cpp",
+    "https://raw.githubusercontent.com/tyoma/micro-profiler/HEAD/collector/src/calls_collector_thread.cpp",
+    "https://raw.githubusercontent.com/tyoma/micro-profiler/HEAD/collector/src/calibration.cpp",
+    "https://raw.githubusercontent.com/tyoma/micro-profiler/HEAD/collector/buffers_queue.h"
+  ],
+  "confidence": 0.7
+}

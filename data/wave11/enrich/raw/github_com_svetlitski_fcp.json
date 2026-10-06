@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/svetlitski/fcp",
+  "one_liner": "Parallel Rust replacement for the common cp -R cases; about 10x faster than GNU cp on a Linux kernel tree on SSD.",
+  "what_it_does": "A command-line tool that copies one source to a destination file, or several sources into a destination directory, always recursively. It has no options beyond --help and --version: no -p, no -i, no -u, no progress output. It is a separate binary, not a library; the Rust crate exposes one fcp(&[String]) entry point used by main.rs.",
+  "how_it_is_fast": "Each directory is read serially, then its entries are copied in parallel with a rayon work-stealing pool (into_par_iter), so directory walking and file copies spread over all cores and the SSD sees a higher queue depth. Regular files go through Rust's std::fs::copy, which uses copy_file_range on Linux and fcopyfile/fclonefileat on macOS; on APFS that becomes a copy-on-write clone, which is where the 822x large-file number comes from. There is no custom I/O engine (no io_uring, no buffer tuning).",
+  "when_to_use": [
+    "Copying large trees of many small files (source checkouts, node_modules, build outputs) on NVMe/SATA SSD where cp is bound by one thread issuing syscalls.",
+    "macOS on APFS, where large files become near-instant clones.",
+    "Scripts and dev workflows that only need plain recursive copy semantics and can tolerate missing cp options.",
+    "Linux or macOS hosts with many cores and an SSD-backed local filesystem."
+  ],
+  "when_not_to_use": [
+    "HDDs: the README warns that parallel copying may perform poorly on spinning disks.",
+    "When you need cp -p/-a semantics (timestamps, ownership, xattrs, ACLs): the code copies only mode bits via std::fs::copy and creates directories with the source mode.",
+    "Large-file copies on Linux: the README's own number is only 1.4x (8 s vs 11.3 s), and issue #41 reports fcp slower than cp (9:39 vs 8:10) on a btrfs RAID1 NVMe workstation.",
+    "FAT32 targets: issue #34 (open) reports a futex deadlock after 8-10 GB copied to a FAT32 USB drive.",
+    "Windows: Unix only (issue #33 closed as wontfix)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon 1.5, nix 0.25 (criterion and a local dev_utils crate for benches only)",
+    "min_toolchain": "README says Rust 1.53.0, but Cargo.toml uses edition 2021, which needs Rust 1.56 or newer",
+    "platforms": "Unix-like only (Linux, macOS); CI and packages for Arch AUR, NixOS, Homebrew",
+    "thread_safety": "Not applicable (CLI); internally runs a rayon pool sized to all cores, with no flag to limit parallelism (speed/IOPS limit request #18 closed)",
+    "drop_in_for_baseline": "partial — covers 'cp -R SRC... DEST' only; rejects every cp option, and always recurses into directories"
+  },
+  "gotchas": [
+    "Errors are printed as they happen and the copy continues; only the exit code reports that something failed.",
+    "Mode bits, including setuid/setgid, are carried over; issue #48 (open) asks for a private security contact about preserving privileged mode bits.",
+    "copy_single's self-overwrite check compares only inode numbers, not device plus inode (reject_self_copies does use both), so a cross-filesystem copy whose inode numbers happen to match is refused.",
+    "Linux reflink (FICLONE) support is still an open request (#11); any Linux CoW benefit comes only from what copy_file_range does in the kernel."
+  ],
+  "pick_this_over_siblings_when": "Pick fcp over wcp or uring-sync when you want a packaged, widely distributed (Homebrew, AUR, NixOS) parallel cp with macOS clone support; wcp's io_uring engine reports a bigger large-file win on Linux (20x512 MiB in 3.97 s vs cp 8.44 s), and uring-sync targets many-file copies and network sync.",
+  "verified_claims_summary": "A Criterion harness (benches/fcp_benchmark.rs: 60 s warm-up, 50 samples for the kernel tree, 100 for large files, destination removed outside the timed region) runs 'cp -R' against fcp. On an AWS a1.metal (Graviton, 16 vCPU, SSD, XFS) the Linux kernel tree took about 675 ms vs 6.02 s (about 9x) and 13x512 MB took about 8 s vs 11.3 s (1.4x). On a 2018 MacBook Pro (i9, APFS) the figures were 5.1 s vs 30 s (6x), and 4.5 ms vs 3.7 s for large files (822x, because of clones). Runs are warm-cache; compiler, run date and GNU cp version are not stated, which matters because newer coreutils cp also changed its copy path.",
+  "status_note": "Small, BSD-3-Clause, 857 stars, last commit 2026-04-23, but several open issues (deadlock #34, btrfs slowdown #41, security #48) have no maintainer reply; fine to use as a dev tool, not a vetted cp replacement.",
+  "sources_read": [
+    "https://github.com/Svetlitski/fcp",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/README.md",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/benches/fcp_benchmark.rs",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/Svetlitski/fcp/HEAD/src/filesystem.rs",
+    "https://github.com/Svetlitski/fcp/issues?q=is%3Aissue",
+    "https://github.com/Svetlitski/fcp/issues/11",
+    "https://github.com/Svetlitski/fcp/issues/34",
+    "https://github.com/Svetlitski/fcp/issues/41",
+    "https://github.com/Svetlitski/fcp/issues/48"
+  ],
+  "confidence": 0.8
+}
