@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/komal-ai417/fastalloc",
+  "one_liner": "Thread-caching slab allocator (C++17) that beats glibc malloc on small mixed-size alloc/free pairs and returns memory aggressively.",
+  "what_it_does": "A general-purpose allocator exposed as a namespaced C-style API (FastAlloc::fast_malloc, fast_free, fast_free_sized, fast_calloc, fast_realloc, fast_aligned_alloc) plus optional global operator new/delete overrides behind FAST_ALLOC_OVERRIDE_NEW. It does not export malloc/free symbols, so it cannot be LD_PRELOADed over a whole process; C code and third-party libraries calling malloc keep using the system allocator. It also offers a stats API, an explicit fast_alloc_purge() that returns cached spans to the OS, and a FASTALLOC_DEBUG build with canaries, red zones, poisoning and double-free detection.",
+  "how_it_is_fast": "Per-thread TLS bins (pthread keys on Linux, FLS on Windows) serve 512 size classes in 16-byte steps up to 8 KB without locks; misses refill in adaptive batches (16 blocks, doubling) from 16 striped global arenas of 64-128 KB slabs. Cross-thread frees go to lock-free MPSC pending queues per arena, which later refills consume directly. Blocks above 8 KB use a best-fit, splitting page-span cache (2 MB per bin, 64 MB global) carved from 4 MB mappings released with madvise(MADV_DONTNEED), so large-block cycles stay in userspace; large realloc uses mremap.",
+  "when_to_use": [
+    "C++ services dominated by small (16 B to 4 KB) mixed-size new/delete pairs, where the report shows 1.16-2.98x over glibc 2.41 at 1-4 threads",
+    "Repeated large-block (8 KB+) alloc/free cycles, measured 4.6-14.6x faster than jemalloc 5.3.0 and mimalloc 2.1.7 because spans are recycled from a userspace cache",
+    "Programs that need to hand memory back after a load spike and can call fast_alloc_purge() explicitly",
+    "Code that wants an allocator-level debug mode (canaries, poisoning, leak dump) switchable at build time"
+  ],
+  "when_not_to_use": [
+    "realloc-heavy growth patterns: 0.28x vs glibc, which grows its heap top in place",
+    "Steady constant-live-set churn or ramp-up against mimalloc or jemalloc (0.36-0.75x), and thread spawn/exit storms against glibc (0.48-0.62x)",
+    "Bulk free of millions of objects at once: free phase 185 ms vs 64 ms for glibc on 1M objects",
+    "When you need a process-wide malloc replacement for C libraries: there is no malloc/free interposition, only new/delete",
+    "Production use that needs a track record: 3 stars, single author, no releases, all numbers from one 2-vCPU VM"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (Google Test and Google Benchmark are fetched via CMake FetchContent for tests and benchmarks only)",
+    "min_toolchain": "C++17, CMake; tested with GCC 14.2, Clang and MSVC in CI",
+    "platforms": "Linux and Windows on x86-64 (span pool and mremap paths are Linux-only); other architectures not documented",
+    "thread_safety": "Thread-safe; cross-thread free via lock-free MPSC queues, verified under ThreadSanitizer in CI per the README",
+    "drop_in_for_baseline": "partial — global operator new/delete can be overridden with FAST_ALLOC_OVERRIDE_NEW (sized delete forwards to fast_free_sized), but malloc/free are not exported, so C callers need source changes to call FastAlloc::fast_malloc"
+  },
+  "gotchas": [
+    "The memory-retention headline (16.0 MB vs 171.8/552.2 MB for jemalloc/mimalloc after purge) is not like-for-like: bench_suite.cpp calls fast_alloc_purge() for FastAlloc but only malloc_trim(0) for the LD_PRELOADed allocators, never jemalloc's arena purge mallctl or mi_collect, and measures immediately, before their decay timers run.",
+    "Every small block carries a 16-byte header (USER_OFFSET = 16) and classes step by 16 B, so RSS/live was 1.08 vs glibc 0.78 in the report; calloc zeroes the whole rounded block (Calloc/10B 11.9x slower than glibc).",
+    "Freeing a pointer FastAlloc did not allocate (for example memory from a C library's malloc) is undefined behaviour in release builds; only FASTALLOC_DEBUG detects it.",
+    "The override covers plain and sized new/delete only; aligned (std::align_val_t) new/delete are not overridden and go to the system allocator."
+  ],
+  "pick_this_over_siblings_when": "Pick it over v8malloc or mem++ when you want a C++17 static library with an explicit purge call and a built-in debug mode, and your workload is small-object pairs or large-block cycles; for constant-live-set churn or ramp workloads mimalloc remains faster per this repo's own matrix, and fast-alloc (NotKeira) is the simpler choice if you only need fixed pools or stack arenas.",
+  "verified_claims_summary": "The author's bench_suite (11 Larson/mimalloc-bench style workloads at 1, 2 and 4 threads, median of 5, one allocator per process, both sides called through the same function pointers) on a 2-vCPU Intel Xeon VM, GCC 14.2 -O3 -march=native + LTO, Debian 13, shows FastAlloc winning 20/33 cells vs glibc 2.41, 21/33 vs jemalloc 5.3.0 and 12/33 vs mimalloc 2.1.7. The report says contended cells are noisy and that the win/loss pattern, not the multipliers, should be quoted.",
+  "status_note": "Active as of the 2026-10-02 commits (100 commits, last one 'Restore repository to a2a342b6 baseline'), MIT-licensed and small enough to vendor, but a 3-star single-author project with raw results gitignored.",
+  "sources_read": [
+    "https://github.com/Komal-ai417/FastAlloc",
+    "https://github.com/Komal-ai417/FastAlloc/commits/main",
+    "https://github.com/Komal-ai417/FastAlloc/tree/main/benchmarks/benchsuite",
+    "https://github.com/Komal-ai417/FastAlloc/tree/main/src",
+    "https://github.com/Komal-ai417/FastAlloc/tree/main/include",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/README.md",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/docs/performance_report.md",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/docs/api_reference.md",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/include/fast_alloc.h",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/src/fast_alloc.cpp",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/src/fast_alloc_config.h",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/src/tls_cache.cpp",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/src/global_heap.cpp",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/benchmarks/benchsuite/bench_suite.cpp",
+    "https://raw.githubusercontent.com/Komal-ai417/FastAlloc/HEAD/benchmarks/benchsuite/run_matrix.sh"
+  ],
+  "confidence": 0.75
+}
