@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/thephd/sol2",
+  "one_liner": "Header-only C++17 Lua binding whose wrapper overhead sits closest to the raw Lua C API among 15 binding libraries.",
+  "what_it_does": "sol2 (current major version is sol3, same repo) wraps the Lua C stack API behind sol::state, sol::table proxies, sol::function and new_usertype<T>, so C++ functions, lambdas, member functions, containers and smart pointers can be pushed to and pulled from Lua without manual stack work. It works with PUC Lua 5.1 to 5.4 and LuaJIT 2.x. It is not a drop-in for another binding library: registration and call syntax are its own, though a raw lua_State* can be mixed with it.",
+  "how_it_is_fast": "Bound functions can be transported as compile-time template arguments (sol::c_call<decltype(&f), &f>), which yields a plain lua_CFunction with no upvalue or std::function indirection. By default it reads values with the unchecked lua_to* functions rather than lua_check*, and argument and userdata checks are only compiled in debug builds or with SOL_ALL_SAFETIES_ON. Table access goes through lazy proxy objects so chained lookups like lua[\"a\"][\"b\"][\"c\"] do not materialize intermediate references, and usertype method lookup avoids per-call string handling.",
+  "when_to_use": [
+    "Embedding Lua or LuaJIT in a C++17 application (games, tools, plugin hosts) where calls cross the C++/Lua boundary often and binding overhead shows up in profiles.",
+    "C++-side table get/set and calling Lua functions from C++: in the 2018 shootout sol2 was within about 0 to 25% of hand-written C API code (table chained get 42.9 vs 43.2 ns, Lua function call 34.5 vs 32.6 ns).",
+    "Binding member functions with c_call: sol3 was the fastest binding on member function calls (6.9 us per 51 set+get iterations vs 5.5 us plain C, 7.5 us OOLua, 21.3 us vanilla LuaBridge).",
+    "You need broad features in one header: overloads, multiple inheritance base/derived casts, std::optional/variant, containers, coroutines.",
+    "Code that must target both PUC Lua and LuaJIT from one binding layer."
+  ],
+  "when_not_to_use": [
+    "You ship with full argument and userdata type checking: sol's speed numbers come from its default unchecked mode, and LuaBridge3's 2026 chart, run with every library at maximum safety, has Sol3 slower on most script-invoked cases (member function call 356.9 vs 152.4 ns).",
+    "Compile time or binary size matter: heavy template metaprogramming makes translation units that include sol slow to build.",
+    "You need Luau or Ravi support: LuaBridge3 claims those, sol2 documents Lua 5.1+ and LuaJIT only.",
+    "Toolchains newer than its last release: GCC 15 and Clang 19 hit 'no member named construct' errors in sol::optional<T&> (issues #1617, #1692, #1695); the fix sits on the v3.5.0 tag but users report it is not in a packaged release.",
+    "Returning C++ objects by value to Lua is your hot path: in the 2018 shootout sol2 (14.3 us) was about 1.7x slower than luwra (8.5 us) and lua-api-pp (8.6 us) on return userdata."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Lua 5.1-5.4 or LuaJIT 2.x headers and library (the user supplies them)",
+    "min_toolchain": "C++17; GCC 7+, Clang 3.9+, Visual Studio 2017+ per README (newest GCC 15 / Clang 19 need the v3.5.0 tag or develop)",
+    "platforms": "any with a C++17 compiler; README lists Windows, Linux, macOS, Android and iOS builds",
+    "thread_safety": "None beyond Lua's own: docs say Lua has no thread safety and recommend one sol::state per thread with serialized transfer between states.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the lua-bindings-shootout baseline: plain_c_member_function_call stores a basic* in an 8-byte userdata, but basic_get_wrap/basic_set_wrap cast lua_touserdata(L, 1) straight to basic* instead of dereferencing basic**, so the 'plain C' floor reads and writes the pointer slot as the double var and never touches the C++ object. The check script still passes (set then get the same 8 bytes), it is undefined behavior, and it skips one indirection, so the floor is slightly flattered; binding rankings are unaffected.",
+    "sol2 and sol3 table_chained_get benchmarks never validate their accumulated result (no lbs::expect), unlike plain_c, LuaBridge and OOLua; sol2's 42.9 ns there edges plain C's 43.2 ns, which is within noise.",
+    "Default build does no argument or userdata type checking in release: passing the wrong userdata or nil to a bound member function can crash; define SOL_ALL_SAFETIES_ON to get checked behaviour, at a runtime cost the published benchmarks do not show.",
+    "Docs page says results were taken with nonius against a Lua 5.3.3 DLL; the shootout repo's only raw data (benchmark_results/lua_bindings_shootout.json, 2018-09-28) is Google Benchmark output from a Windows x64 build on an 8-logical-CPU 2592 MHz machine, with compiler and flags not recorded."
+  ],
+  "pick_this_over_siblings_when": "Pick sol2 over LuaBridge3 when you run unchecked release builds, do much C++-side table access, or need sol's wider feature set (overloads, multiple inheritance, containers); pick LuaBridge3 when you ship with full safety checks, want faster compiles, or target Luau/Ravi. Engines like Luau, LuaJIT Remake or Daslang speed up the script itself, which sol2 does not; it only trims the C++/Lua boundary cost.",
+  "verified_claims_summary": "The author's lua-bindings-shootout (raw Google Benchmark JSON dated 2018-09-28, Windows x64, 8 logical CPUs at 2592 MHz, Lua 5.3.x as a DLL, sol2 v2.20.0 and sol3 of that date with safeties off, compiler not stated) puts sol2 or sol3 first among bindings in about 10 of 22 tests and within a few percent of the leader in most others (derived from page data); sol1 (old_sol), luwra, lua-api-pp, OOLua, kaguya or LuaBridge win the rest, and hand-written C API code beats sol in every test except table chained get (plus a tie on global get). The third-party satoren suite (sol2 v2.5.1, 2016) and LuaBridge3's 2026 safety-on chart give mixed or opposite results, so 'fastest in the land' holds only for unchecked builds on 2018-era versions.",
+  "status_note": "Stale: last commit 2025-03-07 (v3.5.0 tag 2025-02-25), 292 open issues, newest-compiler fixes not in a packaged release; MIT-licensed, header-only and widely used (5.2k stars), so vendoring a pinned commit is easy.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ThePhD/sol2/develop/README.md",
+    "https://raw.githubusercontent.com/ThePhD/sol2/develop/documentation/source/benchmarks.rst",
+    "https://raw.githubusercontent.com/ThePhD/sol2/develop/documentation/source/safety.rst",
+    "https://raw.githubusercontent.com/ThePhD/sol2/develop/documentation/source/threading.rst",
+    "https://raw.githubusercontent.com/ThePhD/sol2/develop/documentation/source/api/c_call.rst",
+    "https://github.com/ThePhD/sol2",
+    "https://github.com/ThePhD/sol2/commits/develop",
+    "https://github.com/ThePhD/sol2/issues?q=is%3Aissue+is%3Aopen+compile+error+gcc+OR+clang",
+    "https://github.com/ThePhD/sol2/issues/1695",
+    "https://github.com/ThePhD/lua-bindings-shootout",
+    "https://github.com/ThePhD/lua-bindings-shootout/tree/master/source",
+    "https://github.com/ThePhD/lua-bindings-shootout/tree/master/benchmark_results",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/README.md",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/benchmark.hpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/lbs_lib.hpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/lbs_lua.hpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/lua_bindings_shootout.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/plain_c.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/sol2.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/sol3.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/luabridge.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/source/oolua.cpp",
+    "https://raw.githubusercontent.com/ThePhD/lua-bindings-shootout/master/benchmark_results/lua_bindings_shootout.json",
+    "https://raw.githubusercontent.com/kunitoki/LuaBridge3/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

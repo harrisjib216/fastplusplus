@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/tpde2/tpde",
+  "one_liner": "Single-pass baseline back-end framework; its LLVM-IR back-end compiles 10-20x faster than LLVM's -O0 back-end at similar code speed.",
+  "what_it_does": "TPDE is a C++ framework for writing baseline compiler back-ends directly on top of an existing SSA IR: you implement an IRAdaptor (iterate functions, blocks, PHIs, instructions, operands) plus instruction selection, and TPDE handles register allocation, calls, unwind info and ELF object emission or in-memory mapping. TPDE-LLVM is the ready-made back-end for LLVM-IR, usable as a library (tpde_llvm::LLVMCompiler::create(triple), then compile_to_elf or compile_and_map for JIT), as the tpde-llc tool, or inside Clang/Flang (a -fpass-plugin plugin for 22+, a source patch with -ftpde for 19 to 21). Unsupported IR falls back to the normal LLVM back-end with a warning.",
+  "how_it_is_fast": "One analysis pass computes block layout (mostly reverse post-order) and per-value live intervals with reference counts, then a single pass over the IR does instruction selection, register allocation and machine-code encoding together, with no intermediate Machine IR and no separate register-allocation pass. Values are freed from registers and stack slots as soon as their reference count reaches zero. Instruction-selection code is largely generated offline by TPDE-Encodegen, which compiles small C 'snippet' functions through LLVM and turns the resulting machine code into encoder functions for x86-64 and AArch64.",
+  "when_to_use": [
+    "JIT compilers that already emit LLVM-IR (query engines, language runtimes) where LLVM's -O0 codegen latency dominates time-to-first-execution and baseline code quality is acceptable.",
+    "Debug or unoptimized builds of C, C++ or Fortran on x86-64 or AArch64 Linux where the LLVM back-end stage is a large share of compile time (plugin for Clang/Flang 22+).",
+    "A tier-0 or baseline tier for your own SSA IR: implement an IRAdaptor and instruction selection instead of lowering to LLVM-IR first.",
+    "Clang -O0 or -O1 generated IR: the docs say this typically compiles; on -O1 IR code size is similar to LLVM's."
+  ],
+  "when_not_to_use": [
+    "You need optimized code: TPDE produces -O0-quality machine code by design, and the docs say an optimizing back-end is not its goal.",
+    "Targets beyond ELF x86-64-v1 and AArch64 Armv8.1 Linux with the small PIC code model: no Windows/COFF, no macOS/Mach-O, no RISC-V.",
+    "Vector-heavy IR (Clang -O2 and higher output typically fails on unsupported vector operations and falls back to LLVM); shufflevector is always scalarized and many vector intrinsics are missing.",
+    "IR using computed goto, IFuncs, non-empty inline assembly, non-C calling conventions, half/bfloat, or integers wider than i128.",
+    "Whole-build speedups are the goal: the 10-20x covers only the back-end stage, so Clang front-end parsing and linking are unchanged and end-to-end gains are smaller (not quantified in the repo)."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "LLVM/Clang 19.1-23.1 for TPDE-LLVM and TPDE-Encodegen (prefer 21.1; the LLVM version must match Clang/Flang when used as a plugin); Python 3.10+; other dependencies bundled as git submodules; core framework builds without LLVM",
+    "min_toolchain": "GNU-compatible C++20 compiler (Clang 19+, GCC 14+); CMake",
+    "platforms": "x86-64 (x86-64-v1) and AArch64 (Armv8.1) Linux ELF only",
+    "thread_safety": "not documented (LLVMCompiler is non-copyable and compilation modifies the module; use one compiler instance per thread)",
+    "drop_in_for_baseline": "partial: through the Clang/Flang 22+ plugin (-fpass-plugin=tpde-plugin.so) it replaces the LLVM back-end with no code changes and falls back to LLVM on unsupported input, but most LLVM code-generation options are ignored and only Linux ELF targets work"
+  },
+  "gotchas": [
+    "Compilation modifies the input module: constant expressions inside functions are expanded into instructions and thread-local accesses are rewritten to llvm.threadlocal.address.",
+    "The built-in JIT mapper supports only typical ELF constructs (no TLS); for more, map the object through LLVM ORC (see tpde-llvm/tools/tpde-lli.cpp). An OrcJIT emission-layer segfault (issue #26) and a wrong RIP-relative string offset with -ftpde on LLVM 20.1.8 (issue #39, garbage output) were reported and closed in 2026; a register-allocation fatal error on llvm.smul.with.overflow.i128 (issue #45) is still open.",
+    "Atomics may use stronger ordering than requested (atomicrmw is always seq_cst), x86_fp80 is slow and mostly unsupported, and non-ABI vector types have an in-register layout incompatible with LLVM, so they cannot cross function boundaries.",
+    "The repo carries no benchmark scripts or results; every number comes from the paper (SPEC CPU 2017, proprietary) that this session could reach only through search snippets, so the speedups cannot be re-run from public code."
+  ],
+  "pick_this_over_siblings_when": "Pick TPDE when your system already produces LLVM-IR (or another SSA IR) and you want a far faster -O0-quality back-end that emits standard ELF objects and falls back to LLVM on unsupported input; copy-and-patch designs like PochiVM or WasmNow can be faster still but need you to build stencils for your own language or Wasm, and AsmJit or sljit make you write instruction selection and register handling yourself.",
+  "verified_claims_summary": "README and docs/tpde-llvm/main.md state first-party that TPDE-LLVM compiles 10-20x faster than the LLVM -O0 back-end with similar execution time and 10-30% larger code for -O0 IR. Paper snippets only (arXiv 2505.22610 and the CGO 2026 version, both blocked here): SPECint 2017 -O0 IR built with Clang/LLVM 20.1.7, 8-24x faster than LLVM -O0 with geomean 12.15x on x86-64 and 18.96x on AArch64 (Apple M1 under Asahi Linux; x86-64 CPU not seen), run time within about 9%, about 80-85x faster than the LLVM -O1 back-end on -O1 IR, and a Cranelift-IR adapter in Wasmtime compiling 4.27x faster than Cranelift's default mode.",
+  "status_note": "Active (1,124 commits, last on 2026-09-22 adding LLVM 23/24 adjustments, 3 open issues); Apache-2.0 WITH LLVM-exception and usable today as a Clang/Flang 22+ plugin or library, but it supports only a subset of LLVM-IR and the authors have not answered the open 'ready for production use?' issue (#6).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/README.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/main.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/tpde-llvm/main.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/tpde/overview.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/tpde/main.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/tpde/guide.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/docs/tpde/adaptor.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/tpde-llvm/include/tpde-llvm/LLVMCompiler.hpp",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/tpde-llvm/tools/tpde-llc.cpp",
+    "https://github.com/tpde2/tpde",
+    "https://github.com/tpde2/tpde/tree/master/docs",
+    "https://github.com/tpde2/tpde/tree/master/docs/tpde",
+    "https://github.com/tpde2/tpde/tree/master/utils",
+    "https://github.com/tpde2/tpde/tree/master/tpde-llvm/tools",
+    "https://github.com/tpde2/tpde/commits/master",
+    "https://github.com/tpde2/tpde/issues?q=is%3Aissue",
+    "https://github.com/tpde2/tpde/issues/4",
+    "https://github.com/tpde2/tpde/issues/6",
+    "https://github.com/tpde2/tpde/issues/10",
+    "https://github.com/tpde2/tpde/issues/39",
+    "https://github.com/buster14a/buster/issues/2632",
+    "https://arxiv.org/abs/2505.22610 (EGRESS_BLOCKED)",
+    "https://ar5iv.labs.arxiv.org/html/2505.22610 (EGRESS_BLOCKED)",
+    "https://home.cit.tum.de/~engelke/pubs/2602-cgo1.pdf (EGRESS_BLOCKED)",
+    "https://llvm.org/devmtg/2024-03/slides/llvm-fast-backend.pdf (EGRESS_BLOCKED)",
+    "https://pith.science/paper/2505.22610 (EGRESS_BLOCKED)",
+    "WebSearch snippets for arxiv.org/pdf/2505.22610, home.cit.tum.de/~engelke/pubs/2602-cgo1.pdf and zenodo.org/records/17619677"
+  ],
+  "confidence": 0.7
+}
