@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/gjduck/e9patch",
+  "one_liner": "Static x86_64 ELF binary rewriter that skips control-flow recovery; more robust and scalable than Dyninst-style rewriters, but not faster.",
+  "what_it_does": "Takes an x86_64 Linux ELF executable or shared object and writes a patched binary that is a drop-in replacement, with instrumentation inserted at chosen instructions. E9Patch is the backend; the E9Tool frontend gives a matching language (-M 'asm=/xor.*/', call targets, operands) and a patching language (-P print, call trampolines into your own compiled patch binary with up to eight arguments, conditional calls, plugins). It is a framework for building profilers, fuzzers (E9AFL) and hardening tools (RedFat), not a ready-made profiler.",
+  "how_it_is_fast": "It does not relocate code or recover control flow: each patched instruction is replaced in place by a jump to a trampoline, using instruction punning plus three tactics from the PLDI 2020 paper (T1 padded jumps, T2 successor eviction, T3 neighbour eviction) to find valid rel32 offsets, so jump targets are preserved and rewriting is safe without a CFG. Physical page grouping packs scattered trampolines into shared file-backed pages to limit RAM and file-size bloat. The speed story is rewrite scalability (Chrome and libxul.so over 100 MB rewritten) rather than lower runtime overhead; the current E9Tool adds -O1/-O2/-O3 optimizations and an optional -CFR mode that uses heuristic control-flow recovery for faster output binaries.",
+  "when_to_use": [
+    "Instrumenting or patching x86_64 Linux binaries you cannot recompile, especially very large ones (browsers, big shared libraries) where CFG-based rewriters fail or are too slow",
+    "Robustness matters more than overhead: binary hot-patching, hardening (e.g. low-fat pointer heap-write checks) or fuzzing instrumentation on stripped or mixed-language (C, C++, Fortran, assembly) code",
+    "Sparse instrumentation (a few call sites, malloc calls, specific instructions), where the extra two jumps per patch site matter little",
+    "Building your own tool on a programmable backend (E9Tool matching language, call trampolines, plugins) under GPL-3.0"
+  ],
+  "when_not_to_use": [
+    "When runtime overhead is the priority: the paper's empty instrumentation costs +110.81% on all jumps and +64.71% on heap writes on SPEC2006, versus cited figures of about 70% for Dyninst, +62% for PEBIL and +60.48% for Multiverse (inlining rewriters)",
+    "Non-x86_64 or non-ELF targets: 32-bit support is an open feature request (#16)",
+    "Binaries that mix code and data in .text or need full coverage of single-byte instructions (ret, push, pop): the linear disassembler and the tactics have documented limits; -100 mode falls back to SIGILL handlers and breaks programs that install their own SIGILL handler",
+    "Binaries with very large static .bss on non-PIE builds (gamess, zeusmp in the paper) that exhaust address space for trampolines",
+    "CET shadow-stack environments: compatibility is an open issue (#55)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "zlib (build.sh also checks for xxd and markdown); prebuilt release binaries available",
+    "min_toolchain": "gcc/g++ and make (C++); not otherwise documented",
+    "platforms": "x86_64 Linux ELF (PIE and non-PIE executables and shared objects)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — a command-line static rewriter like Dyninst's binary-rewriting mode, but a different API (E9Tool match/patch language and patch binaries, not Dyninst's BPatch C++ API) and no basic-block or CFG information in the default mode"
+  },
+  "gotchas": [
+    "The clean call ABI does not save x87/MMX/SSE/AVX registers and does not guarantee 16-byte stack alignment; patch code built outside e9compile.sh that touches SIMD or calls libc can corrupt state or crash.",
+    "Coverage is not guaranteed in the default mode: some instructions may silently stay unpatched (1098 of about 1.05e7 failed in the paper), so counts-based tools can under-report.",
+    "File size grows with trampolines (+57.43% for all-jumps instrumentation in the paper with page grouping; +2239.83% without it); higher -c compression levels trade file size for thousands of mmap calls at load.",
+    "-CFR mode is faster but heuristic and may introduce rewriting errors; the default mode is the one the authors call official for benchmarking."
+  ],
+  "pick_this_over_siblings_when": "Pick it over RetroWrite when the binary is non-PIE, C++ or Fortran, or too large for symbolization-based reassembly, accepting higher overhead; pick bpftime or funtrace instead when you only need probes or function tracing and low per-event cost matters.",
+  "verified_claims_summary": "The PLDI 2020 paper ran the prototype on SPEC2006 (non-PIE, Ubuntu 16.04 default gcc/g++/gfortran) on a Xeon Silver 4114 2.20 GHz: empty instrumentation of all jumps cost +110.81% runtime and of all heap writes +64.71%, with about 113% on Chrome and 46% on Firefox (Dromaeo DOM). The Dyninst (~70%), PEBIL (+62%) and Multiverse (+60.48%) figures are quoted from those tools' papers, not measured side by side, and the paper itself says inlining rewriters generally perform better; the README says today's -O2 output is sometimes 2x faster than the prototype, which is unmeasured here.",
+  "status_note": "Actively maintained (last commit 2026-06-28, 1.2k stars, 4 open issues) and used by several research tools; GPL-3.0 with some MIT files, so linking it into a closed tool needs care, but patched output binaries are standalone.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/GJDuck/e9patch/HEAD/README.md",
+    "https://raw.githubusercontent.com/GJDuck/e9patch/HEAD/doc/e9tool-user-guide.md",
+    "https://raw.githubusercontent.com/GJDuck/e9patch/HEAD/build.sh",
+    "https://github.com/GJDuck/e9patch/issues",
+    "https://raw.githubusercontent.com/gaoxiang9430/gaoxiang9430.github.io/HEAD/papers/PLDI20.pdf"
+  ],
+  "confidence": 0.75
+}

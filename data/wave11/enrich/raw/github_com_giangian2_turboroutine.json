@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/giangian2/turboroutine",
+  "one_liner": "Small x86-64 Linux C library for stackful coroutines with an assembly context switch; README claims about 70x faster round trips than swapcontext.",
+  "what_it_does": "Stackful coroutines for C11 on x86-64 System V Linux: a coroutine can yield from any call depth and be resumed later by any thread. The API is co_pool_create / co_create(pool, fn, arg) / co_resume(co, value) / co_yield(value) / co_destroy, with uint64_t values passed both ways, plus an inline co_checkpoint() for cooperative time slicing every CO_BUDGET (default 1024) calls. It is a different interface from ucontext (no makecontext/swapcontext pair, no signal-mask handling) and has no scheduler; the caller writes the run loop.",
+  "how_it_is_fast": "The switch is a hand-written assembly routine that saves only the callee-saved registers (rbx, rbp, r12-r15) plus MXCSR and the x87 control word on the current stack, swaps rsp through the 64-byte header, and returns. Unlike glibc swapcontext it makes no sigprocmask system call. The running coroutine is found by masking rsp, since every 64 KB slot is aligned to 64 KB and the header sits at the top: (rsp | 0xFFFF) - 63. This takes two instructions, reads no thread-local storage, and lets GCC hoist co_current() out of loops, so the co_checkpoint() fast path is a load, a decrement, a store and a branch.",
+  "when_to_use": [
+    "x86-64 Linux C code that needs generators or pipelines yielding from deep call stacks, where ucontext's per-switch syscall shows up",
+    "Slicing long CPU-bound loops (graph traversals, as in the author's TurboGraph) into short cooperative pieces on a worker pool, with one co_checkpoint() line per loop",
+    "Work-stealing or migrating schedulers, where a coroutine is resumed on a thread other than the one that started it (header lookup uses rsp, not TLS)",
+    "Projects that want gdb backtraces through switches (full CFI) and valgrind memcheck/callgrind support for coroutine stacks",
+    "GPL-3.0-compatible codebases small enough to vendor three files"
+  ],
+  "when_not_to_use": [
+    "Anything outside x86-64 System V Linux: no AArch64, macOS or Windows port",
+    "Code needing deep recursion or large stack frames: stacks are fixed at 64 KB minus a 4 KB guard page (compile-time constant in CoroAbi.h)",
+    "When you want an established, faster or permissively licensed switch: minicoro (9 cycles per switch), libaco, Boost.Context or libdill; TurboRoutine is GPL-3.0 with 1 star and 11 commits",
+    "When you need a scheduler, I/O awaiting or channels out of the box: README lists these as roadmap, not implemented",
+    "Switching from signal handlers, or binaries that require CET shadow stacks (the .S file deliberately drops the SHSTK marking, which disables it for the whole linked binary)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (POSIX threads; valgrind headers optional)",
+    "min_toolchain": "C11, gcc (GNU assembler with Intel syntax; uses __has_include and __attribute__((cleanup)))",
+    "platforms": "x86-64 Linux only (System V ABI)",
+    "thread_safety": "co_create/co_destroy lock a pool mutex; a coroutine may migrate between threads but must be resumed by at most one thread at a time, and a scheduler must publish it only after co_resume returns",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "fs (the TLS base) is not switched: after migration errno, pthread_self() and _Thread_local variables belong to the new thread; README says to hold no lock or thread-local address across a yield, but does not discuss TLS addresses the compiler itself may keep across the co_yield call.",
+    "co_destroy does not check state or double release: destroying a running coroutine or releasing a slot twice silently corrupts the free list. Resuming a DONE coroutine traps on ud2.",
+    "co_yield, co_current and co_checkpoint are only valid on a coroutine stack; calling them on a normal thread stack masks rsp into an unrelated address (use co_pool_contains() to check).",
+    "Linking the assembly object drops the GNU property note, so CET shadow stack is disabled for the whole binary, not only the coroutine code."
+  ],
+  "pick_this_over_siblings_when": "Pick it over minicoro or libaco only if you specifically want TLS-free header lookup from rsp (cheap migration across a thread pool) plus built-in co_checkpoint slicing, and GPL-3.0 is fine; for raw switch speed minicoro (9 cycles vs 352 for ucontext) and libdill (about 16 ns) report better numbers, and libaco and libcopp are far more mature.",
+  "verified_claims_summary": "First-party README table only: on an Intel Core i5-7200U under WSL2 with gcc 13.3 -O2, a resume-plus-yield round trip takes about 30 ns versus about 2 us for glibc swapcontext (about 70x) and about 83 us for a two-thread condition-variable handoff. The switch benchmark source is not in the repo (src/main.c is a self-checking demo of 256 coroutines on 4 workers), and the README itself says WSL2 inflates the syscall cost of both baselines.",
+  "status_note": "Active (last commit 2026-09-18) but a one-person project with 1 star, 11 commits and no issues filed; GPL-3.0 and about 400 lines, so easy to read and vendor if the license fits.",
+  "sources_read": [
+    "https://github.com/giangian2/TurboRoutine",
+    "https://raw.githubusercontent.com/giangian2/TurboRoutine/HEAD/README.md",
+    "https://raw.githubusercontent.com/giangian2/TurboRoutine/HEAD/src/coro_x86_64.S",
+    "https://raw.githubusercontent.com/giangian2/TurboRoutine/HEAD/src/coro.c",
+    "https://raw.githubusercontent.com/giangian2/TurboRoutine/HEAD/include/Coro.h",
+    "https://raw.githubusercontent.com/giangian2/TurboRoutine/HEAD/include/CoroAbi.h"
+  ],
+  "confidence": 0.7
+}
