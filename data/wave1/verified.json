@@ -6980,11 +6980,13 @@
     "tradeoffs": "C API (manual pattern/match-data lifetime management, no RAII) vs std::regex's C++ object model; PCRE (Perl-compatible) syntax has some divergences from the ECMAScript grammar std::regex uses; JIT compilation is an optional extra build/runtime step that widens the speed gap further but adds complexity; requires linking an external C library instead of header-only stdlib usage.",
     "caveats": "This benchmark only exercises libstdc++'s std::regex (g++ 7.5.0 inside a Linux container); libc++ and MSVC STL are not tested, so the win is not shown against all three stdlib implementations. Patterns are simple (email/URI/IPv4) over one fixed text corpus, not a broad workload. A separate, less-detailed independent shootout (github.com/xis19/regexp_benchmark, opened this session) shows the same qualitative gap for the older PCRE (8.38, pre-PCRE2) vs std::regex on 10 small patterns, but without stated compiler/hardware, so it is not used as primary evidence here.",
     "found_via": [
-      "Independent benchmark suites and blogs (shootouts): seed query \"regex engine benchmark comparison std::regex PCRE2\" surfaced github.com/mariomka/regex-benchmark; confirmed with query \"regex-benchmark mariomka std::regex PCRE2 RE2 Rust Boost\" and by reading README.md and run-benchmarks.php directly."
+      "Independent benchmark suites and blogs (shootouts): seed query \"regex engine benchmark comparison std::regex PCRE2\" surfaced github.com/mariomka/regex-benchmark; confirmed with query \"regex-benchmark mariomka std::regex PCRE2 RE2 Rust Boost\" and by reading README.md and run-benchmarks.php directly.",
+      "seed-list mining backfill: awesome-cpp 'Regular Expression' and awesome-c 'Regex' listings for PCRE (pcre.org); numbers from the mariomka/regex-benchmark README after a WebSearch for 'PCRE2 JIT vs std::regex benchmark times faster'"
     ],
     "is_evidence_for_known": false,
     "confidence": 0.85,
     "assignment_ids": [
+      "w1-mine-ab",
       "w1-regex-shootouts"
     ],
     "id": "https://github.com/pcre2project/pcre2",
@@ -7969,6 +7971,78 @@
     "corrected_fields": {
       "claimed_speedup": "~2.85x faster parsing (675ns vs 1928ns on parse_test), 2.9x on deep_test (226ns vs 659ns), 3.25x on round_trip_test (1309ns vs 4258ns), 1.6x on json_test_suite (10462ns vs 16617ns); also ~10x faster compile time (~120ms vs 1200ms+) and ~100x fewer source lines (233 vs 24,766)",
       "caveats": "First-party benchmark run by the author on the author's own hardware; no independent reproduction found. The author's own README flags that json_test_suite() shows an unexplained 39x gap on one sub-metric ('we haven't figured out how to explain yet'), so treat headline ratios with some caution even though compiler/flags/CPU are fully disclosed and benchmark code ships in-repo."
+    }
+  },
+  {
+    "name": "pbtools",
+    "repo_url": "https://github.com/eerimoq/pbtools",
+    "language": "C",
+    "domain": "stdlib-replacements",
+    "category": "serialization-json",
+    "baseline": "Google Protocol Buffers C++ (libprotobuf 3.6.1) and protobuf-c",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Encode and decode of two protobuf messages from a proto derived from Google's protobuf benchmark messages (benchmark/benchmark.proto, java_package com.google.protobuf.benchmarks): 'Message' wrapping Message1 with a 566-byte wire size and Message3 with a 106-byte wire size, 2,000,000 iterations each, per library; whole-process time per row.",
+    "claimed_speedup": "Encoding (Message plus Message3, 2,000,000 iterations each): pbtools -O2 1.457 s vs Google protobuf C++ -O3 2.231 s (about 1.53x, derived from page data) and vs protobuf-c -O3 1.892 s (about 1.30x, derived from page data). Decoding: pbtools -O2 1.594 s vs Google -O3 1.997 s (about 1.25x, derived from page data) and vs protobuf-c -O3 2.508 s (about 1.57x, derived from page data). With -O2 -flto pbtools encodes in 1.319 s and decodes in 1.239 s. At -Os pbtools encodes in 3.398 s, slower than protobuf-c -Os (1.970 s) but faster than Google -Os (3.713 s); at -Os pbtools decodes in 1.749 s vs Google 2.350 s and protobuf-c 2.609 s. An earlier run (September 2019, all at -O3, replaced in commit 6000b5f) had pbtools at 1.118 s encode and 1.069 s decode.",
+    "evidence_tier": "A",
+    "benchmark_url": "https://github.com/eerimoq/pbtools/blob/master/benchmark/README.rst",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "gcc/g++ 8.3.0 with -ffunction-sections -fdata-sections -Wl,--gc-sections (benchmark/common.mk); per-row flags in the README tables: pbtools -O2, -O2 -flto, -Os, -Os -flto; protobuf-c -O3, -O3 -flto, -Os, -Os -flto (libprotobuf-c linked statically); Google -O3 and -Os (generated code and main only, linked against a shared libprotobuf 3.6.1 whose own build flags are not stated). The -O3 rows come from the September 2019 run when common.mk had OPT_SPEED = -O3; commit 6000b5f (2020-01-16) switched OPT_SPEED to -O2 and re-ran only pbtools, nanopb and flatbuffers.",
+    "hardware": "Intel(R) Core(TM) i7-4510U CPU @ 2.00GHz",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2023-06-04",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "82 stars",
+    "has_code": true,
+    "tradeoffs": "Generates C source from proto3 files with a Python generator; no malloc/free, all allocations come from a caller-supplied workspace (arena) that cannot be freed, so repeated-field lengths cannot change after allocation; generates functions instead of tables, so executable size grows faster than table-driven libraries (README: text 17484 B vs nanopb 21256 B for the benchmark program, but growth is steeper); proto3 only, options, services (gRPC), reserved fields and public imports are not implemented; char must be 8 bits.",
+    "caveats": "Benchmark is first-party, single run per row, no variance reported, small messages only, and the toolchain is old (gcc 8.3.0, Google libprotobuf/libprotoc 3.6.1 as a distro shared library, protobuf-c version not stated). The headline mixes two runs: the Google and protobuf-c -O3 rows date from September 2019 (common.mk then had OPT_SPEED = -O3), while the pbtools -O2 rows come from a January 2020 re-run (commit 6000b5f switched to -O2 and the top-level benchmark Makefile only rebuilds nanopb and pbtools), so the baselines were not re-measured against the pbtools version shown; the current Makefiles would build every library at -O2. Harness differences favour pbtools: its encode loop fills a fixed stack workspace and stores pointers to string literals, Google's encode loop constructs a fresh heap-allocated benchmark::Message every iteration (no Arena, although the proto sets cc_enable_arenas) and copies both ~230-byte strings before SerializeToString into a std::string, and protobuf-c encodes through pack_to_buffer with a ProtobufCBufferSimple callback rather than its direct pack() call (stack structs, no malloc on encode). On decode protobuf-c mallocs and frees the whole message tree per iteration (unpack with the default allocator), Google reuses one message object, and pbtools copies strings into its arena workspace. At -Os pbtools encoding is slower than protobuf-c (3.398 s vs 1.970 s). FlatBuffers decodes in 0.100 s (-O2) only because it decodes lazily. The repo's guessed baseline (msgpack) is wrong: msgpack is not in the benchmark. No commits since 2023-06-04.",
+    "found_via": [
+      "seed-list mining backfill: awesome-c#Serialization entry 'pbtools' (https://github.com/oz123/awesome-c#Serialization); started from https://github.com/eerimoq/pbtools README link to benchmark/README.rst"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.8,
+    "assignment_ids": [
+      "w1-mine-aa"
+    ],
+    "id": "https://github.com/eerimoq/pbtools",
+    "verification": {
+      "date": "2026-09-23",
+      "verdict": "confirm",
+      "tier_before": "A",
+      "tier_reason": "Public benchmark code in the repo (benchmark/pbtools/main.c, benchmark/google/main.cpp, benchmark/protobuf-c/main.c with their Makefiles and benchmark/common.mk), gcc 8.3.0, per-row optimization flags and the CPU (Intel Core i7-4510U @ 2.00GHz) are all stated in benchmark/README.rst, and the rows compare directly against Google protobuf C++ and protobuf-c. The -O3 baseline flags are also in public git history (common.mk had OPT_SPEED = -O3 until commit 6000b5f).",
+      "notes": "All headline numbers match benchmark/README.rst exactly and the derived ratios check out. Shortcomings to record: baseline rows (Google, protobuf-c at -O3) are from a September 2019 run not repeated when pbtools was re-measured at -O2 in January 2020; Google's encode loop builds a fresh heap message per iteration without an Arena and protobuf-c uses the slower pack_to_buffer path; first-party single run on gcc 8.3.0 and protobuf 3.6.1; pbtools loses to protobuf-c on -Os encoding; abandoned since 2023-06-04 (MIT, 82 stars, not a fork, not archived).",
+      "urls_opened": [
+        "https://github.com/eerimoq/pbtools",
+        "https://github.com/eerimoq/pbtools/commits",
+        "https://github.com/eerimoq/pbtools/tree/master/benchmark",
+        "https://github.com/eerimoq/pbtools/commits/master/benchmark/common.mk",
+        "https://github.com/eerimoq/pbtools/commits/master/benchmark/README.rst",
+        "https://github.com/eerimoq/pbtools/commit/6000b5f",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/README.rst",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/common.mk",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/Makefile",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/google/Makefile",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/protobuf-c/Makefile",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/pbtools/Makefile",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/pbtools/main.c",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/google/main.cpp",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/protobuf-c/main.c",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/benchmark.proto",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/lib/src/pbtools.c",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/README.rst"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Encoding: pbtools -O2 1.457 s vs Google protobuf C++ -O3 2.231 s (about 1.53x faster, derived from page data) and vs protobuf-c -O3 1.892 s (about 1.30x, derived from page data). Decoding: pbtools -O2 1.594 s vs Google -O3 1.997 s (about 1.25x, derived from page data) and vs protobuf-c -O3 2.508 s (about 1.57x, derived from page data). With -O2 -flto pbtools encodes in 1.319 s and decodes in 1.239 s. At -Os pbtools is not ahead on encoding (3.398 s vs protobuf-c 1.970 s, Google 3.713 s).",
+      "compiler_and_flags": "gcc 8.3.0; per-row flags in the README tables: pbtools -O2 / -O2 -flto / -Os / -Os -flto, protobuf-c and Google -O3 / -Os (protobuf-c also -flto); common CFLAGS -ffunction-sections -fdata-sections -Wl,--gc-sections (benchmark/common.mk)",
+      "workload": "Encode and decode of two protobuf messages from Google's benchmark proto ('Message' wrapping Message1 with 566-byte wire size, and Message3 with 106-byte wire size), 2,000,000 iterations each, per library.",
+      "caveats": "Benchmark is first-party and the toolchain is old (gcc 8.3.0, Google protobuf C++ libprotoc 3.6.1, protobuf-c version not stated), so the Google C++ numbers predate current protobuf releases. The README rows list -O3 for Google and protobuf-c, but the committed benchmark/common.mk sets OPT_SPEED = -O2, so the exact flags per row could not be reproduced from the Makefiles alone. The libraries use different memory models: pbtools builds and decodes into a fixed stack workspace with no malloc, protobuf-c mallocs and frees per iteration, Google C++ reuses one message object on decode and serializes to std::string; the encode loops include building the message, so the comparison favours the arena design. The headline win vanishes at -Os (pbtools encode 3.398 s vs protobuf-c 1.970 s). FlatBuffers decodes in 0.100 s (-O2) but only because it decodes lazily and the benchmark uses fields once. Single machine, single run per row, no variance reported, small messages only. The repo's guessed baseline (msgpack) is wrong: msgpack is not in the benchmark. Project has had no commits since 2023-06-04."
     }
   },
   {

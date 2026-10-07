@@ -1,1 +1,2 @@
 - Quex (sourceforge.net/projects/quex): directly coded lexer generator, claims 2-2.5x over flex (17.4 vs 35-43 cycles/char on Linux kernel source, snippet only). Not catalogued (enricher lead, 2026-10-07).
+- PCRE2 retier lead (https://github.com/PCRE2Project/pcre2, regex-engines incumbent): mariomka/regex-benchmark shows PCRE2 at 251.37 ms vs libstdc++ std::regex 1023.49 ms by default, 87.87 ms with JIT on the optimized branch vs 1021.10 ms; independent harness with public code, check whether the wave 3 record's tier should move (w1-mine-ab backfill, 2026-10-07).
