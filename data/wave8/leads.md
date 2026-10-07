@@ -133,3 +133,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - lleaves (siboehm/lleaves): LLVM compiler for LightGBM models, claims faster prediction than LightGBM. Not catalogued (enricher lead, 2026-10-07).
 - treelite (dmlc/treelite): model compiler for decision-tree ensembles. Not catalogued.
 - XGBoost-FastForest (guitargeek/XGBoost-FastForest): minimal C++ inference for XGBoost models. Not catalogued.
+- libdivide (ridiculousfish/libdivide): header-only constant division u16-s64 plus SIMD, claims up to 10x/5x over div, has a benchmark program. Not catalogued (enricher lead, 2026-10-07).
+- fast_division (lemire/fast_division): BSD-3; Apple M1 clang 12: 0.31 vs 0.91 ns/op at divisor 19. Not catalogued.

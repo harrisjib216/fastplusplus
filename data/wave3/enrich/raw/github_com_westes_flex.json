@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/westes/flex",
+  "one_liner": "The standard lex-compatible scanner generator; table-driven DFA scanners its author timed 1.5-3.8x faster than AT&T lex in 1988.",
+  "what_it_does": "flex reads a .l file of regular-expression rules with C or C++ actions and emits lex.yy.c, a scanner whose yylex() returns one token per call. The input syntax and generated interface follow POSIX lex (yytext, yyleng, yyin, start conditions, yywrap), so most lex specifications build unchanged; %option reentrant gives a yyscan_t-based API and -+ generates a yyFlexLexer C++ class reading std::istream. It is a generator, not a library: you compile the generated file into your program, optionally linking libfl for default yywrap()/main().",
+  "how_it_is_fast": "All rules are compiled into one deterministic finite automaton, so per-character cost does not depend on the number of rules (the manual: adding rules does not slow the scanner). The default -Cem tables are compressed with equivalence classes (yy_ec), meta-equivalence classes (yy_meta) and a base/def/nxt/chk comb-vector layout that may walk default-state chains per character; -Cf emits a full yy_nxt[state][class] matrix and -CF a per-state transition-record array checked by yy_verify, giving one table load per character (manual FAQ: 'factor of 2-3' over -C). Input is block-buffered (YY_BUF_SIZE defaults to 2*BUFSIZ), -f/-F bypass stdio with read(), and removing every backing-up state lets -Cf/-CF scanners skip backtracking bookkeeping.",
+  "when_to_use": [
+    "Lexing ASCII or byte-oriented languages (C-like source, config files, log and protocol formats, DSLs) inside an existing lex/yacc or Bison toolchain.",
+    "Large keyword-plus-identifier rule sets: run-time cost per character is independent of rule count, and -Cfe is the manual's recommended speed/size compromise for production scanners.",
+    "Keeping existing POSIX lex specifications building on current Linux and BSD systems, where flex is the shipped scanner generator.",
+    "Multi-threaded C programs that need several independent scanners: %option reentrant keeps all state in a yyscan_t, and the manual says any thread may run its own scanner without synchronization.",
+    "When a 2-3x gain over default flex tables is enough and larger tables are acceptable: switch from default -Cem to -Cfe, -Cf or -CF and remove the backing-up states reported by -b."
+  ],
+  "when_not_to_use": [
+    "Unicode-aware lexing: flex processes 8-bit bytes only; UTF-8 has to be written as byte-sequence regexes (the manual supplies one) and there are no Unicode classes or properties.",
+    "Peak throughput: catalogued alternatives beat flex's table-driven loop (LRSTAR claims 2x flex-generated lexers; simd-lexing reports 34 ms against 231 ms for default flex and 102 ms for flex --fast; StreamTok claims 2-3x).",
+    "Specifications that rely on REJECT, variable-length trailing context or long newline-spanning tokens under yylineno: the manual ranks these as the most expensive features, REJECT cannot be combined with -f/-F, and -l lex-compat costs 'a considerable amount of performance' and rules out -Cf/-CF/-f/-F/-+.",
+    "Inputs with many NUL bytes or very large single tokens: NUL matching is substantially slower, and growing yytext past roughly 8K characters rescans the whole token from its start.",
+    "Rule sets with large bounded repetitions: generation time can explode (open issue #326: ([a-f]|[x-z]){1,256}[x]{1,1024} takes 45 s, real cases 15 minutes) and specifications above 32000 NFA states are rejected (open issue #572)."
+  ],
+  "integration": {
+    "form": "source-drop (code generator: flex emits lex.yy.c or lex.yy.cc that you compile; optional libfl static library supplies default yywrap()/main())",
+    "dependencies": "Generated scanner: C standard library only (std::istream/ostream for the -+ C++ class; read() with -Cr/-f/-F). The flex tool needs m4 on PATH at generation time; building flex from git needs Autoconf 2.62+, gettext 0.19.6 and the autotools chain (release tarballs ship intermediate files prebuilt).",
+    "min_toolchain": "Generated code is C99 (the manual says flex emits C99 function definitions only; K&R output was removed); the C++ class needs a standard C++ compiler with <iostream>.",
+    "platforms": "Any platform with a C99 compiler for the generated scanner (portable tables, no architecture-specific code); the flex tool targets POSIX-like systems.",
+    "thread_safety": "Default scanners keep state in globals and are not thread-safe. %option reentrant (-R) puts state in a yyscan_t and the manual calls such scanners safe in separate threads without synchronization (one scanner per thread); each C++ yyFlexLexer object holds its entire scanning state.",
+    "drop_in_for_baseline": "partial — accepts POSIX lex input and generates the lex interface (yylex, yytext, yyleng, yywrap); -l/%option lex-compat gives closer but explicitly not full AT&T lex compatibility, at a considerable speed cost and without -Cf/-CF/-f/-F/-+."
+  },
+  "gotchas": [
+    "The fastest modes have sharp edges: -Cf/-CF default to 7-bit tables unless flex was configured otherwise, and the manual says 7-bit scanners 'often hang or crash' on 8-bit input (pass -8 or use -Cfe/-CFe); open issue #628 (February 2024, no fix or maintainer reply) reports an AddressSanitizer global-buffer-overflow in -CF -8 scanners on the two-byte input 0x00 0xFF, inside the yy_verify transition loop.",
+    "Table speedups only show if every backing-up state is removed (run -b, add error or catch-all rules); leaving one gives no gain. -CF and -F cannot be used with the -+ C++ class, and the C++ class is still documented as experimental; the default error handlers (YY_FATAL_ERROR, LexerError) exit the process.",
+    "The last release is 2.6.4 (6 May 2017), which distributions ship; master's manual documents unreleased work (an --emit back-end switch with a c99 back end, yybegin()/yyecho()/yyreject() replacing BEGIN/ECHO/REJECT, which remain in the C/C++ back end), so check documentation against the installed version.",
+    "Regenerate scanners produced by flex 2.5.36 to 2.6.0: CVE-2016-6354 is a heap overflow in the generated yy_get_next_buffer, fixed in 2.6.1. Section-1 code and actions pass through m4, so '[[', ']]' and m4_ names in user code are mangled."
+  ],
+  "pick_this_over_siblings_when": "Pick flex when you need a POSIX lex-compatible generator that every Unix and Bison toolchain already supports; LRSTAR (claimed 2x faster lexers) and StreamTok (claimed 2-3x) are niche or research tools and simd-lexing is an experiment, not a generator. Pick logos (Rust), Accelerated-Zig-Parser-style SIMD tokenizers or a hand-written lexer (as CrossDB did) when throughput matters more than lex compatibility.",
+  "verified_claims_summary": "The only numbers are first-party and from 1988: Vern Paxson's comp.compilers post 88-04-001 (re-posted as 'old timings' in 90-11-063, November 1990) timed a C tokenizer with keywords on a 28,088-line, 685K-character input on a Sun 3/60: AT&T lex 29.8 s against flex 19.3 s with default tables (about 1.5x), 9.0 s with -cfe (3.3x) and 7.8 s with -cf (3.8x), user plus system CPU, identifier hashing excluded, compiler not stated. The same snippet lists object sizes (lex 41.0K, flex 9.4K, -cfe 49.6K, -cf 126.5K) and generation times (lex 83.0 s, flex 3.9 s, -cfe 7.1 s, -cf 15.0 s), so the 3.8x mode costs about 3x lex's object size; all of it is WebSearch snippet text because compilers.iecc.com is blocked here.",
+  "status_note": "Maintained in the sense of dependency bumps and occasional fixes (last commit 30 July 2026, last code fix May 2026) with no release since 2.6.4 in May 2017; the licence is flex's BSD variant (source files now carry SPDX BSD-3-Clause-flex), and the tool is ubiquitous and safe to depend on, but the speed claim rests on a 1988 first-party snippet with no benchmark code to audit and no modern flex-against-lex measurement was found, so treat it as historical.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/westes/flex/HEAD/README.md",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/NEWS",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/doc/flex.texi",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/COPYING",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/src/gen.c",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/src/cpp-flex.skl",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/src/c99-flex.skl",
+    "https://raw.githubusercontent.com/westes/flex/HEAD/src/FlexLexer.h",
+    "https://github.com/westes/flex/releases",
+    "https://github.com/westes/flex/commits/master",
+    "https://github.com/westes/flex/issues?q=is%3Aissue+performance",
+    "https://github.com/westes/flex/issues?q=is%3Aissue+CVE",
+    "https://github.com/westes/flex/issues/628",
+    "https://github.com/westes/flex/issues/326",
+    "WebSearch snippets for https://compilers.iecc.com/comparch/article/88-04-001 and https://compilers.iecc.com/comparch/article/90-11-063 (pages EGRESS_BLOCKED)",
+    "WebSearch snippets for CVE-2016-6354 (security-tracker.debian.org, ubuntu.com)"
+  ],
+  "confidence": 0.7
+}

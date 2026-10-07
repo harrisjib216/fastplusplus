@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/fastlib/fcwt",
+  "one_liner": "Single-precision Morlet continuous wavelet transform on FFTW, OpenMP and AVX; README times it 10-120x faster than other CWT libraries.",
+  "what_it_does": "Computes a continuous wavelet transform (scalogram) of a real or complex float signal with a Morlet wavelet over a linear-frequency, linear-scale or log-scale grid, writing an fn x n matrix of complex<float>. In C++ you build a Morlet(sigma), a Scales(wavelet, type, fs, f0, f1, fn) and an FCWT(wavelet, threads, use_wisdom, normalize) object, then call cwt(input, n, output, &scales); the pip package (SWIG) and MATLAB MEX files expose the same calls. It is not a drop-in for pywt.cwt or MATLAB cwt: Morlet only, float only, and its own scale and normalization conventions.",
+  "how_it_is_fast": "Scale-independent work is done once per call: one real-to-complex FFTW transform of the signal zero-padded to the next power of two, and one frequency-domain Morlet table of that padded length. Each scale then costs an AVX-vectorized multiply that samples the shared table by nearest index (no per-scale exp calls) over only the bins below twice the scale's centre frequency, followed by one inverse complex FFT. FFTW runs multithreaded through OpenMP with plans tuned ahead of time and saved as wisdom files (n<N>_t<threads>.wis), and the multiply is split across OpenMP threads.",
+  "when_to_use": [
+    "Dense time-frequency maps (hundreds to thousands of frequencies, tens of voices per octave) of long float signals, 10^4 to 10^6 samples: EEG/LFP, audio, vibration scalograms.",
+    "Repeated transforms at a fixed padded length and thread count, where FFTW wisdom computed once with -fcwtoptimize (MEASURE, PATIENT or EXHAUSTIVE) is reused on every call.",
+    "Replacing PyWavelets, SciPy or ssqueezepy Morlet CWTs in Python when single precision is acceptable (README: Python wrapper 0.66 s vs PyWavelets 12.69 s at 100k samples x 3000 frequencies, with different settings per row).",
+    "x86-64 desktops or servers with AVX and around 8 cores; 8 threads was the README setting and the best count reported in issue #83 on a 32-thread Ryzen 9 7945HX."
+  ],
+  "when_not_to_use": [
+    "Coarse frequency grids (about 2 voices per octave or fewer): the work buffer is not cleared between scales, so higher-frequency content leaks into lower rows (see gotchas).",
+    "You need double precision, wavelets other than Morlet (issue #60 open), an inverse transform (issue #36 open) or a sample-by-sample streaming CWT (issue #61 open).",
+    "Non-x86 or non-AVX targets: CMakeLists.txt and setup.py hard-code -mavx (/arch:AVX on MSVC); Apple Silicon users report failures (#37 illegal hardware instruction, #69 missing _omp_get_max_threads), and PyPI's latest fcwt 0.1.18 (March 2023) ships only a cp310 macOS x86-64 wheel.",
+    "Long-running services calling cwt() in a loop: every call leaks the padded-length mother table and a padded-length scratch buffer (about 1.5 MB per call at 100k samples).",
+    "Products that cannot take GPL code: the default build links the prebuilt FFTW3f binaries bundled in libs/."
+  ],
+  "integration": {
+    "form": "shared lib by default (BUILD_SHARED_LIBS=ON) or static lib; also a pip package (SWIG extension) and MATLAB MEX files",
+    "dependencies": "FFTW 3.3+ single precision with OpenMP threads (prebuilt fftw3f and fftw3f_omp binaries for macOS, Linux and Windows are bundled in libs/ unless USE_OWN_FFTW=ON; the README says self-built FFTW needs OpenMP and AVX enabled to match the benchmark), OpenMP runtime (libomp or libgomp); Python wrapper needs NumPy and matplotlib",
+    "min_toolchain": "C++17, CMake 3.10+, GCC 10+, Clang or MSVC 15.7+, OpenMP 5 (README)",
+    "platforms": "x86-64 with AVX (flags hard-coded for Unix and MSVC); the source has a scalar fallback path but the build files must be edited to use it; README says tested on macOS (Intel and Apple Silicon), Windows 10 and Ubuntu 20.04, while issues report Apple Silicon failures",
+    "thread_safety": "not documented; cwt() calls omp_set_num_threads, fftwf_init_threads, fftwf_plan_with_nthreads and the FFTW planner (process-global, not thread-safe) and stores the signal length in the object, so serialize calls",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stale spectrum between scales (found by reading src/fcwt/fcwt.cpp at HEAD; not reported upstream): the frequency-domain buffer O1 is zeroed once per cwt() call, but each scale writes only the bins below its own endpoint (min(N/2, 2N/scale)) and scales run from smallest to largest, so bins above the current endpoint still hold earlier scales' products when the inverse FFT runs. A numpy model of the loop written for this review shows the effect is negligible on dense grids (benchmark.cpp's 300 log scales with Morlet(1.0): below 5e-8 relative; the README Python example: 2e-4 on its lowest row), but at 1 voice per octave a pure 64 Hz tone appears in the 32, 16 and 8 Hz rows at 96% of its own row's magnitude (about 6e-5 with the buffer cleared), and at 2 voices per octave with Morlet(1.0) at 3.3%. Rows whose scale exceeds twice the padded length get no bins and repeat the previous row, and the per-thread split (endpoint/4 divided by threads, integer division) also skips up to threads-1 AVX vectors at each band's top.",
+    "Odd signal lengths (code reading, not reproduced): each row's inverse FFT is written straight into the n-strided output and fftbased() first passes the row pointer through std::align(16, ...); with odd n every other row starts 8 bytes off a 16-byte boundary, so that row is written one sample late and its first sample is the previous row's padding tail. Each inverse FFT also writes the whole padded length past its row into the next row, which is why rows must be computed in order and the last row goes through a temporary buffer.",
+    "Housekeeping bugs: Morlet::generate() mallocs a new mother table on every cwt() call without freeing the old one, and convolve() never frees lastscalemem (issue #74 was closed in January 2025 but HEAD still lacks the free). Wisdom files are read from and written to the current working directory; a missing file only prints a warning and falls back to FFTW_ESTIMATE plans (issue #30). Python fcwt.cwt() defaults to nthreads=1 and fast=False (no wisdom), and fcwt.plot() at HEAD calls _plot() with one positional argument missing.",
+    "Benchmark harness: the Rwave (C) and Wavelib (C++) rows run double precision on one thread, and src/rwave-bench.cpp uses a Numerical Recipes four1 radix-2 FFT with a malloc per transform, so much of the 62.75x is FFTW against a textbook FFT. benchmark.cpp hard-codes 300 log scales (the 3000-frequency columns need a source edit), uses Morlet(1.0), times wisdom-file reads and planning inside every call, and never compares outputs. The Python notebook (benchmark.ipynb) used FFTW_MEASURE wisdom, linear frequencies 1-101 Hz at fs=100 (above Nyquist; the Scales check is only an assert) and a 3000 x 100k output array for the 10k-sample case."
+  ],
+  "pick_this_over_siblings_when": "No other CWT library is catalogued; the fft siblings (KFR, PocketFFT, VkFFT and others) are transform engines a CWT is built on. Pick fCWT when you want a ready Morlet scalogram on x86 CPUs with dense grids; build your own filter bank on PocketFFT or KFR for double precision, other wavelets or non-AVX targets, or on VkFFT/cuFFT for GPU batches.",
+  "verified_claims_summary": "On a 2019 MacBook Pro (Core i9 2.3 GHz, 8 threads, single-precision FFTW with OpenMP and AVX, exhaustive wisdom, -O2 -mavx, compiler not stated), fCWT computed a Morlet CWT of 100k samples x 3000 frequencies in 0.32 s against 3.40 s for CCWT, 12.69 s for PyWavelets 1.1.1, 23.22 s for Rwave and 45.04 s for Wavelib; the README's speedup column divides by 0.37 s, and at 10k samples x 300 frequencies the lead over CCWT is only about 3.8x (derived from page data). Rwave and Wavelib ran single-threaded in double precision, the Python, MATLAB and Mathematica rows ran through their interpreters, and no output equivalence was checked.",
+  "status_note": "Stale: last commit 2025-01-06 (two merged cleanup and plotting PRs), last PyPI release 0.1.18 in March 2023, and recent issues (#66 out-of-band energy, #69, #83) have no maintainer reply; Apache-2.0 source but the default build links bundled GPL FFTW binaries (usability mixed), and the stale-spectrum and odd-length row bugs found here mean results on coarse grids or odd lengths should be checked against a reference CWT.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/README.md",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/setup.py",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/fcwt/fcwt.h",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/fcwt/fcwt.cpp",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/fcwt/boilerplate.py",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/wavelib-bench.cpp",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/rwave-bench.cpp",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/benchmark/README.md",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/src/benchmark/cwtbench.py",
+    "https://raw.githubusercontent.com/fastlib/fCWT/HEAD/benchmark.ipynb",
+    "https://github.com/fastlib/fCWT/tree/main/src/benchmark",
+    "https://github.com/fastlib/fCWT/tree/main/src/fcwt",
+    "https://github.com/fastlib/fCWT/tree/main/libs",
+    "https://github.com/fastlib/fCWT/commits/main",
+    "https://github.com/fastlib/fCWT/issues?q=is%3Aissue",
+    "https://github.com/fastlib/fCWT/issues?page=2&q=is%3Aissue",
+    "https://github.com/fastlib/fCWT/issues/83",
+    "https://github.com/fastlib/fCWT/issues/74",
+    "https://github.com/fastlib/fCWT/issues/66",
+    "https://github.com/fastlib/fCWT/issues/69",
+    "https://github.com/fastlib/fCWT/issues/49",
+    "https://pypi.org/pypi/fcwt/json",
+    "https://pypi.org/pypi/pyfcwt/json"
+  ],
+  "confidence": 0.8
+}

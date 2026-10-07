@@ -1,0 +1,1 @@
+- Quex (sourceforge.net/projects/quex): directly coded lexer generator, claims 2-2.5x over flex (17.4 vs 35-43 cycles/char on Linux kernel source, snippet only). Not catalogued (enricher lead, 2026-10-07).
