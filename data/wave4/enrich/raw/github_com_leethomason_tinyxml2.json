@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/leethomason/tinyxml2",
+  "one_liner": "Small zlib-licensed C++ DOM XML parser; about 1.7x faster than MSXML 6.0 in one vendor test, slower than pugixml/RapidXML.",
+  "what_it_does": "Parses a UTF-8 XML document into a mutable DOM (an XMLDocument that owns XMLElement, XMLText, XMLComment and XMLAttribute objects) that can be navigated, edited and written back to a file or memory; XMLPrinter can also stream XML out without building a DOM. The API is its own (FirstChildElement/NextSiblingElement, Attribute, typed QueryIntText/QueryDoubleAttribute-style accessors, XMLHandle for null-safe chaining, an XMLVisitor), not the W3C DOM that MSXML exposes, so moving off MSXML means rewriting call sites. It does not handle DTDs, XSLT, XPath, schema validation, namespace processing (':' is just a name character) or any encoding other than UTF-8.",
+  "how_it_is_fast": "The whole input is read (LoadFile) or memcpy'd (Parse) into one owned buffer and parsed in place by a recursive-descent parser: StrPair records start/end pointers into that buffer, and entity decoding and newline normalization run lazily and in place only when a string is first read (StrPair::GetStr). Nodes and attributes come from per-type fixed-size free-list pools carved from 4 KB blocks (MemPoolT) rather than one heap allocation per node, and the library uses no standard-library containers. The scanning loops are plain byte-at-a-time code (ctype isspace/isalpha, strncmp against end tags) that also counts line numbers for every node, with no SIMD or lookup tables, which is why pugixml and RapidXML outrun it.",
+  "when_to_use": [
+    "Config files, game assets, level data and service payloads up to tens of MB, where a simple editable DOM and round-trip writing matter more than raw parse throughput.",
+    "Replacing MSXML (Windows-only COM) or TinyXML-1 in portable C++: one .h/.cpp pair, zlib licence, no exceptions, no RTTI, no standard-library containers.",
+    "Parsing untrusted input where you want error line numbers on every node and a built-in nesting limit (TINYXML2_MAX_ELEMENT_DEPTH = 500) that returns XML_ELEMENT_DEPTH_EXCEEDED instead of overflowing the stack.",
+    "Generating XML with XMLPrinter to a FILE* or memory buffer, with or without a DOM."
+  ],
+  "when_not_to_use": [
+    "Throughput-bound parsing: in the same maxdz tables RapidXML is about 4.4x and pugixml about 6.0x faster than TinyXML-2 at 800 MB, and in the siximapala CSV pugixml reads 10 MB in 18-20 ms vs 65-102 ms (derived from page data).",
+    "Multi-GB documents: in the 2021 maxdz tables it used 5477.5 MB for an 800 MB file and 9601.6 MB for 1.5 GB (more than MSXML) and crashed on the 2.0 GB and 2.7 GB dumps that MSXML parsed; use a streaming parser such as Expat or yxml.",
+    "Documents that need DTDs, external entities, XPath, XSLT, schema validation, namespaces or UTF-16 input.",
+    "Concurrent reads of one shared XMLDocument from several threads without a lock: the first read of a string writes into the document buffer.",
+    "Code that needs a stable API or ABI: the README says the major version changes fairly rapidly and API changes are common (the current tag is 11.0.0)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C runtime only); CMake and meson builds and a vcpkg port are provided, and it can be built as a static or shared library",
+    "min_toolchain": "C++11 in practice (the header uses override unconditionally; the CMake build does not enforce a standard); MSVC, GCC and Clang",
+    "platforms": "any (portable C++, no SIMD or architecture-specific code); 64-bit file sizes through _fseeki64/fseeko since PR #787 (merged 2020-03-10)",
+    "thread_safety": "Not documented. There is no locking; separate XMLDocument objects can be used on separate threads (the only mutable global is XMLUtil::SetBoolSerialization, which the header calls 'not thread safe'), but even const reads of one document mutate its buffer (mutable StrPair with lazy GetStr), so a shared document needs external locking.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Typed accessors (QueryDoubleText, DoubleAttribute, QueryIntAttribute and friends) go through sscanf and snprintf, so they are slow and depend on the C locale: under a comma-decimal locale a value like 1.5 can read back as 1 (issue #160, open since 2014).",
+    "XMLDocument::Parse(const char*, size_t) allocates and memcpy's the entire input before parsing, so peak memory is the caller's buffer plus TinyXML-2's copy plus the node pools; LoadFile reads straight into the owned buffer and avoids the duplicate. Assertions (TIXMLASSERT) compile to nothing outside debug builds.",
+    "Each new attribute is checked for duplicates by scanning the element's attribute linked list, so an element with k attributes costs O(k^2) name compares while parsing; Attribute(name) and FirstChildElement(name) are linear scans, and XMLNode::DeepClone recursion is unbounded (issue #839, open).",
+    "Harness notes for the numbers: the maxdz raw-parse column says only Parse() is timed for TinyXML-2, but that call includes allocating and copying the whole input, and the Task-Manager memory figure probably counts both the harness buffer and TinyXML-2's copy, while MSXML's timed scope is unstated, so the 1.7x ratio's bias cannot be signed. The project's own timer in xmltest.cpp prints 'milli-seconds' but on non-MSVC builds divides raw clock() ticks by the loop count without CLOCKS_PER_SEC, so on POSIX the printed figure is microseconds, 1000x too large."
+  ],
+  "pick_this_over_siblings_when": "Pick TinyXML-2 over RapidXml (externpro), LightningXML or zxml when you want an actively patched, easy-to-learn editable DOM with error line numbers and a nesting limit and parse speed is secondary; for throughput use RapidXml or a pugixml-class parser, and for multi-GB files use a streaming parser such as Expat or yxml, since TinyXML-2 was the slowest DOM parser in both third-party tables found and the most memory-hungry in the maxdz one.",
+  "verified_claims_summary": "A competing vendor's README (maxdz mdz_xml) timed a TinyXML-2 snapshot of 23.03.2021 (between tags 8.0.0 and 8.1.0) against MSXML 6.0 on March 2021 Wikidata stub dumps on an Intel i5-6600 under Windows 10 with VC++ toolset v100 x64, optimization flags unstated: TinyXML-2's Parse() took 7.42 s vs 12.94 s at 800 MB and 12.96 s vs 22.53 s at 1.5 GB (about 1.7x), and load-parse-unload was about 1.8x faster warm and 1.5x faster cold (derived from page data). The same tables show TinyXML-2 using about 1.6x MSXML's memory and crashing on the 2.0 GB and 2.7 GB files; no standard-library baseline applies and the project itself publishes no numbers.",
+  "status_note": "Actively maintained (latest tag 11.0.0 from March 2025, which includes the CVE-2024-50615 fix from 10.1.0; master gained further GetCharacterRef hardening in #1067 and a destructor speedup in #1075 in May 2026 that are not yet released), and its zlib licence and two-file layout make it trivial to vendor, but the speed evidence is a single unreproducible 2021 vendor table in which it is slower than pugixml and RapidXML.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/readme.md",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/tinyxml2.h",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/tinyxml2.cpp",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/xmltest.cpp",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/meson.build",
+    "https://raw.githubusercontent.com/leethomason/tinyxml2/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/maxdz-gmbh/mdz_xml/HEAD/README.md",
+    "https://raw.githubusercontent.com/siximapala/XML-plugins-exhibit/HEAD/README.md",
+    "https://github.com/leethomason/tinyxml2/releases",
+    "https://github.com/leethomason/tinyxml2/tags",
+    "https://github.com/leethomason/tinyxml2/commits/master",
+    "https://github.com/leethomason/tinyxml2/issues?q=is%3Aissue+performance",
+    "https://github.com/leethomason/tinyxml2/issues?q=is%3Aissue+locale",
+    "https://github.com/leethomason/tinyxml2/issues?q=is%3Aissue+large+file",
+    "https://github.com/leethomason/tinyxml2/issues/749",
+    "https://github.com/leethomason/tinyxml2/issues/786",
+    "https://github.com/leethomason/tinyxml2/issues/872",
+    "https://github.com/leethomason/tinyxml2/issues/997",
+    "https://github.com/leethomason/tinyxml2/issues/1047",
+    "https://github.com/leethomason/tinyxml2/pull/787",
+    "https://github.com/leethomason/tinyxml2/pull/1067",
+    "https://github.com/leethomason/tinyxml2/pull/1075",
+    "https://github.com/bemayer/xml-benchmark"
+  ],
+  "confidence": 0.6
+}
