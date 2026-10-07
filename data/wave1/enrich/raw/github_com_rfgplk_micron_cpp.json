@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/rfgplk/micron.cpp",
+  "one_liner": "Header-only inline memcpy/memset/memmove from the freestanding micron libc/STL rewrite; 1.13-1.91x fewer cycles than glibc on SPEC2017-size random copies.",
+  "what_it_does": "micron is a single-author, header-only C++23 reimplementation of libc and the C++ standard library that talks to Linux syscalls directly; its memory/cmemory headers provide mc::memcpy, mc::memmove, mc::memset, memcmp and memchr. The mc:: functions are templates over typed pointers, not the C signature: memcpy and memmove take an element count, memset a byte count. C-ABI memcpy/memmove/memset symbols are emitted only in freestanding builds (duck -k), so in a normal hosted program you call mc::memcpy explicitly rather than replacing ::memcpy.",
+  "how_it_is_fast": "Copies up to 256 bytes (128 without AVX2) go through an always_inline size ladder that loads the head and tail with overlapping 2/4/8/16/32-byte moves and issues all loads before any store, the same unaligned head/tail technique glibc's memmove-vec-unaligned-erms uses, so memmove shares the code. Larger sizes go to a noinline tier chosen from a one-time CPUID probe: a vector loop below the rep threshold, rep movsb from 2112 bytes (FSRM) or 8192 bytes (ERMS), and non-temporal stores above max(L3/4, 1 MiB). Because the ladder is inlined into the caller, small variable-size copies avoid the out-of-line call, PLT jump and ifunc-selected entry that ::memcpy pays.",
+  "when_to_use": [
+    "Projects already built on micron, or freestanding/no-libc Linux binaries that need fast mem* routines without glibc.",
+    "Hot loops issuing many small variable-size copies (the SPEC2017 mix: mean 104 bytes, 77% of calls at 32 bytes or less) over working sets of 32 KiB to 1 MiB, where inlining the size ladder removes per-call overhead.",
+    "Zero-filling buffers in cache-resident working sets: memset of zero won 1.13x at 32 KiB to 1.91x at 1 MiB in the random-size run and 222 of 386 hot cells in the detail run.",
+    "x86-64 Linux builds with -march=native on AVX2-class cores (results come from a Haswell-E i7-5960X)."
+  ],
+  "when_not_to_use": [
+    "Cold-cache or streaming copies: glibc won all 14 cold memcpy cells (geomean libc/micron 0.85) and 11 of 14 cold memset cells in the author's detail file.",
+    "Tiny memmoves and non-zero memset: glibc took 3-byte memmove at 0.27 vs 1.12 cycles/byte and won 29 of 50 hot memset cells with fill byte 0x5A.",
+    "Hosted programs wanting a global ::memcpy replacement: the C-ABI symbols exist only in freestanding builds, and the mc:: API has different semantics.",
+    "Non-Linux targets or code that needs a stable ABI: Linux is the only supported OS, aarch64 and i386 are 'compiles, untested', and the README says the ABI may change without notice and that performance takes precedence over safety.",
+    "Teams needing an independently reviewed routine: 13 stars, one author, no external measurements, and evidence only from a single Haswell-E machine with an unstated glibc version."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none outside the repo, but cmemory pulls micron's types, type_traits, attributes and simd headers; hosted builds link glibc/pthread by default",
+    "min_toolchain": "C++23 (GCC or Clang through duck's flag profiles; the benchmark files cite GCC 16.2.1; duck itself is bootstrapped with -std=c++26)",
+    "platforms": "Linux only; x86-64 (SSE2 floor, AVX2 and AVX-512 tiers via -march), armv7-a; aarch64 and i386 compile but are untested",
+    "thread_safety": "Routines are stateless; the one-time CPUID tunables probe is guarded by an atomic compare-and-swap in __mem_tun_get (hosted) or run from _start (freestanding).",
+    "drop_in_for_baseline": "partial: mc::memcpy/mc::memmove take typed pointers and an element count, mc::memset a byte count; C-ABI memcpy/memmove/memset replacements are generated only in freestanding (-k) builds"
+  },
+  "gotchas": [
+    "Harness asymmetry behind the numbers: benches/memory_random_bench.cpp inlines mc::memcpy/memset/memmove into the timed loop, while ::memcpy is an out-of-line glibc call through the PLT. At 32 KiB the memcpy gap is about 7 cycles per call (0.0677 cycles/byte x 104-byte mean size, derived from page data), roughly the cost of that call, so part of the 1.24-1.59x reflects call elimination rather than a faster copy loop. memset_rand fills only zero, the one fill value where micron wins in its own detail file.",
+    "The random benchmark never compares micron's output with libc's. The repo's tests/memory/mem_exhaustive_small.cpp (0-300 bytes at every offset, with sentinel guards) and mem_overlap_exhaustive.cpp (overlaps up to 1 MiB against a shadow buffer) do check correctness.",
+    "The cited CSV does not record its build. The 'libc' label holds only for duck's hosted default; in a freestanding -k build, cmemory/memcpy.hpp defines extern \"C\" memcpy on top of micron's own __memcpy_bytes, so ::memcpy would no longer be glibc.",
+    "mc::memcpy and mc::memmove convert element by element with static_cast when sizeof(F) != sizeof(D) or a type is not trivially copyable, so they do not always copy bytes; their count is in elements of the source type, while mc::memset counts bytes."
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "On an Intel i7-5960X (Haswell-E, 20 MiB L3; CPU and the GCC 16.2.1 -O3 -march=native build are named only in sibling result files), with CPU 0 pinned and median of 5 batches of 16384 SPEC2017-distributed random copies, micron used 0.2803 vs 0.3480 cycles/byte for memcpy at 32 KiB and 0.3045 vs 0.4829 at 1 MiB (1.24x and 1.59x), 0.2377 vs 0.4532 for zero memset at 1 MiB (1.91x) and 0.3236 vs 0.4231 for memmove at 1 MiB (1.31x) against glibc of unstated version (ratios derived from page data). The same author's fixed-size detail runs show glibc faster overall for hot memcpy (geomean 0.96) and memmove (0.89) and for every cold memcpy cell.",
+  "status_note": "Very active (last commit 2026-10-03, 407 commits) but a 13-star single-author project with no issue tracker activity and an explicitly unstable ABI; BSL-1.0 (abcmalloc MIT), so the cmemory headers can be vendored with their small simd/types dependencies.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/README.md",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/memory_random_bench.cpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/results/mem_random_s2_final.csv",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/results/mem_detail_s2_final_a.csv",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/results/cmemory_counters_final.txt",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/results/abcmalloc_core_baseline.csv",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/benches/results/rng_final_native.csv",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/memcpy.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/memmove.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/memset.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/bits.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/__unroll_memcpy.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/memory/cmemory/__unroll_memset.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/src/config.hpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/start/start.cpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/start/NOTES.md",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tools/src/main.cc",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tools/src/commands.hh",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tools/src/recipe.hh",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tools/src/recipes/gnu/config.hh",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tests/memory/mem_overlap_exhaustive.cpp",
+    "https://raw.githubusercontent.com/rfgplk/micron.cpp/master/tests/memory/mem_exhaustive_small.cpp",
+    "https://github.com/rfgplk/micron.cpp",
+    "https://github.com/rfgplk/micron.cpp/issues?q=is%3Aissue",
+    "https://github.com/rfgplk/micron.cpp/commits/master",
+    "https://github.com/rfgplk/micron.cpp/tree/master/src/memory/cmemory",
+    "https://github.com/rfgplk/micron.cpp/tree/master/start",
+    "https://github.com/rfgplk/micron.cpp/tree/master/tools/src",
+    "https://github.com/rfgplk/micron.cpp/tree/master/tests",
+    "https://github.com/rfgplk/micron.cpp/tree/master/tests/memory"
+  ],
+  "confidence": 0.7
+}

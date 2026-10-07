@@ -21539,10 +21539,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier A on BENCH.md (U64 dict 923.10 vs 11670.18 ms, 12.6x vs std::unordered_map; symmetric bench-stl.cpp/bench-mlib.c; EPYC 7763) with CI VM noise and the GCC version only in a sign-in-gated CI log (the record's 'GCC 16.1' came from the code-size section); std::unordered_map run with no reserve while Boost's flat map is already 7.97x; STL sort is 1.54x faster than M*LIB and the STL Rbtree beats M*LIB's; the mislabelled STL USet row is std::unordered_set (6189.18 vs 778.50 ms). If tier A requires a printed compiler version this is C."
+      "Tier A on BENCH.md (U64 dict 923.10 vs 11670.18 ms, 12.6x vs std::unordered_map; symmetric bench-stl.cpp/bench-mlib.c; EPYC 7763) with CI VM noise and the GCC version only in a sign-in-gated CI log (the record's 'GCC 16.1' came from the code-size section); std::unordered_map run with no reserve while Boost's flat map is already 7.97x; STL sort is 1.54x faster than M*LIB and the STL Rbtree beats M*LIB's; the mislabelled STL USet row is std::unordered_set (6189.18 vs 778.50 ms). If tier A requires a printed compiler version this is C.",
+      "Enricher: the bench LCG (x*31421+6927 mod 2^32) makes every inserted key even and every missed lookup odd, and M*LIB's int hash (a>>33)^a^(a<<11) keeps bit 0 under a power-of-two mask, so hits and misses start on disjoint slot parities (simulated; effect on the 12.6x not measured). Weak int hash: keys k<<20 all land in slot 0 (verified); the source says HASH_SEED does not stop collisions; the 'dict Bulk' row is DICT_OA with prefetch, not DICT_DEF2; pointers are invalidated on insert; issue #137 reserve assert fixed in _update_limit."
     ],
     "measurements": [
-      "verifier batch-67 (wave 1)"
+      "verifier batch-67 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {
@@ -21550,10 +21552,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier C: 18 CSV rows match; libc wins hot memcpy and memmove, all cold memcpy and tiny sizes, so the 1.1-1.9x win holds only for 32 KiB-1 MiB random sizes (stable across 9 runs); CSV lacks compiler and CPU, glibc version unstated, harness never checks output. abcmalloc MIT, the rest BSL-1.0."
+      "Tier C: 18 CSV rows match; libc wins hot memcpy and memmove, all cold memcpy and tiny sizes, so the 1.1-1.9x win holds only for 32 KiB-1 MiB random sizes (stable across 9 runs); CSV lacks compiler and CPU, glibc version unstated, harness never checks output. abcmalloc MIT, the rest BSL-1.0.",
+      "Enricher: mc:: routines are always_inline into the timed loop while ::memcpy is an out-of-line PLT call; the gap at 32 KiB is about 7 cycles per call (mean 104 B, derived), roughly the call cost; memset_rand fills zero only, micron's one winning fill value; the CSV has no build line, and under the freestanding -k build ::memcpy binds micron's own extern \"C\" memcpy, not glibc. mc::memcpy counts elements and static_casts when sizes differ while memset counts bytes; C-ABI symbols freestanding only; Linux only; unstable ABI; 13 stars. No correctness bug (exhaustive small and overlap tests exist)."
     ],
     "measurements": [
-      "verifier batch-67 (wave 1)"
+      "verifier batch-67 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {
@@ -21566,10 +21570,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier B on rust-leipzig/regex-performance (public code, CMake flags, Threadripper 3960X; compiler not named): wins 10 of 17 patterns against the PCRE2 interpreter (3 of them near ties), 4 of 17 against PCRE2-JIT and 15 of 15 against std::regex (2.2x-41.7x, derived from page data), but loses 13 of 17 to PCRE2-JIT and blows up on (.*?,){13}z (5558.3 vs 32.6 ms). Single 2022 run, means of 5 clock() repeats, engines built from unpinned master, -march=native reaches only the harness. The 2015 sljit regex_perf page (Oniguruma 5.9.6 vs PCRE2 10.10, GCC 4.8.2 -O3) agrees on 6 of 15 wins over interpreted PCRE2. Repo archived 2025-04-24; BSD-2-Clause."
+      "Tier B on rust-leipzig/regex-performance (public code, CMake flags, Threadripper 3960X; compiler not named): wins 10 of 17 patterns against the PCRE2 interpreter (3 of them near ties), 4 of 17 against PCRE2-JIT and 15 of 15 against std::regex (2.2x-41.7x, derived from page data), but loses 13 of 17 to PCRE2-JIT and blows up on (.*?,){13}z (5558.3 vs 32.6 ms). Single 2022 run, means of 5 clock() repeats, engines built from unpinned master, -march=native reaches only the harness. The 2015 sljit regex_perf page (Oniguruma 5.9.6 vs PCRE2 10.10, GCC 4.8.2 -O3) agrees on 6 of 15 wins over interpreted PCRE2. Repo archived 2025-04-24; BSD-2-Clause.",
+      "Enricher (rust-leipzig src/onig.c): the loop stops on any onig_search result below 0, so an error such as ONIGERR_RETRY_LIMIT_IN_MATCH_OVER would silently end the scan and be timed as done (match counts never cross-checked; no evidence it fired); results are the mean of 5 clock() runs, not 'best' as the README says; Onig and PCRE2 restart the subject at each match end while std::regex walks the whole text; engines built from unpinned master without -march=native. Loses to PCRE2-JIT 13 of 17 and RE2 15 of 17, beats Boost.Regex only 8 of 16; literal search slow (Twain 11.2 vs PCRE2 2.5 ms; scalar search loops, no memchr/SIMD); default retry limit 10M per match with search, stack and time unlimited; no UTF-8 validation; 2019 CVEs in HISTORY. Ferroni's README (Rust port, first-party, 2026-10-01) has C Oniguruma about 1.2-1.4x slower than the PCRE2 interpreter on 32 shared-syntax tasks (derived), so the interpreter wins are pattern-specific."
     ],
     "measurements": [
-      "verifier batch-68 (wave 1)"
+      "verifier batch-68 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {

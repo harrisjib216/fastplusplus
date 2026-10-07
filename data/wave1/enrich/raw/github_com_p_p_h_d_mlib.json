@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/p-p-h-d/mlib",
+  "one_liner": "Header-only C99/C11 generic container library whose DICT_DEF2 hash map ran 12.6x faster than libstdc++ std::unordered_map in its author's harness.",
+  "what_it_does": "M*LIB generates typed, type-checked containers in plain C from macros: DICT_DEF2(name, key_type, value_type) emits static inline functions such as name_init, name_set_at, name_get (returns a value pointer or NULL), name_erase and iterators, alongside arrays, deques, lists, red-black trees, B+trees, strings and concurrent queues. Element behaviour (copy, move, hash, equality, destructor) is described by an 'oplist', so containers of non-trivial objects nest with proper ownership. It is a C replacement for the STL containers, not a C++ drop-in: there are no templates, no operator[] and no STL-style iterators.",
+  "how_it_is_fast": "DICT_DEF2 is an open-addressing index table of (32-bit slot index, 32-bit hash) pairs probed with triangular (quadratic) steps, pointing into a dense pair array recycled through a freelist; storing the hash in the index means most probes compare one integer before touching the key, and there is no per-entry node allocation as in std::unordered_map. The table is a power of two kept between 0.2 and 0.7 load. DICT_OA_DEF2 stores keys and values inline and marks empty and deleted slots with reserved 'out of range' key values instead of a separate metadata array; its bulk_get/bulk_set API hashes 16 keys ahead and issues software prefetches. Integer keys use a cheap shift-xor hash, (a>>33)^a^(a<<11), selected through C11 _Generic.",
+  "when_to_use": [
+    "C (not C++) code bases that want typed hash maps, sets, arrays and trees with one consistent API and no dependency beyond libc.",
+    "Large integer-keyed or string-keyed maps where the per-node allocation of std::unordered_map-style chaining dominates (20M-entry u64 map: 923 ms vs 11670 ms and 590M vs 934M memory in the author's run).",
+    "Batch lookups or inserts of many small keys, where the DICT_OA bulk API with prefetching applies (737.57 ms on the same 20M-key test).",
+    "Embedded or freestanding-adjacent C projects that need a custom allocator (M_MEMORY_ALLOC/REALLOC macros, optional per-call context for arenas) or abort-free error handling through m-try."
+  ],
+  "when_not_to_use": [
+    "C++ code: the API is a C macro interface, so boost::unordered_flat_map, absl::flat_hash_map or ankerl::unordered_dense give a std-compatible API with comparable open-addressing speed.",
+    "Hash tables exposed to attacker-chosen keys: the default integer hash is a shift-xor without multiplication and the byte hash's own source comment says collisions are trivial to generate and M_USE_HASH_SEED does not prevent them.",
+    "Code that keeps pointers into the map across inserts or erases: elements move on growth (and on shrink for the OA variant), unlike std::unordered_map's stable node addresses.",
+    "Maps beyond about 3.0 billion entries unless rebuilt with M_USE_DICT_LARGE_INDEX (the default index type is uint32_t).",
+    "Teams unfamiliar with macro-generated code: compile errors surface deep inside preprocessor expansions and the README recommends -ftrack-macro-expansion=0 and a preprocess-then-compile script to debug them."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libc only; optional pthread/C11 threads for the concurrent headers)",
+    "min_toolchain": "ISO C99 (some features need C11, e.g. the _Generic integer hash selection); MSVC needs /Zc:preprocessor /Zc:__cplusplus",
+    "platforms": "any platform with a C99 compiler; CI-tested with GCC and Clang",
+    "thread_safety": "Plain containers such as DICT are not thread-safe; m-buffer, m-snapshot and m-shared-ptr provide documented thread-safe variants.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Weak default integer hash: (a>>33)^a^(a<<11) keeps the low key bits and the table uses a power-of-two mask, so strided keys collide; for example keys k<<20 with k below 2^13 all hash to slot 0 in a table of up to 2^20 slots. Supply a mixing HASH in the oplist for patterned keys.",
+    "name_set_at overwrites an existing value (unlike std::unordered_map::insert), name_get returns a borrowed pointer that the next insert can invalidate, and DICT_OA keys need OOR_EQUAL/OOR_SET operators that reserve two key values (0 and 1 in the bench) which must never be inserted.",
+    "Harness quirk behind the numbers: the bench LCG (x*31421+6927 mod 2^32) yields 32-bit keys and, because every second output is a key, all inserted keys are even and every missed lookup key is odd. M*LIB's hash keeps bit 0, so hits and misses start on disjoint slot parities while libstdc++'s prime-modulo buckets are unaffected; the direction of the effect on the 12.6x was not measured.",
+    "Build with NDEBUG for release: without it M_ASSERT contract checks run on every operation (the bench defines NDEBUG at the top of bench-mlib.c). Issue #137 (reserve then erase tripped a lower_limit contract assertion) is fixed in the current _update_limit."
+  ],
+  "pick_this_over_siblings_when": "Pick M*LIB over klib khash when you want a full typed container family with ownership-aware nested objects rather than a single hash macro (khash used slightly less memory, 552.77M vs 589.90M, and ran 1257.84 ms vs 923.10 ms in the same table); in C++ prefer boost::unordered_flat_map or ankerl::unordered_dense for a std-compatible API.",
+  "verified_claims_summary": "In the author's c-stl-comparison harness on a GitHub Actions AMD EPYC 7763 runner (gcc/g++ from ubuntu-latest, version not printed on the page; -O2 -march=native; best of 3), inserting 20M unsigned long pairs and doing 20M lookups (half hits) took 923.10 ms with DICT_DEF2 versus 11670.18 ms with libstdc++ std::unordered_map using default std::hash and no reserve (12.6x, derived from page data). Smaller wins hold for string keys (3.6x), 256-byte keys (3.7x) and the B+tree ordered set (3.2x), while std::sort beat M*LIB's sort (1105.64 vs 1706.60 ms) and std::set beat M*LIB's red-black tree.",
+  "status_note": "Actively maintained (last master commit 2026-07-22, 4,000+ commits, 1.2k stars, no open dict issues in the issue listing), BSD-2-Clause and header-only, so it is easy to vendor; evidence is the author's own harness on a shared CI VM.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/P-p-H-d/mlib/master/README.md",
+    "https://raw.githubusercontent.com/P-p-H-d/mlib/master/m-dict.h",
+    "https://raw.githubusercontent.com/P-p-H-d/mlib/master/m-core.h",
+    "https://raw.githubusercontent.com/P-p-H-d/mlib/master/m-thread.h",
+    "https://raw.githubusercontent.com/P-p-H-d/mlib/master/m-genint.h",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/doc/BENCH.md",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/Makefile",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/bench-stl.cpp",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/bench-mlib.c",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/common.h",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/bench/common.c",
+    "https://raw.githubusercontent.com/P-p-H-d/c-stl-comparison/result/README.md",
+    "https://github.com/P-p-H-d/mlib",
+    "https://github.com/P-p-H-d/mlib/issues?q=is%3Aissue+dict",
+    "https://github.com/P-p-H-d/mlib/issues/137",
+    "https://github.com/P-p-H-d/mlib/issues/143",
+    "https://github.com/P-p-H-d/mlib/commits/master"
+  ],
+  "confidence": 0.8
+}
