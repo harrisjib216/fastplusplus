@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/auburn/fastnoisesimd",
+  "one_liner": "SIMD 3D coherent-noise generator (Perlin, simplex, value, cellular, cubic) filling float grids 4-45x faster than libnoise.",
+  "what_it_does": "FastNoiseSIMD generates 3D procedural noise (white, value, Perlin, simplex, cellular/Worley, cubic, with FBM/billow/ridged fractals, input perturbation and up-sampling) into float arrays. The API is batch-oriented: configure a FastNoiseSIMD object, then call FillNoiseSet/GetNoiseSet for an xSize x ySize x zSize block or for an arbitrary FastNoiseVectorSet of points. It is not a drop-in for libnoise (per-point double GetValue on a module graph) and its output values differ from both libnoise and the scalar FastNoise.",
+  "how_it_is_fast": "Each noise function is written once against SIMD macros and compiled per instruction set (SSE2, SSE4.1, AVX2+FMA3, AVX-512, NEON); a CPUID/XGETBV check picks the widest path at run time, so 4, 8 or 16 points are evaluated per call. Permutation lookup tables are replaced by an integer multiply-xorshift hash of the lattice coordinates, gradients are chosen with blend masks (or a 16-entry vpermps table on AVX-512), and the grid fill vectorises along z while reusing per-row x/y work. Cellular noise searches only the 3x3x3 neighbourhood in float.",
+  "when_to_use": [
+    "Voxel or terrain generation that fills dense 3D chunks (e.g. 32^3 or 64^3) of float noise per call on x86-64 with AVX2 or on ARM NEON",
+    "Cellular/Worley noise in bulk, where the gap over libnoise is largest (README: 20x on SSE2, 45x on AVX2)",
+    "Existing code already built on FastNoiseSIMD that needs a stable, MIT-licensed, vendorable library rather than migrating to FastNoise2",
+    "You want one binary that runs the best ISA path on each user's CPU without separate builds"
+  ],
+  "when_not_to_use": [
+    "New projects: the repository was archived on 2021-04-02 and the author points users to FastNoise2, which has a node graph, 2D/4D support and a public benchmark harness",
+    "You need 2D or 4D noise, double precision, or tileable noise: only 3D float sets are provided (issues #44 double, #33 4D, #39 tileable were never implemented)",
+    "You need bit-identical output with libnoise or the scalar FastNoise, or across SIMD levels: the readme says outputs differ from FastNoise, and the header warns FMA paths give minute variations versus other levels",
+    "SSE2-only machines running cubic noise: the README table shows SSE2 cubic (3516) slower than the scalar FastNoise (2979), and SSE2 cellular (2959) no faster",
+    "Targets beyond x86 and ARM: ppc64 and s390x fail to build because cpuid.h is missing (issue #22, still open)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (bundled Android cpu-features code only for 32-bit ARM)",
+    "min_toolchain": "C++11 (nullptr, in-class member initialisers, <cstdint>); header lists MSVC v120/v140, Intel 16.0, GCC 4.7 and Clang on macOS as tested; per-file ISA flags required",
+    "platforms": "x86 and x86-64 (SSE2, SSE4.1, AVX2+FMA3 on by default; AVX-512 opt-in), ARM NEON (aarch64 always NEON; 32-bit Android via cpu-features); the scalar fallback is only compiled for 32-bit or _DEBUG builds",
+    "thread_safety": "not documented; from the source, the first construction initialises static SIMD constants behind a plain bool flag and writes the global SIMD level, so create one instance before spawning threads; afterwards FillNoiseSet on separate instances and output buffers shares no mutable state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build setup is part of correctness: only FastNoiseSIMD_avx2.cpp / _avx512.cpp may get AVX flags, and the source says to disable MSVC whole-program optimisation for those files; building the whole project with -mavx2/-march=native or LTO lets AVX code leak into shared paths and crash older CPUs (issue #20, 'Illegal instruction'). AVX-512 is disabled by default, and the #error hint in FastNoiseSIMD_avx512.cpp suggests -march=core-avx2, which does not enable the AVX-512 intrinsics on GCC (the author's later NoiseBenchmarking CMake uses -mavx512f -mavx512dq).",
+    "The AVX-512 path uses _mm512_and_ps/_andnot_ps/_xor_ps, which are AVX512DQ instructions, but run-time dispatch checks only the AVX512F CPUID bit (leaf 7 EBX bit 16), so a CPU with AVX-512F but no DQ (Xeon Phi Knights Landing/Mill) would be sent down a path that faults.",
+    "With FN_ALIGNED_SETS (the default) results are written with aligned SIMD stores and the last vector is stored whole, so output buffers must come from GetEmptySet (aligned and padded to the vector width); a plain std::vector<float> of exactly x*y*z floats can fault or be overrun by up to 15 floats.",
+    "The libnoise cellular gap is mostly algorithmic: libnoise's Voronoi module searches a 5x5x5 = 125-cell neighbourhood in double with three ValueNoise3D calls per cell, versus FastNoiseSIMD's 27 cells in float; the 68x/45x/20x cellular ratios are not a SIMD-only effect."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings generate procedural noise; SLEEF, VDT, fmath and xsimd accelerate elementwise math you would still have to assemble into a noise function yourself. Pick FastNoiseSIMD only for ready-made 3D noise on an existing codebase; for new work its successor FastNoise2 (not yet catalogued) is the author's recommendation.",
+  "verified_claims_summary": "The author's README table times one thread of a 2.0 GHz Skylake Xeon (Intel C++ 17.0 x64, flags not given) filling a 32x32x32 3D grid: AVX2 Perlin 324 us versus libnoise 1368 us (4.2x) and the scalar FastNoise 1002 us (3.1x), AVX2 cellular 1283 us versus libnoise 58125 us (45x), with AVX-512 another 1.3-2.3x over AVX2; the benchmark program was never published. As a consistency check, the FastNoise2 README's NoiseBenchmarking table (clang-cl 10, i7-7820X) shows FastNoise legacy over libnoise by 1.38x (Perlin) and 20.4x (cellular), close to the 1.37x and 19.5x implied by the FastNoiseSIMD table (derived from page data); that harness builds FastNoiseSIMD (AVX2) and libnoise (Perlin at 1 octave, QUALITY_BEST) but publishes no FastNoiseSIMD row.",
+  "status_note": "Archived on 2021-04-02 and deprecated in favour of FastNoise2; the final commit (2021-03-20) only added missing perturbation for the unaligned tail of vector-set fills; MIT-licensed and about 3,600 lines across 9 source files, so vendoring is easy if you pin your ISA build flags.",
+  "sources_read": [
+    "https://github.com/Auburn/FastNoiseSIMD",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/README.md",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/LICENSE",
+    "https://github.com/Auburn/FastNoiseSIMD/tree/master/FastNoiseSIMD",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD.h",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_internal.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_internal.h",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_avx2.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_avx512.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_sse2.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoiseSIMD/HEAD/FastNoiseSIMD/FastNoiseSIMD_neon.cpp",
+    "https://github.com/Auburn/FastNoiseSIMD/wiki/In-depth-SIMD-level",
+    "https://github.com/Auburn/FastNoiseSIMD/commits/master",
+    "https://github.com/Auburn/FastNoiseSIMD/commit/19dc220",
+    "https://github.com/Auburn/FastNoiseSIMD/issues?q=is%3Aissue",
+    "https://github.com/Auburn/FastNoiseSIMD/issues/20",
+    "https://raw.githubusercontent.com/qknight/libnoise/master/src/module/voronoi.cpp",
+    "https://raw.githubusercontent.com/qknight/libnoise/master/src/noise/module/perlin.h",
+    "https://raw.githubusercontent.com/qknight/libnoise/master/src/noisegen.cpp",
+    "https://raw.githubusercontent.com/Auburn/FastNoise2/HEAD/README.md",
+    "https://github.com/Auburn/NoiseBenchmarking",
+    "https://raw.githubusercontent.com/Auburn/NoiseBenchmarking/HEAD/main.cpp",
+    "https://github.com/Auburn/NoiseBenchmarking/tree/master/FastNoiseSIMD",
+    "https://raw.githubusercontent.com/Auburn/NoiseBenchmarking/HEAD/FastNoiseSIMD/Benchmark_FastNoiseSIMD.cpp",
+    "https://raw.githubusercontent.com/Auburn/NoiseBenchmarking/HEAD/FastNoiseSIMD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Auburn/NoiseBenchmarking/HEAD/libnoise/Benchmark_libnoise.cpp"
+  ],
+  "confidence": 0.6
+}

@@ -1,2 +1,6 @@
 - jemalloc (wave0-seed, tier C): w1-mine-c found independent numbers in 7a6163/ruby-alloc-bench (vs glibc); candidate retier C to B after a verifier check.
 - HPAC/LAMP_benchmark (TOMS 2022 Armadillo/Eigen mapping tests, code only, paper on arXiv blocked): independent retier source for Armadillo. Bandicoot (coot.sourceforge.io): GPU Armadillo-like, not catalogued (enricher leads, 2026-10-07).
+- muparserSSE (beltoforion/muparsersse): AsmJit JIT float parser; won bench_expr_complete on points in the 2018 ExprTk logs. Not catalogued (enricher lead, 2026-10-07).
+- METL (TillHeinzel/METL): best double rival to ExprTk in the 2018 logs. Not catalogued.
+- MathPresso (kobalicek/mathpresso): JIT expression evaluator, unverified lead (not opened).
+- FastNoise2 (Auburn/FastNoise2): successor of FastNoiseSIMD; public harness Auburn/NoiseBenchmarking; README table clang-cl 10 /O2 on i7-7820X: AVX2 Perlin 261 vs libnoise 27 Mpts/s, cellular 52 vs 0.65. Possible tier A. Not catalogued.
