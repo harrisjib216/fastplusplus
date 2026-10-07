@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/srwiley/scany",
+  "one_liner": "Pure-Go CL-AA antialiasing scanner for rasterx/oksvg; single-thread parity with ScanFT claimed, multi-thread speedup claimed, nothing measured.",
+  "what_it_does": "scany provides two implementations of the rasterx.Scanner interface: ScannerS (NewScanS, one goroutine) and ScannerT (NewScanT, a pool of worker goroutines). Plugged into rasterx.NewDasher or NewFiller, it turns the flattened line segments of an oksvg/rasterx path into anti-aliased coverage and hands alpha runs to a scany.Collector instead of the Painter interface used by ScanFT; only an image.RGBA collector (RGBACollector, solid colour or rasterx.ColorFunc gradient) ships. Its stated purpose is an MIT-licensed alternative to ScanFT, whose scan.go carries the Freetype-Go licence header (FreeType License or GPL v2).",
+  "how_it_is_fast": "Both scanners use the CL-AA signed cover/area accumulation from cl-vectors (the same idea as FreeType ftgrays and AGG): each line is walked cell by cell in 26.6 fixed point, integer cover and area are added to a per-scanline linked list of cells kept sorted by x inside one flat slice with per-row sentinels, and each row is then swept left to right to emit alpha runs. ScannerT splits the work into three goroutine stages (line-to-cells, cell storage, sweep) with N goroutines of each; scanlines are assigned round-robin (row y goes to worker y mod N) so each worker owns its rows' lists without locks, while every single cell travels over a channel with a WaitGroup Add/Done. That per-cell channel traffic is why one-thread ScanT is about 10 percent slower per the README; the parallel sweep pays off mainly when the per-pixel rasterx.ColorFunc of a gradient dominates, because different rows are swept concurrently.",
+  "when_to_use": [
+    "Go code already rendering SVG through oksvg/rasterx that needs an MIT-licensed scanner instead of ScanFT's FreeType/GPL-licensed port, and only renders square canvases with all geometry on-canvas (see gotchas).",
+    "Gradient-heavy SVGs at large output sizes on multi-core machines, where ScannerT spreads per-pixel ColorFunc evaluation across rows; benchmark it yourself first, because no numbers are published.",
+    "Studying or teaching the CL-AA algorithm: about 1,100 lines of plain Go in three files (scans.go, scant.go, sweep.go), no assembly and no unsafe."
+  ],
+  "when_not_to_use": [
+    "Non-square output: SetBounds is declared (height, width) but rasterx calls Scanner.SetBounds(width, height), so the scanner's row and column limits are swapped (code reading this session).",
+    "SVGs that rely on fill-rule=\"evenodd\", clip rectangles, or subpaths of opposite orientation sharing a scanline: SetWinding and SetClip are no-ops and the coverage sign is fixed once per scanline.",
+    "ScanT with 2 or more threads on content that reaches above the top edge (partly off-canvas art, zoom/pan, strokes straddling y = 0): a negative slice index panics in a worker goroutine.",
+    "When you need a demonstrated speedup: neither ScanFT nor the golang.org/x/image/vector scanner is ever timed, while the same author's scanx publishes numbers against both.",
+    "Long-lived services: unmaintained since 2022-01-17, 1 star, and the tests make no assertions on output."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/image/math/fixed and github.com/srwiley/rasterx in the library code; github.com/srwiley/oksvg in tests and the README usage; go.mod pins 2021 pseudo-versions (rasterx v0.0.0-20210519020934-456a8d69b780, oksvg v0.0.0-20211120171407-1837d6608d8c)",
+    "min_toolchain": "Go 1.17 (go.mod 'go 1.17')",
+    "platforms": "any Go target (pure Go, no assembly, no unsafe)",
+    "thread_safety": "Not documented. A ScannerS or ScannerT instance holds shared mutable state and must be driven from one goroutine. ScannerT starts 3 x N internal goroutines at NewScanT that run until Close(); with a ColorFunc, RGBACollector calls it concurrently from the N sweep goroutines, so the ColorFunc must tolerate concurrent calls.",
+    "drop_in_for_baseline": "partial: same rasterx.Scanner interface as ScanFT, so it plugs into rasterx.NewDasher/NewFiller unchanged, but output goes through scany.Collector instead of ScanFT's Painter (only RGBA provided), even-odd winding and SetClip are unimplemented, SetBounds swaps width and height, and ScanT needs Close()."
+  },
+  "gotchas": [
+    "Swapped bounds (code reading, not executed): ScannerS.SetBounds and ScannerT.SetBounds take (height, width), but the rasterx Scanner interface is SetBounds(w, h) and Filler.SetBounds, which NewDasher, NewStroker and NewFiller call (also at the 2021-05-19 rasterx commit pinned in go.mod), passes (width, height). Following the README (NewScanS(width, height, ...) then rasterx.NewDasher(w, h, scanner)) leaves the scanner with height = image width and width = image height: on a landscape canvas every cell right of column height-1 is pinned to that column so the right side is never painted, on a portrait canvas rows at or below y = width are dropped, and off-canvas geometry can index past the RGBA buffer. Every SVG in testdata is square (TestShapes6 500x500, icons 512x512), so the tests and benchmarks never exercise this.",
+    "Multi-thread crash (code reading, not executed): ScannerT routes each cell with s.cellWorkers[cy%s.threads]; Go's % keeps the sign, so with 2 or more threads any segment whose cell row lies above the image (cy < 0 and not a multiple of the thread count) indexes a negative slot and panics inside a goroutine, killing the process. rasterx forwards lines unclipped (Filler.lineF calls Scanner.Line directly). ScannerS and one-thread ScanT drop such rows safely in saveCell/cellSaver.",
+    "Not output-equivalent to ScanFT: SetWinding and SetClip are empty ('does nothing for now'), so evenodd fills render as nonzero and clip rectangles are ignored, both of which ScanFT implements. Coverage sign is taken from the first non-zero cell of each scanline rather than per cell (ScanFT's areaToAlpha takes the absolute value per cell); when a later subpath on the same row winds the other way its negative int16 alpha wraps to a huge uint32 in RGBACollector and is clamped to full opacity, so those edges lose antialiasing. The README's 'within 1 or 2 percent' therefore compares scanners that do not do the same work on every input.",
+    "Benchmark and test harness: no ScanFT or x/image/vector benchmark exists (ScanFT appears only in commented-out lines), there is no ScanS benchmark on the icon set, RunGradsT/RunGradsS draw a fixed 50 times and ignore b.N (ns/op is only meaningful if one 50-draw call exceeds -benchtime), TestCompHalfCirc only prints ScanT/ScanS green-channel mismatches without failing, and tests write PNGs into testdata/. The sweep also calls the Collector for zero-coverage gaps between cells, so gradient ColorFuncs are evaluated for pixels that receive no paint."
+  ],
+  "pick_this_over_siblings_when": "Among the Go siblings, scanx (same author, same rasterx interface) publishes 3.2x over ScanFT's FTScanner and 74x over the x/image/vector GVScanner at 5x scale, and stilus publishes about 2x over x/image/vector, while scany publishes no numbers and has the defects above; pick scany only if you specifically need an MIT-licensed CL-AA scanner with row-parallel gradient sweeping on square, on-canvas, nonzero-winding SVGs, and measure it first.",
+  "verified_claims_summary": "Nothing was measured: the README says single-threaded ScanS is within 1-2 percent of ScanFT (parity, not a win), one-thread ScanT about 10 percent slower, and multi-thread ScanT faster at an unstated, image-dependent thread count, with no hardware, Go version or figures. The repository's Go benchmarks only vary ScanT's thread count (1 to 32) and run ScanS on the gradient file, all on square inputs, and never time ScanFT or x/image/vector.",
+  "status_note": "Abandoned (11 commits from 2021-12-12 to 2022-01-17, 1 star, 0 forks, no issues) but MIT-licensed and small enough to vendor; the swapped SetBounds arguments, the multi-thread negative-row panic and the missing even-odd/clip support found by code reading this session make it unsafe beyond square, fully on-canvas, nonzero-winding SVGs without patches.",
+  "sources_read": [
+    "https://github.com/srwiley/scany",
+    "https://github.com/srwiley/scany/commits",
+    "https://github.com/srwiley/scany/issues",
+    "https://github.com/srwiley/scany/tree/master/testdata/svg/landscapeIcons",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/go.mod",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/go.sum",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/scans.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/scant.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/sweep.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/scant_test.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/scans_test.go",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/TestShapes6.svg",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/halfCirc.svg",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/landscapeIcons/sea.svg",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/landscapeIcons/beach.svg",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/landscapeIcons/village.svg",
+    "https://raw.githubusercontent.com/srwiley/scany/HEAD/testdata/svg/landscapeIcons/mountains.svg",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/fill.go",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/dash.go",
+    "https://raw.githubusercontent.com/srwiley/rasterx/HEAD/stroke.go",
+    "https://raw.githubusercontent.com/srwiley/rasterx/456a8d69b780/fill.go",
+    "https://raw.githubusercontent.com/srwiley/rasterx/456a8d69b780/scan.go",
+    "https://github.com/srwiley/scanFT",
+    "https://raw.githubusercontent.com/srwiley/scanFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/srwiley/scanFT/HEAD/scan.go"
+  ],
+  "confidence": 0.75
+}
