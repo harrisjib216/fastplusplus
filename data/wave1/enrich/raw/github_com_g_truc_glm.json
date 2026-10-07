@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/g-truc/glm",
+  "one_liner": "Header-only GLSL-style C++ vector/matrix library; beat a 2011 Eigen snapshot on 4x4 float math, but only on ARM phones.",
+  "what_it_does": "GLM gives C++ the GLSL types and functions (vec2-4, mat2-4, quat, dot, cross, normalize) plus extensions for transforms (translate, rotate, perspective, lookAt), quaternions, packing, random numbers and noise. Types are small fixed-size value classes with operator overloads, and glm::value_ptr hands their storage to OpenGL. It is not a drop-in for Eigen: naming follows GLSL, matrices are column-major mat<C, R, T, Q> templates, and there are no dynamic sizes, decompositions or solvers.",
+  "how_it_is_fast": "Everything is inline header code on fixed-size types, so the compiler sees whole 4x4 operations with no heap and no expression-template machinery. The default (packed) mat4 multiply is a column-times-scalar loop (detail::mul4x4<..., false>) left to compiler auto-vectorisation. With GLM_FORCE_INTRINSICS (or GLM_FORCE_SSE2 to GLM_FORCE_AVX512) and aligned types, aligned matrices take a splat-and-FMA path and dedicated SSE or NEON code (NEON mul_lane/madd_lane mat4 multiply, SSE inverse, determinant and transpose). The 2011 ARM win most likely reflects GLM 0.9.3's plain scalar code compiling better for ARMv7 VFP/NEON than that Eigen snapshot (an inference; the benchmark author did not analyse it).",
+  "when_to_use": [
+    "OpenGL/Vulkan or software-rendering code where GLSL-named types and functions (mat4, perspective, lookAt, quat) and value_ptr interop matter more than peak throughput.",
+    "Small fixed-size float math on ARM mobile targets, the only setting with a measured win over Eigen: HTC Desire armeabi-v7a, 1.45x on 4x4 adds and 2.35x on 4x4 multiplies.",
+    "Projects that want a dependency-free header-only math library that also compiles under CUDA (experimental) and on any C++17 compiler.",
+    "Construction-heavy camera code: in RasterDuck/vectormathbench (Ryzen 9 3900X, SSE4.2) GLM built a perspective matrix in 2.20 ns versus 14.60 ns for DirectXMath."
+  ],
+  "when_not_to_use": [
+    "Throughput-critical 4x4 matrix multiplies on x86: the cited test had Eigen 4.7x faster with SSE, and vectormathbench measured GLM's default mat4*mat4 at 22.13 ns against 4.70 ns for DirectXMath and 3.68 ns for Realtime Math (SSE4.2).",
+    "Model-matrix construction in hot loops (vectormathbench: 160.76 ns for GLM against 41.89 ns for DirectXMath).",
+    "General or large linear algebra (dynamic sizes, decompositions, solvers, sparse): GLM covers graphics-sized types only; use Eigen or BLAS.",
+    "Code that cannot move to C++17: master requires it, and older standards must stay on the GLM 1.0 branch.",
+    "When you need SIMD without opting in: plain glm::mat4 does not take the intrinsic paths."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++17 on master (GCC 8+, Clang 6+, Apple Clang 6+, Visual C++ 2019+, CUDA 9.0+ experimental); the GLM 1.0 branch for older C++",
+    "platforms": "any; optional SSE2 to AVX-512 and ARM NEON intrinsic paths when enabled by macros",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "SIMD is opt-in. You need GLM_FORCE_INTRINSICS or a GLM_FORCE_SSE2...AVX512 define, and the manual says the SIMD optimisations require aligned types. The aligned mat4 multiply only applies to aligned qualifiers, so a default glm::mat4 multiply runs the scalar column loop. Issue #1361 (open since 2025-04) shows users unsure which combination is needed.",
+    "GLM_FORCE_DEFAULT_ALIGNED_GENTYPES changes struct layout: the manual's example struct grows from 32 to 48 bytes. Apply it consistently across translation units and to any data shared with GPU buffers or files.",
+    "Default constructors are '= default' (uninitialised) unless GLM_FORCE_CTOR_INIT is defined. The 2011 benchmark relied on GLM 0.9.3 default-constructing identity matrices, so the same harness on current GLM would read uninitialised floats, just as its Eigen side already did.",
+    "Behaviour churn between patch releases: 1.0.2 changed quaternion rotate direction and 1.0.3 reverted it. Pin a version if rotations matter."
+  ],
+  "pick_this_over_siblings_when": "Pick GLM for GLSL-familiar, feature-complete graphics math. Klein (catalogued) composes rotations about 1.85x faster than GLM quaternions by llvm-mca cycle counts, so prefer it for rotor/motor-heavy skinning or kinematics. xsimd or Vc are for SIMD over arrays rather than per-object 4x4 math.",
+  "verified_claims_summary": "mfoo/Math-Library-Test (2011-2012, GCC -O2, version unstated) timed 10 matrices x 1,000,000 repeats of 4x4 float add and multiply for GLM 0.9.3.B against an Eigen 3 snapshot. On a 1 GHz HTC Desire, GLM was 1.45x (add) and 2.35x (multiply) faster in the armeabi-v7a build and 1.52x/1.65x in the NEON build, plain armeabi was a tie, and on an i7 MacBook Pro with SSE Eigen was 2.5x and 4.7x faster.",
+  "status_note": "Actively maintained (GLM 1.0.3 released 2025-12-31, 11.3k stars, not archived), dual MIT or Happy Bunny licensed and header-only, so trivially copyable. The 'faster than Eigen' evidence is one 14-year-old ARM-only hobby test with harness flaws: Eigen inputs have 12 of 16 elements left unset, its EIGEN_TEST_NEON option defaults ON and appends -mfloat-abi=softfp -mfpu=neon to every Android build so the armeabi-v7a vs NEON columns are ambiguous, and outputs are never read or checked. Current independent x86 data has GLM's default mat4 multiply 1.7-4.7x behind DirectXMath and 5.1-6.7x behind Realtime Math across SSE4.2/AVX/AVX2 builds (derived from page data).",
+  "sources_read": [
+    "https://github.com/g-truc/glm",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/readme.md",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/manual.md",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/copying.txt",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/glm/detail/setup.hpp",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/glm/detail/type_mat4x4.inl",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/glm/detail/type_mat4x4_simd.inl",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/glm/detail/func_matrix_simd.inl",
+    "https://raw.githubusercontent.com/g-truc/glm/HEAD/glm/simd/matrix.h",
+    "https://github.com/g-truc/glm/issues?q=is%3Aissue+SIMD+slow",
+    "https://github.com/g-truc/glm/issues?q=is%3Aissue+GLM_FORCE_INTRINSICS",
+    "https://github.com/g-truc/glm/issues/1361",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/README.md",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/LIBRARIES.md",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/src/Driver.cpp",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/src/Main.cpp",
+    "https://raw.githubusercontent.com/mfoo/Math-Library-Test/HEAD/src/androidactivity.cpp",
+    "https://raw.githubusercontent.com/RasterDuck/vectormathbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/RasterDuck/vectormathbench/HEAD/intermediate-benchmarks.md"
+  ],
+  "confidence": 0.6
+}
