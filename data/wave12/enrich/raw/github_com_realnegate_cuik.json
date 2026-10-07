@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/realnegate/cuik",
+  "one_liner": "MIT C11/C23 compiler and sea-of-nodes backend library (TB); about 2x clang -O0 and 12x gcc -O0 compile speed on a synthetic benchmark.",
+  "what_it_does": "Cuik is a C compiler toolchain split into libraries: a C preprocessor and C11/C23 front end (libCuik) and the Tilde Backend (TB), which lowers a sea-of-nodes IR to x64, AArch64, MIPS and wasm32 code and writes ELF, COFF/PE, Mach-O or wasm objects, or places functions in memory through a JIT API (tb_jit_begin, tb_jit_place_function). The cuik CLI takes a GCC-like subset of flags (-c, -o, -D, -I, -O, -g, -S, -xe for type-check only, -j N for threads) but is not a drop-in cc. Each front-end stage (preprocess, parse, sema, IR gen) can be stopped and inspected through the library API.",
+  "how_it_is_fast": "The front end is a unity build with a generated DFA lexer (meta/lexgen.lua writes cuik_pp/dfa.h), arena allocation and mimalloc, and it lowers the typed AST straight into TB's graph builder. Without -O, TB skips the optimizer and per function runs Click-style global code motion (GCM) scheduling, a Rogers-style global register allocator (Briggs-Chaitin graph colouring is the alternative) and direct machine-code and object emission, with no separate assembler pass. Built with -j N, libCuik compiles translation units and functions on a thread pool; the default is single-threaded.",
+  "when_to_use": [
+    "You are building a language or JIT and want an MIT-licensed C library backend with a sea-of-nodes IR, x64/AArch64 codegen, in-memory JIT placement and object export, without linking LLVM.",
+    "Fast unoptimised (-O0-class) builds of small, self-contained C11/C23 programs on x86-64 Linux or Windows, where edit-compile latency matters more than code quality (about 2x clang -O0 and 12x gcc -O0 on compile in the nordlow benchmark).",
+    "C tooling that needs the front end as a library: stop after preprocessing, parsing or type checking and walk the result (the driver also has -bindgen, -objdump and -link modes).",
+    "Studying or extending a compact sea-of-nodes compiler (GCM, GVN, SCCP, SROA, Rogers and Briggs allocators are all in tb/)."
+  ],
+  "when_not_to_use": [
+    "Production code: the README says 'unfinished and buggy' and cuik_c/README.txt says 'NOT PRODUCTION-READY'. Open issues include a Linux call miscompile (#37), a segfault with struct varargs (#60), glibc <stdio.h> parse failures (#58), an infinite loop on attributes in struct fields (#53) and a sema crash (#42).",
+    "When you need optimised code: -O is opt-in, the optimizer is new (commit 'nbody.c running optimized!', Aug 2025) and there are no published code-quality numbers against clang or gcc at -O2.",
+    "When compile speed is the only goal: in the same table TinyCC (already catalogued) was faster on every column (check 2.9, compile 3.5, build 2.6 us/f against Cuik's 6.0, 60.6 and 57.6).",
+    "Large translation units or tight memory: the benchmark capped Cuik at 100 x 100 functions 'due to compiler stability limits', and its build peak RSS was 69.9 kB per function (about 0.7 GB for 10,000 functions, derived from page data) against clang's 8.8.",
+    "Existing GCC/Clang build scripts, musl (#36) or macOS (#29): the driver exits with an error on unknown flags such as -Wall or -std=c11, and on Linux the GNU toolchain hard-codes /usr/include/x86_64-linux-gnu include paths and needs clang on PATH to link."
+  ],
+  "integration": {
+    "form": "CLI executable, plus static or shared libraries (libCuik front end, libtb backend) built from source",
+    "dependencies": "mimalloc (git submodule); build needs Lua or LuaJIT, Ninja and Clang (default) or GCC (-gcc); on Linux, linking an executable runs the system clang",
+    "min_toolchain": "Clang or GCC with C11 <threads.h> (or build with -no_threads); the release build uses -O2 -DNDEBUG and appends -march=haswell on detected hosts",
+    "platforms": "Hosts: Windows (MSVC toolchain), Linux x86-64 glibc (GNU toolchain), macOS (darwin toolchain, build issue #29 open); musl build fails (#36). Targets: x64, AArch64, MIPS32/64, wasm32",
+    "thread_safety": "libCuik is designed to compile several translation units on separate threads (CUIK_ALLOW_THREADS, -j N; default single-threaded); in TB, tb_module_create_section is documented 'not thread-safe' and code arenas must be one per thread",
+    "drop_in_for_baseline": "partial: accepts -c, -o, -D, -I, -O, -g and -S, but uses -xe instead of -fsyntax-only, rejects unknown GCC flags (-Wall, -std=...), supports C11/C23 only and on Linux links through clang"
+  },
+  "gotchas": [
+    "On Linux the GNU toolchain links by calling system(\"clang ... -lc -lm -fPIE -o <out> <obj>\"), and driver.c ignores cuiklink_invoke's return value. A failed link prints 'Linker exited with code N' but cuik still exits 0, so build systems do not notice. Every Cuik 'Build' number on Linux also includes a clang link.",
+    "-g always emits CodeView debug info (the driver hard-codes TB_DEBUGFMT_CODEVIEW, with a TODO), so gdb and lldb on Linux get no DWARF. The default build.lua appends -march=haswell whenever uname -m maps to a known arch, aarch64 included, so a default x86-64 build needs an AVX2-class CPU. The aarch64 host build looks broken (read from build.lua, not tested).",
+    "Issue #37, open since Feb 2024 with no reply: on Linux x86-64, a printf call with 8 arguments prints garbage for the arguments after the fifth (works on Windows). The benchmark's one-argument functions never hit it, and the harness never checks the built binary's exit code or output, so a miscompile would go unnoticed.",
+    "Harness flaws behind the numbers: Cuik ran a 4x smaller program (10,000 vs 40,000 functions) with per-function normalisation, so the Run column (mostly process start-up) cannot be compared across compilers. Cuik's Build (compile plus clang link) timed below its Compile (57.6 vs 60.6 us/f), which shows contention noise of at least 5% on the parallel, CPU-pinned harness. The 100 Hz psutil poll loop adds up to 10 ms per run, up to about 17% of Cuik's 60 ms check run (derived from page data). The Cuik binary is an unpinned '~master' build. Treat the 2x compile ratio against clang as approximate and the build result as a tie."
+  ],
+  "pick_this_over_siblings_when": "Choose Cuik/TB over TPDE when you have C source rather than LLVM IR and want no LLVM dependency, and over dstogov/ir or the copy-and-patch compilers (PochiVM, WasmNow) when you want a complete C front end together with a sea-of-nodes backend and object/JIT output in one MIT library. Choose TPDE (10-20x faster than LLVM -O0 with LLVM compatibility) or dstogov/ir (proven inside PHP's JIT) when you need a mature, tested backend. TinyCC (catalogued elsewhere) remains the faster plain C compiler.",
+  "verified_claims_summary": "In nordlow/compiler-benchmark's 2026-09 sample run on an AMD Ryzen AI 7 350 under Arch Linux, an unpinned Cuik master build took 6.0, 60.6 and 57.6 us per generated function for check, compile and build. clang 22.1.8 took 15.4, 123.3 and 60.3, and gcc 16.2.1 took 18.2, 732.5 and 500.7, all at default -O0 settings (gcc and clang also with -Wall -Wextra) on a synthetic C program of one-line call-chain functions, with Cuik at 10,000 functions and the others at 40,000. That is about 2x clang and 12x gcc on compile, about 2.6x and 3x on check, a tie with clang on build, and slower than TinyCC on every column.",
+  "status_note": "Active (last commit 2026-07-26; history restarted 2025-03-23 with 'Fresh start on the commit history', 32 commits since, 11 open issues) and MIT-licensed, but self-described as unfinished, buggy and not production-ready. It is usable for experiments or as an embeddable backend, not as a production C compiler. The benchmark numbers come from an unpinned build on a noisy parallel harness that compares different program sizes and never validates the built binaries.",
+  "sources_read": [
+    "https://github.com/RealNeGate/Cuik",
+    "https://github.com/RealNeGate/Cuik/commits/master",
+    "https://github.com/RealNeGate/Cuik/issues",
+    "https://github.com/RealNeGate/Cuik/issues/37",
+    "https://github.com/RealNeGate/Cuik/issues/57",
+    "https://github.com/RealNeGate/Cuik/issues/58",
+    "https://github.com/RealNeGate/Cuik/tree/master/cuik_c",
+    "https://github.com/RealNeGate/Cuik/tree/master/cuik_c/driver",
+    "https://github.com/RealNeGate/Cuik/tree/master/tb",
+    "https://github.com/RealNeGate/Cuik/tree/master/tb/opt",
+    "https://github.com/RealNeGate/Cuik/tree/master/tb/objects",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/HEAD/README.md",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/HEAD/main/README.md",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/HEAD/docs/BUILDING.txt",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/HEAD/docs/STRUCTURE.txt",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/cuik_c/README.txt",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/cuik_c/driver/driver.c",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/cuik_c/driver/driver_arg_parse.h",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/cuik_c/linker.c",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/cuik_c/toolchains/gnu.c",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/main/main_driver.c",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/build.lua",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/include/tb.h",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/tb/jit.c",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/tb/opt/gcm.h",
+    "https://raw.githubusercontent.com/RealNeGate/Cuik/master/tb/NOTES.txt",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/benchmark",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/process_timer.py",
+    "https://github.com/c3lang/tilde-backend",
+    "https://handmadecities.com/media/seattle-2023/tb/ (EGRESS_BLOCKED; search snippet only)"
+  ],
+  "confidence": 0.8
+}
