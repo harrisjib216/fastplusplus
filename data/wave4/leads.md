@@ -10,3 +10,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records. S
 - zig-flatbuffers and lalinsky/msgpack.zig: Zig libraries that match or beat s2s on some fixtures of the third-party Zig serialization suite (found by the s2s enricher). Not catalogued.
 - conjure_enum (fix8mt/conjure_enum): C++20 enum reflection comparing itself to magic_enum, claims unverified; not catalogued (enricher lead, 2026-10-07).
 - OpenXLSX (https://github.com/troldal/OpenXLSX, about 4M cells/s per web snippet) and xlsxio (https://github.com/brechtsanders/xlsxio): xlsx readers with no comparative numbers found (xlsx_drone enricher, 2026-10-07).
+- leo-gan/GLD.SerializerBenchmark (https://github.com/leo-gan/GLD.SerializerBenchmark): 13-language serializer shootout with checked-in dashboard/public/data/*_latest.json.gz (c, cpp, rust, go, zig); mining source for yyjson, mpack, zcbor, qcbor, flatcc, jsoncons and others (w4-mine-i, 2026-10-07).
