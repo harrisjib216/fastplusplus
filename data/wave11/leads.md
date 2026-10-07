@@ -7,3 +7,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Kokkos (wave 11, kokkos/kokkos): arXiv 2411.05009 PIC paper, C to B once the PDF is reachable.
 - whippet (wingo/whippet): embeddable GC in C (MIT) with a bdw backend and mt-gcbench derived from GCBench; README has no numbers (enricher lead, 2026-10-07).
 - sse-popcount (WojciechMula/sse-popcount): BSD-2-Clause, 357 stars, results/ directory with per-CPU popcount numbers; positional popcount (Clausecker/Lemire, arXiv 2412.16370). Leads from the libpopcnt enrichment (2026-10-07).
+- tbox retier lead (https://github.com/tboox/tbox, coroutines-fibers): benchbox wiki channel page gives buffered channel 293 ms vs Go 782 ms vs libmill 1135 ms (first-party, tier C either way); fold into the existing tbox record's claim when next retiering (w1-mine-ae backfill, 2026-10-07).

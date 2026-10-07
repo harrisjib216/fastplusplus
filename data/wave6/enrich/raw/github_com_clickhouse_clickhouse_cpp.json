@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/clickhouse/clickhouse-cpp",
+  "one_liner": "Official C++17 native-protocol ClickHouse client; reads columnar blocks far faster than HTTP, JDBC, Python or reflection-based Go clients.",
+  "what_it_does": "A client library for talking to a ClickHouse server over its native TCP protocol (port 9000) from C++. You build a Client from ClientOptions, then Select with a per-Block callback (or the experimental BeginSelect/NextBlock pull API), Insert whole Blocks, or stream inserts with BeginInsert/SendInsertBlock/EndInsert. Data comes and goes as typed column objects (ColumnUInt64, ColumnString, ColumnArray, Nullable, LowCardinality, Map, Tuple, Decimal, geo, JSON as string), not rows, so it is not a drop-in for an HTTP or row-scanning driver.",
+  "how_it_is_fast": "The native protocol ships data as columnar Blocks in ClickHouse's own little-endian layout, so fixed-width columns are loaded with one bulk read of rows*sizeof(T) bytes straight into a std::vector<T> (ColumnVector::LoadBody calls WireFormat::ReadBytes); there is no per-row text or RowBinary parsing, reflection or per-value allocation. Socket I/O goes through a BufferedInput, and optional block compression uses LZ4 or ZSTD with a CityHash128 checksum per compressed frame. In ch-bench this puts it within about 1.0-1.5x of the fastest clients (ch-go, clickhouse-client) and far ahead of HTTP and row-oriented clients.",
+  "when_to_use": [
+    "A C++ service that already runs against a ClickHouse server and needs to pull or push large columnar result sets (millions of rows) with minimal client CPU and RAM (6.9 MB in ch-bench).",
+    "Bulk ingestion from C++ where you can batch rows into Blocks and send them with Insert or BeginInsert/SendInsertBlock rather than issuing per-row SQL.",
+    "Replacing a curl/HTTP or JDBC path in a C++ or mixed codebase when transport and row formatting dominate: ch-bench shows 516 ms vs 3.7 s for curl on 500M UInt64 rows.",
+    "Linux, macOS or Windows (MSVC and MinGW) builds via CMake, or Bazel (experimental), when you want TLS via OpenSSL or BoringSSL and LZ4/ZSTD compression bundled."
+  ],
+  "when_not_to_use": [
+    "When you want analytics in-process without a server: it is only a client, and it is not faster than ClickHouse's own clickhouse-client or the Go ch-go client (parity to about 1.3-1.5x slower in ch-bench).",
+    "Small, frequent inserts sent as SQL text: issue #442 reports 1,600 rows/s over the native protocol vs 20,000 rows/s over HTTP for 100-row INSERT ... VALUES batches with async_insert settings (no maintainer analysis shown); the README notes SDK-side async inserts only work with SQL-text INSERTs, so batch rows into Blocks and use Insert or BeginInsert instead.",
+    "Sharing one connection across threads: Client is documented as NOT thread-safe; you need one Client per thread or your own locking/pooling (no pool is provided).",
+    "Projects that need a stable ABI or a recent tagged release: ABI compatibility is explicitly not guaranteed, and the newest tag (v2.6.2, June 2024 on the releases page) trails two years of master fixes.",
+    "Code that wants row-at-a-time ORM-style access: the API is column-oriented and you index columns by position and cast with As/AsStrict."
+  ],
+  "integration": {
+    "form": "static lib (shared optional on Linux; shared builds are rejected on macOS and MSVC)",
+    "dependencies": "Vendored LZ4, ZSTD and CityHash (system LZ4/ZSTD/Abseil selectable); vendored Abseil int128 unless CH_USE_ABSEIL_FOR_BIGNUM=OFF (the 3.x API setting); optional OpenSSL (WITH_OPENSSL) or BoringSSL under Bazel for TLS",
+    "min_toolchain": "C++17, CMake 3.13+ (FetchContent example needs 3.14); Bazel via bzlmod (experimental)",
+    "platforms": "Linux, macOS, Windows MSVC and MinGW (CI workflows for each); little-endian hosts assumed (see gotchas)",
+    "thread_safety": "Client is not thread-safe (README); use one Client per thread or external synchronization",
+    "drop_in_for_baseline": "partial — it replaces the HTTP interface, JDBC or another driver only after rewriting data access to the Block/column API; SQL strings and server settings carry over"
+  },
+  "gotchas": [
+    "The ch-bench numbers measure only block transfer and decoding: the C++ program sums block.GetRowCount() and never reads a value, the curl row pipes RowBinaryWithNamesAndTypes to /dev/null under time -v (no client deserialization, different timing method), and the table keeps the best of runs taken months apart in 2022 on unstated hardware with unstated compiler flags and server version.",
+    "Default build flags differ from the API you probably want: without CH_USE_3X_API, Bool maps to ColumnUInt8, 128-bit integers need Abseil and GetCurrentEndpoint returns std::optional; the 3.x values change the API and CMAKE_BUILD_TYPE defaults to RelWithDebInfo when unset.",
+    "Fixed-width values are copied raw from the wire (ReadFixed/ReadAll memcpy, ColumnVector::LoadBody) and no byte-swapping code appears in the sources read, so big-endian hosts are not handled; this is not documented.",
+    "Open bug reports include a hang in recv during Insert when the server dies (#209), an Insert that does not always throw on server error (#406) and automatic reconnect dropping per-connection settings (#371); recv and compressed-block size validation fixes landed on master in September 2026 after the last tag."
+  ],
+  "pick_this_over_siblings_when": "Pick it over chDB when you already run a ClickHouse server and need a lean C++ client rather than an embedded engine; it does not compete with the engine siblings (DataFusion, Velox, Databend, StarRocks), which execute queries themselves rather than fetch results from ClickHouse.",
+  "verified_claims_summary": "In the ClickHouse/ch-bench suite (written for ch-go), reading SELECT number FROM system.numbers_mt LIMIT 500000000 (4.0 GB) from a localhost server took 516 ms and 6.9 MB RAM with clickhouse-cpp vs 3.7 s for curl over HTTP, 7.2 s for clickhouse-jdbc, 37 s for Python clickhouse-driver and 46.8 s for clickhouse-go, but 387 ms for clickhouse-client and 401 ms for ch-go; these are 2022 best-of results with no CPU model, compiler, C++ build flags or server version, and the repo's own hyperfine exports give much smaller Go gaps (611.3 ms vs 6529.0 ms in RESULTS.md).",
+  "status_note": "Actively maintained by ClickHouse (master commits through 2026-09-28, CI against server 26.3-26.9) and Apache-2.0, but the last tagged release is v2.6.2 from June 2024, so pin a master commit or expect to miss recent protocol-hardening fixes.",
+  "sources_read": [
+    "https://github.com/ClickHouse/clickhouse-cpp",
+    "https://github.com/ClickHouse/clickhouse-cpp/commits/master",
+    "https://github.com/ClickHouse/clickhouse-cpp/releases",
+    "https://github.com/ClickHouse/clickhouse-cpp/issues?q=is%3Aissue+performance",
+    "https://github.com/ClickHouse/clickhouse-cpp/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/ClickHouse/clickhouse-cpp/issues/442",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/cmake/cpp17.cmake",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/client.h",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/client.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/columns/numeric.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/compressed.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/socket.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/wire_format.h",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/wire_format.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/platform.h",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/buffer.h",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/clickhouse/base/input.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/clickhouse-cpp/HEAD/bench/bench.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/ch-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/ClickHouse/ch-bench/HEAD/RESULTS.md",
+    "https://raw.githubusercontent.com/ClickHouse/ch-bench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ClickHouse/ch-bench/HEAD/ch-bench-cpp/bench.cpp",
+    "https://raw.githubusercontent.com/ClickHouse/ch-bench/HEAD/curl/run.sh"
+  ],
+  "confidence": 0.75
+}
