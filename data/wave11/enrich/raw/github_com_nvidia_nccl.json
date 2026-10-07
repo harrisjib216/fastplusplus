@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/nvidia/nccl",
+  "one_liner": "NVIDIA's GPU collective-communication library (all-reduce, all-gather, send/recv); far faster than Gloo for large GPU all-reduces, slower for small ones.",
+  "what_it_does": "NCCL implements MPI-style collectives (AllReduce, AllGather, ReduceScatter, Broadcast, Reduce, AlltoAll, Gather, Scatter) plus Send/Recv and one-sided put/signal calls on GPU buffers, across GPUs in one node and across nodes. The C API (nccl.h) is stream-ordered: ncclAllReduce(sendbuf, recvbuf, count, type, op, comm, cudaStream_t) enqueues a kernel and returns, communicators are built with ncclGetUniqueId plus ncclCommInitRank (or split/shrink/grow), and ncclGroupStart/End batches calls. It is not a drop-in for Gloo or MPI: frameworks wrap it (PyTorch's 'nccl' backend), and buffers must live in GPU memory.",
+  "how_it_is_fast": "Collectives run as CUDA kernels that move and reduce data GPU-to-GPU over NVLink/NVSwitch/PCIe peer access and GPUDirect RDMA on InfiniBand, so data never stages through host memory. A per-call tuner picks among seven algorithms (Ring, Tree, CollNetDirect, CollNetChain, NVLS, NVLSTree, PAT in src/init.cc), with NVLS and CollNet offloading reductions to NVLink SHARP or in-network SHARP switches. Three wire protocols trade latency for bandwidth: LL interleaves a 4-byte flag with every 4 bytes of data so receivers poll memory instead of synchronizing, LL128 uses one 8-byte flag per 128-byte line, and Simple uses large chunks with explicit fences (src/include/device.h).",
+  "when_to_use": [
+    "Data-parallel or tensor-parallel training on NVIDIA GPUs: gradient all-reduce and parameter all-gather of tens of KB to GBs per call, where the record's data show NCCL ahead of Gloo from 64 KB (IB) or 128 KB (TCP) upward.",
+    "Multi-GPU nodes with NVLink or NVSwitch (DGX/HGX class), where NVLS and NVLink peer paths are available that host-memory libraries cannot use.",
+    "Multi-node GPU clusters on InfiniBand or RoCE with GPUDirect RDMA; PyTorch's own docs say to use NCCL on GPU hosts with InfiniBand because it is the only backend there that supports InfiniBand and GPUDirect.",
+    "Code that already orders work on CUDA streams and wants communication to overlap compute without a host round trip (stream-ordered API, CUDA graph capture is supported by nccl-tests -G)."
+  ],
+  "when_not_to_use": [
+    "Small messages where latency dominates: in the only measured comparison Gloo was faster at every size up to 32 KB on IB (1 KB: 0.039 ms vs NCCL 0.16 ms) and up to 64 KB on TCP (1 KB: 0.354 ms vs 1.89 ms).",
+    "CPU tensors or hosts without NVIDIA GPUs: NCCL needs CUDA and GPU buffers; PyTorch's rule of thumb is Gloo for CPU training.",
+    "Non-NVIDIA accelerators (AMD, Intel XPU): use the vendor's fork or library instead (PyTorch docs point XPU to XCCL).",
+    "Applications that cannot guarantee every rank issues the same collectives in the same order: a mismatch hangs all ranks, and hangs dominate the issue tracker (for example #257 'AllReduce hangs', #1184 'all_reduce_perf hangs on DGX-H100', #1013 ncclCommAbort stuck).",
+    "Windows or WSL deployments: issue #442 'NCCL tests don't work on WSL'; the build and packaging target Linux (deb, rpm, txz)."
+  ],
+  "integration": {
+    "form": "shared lib (libnccl.so) or static lib (libnccl_static.a); prebuilt packages from NVIDIA, or built with make src.build; Python wheel target",
+    "dependencies": "CUDA toolkit and driver; NVIDIA GPU; optional InfiniBand verbs / GPUDirect RDMA stack and external network plugins (libnccl-net.so); MPI only for multi-process nccl-tests",
+    "min_toolchain": "nvcc plus a host C++ compiler at C++14 (C++17 when building with CUDA 13, per makefiles/common.mk); default gencode starts at sm_60 for CUDA 11/12 and sm_75 for CUDA 13; exact minimum CUDA version not documented in the README",
+    "platforms": "Linux on NVIDIA GPUs (Pascal sm_60 through Blackwell sm_100/sm_120 and later in the default gencode list); interconnects PCIe, NVLink, NVSwitch, InfiniBand verbs, TCP sockets",
+    "thread_safety": "Collective calls on a communicator may synchronize across CPUs, so nccl.h requires each rank's calls from a different thread or process, or wrapped in ncclGroupStart/ncclGroupEnd; ncclCommInitRank blocks until all ranks join.",
+    "drop_in_for_baseline": "partial — frameworks swap it in as a backend (PyTorch backend='nccl' instead of 'gloo'), but the raw API differs from Gloo's and requires GPU-resident buffers and CUDA streams"
+  },
+  "gotchas": [
+    "Harness flaw behind the record's numbers (gloo issue #158): the Gloo command shown passes no --elements, and at the reported Gloo commit 1d9e62a gloo/benchmark/runner.cc sweeps 100 to 5,000,000 floats in 1-2-5 steps (400 B, 800 B, 2,000 B, 4,000 B, 8,000 B, 20,000 B, 40,000 B, 80,000 B, 200,000 B ...), so most of the table's power-of-two rows (1 KB, 16 KB, 32 KB, 64 KB, 128 KB, 256 KB, 512 KB, 1 MB) cannot have come from the command as shown. The report also never says which Gloo column (min, p50, p99 or max) was copied, how many NCCL ranks or GPUs ran, or which NCCL tool was used, and the issue has no replies.",
+    "The baseline is not like-for-like: allreduce_ring is Gloo's CPU host-memory benchmark with 2 processes (-s 2), not its CUDA variant. Gloo's own README says its CUDA-aware algorithms depend on NCCL, so on GPUs Gloo is partly NCCL underneath.",
+    "The NCCL column is noisy and both TCP columns are slow: 1 KB 0.16 ms vs 2 KB 0.06 ms, and 128 KB (0.09 ms) is faster than 64 KB (0.13 ms) on IB. The reporter flagged possible stragglers. On TCP, NCCL's 2 MB in 20.9 ms is about 100 MB/s, roughly a 1 Gbit/s link (derived from page data), so the TCP rows say little about modern Ethernet.",
+    "Each call enqueues a kernel and returns at once. Errors and hangs surface asynchronously (ncclCommGetAsyncError, ncclCommAbort), and issue #750 reports a hang on all ranks under CUDA_LAUNCH_BLOCKING=1 since v2.13. Communication kernels also take SMs from compute; ncclConfig_t exposes minCTAs/maxCTAs to cap them."
+  ],
+  "pick_this_over_siblings_when": "None of the siblings does inter-GPU communication; NCCL is the collective layer under multi-GPU training in PyTorch, MXNet and Flashlight, so pick it when gradients or activations must cross GPUs. The kernel siblings (FlashAttention, fast.cu, BitBLAS) speed up compute on one GPU.",
+  "verified_claims_summary": "One user's report filed against Gloo (issue #158, Dec 2018): NCCL 2.3.7 on two 8x V100 servers against Gloo commit 1d9e62a's CPU allreduce_ring with 2 processes and 5000 iterations. NCCL loses below 64 KB (IB) or 128 KB (TCP) and wins above, up to 0.13 ms vs 20.161 ms at 256 KB on IB and 20.9 ms vs 78.237 ms at 2 MB on TCP. No compiler, CPU model, NCCL command or latency statistic is given, and the shown Gloo command cannot produce most of the table's sizes. PyTorch's docs separately state that Gloo runs slower than NCCL on GPUs, without numbers.",
+  "status_note": "Very active: NCCL 2.32.3 was merged to master on 2026-09-17, with frequent releases. Apache-2.0 per the SPDX headers and LICENSE.txt, with some files under BSD-3-Clause (the README's 'all rights reserved' line is stale). Usable as-is, but the catalogue evidence is weak (tier C, one 2018 user report with harness gaps), not a reproducible benchmark.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/makefiles/common.mk",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/makefiles/version.mk",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/src/nccl.h.in",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/init.cc",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/include/device.h",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/include/nccl_common.h",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/tuning/tuning.cc",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/collectives.cc",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/device/prims_ll.h",
+    "https://raw.githubusercontent.com/NVIDIA/nccl/master/src/device/prims_ll128.h",
+    "https://raw.githubusercontent.com/NVIDIA/nccl-tests/HEAD/README.md",
+    "https://github.com/NVIDIA/nccl",
+    "https://github.com/NVIDIA/nccl/tree/master/src",
+    "https://github.com/NVIDIA/nccl/commits/master",
+    "https://github.com/NVIDIA/nccl/issues?q=is%3Aissue+hang+sort%3Acomments-desc",
+    "https://github.com/NVIDIA/nccl/issues/750",
+    "https://github.com/facebookincubator/gloo/issues/158",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/main/README.md",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/main/gloo/benchmark/main.cc",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/main/gloo/benchmark/options.cc",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/main/gloo/benchmark/runner.cc",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/1d9e62a/gloo/benchmark/runner.cc",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/1d9e62a/gloo/benchmark/options.cc",
+    "https://raw.githubusercontent.com/facebookincubator/gloo/1d9e62a/gloo/benchmark/main.cc",
+    "https://raw.githubusercontent.com/pytorch/pytorch/main/docs/source/distributed.md"
+  ],
+  "confidence": 0.6
+}
