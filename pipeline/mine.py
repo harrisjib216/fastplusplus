@@ -109,8 +109,17 @@ def taxonomy():
     return "\n".join(out)
 
 
+def resolve_reference_links(md):
+    """awesome-c uses reference-style links ([Expat][89] with '[89]: url' definitions at the end);
+    inline them so a section carries its URLs."""
+    defs = dict(re.findall(r"^\[([^\]]+)\]:\s*(\S+)", md, re.M))
+    return re.sub(r"\[([^\]]+)\]\[([^\]]+)\]",
+                  lambda m: f"[{m.group(1)}]({defs[m.group(2)]})" if m.group(2) in defs else m.group(0), md)
+
+
 def split_sections(md):
     """Return [(title, text)] for every '## ' or '### ' heading with at least one list entry."""
+    md = resolve_reference_links(md)
     sections, cur, buf = [], None, []
     for line in md.splitlines():
         m = re.match(r"^(##|###)\s+(.*)", line)
