@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/brunolevy/geogram",
+  "one_liner": "BSD-licensed C++ geometry library whose multithreaded 3D Delaunay/regular triangulation (PDEL) outruns CGAL on large point sets.",
+  "what_it_does": "Geogram is a geometry-processing library (remeshing, reconstruction, mesh booleans, exact predicates, OpenNL); this entry is its ParallelDelaunay3d class, which computes 3D Delaunay tetrahedralizations and, when created with dimension 4, regular (weighted) triangulations, the duals of power or Laguerre diagrams. You call Delaunay::create(3, \"PDEL\") after GEO::initialize(), pass a flat array of doubles to set_vertices(), then read cells, adjacency and neighbours back as index arrays; Voronoi or Laguerre cells are extracted with the ConvexCell helpers, and PeriodicDelaunay3d adds periodic boundary conditions. The API is unrelated to CGAL's Delaunay_triangulation_3: it is batch construction from a point array, with no vertex removal and no public incremental insertion.",
+  "how_it_is_fast": "Points are first sorted in BRIO order (Amenta-Choi-Rote biased randomized insertion with Hilbert-style spatial sorting via std::nth_element), then inserted with the Bowyer-Watson cavity algorithm, traversing the cavity from inside as CGAL does. The first BRIO levels (about 1,000 points) are inserted sequentially; each later level is split into one contiguous chunk per thread, and threads claim tetrahedra with compare-and-swap on a one-byte per-tetrahedron ownership array, rolling back and retrying (or inserting from the other end of their chunk) when they collide with another thread. Memory is preallocated at 7 tetrahedra per point and split into per-thread pools, and points that overflow a pool are inserted sequentially at the end. Point location uses an inexact walk followed by the exact one (structural filtering), with filtered floating-point predicates that fall back to exact expansion arithmetic.",
+  "when_to_use": [
+    "3D Delaunay tetrahedralization of 1M to tens of millions of points on a multicore CPU, when a BSD-3-Clause library fits your licensing better than CGAL or Gmsh's HXT.",
+    "Power or Laguerre diagrams (weighted points), for example semi-discrete optimal transport or particle methods; the third-party paper's clustered weighted sets ran 7.5x to 12.7x faster than single-threaded CGAL, and 0.060 s vs 0.533 s against CGAL Parallel at 100k points (snippet data).",
+    "Periodic Voronoi or Delaunay diagrams in a box, through the related PeriodicDelaunay3d class.",
+    "Memory-bound runs: the FAQ claims point sets of hundreds of millions, and the third-party GeoDel wrapper measured 308 MB peak RSS for 1M points vs 2,371 MB for SciPy/Qhull (see the 32-bit index caveat).",
+    "Embedding just the triangulator: the Delaunay_psm.h/.cpp amalgamation (about 36,000 lines per GeoDel's README) drops into another build without the rest of Geogram."
+  ],
+  "when_not_to_use": [
+    "Raw CPU speed on very large uniform point sets: in the SIGGRAPH 2026 comparison HXT (Gmsh) took 2.259 s at 15M white-noise points, about 2.7x faster than Geogram, and against CGAL Parallel on the same 16 cores Geogram was only about 1.12x faster (6.138 s vs 6.903 s, snippet data).",
+    "Dynamic triangulations: no vertex removal (the FAQ says CGAL has it and Geogram does not), and public incremental insert_vertex() is still an open request (issue #255).",
+    "Degenerate input: the class comment says it does not support input where all points are coplanar or collinear and recommends CGAL for that; duplicate points are silently skipped and left as isolated vertices.",
+    "Constrained or quality-meshing tetrahedralization: PDEL is unconstrained; Geogram delegates constrained meshing to its bundled TetGen.",
+    "A small header-only dependency: the full library is a CMake-built C++17 project with graphics, Lua and legacy-numerics options on by default; use the PSM amalgamation or GEOGRAM_LIB_ONLY to trim it."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake); the Delaunay module is also available as a single-file source drop (Delaunay_psm.h/.cpp)",
+    "dependencies": "none required for Delaunay; optional TBB (GEOGRAM_WITH_TBB, off by default); the bundled TetGen and Triangle are built by default (GEOGRAM_WITH_TETGEN and GEOGRAM_WITH_TRIANGLE ON), and their licences are separate from Geogram's BSD-3-Clause, so check them or turn the options off",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17), CMake 3.5 or newer; exact predicates need -ffp-contract=off (and, per GeoDel, -frounding-math)",
+    "platforms": "Linux, Windows, macOS, Android, Emscripten per the FAQ; x86-64 and aarch64; up to 126 threads by default (one-byte cell-status array), more only with GEO_CONNECTION_MACHINE",
+    "thread_safety": "One ParallelDelaunay3d instance spawns its own worker threads (Process::maximum_concurrent_threads(), capped at 126); separate instances on separate threads are the supported pattern (issue #297 fixed this for Delaunay2d), and concurrent neighbour queries need set_thread_safe(true). Otherwise not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build flags are part of correctness: the exact predicates break if the compiler fuses multiply-adds. Geogram's Linux gcc config adds -ffp-contract=off, but clang configs for aarch64 (Android, Darwin/Apple Silicon) and Linux clang lacked it until fixes in 2026 (issues #358 and #382): locate_inexact() looped or hit its 2,500-step guard, and a 9 s tetrahedralization took 30 s to over 13 minutes, nondeterministically. Vendoring the sources into your own build means copying these flags.",
+    "Issue #367 (July 2026): PDEL hit an out-of-range vertex index in the parallel locate_inexact() walk (19,202 points, 32 threads, keeps_infinite, v1.9.x and v1.10.0). It was fixed by PR #368 ('fix locate_inexact() reading deleted-tet vertex slot') in v1.10.1, so the SIGGRAPH 2026 paper's Geogram runs (arXiv May 2026) predate the fix. It is a rare-case robustness fix, and nothing shows that it changes timings.",
+    "With the default 32-bit index_t, set_vertices() computes the tetrahedron pool size as nb_vertices * 7 * 4 in index_t, which wraps above about 153M points (2^32 / 28, derived from source), and no guard was found in set_vertices. Build with GEOGRAM_WITH_GARGANTUA (64-bit indices) before relying on the FAQ's hundreds-of-millions claim.",
+    "Delaunay::create() does not fail loudly in normal builds: if the name is not registered (for example GEO::initialize() was not called), it logs a warning and returns a Delaunay_NearestNeighbors object, which has no tetrahedra. set_vertices() keeps a pointer to your coordinate array rather than copying it, so the array must outlive the triangulation. Weights for dimension 4 are passed as a fourth coordinate sqrt(W - w_i), not as weights."
+  ],
+  "pick_this_over_siblings_when": "Pick Geogram over HXT (which ships inside Gmsh) when you want a standalone BSD-3-Clause library with power or periodic diagrams and Voronoi cell extraction and can accept being about 2.7x slower at 15M uniform points, and over gDel3D when there is no NVIDIA GPU or the input is clustered rather than uniform. For 2D, the Delaunay32, detria or pgl entries fit better.",
+  "verified_claims_summary": "Third-party SIGGRAPH 2026 paper (Taveira et al., arXiv 2605.06408), seen only as search snippets: CPU baselines ran on 16 cores of an AMD EPYC 9534 with compiler, flags and library versions unknown. On clustered weighted point sets (power diagrams), 16-thread Geogram ran 7.5x to 12.7x faster than single-threaded CGAL from 100k to 15M points; on the same 16 cores it was about 1.12x faster than CGAL Parallel at 15M white-noise points (6.138 s vs 6.903 s) and about 2.7x slower than HXT (2.259 s). A separate third-party wrapper, GeoDel, measured Geogram single-threaded at 5.27 s vs 58.0 s for SciPy/Qhull on 1M uniform points (best of three, hardware unstated).",
+  "status_note": "Actively maintained (commits through 2026-10-06; v1.10.1 carried the PDEL locate fix) and BSD-3-Clause, with a 2023 SGP Software Award; copyable, most easily through the Delaunay PSM amalgamation, provided you keep the -ffp-contract=off build flag.",
+  "sources_read": [
+    "https://github.com/BrunoLevy/geogram",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/README.md",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/cmake/geogram.cmake",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/cmake/platforms/Linux.cmake",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/cmake/platforms/Linux-gcc.cmake",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/CMakeLists.txt",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/delaunay/parallel_delaunay_3d.h",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/delaunay/parallel_delaunay_3d.cpp",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/delaunay/delaunay.h",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/delaunay/delaunay.cpp",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/delaunay/delaunay_sync.h",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/basic/numeric.h",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/basic/common.h",
+    "https://raw.githubusercontent.com/BrunoLevy/geogram/HEAD/src/lib/geogram/api/defs.h",
+    "https://github.com/BrunoLevy/geogram/wiki/Delaunay3D",
+    "https://github.com/BrunoLevy/geogram/wiki/FAQ",
+    "https://github.com/BrunoLevy/geogram/issues?q=is%3Aissue+delaunay",
+    "https://github.com/BrunoLevy/geogram/issues/367",
+    "https://github.com/BrunoLevy/geogram/issues/358",
+    "https://github.com/BrunoLevy/geogram/issues/382",
+    "https://github.com/BrunoLevy/geogram/releases",
+    "https://github.com/BrunoLevy/geogram/releases/tag/v1.10.1",
+    "https://github.com/BrunoLevy/geogram/commits",
+    "https://github.com/anttwo/geodel",
+    "https://raw.githubusercontent.com/anttwo/geodel/HEAD/README.md"
+  ],
+  "confidence": 0.6
+}

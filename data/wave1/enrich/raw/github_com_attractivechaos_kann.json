@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/attractivechaos/kann",
+  "one_liner": "Four-file C library for training small MLPs, CNNs and RNNs on CPU; beat 2017 Theano+Keras and tiny-dnn in its own runs.",
+  "what_it_does": "KANN builds a static computational graph of tensor operators (dense, conv1d/conv2d, max pooling, dropout, GRU/LSTM/vanilla RNN layers, several cost functions) and trains it with graph-based reverse-mode automatic differentiation. The API is plain C: build nodes with kann_layer_* and kad_* calls, compile with kann_new(), then train with kann_train_fnn1() or a hand-written loop around kann_cost() and kann_RMSprop(), and predict with kann_apply1(). RNNs are trained by unrolling them to a fixed length with kann_unroll(). It is not a drop-in for Keras, TensorFlow or tiny-dnn; models are saved in KANN's own binary format.",
+  "how_it_is_fast": "There is little framework overhead: one C graph evaluated in topological order with float32 buffers, no interpreter or Python layer. Matrix products use a cache-tiled sgemm built on hand-written 4-wide SSE (or, since June 2025, NEON) sdot/saxpy kernels, or cblas_sgemm when compiled with HAVE_CBLAS (OpenBLAS gave the README's fastest rows). Convolution is direct computation with an optimized inner loop and an NCHW-to-NHWC reshuffle, not im2col, so it needs little working memory but does not benefit from BLAS. Multi-threading (kann_mt) splits each mini-batch across cloned networks on pthreads and averages their gradients, which scaled better than the 2017 Theano+Keras setup.",
+  "when_to_use": [
+    "Training or running small to medium networks (an MLP with tens to hundreds of hidden units, a small CNN, a two-layer GRU of 160 units) inside a C or C++ program without Python, CUDA or a framework dependency.",
+    "Embedding a trainable model in a tool where the four source files (kann.c, kann.h, kautodiff.c, kautodiff.h, about 3,900 lines) can be vendored, for example bioinformatics or command-line utilities.",
+    "CPU-only multi-core training of tiny models where per-step framework overhead dominates and intra-batch threading across 4 cores helps (the README's 4-thread rows beat Theano+Keras by about 1.3x to 2.4x, derived from page data).",
+    "Building non-standard graphs (shared weights, multiple inputs, outputs or costs, VAEs, recurrent nodes) in C when tiny-dnn's layer stack is too rigid.",
+    "Learning how a reverse-mode autodiff engine and RNN unrolling work; the code and doc/02dev.md are short enough to read in an afternoon."
+  ],
+  "when_not_to_use": [
+    "Anything that needs GPUs, large networks or modern operators: no GPU backend, no batch normalization, no attention or transformer layers, float32 only.",
+    "Single-threaded convolution or RNN training without BLAS: KANN's own kernels lost to MKL-backed Theano+Keras in the README (mnist-cnn 57m57s vs 37m12s, mul100-rnn 40m05s vs 27m30s), and doc/02dev.md says its direct convolution is about twice as slow as Theano's GEMM-based one.",
+    "When you need a maintained project: the only commits after April 2021 are two in June 2025 (NEON support and an mt-mode API), and issues such as #33 (mnist-cnn assert failure, 2019) and #34 (kann_class_error returns 0 for KANN_C_CEB, 2020) are still open.",
+    "Interchange with other frameworks: no ONNX or Keras import/export, only kann_save/kann_load in its own format.",
+    "Wide-SIMD x86 targets where you expect AVX2/AVX-512 or FMA: the built-in kernels are 128-bit SSE intrinsics; link OpenBLAS (make CBLAS=...) to get faster dense layers."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc and libm; optional pthreads (HAVE_PTHREAD, on in the Makefile) and an optional CBLAS such as OpenBLAS (HAVE_CBLAS); the examples' kann_extra/kann_data.c uses zlib",
+    "min_toolchain": "ANSI C / C89-compatible compiler (README; the Makefile builds with gcc -O2 and also checks -Wc++-compat); kann.h has extern \"C\" guards for C++",
+    "platforms": "any C target; SSE fast path on x86-64, NEON fast path on aarch64 since June 2025, scalar fallback elsewhere",
+    "thread_safety": "Not documented as thread-safe. One kann_t must not be used from several threads; kann_mt() runs its own worker threads that main-thread code busy-waits on, and the default random number state (kad_rand(0), kann_srand) and kann_verbose are unsynchronized globals.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness differences behind the README table (none invalidates it, but the rows are not like-for-like): KANN's mnist-cnn adds two dropout(0.2) layers that the Keras (-C without -d) and tiny-dnn models lack; the TensorFlow script trains with Adam and tiny-dnn with plain SGD and softmax cross-entropy, while KANN and Keras use RMSprop with sigmoid binary cross-entropy; the Python scripts print their own timers (Keras rnn-bit.py includes model build and Theano compilation, mlp.py excludes it) while the KANN examples have no internal timer, and the README does not say which timer produced each row; the scripts leave theano.config.openmp commented out, so Theano's 4-CPU rows thread only MKL GEMM.",
+    "examples/rnn-bit.c trains with 'for (j = 0; j < d->n - mini_size; j += mini_size)', so each epoch skips the tail of the data (468 batches, 29,952 of the 30,000 mul100 samples); the extra work this saves is under 0.2%, so it does not explain the RNN speedups.",
+    "kann_mt() synchronizes by spinning on a volatile int counter rather than atomics or a condition variable on the main thread: one core is burned while workers run, and the pattern relies on x86 memory ordering, a concern for the new aarch64 NEON build. The NEON kernels carry a source comment saying they were 'translated from SSE to NEON by LLM' and have no published benchmarks.",
+    "Issue #44 (Apple M1) reports the Getting Started rnn-bit example printing 1924146487037 instead of 1138429; the low 21 bits match and only bits 38-40 are wrong (derived from issue data), because rnn-bit's apply mode decodes 64 steps while the model was trained on the data's bit length, so untrained steps can emit spurious 1s. Also, the examples call kad_trap_fe(), which unmasks SSE invalid and divide-by-zero exceptions, so an invalid operation (a NaN-producing step) or a division by zero makes them crash with SIGFPE."
+  ],
+  "pick_this_over_siblings_when": "Pick KANN over tiny-ml-runtime when you need training and RNNs rather than inference of a fixed tiny MLP, and over PyTorch, MXNet or Caffe when a dependency-free C source drop matters more than speed on big models or GPUs. Adept-2, XAD and CoDiPack are scalar operator-overloading AD for C++ numerical code, not neural-network training, so they rarely compete with KANN.",
+  "verified_claims_summary": "First-party 2017 README table, one run per row on 2x Xeon E5-2697 2.7GHz (Linux) and a Core i7-3667U (Mac), compiler and flags unstated (the Makefile defaults to gcc -O2): mnist-mlp, 20 epochs, 1 thread, took 31.3 s for KANN with SSE and 18.8 s with OpenBLAS 0.2.19 versus 33.7 s for Theano 0.8.2 + Keras 1.2.2 with MKL and 2m19s for tiny-dnn, and with 4 threads KANN beat Theano+Keras on mnist-cnn (19m09s vs 24m24s) and mul100-rnn (12m13s, or 8m18s with OpenBLAS, vs 19m52s). Single-threaded without BLAS it lost to Theano+Keras on mnist-cnn (57m57s vs 37m12s) and mul100-rnn (40m05s vs 27m30s), and the baselines are 2017 releases, so the result is about framework overhead and threading on tiny models, not about KANN's kernels beating MKL.",
+  "status_note": "Stale: commits stopped in April 2021 apart from two in June 2025 (NEON support, an mt-mode API), with 2019-2021 bug reports unanswered, but it is MIT-licensed, about 3,900 lines in four C files with no required dependencies, and easy to vendor and patch.",
+  "sources_read": [
+    "https://github.com/attractivechaos/kann",
+    "https://github.com/attractivechaos/kann/tree/master/examples",
+    "https://github.com/attractivechaos/kann/commits",
+    "https://github.com/attractivechaos/kann/issues?q=is%3Aissue",
+    "https://github.com/attractivechaos/kann/issues/33",
+    "https://github.com/attractivechaos/kann/issues/34",
+    "https://github.com/attractivechaos/kann/issues/44",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/README.md",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/kann.h",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/kann.c",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/kautodiff.h",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/kautodiff.c",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/mlp.c",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/mnist-cnn.c",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/rnn-bit.c",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/keras/mlp.py",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/keras/rnn-bit.py",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/tensorflow/mlp.py",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/examples/tiny-dnn/mlp.cpp",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/doc/01user.md",
+    "https://raw.githubusercontent.com/attractivechaos/kann/HEAD/doc/02dev.md"
+  ],
+  "confidence": 0.8
+}
