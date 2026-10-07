@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/google/leveldb",
+  "one_liner": "Google's embedded ordered key-value LSM store; 10-17x SQLite3's write and scan rates in its 2011 benchmark.",
+  "what_it_does": "LevelDB is an embeddable C++ library that stores an ordered map from byte-string keys to byte-string values on local disk. The API is Put/Get/Delete, atomic WriteBatch, snapshots and forward/backward iterators (include/leveldb/db.h), with a pluggable comparator and an Env interface for OS calls. It is not a drop-in for SQLite: there is no SQL, no relational model, no secondary indexes and no client-server layer.",
+  "how_it_is_fast": "It is a log-structured merge tree: each write is appended to a log and inserted into an in-memory skiplist memtable, which is flushed (about every 4 MB) into immutable sorted tables that background compaction merges level by level (10 MB for level 1, 100 MB for level 2, and so on). Writes therefore turn into sequential appends and bulk merges instead of in-place B-tree page updates, and sequential scans read sorted, Snappy-compressed 4 KB blocks. An LRU block cache and optional Bloom filters cut random-read cost.",
+  "when_to_use": [
+    "Write-heavy or ingest-heavy local storage of small records (about 100-byte values) where asynchronous writes are acceptable; the 2011 page shows 164,000 random writes/s vs 9,860 for SQLite3.",
+    "Ordered range scans and prefix iteration over sorted keys: 4.03M sequential reads/s vs 383,000 for SQLite3 and 1.01M for Kyoto TreeDB on the same page.",
+    "Applications that want a small, stable-API C++ library with no mandatory dependencies, such as browser or desktop storage (the record lists Chromium's IndexedDB as a user).",
+    "Batched atomic updates through WriteBatch, including group commits with sync=true to amortise fsync cost."
+  ],
+  "when_not_to_use": [
+    "Read-dominated random point lookups: LevelDB lost random reads to both SQLite3 (129,000 vs 134,000 ops/s) and Kyoto TreeDB (151,000), and with a 128 MB cache TreeDB reached 463,000 vs LevelDB's 190,000.",
+    "Large values: at 100,000-byte values LevelDB managed 1,100 sequential and 480 random writes/s vs 1,600 for SQLite3, because every value is written at least twice (log, then compaction).",
+    "Multi-process access, SQL queries, secondary indexes or transactions beyond single WriteBatches; only one process can open a database.",
+    "Synchronous-durable writes on ext4: the page reports LevelDB dropping to about 31 sync writes/s while SQLite3 did not noticeably drop.",
+    "Projects that need active development or new features: the README says only critical fixes and changes needed by Google's internal clients are reviewed, and build-system contributions are unlikely to be accepted."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake, BUILD_SHARED_LIBS)",
+    "dependencies": "none required; optional Snappy, Zstd, crc32c and tcmalloc are linked when found; googletest and google benchmark submodules only for tests and benchmarks",
+    "min_toolchain": "C++17 and CMake 3.22 (raised in the 2026-03-11 commit); built with -fno-exceptions and -fno-rtti",
+    "platforms": "POSIX (Linux, macOS) and Windows are the tested platforms; other OSes via a custom Env",
+    "thread_safety": "One DB object may be shared by many threads in one process without external locking; Iterator and WriteBatch objects need external synchronisation; an OS file lock stops a second process from opening the same database.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Bloom filters are off by default (Options::filter_policy is null, db_bench uses --bloom_bits=-1), so a missing-key Get can probe every level; set NewBloomFilterPolicy(10) for random-read workloads that do not fit in memory.",
+    "Writes default to sync=false: a Put survives a process crash but recent writes can be lost on a machine crash; the 2011 headline numbers all use asynchronous mode, and the page notes the disks had write caching enabled.",
+    "Deleted data is reclaimed only by compaction: open issue #603 reports disk use growing without bound under a write-then-batch-delete cycle with 9 KB-500 KB values, and the reporter had to consider manual CompactRange calls.",
+    "Harness note: the 2011 SQLite3 numbers come from a table with a rowid plus a separate primary-key index (two B-trees per row); the repo only made WITHOUT ROWID the default in the 2019-12-02 commit 'Add WITHOUT ROWID to SQLite benchmark', so today's benchmarks/db_bench_sqlite3.cc does not reproduce the measured SQLite setup and part of the 10-17x write gap reflects that schema. The SQLite readseq byte counter also reads result columns 1 and 2 (0-based, column 2 does not exist), so its MB/s figure is wrong; ops/s is unaffected."
+  ],
+  "pick_this_over_siblings_when": "Pick LevelDB over LMDB when the workload is write-heavy with small values and asynchronous writes, and LMDB (B+tree, mmap, multi-process readers) when reads dominate or several processes share the store; pick it over HyperLevelDB or the RocksDB-derived siblings (Speedb, ToplingDB, Pebble) when a small, stable, dependency-free library matters more than multi-threaded write throughput and tuning knobs.",
+  "verified_claims_summary": "Google's July 2011 page ran single-threaded db_bench ports on a six-core Xeon X5650 with 7200 RPM SATA disks (ext3), 1M entries of 16-byte keys and 100-byte values, 4 MB of cache and asynchronous writes, comparing LevelDB revision 39 (tcmalloc, Snappy) against SQLite 3.7.6.3 (WAL, exclusive locking, 1 KB pages) and Kyoto Cabinet 1.2.67 TreeDB; LevelDB was 10.5x SQLite3 on sequential reads, 16x on sequential writes and 16.6x on random writes, but lost random reads and large-value writes. Compiler and flags are not stated and the numbers are 15 years old.",
+  "status_note": "Active only for critical fixes and Google-internal needs (last commits 2026-03-11 moved it to C++17 and CMake 3.22); BSD-3-Clause, about 39.5k stars, 263 open issues and 153 open PRs, so it is safe to vendor but do not expect new features.",
+  "sources_read": [
+    "https://github.com/google/leveldb",
+    "https://github.com/google/leveldb/commits/main.atom",
+    "https://github.com/google/leveldb/commits/main/benchmarks/db_bench_sqlite3.cc.atom",
+    "https://github.com/google/leveldb/issues?q=is%3Aissue+label%3Abug+",
+    "https://github.com/google/leveldb/issues/603",
+    "https://github.com/google/leveldb/issues/693",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/README.md",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/doc/benchmark.html",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/doc/index.md",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/doc/impl.md",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench.cc",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench_sqlite3.cc",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench_tree_db.cc",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/include/leveldb/db.h",
+    "https://raw.githubusercontent.com/google/leveldb/HEAD/include/leveldb/options.h",
+    "https://raw.githubusercontent.com/mykmelez/kvbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
