@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/gnome/librsvg",
+  "one_liner": "GNOME's Rust SVG renderer onto Cairo; beat resvg 0.8.0 on blur- and clip-heavy icons, lost on simple ones.",
+  "what_it_does": "Parses SVG 1.1/SVG 2 static documents and renders them onto a Cairo context, so the output can be an image surface, PDF, PostScript or SVG. C and C++ callers use the GObject API (RsvgHandle, rsvg_handle_render_document) from librsvg-2; Rust callers use the librsvg crate (Loader, SvgHandle, CairoRenderer); the rsvg-convert CLI and a gdk-pixbuf loader ship alongside. It is not a drop-in for resvg or QtSvg: you bring a cairo_t and render into it.",
+  "how_it_is_fast": "Clip paths go straight to Cairo's native path clipping (cr.clip() in drawing_ctx.rs) instead of rendering each clip into a mask layer, which is cheap on files with many clip paths. feGaussianBlur uses the spec-sanctioned three-box-blur approximation for stdDeviation of 2 or more (an explicit convolution below that, kernel capped at 500 taps), and the box-blur and lighting loops are split per row or column across all cores with Rayon (since 2.43.4). Path filling and compositing are Cairo/pixman's.",
+  "when_to_use": [
+    "Programs already on the GNOME/GTK stack (cairo, pango, glib) that need SVG icons, thumbnails or gdk-pixbuf loading with no extra rendering engine.",
+    "Illustrator-style SVGs with many clip paths at large output sizes, where current resvg allocates a layer per clip (resvg issue #1146: rsvg 42 ms vs 960 ms at 1000 px, 537 ms vs 31.7 s at 4000 px).",
+    "Filter-heavy (Gaussian blur, lighting) batch rasterization on multi-core machines, since those filters run in parallel.",
+    "Vector output: rendering SVG into PDF or PostScript through Cairo surfaces, which pixel-only renderers cannot do.",
+    "Text-bearing SVGs that should use the system's fonts through fontconfig and Pango shaping."
+  ],
+  "when_not_to_use": [
+    "Small or simple icons: resvg 0.8.0's own chart had librsvg slower on the Elementary set (24 s vs 19 s for 3,417 files).",
+    "When exact clipPath semantics matter: Cairo can only intersect clips, so unions of clip paths are approximated (the source comment says 'not completely correct'; resvg's README calls it incorrect but faster).",
+    "Static, dependency-free or WASM builds: it needs cairo 1.18+, pango 1.50+, glib 2.50+, harfbuzz, freetype and libxml2 at build time.",
+    "Untrusted input without your own sandbox or limits: there is no built-in cap on memory or CPU time, and an open report (#952, search snippet only) has one SVG taking 17 minutes that resvg, Firefox and Chrome render normally.",
+    "Animated, scripted or SVG 1.2/Tiny content: not supported."
+  ],
+  "integration": {
+    "form": "shared lib (librsvg-2 C/GObject API, built with meson and cargo-c) or crate (librsvg); rsvg-convert CLI",
+    "dependencies": "cairo >= 1.18.0, pango >= 1.50, glib/gio >= 2.50, harfbuzz >= 2.0, freetype2, libxml2 >= 2.9; optional gdk-pixbuf >= 2.20, dav1d >= 1.3 for AVIF, gobject-introspection and Vala for bindings",
+    "min_toolchain": "Rust 1.92.0 (MSRV in Cargo.toml and meson.build), meson >= 1.3.0, cargo-c >= 0.10.10",
+    "platforms": "Linux and other Unix-likes, macOS/iOS and Windows (meson.build has darwin/ios and windows branches); anywhere cairo and pango build",
+    "thread_safety": "Not documented as a general guarantee; rendering can be cancelled from another thread with a GCancellable (2.58.92 and later), and filters use a process-wide Rayon pool on all cores.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the headline: librsvg 2.43.4 and later run Gaussian blur and lighting filters on all available cores with Rayon (NEWS; rayon::scope in shared_surface.rs box_blur_loop), and the resvg 0.8.0 README states no thread count or CPU, while resvg rendered single-threaded. The 'faster blur' it credits for librsvg 2.45.5's Oxygen win (163 s vs 175-205 s) may be multi-core versus single-core blur rather than a per-core advantage; the 'single thread' note appears only in v0.9.0, whose charts drop librsvg.",
+    "Clip paths use Cairo's native clipping, which intersects but cannot union; apply_clip_path's own comment calls this not completely correct, so part of the speed comes from approximate clip semantics.",
+    "Only 2.62.x and 2.63.x are supported; 2.63.2 (2026-10-01) fixes a use-after-free with duplicated XML entities in nested XInclude documents (RUSTSEC-2026-0305), and Cairo older than 1.17.0 crashes on out-of-range coordinates.",
+    "There is no in-tree performance tracking (devel-docs/performance_tracking.rst, 2022) and rsvg-bench only loops parse/render into a fixed 100x100 surface, so the project publishes no numbers of its own."
+  ],
+  "pick_this_over_siblings_when": "Pick librsvg over resvg when your SVGs are clip-path or blur heavy, you already ship cairo and pango, or you need PDF/PS output; pick resvg for simple icons, pure-Rust static builds, untrusted input and exact clip semantics. LunaSVG and ThorVG are smaller dependency-light C++ options that have not been benchmarked against librsvg in any source read here.",
+  "verified_claims_summary": "Only a competitor's numbers exist: the resvg 0.8.0 README (2019, no CPU, threads, compiler or build flags stated) rendered the Oxygen icon theme (4,947 blur- and clip-heavy files) in 163 s with librsvg 2.45.5 against 175-205 s for resvg's four backends and 160 s for feature-poor QtSvg, but Elementary (3,417 simple files) in 24 s against 19 s for resvg. A 2026 third-party resvg issue (#1146, one clip-path-heavy file, no versions, hardware or timing method, LLM-assisted analysis) has rsvg 23-59x faster than upstream resvg, while a proposed resvg patch then beats rsvg.",
+  "status_note": "Actively maintained by GNOME (2.63.2 security release on 2026-10-01; about 193k crates.io downloads) under LGPL-2.1-or-later; the GitHub repo is a read-only mirror, development and issues are on gitlab.gnome.org.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/README.md",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/NEWS",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/meson.build",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/Cargo.toml",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/lib.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/api.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/drawing_ctx.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/filters/gaussian_blur.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/surface_utils/shared_surface.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg/src/filters/lighting.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg-bench/Cargo.toml",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/rsvg-bench/src/main.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/librsvg-c/Cargo.toml",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/librsvg-c/src/handle.rs",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/security.rst",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/features.rst",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/architecture.rst",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/performance_tracking.rst",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/compiling.rst",
+    "https://raw.githubusercontent.com/GNOME/librsvg/HEAD/devel-docs/supported_versions.rst",
+    "https://crates.io/api/v1/crates/librsvg",
+    "https://raw.githubusercontent.com/RazrFalcon/resvg/v0.8.0/README.md",
+    "https://raw.githubusercontent.com/RazrFalcon/resvg/v0.9.0/README.md",
+    "https://github.com/RazrFalcon/resvg-test-suite",
+    "https://github.com/RazrFalcon/resvg-test-suite/tree/master/tools",
+    "https://github.com/RazrFalcon/resvg-test-suite/tree/master/tools/perf (404, perf script removed)",
+    "https://github.com/linebender/resvg/issues/1146",
+    "https://gitlab.gnome.org/GNOME/librsvg/-/issues/952 (search snippet only; gitlab.gnome.org egress-blocked)",
+    "https://gitlab.gnome.org/GNOME/librsvg/issues/188 (search snippet only)"
+  ],
+  "confidence": 0.7
+}

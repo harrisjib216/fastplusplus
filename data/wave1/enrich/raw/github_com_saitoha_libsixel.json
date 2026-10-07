@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/saitoha/libsixel",
+  "one_liner": "Reference C SIXEL encoder/decoder behind img2sixel; one smoke test beat chafa, but chafa encoded about 100x more pixels.",
+  "what_it_does": "Converts images to and from DEC SIXEL, the escape-sequence bitmap format that xterm, mlterm, foot, WezTerm and Windows Terminal display inline. It ships the img2sixel and sixel2png tools, a high-level encoder/decoder API (sixel_encoder_new, sixel_encoder_setopt, sixel_encoder_encode) and a low-level API (sixel_dither_t for palette and dithering, sixel_output_t with a write callback, sixel_encode on a pixel buffer), plus Python, Perl, PHP and Ruby bindings. It is not a drop-in for chafa: chafa sizes output in terminal cells and also prints symbol art, while img2sixel takes pixel geometry and only writes SIXEL.",
+  "how_it_is_fast": "Palette reduction is Heckbert median cut (ported from netpbm's pnmcolormap.c) over a 15-bit histogram (5 bits per channel). The default 'auto' quality picks LOW whenever more than 8 colors are requested, which builds that histogram from at most 18,383 sampled pixels. Nearest-color lookup is memoized in a 32,768-entry table keyed by the 15-bit color, so each bucket is searched once. The band encoder emits run-length repeats in kmiya's terminal-oriented SIXEL layout. Everything is single-threaded scalar C99; there is no SIMD or threading in the encoder.",
+  "when_to_use": [
+    "Showing images inline in SIXEL terminals from a CLI or TUI written in C, C++, Python, Perl, PHP or Ruby.",
+    "Small to medium images where a process-per-image tool such as img2sixel is fast enough (about 16 ms per 256x256 JPEG in the only measurement found).",
+    "When you need SIXEL decoding as well as encoding (sixel2png, sixel_decode_raw).",
+    "Fixed or built-in palettes (xterm16, xterm256, VT340, grayscale) and the standard error-diffusion choices (Floyd-Steinberg, Atkinson, Jarvis, Stucki, Burkes, positional dithers).",
+    "Compact SIXEL streams: a 256-color median-cut palette with run-length repeats gave 121,993 bytes for a 256x256 photo, and -E size adds a band-fill optimisation for smaller output still."
+  ],
+  "when_not_to_use": [
+    "Untrusted images without sandboxing: 1.8.7 alone fixes use-after-frees and integer overflows in the GIF, gdk-pixbuf, PNG writer, encode_bytes and SIXEL parser paths (CVE-2026-33018 to CVE-2026-33023 and several GHSAs), on top of a long CVE list in 1.8.x.",
+    "Large frames or video where per-frame throughput matters: the quantizer and encoder are single-threaded scalar code, while chafa uses threads and SIMD (per its 1.4.0 release notes, search snippet only).",
+    "Highest palette fidelity at default settings: 'auto' quality samples at most 18,383 pixels for the histogram and caches nearest-color lookups per 15-bit bucket; use -q full to disable both.",
+    "Terminals without SIXEL support (macOS Terminal.app, most Kitty-protocol-only setups): there is no fallback renderer.",
+    "Projects that need one maintained upstream: the saitoha 1.8.x line, the community fork libsixel/libsixel 1.9-1.10.x (archived 2025-02-12) and distro packages diverge."
+  ],
+  "integration": {
+    "form": "shared or static lib (autotools ./configure && make), plus img2sixel and sixel2png CLIs",
+    "dependencies": "none required (bundled stb_image loader); optional libjpeg, libpng, libcurl, libgd, gdk-pixbuf2; Python, Perl, PHP and Ruby bindings",
+    "min_toolchain": "C99 compiler (configure adds -std=c99), autoconf 2.60+",
+    "platforms": "Linux, BSDs, macOS, Windows via MinGW cross-build (packaged for FreeBSD, pkgsrc, Homebrew, MacPorts, Debian, Fedora, NixOS, Cygwin's yacp and others)",
+    "thread_safety": "Objects are not thread-safe: the header marks every ref/unref as thread-unsafe and sixel_dither_t carries a 'TODO: be thread safe'; use one encoder and dither per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the only number: the sixrs README ran 'chafa -f sixels --size 256x256', but chafa's --size counts terminal cells, not pixels. With an explicit size, chafa 1.18.2 treats the 256-pixel source as 256 cells, fits it to 256x128 cells and multiplies by the cell size (10x20 pixels by default, or the size probed from the controlling terminal), so it upscaled Lenna to about 2560x2560 pixels, roughly 100 times what img2sixel encoded at 256x256. That matches chafa's 35x larger output (4,248,878 vs 121,993 bytes). Chafa also probes the controlling terminal on every run (up to a 5 s timeout). The 4.5x says nothing about per-pixel encoder speed.",
+    "The measured img2sixel 1.10.5 is the libsixel/libsixel fork (archived 2025-02-12), not this repository's 1.8.7-r2 line; Homebrew now ships saitoha's 1.8.7-r2, so the run used an older or separate build. JPEG decoding goes through libjpeg when configure finds it and the bundled stb_image otherwise, so the decode cost depends on the build.",
+    "The fast nearest-color cache is lossy: the first pixel looked up in each 15-bit bucket fixes the palette index for every later pixel in that bucket. Quality 'full' turns the cache off.",
+    "In this repository's encoder, -E fast behaves exactly like the default 'auto' (only 'size' changes the band encoder, by enabling a fill optimisation), and img2sixel -S is --static (animated GIFs rendered as one frame), which has no effect on a JPEG; the fork's 1.10.5 code that was actually measured was not read."
+  ],
+  "pick_this_over_siblings_when": "No SIXEL encoder is catalogued among the image-codecs siblings; they are PNG, JPEG, QOI and texture codecs that decode or encode files, so pick libsixel only when the output is a SIXEL escape stream for a terminal or printer.",
+  "verified_claims_summary": "The only comparison is the sixrs crate README: on macOS (CPU unstated), 100 sequential img2sixel 1.10.5 runs on one 256x256 Lenna JPEG took 1.64 s against 7.32 s for chafa 1.18.2 (about 4.5x, derived) and 1.66 s for sixrs. The chafa command rendered about a 2560x2560 canvas because its --size is in terminal cells, so the tools did different amounts of work, and each run also paid process startup and JPEG decoding.",
+  "status_note": "Revived after years of dormancy (1.8.7-r2 in 2026 with many security fixes, last commit 2026-06-15, about 2.9k stars) under MIT with permissive bundled components; usable and widely packaged, but treat it as unsafe for untrusted input and pin the saitoha line, not the archived fork.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/README.md",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/NEWS",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/include/sixel.h.in",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/quant.c",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/dither.c",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/tosixel.c",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/encoder.c",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/output.c",
+    "https://raw.githubusercontent.com/saitoha/libsixel/HEAD/src/loader.c",
+    "https://github.com/saitoha/libsixel/issues?q=is%3Aissue+slow+OR+performance+OR+speed",
+    "https://raw.githubusercontent.com/libsixel/libsixel/v1.10.5/NEWS",
+    "https://raw.githubusercontent.com/libsixel/libsixel/v1.10.5/README.md",
+    "https://raw.githubusercontent.com/libsixel/libsixel/v1.10.5/meson.build",
+    "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/lib/libsixel.rb",
+    "https://crates.io/api/v1/crates/sixrs/0.1.2/readme",
+    "https://raw.githubusercontent.com/hpjansson/chafa/1.18.2/tools/chafa/chafa.c",
+    "https://raw.githubusercontent.com/hpjansson/chafa/1.18.2/tools/chafa/chicle-options.c",
+    "https://raw.githubusercontent.com/hpjansson/chafa/1.18.2/tools/chafa/chicle-options.h",
+    "https://raw.githubusercontent.com/hpjansson/chafa/1.18.2/chafa/chafa-util.c",
+    "https://raw.githubusercontent.com/hpjansson/chafa/1.18.2/chafa/chafa-canvas.c",
+    "https://hpjansson.org/blag/2020/04/01/chafa-1-4-0-now-with-sixels/ (egress-blocked; search snippet only)"
+  ],
+  "confidence": 0.75
+}
