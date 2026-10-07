@@ -12,3 +12,4 @@ For a later wave (not storage-and-data):
 - pgrust OLTP (https://github.com/malisper/pgrust): a Rust reimplementation of PostgreSQL with a real head-to-head OLTP result of 1.25-1.40x vs PostgreSQL 18.3 in its own kit. Its columnar ClickBench claim was rejected in wave 6 (benchmark-specific kernels, removed from ClickBench).
 - fjall (fjall-rs/fjall): Rust LSM engine; in the redb table batch writes 353 vs RocksDB 451 ms and removals 6004 vs 6900 ms; README has no own benchmarks. Not catalogued (enricher lead, 2026-10-07).
 - TickTock (ytyou/ticktock): C++ time-series DB, GPL, 89 stars; 3.2M points/s in its own IoTDB-benchmark shootout (first-party). Not catalogued (enricher lead, 2026-10-07).
+- IOWOW (https://github.com/Softmotions/iowow): EJDB2's storage engine, claims to beat LMDB, LevelDB and Kyoto Cabinet; not catalogued (w6-mine-c backfill, 2026-10-07).

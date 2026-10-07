@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/powturbo/turborle",
+  "one_liner": "Block run-length encoder (TRLE, plus escape-based SRLE for 8/16/32/64-bit runs) that out-compresses and out-runs rle8 and Mespotine RLE.",
+  "what_it_does": "Compresses byte runs (TRLE, SRLE 0) or runs of 16/32/64-bit elements (SRLE 16/32/64) in one memory block. The C API is a set of plain functions, trlec(in, inlen, out) and trled(in, inlen, out, outlen), plus srlec/srled and srlecN/srledN with a caller-chosen escape value; there is no frame format, so the caller stores the original and compressed lengths. Output never exceeds the input length because the encoder falls back to memcpy (and to a 1-byte memset code for single-symbol input). Java bindings are provided through JNI (jtrle.c).",
+  "how_it_is_fast": "TRLE first builds a byte histogram (the 4-way unrolled TurboHist counter) and, when some byte values are unused, uses those unused values as run codes, so literals pass through unescaped and short run lengths fit in the code byte itself; runs of the most frequent byte are folded into the length with a flag bit, and lengths beyond the code range use a variable-byte integer. When every byte value occurs it falls back to escape-based SRLE with the least frequent byte as escape. The encoder finds run boundaries by XOR-ing a 64-bit word with the word one byte later and taking ctz, and the SRLE decoder copies 16 or 32 literal bytes at a time with SSE2/AVX2 compare-and-movemask to find the next escape, filling runs with vector stores.",
+  "when_to_use": [
+    "A fast byte-preserving pre-pass before an entropy coder on run-heavy data such as BWT output: the README shows trle + TurboANX 12 at 19.2% of enwik9bwt, compressing at 1527 MB/s and decoding at 3834 MB/s on a 2019 Skylake.",
+    "Images, masks, bitmaps and tablebase-like files dominated by long runs: trle cut girl.bmp to 0.6% while decoding at 11385 MB/s, and 1034.db to 17.4% (best ratio among the RLEs tested).",
+    "Runs of 16/32/64-bit values (sparse integer or float arrays) where speed matters more than ratio: srle 64 decodes 1034.db at 10120 MB/s at 39.5% size on the same Skylake.",
+    "C or C++ projects that are GPL-compatible and can vendor two .c files plus the bundled include_ headers; Java callers via the JNI wrapper."
+  ],
+  "when_not_to_use": [
+    "Decoding untrusted input: the decoders never check the compressed length and never bound run lengths against outlen; issue #12 (open since 2025-09-21, no maintainer reply) shows a heap overflow in srled8 from a crafted stream, and _trled has the same unchecked rmemset pattern.",
+    "Permissive or proprietary code: the licence is GPL-2.0-or-later; a 2020 request for a permissive licence (issue #8, Wes McKinney) was closed with no licence change, and the README offers no commercial licence.",
+    "Data without long runs (text, binaries, general archives): every README benchmark is a run-heavy file, and LZ-family siblings such as LZ4 or zstd target repeated substrings that RLE cannot exploit.",
+    "When the fastest RLE decoder is the goal: the 2019 tables predate the rle8 successor hypersonic-rle-kit (BSD-2-Clause), whose own 2023 run on a Ryzen 9 7950X with TurboRLE 7f6e486 and AVX2 shows its 8-bit codecs decoding faster at similar ratios (enwik9.bwt '8 Bit 3LUT Short' 40.34% and 3,046.5 MiB/s vs trle 42.0% and 2,062.9 MiB/s); that is a competitor-run comparison.",
+    "Inputs of 4 GiB or more in one call or streaming use: lengths are 32-bit unsigned and the API is single-block only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (bundled include_/conf.h; the trle test tool also uses include_/time_.h and ext/mrle.c)",
+    "min_toolchain": "C99 (makefile uses -std=gnu99); README lists GCC 4.6+, Clang 3.2+, Visual C++ 2008+ (makefile.vs), aarch64 GCC 6.3+, ppc64le GCC 8+",
+    "platforms": "x86-64 and x86 (SSE2 path by default, AVX2 path when compiled with AVX2 enabled), aarch64 NEON through an SSE translation header, ppc64le, loongarch64, riscv64 scalar fallback; Linux, Windows (MinGW, MSVC), macOS",
+    "thread_safety": "not documented; trlec.c and trled.c keep all state (histograms, rmap) on the stack with no globals, so concurrent calls on separate buffers appear safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No input validation in any decoder (trled, srled, srledN): truncated or crafted data reads past the input and writes past outlen; issue #12 (heap-buffer-overflow in srled8, reproducer writes 101 bytes into a 16-byte buffer) is still open, and the HEAD trled.c run paths have no bounds checks.",
+    "Output buffers need undocumented slack: trlec memsets 32 bytes of bitmap header even for 2-byte inputs, srlecN with a fixed escape writes the whole escaped stream (up to about 2x the input for srle 8 when isolated escape bytes alternate with other bytes) before deciding to fall back to memcpy, and the AVX2/SSE run fill can store up to 31 bytes past a run's end. The bundled test tool allocates inlen*4/3+1024 for compressed output and inlen+1024 for decoded output; the header gives no bound.",
+    "The compressed length is part of the format: trled treats inlen == outlen as a stored block (memcpy) and inlen == 1 as a memset, so the exact length returned by the encoder must be stored and passed back. The srle 8/16/32/64 benchmark rows use a hard-coded escape (0xda repeated), and data rich in that value compresses worse or expands transiently.",
+    "Build: the GNU makefile defines -mavx -mpopcnt and -march=haswell for x86_64 but never adds them to CFLAGS, so the README's 'make AVX2=1' builds the SSE2 paths only; pass MARCH=-march=haswell (or -mavx2) to get the AVX2 decoder (makefile.vs does honour AVX2=1)."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (LZ4, zstd, Blosc/c-blosc2, Density) are LZ or shuffle codecs; pick TurboRLE only when the data is dominated by long runs of bytes or fixed-width elements and you want a cheap, byte-preserving step before an entropy coder, and stay with LZ4 or zstd for general data, for a self-describing frame, or for input you do not control.",
+  "verified_claims_summary": "First-party TurboBench runs (single thread, Intel i7-6700 Skylake 3.4 GHz, gcc 8.3, August 2019, flags not stated) against rle8 (2019, SSE/AVX2) and Mespotine RLE: srle 8 compresses girl.bmp at 11307 MB/s vs rle8 890 MB/s (about 12.7x, smaller output 1.2% vs 1.5%) and decodes enwik9bwt at 4310 vs 675 MB/s (about 6.4x), while trle gives the best ratio on all three files but decodes girl.bmp slightly slower than rle8 (11385 vs 11998 MB/s); no zlib, zstd or LZ4 rows exist. The in-repo trle tool verifies each round trip against a complemented copy, so decode correctness is checked, but it does not include rle8.",
+  "status_note": "Actively maintained (decoder and platform commits through 2026-07-14, a RISC-V scalar fallback PR merged June 2026) and small enough to vendor, but GPL-2.0-or-later and with an open, unanswered heap-overflow report (#12) in the decoder, so it suits trusted in-process data in GPL-compatible code only.",
+  "sources_read": [
+    "https://github.com/powturbo/Turbo-Run-Length-Encoding",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/README.md",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/include/trle.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/include_/trle.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/include_/conf.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/include_/time_.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/trle_.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/trle.c",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/trlec.c",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/trled.c",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/makefile",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/makefile.vs",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/.github/workflows/build.yaml",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Run-Length-Encoding/HEAD/LICENSE",
+    "https://github.com/powturbo/Turbo-Run-Length-Encoding/issues?q=is%3Aissue",
+    "https://github.com/powturbo/Turbo-Run-Length-Encoding/issues/12",
+    "https://github.com/powturbo/Turbo-Run-Length-Encoding/issues/8",
+    "https://github.com/powturbo/Turbo-Run-Length-Encoding/commits/master",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rle-kit/HEAD/README.md"
+  ],
+  "confidence": 0.78
+}

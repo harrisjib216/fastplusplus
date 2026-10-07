@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/damian-m-g/xlsx_drone",
+  "one_liner": "Small read-only C11 .xlsx cell reader; through its Ruby FFI binding it read a 600k-cell sheet about 1.9x faster than roo.",
+  "what_it_does": "Opens an .xlsx workbook, loads one worksheet at a time, and returns individual cell values by row number and column letters (xlsx_read_cell(sheet, 4, \"B\", &cell)) as a tagged union of string, int, long long or double plus a style category (number, text, date, time, date-time). It is a plain C API (xlsx_open, xlsx_load_sheet, xlsx_read_cell, xlsx_get_last_column, xlsx_close) with no writing support; the Ruby gem xlsx_drone wraps it through the ffi gem.",
+  "how_it_is_fast": "There is no special algorithm: the speed in the benchmark comes from doing the work in native C instead of pure Ruby. xlsx_open extracts the whole archive with kuba--/zip (miniz) into a temporary directory and parses sharedStrings.xml, styles.xml and workbook.xml once; xlsx_load_sheet parses the sheet XML into an sxmlc DOM, and each read finds the row by scanning forward from the last row it looked at and the cell by a linear strcmp over that row's cells, so sequential row-major reads stay cheap while random backward reads rescan from the first row. Shared strings are returned as pointers into the DOM with no copying, and the last column is not computed unless asked for.",
+  "when_to_use": [
+    "A C or C++ program, or a Ruby script via the xlsx_drone gem, that reads values from Excel-saved .xlsx files with a known layout, row by row.",
+    "Replacing roo, creek, rubyXL or simple_xlsx_reader in Ruby when read time dominates and the files come from Excel itself.",
+    "Small embedded tools that want an MIT-licensed reader in a few C files with no external runtime dependencies beyond a writable temp directory."
+  ],
+  "when_not_to_use": [
+    "Files written by Apache POI or other generators that order cell attributes differently or use inline strings: they are misread (open issue #14, fix PR #15 unmerged as of 2026-06).",
+    "Untrusted or unusual files: indices into shared strings and styles are not bounds-checked, XML layout is assumed, and the code builds paths with strcpy/strcat into fixed 260-byte buffers.",
+    "Very large sheets on memory-tight systems or read-only/no-temp-dir environments: the whole archive is unpacked to disk and the full sheet is held as an XML DOM.",
+    "Writing, formulas evaluation, rich text, merged cells or any other workbook features: it only returns raw cell values.",
+    "Programs that set a comma-decimal LC_NUMERIC locale: doubles are parsed with plain strtod again (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "bundled kuba--/zip 0.3.2 (with miniz) and sxmlc 4.5.4 in ext/; a writable temp directory ($TMPDIR, /tmp fallback, %TEMP% on Windows)",
+    "min_toolchain": "C11 (CMakeLists sets C_STANDARD 11, CMake 3.9+); uses VLAs outside MSVC; MSVC supported since 0.3.0 via _alloca",
+    "platforms": "Windows, Linux and macOS (POSIX mkdtemp on non-Windows); prebuilt xlsx_drone_x64/x86.dll and libxlsx_drone_x64.so in share/; no architecture-specific code",
+    "thread_safety": "not documented; the error code (xlsx_errno) and the print-errors flag are process-wide statics, so concurrent calls race on error reporting",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Cell parsing reads attributes by position: 'r' must be the first attribute, 't' the last and 's' the second to last. Apache POI writes r, t, s, so its files are misread (issue #14; PR #15 of 2026-05-29 searches attributes by name and adds inline-string support, not merged). For t=\"inlineStr\" the current code returns the text of the <is> element, which holds no text itself, and rows or cells without the optional 'r' attribute would be read out of bounds (code reading).",
+    "Regression: CHANGELOG 0.2.5 lists issue #5 (doubles parsed with the locale's decimal comma) as fixed, and commit 9a9db6e did add a locale-independent strtodouble(), but it disappeared in 0.3.0-pre (03b3653) and master again calls strtod(cell_text, NULL), so a host program running under a comma-decimal LC_NUMERIC truncates 3.14 to 3.",
+    "xlsx_open unpacks every part of the archive into a mkdtemp directory (tmpnam on Windows) that only xlsx_close deletes; a crash or a missing close leaves the extracted XML behind, and the sheet path is built in a fixed char[260] buffer, so a long TMPDIR can overflow it. Unmerged PR #17 (2026-06-23) would unzip in memory instead.",
+    "Sheets are located as xl/worksheets/sheetN.xml by position in workbook.xml, and shared strings as the first child of each <si>, so workbooks whose sheet part names do not follow sheet order, or rich-text shared strings (<si><r>...), are not handled (code reading)."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling does the same job: the other binary-schemas entries are serialization formats (Bebop, FlatBuffers alternatives, MessagePack, Protobuf replacements), not spreadsheet readers. The relevant comparisons, C/C++ xlsx readers such as xlsxio and OpenXLSX, are not catalogued and have not been benchmarked against it.",
+  "verified_claims_summary": "One first-party run of the Ruby binding's test/benchmark/speed.rb on the author's 'old notebook' (CPU, OS, Ruby, gem versions and C build flags not stated) read all 600,000 cells of a 200,000-row, 3-column xlsx in 10.63 s against 20.41 s for roo (1.9x), 25.49 s for simple_xlsx_reader, 28.27 s for creek and 79.56 s for rubyXL; each timed block also includes the gem's require and workbook open, it is a single run with roo first, and xlsx_drone pays an FFI call per cell, so it compares native C with pure-Ruby gems rather than C with C.",
+  "status_note": "Stale: last release 0.4.0 on 2024-12-09 and a README edit on 2025-01-09, with an outside contributor's fixes (POI compatibility, in-memory unzip) waiting unmerged; MIT and small enough to vendor, but test it on files from your own producers first.",
+  "sources_read": [
+    "https://github.com/damian-m-g/xlsx_drone",
+    "https://github.com/damian-m-g/xlsx_drone/commits/master",
+    "https://github.com/damian-m-g/xlsx_drone/issues?q=is%3Aissue",
+    "https://github.com/damian-m-g/xlsx_drone/issues/14",
+    "https://github.com/damian-m-g/xlsx_drone/issues/5",
+    "https://github.com/damian-m-g/xlsx_drone/pulls?q=is%3Apr",
+    "https://github.com/damian-m-g/xlsx_drone/pull/15/files",
+    "https://github.com/damian-m-g/xlsx_drone/pull/17",
+    "https://github.com/damian-m-g/xlsx_drone/commit/9a9db6e",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/README.md",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/Rakefile",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/HEAD/src/xlsx_drone.h",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/master/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/9a9db6e/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/9a32fcc/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/03b3653/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/9774d74/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone/69392d1/src/xlsx_drone.c",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/README.md",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/test/benchmark/speed.rb",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/lib/xlsx_drone.rb",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/lib/xlsx_drone/sheet.rb",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/lib/xlsx_drone/native_binding.rb",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/xlsx_drone.gemspec",
+    "https://raw.githubusercontent.com/damian-m-g/xlsx_drone_rb/HEAD/Rakefile"
+  ],
+  "confidence": 0.75
+}

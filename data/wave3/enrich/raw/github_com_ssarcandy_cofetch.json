@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/ssarcandy/cofetch",
+  "one_liner": "Header-only async HTTP client on libcurl's multi interface and ASIO; out-runs one-request-at-a-time cpr and cpp-httplib clients by multiplexing.",
+  "what_it_does": "An HTTP client (not a server) that runs requests on an existing asio::io_context: build a request with chained setters (headers, body, timeout, follow_redirects, a raw .curl() hook) and fire it with the verb (get/post/put/patch/del). One implementation accepts any ASIO completion token, so the same call works with callbacks, std::future, asio::deferred or C++20 co_await. libcurl does the protocol work (HTTP/1.1, HTTP/2, TLS, decompression, connection reuse). It is not a drop-in for cpr or cpp-httplib: their blocking calls become async operations you drive with run() or poll().",
+  "how_it_is_fast": "It uses libcurl's multi socket API (CURLMOPT_SOCKETFUNCTION and CURLMOPT_TIMERFUNCTION) and hands every socket curl opens to an asio socket, so one thread waits on all transfers through asio's reactor (epoll on Linux) instead of parking one OS thread per request. Hot-path tweaks from the 2026-07-10 tuning: easy handles and transfer nodes are pooled and reused without curl_easy_reset (static options set once per handle), curl's 0 ms timer kicks become one deduplicated asio::post, timer rescheduling is skipped when the pending expiry is early enough, handlers use asio::recycling_allocator, and completions are invoked directly instead of dispatched. An optional busy-poll mode (io_context::poll() in a spin loop) removes the kernel sleep and wake per request that hurts the sequential-chain case.",
+  "when_to_use": [
+    "A C++ service already running an asio (or Boost.Asio) event loop that must fan out many outbound HTTP calls without a thread per request.",
+    "Workloads with real network latency: one thread with 100 requests in flight matched a 100-thread cpr or cpp-httplib pool at 10 ms RTT and was about 98x a single blocking client.",
+    "Latency-sensitive loops (trading-style) that already busy-poll: busy-poll mode was the fastest client in the 2,000-request dependent chain (14,804 req/s vs cpp-httplib 12,761).",
+    "Code that wants co_await for dependent requests while keeping libcurl's HTTP/2, TLS and compression support."
+  ],
+  "when_not_to_use": [
+    "Simple scripts or tools making a few sequential requests in the default run() mode: in the chain test cofetch run() (11,116 req/s) and its coroutine form (10,547) were slower than cpp-httplib (12,761).",
+    "Very high RTT links where you already have a thread pool: at 50 ms RTT one cofetch thread (1,819 req/s) was about 5% behind 100-thread pools (about 1,918).",
+    "Multi-threaded callers sharing one client: a Client is not thread-safe and must live on its io_context's thread.",
+    "You need a server, a zero-dependency build, or a streaming download API: cofetch is client-only, needs libcurl plus ASIO, and buffers each whole response body into a std::string.",
+    "Production use that needs a track record: first commit 2026-07-10, 8 stars, no issues filed yet, and no Windows CI."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "libcurl >= 7.55 (linked) and standalone ASIO or Boost.Asio (-DCOFETCH_USE_BOOST_ASIO); vendored asio submodule optional; also available as a vcpkg port",
+    "min_toolchain": "C++17 (C++20 for the co_await interface); CMake 3.14 for the package config; CI builds with gcc and clang on ubuntu-24.04 and clang on macOS",
+    "platforms": "Linux and macOS tested in CI; Windows has code paths (_WIN32) but no CI job, and there the resolver descriptor is not watched",
+    "thread_safety": "Not thread-safe: one Client per io_context, used from that loop's thread; Clients on different threads are fine (curl_global_init is serialized behind a mutex, covered by a 4-thread test).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Completion handlers are invoked inline from the client's curl-message loop (check_completions) without dispatching to the handler's associated executor, so a handler bound to a strand or another io_context runs on the client thread; by code reading, destroying the Client from inside a completion (for example a coroutine that owns the Client returning right after co_await) would leave check_completions iterating a freed multi handle, and no test covers that case.",
+    "Destroying a Client drops in-flight requests and never calls their handlers (documented and tested), so pending futures or awaiting coroutines do not complete normally; drain the io_context first.",
+    "Every request has a 5 s whole-transfer timeout by default, redirects are not followed by default (a 3xx arrives with is_ok() false), and HTTP error statuses are not reported through the error_code; check is_ok() or http_code_.",
+    "Each easy handle asks for a 512 KiB receive buffer (CURLOPT_BUFFERSIZE) and up to 64 idle handles are pooled by default; bench note: the RTT script says each run holds about 10 s of steady state, but its 100-in-flight runs are sized to about 2 s (results.csv: 2.09-2.20 s), and the 20-thread tier lasts 0.12-0.16 s including thread and Client start-up; only cofetch gets warm-up runs."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling in this category is a server or a framework (Drogon, Crow, cinatra, aeronet, Sogou Workflow's HTTP server) or a Go library (fasthttp, whose client is claimed up to 4x net/http); pick cofetch when the job is outbound HTTP from C++ inside an asio event loop. If you also need to serve HTTP, pair it with one of those servers rather than replacing them.",
+  "verified_claims_summary": "First-party runs (2026-07-10, gcc 14 -O3, libcurl 8.14, asio 1.38, Debian 13 on WSL2 with 20 logical cores, CPU model not named) of 20,000 keep-alive GETs against a local 4-worker nginx returning a 28-byte JSON: one cofetch thread with 100 requests in flight did 17,412 req/s (run()) and 18,240 (busy poll) against cpp-httplib 12,889 and cpr 10,127 with one request in flight, and with 20 threads 166,646 vs 127,333 and 122,122 while cofetch kept 5x the in-flight requests. Every driver checks the status of every response and all rows report 0 failures, so the gains are concurrency, not a faster per-request path (an internal raw-epoll client is about 14% faster still), and they predate the 2026-09-29 fix commit c1bd40f.",
+  "status_note": "Active (v0.1.2; 84 commits, the last on 2026-09-29 fixing leaked in-flight handles, resolver-descriptor watching and multi-block header parsing), MIT, header-only and in vcpkg, but brand new with 8 stars and no external bug reports yet.",
+  "sources_read": [
+    "https://github.com/SSARCandy/cofetch",
+    "https://github.com/SSARCandy/cofetch/commits/main",
+    "https://github.com/SSARCandy/cofetch/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/README.md",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/run_bench.sh",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/run_netem.sh",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/bench_cofetch.cpp",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/bench_cpr.cpp",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/bench_httplib.cpp",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/bench_epoll.cpp",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/bench_util.h",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/results.csv",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/bench/nginx.conf",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/include/cofetch.h",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/docs/api-reference.md",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/examples/README.md",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/test/cofetch_tests.cpp",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SSARCandy/cofetch/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}

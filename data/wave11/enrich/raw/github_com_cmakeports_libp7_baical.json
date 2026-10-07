@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/cmakeports/libp7-baical",
+  "one_liner": "Binary trace/telemetry logger with deferred formatting; its call-site enqueue beats vsprintf-to-buffer and printf-to-console in its own test.",
+  "what_it_does": "P7 is a C++ library (with C, C# and Python wrappers) that records trace messages and numeric telemetry samples from an application and ships them through a pluggable sink: UDP to the Baical server, a binary file, a text file, console, syslog, Auto or Null. You create an IP7_Client from an option string (\"/P7.Sink=FileBin /P7.Pool=4096\", also overridable from the command line) and IP7_Trace or IP7_Telemetry channels on it, then log with printf-style macros such as P7_TRACE/P7_QTRACE. It is not a drop-in for printf or iostream: binary output is read with the Baical viewer/server, and text output goes through the slower text sinks.",
+  "how_it_is_fast": "Deferred formatting with binary records: each call site's format string, file, function, line and module are serialized once as a 'description' (looked up by a fixed trace ID in an array, or by an RB-tree keyed on function and format-string addresses), and every later call writes only a small header (level, CPU, thread ID, sequence, 100 ns timestamp) plus the raw va_arg values, whose types were parsed from the format string once. Records are copied into a preallocated buffer pool and written or sent by a background thread, so the caller never formats or does I/O. The hot path is not lock-free: it takes a per-channel recursive pthread mutex and then the sink's mutex.",
+  "when_to_use": [
+    "High-volume diagnostic tracing (hundreds of thousands to millions of messages per second from C/C++) where you can read logs in a dedicated viewer instead of grep.",
+    "You want trace plus numeric telemetry counters (CPU, queue depth, latencies) in one tool, with live streaming to a Baical server on another machine and remote verbosity control.",
+    "Mixed-language processes (C, C++, C#, Python) that should log into one trace stream, or channels shared across modules by name via shared memory.",
+    "Crash-time capture matters: P7_Set_Crash_Handler() installs a handler for segfaults, division by zero and similar faults that calls P7_Exceptional_Flush to save or send buffered records."
+  ],
+  "when_not_to_use": [
+    "You need plain-text logs as the primary output: the manual's own sink ranking puts text file at about 0.9M/s, syslog 0.5M/s and console 0.1M/s, versus about 10M/s for the binary file sink, so most of the advantage disappears once P7 has to format text.",
+    "Many threads log to the same channel: every call serializes on two mutexes, unlike the per-thread lock-free queues in Quill, fmtlog or NanoLog.",
+    "You need a maintained dependency: this CMake port stopped at v5.2.0 in February 2020 (issue #4 points to an upstream 5.3.0 that was never merged), and issues about Clang builds (#1), 'unknown type name size_t' (#7) and timestamps jumping back two days on CentOS 7 (#2) are open with no replies.",
+    "LGPL-3.0-or-later is a problem for static linking in closed-source products (the CMake default builds a static library).",
+    "Lossless delivery is required: when the buffer pool is full or the sink is not connected, Trace() returns FALSE and the message is dropped (counted in reject counters), not blocked."
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib via CMake (BUILD_SHARED_LIBS)",
+    "dependencies": "none beyond the OS: pthread and rt on Linux, ws2_32 on Windows",
+    "min_toolchain": "CMake 3.10; C++ standard not documented (pre-C++11 style code); MSVC and GCC; Clang build reported failing in Visual Studio (issue #1)",
+    "platforms": "Linux x86/x64 and Windows x86/x64 per the manual; ARM atomics code and ARM 926EJ numbers exist but ARM is not in the supported list",
+    "thread_safety": "Thread-safe per the manual; implemented with a recursive pthread mutex per channel plus a mutex in the sink, so concurrent writers to one channel serialize",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in Tests/Speed/Speed.cpp: the P7 loop ignores Trace()'s return value and the client's reject counters, and the test passes no sink, so the default sink is Baical over UDP; run without a reachable Baical server (or without /P7.Sink=File on the command line) every call returns FALSE right after the mutex because the channel is not 'connected', and the dropped calls are reported as P7 throughput.",
+    "The same test sets /P7.Pool=65536 (64 MB, 16x the 4 MB default), so all 100,000 records fit in memory and the timed loop never meets back-pressure from the writer thread; the timer also stops before Release(), so file or network delivery is never timed.",
+    "Speed.cpp measures whole milliseconds: at about 5M calls/s the 100,000-call P7 loop takes about 19-20 ms, so the printed rate moves in 5% steps (100,000/19 ms = 5.26M, /20 ms = 5.00M); the manual's 5,210,000/s figure matches neither, which fits the verifier's finding that the screenshot came from a different build of the test.",
+    "The baselines are not like for like: the buffer case runs vsprintf with 6 arguments including two strings, the P7 case stores 1 integer and defers formatting, and the console case calls printf with the previous formatted line as its format string."
+  ],
+  "pick_this_over_siblings_when": "Pick P7 over binlog or Quill when you want the Baical tooling: live network streaming, telemetry graphs next to traces, remote verbosity control and C#/Python clients in the same stream. For a maintained, permissively licensed, multi-thread-scalable logger with text output, Quill or fmtlog are the better choices, and binlog is the closest maintained equivalent of P7's binary deferred-format design.",
+  "verified_claims_summary": "The author's own speed test on an Intel i7-870 (2015, file sink, compiler and flags not stated) reports 5.21M P7 trace calls per second versus 688k vsprintf calls into a memory buffer and 10k printf calls to the console; the P7 number times only the enqueue into a 64 MB in-memory pool, not formatting or delivery, and no logging library was used as a baseline.",
+  "status_note": "Abandoned port (last commit 2020-02-06, v5.2.0, upstream 5.3.0 never merged, six open issues without replies) but self-contained, dependency-free and copyable under LGPL-3.0-or-later; treat the speed figures as first-party and the benchmark as a best-case enqueue measurement.",
+  "sources_read": [
+    "https://github.com/CMakePorts/libp7-baical",
+    "https://github.com/CMakePorts/libp7-baical/commits/cmake",
+    "https://github.com/CMakePorts/libp7-baical/issues",
+    "https://github.com/CMakePorts/libp7-baical/issues/1",
+    "https://github.com/CMakePorts/libp7-baical/issues/2",
+    "https://github.com/CMakePorts/libp7-baical/issues/4",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/README.md",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/LICENSE.md",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/CMakeLists.txt",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Documentation/P7.pdf",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Tests/Speed/Speed.cpp",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Headers/P7_Client.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Headers/P7_Trace.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Headers/GTypes.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Sources/Client.cpp",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Sources/Trace.cpp",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Sources/ClFile.cpp",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Sources/ClBaical.cpp",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Shared/Lock.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Shared/Platforms/Linux_x86/PLock.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Shared/Platforms/Linux_x86/PAtomic.h",
+    "https://raw.githubusercontent.com/CMakePorts/libp7-baical/cmake/Shared/Platforms/Linux_x86/PTime.h"
+  ],
+  "confidence": 0.7
+}

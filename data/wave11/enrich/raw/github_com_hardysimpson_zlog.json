@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/hardysimpson/zlog",
+  "one_liner": "Pure-C, config-file-driven logging library (log4j-style categories and rules); claims about 1000x syslog(3) throughput, unmeasured in the repo.",
+  "what_it_does": "zlog gives C programs log4j-style logging: a configuration file defines formats, rules and outputs (static or dynamic file paths, size-based rotation, stdout/stderr, syslog, a pipe to a program, or a user-defined output function), and code logs through categories with zlog_info(c, fmt, ...) or the default-category dzlog_* macros. It is not a drop-in for syslog(3): you call zlog_init with a config file and get categories, and the config can be reloaded at runtime; MDC key-value pairs and process-safe rotation are included.",
+  "how_it_is_fast": "It stays in the calling process and writes directly: each thread has its own preallocated message buffer (pthread TLS), the format string is compiled at init into a list of specs, the formatted time string is cached per thread and per second (strftime was the profiled bottleneck in issue #3), and each line goes out with one write(2) on an O_APPEND descriptor, with no daemon round trip as syslog(3) to rsyslogd needs. Every call still takes a global pthread rwlock for reading and, for static files, calls stat(2) on the log path to detect external rotation. An optional writer thread (global option use_writer_thread = 1, queue size fifo_size) moves the write off the calling thread, but the message is still formatted with vsnprintf on the caller.",
+  "when_to_use": [
+    "C (or C-compatible C++) services on Linux, macOS or other POSIX systems that need text log files with per-module levels, several outputs and rotation, configured at deploy time rather than compiled in.",
+    "Several processes writing to the same log file with rotation: zlog coordinates rotation across processes with a lock file and appends with O_APPEND.",
+    "Replacing syslog(3) or printf in an application that logs at up to a few hundred thousand lines per second and can afford one or two syscalls per line.",
+    "You want a mature, permissively licensed (Apache-2.0) C library that is still maintained, with CI on x86-64, arm64, 32-bit ARM, Alpine/musl and macOS including TSan and ASan builds."
+  ],
+  "when_not_to_use": [
+    "Latency-sensitive hot paths: each synchronous call formats the whole line and does stat(2) plus write(2); doc/performence.txt implies about 1.8-4.5 us of user+sys CPU per line for v1.1.0-v1.1.1 (derived from page data), while the deferred-formatting C++ siblings enqueue in tens of nanoseconds.",
+    "Durability per line: the User's Guide shows the 1,000,000-line press test going from 1.806 s to 41.995 s with 'fsync period = 1K', and O_SYNC files ('-' prefix) are described as 'painfully slow'.",
+    "Real-time threads: every log call takes a pthread rwlock for reading, and issue #196 (priority inversion, open since 2021) reports that wrapping zlog in a priority-inheritance mutex cost significant performance.",
+    "Windows: the main repo targets POSIX only; Windows support exists in a separate fork (lopsd07/WinZlog).",
+    "Untrusted configuration files: issue #206 reports an ASan stack-buffer-overflow in zlog_conf_build_with_file and is still open."
+  ],
+  "integration": {
+    "form": "shared lib and static lib (CMake targets zlog::zlog and zlog::zlog_s, or plain Makefile), plus pkg-config file",
+    "dependencies": "none beyond POSIX (pthread) and a C99-conforming vsnprintf",
+    "min_toolchain": "CMake 3.12 (or make); compiled with -std=c99 but includes <stdatomic.h>, so a GCC or Clang that ships C11 atomics; C header usable from C++",
+    "platforms": "Linux (x86-64, arm64, 32-bit ARM, musl), macOS, AIX per the author; other POSIX systems untested; Windows only through the WinZlog fork",
+    "thread_safety": "Thread-safe (global rwlock plus per-thread buffers); process-safe rotation via a lock file; fork() in a threaded process fixed in September 2026",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The '1000 times faster than syslog(3)' figure has no measurement anywhere in the repo: test/test_press_syslog.c exists but no timing for it is published, and the rsyslogd configuration (for example whether its file action syncs each line) is not documented, so the ratio cannot be reproduced or attributed.",
+    "The two press harnesses are not symmetric: the zlog side runs N processes with M threads each and writes a full timestamped line (about 85 bytes, format '%d.%us %-6V %p:%T:%F:%L %m%n'), while the syslog side runs N single-threaded processes that send the bare string 'loglog' through /dev/log.",
+    "The README's 250,000 logs/s does not match doc/performence.txt, whose 1 process x 10 threads x 100,000 lines runs imply about 430,000 lines/s for v1.1.1 (2.334 s) and about 900,000 for v1.1.0 (1.107 s) (derived from page data); all figures date from the 2012 1.x versions, with no CPU or compiler named.",
+    "In writer-thread mode a full FIFO drops the message with an error (the producer's full counter is incremented) instead of blocking, and the default queue is 1024 * 4 bytes; the default synchronous mode instead blocks in write(2)."
+  ],
+  "pick_this_over_siblings_when": "Pick zlog when the code base is C and you want configuration-file-driven routing, rotation and multi-process file sharing with a permissive licence; for raw call-site latency, Quill, fmtlog or NanoLog (C++) are one to two orders of magnitude faster, and P7 offers a C interface with deferred binary formatting if you can use its viewer.",
+  "verified_claims_summary": "The only comparison with the baseline is an unmeasured README sentence: 250,000 logs/s 'on my laptop' and about 1000x syslog(3) through rsyslogd, with no CPU, compiler, flags, message size or rsyslogd setup; the repo's own timings (doc/performence.txt, -O2, 10 threads writing 1,000,000 lines to one file) compare zlog versions with each other and with raw write(2), never with syslog.",
+  "status_note": "Active again (version 1.2.20, a burst of fixes in September 2026 including fork safety, zlog_fsync and a non-hanging zlog_fini_try) and Apache-2.0 since 1.2.17 (LGPL-2.1 before), so it is safe to adopt; treat the speed claim as first-party and unreproduced.",
+  "sources_read": [
+    "https://github.com/HardySimpson/zlog",
+    "https://github.com/HardySimpson/zlog/commits/master",
+    "https://github.com/HardySimpson/zlog/tree/master/.github/workflows",
+    "https://github.com/HardySimpson/zlog/issues?q=is%3Aissue+performance+OR+slow+OR+deadlock+OR+crash",
+    "https://github.com/HardySimpson/zlog/issues/3",
+    "https://github.com/HardySimpson/zlog/issues/196",
+    "https://github.com/HardySimpson/zlog/issues/206",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/README.md",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/Changelog",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/.github/workflows/cmake-multi-platform.yml",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/doc/performence.txt",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/doc/UsersGuide-EN.md",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/zlog.h",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/zlog.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/conf.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/rule.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/rule.h",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/spec.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/buf.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/event.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/src/category.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_zlog.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_zlog.conf",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_zlog2.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_zlog2.conf",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_syslog.c",
+    "https://raw.githubusercontent.com/HardySimpson/zlog/HEAD/test/test_press_write.c"
+  ],
+  "confidence": 0.75
+}
