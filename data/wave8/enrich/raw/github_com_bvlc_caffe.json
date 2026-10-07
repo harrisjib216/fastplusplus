@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/bvlc/caffe",
+  "one_liner": "Berkeley's C++/CUDA layer-based deep learning framework; its native im2col+cuBLAS convolutions edged Torch-7's native kernels by 3-7% in 2015.",
+  "what_it_does": "Caffe trains and runs convolutional networks described as protobuf text files (prototxt) of layers wired by named blobs, driven by the `caffe` command-line tool (train, test, time) or the C++ Net/Solver API, with pycaffe and matcaffe wrappers. It is a whole framework, not a kernel library: you adopt its model format, Blob memory model and solvers rather than swapping one call.",
+  "how_it_is_fast": "The native ConvolutionLayer lowers each image to a column matrix with im2col (skipped for 1x1 kernels) and runs one cuBLAS/BLAS GEMM per image and group, so convolution speed is essentially GEMM speed; backward does a second GEMM for the weight gradient and col2im for the data gradient. Blobs keep synchronized CPU/GPU copies so data moves only when a layer on the other device touches it. Built with USE_CUDNN, the layer factory silently swaps every convolution (except dilated ones) to the cuDNN engine, which is where Caffe's later speed came from.",
+  "when_to_use": [
+    "Maintaining or reproducing a legacy Caffe model (Model Zoo prototxt/caffemodel) where re-implementing it elsewhere is not justified.",
+    "Older NVIDIA GPU stacks (CUDA up to 10.x, cuDNN up to 7) or CPU-only boxes where its BLAS (ATLAS, OpenBLAS, MKL) path is enough.",
+    "Teaching or studying a compact, readable im2col + GEMM CNN implementation in C++/CUDA.",
+    "Deployments that already standardised on Caffe tooling (prototxt nets, LMDB/LevelDB data layers) and cannot take a new framework."
+  ],
+  "when_not_to_use": [
+    "Any new project: the same benchmark tables put Caffe native far behind TensorFlow and cuDNN R4 (81 ms vs 324 ms on AlexNet) and on GoogleNet V1 at 1935 ms vs TensorFlow 445 ms; PyTorch or MXNet are the maintained choices.",
+    "Current CUDA/cuDNN toolchains: master calls cudnnGetConvolution*Algorithm with SPECIFY_WORKSPACE_LIMIT preferences that cuDNN 8 removed, so USE_CUDNN builds fail (issues #6970 and #6982 still open); Makefile.config.example's default arch list includes sm_20/sm_21, which CUDA 9+ rejects.",
+    "Dynamic graphs, autodiff of arbitrary code, mixed precision or modern attention/transformer layers: none are in master.",
+    "Projects that need upstream fixes or security updates: last commit 2020-02-13, 898 open issues and 277 open PRs."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "Boost >= 1.55, protobuf, glog, gflags, HDF5, a BLAS (ATLAS default, OpenBLAS or MKL); CUDA for GPU mode; optional cuDNN (v7 per docs), OpenCV >= 2.4, LevelDB, LMDB; boost.python and numpy for pycaffe",
+    "min_toolchain": "CMake 2.8.7 or the Makefile build; nvcc from CUDA (comment out sm_20/sm_21 for CUDA 9+); cuDNN 7 at most for USE_CUDNN (cuDNN 8 build breaks); no -std flag pinned in CMakeLists; docs list Ubuntu 12.04-16.04 and OS X 10.8-10.11",
+    "platforms": "x86-64 Linux and macOS; NVIDIA GPUs (compute capability >= 3.0 recommended) or CPU_ONLY builds; OpenCL, Intel CPU and Windows variants live on separate branches",
+    "thread_safety": "The global Caffe context (CPU/GPU mode, device, cuBLAS/cuRAND handles) is a thread-local singleton (common.hpp); sharing one Net across threads is not documented as safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Engine choice is a build flag: with USE_CUDNN every Convolution layer uses cuDNN unless engine: CAFFE is set per layer (layer_factory.cpp), so 'Caffe' timings mean different kernels depending on Makefile.config; the cuDNN path also caps algorithm workspace at 8 MB (cudnn_conv_layer.cpp), which can rule out the fastest algorithms.",
+    "Native convolution loops over the batch (one im2col and one GEMM per image, conv_layer.cu) with a per-layer column buffer, so throughput depends heavily on the BLAS and on batch size; backward redoes im2col for the weight gradient.",
+    "Harness asymmetry in soumith/convnet-benchmarks: the Caffe prototxts set force_backward: true, so Caffe also computes the gradient with respect to the input image in conv1, while the current Torch net files set features:get(1).gradInput = nil and skip it. This works against Caffe, so it does not inflate the 3-7% margin, but the two rows are not like-for-like work.",
+    "The README's Caffe rows cannot be traced to the checked-in logs: caffe/output_alexnet.log reports Average Forward-Backward 128.729 ms against the README's 324 ms, with no build configuration (cuDNN on or off, CUDA version) recorded, and the Torch row comes from a May 2015 log, so the comparison mixes runs from different dates. The log also prints 'does not need backward computation' for every layer because the net has no loss; force_backward overrides this after the message."
+  ],
+  "pick_this_over_siblings_when": "Pick Caffe over PyTorch, MXNet or Flashlight only to run or reproduce existing Caffe models on an older CUDA/cuDNN stack; for raw convolution speed, fbfft and Nervana neon beat it in the same tables, and FeatherCNN beats Caffe+OpenBLAS on ARM CPUs.",
+  "verified_claims_summary": "In soumith/convnet-benchmarks (i7-5930K plus a Titan X, Ubuntu 14.04, compiler, CUDA and cuBLAS versions not stated), Caffe's native non-cuDNN convolution took 324, 823 and 1068 ms for one forward plus backward pass of AlexNet (batch 128), Overfeat-fast (128) and OxfordNet-A (64), against Torch-7's native SpatialConvolutionMM at 342, 878 and 1105 ms, about 1.03-1.07x (derived from page data). The two rows come from runs on different dates, and Caffe did extra conv1 input-gradient work that Torch skipped.",
+  "status_note": "Abandoned (last commit 2020-02-13, not archived, cuDNN 8+ builds broken). It is BSD-2-Clause and copyable, but large and dependency-heavy, so use it only for legacy models.",
+  "sources_read": [
+    "https://github.com/BVLC/caffe",
+    "https://github.com/BVLC/caffe/commits/master",
+    "https://github.com/BVLC/caffe/issues?q=is%3Aissue+cudnn+8",
+    "https://github.com/BVLC/caffe/issues/6970",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/README.md",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/Makefile.config.example",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/cmake/Dependencies.cmake",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/docs/installation.md",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/src/caffe/layers/conv_layer.cu",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/src/caffe/layers/base_conv_layer.cpp",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/src/caffe/layers/cudnn_conv_layer.cpp",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/src/caffe/layer_factory.cpp",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/src/caffe/net.cpp",
+    "https://raw.githubusercontent.com/BVLC/caffe/master/include/caffe/common.hpp",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/install.sh",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/run_imagenet.sh",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/output_alexnet.log",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/imagenet_winners/alexnet.prototxt",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/imagenet_winners/overfeat.prototxt",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/caffe/imagenet_winners/vgg_a.prototxt",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/benchmark.lua",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/output_raw.log",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/alexnet.lua",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/overfeat.lua",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/vgg_a.lua",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/master/torch7/imagenet_winners/googlenet.lua",
+    "https://raw.githubusercontent.com/torch/nn/master/SpatialConvolutionMM.lua"
+  ],
+  "confidence": 0.75
+}

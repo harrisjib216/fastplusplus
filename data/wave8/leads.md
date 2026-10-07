@@ -130,3 +130,6 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - imperatormk/metal-flash-attention and imperatormk/mps-flash-attention (causal masks, PyTorch MPS, claims 2-5x over SDPA): forks worth a seed check. SevenNet-Omni paper section 2.7 compares FlashTP and cuEquivariance. (from FlashTP/MFA enricher)
 - pedrobtz/zurand (R package with C core, MIT, 0 stars): README Gaussian 366 M/s vs dqrng 143, RcppZiggurat 125, base rnorm 28; uniform 864 vs dqrng 368. NLAFET/SpLLT (StarPU/OpenMP/PaRSEC sparse Cholesky; paper says only 'comparable' to HSL MA87). (from fast_prng/SyLVER enricher)
 - AVXPoS (IACR ePrint 2026/1827, AVX-512 BLS12-381 batch verification backend for Prysm, 1.44-2.10x over Prysm's blst backend per snippet; repo not found) and paper-access retier for avxbls-sig (ePrint 2026/947): avxbls-sig enricher, 2026-10-07.
+- lleaves (siboehm/lleaves): LLVM compiler for LightGBM models, claims faster prediction than LightGBM. Not catalogued (enricher lead, 2026-10-07).
+- treelite (dmlc/treelite): model compiler for decision-tree ensembles. Not catalogued.
+- XGBoost-FastForest (guitargeek/XGBoost-FastForest): minimal C++ inference for XGBoost models. Not catalogued.

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/catboost/catboost",
+  "one_liner": "Yandex gradient-boosted-tree library whose oblivious-tree CPU evaluator scored batches 27-60x faster than XGBoost 0.80 and LightGBM 2.2.1.",
+  "what_it_does": "CatBoost trains gradient-boosted decision tree ensembles for classification, regression and ranking on CPU or GPU, with native categorical-feature handling, and exposes them through Python, R, CLI, Spark and JVM packages. Trained models are applied through the same packages, through inference-only libraries (C API, C++, JVM, Rust, .NET, Node.js), or by exporting to CoreML, ONNX, PMML, or C++/Python code. It is not a drop-in predictor for existing XGBoost or LightGBM models: the speedup requires a model trained by CatBoost with its default symmetric trees.",
+  "how_it_is_fast": "By default CatBoost grows oblivious (symmetric) trees: every node at one depth uses the same feature/border split, so a depth-6 tree is just 6 splits plus a 64-entry leaf table. The CPU evaluator first quantizes each 128-document block of float features to ui8 bin indices with SSE compares (quantization.h). For every tree it then builds leaf indexes for 16 documents per SSE register, one byte compare and OR per depth level (CalcIndexesSseDepthed in evaluator_impl.cpp), and gathers the leaf values. There is no per-node pointer chasing or data-dependent branching, unlike the node-by-node row walks of XGBoost 0.80 and LightGBM 2.2.1.",
+  "when_to_use": [
+    "High-throughput batch scoring on CPU of large tree ensembles (thousands of trees, many rows per call), where you control training and can keep the default SymmetricTree grow policy.",
+    "Tabular data with many categorical features, which CatBoost encodes natively instead of requiring one-hot or target encoding upstream.",
+    "C, C++, JVM or Rust services that embed the inference-only library or exported C++ code, avoiding Python wrapper overhead.",
+    "GPU training on dense, wide data: the first-party gpu_vs_cpu README reports 17.9 ms per tree on Epsilon vs XGBoost 488 ms and LightGBM 40 ms on a P100."
+  ],
+  "when_not_to_use": [
+    "You must serve existing XGBoost or LightGBM models: CatBoost cannot load them, so you would have to retrain (and revalidate) the model.",
+    "CPU training time is the bottleneck: the repo's own table has CatBoost slower on letters (259.75 s vs 176.82 s and 112.74 s) and airline (974.1 s vs 611.9 s and 526.2 s), and szilard/GBM-perf finds it slower than both on CPU and slower than XGBoost on GPU.",
+    "Single-row prediction from Python: issue #1346 (open since 2020-06-29) reports 1000 single-row calls taking about 0.40 s vs XGBoost 0.088 s and LightGBM 0.142 s, with a C++ export 30x faster than the wrapper.",
+    "Models trained with Depthwise or Lossguide grow policies: these go through a scalar per-document node walk (CalcIndexesNonSymmetric) rather than the SSE oblivious path, and the benchmark did not test them.",
+    "Building from source on an arbitrary toolchain: it needs CMake >= 3.24 and < 4.0, clang 18-22, lld, Conan and C++20, so most users rely on the prebuilt packages."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "Prebuilt inference library (libcatboostmodel, C API in catboost/libs/model_interface/c_api.h) needs nothing else; the Python package imports numpy, pandas, scipy, six and graphviz (plus plotting extras); source builds pull dependencies through Conan; CUDA toolkit for GPU training",
+    "min_toolchain": "Source build: C++20 (CMAKE_CXX_STANDARD 20), CMake >= 3.24 and < 4.0, clang 18-22 with lld on Linux, Xcode clang 15+ on macOS, Visual Studio 2022 clang-cl on Windows; prebuilt wheels avoid this",
+    "platforms": "Linux, macOS and Windows on x86-64 (SSE evaluator) and aarch64, plus an Android target; NVIDIA CUDA GPUs for training and optional GPU evaluation (EnableGPUEvaluation)",
+    "thread_safety": "C API error state is thread-local (c_api.h); Python predict takes a per-call thread_count; concurrent prediction on one shared model handle is not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the benchmark notebook: XGBoost.model (num_feature 2001, no split on feature 0) and LightGBM_model.txt (max_feature_idx=2000, feature_infos 'none' for Column_0) were trained on 1-based libsvm-style feature indices, but X_test from catboost.datasets.epsilon has 2000 zero-based columns. XGBoost and LightGBM therefore scored every row on features shifted by one (feature 2000 missing), and no cell checks predictions or accuracy. The CatBoost model (features 0-1999) is aligned. Depth-bounded tree walks make the timing effect small for XGBoost, but the competitor outputs are wrong, and recent LightGBM releases reject this shape mismatch unless predict_disable_shape_check is set.",
+    "The ensembles are not identical in size. Over the first 8000 trees, CatBoost has 64 leaves per tree at depth 6. XGBoost (19,730 trees in the file) has depth at most 6, a mean of 44.4 leaves and a mean leaf depth of 5.7. LightGBM (14,835 trees) has 4121 trees at 64 leaves, depths up to 25 and a mean leaf depth of 8.2. XGBoost therefore did no more comparisons per tree than CatBoost, so the 27x gap comes from the evaluator, not from a larger competitor model.",
+    "Timing setup: the XGBoost DMatrix and the CatBoost Pool are built outside the timed cells (this corrects the record's note that XGBoost's time includes input handling); only LightGBM receives a raw numpy array. LightGBM's thread count is never set, so it follows the process OpenMP default (in the 1-thread section its wall time equals its CPU time). The 1-thread rows are single %time runs, not %timeit.",
+    "The benchmark is from 2018-2019 (catboost 0.10.3, xgboost 0.80 and lightgbm 2.2.1 per the training README; the notebook kernel is Python 3.7.3), so later XGBoost and LightGBM predictors and model compilers such as Treelite and lleaves probably narrow the ratio."
+  ],
+  "pick_this_over_siblings_when": "No gradient-boosted-tree siblings are catalogued: the category's other entries (PyTorch, MXNet, FBGEMM, OpenVINO, MNN and others) serve neural networks. Pick CatBoost when the model is a tree ensemble and batch CPU scoring throughput matters more than CPU training time.",
+  "verified_claims_summary": "In a first-party notebook (catboost/benchmarks model_evaluation_speed; CPU model and compiler unstated; library versions probably catboost 0.10.3, xgboost 0.80 and lightgbm 2.2.1 per the sibling README), scoring the 100K-row, 2000-feature Epsilon test split with 8000 trees took 184 ms for CatBoost vs 4.89 s for XGBoost and 11.1 s for LightGBM at 32 threads, and 1.98 s vs 72 s and 116 s on one thread (about 27x/60x and 36x/59x, derived from page data). The competitor models were fed feature columns shifted by one and no outputs were checked.",
+  "status_note": "Actively maintained (commits through 2026-10-07; PyPI release 1.2.10 on 2026-02-18, 672 open issues) and Apache-2.0. Use the prebuilt packages or the inference-only library rather than vendoring, because the source build needs a pinned clang/Conan toolchain.",
+  "sources_read": [
+    "https://github.com/catboost/catboost",
+    "https://raw.githubusercontent.com/catboost/catboost/master/README.md",
+    "https://raw.githubusercontent.com/catboost/catboost/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/CatboostModelAPI.md",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/docs/en/installation/build-environment-setup-for-cmake.md",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/libs/model/cpu/evaluator_impl.cpp",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/libs/model/cpu/evaluator.h",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/libs/model/cpu/quantization.h",
+    "https://raw.githubusercontent.com/catboost/catboost/master/catboost/libs/model_interface/c_api.h",
+    "https://github.com/catboost/catboost/issues?q=is%3Aissue+predict+slow",
+    "https://github.com/catboost/catboost/issues/1346",
+    "https://pypi.org/pypi/catboost/json",
+    "https://raw.githubusercontent.com/catboost/benchmarks/master/model_evaluation_speed/model_evaluation_benchmark.ipynb",
+    "https://github.com/catboost/benchmarks/tree/master/model_evaluation_speed",
+    "https://raw.githubusercontent.com/catboost/benchmarks/master/model_evaluation_speed/XGBoost.model",
+    "https://raw.githubusercontent.com/catboost/benchmarks/master/model_evaluation_speed/LightGBM_model.txt",
+    "https://raw.githubusercontent.com/catboost/benchmarks/master/model_evaluation_speed/epsilon8k_64.bin",
+    "https://raw.githubusercontent.com/catboost/benchmarks/master/training_speed/README.md",
+    "https://github.com/szilard/GBM-perf/issues/4",
+    "https://raw.githubusercontent.com/siboehm/lleaves/HEAD/README.md",
+    "https://raw.githubusercontent.com/guitargeek/XGBoost-FastForest/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
