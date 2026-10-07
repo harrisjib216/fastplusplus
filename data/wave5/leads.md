@@ -8,3 +8,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - rsloop: a Python event loop whose benchmark doc compares itself with uvloop and stdlib asyncio (CPython 3.14). Found by the uvloop enricher; picked up by the event-loops hn search, so no seed needed.
 
 Seeded as w5-seed-leads (Caladan, Machnet) on 2026-09-26. milo was found by the http-parsers gh-any search.
+- iceoryx2 (eclipse-iceoryx/iceoryx2): Rust core with C/C++ bindings; README benchmark plots vs other IPC on i7-13700H, rustc 1.81, gcc 14.2.1. Not catalogued (enricher lead, 2026-10-07).
