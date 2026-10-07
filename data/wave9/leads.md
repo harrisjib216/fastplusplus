@@ -45,3 +45,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Tessil/sparse-map (tsl::sparse_map, not catalogued; the same 2017 shootout CSV has rows vs std::unordered_map), emilk/emilib HashMap, fanf2/qp, dcjones/hat-trie: hash-map seed leads for wave 1 backfill (array-hash enricher, 2026-10-07).
 - aditya12agd5/cuda_bzip2 (GPU BWT compressor, not catalogued): lead from the bzip2gpu enricher (2026-10-07).
 - libbzip2-rs (trifectatechfoundation/libbzip2-rs): c2rust port of bzip2, snippet claims 14% faster level-1 compress; port of a listed project, duplicate rule applies.
+- xpack (ebiggers/xpack): lzbench 1.8: 171/890 MB/s at 33.54% vs zlib -1 119/383 at 36.45%. Not catalogued (enricher lead, 2026-10-07).
+- liblzg (mbitsnbites/liblzg): minor lead from the LZMAT enrichment, not opened.

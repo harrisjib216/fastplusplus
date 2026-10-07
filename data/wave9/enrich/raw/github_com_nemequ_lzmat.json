@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/nemequ/lzmat",
+  "one_liner": "Abandoned 2008 nibble-packed LZ77 codec; decompresses about 1.2x faster than zlib at zlib -1 ratio, compresses 3x slower.",
+  "what_it_does": "A tiny GPL C codec (one header and two .c files, release 1.01 from 2008, mirrored in a single commit) for whole in-memory buffers: lzmat_encode(out, &outLen, in, inLen) and lzmat_decode(out, &outLen, in, inLen), returning 0 on success or LZMAT_STATUS_* error codes. The stream has no header, length or checksum, so the caller stores the original size itself (the bundled test_lzmat.c prepends a 4-byte int) and sizes the output with MAX_LZMAT_ENCODED_SIZE(n) = n + n/8 + 33. It is not zlib-compatible and has no streaming interface.",
+  "how_it_is_fast": "It is a pure LZ77 coder with no entropy stage: flags come in 8-token tag bytes and every literal, distance and length is packed at 4-bit (nibble) granularity, with position-dependent distance classes (7/11-bit offsets in the first 2,176 bytes, then 6/10/14/18-bit classes, about a 273 KiB window), lengths from 3 up to 65,807, and raw 4-byte-word copy chunks for incompressible stretches. Decoding is therefore bit-twiddling plus byte copies instead of zlib's Huffman decoding, which is where the roughly 1.2x decompression lead comes from, while the larger window and nibble-sized fields keep the ratio near zlib -1. The encoder walks the full hash chain (4-byte hash, 32,768-entry head and chain tables) inside the window and special-cases byte runs, which makes it slow (38 MB/s).",
+  "when_to_use": [
+    "Reading or producing existing LZMAT streams for compatibility with software that already uses the format.",
+    "Trusted, write-once read-many data on x86 where a GPL dependency is acceptable and you want a decoder of about 140 lines of C with no tables, no heap and no work memory.",
+    "Historical reference or benchmark completeness (lzbench carried it from v1.5 to v1.8.1)."
+  ],
+  "when_not_to_use": [
+    "Any performance-driven new design: in the same lzbench 1.8 table libdeflate 1.3 -1 compresses at 201 MB/s and decompresses at 865 MB/s to 34.59%, beating LZMAT's 38 / 479 MB/s at 36.09% on every axis while staying deflate-compatible; lzo1x -999 (827 MB/s at 35.53%), lzfse (934 MB/s at 31.91%) and lizard -25 (2853 MB/s at 35.80%) also decode faster at equal or better ratio.",
+    "Untrusted or possibly corrupt input: lzbench has warned since v1.5 of decompression errors and GCC 4.9+ -O3 segfaults and lists it under 'security issues and/or no longer maintained', CompFuzz recorded issues found (2013-09-11, abandoned), and the decoder's raw-copy path does not bound-check its input (see gotchas).",
+    "Fast compression: 38 MB/s is 3.1x slower than zlib -1 and about 5x slower than libdeflate -1 in the same run.",
+    "Proprietary or permissively licensed products: GPL-2.0-or-later.",
+    "Big-endian or strict-alignment targets: the GET_LE16/GET_LE32 macros are native-endian unaligned pointer loads, so streams are not portable and the code relies on undefined behaviour."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc memset)",
+    "min_toolchain": "ANSI C per the header (the header uses // comments, so C99 or a compiler extension); lzbench builds it at -O2 with a 'FIX for SEGFAULT on GCC 4.9+' rule instead of -O3",
+    "platforms": "little-endian targets that tolerate unaligned 16/32-bit loads (x86, x86-64); on LP64 use lzbench's patched copy, since upstream truncates pointers to 32 bits",
+    "thread_safety": "not documented; the code has no static or global state (the encoder's 256 KiB hash table lives on the stack, or in a caller buffer with LZMAT_SMALL_STACK), so concurrent calls on separate buffers appear safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default decoder (the LZMAT_SAVE variant, the one lzbench measured) checks output bounds but not input bounds everywhere: the raw 'copy chunk' path copies up to about 64 KiB (r_cnt up to 16,390 four-byte words) from pbIn without comparing against cbIn, nibble field reads (LZMAT_GET_LE16, LZMAT_GET_U4) can touch 1-2 bytes past the end, and it returns LZMAT_STATUS_OK without checking that all input was consumed (the non-SAVE variant does). A crafted stream can therefore over-read the source buffer; lzbench's 'decompression error; returns 0' warning has no documented root cause.",
+    "Upstream nemequ/lzmat is broken on 64-bit: lzmat_enc.c line 426 compares output pointers truncated to 32 bits ((MP_U32)pOut >= (MP_U32)pEndOut), so the overflow guard misfires if the output buffer straddles a 4 GiB address boundary, and line 463 computes the size the same way; lzbench (v1.8.1 and master lz/lzmat) replaced both with plain pointer arithmetic and changed the MP_PTR typedef guard in lzmat.h, so vendor that copy.",
+    "The encoder puts a 256 KiB hash table (two 32,768-entry int32 arrays) on the stack unless LZMAT_SMALL_STACK is defined and memsets it on every call, which can overflow small thread stacks and makes small-block compression expensive; it also loads 4-byte hash keys and 2-byte compare values past the end of the input on the last 1-3 bytes.",
+    "Sizes are 32-bit (MP_U32), so one call handles under 4 GiB, and the stream carries no length or checksum: a wrong output size yields a short or failed decode rather than a detected integrity error."
+  ],
+  "pick_this_over_siblings_when": "Practically never for new work: libdeflate (catalogued) beats it on compression speed, decompression speed and ratio in the same lzbench run while staying zlib/deflate-compatible, and Lizard -25 and LZSSE8 -6 decode 6x and 9x faster at similar ratios (35.80% and 35.61%). Pick LZMAT only to interoperate with existing LZMAT data, and then from lzbench's patched copy.",
+  "verified_claims_summary": "lzbench 1.8 (v1.8.1 README), clang 9.0.1, one core of an Intel Core i7-8700K on Ubuntu 18.04.3, -t16,16, whole silesia.tar (211,947,520 bytes) in one call: lzmat 1.01 compresses at 38 MB/s and decompresses at 479 MB/s to 36.09%, against zlib 1.2.11 -1 at 119 / 383 MB/s and 36.45% and zlib -6 at 35 / 407 MB/s and 32.19%, so decompression is about 1.25x faster than -1 and 1.18x faster than -6 and compression 3.1x slower than -1 (derived from page data). lzbench memcmp-checked the round trip, and lzmat was compiled at -O2 against zlib's -O3, which if anything favours zlib.",
+  "status_note": "Abandoned since the 2008 1.01 release (single-commit mirror dated 2013-08-22, no README, 10 stars), GPL-2.0-or-later, and dropped from current lzbench tables; usable only as a vendored source drop from lzbench's 64-bit-fixed copy on trusted little-endian data.",
+  "sources_read": [
+    "https://github.com/nemequ/lzmat",
+    "https://raw.githubusercontent.com/nemequ/lzmat/HEAD/lzmat.h",
+    "https://raw.githubusercontent.com/nemequ/lzmat/HEAD/lzmat_dec.c",
+    "https://raw.githubusercontent.com/nemequ/lzmat/HEAD/lzmat_enc.c",
+    "https://raw.githubusercontent.com/nemequ/lzmat/HEAD/test_lzmat.c",
+    "https://raw.githubusercontent.com/nemequ/lzmat/HEAD/test_lzmat.mak",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/Makefile",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/_lzbench/lzbench.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/_lzbench/lzbench.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/_lzbench/compressors.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/lzmat/lzmat.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/lzmat/lzmat_dec.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/v1.8.1/lzmat/lzmat_enc.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/master/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/master/lz/lzmat/lzmat.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/master/lz/lzmat/lzmat_dec.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/master/lz/lzmat/lzmat_enc.c",
+    "https://github.com/nemequ/compfuzz/wiki/Results"
+  ],
+  "confidence": 0.7
+}
