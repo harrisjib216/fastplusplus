@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/dmlc/xgboost",
+  "one_liner": "Multithreaded gradient-boosted-tree library; trained 3-9x faster than R gbm and 120-375x faster than 2015 scikit-learn GBM.",
+  "what_it_does": "XGBoost trains gradient-boosted decision tree ensembles (classification, regression, ranking, survival) on CPU, CUDA GPUs and distributed clusters (Dask, Spark, Kubernetes), with a C++ core exposed through a C API (include/xgboost/c_api.h) and Python, R, JVM and other bindings. The Python package ships a scikit-learn-style XGBClassifier/XGBRegressor (fit, predict_proba) next to the native DMatrix/train API. It is not a drop-in for R gbm or scikit-learn's GradientBoostingClassifier: parameter names, tree-growth semantics and the resulting models differ.",
+  "how_it_is_fast": "The 2015 snapshot that was benchmarked predates the tree_method option (v0.6, 2016) and the hist method (v0.7, 2017-12-30), so it ran the exact greedy column-wise updater: data is pre-sorted into compressed sparse column pages, OpenMP threads enumerate split candidates per feature in parallel (UpdateSolution in updater_colmaker.cc) for all nodes of one depth in a single scan, and only non-missing entries are stored, with a learned default direction for missing values, so one-hot dummy columns cost time proportional to their non-zeros. Since 2.0 the default is hist: features are quantile-binned once and per-node gradient histograms are built row-wise with software prefetching (RowsWiseBuildHistKernel in common/hist_util.cc), the LightGBM-style approach; a CUDA hist path covers GPUs.",
+  "when_to_use": [
+    "Tabular classification or regression with 100K to 10M rows on a multicore CPU: szilard/GBM-perf (r4.8xlarge, software as of 2024-06-04, 100 trees, depth 10) trains the airline data in 0.4 s at 100K and 2.7 s at 1M rows, ahead of LightGBM (2.3 s, 4.0 s), CatBoost (1.9 s, 7.0 s) and H2O (11 s, 12 s).",
+    "GPU training: the same suite on one V100 trains 10M rows in 5 s vs LightGBM 40 s and CatBoost 23 s, and 100M rows in 80 s with 6 GB of GPU memory and no extra host RAM.",
+    "Sparse or one-hot inputs with missing values, where the sparsity-aware split finding skips absent entries instead of scanning dense zero columns.",
+    "Python code built around scikit-learn estimators that needs a faster boosted-tree model with the same fit/predict_proba interface (XGBClassifier), or C/C++, JVM or R services that need one model format across languages."
+  ],
+  "when_not_to_use": [
+    "Very large CPU training jobs: GBM-perf has LightGBM about 2x faster at 10M rows (20 s vs 40 s) and about 3.5x faster at 100M rows on a c7i.metal-48xl (55 s vs 190 s); on m5.12xlarge at 100M rows XGBoost also used 15 GB of training RAM vs 5 GB for LightGBM.",
+    "Hosts with two sockets or hyperthreading and default thread counts: GBM-perf measured XGBoost 1M-row training at 120 s on 64 threads (2 sockets plus HT) vs 12 s on 16 physical cores in May 2019; fixes by September 2020 brought both to about 5 s, but the author still advises pinning to the physical cores of one socket.",
+    "tree_method='exact', the algorithm behind the 2015 numbers: the project's own docs call it computationally slower than approx and hist and it does not support distributed training or external memory.",
+    "Accuracy at fixed settings on categorical-heavy data: in GBM-perf's one-configuration runs XGBoost reached AUC 0.749 at 1M rows vs 0.765 for LightGBM and 0.762 for H2O, so tune before assuming the fastest tool is also the best model.",
+    "Minimal-dependency installs: the default Linux PyPI wheel (3.4.1) pulls nvidia-nccl-cu13; use the separate xgboost-cpu wheel for CPU-only machines."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "OpenMP and the vendored dmlc-core submodule for the C++ library; optional CUDA, NCCL, RMM and a SYCL plugin; the Python package needs numpy and scipy (plus nvidia-nccl-cu13 on Linux for the default wheel; xgboost-cpu omits it)",
+    "min_toolchain": "C++17; CMake 3.18+; GCC 8.1+, Clang 9+, AppleClang 11+ or Visual Studio 2019+ (checked in CMakeLists.txt); Python 3.12+ for the 3.4.1 wheels",
+    "platforms": "Linux, macOS and Windows on x86-64 and aarch64 (PyPI wheels for manylinux x86-64/aarch64 and macOS x86-64/arm64); NVIDIA GPUs through CUDA; distributed via Dask, Spark, Kubernetes",
+    "thread_safety": "Since 1.4, all prediction functions (predict, inplace_predict, SHAP) are thread-safe for gbtree and dart boosters; training and prediction on the same model concurrently, or calling set_params inside a predict function, is undefined behaviour (doc/prediction.rst)",
+    "drop_in_for_baseline": "partial — XGBClassifier follows the scikit-learn estimator API and can replace GradientBoostingClassifier in a pipeline, but hyperparameter semantics and defaults differ; there is no drop-in replacement for R gbm calls"
+  },
+  "gotchas": [
+    "Harness flaw in the R gbm comparison: gbm's interaction.depth is a split count, not a depth. Its tree.cpp grow loop performs one best-first split per iteration for cMaxDepth iterations, so interaction.depth = 16 in 1-gbm.R builds trees with 16 splits (17 non-empty leaves), while xgboost max_depth = 16 in 6-xgboost.R allows depth-16 trees with thousands of leaves (min_child_weight = 1). The 'matched' hyperparameters therefore gave R gbm much smaller trees; XGBoost was faster despite doing more work per tree, but the AUC gap (e.g. 64.9 vs 70.3 at 10K) partly reflects model size, and the time ratio is not a like-for-like per-model comparison.",
+    "The scikit-learn ratios (183x, 375x) do not include the encoding step: 2-boost.py times pd.get_dummies in a separate %time cell and %time md.fit only on the resulting dense frame of about 1K dummy columns. What they measure is single-threaded exact splitting over dense mostly-zero columns (scikit-learn 0.15.2) against XGBoost's 32-thread sparse column scan; the README says scikit-learn is only 1.5x slower than R with integer encoding.",
+    "In the same benchm-ml table XGBoost is not the fastest at 10M rows: H2O trained experiment A in 3500 s vs XGBoost 9000 s and experiment B in 300 s vs 1000 s (2.6x and 3.3x in H2O's favour, derived from page data), although XGBoost still led at 1M (400 s vs 900 s in A, 45 s vs 60 s in B). The multi-x headline holds only against the single-threaded R and Python baselines.",
+    "Defaults changed under users: 2.0 made hist the default tree method (earlier versions chose exact or approx depending on input and environment), so models and timings differ across versions; issue #9013 (closed) reported 80-90 s per iteration with QuantileDMatrix in 1.7.4 vs 4-5 s with DMatrix in 1.4.2 after the automatic switch."
+  ],
+  "pick_this_over_siblings_when": "Against CatBoost, the only other boosted-tree entry, pick XGBoost when training time matters: GBM-perf has it 2.6-4.8x faster on CPU at 100K to 1M rows and 4.6x faster on a V100 at 10M rows; pick CatBoost when batch CPU scoring of large ensembles dominates. The neural-network siblings (PyTorch, MXNet, oneDNN-based runtimes) do not train tree ensembles.",
+  "verified_claims_summary": "In szilard/benchm-ml (2015, independent; EC2 c3.8xlarge, 32 cores, Ubuntu 14.04, R 3.2.0, XGBoost R package built from the 2015-05-16 GitHub snapshot with R's default flags, CPU model not stated), XGBoost with nthread = detectCores() trained 1000 depth-16 trees on 1M airline rows in 400 s vs 3000 s for single-threaded R gbm and 10K rows in 6 s vs 1100 s for single-threaded scikit-learn 0.15.2 on dense one-hot input; gbm's trees were capped at 16 splits rather than depth 16, so the models were not equivalent.",
+  "status_note": "Actively maintained (commits through 2026-10-07, PyPI 3.4.1 released 2026-08-15, 405 open issues, 28.8k stars) and Apache-2.0; install the prebuilt packages rather than vendoring the C++ core.",
+  "sources_read": [
+    "https://github.com/dmlc/xgboost",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/README.md",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/doc/build.rst",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/doc/treemethod.rst",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/doc/prediction.rst",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/doc/faq.rst",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/NEWS.md",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/src/tree/updater_colmaker.cc",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/src/common/hist_util.cc",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/python-package/xgboost/sklearn.py",
+    "https://raw.githubusercontent.com/dmlc/xgboost/master/include/xgboost/c_api.h",
+    "https://github.com/dmlc/xgboost/issues?q=is%3Aissue+slow+training+label%3Aperformance",
+    "https://github.com/dmlc/xgboost/issues/9013",
+    "https://pypi.org/pypi/xgboost/json",
+    "https://pypi.org/pypi/xgboost-cpu/json",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/README.md",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/3-boosting/1-gbm.R",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/3-boosting/2-boost.py",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/3-boosting/6-xgboost.R",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/0-init/1a-versions.txt",
+    "https://raw.githubusercontent.com/szilard/benchm-ml/HEAD/0-init/1-install.md",
+    "https://raw.githubusercontent.com/szilard/GBM-perf/master/README.md",
+    "https://raw.githubusercontent.com/gbm-developers/gbm/master/src/tree.cpp"
+  ],
+  "confidence": 0.8
+}

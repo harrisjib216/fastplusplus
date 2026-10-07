@@ -137,3 +137,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - fast_division (lemire/fast_division): BSD-3; Apple M1 clang 12: 0.31 vs 0.91 ns/op at divisor 19. Not catalogued.
 - Rapier (dimforge/rapier): Rust physics engine; Godot Rapier blog (snippet only) says faster than Jolt on 3 of 5 scenes. Not catalogued (enricher lead, 2026-10-07).
 - knor (flashxio/knor): NUMA-optimized k-means in C++, Apache-2.0; HPDC 2017 paper claims 10-100x vs MLlib/H2O and compares mlpack and sklearn. Not catalogued (enricher lead, 2026-10-07).
+- microsoft/LightGBM (https://github.com/microsoft/LightGBM): GBM-perf shows 2x faster than xgboost at 10M rows on CPU, 3.5x at 100M; not catalogued (XGBoost enricher, 2026-10-07).
+- nmslib/hnswlib (https://github.com/nmslib/hnswlib): usearch issue #439 says hnswlib is faster on SIFT1M; not catalogued (USearch enricher, 2026-10-07).

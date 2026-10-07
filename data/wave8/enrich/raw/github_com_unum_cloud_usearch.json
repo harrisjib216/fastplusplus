@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/unum-cloud/usearch",
+  "one_liner": "Header-only C++11 HNSW vector-search engine with native bindings; first-party tables claim 2-10x faster index builds than FAISS.",
+  "what_it_does": "USearch builds and queries approximate nearest-neighbour (HNSW) indexes over dense or binary vectors, plus brute-force exact search, clustering and joins, from a C++11 core (include/usearch/index.hpp, with index_dense.hpp and index_plugins.hpp for the keyed dense API and metrics) and native bindings for Python, Rust, JavaScript, Java, C, C#, Go, Swift and others. The API is add(key, vector) / search(vector, k) / remove(key) with save, load and memory-mapped view of an index file. It is not a drop-in for FAISS: there is no IVF/PQ family, no GPU index and no FAISS index-factory or file compatibility.",
+  "how_it_is_fast": "It implements HNSW (Malkov and Yashunin) with a flat tape allocator for nodes, 32- or 40-bit neighbour ids, and cache-line-padded striped spin locks (striped_locks_gt) so many caller threads can insert concurrently without spawning threads of its own. Distances come from NumKong (formerly SimSIMD) kernels with runtime dispatch to AVX2, AVX-512 or Arm SVE/NEON, which also cover f16, bf16, fp8 and i8 storage, so downcast vectors cut memory traffic during graph construction and search. The Rust and Python builds compile the core with -O3 -ffast-math.",
+  "when_to_use": [
+    "Embedding a small, dependency-light ANN index in a C++ or multi-language product (databases, services, mobile, WebAssembly), as ClickHouse, DuckDB and TiDB/TiFlash do per the README's integration list.",
+    "Building HNSW graphs over 10M to 100M vectors with bf16, f16 or fp8 storage: the author's RetriEval tables show 2.8-4.3x higher add throughput than FAISS HNSW with SQbf16/SQfp16 on Turing-ANNS 10M (but see the FAISS build flaw in gotchas).",
+    "Binary fingerprints with Tanimoto, Sorensen or Hamming distance (chemistry, genomics) at 100M scale, where FAISS IndexBinaryHNSW did not finish within 9 hours in RetriEval while USearch built PubChem MACCS 100M in 54.6 min.",
+    "Serving indexes larger than RAM from a memory-mapped file (Index.restore(path, view=True)), or custom metrics compiled with Numba or another JIT."
+  ],
+  "when_not_to_use": [
+    "Compressed billion-scale or GPU search that needs IVF, PQ or CAGRA: USearch offers only HNSW and exact scans on CPU.",
+    "Plain f32 or binary workloads at FAISS-tuned settings: in RetriEval FAISS searched Turing-ANNS 10M f32 faster (16,486 vs 12,331 queries/s) and PubChem MACCS 10M binary much faster (293,795 vs 35,767 queries/s, 95,230 vs 36,347 adds/s, different M and ef), so the 10x headline is not a general result.",
+    "Write-heavy concurrent ingestion that must stay fully searchable: open bug #735 (2026-03-24, labelled v3) reports concurrent add() leaving nodes stored but unreachable by search(), and open issues #396 and #354 report deadlocks in concurrent update() and Swift add().",
+    "Workloads that delete heavily: remove() frees the key slot for reuse but graph links to removed entries stay until you call isolate() or compact(), and memory-mapped views are immutable (add and remove fail on a viewed file).",
+    "Expecting a plain C++ include to be fast: the CMake defaults USEARCH_USE_NUMKONG and USEARCH_USE_OPENMP are OFF, so the header alone falls back to the generic metrics; the Python wheel and Rust crate enable NumKong by default."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the core headers; optional NumKong (SIMD metrics), OpenMP and jemalloc via CMake options; the Python package (2.26.4) requires numpy, tqdm and numkong",
+    "min_toolchain": "C++11 for the headers (C++17 and C++20 features used when available); CMake 3.11+; the Rust crate builds with C++17 and -O3 -ffast-math; Python 3.10+",
+    "platforms": "Linux, macOS, Windows, iOS, Android and WebAssembly per the README; x86-64 and aarch64 with runtime-dispatched SIMD through NumKong",
+    "thread_safety": "index_gt documents concurrent construction, search and updates as thread-safe and reuses the caller's threads; reserve() must run with no concurrent insertions, neighbour views must not outlive concurrent add/update/remove, and open issues #735, #396 and #354 report lost reachability and deadlocks under concurrent mutation",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the newer comparison the verifier relied on: RetriEval builds FAISS with `cargo install --features faiss-static`, which goes through faiss-sys's build.rs. That script sets only CMAKE_BUILD_TYPE Release, C API, shared-libs off and GPU off, never FAISS_OPT_LEVEL, so FAISS 1.12.0's default 'generic' target is built and linked (faiss/CMakeLists.txt leaves faiss_avx2, faiss_avx512 and faiss_avx512_spr out of the build unless that level is chosen). The FAISS baseline therefore ran without -mavx2/-mfma/-mf16c or AVX-512 on a Xeon 6, while USearch used NumKong with runtime dispatch. No CXXFLAGS are documented. This plausibly explains why FAISS's SQfp16 and SQbf16 builds are 2-3x slower than its own f32 build (2,545 and 3,800 vs 7,491 adds/s), so the 2.8-4.3x half-precision leads are against a crippled baseline.",
+    "The README headline (9.6-10.7x on 100M 96d vectors) comes from a 2023 vendor blog that is egress-blocked here, with no CPU model, thread count, compiler, flags or FAISS build level stated. BENCHMARKS.md lists different HNSW defaults (FAISS M=32, efConstruction 40, ef 16; USearch M=16, 128, 64), and 'equivalent recall' is asserted, not shown.",
+    "The 20x exact-search figure (FAISS IndexFlatL2 55.3 ms vs 2.54 ms) is a single Colab comment on issue #176, whose opening report had USearch at 94.7 ms vs FAISS 1.14 ms (500 x 1024d, k=50). The in-tree python/scripts/bench_exact.py times one unwarmed call per backend with 10 queries by default, so it is not a stable reproduction harness either.",
+    "README claims of '3 K SLOC' and a 'single header' are stale: index.hpp alone is 5,066 lines and the dense API adds index_dense.hpp (2,457) and index_plugins.hpp (4,329). The 'no required dependencies' row holds only for the C++ headers: the Python package requires numkong, and open issue #767 reports the 2.25.x NuGet libusearch_c.so depending on libnumkong.so."
+  ],
+  "pick_this_over_siblings_when": "Against FAISS, the only vector-search sibling, pick USearch for an embeddable header-only HNSW index with custom or binary metrics, half-precision or fp8 storage and many language bindings; pick FAISS for IVF/PQ compression, GPU search, or f32 HNSW search throughput, where the author's own suite does not show USearch ahead.",
+  "verified_claims_summary": "The README reports, first-party, that building HNSW indexes over 100M vectors on an unspecified Intel Sapphire Rapids machine took 0.2-0.3 h vs 2.6 h for FAISS at 96d and 0.8-2.1 h vs 3.8-5.0 h at 1536d, with no compiler, flags, threads or FAISS build level. The author's reproducible RetriEval suite (dual-socket Xeon 6, 192 threads, USearch main-dev vs FAISS 1.12.0 built at the generic SIMD level) shows 1.14x faster builds on Turing-ANNS 10M f32 and 1.34x on SIFT 10M u8 at equal M and ef, with search ranging from 2.1x faster (SIFT) to 1.34x slower (Turing f32).",
+  "status_note": "Actively maintained (commits through 2026-10-05, PyPI 2.26.4 released 2026-10-05) and Apache-2.0; the core is small enough to vendor as headers, but check the open concurrency bugs before relying on multi-threaded inserts.",
+  "sources_read": [
+    "https://github.com/unum-cloud/usearch",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/README.md",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/python/scripts/bench_exact.py",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/Cargo.toml",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/build.rs",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/include/usearch/index.hpp",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/include/usearch/index_dense.hpp",
+    "https://raw.githubusercontent.com/unum-cloud/usearch/main/include/usearch/index_plugins.hpp",
+    "https://github.com/unum-cloud/usearch/issues/176",
+    "https://github.com/unum-cloud/usearch/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/unum-cloud/usearch/issues/735",
+    "https://github.com/unum-cloud/usearch/issues/439",
+    "https://pypi.org/pypi/usearch/json",
+    "https://raw.githubusercontent.com/ashvardanian/RetriEval/HEAD/README.md",
+    "https://raw.githubusercontent.com/ashvardanian/RetriEval/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ashvardanian/RetriEval/HEAD/src/faiss.rs",
+    "https://raw.githubusercontent.com/Enet4/faiss-rs/master/faiss-sys/build.rs",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/v1.12.0/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/v1.12.0/faiss/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/faiss/CMakeLists.txt"
+  ],
+  "confidence": 0.75
+}
