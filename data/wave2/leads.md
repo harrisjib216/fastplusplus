@@ -1,2 +1,4 @@
 - AOCC (amd.com/en/developer/aocc.html, wave 2, reference C): Phoronix Milan-X and Zen 4 articles blocked; retier to B or A once phoronix.com or openbenchmarking.org is reachable (2026-10-07).
 - AOCL-LibM (https://github.com/amd/aocl-libm-ose, BSD-3-Clause, v5.3.2): AMD's vector math library behind AOCC's -fveclib edge (upstream Clang 19 gained -fveclib=AMDLIBM); not catalogued, benchmarks not checked (AOCC enricher, 2026-10-07).
+- rr (https://github.com/rr-debugger/rr): the ATC 2017 paper (arXiv 1705.05937) carries gdb 'record full' overhead numbers; blocked here, retry from an environment with paper access (w2-mine-c, 2026-10-07).
+- Sierra (SIMD extension for C++, sierra-lang): WPMVP 2014 paper blocked; no numbers in repos (w2-mine-c, 2026-10-07).
