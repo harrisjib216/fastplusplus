@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/eerimoq/pbtools",
+  "one_liner": "Python-generated C11 proto3 encoder/decoder with arena workspaces; beat libprotobuf C++ and protobuf-c on small messages at -O2.",
+  "what_it_does": "A Python tool (pip install pbtools) parses proto3 files and generates one C struct plus new/encode/decode functions per message, linked against a single runtime file, lib/src/pbtools.c. All memory comes from a caller-supplied workspace buffer: foo_new(workspace, size) bump-allocates the message, sub-messages and repeated arrays are allocated with *_alloc() before encoding, and decoding copies strings and bytes into the same workspace. The API is different from libprotobuf (plain structs, char * strings, int return codes), but the wire format is standard proto3.",
+  "how_it_is_fast": "Encoding is single-pass and runs back to front: generated encode functions write fields in reverse order from the end of the output buffer, so each sub-message length is known when its tag is written. No ByteSize pre-pass is needed, and one memmove at the end shifts the result to the buffer start. There is no malloc: messages, repeated arrays and decoded strings are bump-allocated from the workspace, and per-message generated functions (a switch on field number) replace table-driven reflection. Repeated fields are decoded in two passes, counting first and then filling one contiguous arena array. Part of the measured lead comes from work the baselines do and pbtools does not (see verified_claims_summary).",
+  "when_to_use": [
+    "Embedded or RTOS C firmware that has to speak the proto3 wire format with no heap: a fixed stack or static workspace and output buffer per message.",
+    "High-rate encode/decode of small messages (the benchmark used 106-byte and 566-byte messages) in builds optimized with -O2, where per-message heap allocation in libprotobuf or protobuf-c dominates.",
+    "C-only builds that cannot take C++ or libprotobuf: one runtime .c/.h pair plus generated files (a CMakeLists.txt is provided); 17,484-byte text for the -O2 benchmark program vs 21,256 for nanopb and 77,538 for the Google C++ program (shared libprotobuf not counted).",
+    "Messages that are built once and encoded, or decoded once and read, so the arena's no-free rule does not matter."
+  ],
+  "when_not_to_use": [
+    "Decoding untrusted input, until the packed fixed-width out-of-bounds write described under gotchas is fixed or the input is pre-validated.",
+    "proto2, services/gRPC, options, reserved fields and public imports (not supported); map fields are clumsy (README ToDo: one allocation per item); no reflection, JSON or text format; unknown fields are skipped and dropped on re-encode.",
+    "Messages you mutate repeatedly or build incrementally: arena memory cannot be freed and repeated-field lengths cannot change after allocation; workspace sizing is left to the caller (issue #17 asks how to size it and has no visible answer).",
+    "Size-optimized (-Os) builds: there pbtools encodes slower than protobuf-c (3.398 s vs 1.970 s in the project's own table).",
+    "Large messages or long repeated arrays: there are no published numbers beyond 566-byte messages, every string and bytes field is copied into the arena on decode, and repeated fields are scanned twice. The project has had no commits since 2023-06-04."
+  ],
+  "integration": {
+    "form": "source-drop (lib/src/pbtools.c and lib/include/pbtools.h plus generated .c/.h per proto file; lib/CMakeLists.txt builds a static library)",
+    "dependencies": "none at runtime beyond the C standard headers (stdint, stdbool, string, limits, stdalign); the generator needs Python 3.6+ and textparser>=0.21.1",
+    "min_toolchain": "C11 (stdalign.h; CMake sets C_STANDARD 11, the tests build with -std=gnu11); char must be 8 bits",
+    "platforms": "any C11 target with 8-bit char; fixed-width values are assembled byte by byte, so endianness does not matter; -D PBTOOLS_CONFIG_FLOAT=0 removes float/double support for small MCUs",
+    "thread_safety": "No mutable global state in pbtools.c, so calls are reentrant when each thread uses its own workspace and buffers; the README lists thread safety as a design goal, but issue #6 asking about it has no visible maintainer answer. A message and its workspace are not safe to share across threads without a lock.",
+    "drop_in_for_baseline": "partial: wire-compatible with proto3 messages from libprotobuf and protobuf-c, but the generated C API (structs, char * strings, workspace arguments, negative error codes) replaces the C++ classes, so calling code has to be rewritten"
+  },
+  "gotchas": [
+    "Out-of-bounds write on malformed packed fixed-width fields (found by reading lib/src/pbtools.c, not executed): for packed fixed32/sfixed32/float/fixed64/sfixed64/double, the counting pass (repeated_info_decode_32bit/64bit) adds floor(len/4) or floor(len/8) items. The fill pass (decoder_read_repeated) keeps reading while any byte remains in the slice, so a payload of 4k+1..4k+3 bytes stores one extra zero item at items_p[k]: a 4- or 8-byte write past the arena allocation. Strings are allocated during the first pass and repeated arrays after it, so a crafted message can place that array at the very end of the caller's workspace. The test suite only covers well-formed packed input, and the ASan libFuzzer target runs 30 s by default.",
+    "An N-byte encode buffer holds at most N-1 encoded bytes: encoder_write requires pos >= size and pos starts at size-1, so a buffer sized exactly to the message returns PBTOOLS_ENCODE_BUFFER_FULL. Encoding writes from the end of the buffer and memmoves the result to the front on return.",
+    "Strings are NUL-terminated char *: every encode calls strlen on every string, embedded NUL bytes silently truncate the field, and there is no UTF-8 validation on encode or decode (protobuf 3.6.1's generated C++ for proto3 checks UTF-8 strictly, so the Google rows include work pbtools skips).",
+    "Decode does not reset fields that are absent from the input: call *_new() on the workspace before every decode (issue #14: decoding an empty message after an earlier decode kept the old values). Running out of workspace returns -PBTOOLS_OUT_OF_MEMORY (-3), and sub-message pointers are NULL when the field was absent."
+  ],
+  "pick_this_over_siblings_when": "Pick pbtools when you need the protobuf wire format from plain C with no heap. Cap'n Proto, zpp::bits, HPS and BitSerializer are faster or richer, but they are C++ and use their own formats, and cmp is the malloc-free C choice only if MessagePack is acceptable. Do not pick it for JSON workloads; the JSON siblings (simdjson-class parsers, DAW JSON Link) solve a different problem.",
+  "verified_claims_summary": "In the project's own single-run benchmark (gcc 8.3.0, Intel Core i7-4510U), encoding a 566-byte and a 106-byte message 2,000,000 times each took 1.457 s with pbtools at -O2, against 2.231 s for Google protobuf C++ 3.6.1 and 1.892 s for protobuf-c at -O3; decoding took 1.594 s vs 1.997 s and 2.508 s. The baseline rows come from a September 2019 run and were not re-measured with the January 2020 pbtools build. The harnesses do unequal work: Google's encode loop heap-allocates a fresh message and copies every string each iteration (no Arena) and validates proto3 UTF-8, protobuf-c encodes through pack_to_buffer and mallocs and frees the whole tree on every decode, and both baseline runtimes are prebuilt distro libraries (only the generated code got the row's flags), while pbtools compiles its runtime with the row's flags and stores pointers to string literals.",
+  "status_note": "Unmaintained since 2023-06-04 (v0.47.0 on PyPI, 82 stars, MIT). Small enough to vendor for trusted-input embedded use, but patch the packed fixed-width OOB write in decoder_read_repeated before decoding untrusted data, and treat the first-party speedups as harness-inflated: the baselines are from an older run and do extra allocation and UTF-8 work.",
+  "sources_read": [
+    "https://github.com/eerimoq/pbtools",
+    "https://github.com/eerimoq/pbtools/issues?q=is%3Aissue",
+    "https://github.com/eerimoq/pbtools/issues/4",
+    "https://github.com/eerimoq/pbtools/issues/6",
+    "https://github.com/eerimoq/pbtools/issues/9",
+    "https://github.com/eerimoq/pbtools/issues/10",
+    "https://github.com/eerimoq/pbtools/issues/14",
+    "https://github.com/eerimoq/pbtools/issues/17",
+    "https://github.com/eerimoq/pbtools/commits/master",
+    "https://github.com/eerimoq/pbtools/tree/master/lib",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/README.rst",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/README.rst",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/common.mk",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/benchmark.proto",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/pbtools/main.c",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/pbtools/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/google/main.cpp",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/google/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/protobuf-c/main.c",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/protobuf-c/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/lib/src/pbtools.c",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/lib/include/pbtools.h",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/lib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/examples/address_book/generated/address_book.c",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/tests/main.c",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/tests/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/setup.py",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/crate/Cargo.toml",
+    "https://pypi.org/pypi/pbtools/json",
+    "https://raw.githubusercontent.com/protocolbuffers/protobuf/v3.6.1/src/google/protobuf/compiler/cpp/cpp_helpers.cc"
+  ],
+  "confidence": 0.85
+}
