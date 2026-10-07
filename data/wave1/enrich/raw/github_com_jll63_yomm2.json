@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/jll63/yomm2",
+  "one_liner": "Archived C++17 open multi-methods library; plain dispatch is slower than virtual calls, and its 5x virtual_ptr win is a cache-layout artifact.",
+  "what_it_does": "YOMM2 adds 'virtual functions' that live outside the classes (open methods) and can dispatch on the dynamic type of several arguments (multiple dispatch), which C++ virtual member functions cannot do. You register the hierarchy with register_classes, declare a free function with declare_method and virtual_<Base&> parameters, write overriders with define_method, and call yorel::yomm2::update() once to build the dispatch tables. Arguments can be plain references or virtual_ptr, a fat pointer that carries the method-table pointer next to the object pointer. It is a different calling model, not a drop-in for a virtual member call.",
+  "how_it_is_fast": "Each registered class gets a method table; a call finds it through a fast perfect hash of the object's type_info pointer (one multiply, one shift, one load), then loads the method's slot and jumps, with no branches or loops (9 instructions and 7 memory reads per the author's disassembly, versus 2 and 2 for a virtual call). Multiple dispatch indexes a multi-dimensional table with per-method strides. virtual_ptr does the hash lookup once when the fat pointer is built, so a later dispatch is a slot load plus an indirect jump (3 instructions); intrusive policies store the vptr inside the object instead.",
+  "when_to_use": [
+    "You need dispatch on two or more runtime types (collision handling, binary operations on a matrix hierarchy): the arity-2 open method measured 1.16-1.53x the time of a hand-written double virtual dispatch, without the Visitor boilerplate.",
+    "You must add operations (to_json, render, serialize) to class hierarchies you cannot or do not want to modify, i.e. the Expression Problem.",
+    "Code that can carry virtual_ptr through its call chains, so the type-hash lookup is paid once per object rather than once per call.",
+    "An existing YOMM2 codebase that cannot move to Boost 1.90 yet and needs a BSL-1.0, header-only, C++17 dependency that keeps working."
+  ],
+  "when_not_to_use": [
+    "As a speed-up over virtual member functions: dispatch through a plain reference measured 1.09-1.62x slower (ordinary base), and the ~5x faster virtual_ptr rows come from a benchmark layout effect, not cheaper dispatch.",
+    "Hierarchies that use virtual inheritance: every open-method path, virtual_ptr included, measured 2.05-2.47x slower than the virtual function because the overrider needs a dynamic cast.",
+    "New projects: the repository was archived on 2026-03-04 and replaced by Boost.OpenMethod (Boost 1.90), which is not source-compatible (macros, namespaces and initialize() renamed).",
+    "Plugin-heavy programs where you cannot control when update() runs: the tables must be rebuilt after every dlopen/dlclose, and calls before update() are invalid.",
+    "Footprint-sensitive builds: the runtime adds about 75 KB (64 KB stripped) and pulls in Boost Mp11, Preprocessor and DynamicBitset headers."
+  ],
+  "integration": {
+    "form": "header-only (default); optional shared library for the runtime via -DYOMM2_SHARED=1",
+    "dependencies": "Boost headers (Mp11, Preprocessor, DynamicBitset); Boost.Test and Google Benchmark only for tests and benchmarks; Boost unordered_flat_map optional for one benchmark policy",
+    "min_toolchain": "C++17, CMake 3.21 for the CMake build; packaged in vcpkg and Conan Center. The benchmark program refuses to run under g++ (GCC bug 85282) and was only run with clang 16.0.6.",
+    "platforms": "Any C++17 platform with RTTI (dispatch hashes type_info pointers); not documented further",
+    "thread_safety": "Not documented. Dispatch only reads global tables built by update(); update() is a global rebuild with no documented locking, so it should not run concurrently with method calls.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness flaw behind the headline: in tests/benchmarks.cpp the virtual_ptr rows copy a precomputed 16-byte fat pointer from a contiguous vector and call an empty overrider, so the object itself is never read in the timed loop; the virtual-function row must load the C++ vptr from one of 100,000 randomly drawn heap objects, so it pays the cache miss. The same table shows this: with virtual inheritance, where converting the virtual_ptr to the virtual base and casting in the overrider touch the object, virtual_ptr becomes 2.1x slower than the virtual function.",
+    "The page's 'avg' column is Google Benchmark mean CPU time in nanoseconds (the default unit; no Unit() is set) minus a no-dispatch 'baseline' run, per dev/bmutils.py, so absolute values are net of the harness overhead (derived from harness code). The odd cache sizes ('L1 Data 32768 KiB') come from bmutils.py printing Google Benchmark's byte counts with a KiB label; the real sizes are 32 KiB L1d, 512 KiB L2 and 4 MiB L3.",
+    "docs/articles/performance.md says object allocation sizes are randomized, but at HEAD the alloc_dist distribution in tests/benchmarks.cpp is declared and never used; objects are scattered only by allocating them round-robin across 100 randomly chosen populations.",
+    "A call with no applicable or an ambiguous overrider goes to the error handler and then abort(); issue #36 reports that defining the same overrider twice compiles and crashes at call time (closed without a fix shown)."
+  ],
+  "pick_this_over_siblings_when": "The siblings (woid, Delegate, stdext::inplace_function, SmallFunction) are faster std::function replacements for storing one callable; YOMM2 solves a different problem, selecting an implementation from the runtime types of one or more arguments. Pick it only when you need open or multiple dispatch over class hierarchies, and prefer its successor Boost.OpenMethod for new code.",
+  "verified_claims_summary": "The author's Google Benchmark run (clang 16.0.6, release build, unnamed 16-thread 3.3 GHz host, 100 hierarchies x 1000 objects, 2024-04-26) gives, after subtracting a no-dispatch baseline, 60.1 ns per arity-1 virtual call versus 65.4-97.2 ns for reference-based open methods and 10.5-12.2 ns for virtual_ptr (arity 2: 93.2 versus 108.0-143.0 and 19.4-20.5). The virtual_ptr gap reflects that its rows never touch the randomly placed objects; with virtual inheritance all open-method rows are 2.05-2.47x slower, and the successor's own docs claim only that reference dispatch is 30-50% slower and virtual_ptr dispatch is as short as a virtual call.",
+  "status_note": "Archived on 2026-03-04 and superseded by Boost.OpenMethod in Boost 1.90; BSL-1.0 and header-only so it can still be vendored, but it will get no fixes and the virtual_ptr speed claim should not be relied on.",
+  "sources_read": [
+    "https://github.com/jll63/yomm2",
+    "https://github.com/jll63/yomm2/issues?q=is%3Aissue",
+    "https://github.com/jll63/yomm2/issues/36",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/README.md",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/ORIGINAL-README.md",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/docs/benchmarks/v010500.euclid.clang.md",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/docs/articles/performance.md",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/tests/benchmarks.cpp",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/tests/benchmarks_parameters.hpp",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/dev/bm2md",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/dev/bmutils.py",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/include/yorel/yomm2/core.hpp",
+    "https://raw.githubusercontent.com/jll63/yomm2/HEAD/include/yorel/yomm2/policy.hpp",
+    "https://github.com/boostorg/openmethod",
+    "https://raw.githubusercontent.com/boostorg/openmethod/develop/doc/modules/ROOT/pages/performance.adoc"
+  ],
+  "confidence": 0.8
+}

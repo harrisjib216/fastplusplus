@@ -7,3 +7,5 @@
 - CspChan (glepnir/CspChan): Go-like CSP channels in C, lead from the libcsp enrichment, not opened (2026-10-07).
 - rpmalloc (wave 1, mjansson/rpmalloc, tier C): w1-mine-f derived B-grade numbers from the mimalloc-bench CSVs (slower than tcmalloc, and than jemalloc at 8-16 threads); candidate retier C to B after a verifier check (2026-10-07).
 - jl_signal (jeffomatic/jl_signal, 415,278 score), vdksoft/signals (309,575), nano-signal-slot (NoAvailableAlias): top rows of signal-slot-benchmarks, not catalogued (enricher leads, 2026-10-07).
+- zmij (vitaut/zmij), teju_jagua (cassioneri/teju_jagua), fpfmt (rsc/fpfmt): float-to-string rivals from the xjb enrichment; none catalogued (2026-10-07).
+- Boost.OpenMethod (boostorg/openmethod): successor of Yomm2; docs claim no speed-up (30-50% slower reference dispatch). Not catalogued.

@@ -6026,7 +6026,7 @@
     "metric": "latency (average time per dispatched call, unit not stated on the page)",
     "workload": "Google Benchmark loop picking a random hierarchy out of 100, then a random object (or two for arity 2) out of 1000 per hierarchy with randomized allocation sizes, and calling one virtual function or the equivalent open method; ordinary-inheritance and virtual-inheritance variants.",
     "claimed_speedup": "Only the virtual_ptr rows beat the baseline. In docs/benchmarks/v010500.euclid.clang.md (clang 16.0.6, release build, 100 hierarchies of 1000 objects, run 2024-04-26), arity 1 with an ordinary base: virtual function 60.1, direct virtual ptr 10.5 (ratio 0.18), indirect virtual ptr 12.2 (0.20). Arity 2 with an ordinary base: virtual function 93.2, direct virtual ptr 19.4 (0.21), indirect 20.5 (0.22). That is about 5x lower time per call (derived from page data); the page gives no time unit. With virtual inheritance, the virtual_ptr rows are about 2.1x slower than the virtual function (arity 1: direct 156.9 vs 74.3; arity 2: 231.9 vs 107.3). Every other open-method row is slower than the virtual function: ratios 1.09-1.62 with an ordinary base and 2.05-2.47 with a virtual base. The Performance section of ORIGINAL-README.md says that dispatching a method with one virtual argument takes 15-30% more time than the equivalent virtual member function, and that virtual_ptr makes dispatch 'even faster - three instructions and two memory reads'.",
-    "evidence_tier": "C",
+    "evidence_tier": "D",
     "benchmark_url": "https://raw.githubusercontent.com/jll63/yomm2/HEAD/docs/benchmarks/v010500.euclid.clang.md",
     "baseline_stdlib": [],
     "compiler_and_flags": "clang 16.0.6, build type release (CMake Release; exact flags not stated in the result file)",
@@ -6040,7 +6040,7 @@
     "stars_or_usage": "382 stars; packaged in Conan Center and vcpkg",
     "has_code": true,
     "tradeoffs": "Open (non-intrusive) multi-methods for C++17 with multiple dispatch on several arguments, which virtual functions cannot do; needs class registration and a runtime update() call that builds dispatch tables (about 75K runtime). Plain-reference dispatch costs 9 instructions and 7 memory reads vs 2 and 2 for a virtual call; virtual_ptr is a fat pointer (extra pointer size) that carries the vptr. Dispatch through virtual bases needs a dynamic cast and is 2-5x slower than virtual functions.",
-    "caveats": "Weak evidence of 'faster'. The repo was archived on 2026-03-04 and is superseded by Boost.OpenMethod (Boost 1.90). The current README is a retirement notice saying YOMM2 'was' a library, and the original documentation now lives in ORIGINAL-README.md. The author's own text there says open methods are almost as fast as virtual functions and take 15-30% more time with plain references. The benchmark page shows ratios of 1.09-1.62 for every non-virtual_ptr row with an ordinary base (for example, arity 1: basic policy 80.4 vs virtual function 60.1), and 2.05-2.47 with a virtual base. The 0.18-0.22 ratios for virtual_ptr come from a layout effect in tests/benchmarks.cpp. The virtual_ptr rows copy a fat pointer, which already carries the vtable pointer, out of a contiguous vector (population::vptr_draw / ivptr_draw; the vectors are built during allocation, outside the timed loop). The virtual-function row dereferences a randomly chosen heap object (population::draw returns *objects[dist(rnd)]), so cache misses on the object dominate the baseline. In real code that touches the object, the gap would shrink. With virtual inheritance, virtual_ptr dispatch is about 2.1x slower than the virtual function. The result file gives no time unit, no compiler flags and no CPU model; its cache sizes are printed with implausible units (L1 Data 32768 KiB). The benchmark source excludes g++ ('Don't benchmark g++ until this is fixed', GCC bug 85282). The 'much faster than other implementations' claim in docs/articles/performance.md has no numbers. First-party measurement, so tier C.",
+    "caveats": "Weak evidence of 'faster'. The repo was archived on 2026-03-04 and is superseded by Boost.OpenMethod (Boost 1.90). The current README is a retirement notice saying YOMM2 'was' a library, and the original documentation now lives in ORIGINAL-README.md. The author's own text there says open methods are almost as fast as virtual functions and take 15-30% more time with plain references. The benchmark page shows ratios of 1.09-1.62 for every non-virtual_ptr row with an ordinary base (for example, arity 1: basic policy 80.4 vs virtual function 60.1), and 2.05-2.47 with a virtual base. The 0.18-0.22 ratios for virtual_ptr come from a layout effect in tests/benchmarks.cpp. The virtual_ptr rows copy a fat pointer, which already carries the vtable pointer, out of a contiguous vector (population::vptr_draw / ivptr_draw; the vectors are built during allocation, outside the timed loop). The virtual-function row dereferences a randomly chosen heap object (population::draw returns *objects[dist(rnd)]), so cache misses on the object dominate the baseline. In real code that touches the object, the gap would shrink. With virtual inheritance, virtual_ptr dispatch is about 2.1x slower than the virtual function. The result file gives no time unit, no compiler flags and no CPU model; its cache sizes are printed with implausible units (L1 Data 32768 KiB). The benchmark source excludes g++ ('Don't benchmark g++ until this is fixed', GCC bug 85282). The 'much faster than other implementations' claim in docs/articles/performance.md has no numbers. First-party measurement, so tier C. [retier] Project's own tests/benchmarks.cpp (Google Benchmark, no CPU model): ordinary open-method dispatch is 1.09-2.47x slower than virtual functions. The only faster rows (virtual_ptr 0.18-0.22x) copy prebuilt fat pointers from a contiguous vector and call empty overriders that never read the object, while the virtual-function row loads the vptr from one of 100,000 random heap objects and pays the cache miss; with a virtual base, where the object must be touched, virtual_ptr turns 2.1x slower. avg is the Google Benchmark mean minus a no-dispatch baseline (dev/bmutils.py); the odd cache sizes are byte counts printed as KiB; alloc_dist is declared but never used. Issue #36 (duplicate overrider crashes at call time). Archived 2026-03-04, superseded by Boost.OpenMethod (Boost 1.90), whose docs claim no speed-up over virtual functions. No spec category fits; filed with the fat-pointer and delegate libraries under smart-pointers-and-refcount.",
     "found_via": [
       "seed-list mining backfill: awesome-cpp list entry Yomm2 (https://github.com/fffaraz/awesome-cpp#Frameworks), repo README, ORIGINAL-README.md, docs/articles/performance.md and docs/benchmarks"
     ],
@@ -6066,7 +6066,16 @@
         "https://github.com/jll63/yomm2/commits"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Downgraded C to D: the only faster rows (virtual_ptr 0.18-0.22x) come from a harness in which virtual_ptr copies prebuilt fat pointers from a contiguous vector into empty overriders that never read the object while the virtual-function row dereferences random heap objects, so the win is a cache-layout artifact (AssemblyScript and Blosc precedent); ordinary dispatch is 1.09-2.47x slower than virtual functions.",
+        "urls_opened": [
+          "https://github.com/jll63/yomm2/blob/master/tests/benchmarks.cpp",
+          "https://github.com/jll63/yomm2/blob/master/dev/bmutils.py"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "Only the virtual_ptr rows beat the baseline. docs/benchmarks/v010500.euclid.clang.md (clang 16.0.6, 100 hierarchies of 1000 objects), arity 1 ordinary base: virtual function 60.1, direct virtual ptr 10.5 (ratio 0.18), indirect virtual ptr 12.2 (0.20); arity 2: virtual function 93.2, direct virtual ptr 19.4 (0.21), indirect 20.5 (0.22), i.e. about 5x lower time per call (derived from page data). With virtual inheritance the same rows are 2.1x slower than the virtual function (arity 1: 74.3 vs 156.9). The README states the headline opposite: dispatch with one virtual argument takes 15-30% more time than the equivalent virtual member function.",
@@ -8138,6 +8147,70 @@
     }
   },
   {
+    "name": "BitSerializer",
+    "repo_url": "https://github.com/PavelKisliak/BitSerializer",
+    "language": "C++",
+    "domain": "stdlib-replacements",
+    "category": "serialization-json",
+    "baseline": "nlohmann::json (nlohmann::json::to_msgpack / from_msgpack, DOM-based MsgPack path)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Fields per millisecond saving a C++ test model (array of objects with 10 fields each: bool, int8, uint64, float, double and five strings including long, Russian Unicode, escaped and multi-line values) to an in-memory std::string and loading it back, MsgPack format; best (minimum) time over a 30 second window per stage, thread pinned to one core.",
+    "claimed_speedup": "BitSerializer-MsgPack vs NlohmannJson-MsgPack: save to memory 86842 vs 2621 fields/ms (about 33x, derived from page data), load from memory 49254 vs 2206 fields/ms (about 22x, derived from page data). README also says the built-in JSON archive is about 40% faster than BitSerializer's own RapidJSON-based JSON archive, and that wrapped third-party formats (RapidJSON, PugiXml, RapidYAML) cost about 5% against their native APIs.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/benchmark_results/serialization_speed_report.json",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-09-30",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "34 stars",
+    "has_code": true,
+    "tradeoffs": "Header-style C++17 library; types need a Serialize function or KeyValue mapping per class (non-intrusive). MsgPack, CSV and the new built-in JSON archive have no external dependencies; the RapidJSON, PugiXml and RapidYAML archives pull in those libraries. Streams straight to and from the model with no intermediate DOM, so it cannot do arbitrary DOM manipulation the way nlohmann::json can.",
+    "caveats": "Benchmark source is public (benchmarks/archives: main.cpp, benchmark_base.cpp, competitors/nlohmannjson_benchmark.h) but no compiler, flags or CPU model are stated anywhere in the repo or README, and the committed report JSON and chart carry no machine information, so it is a first-party result with partial methodology (tier C, not A). The only nlohmann::json row is MsgPack: competitors/nlohmannjson_benchmark.h also defines a NlohmannJson-Json (text JSON) class, but main.cpp never runs it, so there is no nlohmann JSON text row. The baseline converts the struct into a nlohmann::json DOM (whose objects are std::map nodes) and then calls to_msgpack/from_msgpack, while BitSerializer maps the struct straight to bytes; the README itself calls Serializer-vs-Parser comparisons 'not entirely fair', and the README text never quotes the nlohmann numbers (they appear only in the report JSON and chart). No dedicated MsgPack library (msgpack-c/cpp, cereal, glaze, zpp_bits) is compared, so 'best-in-class' MsgPack speed is unsupported. Correctness: the harness validates the loaded model against the source after every load stage (ValidateTargetModel), so round-trip correctness is checked, but serialized bytes are not compared across libraries and the committed output-size report (last changed 2025-05-01) has no NlohmannJson-MsgPack row. The committed speed report has no row for the new built-in JSON archive (BitSerializer::Json::JsonArchive), so the README's 'about 40% faster than the RapidJSON-based archive' claim has no committed numbers. Against RapidJSON, PugiXml and RapidYAML the BitSerializer archives are within about 5% or slightly slower, not faster (RapidJson save 14103 vs 13636, load 11957 vs 11149 fields/ms), so the speedup claim holds only for MsgPack against nlohmann. The 33x and 22x ratios are derived from the report's two numbers. Results are the minimum time per stage over a 30 s window after a 10 s CPU warm-up, which favours best-case numbers for every library equally.",
+    "found_via": [
+      "seed-list mining backfill: awesome-cpp Serialization entry 'BitSerializer' (https://github.com/PavelKisliak/BitSerializer), README performance overview, then benchmarks/archives/benchmark_results/serialization_speed_report.json"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w1-mine-j"
+    ],
+    "id": "https://github.com/pavelkisliak/bitserializer",
+    "verification": {
+      "date": "2026-09-23",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party committed report (benchmarks/archives/benchmark_results/serialization_speed_report.json) produced by the public harness in benchmarks/archives (main.cpp, benchmark_base.cpp, competitors/nlohmannjson_benchmark.h), with NlohmannJson-MsgPack save 2621 and load 2206 fields/ms versus BitSerializer-MsgPack 86842 and 49254; no compiler, flags or CPU model stated anywhere, so not A.",
+      "notes": "Numbers match the report exactly; the win is only against nlohmann::json's DOM-plus-to_msgpack path, a weak baseline, with no dedicated MsgPack library compared and other formats at parity or slightly slower than their native libraries. The harness does validate round-trip correctness of loaded models, so the record's 'output equivalence not checked' was softened; the nlohmann JSON text benchmark class exists but is never run, and the built-in JSON archive's '40% faster' claim has no committed numbers. Metadata confirmed: MIT, 34 stars, last commit 2026-09-30, not a fork.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/benchmark_results/serialization_speed_report.json",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/benchmark_results/serialization_output_size_report.json",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/README.md",
+        "https://github.com/PavelKisliak/BitSerializer",
+        "https://github.com/PavelKisliak/BitSerializer/tree/master/benchmarks/archives",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/CMakeLists.txt",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/main.cpp",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/benchmark_base.cpp",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/benchmark_base.h",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/test_model.h",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/competitors/nlohmannjson_benchmark.h",
+        "https://raw.githubusercontent.com/PavelKisliak/BitSerializer/HEAD/benchmarks/archives/competitors/bitserializer_benchmark.h",
+        "https://github.com/PavelKisliak/BitSerializer/commits/master/benchmarks/archives/benchmark_results",
+        "https://github.com/PavelKisliak/BitSerializer/commits/master"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "caveats": "Benchmark source is public (benchmarks/archives, with a CMake target and competitors/*.h) but no compiler, flags or CPU model are stated anywhere in the repo or README, and the committed report JSON and chart carry no machine information, so it is a first-party result with partial methodology (tier C, not A). The only nlohmann::json row is MsgPack; there is no nlohmann JSON text row in the committed report. The baseline builds a nlohmann::json DOM and converts it, while BitSerializer maps the struct straight to bytes, which the README itself calls not entirely fair ('Serialization' vs 'Parser' classes). Output equivalence is not checked: the committed output-size report does not include the nlohmann MsgPack row. Against RapidJSON, PugiXml and RapidYAML the BitSerializer archives are within about 5% or slightly slower, not faster (RapidJson save 14103 vs 13636, load 11957 vs 11149 fields/ms), so the speedup claim holds only for MsgPack against nlohmann. The 33x and 22x ratios are derived from the report's two numbers."
+    }
+  },
+  {
     "name": "blazingio",
     "repo_url": "https://github.com/purplesyringa/blazingio",
     "language": "C++",
@@ -8388,6 +8461,66 @@
     }
   },
   {
+    "name": "cmp",
+    "repo_url": "https://github.com/camgunz/cmp",
+    "language": "C",
+    "domain": "stdlib-replacements",
+    "category": "serialization-json",
+    "baseline": "msgpack-c (msgpack C API, v1.3.0 in the shootout)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Encoding (write test) of randomly generated schemaless data (2367-byte small and 248571-byte large MessagePack objects) into a growable buffer in the ludocode/schemaless-benchmarks suite, with the hash cost subtracted. CMP's incremental reader is also timed, but msgpack-c has no incremental-parser row in the suite, so only the write test is a like-for-like comparison against the baseline.",
+    "claimed_speedup": "No speed win exists. The project only says 'Fast, Lightweight, Flexible, and Robust' (no numbers). The independent shootout shows CMP v14 slower than msgpack C 1.3.0 on write: 7.33 us vs 6.42 us (small) and 660.19 us vs 544.24 us (large) on the AMD Phenom II X6 1090T desktop; 89.75 us vs 69.21 us (small) and 9206.05 us vs 8142.64 us (large) on a Raspberry Pi. CMP is the smallest MessagePack build on the desktop (3232 vs 4088 bytes for write) but not on the Raspberry Pi size build (2324 vs 1528 bytes).",
+    "evidence_tier": "D",
+    "benchmark_url": "https://raw.githubusercontent.com/ludocode/schemaless-benchmarks/HEAD/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "GCC 5.3.0 on Arch Linux, -Wall -O3 -flto -fno-fat-lto-objects -DPIC -fPIC -DNDEBUG, each test run 7 times for 10 s, best and worst dropped",
+    "hardware": "AMD Phenom II X6 1090T desktop; first-generation Raspberry Pi Model B rev2 (ARMv6)",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2025-08-06",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "370 stars; listed on msgpack.org",
+    "has_code": true,
+    "tradeoffs": "No internal buffers and no heap allocation, about 4k lines in cmp.c/cmp.h, C89, user supplies read/write/skip callbacks (no growable buffer, no tree parser). Small and portable rather than fast.",
+    "caveats": "Not faster than the named baseline. Every write row in the shootout (README and full-results-extended.md) has CMP v14 slower than msgpack C 1.3.0: desktop 7.33 vs 6.42 us small and 660.19 vs 544.24 us large; Raspberry Pi 89.75 vs 69.21 us and 9206.05 vs 8142.64 us; the extended results add an Intel Celeron 2957U Chromebook with 14.01 vs 11.90 us small and 1463.82 vs 1338.33 us large. Both write tests produce the same output hash (1a9c6681 small, b4ac134d large), so the numbers are real. CMP has no tree parser; its incremental reader is faster than msgpack C's tree unpacker on large data (533.46 vs 750.87 us desktop, 5713.58 vs 10287.89 us Raspberry Pi, derived from page data) but slower on small desktop data (7.43 vs 6.47 us), and that is a cross-category comparison, not a like-for-like win. The shootout was written by the author of MPack (a competitor; its own disclaimer says it may be biased), dates from 2016 (GCC 5.3.0, CMP v14, msgpack-c 1.3.0; the MPack README's feature table now lists CMP v19 and msgpack-c v3.3.0), and the CMP write test uses a harness-supplied growable buffer (buffer.h) because CMP has none, which the author notes is unfair for embedded comparisons. CMP's only measured advantage is code size in the desktop speed build (3232 vs 4088 bytes for write); in the Raspberry Pi -Os build msgpack C is smaller (1528 vs 2324 bytes). No numbers anywhere support a speed claim; candidate for the not-faster shortcoming list.",
+    "found_via": [
+      "seed-record pass: https://github.com/camgunz/cmp (awesome-c Serialization list), WebSearch 'camgunz cmp MessagePack C benchmark vs msgpack-c', then ludocode/mpack README and ludocode/schemaless-benchmarks README"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.3,
+    "assignment_ids": [
+      "w1-mine-l"
+    ],
+    "id": "https://github.com/camgunz/cmp",
+    "verification": {
+      "date": "2026-09-23",
+      "verdict": "confirm",
+      "tier_before": "D",
+      "tier_reason": "No numbers anywhere show a speed win: the CMP README only has a 'Fast, Lightweight, Flexible, and Robust' heading with qualitative text. The ludocode/schemaless-benchmarks shootout would meet tier-A methodology (public code src/cmp/cmp-write.c and src/msgpack/msgpack-c-pack.c, GCC 5.3.0, -O3 -flto flags, AMD Phenom II X6 1090T), but it shows CMP v14 slower than msgpack C 1.3.0 on every write row, so it is evidence against the claim, not for it.",
+      "notes": "All numbers in claimed_speedup match the shootout README rows for CMP (v14) and msgpack C (1.3.0); metadata checked on github.com (370 stars, 85 forks, MIT, not archived, not a fork, last commit 2025-08-06, stale). Keep as a documented not-faster entry: shortcoming 'slower than msgpack-c on write in an independent (MPack-author) shootout; no first-party numbers; only wins on desktop code size'. Not a reject because the evidence is valid, just unfavourable.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/ludocode/schemaless-benchmarks/HEAD/README.md",
+        "https://raw.githubusercontent.com/ludocode/schemaless-benchmarks/HEAD/full-results-extended.md",
+        "https://raw.githubusercontent.com/ludocode/schemaless-benchmarks/HEAD/src/cmp/cmp-write.c",
+        "https://raw.githubusercontent.com/ludocode/schemaless-benchmarks/HEAD/src/msgpack/msgpack-c-pack.c",
+        "https://raw.githubusercontent.com/ludocode/mpack/HEAD/README.md",
+        "https://raw.githubusercontent.com/camgunz/cmp/HEAD/README.md",
+        "https://raw.githubusercontent.com/camgunz/cmp/HEAD/LICENSE",
+        "https://github.com/camgunz/cmp",
+        "https://github.com/camgunz/cmp/commits"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "Encoding (write test) and incremental parsing of randomly generated schemaless data (2367-byte small and 248571-byte large MessagePack objects) in the ludocode/schemaless-benchmarks suite, with the hash cost subtracted.",
+      "caveats": "Recorded because the only numeric comparison anywhere reachable is the shootout above, and it contradicts any speed claim: CMP is slower than the named baseline on write and has no tree parser. The shootout was written by the author of MPack (a competitor; its own disclaimer says it may be biased) and tests CMP v14 with GCC 5.3.0 from 2016 (the MPack README now lists CMP v19), so current numbers may differ. The benchmark's CMP write code adds its own simple growable buffer, which the author notes is unfair for embedded comparisons. Tier D because the project's own claim has no numbers; the shootout is evidence about CMP, not for a win. Candidate for the not-faster shortcoming list."
+    }
+  },
+  {
     "name": "SimpleSignal",
     "repo_url": "https://github.com/larspensjo/SimpleSignal",
     "language": "C++",
@@ -8511,6 +8644,70 @@
     "corrected_fields": {
       "baseline": "std::to_string, std::to_chars",
       "compiler_and_flags": "clang-18, CMake Release build configuration; exact -O flags not individually quoted on the page"
+    }
+  },
+  {
+    "name": "bstring",
+    "repo_url": "https://github.com/msteinert/bstring",
+    "language": "C",
+    "domain": "stdlib-replacements",
+    "category": "small-buffer-and-strings",
+    "baseline": "C standard library char* string functions (strcpy, strcat, strchr, strstr, strcspn, memmove)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Upstream Bstrlib's cbench.c example (examples-09282006.zip): operations per second for assignment, char extraction, scan, concatenation (250 appends of a 60 character string plus '!!' into one growing buffer, buffer reset each iteration) and replace, bstring C API against plain char* code (strcpy, strchr, strstr, strcspn, strcat, memmove/memcpy). The same page also benchmarks upstream's C++ wrapper CBString against std::string with cppbench.cpp.",
+    "claimed_speedup": "Bstrlib C API as percent of char* Clib speed (100% is parity), columns WATCOM C 11.0c / Visual C++ 6.0 / Intel C++ 6.0 / gcc 3.3.3 Cygwin / gcc 3.3.3 Power 4 SUSE: concatenation 21700% / 23700% / 21200% / 9260% / 3980%; assignment 182% / 198% / 218% / 89% / 91%; scan 214% / 125% / 159% / 209% / 89%; char extraction 95% / 96% / 101% / 102% / 113%; replace 147% / 114% / 125% / 101% / 86%. Same page, CBString over std::string (WATCOM + STLport / Visual C++ 6.0 / Intel C++ 6.0 / g++ 3.3.3 Cygwin / g++ 3.3.3 Power 4): char * assignment 93% / 248% / 264% / 537% / 132%; char extraction 63% / 118% / 123% / 132% / 100%; scan 155% / 143% / 178% / 274% / 192%; concatenation 187% / 21100% / 19400% / 1330% / 200%; replace 144% / 95% / 110% / 108% / 135%.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://bstring.sourceforge.net/features.html",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "WATCOM C/C++ 11.0c (with STLport for C++), Visual C++ 6.0 (12.00.8168), Intel C++ 6.0 (4.0 99026), gcc/g++ 3.3.3 on Cygwin and on SUSE Linux. The page says only that the compiler must be set to 'a reasonable maximum performance setting', for most compilers 'a flag such as -O2'; the makefiles shipped in examples-09282006.zip use gcc -O3 (Makefile.gccXnix), MSVC /O2 (plus /Ob2 for C++) and Intel /Ox /Ob2, but the page does not say these were the flags used.",
+    "hardware": "Athlon XP 1.620GHz (all Windows/Cygwin columns); Power 4 1GHz (SUSE Linux column)",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause OR GPL-2.0-only",
+    "usability": "copyable",
+    "last_commit": "2026-09-12",
+    "maintenance_status": "active",
+    "is_fork_of": "https://github.com/websnarf/bstrlib",
+    "stars_or_usage": "175 stars (msteinert fork); upstream websnarf/bstrlib 570 stars; packaged in many distributions per the README's repology badge",
+    "has_code": true,
+    "tradeoffs": "Length-prefixed string struct (slen, mlen, data) that stays NUL-terminated for interop with char* code, so length is O(1) and appends amortize, at the cost of a header and a different API from <string.h>. Dual licensed BSD-3-Clause or GPL-2.0 (user's choice). This fork is pure C: it removed upstream's C++ wrapper (CBString, bstrwrap) and the const_bstring type, and adds Meson build, Check tests, fuzzing and CI.",
+    "caveats": "The numbers are for upstream Bstrlib (websnarf/bstrlib, last commit 2016-11-02), measured with 2000s era compilers on a 1.62GHz Athlon XP and a 1GHz Power 4; the msteinert fork is described as binary compatible but was not re-benchmarked, and the CBString versus std::string rows apply only to upstream because the fork dropped the C++ wrapper. First-party project page with percentages only (no raw ops/s), no date, and flags not tied to the run, so tier C. The page's cbench.c/cppbench.cpp links point at the dead cvs.sourceforge.net; the code is in examples-09282006.zip on the SourceForge downloads page. The large concatenation ratios come from the baseline calling strcat repeatedly on a growing buffer (rescanning the whole string every call, quadratic) while bstring tracks length; a C program that keeps its own end pointer would not lose this much. The scan row is not like for like: in cbench.c the char* test runs strchr '.', strstr \"123\" and strcspn \"sm\" over the 60-character TESTSTRING1, which contains neither '.' nor \"123\" (both calls scan the whole string), while the bstring test searches the 25-character 'Dot. 123. Some more data.', where '.' and \"123\" are found within the first six characters; the scan percentages therefore overstate bstring. The std::string comparison used old STLs (WATCOM with STLport, Visual C++ 6.0 and Intel C++ 6.0 sharing Microsoft's STL, g++ 3.3.3 libstdc++); the page itself attributes the 19400-21100% concatenation results to Microsoft's STL implementing concat as O(m+n), so they reflect a since-fixed library defect rather than a lasting advantage. std::string was faster or equal in some rows (char extraction 63% with STLport, replace 95% with Visual C++ 6.0, assignment 93% with STLport) and the C API loses on assignment and replace in some columns (89%, 91%, 86%). The fork's own README claims 'improved overall performance of common string operations' and doc/comparisons.md discusses performance qualitatively, with no numbers.",
+    "found_via": [
+      "seed-list mining backfill: awesome-c String Manipulation listing 'bstring' (http://mike.steinert.ca/bstring/ not opened), then WebSearch 'Bstrlib Better String Library benchmark performance vs std::string Paul Hsieh timings' led to https://bstring.sourceforge.net/features.html and the cbench.c / cppbench.cpp sources in examples-09282006.zip"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w1-mine-j"
+    ],
+    "id": "https://github.com/msteinert/bstring",
+    "verification": {
+      "date": "2026-09-23",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "Upstream author's project page (bstring.sourceforge.net/features.html) gives percentage tables from cbench.c (bstring vs char* Clib) and cppbench.cpp (CBString vs std::string) with compiler versions and CPUs, but the flags used for the run are not stated (only 'a flag such as -O2'), no raw numbers or date are given, and the numbers are for upstream Bstrlib, not this fork; first-party with partial methodology, so C.",
+      "notes": "All percentages on the page match the record; the CBString assignment and scan rows were added to claimed_speedup. Checked cbench.c from examples-09282006.zip: the scan row compares different input strings (char* searches 60 chars with no match, bstring finds its targets within 6 chars), and the concatenation win comes from repeated strcat on a growing buffer; both are harness flaws to record as shortcomings, not grounds for rejection since concatenation and assignment wins are genuine algorithmic effects. License corrected to dual BSD-3-Clause or GPL-2.0 at the user's option (COPYING plus README); 175 stars and last commit 2026-09-12 confirmed; upstream websnarf/bstrlib has 570 stars, last commit 2016-11-02.",
+      "urls_opened": [
+        "https://bstring.sourceforge.net/features.html",
+        "https://bstring.sourceforge.net/",
+        "https://prdownloads.sourceforge.net/bstring/examples-09282006.zip?download",
+        "https://github.com/msteinert/bstring",
+        "https://github.com/msteinert/bstring/commits",
+        "https://raw.githubusercontent.com/msteinert/bstring/HEAD/README.md",
+        "https://raw.githubusercontent.com/msteinert/bstring/HEAD/COPYING",
+        "https://raw.githubusercontent.com/msteinert/bstring/HEAD/doc/comparisons.md",
+        "https://github.com/websnarf/bstrlib",
+        "https://github.com/websnarf/bstrlib/commits"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "license": "BSD-3-Clause",
+      "workload": "Upstream Bstrlib's cbench.c example: operations per second for assignment, char extraction, scan, concatenation (250 appends of a 62 character string plus '!!' into one growing buffer) and replace, bstring C API against plain char* code. The same page also benchmarks upstream's C++ wrapper CBString against std::string with cppbench.cpp.",
+      "claimed_speedup": "Bstrlib C API as percent of char* Clib speed (100% is parity), columns WATCOM C 11.0c / Visual C++ 6.0 / Intel C++ 6.0 / gcc 3.3.3 Cygwin / gcc 3.3.3 Power 4 SUSE: concatenation 21700% / 23700% / 21200% / 9260% / 3980%; assignment 182% / 198% / 218% / 89% / 91%; scan 214% / 125% / 159% / 209% / 89%; char extraction 95% / 96% / 101% / 102% / 113%; replace 147% / 114% / 125% / 101% / 86%. Same page, CBString over std::string: concatenation 187% (WATCOM + STL port), 21100% (Visual C++ 6.0), 19400% (Intel C++ 6.0), 1330% (g++ 3.3.3 Cygwin), 200% (g++ 3.3.3 Power 4); char extraction 63% to 132%; replace 95% to 144%.",
+      "compiler_and_flags": "WATCOM C/C++ 11.0c, Visual C++ 6.0 (12.00.8168), Intel C++ 6.0 (4.0 99026), gcc 3.3.3 on Cygwin and on SUSE Linux. The page states only that the compiler must be set to 'a reasonable maximum performance setting'; the makefiles shipped in examples-09282006.zip use gcc -O3, MSVC /O2 and Intel /Ox /Ob2 but the page does not say these were the flags used.",
+      "caveats": "The numbers are for upstream Bstrlib (websnarf/bstrlib, last commit 2016-11-02), measured with 2000s era compilers on a 1.62GHz Athlon XP and a 1GHz Power 4; the msteinert fork is described as binary compatible but was not re-benchmarked, and the CBString versus std::string rows apply only to upstream because the fork dropped the C++ wrapper. First-party project page with percentages only (no raw ops/s), flags not stated for the run, so tier C. The large concatenation ratios come from the baseline calling strcat repeatedly on a growing buffer (rescanning the whole string every call, quadratic) while bstring tracks length; a C program that keeps its own length would not lose this much. In cbench.c the char* scan test searches TESTSTRING1 while the bstring scan test searches a different, shorter string ('Dot. 123. Some more data.'). The std::string comparison used old STLs (WATCOM STL port, Visual C++ 6.0, g++ 3.3.3 libstdc++) and resets the accumulator with accum = \"\", which those implementations may treat differently from CBString; std::string was faster or equal in several rows (char extraction 63-132%, replace 95-144%) and the C API loses on assignment and replace in some columns (89%, 91%, 86%). The fork's own README and comparisons.md claim 'improved overall performance of common string operations' and an advantage over std::string at least as large as the Str library's, with no numbers."
     }
   },
   {
