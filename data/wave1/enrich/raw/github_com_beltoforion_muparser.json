@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/beltoforion/muparser",
+  "one_liner": "Runtime math-expression parser that compiles to a bytecode stack machine; beats TinyExpr, Lepton and muParserX, not ExprTk.",
+  "what_it_does": "Parses a string expression such as 'sin(a)*x^2+b' at runtime and evaluates it repeatedly against C++ variables bound by pointer (DefineVar), with user callbacks (DefineFun), constants, custom operators and an if-then-else operator. The class API is SetExpr then Eval(); a bulk overload Eval(results, n) evaluates one expression over arrays of variable values, optionally with OpenMP, and a C interface (muParserDLL) exists for other languages. It is a library you call, not a drop-in for any standard facility.",
+  "how_it_is_fast": "The first Eval() parses the string with a shunting-yard pass into reverse-Polish bytecode and swaps an internal function pointer so later calls run only a switch-dispatched stack interpreter (ParseCmdCodeBulk). The bytecode optimizer folds constant subexpressions and fuses common patterns into single opcodes (a*a and a^2..a^4 into VARPOW2/3/4, 2*(3*b+1) into one multiply-add VARMUL), and single-token expressions take a short path. Bulk mode splits the array over up to 16 OpenMP threads, each with its own slice of the value stack.",
+  "when_to_use": [
+    "User-supplied formulas (spreadsheet cells, config-driven transforms, plotting tools) that are parsed once and evaluated millions of times on double variables",
+    "You currently embed TinyExpr, Lepton or muParserX and evaluation time matters: the third-party shootout ranks muparser ahead of all three on its main and larger expression files",
+    "You want a compiled BSD-2-Clause library with a plain C interface (muParserDLL) rather than a very large header",
+    "Evaluating one expression over large arrays of inputs, where the bulk Eval(results, n) overload avoids per-call overhead"
+  ],
+  "when_not_to_use": [
+    "Peak evaluation speed is the goal: ExprTk, METL and FParser beat it on every 2018 suite of the same shootout, and atmsp edges it on bench_expr.txt",
+    "Short or oddly written expressions: TinyExpr beats it on bench_expr_weird.txt (508 versus 394 points) and on single expressions such as '+a^+b+1.1'",
+    "Expressions are evaluated only a few times each: the first Eval() includes parsing and bytecode generation, and issue #131 reports 5 to 25 ms on ESP32 to clear and redefine variables on a shared parser",
+    "You need types other than double/float, vectors or strings as first-class values (its sibling muParserX covers those, at a large speed cost)",
+    "Untrusted input on versions before 2.3.3/2.3.6: oss-fuzz found heap-buffer-overflow reads and access violations on malformed expressions, fixed in 2.3.2, 2.3.3 and 2.3.6"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; BUILD_SHARED_LIBS defaults ON); a handful of .cpp/.h files can also be source-dropped",
+    "dependencies": "none required; OpenMP optional (CMake option ENABLE_OPENMP defaults ON)",
+    "min_toolchain": "C++17 source per the 2.3.2 changelog; the current CMakeLists sets CMAKE_CXX_STANDARD 20 and needs CMake 3.15+",
+    "platforms": "any platform with a C++17 compiler; changelog covers MSVC (incl. C++20), MinGW, GCC, Clang, IntelLLVM; optional wide-character build (ENABLE_WIDE_CHAR)",
+    "thread_safety": "Not documented. Each Parser keeps mutable state (stack buffer, the parse-function pointer swapped on first Eval), so use one Parser per thread; issue #106 reports a segfault running parsers under OpenMP with no documented answer. The built-in rnd() uses a function-static std::mt19937 shared by all parsers, which is a data race under concurrent evaluation.",
+    "drop_in_for_baseline": "partial: same parse-once, evaluate-many pattern as TinyExpr's te_compile/te_eval with pointer-bound variables, but a different C++ class API and grammar"
+  },
+  "gotchas": [
+    "The shootout numbers come from a bundled copy whose header says MUP_VERSION 2.2.5 (the harness labels it 2.2.4), built with MUP_ASSERT compiled out under NDEBUG; since 2.3.2 MUP_ASSERT stays active in release builds and runs bounds checks on every stack operation of the interpreter loop, so current 2.3.6 may be slower than the 2018 results show.",
+    "The 'omp' bulk variant was slower than plain muparser in every logged run (for example 53.252 versus 47.358 ns on the README's first expression), and the benchmark bulk path allocates nine arrays of 5,000,000 doubles; do not assume OpenMP helps.",
+    "Issue #68 reported 36478.8 ns for '((cos(cos(tan(pi)))+a)/a)' with muparser 2.2.4 built by GCC 7+ or Clang 6, against 8 ns for ExprTk on the same machine; it was closed under the 2.3.0 milestone without a documented root cause.",
+    "Behaviour changes across versions: since 2.3.2 math exceptions (divide by zero, sqrt of a negative) no longer throw, expressions are capped (now 20000 characters) and identifiers at 100 characters; 2.3.5 changed bitwise 'and' precedence and 2.3.6 rejects unary plus before functions."
+  ],
+  "pick_this_over_siblings_when": "ExprTk is the only catalogued sibling that is an expression parser and it is faster in every suite of the shootout, so pick muparser only when you prefer its smaller compiled library, C interface, BSD-2-Clause licence or bulk array API over raw evaluation speed; the other siblings (xsimd, SLEEF, fmath and similar) are math kernels, not parsers.",
+  "verified_claims_summary": "In ArashPartow's math-parser-benchmark-project (written by ExprTk's author), a bundled muparser 2.2.x evaluating 74 pre-parsed double expressions 5,000,000 times each, built with MSVC 1913 Release Win32 on a Xeon E5-2687W in 2018, scored 38 against TinyExpr's 32 on bench_expr.txt (about 1.2x on average, derived from page data) and about 1.9x to 2.2x on the larger suites, while ExprTk set the 100 reference and TinyExpr won the 'weird' suite. The README's headline expression shows 47.4 ns versus TinyExpr's 121.2 ns, but that is one favourable case.",
+  "status_note": "Actively maintained (2.3.6 released 2026-04-10, last commit 2026-07-03, fuzzed by oss-fuzz) and BSD-2-Clause, so easy to adopt; the only third-party speed data is eight years old, on an older version without the release-mode bounds checks the current code carries.",
+  "sources_read": [
+    "https://github.com/beltoforion/muparser",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/README.md",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/CHANGELOG",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/include/muParserDef.h",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/include/muParserBase.h",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/include/muParserBytecode.h",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/include/muParserTemplateMagic.h",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/include/muParserCallback.h",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/src/muParserBase.cpp",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/src/muParserBytecode.cpp",
+    "https://raw.githubusercontent.com/beltoforion/muparser/HEAD/src/muParser.cpp",
+    "https://github.com/beltoforion/muparser/issues?q=is%3Aissue+performance+OR+slow+OR+thread",
+    "https://github.com/beltoforion/muparser/issues/68",
+    "https://github.com/beltoforion/muparser/issues/106",
+    "https://github.com/beltoforion/muparser/issues/131",
+    "https://beltoforion.de/en/muparser/ (EGRESS_BLOCKED)",
+    "https://github.com/ArashPartow/math-parser-benchmark-project",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/readme.md",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/src/BenchMuParser2.cpp",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/src/BenchTinyExpr.cpp",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/src/Benchmark.cpp",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/src/ParserBench.cpp",
+    "https://raw.githubusercontent.com/ArashPartow/math-parser-benchmark-project/HEAD/muparser2/muParserDef.h"
+  ],
+  "confidence": 0.65
+}
