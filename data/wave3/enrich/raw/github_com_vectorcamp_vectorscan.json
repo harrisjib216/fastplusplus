@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/vectorcamp/vectorscan",
+  "one_liner": "Portable BSD fork of Intel Hyperscan multi-regex matcher for ARM, Power and x86; 1.4-3.6x faster Snort 3 on ARM routers.",
+  "what_it_does": "Compiles up to tens of thousands of PCRE-syntax patterns into one database (hs_compile_multi) and scans buffers, streams or vectors of buffers against all of them at once, reporting (pattern id, end offset) through a callback. The C API and ABI follow Hyperscan 5.4 (libhs), so code and applications written for Hyperscan, such as Snort 3 built with ENABLE_HYPERSCAN, relink unchanged; 5.4.12 is described as the last 100% compatible release and later releases plan mostly backward-compatible extensions. It is not a drop-in for std::regex, PCRE or RE2: no capture groups, no back-references, and every match end is reported.",
+  "how_it_is_fast": "It keeps Hyperscan's hybrid-automata design: the Rose engine splits patterns into literal factors found by SIMD literal matchers (FDR, Teddy, noodle), then confirms them with bit-parallel LimEx NFAs, McClellan and shuffle-based Sheng/McSheng DFAs, and repeat engines (LBR, Castle), and skips input with SIMD acceleration scanners (shufti, truffle, vermicelli). Vectorscan's own work is the SIMD layer: since 5.4.6 the engines use a SuperVector C++ template library with NEON/ASIMD, SVE/SVE2, VSX and SIMDe backends, plus Arm-specific tweaks such as the shrn-based movemask (5.4.8) and 256-bit TBL truffle (5.4.12).",
+  "when_to_use": [
+    "IDS/IPS, DPI, log or malware scanning where hundreds to tens of thousands of signatures must be matched in one pass, including matching across packet or chunk boundaries in streaming mode.",
+    "aarch64 servers and boards (Graviton, Ampere Altra, Apple Silicon, Raspberry Pi 5, router SoCs) or ppc64le, where Intel Hyperscan does not build; Snort 3 on OpenWrt and Arm's Snort learning path both use it there.",
+    "You need a maintained BSD-3-Clause Hyperscan: the open Intel line stopped at 5.4 and 5.5+ ships under Intel's proprietary licence, while Vectorscan 5.4.13 (August 2026) is packaged by Debian/Ubuntu (libvectorscan-dev), Fedora, Arch AUR and OpenWrt.",
+    "x86 deployments that already use Hyperscan 5.4 and want current compiler fixes (clang 21, GCC 15/16) and bug fixes without an API change; a fat runtime picks SSE4.2, AVX2, AVX-512 or AVX-512VBMI code at load time."
+  ],
+  "when_not_to_use": [
+    "You need capture groups, back-references, lookaround or PCRE/RE2 leftmost-first semantics: those constructs fail to compile (prefilter mode only approximates them as a superset that another engine must confirm), and start offsets need HS_FLAG_SOM_LEFTMOST, which rebar's notes say slows scanning and limits pattern size.",
+    "One pattern, patterns that change per request, or tiny inputs: the database must be compiled up front and large or complex patterns can hit 'Pattern too large' or 'Unable to generate bytecode' errors.",
+    "Windows/MSVC, RISC-V or LoongArch targets: the 5.4.12 platform list is Linux (x86, Arm, Power), FreeBSD 14 and macOS 14+; 5.4.13 dropped macOS x86 and FreeBSD from CI, excludes new architectures without a support contract, and an MSYS2 UCRT64 port still fails two rebar-derived match-count tests (issue #417, 4 matches short).",
+    "Logical-combination patterns whose operands use singlematch or max_offset: they return incomplete results (open issue #357, inherited from Hyperscan #430)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libhs via CMake; distro packages libvectorscan5 / libvectorscan-dev)",
+    "dependencies": "Build only: CMake 3.18.4+, Ragel, Boost headers (1.57+, 1.61+ in some configurations), pkg-config; optional PCRE 8.41+ for the Chimera library, SQLite and libpcap for tools and benchmarks. Runtime: none beyond libc (C API).",
+    "min_toolchain": "C17 and C++17 (cflags-generic.cmake sets -std=c17 / -std=c++17); GCC or Clang, with fixes for clang 21 and GCC 15/16 in 5.4.13",
+    "platforms": "Linux x86-64 (SSE4.2 minimum; AVX2/AVX-512/AVX-512VBMI paths, fat runtime on by default), aarch64 NEON/ASIMD plus SVE/SVE2 (fat runtime on Linux), ppc64le VSX, macOS 14+ arm64; SIMDe backend for other CPUs; Windows not officially supported",
+    "thread_safety": "Compiled databases are read-only and can be shared; every concurrent caller needs its own hs_scratch_t (hs_alloc_scratch, or hs_clone_scratch per thread), per hs_runtime.h.",
+    "drop_in_for_baseline": "partial — ABI/API replacement for Intel Hyperscan 5.4 (Snort 3 picks it up via -DENABLE_HYPERSCAN and search_method 'hyperscan'), but not a drop-in for Snort's Aho-Corasick search methods' semantics, PCRE or std::regex"
+  },
+  "gotchas": [
+    "The measured 5.4.11 predates a run of ARM and SIMD correctness fixes released in 5.4.13: arm64 HS_FLAG_DOTALL false negatives (#382, tests in #391), SVE shufti/truffle/noodle bugs (#377), a NEON rshift fallback bug (#396), double-shufti missing matches across stream chunk boundaries (#402) and a stack buffer overflow in rvermicelliDoubleExecReal (#392); use 5.4.13 or later.",
+    "Match semantics differ from backtracking engines: every match end is reported, including overlapping ones ([a-z]+ on 'abc' reports three matches per rebar's Hyperscan notes), so counts differ from PCRE unless HS_FLAG_SINGLEMATCH or SOM flags are used.",
+    "Compiling in UTF-8 mode and scanning invalid UTF-8 is undefined behaviour (rebar's Hyperscan runner refuses such haystacks); validate input first.",
+    "In Snort 3 the gain depends on the configured fast-pattern search method: Arm's learning path sets search_engine.search_method='hyperscan' explicitly, OpenWrt's snort.uc sets no method, and the OpenWrt commit does not say which matcher ran in either column."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Hyperscan whenever you are on ARM or Power, or want a maintained open-source build; on x86 the two share algorithms and API. Pick it over RE2, rejit, BLARE or regexr when many patterns must be matched in one pass or across streamed chunks and you do not need captures or leftmost-first semantics.",
+  "verified_claims_summary": "An OpenWrt packager's commit measured download throughput through routers running Snort 3.1.84.0 with a roughly 22 MB community ruleset, built with and without the Vectorscan 5.4.11 package (n=3, one core saturated): GL.iNet GL-MT6000 IDS 91.2 to 331.0 Mbit/s (3.6x) and IPS 30.0 to 52.9 Mbit/s (1.8x), Raspberry Pi 5 IPS 164.3 to 232.8 Mbit/s (1.4x). It is a whole-application number against an unnamed fallback matcher, with the OpenWrt toolchain's unstated compiler and flags, and it mostly reflects the Hyperscan design Vectorscan inherits.",
+  "status_note": "Actively maintained (5.4.13 released 2026-08-21 after a funding gap the changelog says is solved, last commit 2026-09-04), BSD-3-Clause and packaged by major distributions, so link the distro library rather than vendoring the Ragel/Boost build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/README.md",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/CHANGELOG-vectorscan.md",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/CMakeLists.txt",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/cmake/compiler.cmake",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/cmake/cflags-generic.cmake",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/cmake/boost.cmake",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/cmake/osdetection.cmake",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/cmake/archdetect.cmake",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/src/hs.h",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/src/hs_common.h",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/src/hs_compile.h",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/src/hs_runtime.h",
+    "https://raw.githubusercontent.com/VectorCamp/vectorscan/develop/benchmarks/benchmarks.cpp",
+    "https://github.com/VectorCamp/vectorscan/tree/develop/src/nfa",
+    "https://github.com/VectorCamp/vectorscan/issues",
+    "https://github.com/VectorCamp/vectorscan/issues/417",
+    "https://github.com/VectorCamp/vectorscan/issues/382",
+    "https://github.com/VectorCamp/vectorscan/issues/357",
+    "https://github.com/VectorCamp/vectorscan/commits/develop",
+    "https://github.com/openwrt/packages/commit/d62471c093bfec5c5203ade9e5175a8ef7ae80b1",
+    "https://raw.githubusercontent.com/openwrt/packages/master/net/snort3/Makefile",
+    "https://raw.githubusercontent.com/openwrt/packages/master/net/snort3/files/snort.uc",
+    "https://raw.githubusercontent.com/ArmDeveloperEcosystem/arm-learning-paths/main/content/learning-paths/servers-and-cloud-computing/vectorscan/_index.md",
+    "https://raw.githubusercontent.com/ArmDeveloperEcosystem/arm-learning-paths/main/content/learning-paths/servers-and-cloud-computing/vectorscan/snort.md",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/master/engines/hyperscan/README.md",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/master/engines/hyperscan/Cargo.toml"
+  ],
+  "confidence": 0.75
+}
