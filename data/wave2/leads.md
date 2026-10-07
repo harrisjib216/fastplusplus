@@ -1,0 +1,1 @@
+- AOCC (amd.com/en/developer/aocc.html, wave 2, reference C): Phoronix Milan-X and Zen 4 articles blocked; retier to B or A once phoronix.com or openbenchmarking.org is reachable (2026-10-07).
