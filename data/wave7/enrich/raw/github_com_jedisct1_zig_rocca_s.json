@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/jedisct1/zig-rocca-s",
+  "one_liner": "Zig Rocca-S AEAD in one file; KDDI's C reference beats OpenSSL AES-128-GCM 2.0-2.9x, but this port has no baseline.",
+  "what_it_does": "An independent Zig implementation by Frank Denis (MIT, about 200 lines in src/rocca.zig) of Rocca-S from IETF draft-nakano-rocca-s, a beyond-5G/6G AEAD with a 256-bit key, a 128-bit nonce and a 256-bit tag. It exposes RoccaS.encrypt(c, &tag, m, ad, npub, key) and RoccaS.decrypt(m, c, tag, ad, npub, key), which have the same signature shape as Zig's std.crypto.aead types such as Aes256Gcm. Moving Zig code over is therefore a type change plus 32-byte keys, 16-byte nonces and 32-byte tags, but the ciphertexts are not AES-GCM compatible. The API is one-shot only, with no incremental or streaming interface; decrypt checks the tag itself and overwrites the output with 0xaa on failure. The repo began in 2021 as an implementation of the original Rocca, switched to Rocca-S in August 2022, and has followed draft revision -03 since March 2023.",
+  "how_it_is_fast": "Rocca-S keeps seven 128-bit state words and absorbs each 32-byte block with six independent single AES rounds plus one XOR. Each round is Zig's std.crypto.core.aes.Block.encrypt: one AESENC on x86-64, or AESE+AESMC on aarch64. The keystream costs two more rounds, so a 32-byte block takes 8 AES rounds with no key schedule and no GHASH. AES-128-GCM needs 10 rounds per 16 bytes plus a carry-less multiply. The six rounds of an update are independent, so they keep the pipelined AES units busy. Encryption can feed the plaintext into the state update immediately. Decryption must wait for the keystream round to recover the plaintext first, which is why it tops out lower: 111.82 vs 189.78 Gbps at 64 KB on M4. There is no hand-written SIMD and no multi-message interleaving; the code relies on the compiler to keep the state in registers.",
+  "when_to_use": [
+    "Zig code that needs Rocca-S specifically, for example to interoperate with KDDI's reference or a protocol that mandates it, and wants one small MIT file with no dependencies beyond std. Its tests carry KDDI's reference vectors 1-3, and a Python model of rocca.zig's logic run this session reproduced all seven KDDI reference vectors, including the 40-, 48- and 57-byte partial-block cases.",
+    "Encrypt-heavy bulk AEAD of 4 KB or more on aarch64 with crypto extensions, or on x86-64 with AES-NI and AVX. On the README's Apple M4 table, encryption runs at 140.54 Gbps at 4 KB and 189.78 Gbps at 64 KB.",
+    "Links where you control both endpoints and want a 256-bit key and a 256-bit tag at encrypt speeds above AES-GCM's.",
+    "As a compact, readable reference for porting Rocca-S. jedisct1's Rust crate rocca (rust-rocca-s) mirrors the same State/enc/dec/decPartial/mac structure."
+  ],
+  "when_not_to_use": [
+    "Decrypt-heavy or symmetric traffic. Decryption is 1.57-1.70x slower than encryption from 4 KB to 64 KB on M4. In the hiae-aead C harness on Zen 4, Rocca-S decryption (92.3 Gbps) only ties OpenSSL AES-128-GCM (92.9), while AEGIS-128x2 on plain AES-NI does 208.4/207.6. Zig's own std.crypto.aead.aegis decrypts as fast as it encrypts.",
+    "Small packets. Every message pays a 16-update initialization and a 16-update finalization, 192 AES rounds in all. The M4 table shows 4.67 Gbps at 64 B and 23.91 Gbps at 256 B.",
+    "Anything that needs a standard, FIPS, broad interop or key commitment. The spec is an individual IETF draft, and practical committing attacks on Rocca-S are published (IACR ePrint 2024/901). The README dropped its 'claims to be key committing' wording in October 2024.",
+    "Binaries built for a generic CPU. std.crypto.core.aes picks its backend at compile time and uses AES-NI only when both the aes and avx target features are on (aarch64 needs aes). Any other target, including baseline x86_64 and the Zig C backend, silently gets table-based software AES, which is much slower and has only the default 'medium' cache-timing mitigation.",
+    "When you need streaming, 12-byte nonces, keys shorter than 256 bits, or a C ABI. The API is one-shot, the nonce is fixed at 16 bytes and the key at 32. The static library that build.zig installs exports no C symbols."
+  ],
+  "integration": {
+    "form": "source-drop: copy the single file src/rocca.zig. There is no build.zig.zon (404), and build.zig uses b.createModule rather than b.addModule, so Zig dependents get no named module. The only installed artifact is a static library with no exported functions.",
+    "dependencies": "none (Zig standard library only: std.crypto.core.aes, std.mem)",
+    "min_toolchain": "Tracks Zig master. Recent commits are 'Update for Zig 0.16' (2026-01-29), 'Update for zig-current' (2026-03-13) and 'Splatify' (2026-05-19). build.zig uses b.addLibrary with root_module, and the benchmark uses the 0.16-era std.process.Init/std.Io API. No minimum version is declared, so older Zig releases need older commits.",
+    "platforms": "Any Zig target. Hardware AES is used only on x86-64 compiled with both AES-NI and AVX enabled, or on aarch64 with the aes feature (std.crypto.core.aes selects aesni.zig or armcrypto.zig). Everything else falls back to table-based soft AES.",
+    "thread_safety": "Not documented. encrypt and decrypt are pure functions whose state lives on the stack with no globals, so concurrent calls on separate buffers are independent.",
+    "drop_in_for_baseline": "partial: the call signatures match Zig's std.crypto.aead AES-GCM types, but key (32 B), nonce (16 B) and tag (32 B) sizes differ, ciphertexts are incompatible, and there is no OpenSSL EVP-style interface"
+  },
+  "gotchas": [
+    "Harness flaw in this repo's benchmark (src/benchmark.zig). Each size is timed in a single pass with no warm-up and no repetitions. The first timed loop is 64 B encryption, which may explain why 64 B decryption reads faster (5.45 vs 4.67 Gbps). The 64 KB row is 1000 iterations, roughly 2.8 ms of encryption and 4.7 ms of decryption (derived from page data). The hiae-aead C harness, by contrast, warms up for 0.5 s and reports a median. There is no AES-GCM or AEGIS row, although Zig std ships both.",
+    "The README table is stale relative to the code. It was added in commit 04c6fb5 (July 2025), when the benchmark used std.time.Timer. The benchmark was later rewritten for Zig 0.16's std.Io and the table was never re-run. The Zig version and the M4 variant are not stated.",
+    "Older numbers that still circulate in search results and mirrors were for the original Rocca, not Rocca-S: 16284 MiB/s on a Core i9 MacBook, plus Rocket Lake and Freebox aarch64 runs and an OpenSSL 3.0.0 AES-GCM reference row. Commit d64addb removed them in October 2024, and Rocca lost to AEGIS-128L on that Rocket Lake run.",
+    "decrypt writes unverified plaintext into the output before it checks the tag, and fills it with 0xaa on failure, so callers must ignore m when an error comes back. The tag comparison is a hand-rolled OR-accumulate loop rather than std.crypto.timing_safe.eql. Associated data goes through the encryption path, which computes and throws away two keystream AES rounds per 32-byte AD block (a small cost for AD-heavy traffic)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you need Rocca-S itself in Zig. In the same hiae-aead harness, KDDI's C Rocca-S (catalogued as yt-nakano/rocca-s) roughly ties AEGIS-128x2 on M5 encryption (208.1 vs 211.8 Gbps) but decrypts about 1.5x slower (140.4 vs 213.1). HiAE beats it in both directions, and on Zen 4 AEGIS-128x2 on plain AES-NI beats it in both directions too. For a fast general-purpose AEAD in Zig, std.crypto.aead.aegis (the libaegis design) is already in the standard library. The Rocca entry covers the attacked predecessor design.",
+  "verified_claims_summary": "Only the algorithm has been compared with a baseline. hiae-aead/benchmarks ran KDDI's C reference Rocca-S, with an added ARM-crypto backend, not this Zig code, against OpenSSL EVP AES-128-GCM at 64 KB with 48 B of AD and the tag included. On an Apple M5 Max (Apple clang 21.0.0, -O3 -mcpu=native, OpenSSL 3.6.4, median of 3 passes) Rocca-S did 208.1 vs 70.8 Gbps encryption (~2.9x) and 140.4 vs 70.2 Gbps decryption (~2.0x). On a Ryzen 7 7700 locked at 3.8 GHz (clang 21.1.8, OpenSSL 3.5.5) the chart shows 174.6/92.3 Gbps against GCM's 92.7/92.9, so ~1.9x on encryption and parity on decryption (derived from page data). This repo's own figures are a baseline-free ReleaseFast run on an Apple M4: 189.78 Gbps encryption and 111.82 Gbps decryption at 64 KB.",
+  "status_note": "Actively kept building on Zig master (38 commits, last on 2026-05-19, two closed issues and no PRs), MIT-licensed and small enough to vendor. A Python model of its logic matched all seven KDDI reference vectors, so no correctness bug was found. However, the catalogue already folds this port into yt-nakano/rocca-s as a duplicate in data/decisions.json.",
+  "sources_read": [
+    "https://github.com/jedisct1/zig-rocca-s",
+    "https://github.com/jedisct1/zig-rocca-s/commits/master",
+    "https://github.com/jedisct1/zig-rocca-s/commit/04c6fb5c411c0816bf0da2c169b0ff27971674c6",
+    "https://github.com/jedisct1/zig-rocca-s/commit/36522b2b26592aef078a5a19cc62b9c6209f5493",
+    "https://github.com/jedisct1/zig-rocca-s/commit/d64addbdf3039e643c0a8e901a7a653c49c81ae3",
+    "https://github.com/jedisct1/zig-rocca-s/commit/ed25023bcf5bc58f44daa592908c9993babfec43",
+    "https://github.com/jedisct1/zig-rocca-s/issues?q=is%3Aissue",
+    "https://github.com/jedisct1/zig-rocca-s/issues/2",
+    "https://github.com/jedisct1/zig-rocca-s/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/README.md",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/build.zig",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/src/rocca.zig",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/src/benchmark.zig",
+    "https://raw.githubusercontent.com/jedisct1/zig-rocca-s/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yt-nakano/rocca-s/main/test/test_rocca-s_ref.cc",
+    "https://raw.githubusercontent.com/jedisct1/rust-rocca-s/master/src/lib.rs",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/Makefile",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/rocca-s/performance_test.c",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/rocca-s/Makefile",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/aes128-gcm-openssl/benchmark.c",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/aes128-gcm-openssl/Makefile",
+    "https://raw.githubusercontent.com/hiae-aead/benchmarks/HEAD/.media/zen4/throughput_comparison_zen4.png",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto/aes.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto/aes/soft.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto/aes/aesni.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto/aes/armcrypto.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/std.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/master/lib/std/crypto/aes_gcm.zig"
+  ],
+  "confidence": 0.8
+}

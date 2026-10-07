@@ -1,0 +1,53 @@
+{
+  "id": "https://beecrypt.sourceforge.net",
+  "one_liner": "Portable LGPL C crypto library with per-CPU assembler bignum code; 2003-era tables show 2-4.6x faster modexp than Java BigInteger.",
+  "what_it_does": "BeeCrypt is a C library (with optional C++, Python and Java/JNI glue) providing AES, Blowfish, MD4/MD5, SHA-1/224/256/384/512, RIPEMD, HMAC, FIPS-186 and Mersenne Twister PRNGs, a multi-precision integer library, RSA (with CRT), DSA, ElGamal, Diffie-Hellman and DHAES. The API is plain C structs and functions (mpbarrett for a modulus, mpnumber for integers, hashFunctionContext and blockCipherContext for generic dispatch), modelled to exchange keys with Java's security classes. It is not a drop-in for anything; a separate 'BeeCrypt for Java' JCE provider was the route for Java users.",
+  "how_it_is_fast": "Modular exponentiation uses Barrett reduction with the mu coefficient precomputed once per modulus (stored in the mpbarrett struct) plus 4-bit sliding-window exponentiation over a table of odd powers g^1..g^15. The inner multiply-accumulate and squaring loops have hand-written assembler for x86 (including Pentium 4 SSE2 multiplication), x86_64, PowerPC/PPC64, SPARC v8/v8plus, Alpha, IA-64, ARM, m68k and s390x, generated from m4 sources (gas) or masm on Windows. RSA private-key operations use CRT, with the two half-size exponentiations run as OpenMP sections since 4.2.0.",
+  "when_to_use": [
+    "Maintaining or building legacy software (for example old RPM stacks) that already links BeeCrypt and needs its RSA/DSA/DH/ElGamal API.",
+    "Classic finite-field public-key operations (1024-bit-class RSA, DSA, DH) in C on an unusual or legacy CPU where BeeCrypt still has assembler bignum code (Alpha, IA-64, m68k, s390x, SPARC).",
+    "Reading a compact, LGPL reference implementation of Barrett reduction plus sliding-window exponentiation with per-architecture assembler kernels.",
+    "C code that must exchange key material with Java's security classes in the same encodings, which the README says the structures were designed for."
+  ],
+  "when_not_to_use": [
+    "Any new security-sensitive deployment: the project is unmaintained (last CVS change 2015-12-28, last file release 4.2.1 per SourceForge, updated 2013-04-23) and has no published security process.",
+    "Private-key operations exposed to timing or cache attackers: the sliding-window exponentiation is secret-dependent and rsapricrt has no blinding.",
+    "Modern primitives: no AES-GCM, ChaCha20-Poly1305, X25519/Ed25519, ECDSA or post-quantum schemes (elliptic curves are still listed under 'Planned' in the README).",
+    "When you need a speed claim against OpenSSL, BoringSSL or libsodium: none was ever published; the only comparison is against 1999-2002 JVMs.",
+    "Projects that cannot accept LGPL-2.1-or-later linking terms."
+  ],
+  "integration": {
+    "form": "shared lib (autotools/libtool build, static also possible; Makefile.mak and vcproj for MSVC)",
+    "dependencies": "none for the C core; C++ API needs IBM ICU >= 2.8; optional OpenMP, Python module and Java JNI glue (gcj headers)",
+    "min_toolchain": "ANSI C compiler plus GNU m4 and an assembler for the optimized routines; last maintenance commit (2015) fixed the C++ code for gcc-5.3.0",
+    "platforms": "README lists Linux on x86, x86_64, alpha, arm, ia64, m68k, ppc, ppc64, s390, s390x and sparc; Solaris sparc/x86; Tru64; Darwin/MacOS X; Cygwin; Win32. MinGW and 64-bit AIX shared libraries were unfinished.",
+    "thread_safety": "Contexts are caller-owned structs; 2.0.0 made mp32barrett operations multithread-safe (NEWS), and the FIPS-186 PRNG locks a pthread/Solaris/Win32 mutex (--enable-threads, default yes). The C++ API adds Java-style synchronization.",
+    "drop_in_for_baseline": "partial — the baseline is Java BigInteger.modPow; BeeCrypt is a C library, reachable from Java only through the separate BeeCrypt for Java JCE provider and the JNI glue in java/, not as a BigInteger replacement"
+  },
+  "gotchas": [
+    "Harness flaw: the C timings come from beetest.c, which times 100 mpbnpowmod calls with clock() (processor time on Unix, wall time on Windows) after the Barrett mu has already been computed by mpbset outside the loop; the Java harness is not in the tree, so whether the Java rows include JIT warm-up or per-call setup is unknown and the two sides are not measured the same way.",
+    "The 2.0.0 rows behind the Solaris PIII 450 (about 2.9x) and UltraSparc I (about 2.0x) ratios predate the 2.1.0 fix for a missed carry in the C version of mp32sub, which the reduction path uses; NEWS does not say whether those builds used the C or the assembler routine.",
+    "Not constant-time: mpbpowmodsld_w picks table entries and squaring counts from exponent bits, and rsapricrt has no base blinding; no side-channel hardening is mentioned anywhere in the source tree.",
+    "mpbpowmod_w mallocs the 8-entry window table on every call without checking for NULL; NEWS also records later correctness fixes in mpextgcd_w (3.1.0 and 4.0.0), RSA keypair generation (4.0.0) and mpbsubmod (4.1.0)."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (libsecp256k1, FourQlib, curve25519-voi, Snowshoe, the PQC entries) all target elliptic-curve or lattice schemes; pick BeeCrypt only when you are stuck with classic RSA/DSA/ElGamal/DH in C on legacy hardware or legacy code, otherwise use a maintained sibling or OpenSSL.",
+  "verified_claims_summary": "BENCHMARKS revision 1.17 (2003-01-28) times 100 modular exponentiations of 1024-bit random base and exponent mod a fixed 1024-bit prime: BeeCrypt 2.1.0 (Visual C 6.0) took 4.3 s on a Pentium III 600 under Windows 2000 against 10.2 s for the Java 1.4.0 Sun Server VM and 19.7 s for the Client VM (about 2.4x and 4.6x, derived from page data), with similar 2-3x gaps on Solaris 8 PIII 450 and UltraSparc I rows; no optimization flags are given and most Java rows ran on different machines. The current BENCHMARKS (revision 1.35, 2015) has only BeeCrypt-alone fixed-time scores from tests/benchme.c and does not say which of its two loops (1024^160 or 1024^1024 bits) the score is.",
+  "status_note": "Abandoned (last CVS commit 2015-12-28, SourceForge last update 2013-04-23) but LGPL-2.1-or-later and buildable as a shared library; usable for legacy code and study, not recommended for new security work.",
+  "sources_read": [
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/BENCHMARKS,v (revisions 1.17 and 1.35 rebuilt from RCS)",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/README,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/NEWS,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/BUGS,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/configure.ac,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/mpbarrett.c,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/include/beecrypt/mpbarrett.h,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/rsa.c,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/fips186.c,v",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/Attic/beetest.c,v (revision 1.12)",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/tests/beetest.c,v (revisions 1.3 and 1.6)",
+    "https://sourceforge.net/code-snapshots/cvs/b/be/beecrypt.zip#beecrypt/beecrypt/tests/benchme.c,v",
+    "https://sourceforge.net/projects/beecrypt/"
+  ],
+  "confidence": 0.6
+}
