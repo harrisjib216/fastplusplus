@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/ed-von-schleck/shoco",
+  "one_liner": "Tiny C entropy coder for short ASCII strings; first-party 2014 timings show about 2x smaz's speed on English words.",
+  "what_it_does": "Compresses and decompresses individual short strings (the author suggests under about 100 bytes) using a character-bigram model compiled into the binary, so nothing is stored per string. The whole API is two C functions, shoco_compress(in, len, out, bufsize) and shoco_decompress(in, len, out, bufsize), which write into caller buffers and return bytes written (bufsize + 1 when the buffer is too small). Plain ASCII never grows and is itself valid compressed input. The default model is trained on English words; a Python script builds models from your own data, and a JavaScript build via emscripten is included.",
+  "how_it_is_fast": "It is an order-1 (bigram) entropy coder with fixed bit packing rather than a dictionary or adaptive coder: a run of 2, 4 or 8 characters whose successor indices fit fixed bit budgets is packed into 1, 2 or 4 bytes, tagged by the high bits of the first byte (10, 110, 1110), while ASCII bytes pass through untouched because their top bit is 0. Encoding is lookups in a 256-entry char-to-id table and a 32x32 successor table plus one SSE2 compare (_mm_cmpgt_epi16 and movemask) to pick the largest pack that fits; decoding is a byte swap, shifts and masks into an [83][16] successor table. There is no allocation, hashing, match search or per-string header.",
+  "when_to_use": [
+    "Storing many short English or other ASCII strings (words, tags, names, keys in a key-value store or in-memory index) that must each be compressed independently, where gzip-style headers would make the output larger than the input.",
+    "You control both compressor and decompressor and can train a model on your own corpus (file paths, URLs, identifiers) with generate_compressor_model.py, then compile it in.",
+    "Per-string compression on a hot path: the README's driver run works out to about 0.3 microseconds per word for compress plus decompress plus line reading and comparison (0.145 s over 479,828 words, derived from page data).",
+    "Embedded or freestanding C/C++ code that needs no allocation and no dependencies: three files, caller-owned buffers, an output buffer the size of the input suffices for ASCII.",
+    "Data you produce and store yourself (trusted input), since the decompressor is not safe on hostile bytes."
+  ],
+  "when_not_to_use": [
+    "Decompressing untrusted or possibly corrupted data: shoco_decompress reads out of bounds on crafted input (CVE-2017-11367, issue #28, fix PR #34 unmerged since 2017), and crafted pack codes can still index the successor table out of range even with that fix.",
+    "Strings much longer than about 100 bytes or whole files: on /usr/share/dict/words shoco keeps 68.5% of the input versus 29.8% for gzip and 24.8% for xz (derived from page data). The author now recommends Zstandard; for columns of short strings FSST is the stronger, maintained option.",
+    "Non-ASCII or UTF-8 text: every byte with the top bit set costs two bytes, so output can double. The default model also has no digits, spaces, punctuation other than hyphen and apostrophe, or most capitals, so codes, IDs and mixed alphanumeric strings get no gain (issue #35).",
+    "Binary data or strings with embedded NUL bytes: compression stops at the first NUL even when len is given.",
+    "Projects that need a maintained, packaged or versioned format: no releases, no model identifier in the stream, unmaintained since 2015, and the model generator only runs under Python 2."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none at runtime (C standard headers; emmintrin.h on x86-64); Python 2 for the optional model generator, emscripten for the JS build",
+    "min_toolchain": "C99 (Makefile: -std=c99 -O3); the author tested only gcc and clang on x86_64 Linux; MSVC 2013 and g++ build fixes were merged in 2014",
+    "platforms": "any; SSE2 index check enabled automatically on x86-64, scalar fallback elsewhere (no NEON); big-endian handled by a byte-swap macro but untested per the README",
+    "thread_safety": "Not documented; both functions only read static const tables and caller buffers, so concurrent calls are reentrant by construction.",
+    "drop_in_for_baseline": "partial — replaces smaz conceptually (buffer-in, buffer-out C API for short strings) but the formats are incompatible and both ends must be built with the same compiled-in model"
+  },
+  "gotchas": [
+    "Decompressor out-of-bounds reads (from code reading, not executed): decode_header() counts leading 1 bits, so lead bytes 0xF0-0xFF give mark 3-7 and index packs[] past PACK_COUNT 3 (CVE-2017-11367; issue #28's ASan report and a possible hang; PR #34 adds 'else if (mark < 3)' but was never merged). Even with that check, a 4-byte pack such as E1 70 00 00 decodes 'i' then successor 14 = 'z', and the next lookup uses row 'z' - MIN_CHR = 83 of the 83-row chrs_by_chr_and_successor_id table (one past the end); EE 38 00 00 decodes 'x', 'q', then '\\0' from the all-zero 'q' row, giving row index -39 before the table. A safe vendored copy needs a range check on last_chr too.",
+    "shoco_compress reads one byte past len: the loop tests *in != '\\0' before in == in_end, so a buffer of exactly len bytes with no terminator is over-read by one byte (issues #15 and #16 still open; commit c112c4e of December 2015 stopped junk being encoded but kept the read). It also stops at any embedded NUL.",
+    "shoco_decompress returns SIZE_MAX on truncated input, which the README does not document (it only describes bufsize and bufsize + 1); the bundled shoco CLI stores that result in an int and passes it to fwrite, so a malformed file makes it write from far beyond its buffer.",
+    "The model is compiled in and the stream carries no model id: data compressed with one shoco_model.h decodes silently into wrong text with another. generate_compressor_model.py reads files as bytes and writes str with 'wb', so it fails under Python 3 (issues #38 and #39), and issues #27 and #42 report invalid or non-C-compliant generated headers."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings compress: to_static_string, bstring, buffet, FastString, MengRao/str and zuu_string_view speed up string building, conversion and search, while shoco shrinks stored short strings. Pick shoco only when bytes per stored short string are the constraint and the data is trusted; for columns of short strings with random access, FSST (wave 9, general-lossless) has peer-reviewed numbers and active maintenance.",
+  "verified_claims_summary": "The author's 2014 README timings, on an unstated machine and compiler: compress plus decompress of every word in /usr/share/dict/words took about 0.145 s user time for shoco (the test_input driver, which also counts fgets, strlen, strcmp and assert per line and is built by make's implicit rule without -O3; only shoco.o gets -O3) versus about 0.325 s for smaz with no published harness, about 2.2x (derived from page data). Whole-process runs of the shoco CLI on the 4.95 MB word list took 0.070 s to compress and 0.010 s to decompress versus 0.470 s and 0.048 s for gzip and 3.300 s and 0.148 s for xz at unstated levels, at a much worse ratio (3.39 MB versus 1.48 MB and 1.23 MB).",
+  "status_note": "Unmaintained: the README says to use Zstandard instead, the last code change is the December 2015 merge of PR #17, the 2026-02-16 commit only adds that notice, and 20 issues and 12 PRs (including the CVE-2017-11367 fix) sit open; it is MIT-licensed and three small files, so it can be vendored for trusted data if you add bounds checks to shoco_decompress.",
+  "sources_read": [
+    "https://github.com/Ed-von-Schleck/shoco",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/README.md",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/shoco.c",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/shoco.h",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/shoco_model.h",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/test_input.c",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/shoco-bin.c",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/tests.c",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/Makefile",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Ed-von-Schleck/shoco/HEAD/generate_compressor_model.py",
+    "https://github.com/Ed-von-Schleck/shoco/issues?q=is%3Aissue",
+    "https://github.com/Ed-von-Schleck/shoco/issues/28",
+    "https://github.com/Ed-von-Schleck/shoco/issues/15",
+    "https://github.com/Ed-von-Schleck/shoco/issues/16",
+    "https://github.com/Ed-von-Schleck/shoco/issues/35",
+    "https://github.com/Ed-von-Schleck/shoco/commits/master",
+    "https://github.com/Ed-von-Schleck/shoco/commit/c112c4e",
+    "https://github.com/Ed-von-Schleck/shoco/tree/master/models",
+    "https://github.com/Ed-von-Schleck/shoco/pulls",
+    "https://github.com/Ed-von-Schleck/shoco/pull/34",
+    "https://github.com/Ed-von-Schleck/shoco/pull/34/files",
+    "https://github.com/tmthrgd/shoco",
+    "https://raw.githubusercontent.com/siara-cc/Unishox2/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

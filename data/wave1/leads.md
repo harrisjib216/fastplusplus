@@ -19,3 +19,5 @@
 - utf8proc (https://github.com/JuliaStrings/utf8proc): bench/ has ICU and libunistring harnesses with no published results; issue #12 snippet shows utf8proc slower than ICU (w1-mine-af, 2026-10-07).
 - cpp-sort (https://github.com/Morwenn/cpp-sort): wiki benchmark graphs are imgur-hosted (blocked) with public scripts; retry where readable, likely tier A (w1-mine-m, 2026-10-07).
 - RasterDuck/vectormathbench (https://github.com/RasterDuck/vectormathbench): GLM vs DirectXMath, RTM and move::vectormath; BENCHMARKS.md empty, results in intermediate-benchmarks.md; uncatalogued (w1-mine-p, 2026-10-07).
+- libgcrypt (https://github.com/gpg/libgcrypt): two external comparisons blocked (gnupg.org/blog/20131215-gcrypt-bench.html; 2018 nettle-bugs thread, AES-128-CBC on i7-6820HQ: libgcrypt 1172, OpenSSL 1153, nettle 850 MB/s per search summary); retry where reachable (w1-mine-t, 2026-10-07).
+- libgd (https://github.com/libgd/libgd): vips-bench has jpg-gd at 5.47 s, 6.67x slower than libvips and slower than ImageMagick 4.44 s; not faster, no record written (w1-mine-t, 2026-10-07).
