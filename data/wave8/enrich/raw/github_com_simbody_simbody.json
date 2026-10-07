@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/simbody/simbody",
+  "one_liner": "Featherstone-style O(n) multibody dynamics library; measured slower than ODE and Bullet for free boxes, so a not-faster entry.",
+  "what_it_does": "Simbody is a C++ toolkit for simulating articulated rigid-body systems (skeletons, robots, vehicles, molecules) in generalized/internal coordinates, with joints, constraints, forces, prescribed motion, compliant contact (Hertz, Hunt and Crossley) and error-controlled integrators. You build a MultibodySystem from subsystems and MobilizedBody objects, realize a State and advance it with an Integrator plus TimeStepper; it is a library, not a drop-in for ODE's or Bullet's world/step API. It is the dynamics engine of OpenSim and an optional engine in Gazebo-classic.",
+  "how_it_is_fast": "Its speed argument is algorithmic: O(n) recursive (Featherstone-style) forward dynamics in internal coordinates, so an n-joint chain needs no constraint solve and has no joint drift, unlike maximal-coordinate engines (ODE, Bullet) that solve 6n coordinates plus constraints. No project page gives speed numbers for this; the only cross-engine measurement found (Gazebo maintainers, 2014-2015) covers free-floating boxes and a stacking scene, which do not exercise that advantage. Release builds use -O2 (CMake forces it; an optional -m<instruction set> via BUILD_INST_SET).",
+  "when_to_use": [
+    "Long articulated chains and closed loops (musculoskeletal models, robot arms, legged robots) where drift-free generalized coordinates and implicit joint damping matter more than raw steps per second.",
+    "Biomechanics work that already uses OpenSim, or molecular multibody models in the MMB style with thousands of bodies linked by joints.",
+    "Simulations that need error-controlled accuracy (variable-step Runge-Kutta, Merson or error-controlled semi-explicit Euler) rather than a fixed game-engine step.",
+    "Mixed forward/inverse dynamics, prescribed motion or optimization (gradient, interior point, CMA-ES) around one dynamics model."
+  ],
+  "when_not_to_use": [
+    "Many free bodies or piles: in the Gazebo boxes benchmark Simbody's time ratio at 101 boxes was 1.84 to 1.87 against ODE 1.34 to 1.58 and Bullet 1.44 to 1.48, even with twice the step size.",
+    "Stiff contact and stacking: the ROSCon 2014 stacking scene ran at more than 100x real time per simulated second, against 0.4 for ODE and 0.5 for Bullet (compliant contact with variable steps).",
+    "Real-time game physics with fixed steps and rigid impulse contact: Jolt Physics, PhysX or Bullet fit that shape better.",
+    "Projects that cannot take a LAPACK/BLAS dependency or a compiled shared-library build (no header-only option).",
+    "Toolchains stuck below C++20 if you track master: the CHANGELOG for 3.9 (in development) raises the required level from C++11 to C++20; the 3.8 release (May 2025) still targets C++11."
+  ],
+  "integration": {
+    "form": "shared lib (three libraries: SimTKcommon, SimTKmath, Simbody; static build optional)",
+    "dependencies": "LAPACK 3.6.0+ and BLAS; optional FreeGLUT, Xi and Xmu for the visualizer; CMake 3.21+ to build",
+    "min_toolchain": "README: GCC 4.9+, Clang 3.4+, Apple Clang 8+, VS 2015/2017/2019 (3.8 release); master (3.9 in development) requires C++20 per CHANGELOG",
+    "platforms": "Windows, macOS, Linux, FreeBSD; packaged in apt, Homebrew, Conda and vcpkg; no SIMD requirement",
+    "thread_safety": "not documented as a whole; System and State are separate objects, the CHANGELOG lists a ParallelExecutor, parallelizable forces and a mutex state lock, and the CMA-ES optimizer is multithreaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the equal-step numbers: Gazebo-classic's Simbody plugin hard-codes SimTK::SemiExplicitEuler2Integrator (integratorType is a TODO, not read from SDF), an error-controlled integrator that takes two half-steps plus one full step per step for Richardson error estimates. Simbody's own header says it 'needs to run at twice the step size' for performance equal to the fixed-step method that ODE and Bullet use, so the 2.3x gap at dt 0.0005 (time ratio 0.259 vs ODE 0.112) is largely the integrator choice; Simbody's fixed-step SemiExplicitEulerIntegrator was never measured.",
+    "At the step sizes the benchmark treats as equal accuracy (Simbody 0.001 s, others 0.0005 s, all at 0.0245 max position error) Simbody is about equal at 1 box (0.124 vs ODE 0.102, Bullet 0.127) and 16 to 40% slower than ODE at 21 to 101 boxes (derived from page data). Each row is a single run with no CPU, compiler or flags, and timing goes through Gazebo's world->Step, so Gazebo overhead is included.",
+    "The CSVs were last committed on 2015-06-29; boxes.cc was rewritten in 2024 (dynamic SDF generation, then MCAP logging of every step's pose and twist inside the timed loop), so rerunning today's harness measures something different from the published numbers.",
+    "Debug builds are more than 10x slower (README); link only optimized (Release or RelWithDebInfo) libraries when timing."
+  ],
+  "pick_this_over_siblings_when": "Pick Simbody over ODE or Jolt Physics when the model is an articulated mechanism (skeleton, robot) where generalized coordinates, drift-free joints and error-controlled accuracy matter; for many free bodies, stacking or game-style real-time contact, ODE, Bullet or Jolt Physics were faster in every measurement found.",
+  "verified_claims_summary": "The Gazebo maintainers' benchmark (scpeters/benchmark boxes.cc, results committed 2015) ran free-floating boxes through Gazebo-classic plugins: at 101 boxes Simbody's wall/sim time ratio was 1.84 to 1.87 against ODE 1.34 to 1.58 and Bullet 1.44 to 1.48 (Simbody at twice the step size), and at equal step size it was about 2.3x slower than ODE; a stacking scene ran over 100x real time against 0.4 for ODE. It beat DART only (1.84 vs 4.37). No CPU, compiler or flags were stated.",
+  "status_note": "Actively maintained (last commit 2026-09-28, release 3.8 in May 2025, 3.9 in development), Apache-2.0 and widely packaged, so easy to adopt for articulated-body work, but it is catalogued as a not-faster entry against ODE and Bullet.",
+  "sources_read": [
+    "https://github.com/simbody/simbody",
+    "https://github.com/simbody/simbody/commits",
+    "https://github.com/simbody/simbody/issues?q=is%3Aissue+performance",
+    "https://github.com/simbody/simbody/issues/640",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/README.md",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/SimTKmath/Integrators/include/simmath/SemiExplicitEuler2Integrator.h",
+    "https://raw.githubusercontent.com/simbody/simbody/HEAD/SimTKmath/Integrators/include/simmath/SemiExplicitEulerIntegrator.h",
+    "https://raw.githubusercontent.com/gazebosim/gazebo-classic/gazebo11/gazebo/physics/simbody/SimbodyPhysics.cc",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/boxes.cc",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_model_count.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_dt.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/roscon2014_scpeters.pdf",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/multibody2015_scpeters.pdf",
+    "https://github.com/scpeters/benchmark/commits/master/boxes.cc",
+    "https://github.com/scpeters/benchmark/commits/master/test_results/BENCHMARK_boxes_model_count.csv"
+  ],
+  "confidence": 0.75
+}
