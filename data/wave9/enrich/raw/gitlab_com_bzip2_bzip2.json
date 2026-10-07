@@ -1,0 +1,70 @@
+{
+  "id": "https://gitlab.com/bzip2/bzip2",
+  "one_liner": "Reference bzip2/libbz2: Burrows-Wheeler compressor whose decoder is 2.5-14x faster than PPMd at a similar ratio, but slow by modern standards.",
+  "what_it_does": "libbz2 is the reference library and CLI for the .bz2 format: block-sorting compression in independent 100-900 KB blocks with a CRC32 per block and per stream. The API is zlib-like (BZ2_bzCompressInit/BZ2_bzCompress/BZ2_bzDecompress on a bz_stream, one-shot BZ2_bzBuffToBuffCompress/Decompress, and a stdio FILE layer). It is not a drop-in for PPMd or any other format; its value is reading and writing the .bz2 files that every Unix toolchain and distribution already ships. This GitLab project is the archived 1.1 development fork; release 1.0.8 is maintained at sourceware, and the compression and decompression sources here match lzbench's 1.0.8 copy apart from whitespace and version strings.",
+  "how_it_is_fast": "Against PPM the speed comes from the transform, not tuning: an initial run-length pass, a Burrows-Wheeler transform (radix pre-sort plus multikey quicksort in mainSort, with a fallbackSort when a work budget runs out on repetitive data), move-to-front, zero-run coding and up to 6 canonical Huffman tables switched every 50 symbols. Decoding is Huffman decoding plus an inverse BWT that walks one 4-bytes-per-symbol array (BZ_GET_FAST), which is far cheaper than PPMd's per-symbol context modelling and range decoding, so the decoder wins even though PPM is symmetric. The decoder still looks up Huffman code lengths bit by bit and chases cache-missing pointers, which is why it decodes at 35.5 MB/s while LZ decoders run at hundreds.",
+  "when_to_use": [
+    "You must read or write .bz2 (tarballs, archives, scientific and genomics files, legacy pipelines); libbz2 is the system library on essentially every Linux distribution.",
+    "Text-like data where you want a better ratio than zlib (25.75% vs 31.92% for zlib 1.3.2 -9 on silesia.tar) with small, bounded memory: about 7.6 MB to compress and 3.7 MB to decompress at -9, or 2.3 MB with the small decoder.",
+    "When you are choosing between bzip2 and a PPM codec and decode speed matters: bzip2 -9 decodes 3.1x faster than ppmd8 -4 and 2.5x faster than ppmd8 -1 at a 2% smaller output than the latter (lzbench 2.4, derived from page data).",
+    "Embedded or constrained builds: the low-level interface is plain C89 with no globals and can be built with -DBZ_NO_STDIO."
+  ],
+  "when_not_to_use": [
+    "Any new format choice: in the same lzbench 2.4 table zstd 1.5.7 -18 is 2.4% smaller and decodes 33x faster (1175 vs 35.5 MB/s, though it compresses 3.1x slower), lzma 26.03 -4 is 2.5% larger but compresses 1.07x and decodes 2.1x faster, and lzma -9 is 10.8% smaller and decodes 2.2x faster (derived from page data).",
+    "When you need the best BWT ratio: bsc 3.3.12 -m0 -e1 is 9.7% smaller and compresses 1.5x faster, bzip3 1.5.4 -5 is 13.4% smaller (both decode slower than bzip2).",
+    "When you need bzip2-format speed: lbzip2 2.6.5 -9 writes the same format at the same size and is 1.76x faster to compress and 1.32x faster to decompress on one thread, and it parallelizes.",
+    "Multi-core or random access: libbz2 is single-threaded and the format does not record compressed block sizes, so parallel decoding means scanning for block magic (the manual names this as a format flaw; GitLab issues #11 parallel compression and #12 faster BWT stay open).",
+    "Small messages or latency-sensitive paths: blocks are 100-900 KB and the BWT needs the whole block before output."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libbz2; Meson or CMake on the 1.1 master branch, classic Makefile in the 1.0.8 release)",
+    "dependencies": "none",
+    "min_toolchain": "C89 (meson default c_std=c89); Meson 0.56+ or CMake 3.12+ for the 1.1 master build",
+    "platforms": "any (portable C; Unix, Windows via CMake/nmake, MinGW with open build issues)",
+    "thread_safety": "Low-level BZ2_bzCompress/BZ2_bzDecompress interface has no globals and is thread-safe per stream (manual); the high-level stdio layer reports I/O errors through errno, and the zlib-compatible bzopen/bzread/bzwrite functions are marked untested and not checked for thread safety.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Use 1.0.8 or later: 1.0.7 fixed CVE-2019-12900 (nSelectors out of range in the decoder, found by fuzzing) and CVE-2016-3189 (use-after-free in bzip2recover); the 1.0.7 fix rejected some lbzip2-written files and 1.0.8 relaxed it (GitLab issue #24).",
+    "BZ2_bzBuffToBuffCompress/Decompress take unsigned int lengths, so one-shot calls are limited to under 4 GB; use the streaming API for larger data.",
+    "Highly repetitive input can make compression up to about 10x slower than average (manual); the fallback sort is about 3x slower than the main sort, and workFactor (default 30) controls when it kicks in. Decompression speed is unaffected.",
+    "The 1.1 master branch changes the Linux SONAME to libbz2.so.1 (1.0 used libbz2.so.1.0; CMake -DUSE_OLD_SONAME=ON builds both) and ships no Makefile (open issue #60); the archived GitLab fork will not get fixes, so take release code from sourceware."
+  ],
+  "pick_this_over_siblings_when": "Pick libbz2 only when the .bz2 format is required and you want the canonical, distro-shipped implementation; for bzip2-format speed lbzip2 is faster on one core and scales across cores, and for anything format-free zstd, xz/LZMA or bzip3/libbsc beat it on ratio, speed or both.",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0 -O3 release binary, one thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar) measured bzip2 1.0.8 -9 at 12.7 MB/s compress, 35.5 MB/s decompress and 54,572,811 bytes, versus 7-Zip ppmd8 26.03 -4 at 12.8/11.5 MB/s and 51,241,932 bytes and ppmd8 -1 at 15.7/14.0 MB/s and 55,803,295 bytes: about 3.1x and 2.5x faster decoding with equal or slower compression (derived from page data). lzbench's ppmd8 levels map to small models (level L uses order 3+L and 2^(L-1) MB, so -1 is an order-4, 1 MB model reset whenever memory fills), and every run is checked by memcmp against the input.",
+  "status_note": "The GitLab 1.1 fork is archived ('lack of interest, and because there are better options available through the Rust ecosystem', last commit 2023-05-31) while 1.0.8 (2019) lives on at sourceware; usability is reference because SPDX marks the permissive BSD-style bzip2-1.0.6 licence as not OSI-approved, though it is free to use, small C89 and universally packaged.",
+  "sources_read": [
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/README.md",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/NEWS.md",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/COPYING",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/COMPILING.md",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/patches-not-included.txt",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/bzlib.h",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/bzlib.c",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/bzlib_private.h",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/blocksort.c",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/compress.c",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/decompress.c",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/huffman.c",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/docs/manual.xml",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/meson.build",
+    "https://gitlab.com/bzip2/bzip2/-/raw/master/CMakeLists.txt",
+    "https://gitlab.com/api/v4/projects/bzip2%2Fbzip2?license=true",
+    "https://gitlab.com/api/v4/projects/bzip2%2Fbzip2/repository/tree?per_page=100&recursive=true",
+    "https://gitlab.com/api/v4/projects/bzip2%2Fbzip2/issues?state=all&per_page=100",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/mk/bzip2.mk",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/mk/ppmd.mk",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bench/symmetric_codecs.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bench/lzbench.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bench/lzbench.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/blocksort.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/decompress.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/compress.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/huffman.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/bzlib.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bwt/bzip2/bzlib_private.h"
+  ],
+  "confidence": 0.8
+}

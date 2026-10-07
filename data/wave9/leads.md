@@ -44,3 +44,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Seed-d (2026-10-07): tsl::array_map A, bzip2gpu C (ICPP 2024 paper doi 10.1145/3673038.3673067 blocked; paper-access retier candidate B), DeLZSA D (repo 404). Lead: emmanuel-marty/em_inflate and smalLZ4/blz4/LZ4X still unseeded.
 - Tessil/sparse-map (tsl::sparse_map, not catalogued; the same 2017 shootout CSV has rows vs std::unordered_map), emilk/emilib HashMap, fanf2/qp, dcjones/hat-trie: hash-map seed leads for wave 1 backfill (array-hash enricher, 2026-10-07).
 - aditya12agd5/cuda_bzip2 (GPU BWT compressor, not catalogued): lead from the bzip2gpu enricher (2026-10-07).
+- libbzip2-rs (trifectatechfoundation/libbzip2-rs): c2rust port of bzip2, snippet claims 14% faster level-1 compress; port of a listed project, duplicate rule applies.

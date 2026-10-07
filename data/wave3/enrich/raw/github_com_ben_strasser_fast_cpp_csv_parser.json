@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/ben-strasser/fast-cpp-csv-parser",
+  "one_liner": "Single-header C++11 typed CSV reader; beats vincentlaucsb/csv-parser on single-worker raw reads of files around 30 MB.",
+  "what_it_does": "Reads CSV/TSV files into a fixed, compile-time number of typed columns: you declare io::CSVReader<N, policies...>, call read_header with the column names you want (it reorders columns by header and can ignore extras), then loop on read_row(a, b, c...) which fills ints, floats, char, std::string or a zero-copy char* into the buffer. It is a different interface from csv-parser's dynamic CSVRow model, not a drop-in. A lower-level LineReader returns one null-terminated line at a time from a file, FILE*, istream, memory range or a custom ByteSourceBase.",
+  "how_it_is_fast": "Input is read unbuffered (setvbuf _IONBF) in 1 MiB blocks into a 3 MiB buffer, and a background std::thread prefetches the next block while the caller parses the current one (double buffering that overlaps disk I/O with parsing). Lines and fields are tokenized in place by writing NUL terminators into the buffer, so char* columns cost no copy or allocation. Trimming, quoting, overflow and comment handling are template policy classes resolved at compile time, so disabled features add no branches. There is no SIMD: separators and newlines are found with plain byte loops (about 315-350 MB/s in the cited run, derived from the result JSON).",
+  "when_to_use": [
+    "Fixed-schema files (known column names and types) where you want typed values straight into local variables with a tiny loop.",
+    "Large single-line-per-record files read sequentially on one core, where a 1 MiB block prefetch thread helps hide disk latency.",
+    "Projects that need a vendorable single header with no dependencies and a C++11 floor.",
+    "Pipelines that read char* columns and do their own parsing (std::from_chars etc.) to stay zero-copy.",
+    "Simple TSV or custom-separator files where quoting can be compiled out entirely for extra speed."
+  ],
+  "when_not_to_use": [
+    "Any file that may contain quoted fields with embedded line breaks: these are unsupported and throw escaped_string_not_closed (README FAQ, open issue #92).",
+    "Variable or unknown column counts, or schemas only known at runtime: column count is a template parameter (open issues #140, #119).",
+    "Numeric data where exact double round-tripping matters: the built-in float parser is not correctly rounded (open issue #122).",
+    "Multi-core throughput on large files: csv-parser's 4-8 worker speculative mode and its mmap count path beat it at 5M rows, and SIMD parsers such as zsv go much faster.",
+    "Projects wanting an actively maintained library: last commit 2025-02-02, 21 open issues, no tagged release (issue #99)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library; uses std::thread, so GCC builds need -lpthread unless CSV_IO_NO_THREAD is defined",
+    "min_toolchain": "C++11 (README; developed with GCC 4.6.1). Open issue #77 reports a build failure with VS 2017 in C++17 mode; the 2026 comparison builds it with MSVC 19.50 in C++20.",
+    "platforms": "any platform with a C++11 compiler; no SIMD or architecture-specific code; handles \\n and \\r\\n line endings and skips a UTF-8 BOM",
+    "thread_safety": "Not documented beyond: each reader owns one background I/O thread (started only when the input exceeds 2 MiB), and a custom ByteSourceBase::read may be called from either thread but never concurrently. Treat each reader as single-consumer; separate readers share no globals in csv.h.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Float parsing is hand-rolled (digit accumulation plus repeated multiplication for exponents), not correctly rounded: issue #122 (open since 2021) shows 9.855536508 read as 9.8555365080000054 instead of 9.8555365080000001, although the README says the input 'is rounded to the next floating point'. Read char* and use std::from_chars or strtod when exactness matters.",
+    "Empty numeric cells parse silently as 0 (the integer and float parsers accept an empty string, and a lone '-' or '.' also yields 0); there is no NaN/inf support.",
+    "The current csv.h limits a line to block_len = 2^20 bytes (about 1 MiB) and throws line_length_limit_exceeded, while the README and the exception text still say 2^24-1.",
+    "Defaults are not RFC 4180: CSVReader<N> uses no_quote_escape (quoted commas split columns) and trims spaces and tabs; you must opt into double_quote_escape<',','\"'>, and quoted fields keep inner spaces because trimming happens before unquoting."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zsv or DuckDB's CSV reader when you want a dependency-free single header that hands typed values of a known schema to C++ code; pick zsv for SIMD throughput, dynamic columns and multiline quoted fields, and DuckDB when you want SQL or columnar loading rather than a row loop.",
+  "verified_claims_summary": "In csv-parser's own Windows comparison (MSVC 19.50, C++20 Release, i5-12400, Google Benchmark median of 5 repetitions, warm 8-column files of about 29 MB at 500K rows and 297 MB at 5M rows), fast-cpp-csv-parser read 500K rows in 81.8-136.2 ms versus 146.5-223.5 ms for csv-parser (about 1.6-2.0x) and won the 5M clean read (944 ms vs 1,087 ms), but lost the 5M count runs, the 5M quoted read, both materialization tables and the positional-read table once csv-parser used 4 or more parser workers. Its throughput was flat at about 315-350 MB/s across sizes, whereas csv-parser's count path rose from about 196 MB/s at 500K to 543 MB/s at 5M (derived from the result JSON), so the 500K wins mostly reflect csv-parser's fixed per-reader start-up cost rather than a faster parsing loop.",
+  "status_note": "Stale (last commit 2025-02-02, open bugs on float precision and multiline fields unanswered) but BSD-3-Clause, a single 1,200-line header and easy to vendor; the cited numbers come from the competing project's harness, which copies all 8 fields into std::string for fast-cpp while csv-parser takes string_views, and which compiles csv-parser's binaries with /arch:AVX2 (a PUBLIC option on the csv target) while the standalone fast-cpp binary that produced the raw-throughput table gets no AVX2 flag.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ben-strasser/fast-cpp-csv-parser/HEAD/README.md",
+    "https://raw.githubusercontent.com/ben-strasser/fast-cpp-csv-parser/HEAD/csv.h",
+    "https://raw.githubusercontent.com/ben-strasser/fast-cpp-csv-parser/HEAD/LICENSE",
+    "https://github.com/ben-strasser/fast-cpp-csv-parser/issues",
+    "https://github.com/ben-strasser/fast-cpp-csv-parser/issues/122",
+    "https://github.com/ben-strasser/fast-cpp-csv-parser/issues/115",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/fast_cpp_csv_parser_read_bench.cpp",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/csv_parser_read_bench.cpp",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/results/500000_rows/clean/csv_parser_read_bench.json",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/results/500000_rows/clean/fast_cpp_csv_parser_read_bench.json",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/results/5000000_rows/clean/csv_parser_read_bench.json",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/benchmarks/results/5000000_rows/clean/fast_cpp_csv_parser_read_bench.json",
+    "https://raw.githubusercontent.com/vincentlaucsb/csv-parser/HEAD/include/internal/CMakeLists.txt"
+  ],
+  "confidence": 0.8
+}
