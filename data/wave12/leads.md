@@ -60,3 +60,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - HaxeFoundation/hxcpp (beats Neko and HashLink in both gist runs, not catalogued) and the benchs.haxe.org multi-target suite (blocked here; HaxeBenchmarks/benchmark-runner commits no results) (HashLink enricher, 2026-10-06). mighty-gerbils/gerbil is weak (1.13x over Guile in all.csv).
 - asumagic/asllvm (LLVM AngelScript JIT, no numbers in README; weak) and Hazelight UnrealEngine-Angelscript StaticJIT (gated fork, unreachable): angelsea enricher leads (2026-10-07).
 - Pycket (pycket/pycket, Racket tracing JIT on RPython): not catalogued (hxcpp/LC enricher, 2026-10-07); seed candidate.
+- QMDB (LayerZero-Labs/qmdb, Merkleized state database under FAFO; upstream README is a stub): not catalogued (FAFO enricher, 2026-10-07); wave 5 databases lead.
