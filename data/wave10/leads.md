@@ -62,3 +62,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - esp-arduino-libs/ESP32_JPEG (Espressif decoder, 20 ms vs JPEGDEC 23 ms on ESP32-S3; precompiled libesp_codec.a, so reference at best): JPEGDEC enricher lead (2026-10-07).
 - VRSFML (vittorioromeo/VRSFML): SFML fork with modern GL plus DrawableBatch/instanced headers, 105 stars, no numbers found (enricher lead, 2026-10-07).
 - Wav2Letter++ (facebookresearch/wav2letter, now flashlight/wav2letter): first-party paper arXiv 1812.07625 (over 2x vs ESPnet, Kaldi, OpenSeq2Seq) blocked; C to B once the PDF is readable (2026-10-07).
+- libvips retier lead (https://github.com/libvips/libvips, color-and-resampling, tier C): the wave 1 backfill found the Electronic Imaging 2025 paper (eprints.soton.ac.uk, blocked) behind the wiki numbers (ImageMagick 7.1.1 4.44 s / 1499 MB vs vips-c 0.57 s / 94 MB); an independent or peer-reviewed read could lift the record to B (w1-mine-w, 2026-10-07).
