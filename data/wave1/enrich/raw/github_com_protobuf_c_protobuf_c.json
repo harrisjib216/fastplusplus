@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/protobuf-c/protobuf-c",
+  "one_liner": "Wire-compatible Protocol Buffers runtime and protoc plugin for C; about 5x nanopb's encode+decode throughput on host CPUs.",
+  "what_it_does": "Generates C structs, descriptor tables and thin pack/unpack wrappers from .proto files (protoc --c_out, plugin protoc-gen-c) and links them against libprotobuf-c, a small C runtime that serialises any message by walking its descriptors. You fill a plain struct (pointer plus n_ count for repeated fields, char* strings), call foo__pack() into a buffer you size with foo__get_packed_size(), and decode with foo__unpack(allocator, len, data), which returns a heap-allocated tree you release with foo__free_unpacked(). It is a different API from nanopb (heap-allocated, unbounded fields instead of fixed max_size arrays), but the bytes on the wire are the same.",
+  "how_it_is_fast": "Encoding is a single pass. protobuf-c.c writes each submessage at out+1 and memmoves it only when its length prefix needs more than one byte (prefixed_message_pack). Packed repeated fields reserve the minimum prefix size and shift by at most one byte, and on little-endian hosts packed float, double and fixed32/fixed64 arrays are copied with memcpy. nanopb 0.4.9.1, by contrast, encodes every submessage twice (a PB_OSTREAM_SIZING pass, then the real write) and also runs a sizing pass for packed varint arrays, so a submessage nested two deep is encoded about four times. Decoding takes two passes: the first scans all fields into a ScannedMember slab whose first 16 entries sit on the stack, so each repeated array can be allocated once at its exact size; the second parses the values. Tags are found by binary search over field ranges (int_range_lookup), with a shortcut that reuses the previous field.",
+  "when_to_use": [
+    "C code (or C++ that wants a C ABI) on Linux-class hosts that must exchange standard protobuf wire data with messages of unbounded size and no per-field max_size options.",
+    "Encode-heavy services or gateways where nanopb is the bottleneck: two third-party benchmarks show protobuf-c about 5x faster encoding than nanopb and 2.4-2.6x faster decoding (pbtools), and 5.3x faster on a combined round trip (SofaBuffers arena).",
+    "Messages dominated by packed float, double or fixed-width arrays on little-endian targets, which take the memcpy paths.",
+    "Projects that want a distro-packaged runtime (Ubuntu ships libprotobuf-c-dev and protobuf-c-compiler) and descriptor-level reflection in C (field descriptors, protobuf_c_message_check).",
+    "Proto2 schemas with required fields and defaults, which the runtime enforces through a required-field bitmap during unpack."
+  ],
+  "when_not_to_use": [
+    "Bare-metal MCUs without a heap or with tight flash: every decode allocates through ProtobufCAllocator, and the arena keeps protobuf-c out of its bare-metal footprint rows (nanopb is 6.6-7.5 KB there).",
+    "Decode-heavy C++ code that can use Google protobuf: in pbtools' table protobuf-c decodes in 2.508 s against 1.997 s for Google protobuf C++ 3.6.1 at -O3 (0.80x, derived from page data), and pbtools itself beats protobuf-c on both encode and decode.",
+    "Unwrapped untrusted input: unpack has no recursion-depth limit and no UTF-8 check on proto3 strings, and allocation-overflow reports #796 and #799 are still open against 1.5.2.",
+    "Schemas that use proto3 `optional` or Editions: protoc-gen-c reports no supported features (GetSupportedFeatures returns 0) and caps the maximum edition at proto3; issue #476 has been open since 2021.",
+    "Toolchains built on the newest Google protobuf or C++20: protoc-gen-c 1.5.2 fails to build against protobuf 34.0 (#795) and 35.0 (#801) and under C++20 (#802), all still open."
+  ],
+  "integration": {
+    "form": "shared lib (libprotobuf-c, static also possible) plus generated .pb-c.c/.pb-c.h sources compiled into your program",
+    "dependencies": "Runtime: libc only. Code generator protoc-gen-c: Google protobuf (>= 3.0.0 per configure.ac, with libprotoc headers) and pkg-config; ./configure --disable-protoc builds the runtime alone.",
+    "min_toolchain": "C compiler for the runtime; a C++17 compiler for protoc-gen-c (configure.ac AX_CXX_COMPILE_STDCXX(17)); autotools or CMake.",
+    "platforms": "Any platform with a C compiler; little- and big-endian (WORDS_BIGENDIAN fallbacks); MSVC builds fixed in 1.5.0.",
+    "thread_safety": "Not documented. pack and unpack keep no shared mutable state (the default allocator is a stateless malloc/free pair), so separate messages can be processed on separate threads; a single message object is not synchronised.",
+    "drop_in_for_baseline": "partial: wire-compatible with nanopb, so either side can be swapped, but the generated C API differs (heap-allocated tree from unpack, pointer plus count fields instead of fixed arrays), so calling code has to be rewritten."
+  },
+  "gotchas": [
+    "Unpack mallocs the whole decoded tree (each submessage, string, bytes field and repeated array) and must be released with free_unpacked using the same allocator. Unpacking onto the stack was declined in #154 (wontfix). To cut malloc cost, pass a bump or arena ProtobufCAllocator.",
+    "Security on untrusted bytes: each nesting level recurses through protobuf_c_message_unpack and puts a 16-entry (512-byte) ScannedMember slab on the stack, with no depth limit. Proto3 strings are not UTF-8-validated. In 1.5.2 the count is narrowed with `unsigned n = *n_ptr` before `do_alloc(allocator, siz * n)` (open #796, #799). Past fixes: CVE-2022-48468 (integer overflow in parse_required_member, fixed in 1.4.1) and an uninitialised unknown_fields pointer that caused memory corruption (fixed in 1.5.1).",
+    "Harness flaw behind both benchmarks: the runtime build is not matched. The arena compiles nanopb's runtime from source at -Os -flto but links the distro's prebuilt libprotobuf-c with -lprotobuf-c. pbtools links `-static -lprotobuf-c`, so its four protobuf-c rows (-Os, -Os -flto, -O3, -O3 -flto; 1.883-2.025 s encode) all run the same prebuilt runtime and the flag labels do not describe it. The direction still holds: even pairing protobuf-c's slowest pbtools row with nanopb's fastest, protobuf-c leads 4.7x on encode and 2.4x on decode (derived from page data). Applying pbtools' nanopb -Os-to-O2 gap (1.35x encode, 1.51x decode) suggests the arena's 5.3x would shrink to roughly 3.5-3.9x with a matched build (derived from page data, not measured).",
+    "Generated .pb-c.h files carry version guards tied to the installed protobuf-c.h, so regenerate them in your build. The README advises against exporting generated symbols, or installing .pb-c.h files, in a stable library interface."
+  ],
+  "pick_this_over_siblings_when": "Choose it over pbtools when you want the long-established, distro-packaged C runtime with proto2 required/default handling and descriptor reflection; pbtools was faster than protobuf-c on both encode and decode in its own benchmark. Choose it over protopuf, zpp::bits or Cap'n Proto when the code is C, not C++, and the wire format must be standard protobuf.",
+  "verified_claims_summary": "In the SofaBuffers arena's c-embedded host target (gcc -Os -flto driver from an Ubuntu 26.04 devcontainer, unnamed x86-64 host, best of 5), a 494-byte proto3 message packed and unpacked 500,000 times ran at 663,929 msg/s (328.0 MB/s) with protobuf-c against 125,240 msg/s (61.9 MB/s) with nanopb 0.4.9.1, about 5.3x; protobuf-c pays malloc and free for the decoded tree on every iteration, while nanopb decodes into a memset stack struct. The older pbtools benchmark (gcc 8.3.0, Core i7-4510U, 2,000,000 iterations each of two messages) agrees: protobuf-c encodes about 5x and decodes about 2.6x faster than nanopb -O2. Do not set the arena's C++ row (Google protobuf at 530,747 msg/s) against this one: it chains encode(decode()) at -O3 -march=native, and the arena itself says rows are not comparable.",
+  "status_note": "Releases are slow but development continues: master stops at 1.5.2 (2025-04-07), while the maintainer's next branch has commits through 2026-08-22 (ASan/UBSan CI, the oneof init fix for #804). Build breaks against protobuf 34/35 and open allocation-overflow reports are unreleased. BSD-2-Clause and packaged by Ubuntu, so usable as is.",
+  "sources_read": [
+    "https://github.com/protobuf-c/protobuf-c",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/README.md",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/protobuf-c/protobuf-c.h",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/protobuf-c/protobuf-c.c",
+    "https://raw.githubusercontent.com/protobuf-c/protobuf-c/HEAD/protoc-gen-c/c_generator.h",
+    "https://github.com/protobuf-c/protobuf-c/releases",
+    "https://github.com/protobuf-c/protobuf-c/commits/next",
+    "https://github.com/protobuf-c/protobuf-c/issues?q=is%3Aissue+is%3Aopen+sort%3Aupdated-desc",
+    "https://github.com/protobuf-c/protobuf-c/issues?q=is%3Aissue+recursion+OR+depth+OR+%22stack+overflow%22",
+    "https://github.com/protobuf-c/protobuf-c/issues?q=is%3Aissue+performance+OR+slow+OR+benchmark+OR+speed",
+    "https://github.com/protobuf-c/protobuf-c/issues/476",
+    "https://github.com/protobuf-c/protobuf-c/issues/796",
+    "https://github.com/protobuf-c/protobuf-c/issues/803",
+    "https://github.com/protobuf-c/protobuf-c/issues/810",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/README.md",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/results/RESULTS.txt",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/schema/message.proto",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/setup.sh",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/bench.sh",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/bench.h",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/meta",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/protobuf/bench.c",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/nanopb/bench.c",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/languages/c-embedded/nanopb/message.options",
+    "https://raw.githubusercontent.com/sofa-buffers/arena/HEAD/.devcontainer/Dockerfile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/README.rst",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/protobuf-c/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/nanopb/Makefile",
+    "https://raw.githubusercontent.com/eerimoq/pbtools/HEAD/benchmark/common.mk",
+    "https://raw.githubusercontent.com/nanopb/nanopb/0.4.9.1/pb_encode.c",
+    "WebSearch: protobuf-c CVE-2022-48468 parse_required_member (snippets from docs.bell-sw.com, bugzilla.redhat.com, osv.dev)"
+  ],
+  "confidence": 0.65
+}
