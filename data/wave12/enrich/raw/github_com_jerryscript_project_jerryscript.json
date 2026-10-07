@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/jerryscript-project/jerryscript",
+  "one_liner": "C99 JavaScript engine for microcontrollers that trades speed for footprint; uses less memory than Duktape but runs about 2x slower.",
+  "what_it_does": "JerryScript runs JavaScript (full ES5.1, about 70% of ES2025 per the README) on devices with under 64 KB of RAM and 200 KB of flash, and ships as a C library with a platform port layer (jerryscript-port.h). The host calls jerry_init, compiles source with jerry_parse or loads a precompiled snapshot with jerry_exec_snapshot, runs it with jerry_run or jerry_eval, and exposes C functions with jerry_function_external; every jerry_value_t the API returns is owned by the caller and must be released with jerry_value_free. It is not a drop-in for Duktape: Duktape's duk_* value-stack API and JerryScript's handle-based API do not map onto each other, and the 3.0 release (December 2024) renamed most of JerryScript's own API as well.",
+  "how_it_is_fast": "The win is footprint, not speed. A recursive-descent parser emits a compact byte-code (CBC, a CISC-like encoding with short opcodes for frequent operations) directly without building an AST, and snapshots of that byte-code can execute in place from ROM. Heap references are 16-bit compressed pointers (8-byte aligned offsets into a statically allocated heap of at most 512 KB; switching to 32-bit pointers costs about 20% more memory per the internals doc), values are tagged in their low three bits, object properties are packed two per 16-byte pair, common strings are replaced by ROM 'magic string' ids, and the VM loop is non-recursive so JS calls do not grow the C stack. Memory is reclaimed by reference counting plus a mark-and-sweep pass over a single object chain; the speed aids it does have (LCache property cache, per-object property hashmaps above 16 properties) are on by default and cost RAM.",
+  "when_to_use": [
+    "Bare-metal or RTOS microcontrollers with tens to a few hundred KB of RAM where QuickJS-class engines do not fit; the default build reserves a fixed 512 KB heap, and JERRY_GLOBAL_HEAP_SIZE shrinks it.",
+    "Firmware that ships JavaScript precompiled: snapshot save/exec plus --js-parser=OFF removes the parser and runs byte-code straight from flash.",
+    "Products that need a stable C embedding API with a documented port layer (time, I/O, fatal handling, context allocation) and in-tree targets such as RIOT and NuttX.",
+    "Running several isolated scripts in one firmware image: JERRY_EXTERNAL_CONTEXT lets the port supply a separately sized context per engine instance via jerry_port_context_get."
+  ],
+  "when_not_to_use": [
+    "Throughput matters: in third-party issue #4386 it scored 250 against Duktape's 487 and QuickJS's 1,042 on the V8 suite, losing all eight tests to Duktape, and in the independent ahaoboy/js-engine-benchmark CI JerryScript 3.0.0 is slower than Duktape on every test it completes.",
+    "Workloads that allocate heavily or need more than 512 KB of heap: the stock build in ahaoboy's CI (plain tools/build.py) produced no score for EarleyBoyer, RegExp, Splay or NavierStokes; larger heaps need 32-bit compressed pointers, and the malloc-backed system allocator is documented as unsupported on 64-bit architectures.",
+    "Running untrusted scripts or snapshots: the tracker holds dozens of open fuzzer reports from 2025-2026 without fixes, including #5302 (malformed snapshot drives a stack-buffer-overflow), #5272 (heap-overflow write during garbage collection), #5282 (heap out-of-bounds read in Array.prototype.copyWithin) and #5291 (a request for a private security contact about snapshot-loader bugs).",
+    "Code that needs modern JavaScript: ES2025 coverage is about 70%, and error messages are compiled out by default (JERRY_ERROR_MESSAGES=0).",
+    "You need active upstream: only two commits landed after the 3.0.0 release (2025-06-03 and 2025-10-08), with 209 open issues and 45 open pull requests."
+  ],
+  "integration": {
+    "form": "static lib (CMake via tools/build.py) or source-drop (amalgamated jerryscript.c, jerryscript-port.c and jerryscript-math.c from tools/amalgam.py)",
+    "dependencies": "none beyond a C library; ships its own optional libm (jerry-math) and default port implementation",
+    "min_toolchain": "C99 compiler (GCC, Clang, MSVC, arm-none-eabi); CMake 3.10+ and Python 3 for the build scripts",
+    "platforms": "any target with a C99 compiler: ARM Thumb-2 microcontrollers (258K binary per the README), Linux, macOS, Windows; 32-bit hosts for the system-allocator mode; on 32-bit x86 the docs require -msse2 -mfpmath=sse for correct floating point",
+    "thread_safety": "Not documented as thread-safe. The default build keeps all engine state in one static context (one engine per process); with JERRY_EXTERNAL_CONTEXT the port's jerry_port_context_get selects the active context, so separate threads need separate contexts.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The memory figure behind this entry comes from a harness that does not reflect a footprint build: issue #4386 built JerryScript with --system-allocator=ON (plain malloc instead of the compact static heap), --cpointer-32bit=ON, the debugger, line info, error messages and logging. The configuration docs say the system allocator is unsupported on 64-bit architectures, and the issue never names its architecture; in release builds jmem_compress_pointer only asserts that a 64-bit pointer offset fits in 32 bits, so on a 64-bit host the run was either unsupported or relied on malloc addresses staying in range.",
+    "The issue's peak-memory row is not credible as labelled: Node.js and Node.js --jitless share the identical 73,873,464 'KB' (about 70 GB) and QuickJS shows 5.5 GB; no measurement method, hardware or compiler version is given, so the 2.4x-less-than-Duktape ratio is directional only.",
+    "With the internal allocator, the heap is a fixed static array (default 512 KB) addressed by 16-bit compressed pointers; raising JERRY_GLOBAL_HEAP_SIZE above 512 forces 32-bit pointers and about 20% more memory per object, so the footprint advantage shrinks as heaps grow.",
+    "API ownership is manual: every returned jerry_value_t must be passed to jerry_value_free, and 2.x code using jerry_release_value or jerry_get_global_object does not compile on 3.0 (the migration guide points to per-function rename notes in the API reference)."
+  ],
+  "pick_this_over_siblings_when": "Pick JerryScript over QuickJS or Duktape when RAM, not speed, is the constraint and you want precompiled snapshots in flash with a parser-free build; QuickJS is about 4x faster on the V8 suite and much more complete. Against XS (Moddable SDK) and MicroQuickJS, which also target microcontrollers, JerryScript's draws are its long-stable C port layer and Apache-2.0 licence rather than measured footprint, since no catalogued source compares them directly.",
+  "verified_claims_summary": "A third-party GitHub issue (#4386, December 2020) ran the V8 benchmark suite on a debugger-enabled, malloc-backed JerryScript ESNext build, Duktape (gcc -O3), QuickJS and Node.js, and reports one 'peak memory' figure per engine (JerryScript 239,664 vs Duktape 582,240, about 2.4x less) with no hardware, compiler version or measurement method, alongside scores where JerryScript is about 1.9x slower than Duktape. Samsung's first-party SunSpider max-RSS slides (JerryScript 1.0 vs Duktape 1.5.1 on a Raspberry Pi 2) point the same way but were reachable only as search snippets.",
+  "status_note": "Apache-2.0 and easy to vendor as amalgamated C, but development has slowed to two commits since the December 2024 3.0.0 release (last 2025-10-08, so it turns stale on 2026-10-09) while fuzzer-found memory-safety reports accumulate unanswered.",
+  "sources_read": [
+    "https://github.com/jerryscript-project/jerryscript",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/README.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/00.GETTING-STARTED.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/01.CONFIGURATION.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/02.API-REFERENCE.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/04.INTERNALS.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/05.PORT-API.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/docs/16.MIGRATION-GUIDE.md",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/jerry-core/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/jerry-core/config.h",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/jerry-core/jmem/jmem-allocator.c",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/jerry-core/jmem/jmem-heap.c",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/tools/build.py",
+    "https://raw.githubusercontent.com/jerryscript-project/jerryscript/HEAD/LICENSE",
+    "https://github.com/jerryscript-project/jerryscript/issues/4386",
+    "https://github.com/jerryscript-project/jerryscript/commits/master",
+    "https://github.com/jerryscript-project/jerryscript/releases",
+    "https://github.com/jerryscript-project/jerryscript/issues?q=is%3Aissue+is%3Aopen+overflow",
+    "https://github.com/jerryscript-project/jerryscript/tree/master/tools",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://github.com/ahaoboy/jerryscript-build",
+    "https://raw.githubusercontent.com/ahaoboy/jerryscript-build/HEAD/.github/workflows/build.yml"
+  ],
+  "confidence": 0.6
+}
