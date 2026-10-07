@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/intel/llvm",
+  "one_liner": "Intel's LLVM-based C++ compiler (icpx); under relaxed FP it ran a math-heavy pipeline 1.5-1.8x faster than GCC/Clang.",
+  "what_it_does": "icpx is the C++ driver of Intel's oneAPI DPC++/C++ Compiler: a Clang/LLVM-based compiler with a GCC-style command line that compiles against the system GCC's libstdc++. intel/llvm is the open-source staging tree (sycl branch, synced with upstream LLVM with a delay of usually 1-2 weeks) that the proprietary product is built on; its README says feature parity with the product is not guaranteed. Switching is a CMAKE_CXX_COMPILER=icpx change plus flag translation (-march=native becomes -xHost, -ffast-math becomes -fp-model=fast), so it is a toolchain swap, not a library.",
+  "how_it_is_fast": "The product ships SVML, a vector math library with 4- and 8-wide erf/exp/log (__svml_erf4 and friends) that its vectorizer calls in flat transcendental sweeps, and libimf, faster scalar libm replacements that the benchmark credits for icpx's edge over Clang in the scalar Newton loop; upstream LLVM 18 has no vector erf mapping for libmvec or SVML, so Clang leaves those loops scalar. The largest single saving in the measured pipeline, though, is the Levenberg-Marquardt normal-equations loop (sqrt, divide and FMA into 21 accumulators, no transcendental calls), which icpx ran 2.0x (precise) to 3.7x (fast) faster than gcc -O3; the benchmark does not explain why and did not check that every build ran the same number of LM iterations. -fp-model=fast allows the reassociation that reduction vectorization needs.",
+  "when_to_use": [
+    "Single-threaded double-precision kernels on Intel Xeon with AVX-512 where flat loops are dense in erf/exp/log (greeks-style sweeps: 770 ms vs 2571 ms for gcc -O3, 3.3x) and the numerics can be qualified under -fp-model=fast -fimf-precision=high",
+    "Small dense least-squares or normal-equation accumulation loops (5x5 LM fits): the SVI stage was 2.0x faster than gcc-strict even under -fp-model=precise, though equal iteration counts were not verified",
+    "HPC codes that already carry Intel-tuned paths: LAMMPS's INTEL package measured 1.17-3.48x vs GCC 14 on most inputs on a Cascade Lake Xeon Gold 6248 (icpx 2026.1, -xHost -fp-model fast=2), but that GCC baseline ran the same Intel-tuned package, which the issue says is slower under GCC than its OPENMP package for lj and rhodo",
+    "As an extra CI build target to A/B hot kernels against GCC and Clang before committing to one compiler",
+    "When the same toolchain must also compile SYCL device code for Intel GPUs (the open-source DPC++ part)"
+  ],
+  "when_not_to_use": [
+    "Code that must keep strict IEEE semantics: under strict FP the three compilers were within 1.00-1.23x, and most of icpx's lead needed -fp-model=fast",
+    "Branchy scalar iterative code: gcc -ffast-math beat icpx-fast on the Newton implied-vol stage (3.07 vs 2.83 Mquotes/s), and LAMMPS's lc and dpd inputs showed 0.91x and 1.02x",
+    "AMD or non-x86 hosts: -xHost, SVML and the measured gains are Intel-hardware oriented and nothing here was measured on AMD (see AOCC)",
+    "Projects that need the exact optimizer to be open source or reproducible from source: the measured binary, its SVML/libimf runtimes and its Intel-only flags come from the proprietary oneAPI product, not from intel/llvm",
+    "Expecting wider vectors to help: forcing 512-bit vectors (-qopt-zmm-usage=high) made the pipeline 14.8% slower than icpx's 256-bit default"
+  ],
+  "integration": {
+    "form": "compiler toolchain (proprietary oneAPI binary; intel/llvm builds an open-source clang++ with SYCL from source or nightly archives)",
+    "dependencies": "product binaries link Intel runtimes (libsvml, libimf) found next to the compiler, plus the system GCC's libstdc++; building intel/llvm needs CMake, Python, Ninja and hwloc >= 2.3 on Linux",
+    "min_toolchain": "benchmark used icpx (IntelLLVM) 2025.3.3 on C++20 code against Ubuntu's g++ 13 libstdc++; intel/llvm follows upstream LLVM's build requirements",
+    "platforms": "x86-64 Linux and Windows 64-bit (intel/llvm build guide); -xHost targets the build host's Intel ISA; the cited run was only on an Emerald Rapids Xeon guest",
+    "thread_safety": "not applicable (compiler); the benchmark was single-threaded by design",
+    "drop_in_for_baseline": "partial — GCC/Clang-style driver that links the system libstdc++, but its default floating-point model is fast (relaxed), and the Intel flags used in the benchmark (-xHost, -fp-model=, -fimf-precision=, -qopt-zmm-usage=) do not exist in the open-source intel/llvm driver"
+  },
+  "gotchas": [
+    "Intel's documentation (search snippet; intel.com blocked here) says icx/icpx default to -fp-model fast=1 with math errno disabled, unlike GCC and Clang; a plain compiler swap silently relaxes FP semantics, so pass -fp-model=precise for parity. The strict GCC/Clang builds in the benchmark kept the Linux -fmath-errno default, which by itself can stop sqrt loops from vectorizing, so the 'strict' rows may not be matched on errno semantics.",
+    "Harness flaw: the SVI stage, which supplies 60% of icpx-fast's lead over gcc-strict and 90% of its lead over gcc-fast (derived from page data), has no transcendental calls in its LM hot loop and stops on data-dependent tests (relative SSE gain below 1e-12, lambda above 1e8, or 50 iterations). validate.py compares only the five fitted parameters (max drift up to 1.7e-8) and never the per-slice iteration count the bindings export, so equal work across builds is not shown, and the README's attribution of the win to SVML misreads its own stage table. The timed SVI region also includes a 30M-quote bucketing pass with exp, log and push_back.",
+    "The README's reason that GCC stays scalar ('glibc's libmvec has no vector erf') is wrong for GCC: glibc 2.39's math-vector.h declares a SIMD erf for GCC 6+ under __FAST_MATH__, yet gcc-fast emitted no _ZGV calls, so the GCC fast-math baseline failed to vectorize for an unexplained reason. For Clang 18 the limit is real (LLVM 18's libmvec table has no erf). Only GCC got -funroll-loops.",
+    "The open-source intel/llvm driver (Options.td) has -ffp-model=, -ffp-accuracy=, -fveclib=SVML and -faltmathlib=SVMLAltMathLibrary but none of -xHost, -fp-model=, -fimf-precision= or -qopt-zmm-usage=, so the benchmarked build cannot be reproduced from the repo this entry links."
+  ],
+  "pick_this_over_siblings_when": "Pick icpx over AOCC when the hosts are Intel Xeons and the hot loops are vectorizable transcendental or reduction math you can run under relaxed FP; AOCC's evidence is an 8% geomean over GCC 11.2 on AMD hardware. zapcc, TinyCC, MIR/c2m and cg_clif target compile time rather than generated-code speed, and MSVC's entry is about Windows build time, so they do not compete on this workload.",
+  "verified_claims_summary": "In one 2026 session on a 4-vCPU KVM guest of an Emerald Rapids Xeon, a single-threaded C++20 quant pipeline over 29.9M option quotes (Newton implied vol, LM SVI fits, greeks; median of 7 reps) took 13.7 s built with icpx 2025.3.3 -O3 -xHost -fp-model=fast -fimf-precision=high versus 24.5 s with GCC 13.3.0 -O3 -march=native -funroll-loops (1.79x), 21.6 s with GCC plus -ffast-math (1.57x) and 20.5 s with the best Clang 18.1.8 build (1.49x); with strict IEEE flags icpx led by only 1.23x. Most of the gap sits in the SVI least-squares stage rather than in the SVML-vectorized erf sweeps, and cross-build validation was run on a 299k-quote dev file, not the timed one.",
+  "status_note": "intel/llvm is active (1.5k stars, daily DPC++ nightly releases, latest 2026-10-06) and Apache-2.0 WITH LLVM-exception, but the measured icpx binary, its SVML/libimf runtimes and its Intel-only flags belong to the proprietary oneAPI product, so usability is mixed: usable as a free-standing compiler, not reproducible or forkable from this repo.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/README.md",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/results/validation.md",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/src/implied_vol.cpp",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/src/svi_fit.cpp",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/src/greeks.cpp",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/include/qr/black_scholes.hpp",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/include/qr/svi.hpp",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/python/bench.py",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/python/bench_worker.py",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/python/validate.py",
+    "https://raw.githubusercontent.com/yzia2000/qr_cpp_compiler/HEAD/python/bindings.cpp",
+    "https://github.com/intel/llvm",
+    "https://github.com/intel/llvm/releases",
+    "https://github.com/intel/llvm/issues?q=is%3Aissue+slower+than+gcc",
+    "https://raw.githubusercontent.com/intel/llvm/sycl/README.md",
+    "https://raw.githubusercontent.com/intel/llvm/sycl/LICENSE.TXT",
+    "https://raw.githubusercontent.com/intel/llvm/sycl/sycl/doc/GetStartedGuide.md",
+    "https://raw.githubusercontent.com/intel/llvm/sycl/clang/include/clang/Options/Options.td",
+    "https://raw.githubusercontent.com/llvm/llvm-project/release/18.x/llvm/include/llvm/Analysis/VecFuncs.def",
+    "https://raw.githubusercontent.com/bminor/glibc/release/2.39/master/sysdeps/x86/fpu/bits/math-vector.h",
+    "https://github.com/lammps/lammps/issues/5213",
+    "WebSearch snippet: Intel oneAPI DPC++/C++ Compiler Developer Guide, Floating-Point Optimizations (intel.com, blocked; default -fp-model fast=1, -fno-math-errno)"
+  ],
+  "confidence": 0.65
+}

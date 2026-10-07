@@ -1,0 +1,50 @@
+{
+  "id": "https://learn.microsoft.com/en-us/cpp/build/reference/compiler-options",
+  "one_liner": "Microsoft's closed C++ compiler; one Node.js report had it compiling ~2.5x faster than clang-cl, but only versus no-PCH clang-cl.",
+  "what_it_does": "cl.exe is the C/C++ compiler shipped with Visual Studio and the Build Tools ('Desktop development with C++' workload) and the default MSBuild toolset on Windows. clang-cl is LLVM's driver that accepts cl.exe-style options (/Yc, /Yu, /fp:precise appear in its option table) and installs as an optional Visual Studio component with an MSBuild toolset, so switching between the two is a toolset or CC/CXX change, not a source change. The listed URL is Microsoft's option reference (blocked here); there is no source code and no benchmark behind it.",
+  "how_it_is_fast": "Nothing measured isolates compiler speed. The reported gap came from precompiled headers: Node's MSVC builds used PCH so shared headers were parsed once, while its gyp setup gave clang-cl no PCH until PR #55249. cl.exe can also compile several sources in parallel inside one invocation (/MP), which clang-cl's option table lists as unsupported, so MSBuild builds that rely on /MP rather than a parallel generator such as Ninja run serially under clang-cl.",
+  "when_to_use": [
+    "Windows-only MSBuild solutions that already depend on cl /MP and /Yc-/Yu precompiled headers, where moving to clang-cl without Ninja-style parallelism and PCH would lengthen builds",
+    "C++/CLI code (/clr), which clang-cl's option table lists as unsupported",
+    "Debug-build edit-compile loops on Windows, where Lemire's 2023 'Visual Studio versus ClangCL' post (search snippet only) says MSVC compiles faster than ClangCL"
+  ],
+  "when_not_to_use": [
+    "Throughput-bound SIMD or parsing code: simdjson parsed twitter.json at 1.31 GB/s built with MSVC 19.25 vs 2.22 GB/s with ClangCL 9.0 (ClangCL 1.70x, derived from page data), and llama.cpp PR #10668 measured clang with Ninja 15.68% faster prompt processing than MSVC on an AMD 7600X",
+    "Projects that track Node.js or V8: Node.js 24.0.0 (2025-05-06) removed MSVC support and requires ClangCL on Windows",
+    "CPU-heavy Windows on ARM builds: llama.cpp's build docs say MSVC's ARM NEON intrinsic support may be incomplete, and its release workflow builds the CPU backend with clang",
+    "Cross-platform or open toolchains: cl.exe is closed-source and runs only on Windows hosts",
+    "As evidence of a compile-time edge: no equal-settings (both with PCH, both parallel) comparison was found; the only ratio compares PCH with no PCH"
+  ],
+  "integration": {
+    "form": "compiler toolchain (closed-source binary in Visual Studio / Build Tools)",
+    "dependencies": "Visual Studio or Build Tools with the 'Desktop development with C++' workload (MSVC STL, Windows SDK)",
+    "min_toolchain": "not applicable; the cited issue names no MSVC version, and Node's current build guide targets Visual Studio 2026 or VS 2022 17.14",
+    "platforms": "Windows hosts; x64 and ARM64 targets (Node lists ARM64/ARM64EC build tools)",
+    "thread_safety": "not applicable (compiler)",
+    "drop_in_for_baseline": "partial — both take cl.exe-style options and plug into MSBuild as platform toolsets, but code that now requires Clang (Node.js 24+ with its V8) will not build with cl.exe, and in the other direction clang-cl ignores /MP and rejects /clr"
+  },
+  "gotchas": [
+    "The ~2.5x figure (no hardware, versions, flags or timings; 'less with x64, more with ARM64') compares MSVC with precompiled headers against clang-cl without them; Node PR #55249 enabled PCH for clang-cl through gyp-next (merged 2024-10-11, backported to v22.12.0) and published no before/after numbers, so the evidence measures a build-configuration difference that no longer exists.",
+    "clang-cl lists /MP under unsupported options, so reports that clang-cl builds are several times slower in MSBuild projects (a llama.cpp-related search snippet cites 3-4x) usually measure lost per-invocation parallelism; build with Ninja or another parallel generator before comparing.",
+    "Clang does not instantiate templates into a PCH by default (-fpch-instantiate-templates defaults off), but clang-cl /Yc turns it on by default in current LLVM's driver; a January 2020 cfe-dev thread (search snippet only) reported clang-cl PCH builds about 3x slower than MSVC for one codebase before that change, so older comparisons may not hold.",
+    "Lemire's Node issue #52809 (May 2024) calls a warm-ccache ClangCL build of 15-20 minutes an improvement over MSVC but gives no MSVC figure; cached versus uncached, so it is not an equal-settings counter-measurement either."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (icpx, AOCC, zapcc, TinyCC, MIR/c2m, cg_clif) target generated-code speed or one-shot compile speed, mostly on Linux; pick MSVC only for Windows MSBuild solutions that need cl.exe-specific features such as /clr or /MP-driven builds, and prefer clang-cl or icpx (intel/llvm also builds on 64-bit Windows) when runtime speed matters.",
+  "verified_claims_summary": "A Node.js Windows build contributor reported in October 2024 that building Node with vcbuild.bat clang-cl took about 2.5x as long as with MSVC, with no hardware, versions, flags or timings, and attributed the gap to clang-cl builds lacking precompiled headers; the PCH fix for clang-cl landed eleven days later without numbers. No measurement of cl.exe versus clang-cl at equal build settings was found.",
+  "status_note": "Actively shipped with Visual Studio but closed-source and Windows-only, so usability is reference; the evidence workload is gone, since Node.js 24 (May 2025) dropped MSVC builds and requires ClangCL.",
+  "sources_read": [
+    "https://learn.microsoft.com/en-us/cpp/build/reference/compiler-options (EGRESS_BLOCKED)",
+    "https://github.com/nodejs/node/issues/55208",
+    "https://github.com/nodejs/node/pull/55249",
+    "https://github.com/nodejs/node/issues/52809",
+    "https://raw.githubusercontent.com/nodejs/node/main/BUILDING.md",
+    "https://raw.githubusercontent.com/nodejs/node/main/doc/changelogs/CHANGELOG_V24.md",
+    "https://github.com/simdjson/simdjson/issues/847",
+    "https://github.com/ggml-org/llama.cpp/pull/10668",
+    "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/docs/build.md",
+    "https://raw.githubusercontent.com/intel/llvm/sycl/clang/include/clang/Options/Options.td",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/clang/lib/Driver/ToolChains/Clang.cpp",
+    "https://lists.llvm.org/pipermail/cfe-dev/2020-January/064321.html (EGRESS_BLOCKED; search snippet only)"
+  ],
+  "confidence": 0.55
+}
