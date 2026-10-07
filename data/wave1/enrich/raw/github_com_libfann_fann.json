@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/libfann/fann",
+  "one_liner": "Small C library for training and running multilayer perceptrons; 2003 report shows 164x over jneural, ~1.3x over lwnn.",
+  "what_it_does": "FANN builds, trains and runs fully or sparsely connected multilayer perceptrons from C (a header-only C++ wrapper, fann_cpp.h, is included). The API is a struct fann handle: fann_create_standard, fann_train_on_data (RPROP default; also Quickprop, batch, incremental, SARPROP, Cascade2 and, since January 2026, Adam), fann_run for inference, fann_save/fann_create_from_file for persistence. It is a different interface from the 2003 baselines (jneural, lwnn), not a drop-in.",
+  "how_it_is_fast": "All weights live in one contiguous array and all neurons in one array, so a fully connected layer is a straight dot product over weights[] with a 4-way manually unrolled loop (fann_run in src/fann.c); a separate pointer-chasing path is used only for sparse nets. A fixed-point build (fixedfann, int fann_type, stepwise-linear sigmoid with six precomputed breakpoints) avoids floating point entirely on FPU-less CPUs, which is where the 70x iPAQ result comes from. There is no SIMD, BLAS or threading in the forward pass; the per-neuron struct is packed (24 bytes) so neuron values are read with a 24-byte stride.",
+  "when_to_use": [
+    "Small MLPs (tens to a few hundred neurons per layer) for classic tabular or control problems where you want training and inference in one dependency-free C library",
+    "Microcontrollers or CPUs without an FPU: the fixed-point build (fixedfann) runs a float-trained net exported with fann_save_to_fixed using only integer arithmetic",
+    "Projects that need Cascade2 constructive training or RPROP out of the box and a stable on-disk network format",
+    "Embedding a NN into an LGPL-compatible C or C++ program, or via one of its many language bindings, where a deep-learning framework is too heavy"
+  ],
+  "when_not_to_use": [
+    "Anything needing convolutions, recurrence, attention, GPUs or modern layers: FANN is MLP-only and CPU-only",
+    "Throughput-critical inference on modern CPUs: the forward pass is scalar C with strided neuron reads and no SIMD or BLAS, and no benchmark against any post-2003 library exists, so a gemv-based implementation may well be faster (not measured)",
+    "Sparse networks: the 2003 report itself says sparse connected ANNs 'have serious performance problems in the fann library'",
+    "Very small nets (about 8 neurons per layer) on desktop CPUs: lwnn's table-lookup sigmoid beat standard fann there in the report",
+    "Static linking into closed-source products if LGPL-2.1 relinking obligations are a problem"
+  ],
+  "integration": {
+    "form": "shared lib (static variants also built: fann, floatfann, doublefann, fixedfann); header-only C++ wrapper",
+    "dependencies": "none for the library (libm on Unix); OpenMP optional for the parallel training functions; bundled GoogleTest for tests",
+    "min_toolchain": "C compiler (C89-style code), CMake 3.5+; C++11 only for the test suite",
+    "platforms": "any (portable C; Linux, macOS, Windows/MSVC builds; fixed-point build for FPU-less targets)",
+    "thread_safety": "Not documented. fann_run writes neuron sums and values into the struct fann and returns a pointer to the net's internal output buffer, so one network cannot be run concurrently; use fann_copy per thread. OpenMP-parallel training exists only via parallel_fann.h (fann_train_epoch_*_parallel).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness (report appendix B.3.3 performance.cc): the author modified the jneural baseline from double to single precision before timing it, and the 20-second loop calls time_elapsed() on every iteration, so timer overhead is included per network evaluation and inflates small-network ns/connection for all libraries; the 238x headline uses a threshold activation that skips the sigmoid.",
+    "fann_run returns ann->output, an internal buffer overwritten by the next call; copy the outputs if you need them later.",
+    "Fixed-point build: fann_mult is (x*y)>>decimal_point on int, so out-of-range inputs overflow; fann_run only printf()s a warning per out-of-range input in the hot path, and Elliot, Gaussian, sin and cos activations raise FANN_E_CANT_USE_ACTIVATION.",
+    "Last tagged release is 2.2.0 (2013-03-10); distro packages ship that, while master has later additions (Adam, new activations, a new file-format version for Adam)."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (xsimd, SLEEF, NumKong, VDT, fmath and others) are math or SIMD primitives, not neural-network libraries; pick FANN when you want a complete train-and-run MLP library, and reach for NumKong-style dot kernels or a BLAS gemv if you only need fast dense forward passes.",
+  "verified_claims_summary": "Steffen Nissen's own 2003 report timed four-layer fully connected nets (forward pass only) for 20 s each on an AMD Athlon XP 1600+ and a 206 MHz StrongARM iPAQ, all three libraries built with the same unnamed compiler and options: at 128 neurons per layer standard fann ran about 3.1 ns/connection versus 509 ns for a single-precision-modified jneural 1.05 (164x) and 4.0 ns for lwnn 0.6 (about 1.3x, derived from page data), shrinking to about 1.07x over lwnn at 512 neurons; on the iPAQ the fixed-point build was about 70x faster than jneural and over 40x faster than lwnn.",
+  "status_note": "Maintained at a low pace (Adam training added January 2026, last commit 2026-07-06) but no release since 2.2.0 in 2013; LGPL-2.1, small portable C, packaged in Debian, Fedora and vcpkg, and its only speed evidence is the 2003 first-party report against libraries nobody uses today.",
+  "sources_read": [
+    "https://github.com/libfann/fann",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/README.md",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/fann.c",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/fann_train.c",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/fann.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/fann_data.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/fann_activation.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/fann_internal.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/fann_cpp.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/floatfann.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/parallel_fann.h",
+    "https://raw.githubusercontent.com/libfann/fann/HEAD/src/include/config.h",
+    "https://fann.sourceforge.net/report/node8.html",
+    "https://fann.sourceforge.net/report/node12.html",
+    "https://github.com/libfann/fann/issues?q=is%3Aissue+crash+OR+overflow+OR+performance+OR+thread+OR+slow",
+    "https://github.com/libfann/fann/issues/145",
+    "https://github.com/libfann/fann/issues/110",
+    "https://github.com/libfann/fann/commits/master.atom",
+    "https://github.com/libfann/fann/tags"
+  ],
+  "confidence": 0.72
+}
