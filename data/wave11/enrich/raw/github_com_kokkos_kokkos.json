@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/kokkos/kokkos",
+  "one_liner": "Performance-portability programming model (Views plus parallel dispatch); a Kokkos PIC port beat its OpenMP variant 1.4-1.6x on Xeon.",
+  "what_it_does": "A C++ programming model, shipped as a compiled library, for writing one source that runs on CPUs (Serial, OpenMP, C++ threads, HPX backends) and GPUs (CUDA, HIP, SYCL, OpenACC). Work is expressed as parallel_for, parallel_reduce and parallel_scan over execution policies (RangePolicy, MDRangePolicy, TeamPolicy for hierarchical team/thread/vector parallelism) with lambdas or functors, operating on Kokkos::View multidimensional arrays that live in a chosen memory space. It is a different interface from OpenMP pragmas or a thread pool's submit(): data has to move into Views and the program must call Kokkos::initialize and Kokkos::finalize.",
+  "how_it_is_fast": "Kokkos does not bring a faster CPU scheduler: on the OpenMP backend a RangePolicy parallel_for is a native '#pragma omp parallel for schedule(static)' (schedule(dynamic) with Schedule<Dynamic>), and the C++ threads backend uses static partitioning plus chunk stealing from a neighbouring thread's range (HostThreadTeamData / ThreadsInternal::get_work_index). The gains come from the data abstraction: Kokkos::View chooses the layout per execution space (LayoutRight on host so each thread walks contiguous memory and avoids false sharing, LayoutLeft on GPUs for coalesced access) and may pad dimensions, so one source gets a target-appropriate layout without hand-written architecture-specific structures; the PIC paper credits exactly this for its CPU result. Functors and lambdas are template arguments, so the loop body is inlined into the backend loop.",
+  "when_to_use": [
+    "One C++ code base (typically MPI+X HPC) that must run on Xeon/EPYC CPUs and on NVIDIA, AMD or Intel GPUs without maintaining separate OpenMP and CUDA/HIP variants.",
+    "Grid, stencil and particle kernels over multidimensional arrays where letting View pick LayoutRight on host and LayoutLeft on GPU replaces hand-flattened, GPU-oriented 1D arrays (the source of the 1.4-1.6x CPU gain in the PIC study).",
+    "Data-parallel loops that need reductions, scans, multidimensional ranges (MDRangePolicy) or hierarchical team parallelism with per-team scratch memory.",
+    "Projects already built on the Kokkos ecosystem (kokkos-kernels, Trilinos) that want the same View and dispatch types end to end."
+  ],
+  "when_not_to_use": [
+    "CPU-only code that already has a well-laid-out OpenMP loop: the OpenMP backend runs the same omp pragma, so there is no scheduling gain, and third-party studies report overhead instead (FESOM2 ocean-model port: Kokkos-CPU 13-18% slower than the C port; LArTPC study: about 4x speedup from Kokkos OpenMP where about 20x was expected; both seen as search snippets only).",
+    "Task graphs, futures or recursive fork-join: the task DAG scheduler was removed in 5.0.0 (#8390), so there is no work-stealing task pool left in Kokkos core.",
+    "A general-purpose thread pool for heterogeneous asynchronous jobs: there is no submit/future API, only bulk parallel dispatch on execution-space instances.",
+    "Small projects that cannot take a C++20 toolchain, CMake 3.22+ (3.25.2 for the CUDA language) and configure-time backend selection; makefile builds were dropped in 5.0.0.",
+    "Latency-critical tiny dispatches: each OpenMP-backend kernel takes a per-instance std::mutex before entering the parallel region; dedicated fork-join pools target lower per-dispatch cost."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake build; also consumable via add_subdirectory or 'spack install kokkos')",
+    "dependencies": "none required for the Serial and C++ threads backends; the compiler's OpenMP runtime for the OpenMP backend; CUDA, ROCm/HIP, SYCL (IntelLLVM), NVC++ or HPX toolchains for those backends; optional hwloc for thread binding; third-party code embedded under tpls/",
+    "min_toolchain": "C++20 and CMake 3.22 (Kokkos 5.x); minimum compilers GCC 10.4.0, Clang 14 (CPU), Clang 15 + CUDA 11.8 (CUDA), NVCC 12.2, IntelLLVM 2022.0.0 (CPU) or 2024.2.1 (SYCL), NVC++ 22.3, ROCm 6.2.0, MSVC 19.30; Kokkos 4.x still covers C++17 toolchains",
+    "platforms": "x86-64, aarch64 (NEON and SVE SIMD types), RISC-V; Linux, Windows (MSVC, shared libs since 5.0) and macOS; NVIDIA, AMD (incl. MI300A) and Intel GPUs; NextSilicon execution space added in 5.2.0",
+    "thread_safety": "Kernels dispatched to the same execution-space instance are serialized by a per-instance mutex (OpenMP backend source); execution-space instances may only be created after Kokkos::initialize and must be destroyed before finalize (5.1.0), and creating Kokkos::OpenMP instances inside an omp parallel region is deprecated; thread-safety fixes are still landing (Serial and OpenMP in 4.4, parallel_scan #9300 in 5.2.0).",
+    "drop_in_for_baseline": "partial — a RangePolicy parallel_for on the OpenMP backend compiles to the same '#pragma omp parallel for', so loops can be ported one at a time, but arrays must become Kokkos::View, the program needs initialize/finalize, and OpenMP features outside the dispatch patterns (tasks, sections, arbitrary pragmas) have no direct equivalent."
+  },
+  "gotchas": [
+    "Backends are chosen at configure time and default OFF: if no host backend is enabled, CMake turns on Serial only (cmake/kokkos_enable_devices.cmake), so a default build runs single-threaded until Kokkos_ENABLE_OPENMP or Kokkos_ENABLE_THREADS is set.",
+    "The default RangePolicy schedule is Static (Kokkos_ScheduleTrait.hpp); work stealing only happens with Schedule<Dynamic>, and on the OpenMP backend that maps to OpenMP's own schedule(dynamic) for range loops. With GCC the RangePolicy chunk size is ignored for static schedules (source comment: specifying it caused a performance regression).",
+    "Views are reference-counted shallow handles, but allocation and reference counting are switched off inside parallel regions, nested Views must be built in host code, and the default layout differs by memory space, so deep_copy between a LayoutLeft CudaSpace View and a LayoutRight HostSpace View does not compile.",
+    "Harness flaw behind the catalogued numbers: the 1.4x/1.6x comes from one PIC application (Kokkos port vs its own OpenMP variant), and since Kokkos's OpenMP-backend parallel_for is the same native omp pragma, the gain cannot come from the threading runtime; per the paper snippets it comes from the OpenMP variant storing the grid as a one-dimensional, GPU-oriented array. Which Kokkos host backend, version, compiler and flags were used was not seen (arXiv is blocked here)."
+  ],
+  "pick_this_over_siblings_when": "Pick Kokkos over Fork Union, citor or nexus only when the same source must also run on GPUs or you want backend-chosen multidimensional View layouts; for CPU-only fork-join dispatch Fork Union (claims 3-6x lower per-dispatch cost than OpenMP) or citor are lighter, and for task graphs nexus or dpuyda/scheduling fit better because Kokkos 5 has no task scheduler.",
+  "verified_claims_summary": "Per web-search snippets of Ruzicka, Asch, Meneses, Rampp and Laure (CARLA 2024 preprint, arXiv 2411.05009; the paper itself was not opened), a Kokkos port of a plasma particle-in-cell code moved particles 1.4x faster than the code's own OpenMP variant on an Intel Xeon Gold 6354 (Kabre) and 1.6x faster on a Xeon Platinum 8360Y (Raven), and scored 100% vs 67% on a performance-portability metric for the geometric initialization case; the authors attribute the gap to the OpenMP variant's one-dimensional grid storage chosen for GPU offload versus Kokkos's automatic layout. Compiler, flags, Kokkos version and the Kokkos CPU backend were not seen, and the repo's own benchmarks/ directory (stream, gups, launch_latency, atomic, policy_performance and others) publishes no result tables.",
+  "status_note": "Actively maintained Linux Foundation / HPSF project (release 5.2.2 on 2026-09-10, 325 develop commits since, 2.7k stars), Apache-2.0 WITH LLVM-exception and copyable; the catalogued win is snippet-only and reflects data layout in one application rather than a faster scheduler, so it is a loose fit for thread-pools-work-stealing (README still names 5.1.0 as current).",
+  "sources_read": [
+    "https://github.com/kokkos/kokkos",
+    "https://raw.githubusercontent.com/kokkos/kokkos/HEAD/README.md",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/CHANGELOG.md",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/OpenMP/Kokkos_OpenMP_Parallel_For.hpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/Threads/Kokkos_Threads_ParallelFor_Range.hpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/Threads/Kokkos_Threads_Instance.cpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/impl/Kokkos_HostThreadTeam.hpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/impl/Kokkos_HostThreadTeam.cpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/traits/Kokkos_ScheduleTrait.hpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/core/src/Kokkos_Macros.hpp",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kokkos/kokkos/develop/cmake/kokkos_enable_devices.cmake",
+    "https://raw.githubusercontent.com/kokkos/kokkos-core-wiki/main/docs/source/get-started/requirements.rst",
+    "https://raw.githubusercontent.com/kokkos/kokkos-core-wiki/main/docs/source/ProgrammingGuide/ParallelDispatch.md",
+    "https://raw.githubusercontent.com/kokkos/kokkos-core-wiki/main/docs/source/ProgrammingGuide/View.rst",
+    "https://raw.githubusercontent.com/kokkos/kokkos-core-wiki/main/docs/source/API/core/policies/RangePolicy.rst",
+    "https://github.com/kokkos/kokkos/tree/develop/benchmarks",
+    "https://github.com/kokkos/kokkos/issues?q=is%3Aissue+openmp+slower+performance",
+    "https://github.com/kokkos/kokkos/issues?q=is%3Aissue+is%3Aopen+label%3A%22Performance%22",
+    "https://github.com/kokkos/kokkos/issues/6480",
+    "https://github.com/kokkos/kokkos/releases/latest",
+    "https://arxiv.org/abs/2411.05009 (EGRESS_BLOCKED; numbers taken from WebSearch snippets of arxiv.org/pdf/2411.05009 and arxiv.org/html/2411.05009v1)",
+    "WebSearch snippets of arXiv 2606.11356 (FESOM2 Kokkos port) and arXiv 2203.02479 (LArTPC portable programming models), not opened"
+  ],
+  "confidence": 0.5
+}
