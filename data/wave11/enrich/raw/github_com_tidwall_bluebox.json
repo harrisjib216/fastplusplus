@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/tidwall/bluebox",
+  "one_liner": "Toy Redis-protocol server (SET/GET/DEL/PING) showcasing Neco coroutines; first-party memtier run shows 2.4x redis-server throughput.",
+  "what_it_does": "Bluebox is a roughly 800-line C demo server for tidwall's Neco coroutine library: it listens on TCP port 9999 (or a Unix socket with --unixsocket), starts one stackful coroutine per accepted connection and speaks RESP plus inline (telnet) commands, so redis-cli and memtier_benchmark can drive it. It implements SET, GET, DEL and PING, plus QUIT, DBSIZE and KEYS, over one string-to-string hash map. It is a program, not a library, and not a drop-in Redis: no persistence, expiry, data types, auth, replication or configuration.",
+  "how_it_is_fast": "Each connection is a blocking-style read/dispatch loop inside a Neco coroutine (llco assembly context switch, about 11 ns per the Neco README) over a 4 KiB buffered neco_stream; replies are buffered and flushed when the read buffer drains or after 1,000 pipelined commands. Keys live in tidwall's open-addressing Robin Hood hashmap keyed with xxHash3. On Linux the vendored Neco enables write workers by default (NECO_USEWRITEWORKERS, NECO_MAXIOWORKERS 2), so every write() is handed to one of two I/O threads while the scheduler thread re-arms an EPOLLONESHOT registration and reads; the server therefore spreads its syscalls over up to three threads, against one thread for default redis-server. That offload and the much smaller per-command work (no ACL checks, stats, keyspace notifications, expiry or object encoding) likely explain most of the gap; the README isolates neither from coroutine switching.",
+  "when_to_use": [
+    "Reading or adapting a coroutine-per-connection RESP or line-protocol server in C on Neco: the read-args, dispatch and flush-on-empty-buffer loop in src/bluebox.c is short and clear.",
+    "Reproducing the Neco versus redis-server comparison on Linux with a fairer harness (memtier --distinct-client-seed or --randomize, a key range that produces hits, pinned client and server cores, Redis io-threads matched to Neco's I/O workers).",
+    "Local experiments on how Neco's Linux write-worker offload changes latency with hundreds of connections and one request in flight each (memtier's default pipeline 1).",
+    "A throwaway local endpoint for client code that only issues GET/SET/DEL/PING, when Redis features and licensing do not matter."
+  ],
+  "when_not_to_use": [
+    "As a Redis replacement: only SET (no EX/NX options), GET, DEL, PING, QUIT, DBSIZE and KEYS (which ignores its pattern); no persistence, expiry, eviction or maxmemory, auth, TLS, replication, transactions or non-string types.",
+    "In shipped code: the repository has no LICENSE file, so Bluebox's own code carries no grant; take the MIT-licensed neco.c and hashmap.c from their own repositories instead.",
+    "On untrusted networks: the key hashmap uses fixed seeds 0,0 (hash flooding), each bulk argument may be up to 500 MB with no memory cap, and DEL leaks the stored key and value buffers.",
+    "When you need multi-core scaling: one Neco scheduler serves all connections (Neco lists a scalable multithreaded runtime as a non-goal); only write() calls leave that thread.",
+    "As evidence that Neco beats an epoll loop: the benchmark compares whole servers with different feature sets and thread counts, not event loops."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc and pthreads; vendors neco.c/neco.h (Neco with llco and sco embedded) and tidwall hashmap.c/hashmap.h under src/",
+    "min_toolchain": "not documented; Neco README says most modern C compilers work. Makefile is ${CC} -O3 -g ${CFLAGS} -o bluebox src/*.c and links no -lpthread or -ldl although neco.c uses pthreads and dlsym",
+    "platforms": "Linux, macOS, FreeBSD (Neco's epoll/kqueue event queue); the write-worker offload behind the published numbers is Linux-only; Windows and WebAssembly lack Neco's socket wait, so the server is not usable there",
+    "thread_safety": "One Neco scheduler thread owns the hashmap and every connection coroutine, so no locking; Neco's Linux I/O worker threads only perform write() calls on behalf of paused coroutines",
+    "drop_in_for_baseline": "partial — speaks RESP so redis-cli and Redis clients connect (port 9999 by default, -p to change), but only SET/GET/DEL/PING/QUIT/DBSIZE/KEYS work and every other command returns -ERR unknown command"
+  },
+  "gotchas": [
+    "Harness flaw affecting both runs: memtier_benchmark clones one object generator per client with a constant seed unless --distinct-client-seed or --randomize is given, so all 200 clients (4 threads x 50) replay the same R:R key sequence and GETs land on keys that were never SET; that is why both tables show 0.00 hits. The store held only about 909 distinct 32-byte keys (10,000 requests per client, 1 in 11 a SET), so the run measures connection handling plus a miss lookup in a tiny table, not a key-value workload.",
+    "Closed loop with one request in flight per connection: ops/sec equals 200 connections divided by average latency (200 / 0.96274 ms = 207.7k, 200 / 0.40524 ms = 493.5k, derived from page data), so the 2.4x is the per-request round-trip cost of each server with unpinned client threads on the same 16-core machine; client binaries also differ (memtier_benchmark from PATH versus ./memtier_benchmark).",
+    "Unequal threads: the vendored Neco (already at README commit fcde463) sends every write() to up to 2 I/O worker threads through a mutex and condition variable, and re-arms EPOLLONESHOT with an epoll_ctl call before every read, while redis-server at its default io-threads 1 does all reads and writes on one thread; compare against Redis with io-threads enabled before crediting coroutines.",
+    "Code bugs outside the measured path: cmdDEL removes entries without bulk_release of the stored key and value (leak per deleted key); read_integer0 reads buf[-1] on an empty length line and never clears errno before strtoll, so a stale errno (Neco's epoll_ctl MOD-then-ADD leaves ENOENT) can reject a valid zero length such as SET k \"\" as 'invalid bulk length'. The 2025 commits 25a2011 (SET body disabled) and 2190cd7 (restored) postdate the README numbers."
+  ],
+  "pick_this_over_siblings_when": "Pick Bluebox only as a worked example of a Neco-based network server; for the coroutine library itself take Neco (same author, MIT, about 11 ns switches, no baseline), libdill or libmill for C coroutines with published switch costs against Go and Boost.Context, or iqiyi libfiber if you want a server-level QPS comparison against libco.",
+  "verified_claims_summary": "One first-party memtier_benchmark run with default options (4 threads x 50 connections, pipeline 1, 1:10 SET:GET, 32-byte values) on Linux with an AMD Ryzen 9 5950X gave Bluebox 493,346 ops/sec at 0.405 ms average (p99 0.463 ms) against redis-server with persistence off at 207,735 ops/sec and 0.963 ms (p99 1.871 ms), about 2.4x (derived from page data). Compiler, Redis and memtier versions are unstated, Bluebox used two extra Neco write threads, and every GET was a miss because of memtier's shared default seed.",
+  "status_note": "Stale since 2025-05-27 (10 commits, 29 stars, 1 fork, no issues) and unlicensed, so reference reading only; the reusable parts, Neco and hashmap.c, are MIT in their own repositories.",
+  "sources_read": [
+    "https://github.com/tidwall/bluebox",
+    "https://github.com/tidwall/bluebox/commits/main",
+    "https://github.com/tidwall/bluebox/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/Makefile",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/src/bluebox.c",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/src/neco.c",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/src/neco.h",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/src/hashmap.c",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/src/hashmap.h",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/tidwall/bluebox/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tidwall/bluebox/fcde46382f8ebf230b817c75aeb80d43ac716685/src/neco.c",
+    "https://raw.githubusercontent.com/tidwall/neco/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/neco/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/memtier_benchmark.cpp",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/client.cpp",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/protocol.cpp",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/obj_gen.cpp",
+    "https://raw.githubusercontent.com/RedisLabs/memtier_benchmark/HEAD/obj_gen.h"
+  ],
+  "confidence": 0.8
+}
