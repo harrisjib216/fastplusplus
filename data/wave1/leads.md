@@ -10,3 +10,4 @@
 - zmij (vitaut/zmij), teju_jagua (cassioneri/teju_jagua), fpfmt (rsc/fpfmt): float-to-string rivals from the xjb enrichment; none catalogued (2026-10-07).
 - Boost.OpenMethod (boostorg/openmethod): successor of Yomm2; docs claim no speed-up (30-50% slower reference dispatch). Not catalogued.
 - VcDevel/std-simd (https://github.com/VcDevel/std-simd): Vc's successor, only in data/seeds/no_evidence; no comparative numbers found (Vc enricher, 2026-10-07).
+- GATL (https://github.com/laffernandes/gatl): fastest geometric-algebra library in the ga-benchmark 2020-02-05 run by wall-clock time (golds 111 vs Versor 23); not catalogued. gafro (https://gitlab.com/gafro/gafro) also uncatalogued (Versor enricher, 2026-10-07).
