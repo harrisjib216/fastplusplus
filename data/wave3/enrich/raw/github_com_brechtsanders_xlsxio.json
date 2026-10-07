@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/brechtsanders/xlsxio",
+  "one_liner": "C library that streams .xlsx worksheet values through expat; its Python wrapper reads about 5.8x faster than openpyxl read-only.",
+  "what_it_does": "XLSX I/O is two small C libraries: libxlsxio_read pulls cell values out of an .xlsx worksheet as strings (with int64, double and time_t helpers), and libxlsxio_write streams out a single-sheet data table. Reading offers a pull API (xlsxioread_sheet_next_row / xlsxioread_sheet_next_cell, every returned value freed with xlsxioread_free) and a callback API (xlsxioread_process) that the README calls lower-overhead. It assumes a data table (header row, values only) and ignores formulas, styles, number formats and layout. It is not a drop-in for any Python reader: the measured path is the third-party python-xlsxio Cython wrapper, which wants per-column types up front or returns everything as str/bytes.",
+  "how_it_is_fast": "The worksheet XML is inflated by minizip (or libzip) in 256-byte chunks and fed straight into expat's SAX parser, so the sheet is never built as a DOM; only the shared-string table is loaded into memory first. Parsing is a state machine that swaps expat element and character-data handlers per state (find row, find cell, find value), and the pull API rides on expat's suspend/resume (XML_StopParser with resumable=true at each cell). The gain over openpyxl, xlrd and sxl is compiled SAX parsing versus Python object construction; there is no SIMD or custom tokenizer, and every cell value is still a separate heap allocation (shared strings are strdup'd per cell).",
+  "when_to_use": [
+    "Reading large data-table .xlsx exports (header row plus homogeneous columns) from C or C++ when only cell values matter, not formatting.",
+    "Python ETL jobs bottlenecked on openpyxl read_only or xlrd for 10^5-row sheets that can declare column types (python-xlsxio: about 1.09 s vs 6.35 s for 100,000 rows x 8 columns).",
+    "Streaming a big sheet row by row with bounded memory, as long as the shared-string table fits in RAM.",
+    "Writing a plain single-sheet table (strings, ints, floats, datetimes) from C with only zlib/minizip as dependencies, or converting from the shell with the bundled xlsxio_xlsx2csv and xlsxio_csv2xlsx tools."
+  ],
+  "when_not_to_use": [
+    "Untrusted .xlsx input in a long-running process: open crash reports include #151 (NULL dereference on a Relationship without Id), #136 (segfault under ASan) and #123 (infinite loop listing sheets); CVE-2023-34795 and a heap over-read in the xlsxioread_open_memory path (#150) were fixed in 2023 and 2026-09-24; no fuzzing is documented.",
+    "You need cell types, number formats or dates detected automatically: styles.xml is never parsed, so dates come back as Excel serial numbers unless the caller asks for datetime per column (open issue #19), and the 1904 date system is not handled.",
+    "Workbooks with very many unique strings: the whole shared-string table is held in memory, and its pointer array grows by a realloc of one element per string.",
+    "Writing anything beyond one plain sheet: no multiple worksheets, shared strings, formulas or styling, and the sheet is always deflated at level 9; libxlsxwriter covers that.",
+    "Data that is or can be CSV: the catalogued CSV parsers avoid ZIP inflation and XML parsing altogether."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libxlsxio_read, libxlsxio_write, experimental UTF-16 libxlsxio_readw) built with CMake or a plain Makefile; Conan package; Python via the third-party python-xlsxio (wheels only up to CPython 3.10)",
+    "dependencies": "expat (reader only), minizip (preferred; minizip-ng supported) or libzip, zlib; the writer uses pthreads (Windows threads on Windows)",
+    "min_toolchain": "any C compiler (gcc, clang, MinGW/MinGW-w64; MSVC fixes landed 2024); CMake 2.6+ optional, but open issue #147 reports CMake 4 does not work",
+    "platforms": "Windows, macOS, Linux per README; prebuilt binaries for Windows 32/64-bit only",
+    "thread_safety": "not documented; each reader handle owns its expat parser and zip state, but one xlsxioreader handle cannot interleave operations (minizip reentry crash fixed in #148; open #128 'Cannot use sheetlist_next after sheet_open')",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Datetime truncation: xlsxioread_sheet_next_cell_datetime computes (serial - 25569) * 86400 and casts to time_t, truncating instead of rounding. Simulating the benchmark's 'Last activity' column (openpyxl writes serials with '%.16g'), 36,007 of 100,000 values come back one second early, against 0 with rounding. xlsxio's own writer adds 0.499 s before converting, so round-trip tests on xlsxio-written files hide it. This corrupts output of the wrapper's 'with types' rows, not their timing.",
+    "xlsxioread_sheet_next_cell_int parses with sscanf(\"%\" PRIi64): %i auto-detects the base, so a text cell '010' reads as 8 and '0x1A' as 26, '45000.5' silently becomes 45000, and an unparseable cell yields 0 rather than an error. The wrapper's bool type goes through the same path.",
+    "Shared strings (lib/xlsxio_read_sharedstrings.c) are matched with plain strcasecmp on 'sst', 'si' and 't', while sheet parsing strips namespace prefixes (XML_Char_icmp_ins); from code reading, a namespace-prefixed <x:sst> table, the case in issue #29 (closed 2020), would load no strings and shared-string cells would come back empty. Not tested here.",
+    "Benchmark harness flaws behind the published table: the four 'xlsx2csv' rows rerun openpyxl (READ_OPENPYXL_* constants pasted), generate_xlsx.py writes benchmark.xlsx while benchmark.py reads benchmark_big.xlsx and benchmark_small.xlsx (the 100-row file is not scripted), xlrd needs a pre-2.0 release, and the 'without types' rows (0.88-0.94 s) return dates and numbers as raw strings while openpyxl returns typed values, so the 7.2x untyped ratio compares unequal work."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (zsv, Vince's CSV Parser, fast-cpp-csv-parser, DuckDB, Polars) all parse CSV; pick xlsxio only when the input arrives as .xlsx and you want a small MIT C dependency instead of converting first. For writing, libxlsxwriter (same category) is the richer choice with formats, formulas and multiple sheets; for a speed-first C reader, xlsx_drone (catalogued under binary-schemas) is the other option, also with first-party numbers only.",
+  "verified_claims_summary": "The only numbers come from the third-party python-xlsxio wrapper's README (about June 2020, Linux 5.4.44 Manjaro; CPU, compiler, Python and library versions not stated): reading a generated 100,000-row x 8-column mixed-type sheet into Python lists took 1.09 s with types (0.94 s as str, 0.88 s as bytes) versus 6.35 s for openpyxl read_only, 4.11 s for xlrd (pre-2.0) and 4.98 s for sxl, min of 3 runs, about 5.8x versus openpyxl (derived from page data). It measures C plus Cython against pure Python, not xlsxio against any C or C++ reader, and the 'xlsx2csv' rows are a mislabelled second openpyxl run.",
+  "status_note": "Lightly but actively maintained (security fixes merged 2026-06-28 and 2026-09-24, yet 42 open issues including unanswered crash reports #151 and #123) and MIT-licensed and small enough to vendor, while the benchmarked python-xlsxio wrapper has been idle since January 2022 with wheels only to CPython 3.10; a simulation of the benchmark's datetime column shows about 36% of values truncated one second early by xlsxioread_sheet_next_cell_datetime.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/README.md",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/Changelog.txt",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/include/xlsxio_read.h",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/include/xlsxio_write.h",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/lib/xlsxio_read.c",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/lib/xlsxio_write.c",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/lib/xlsxio_read_sharedstrings.c",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/lib/xlsxio_read_sharedstrings.h",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/lib/xlsxio_private.h",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/brechtsanders/xlsxio/HEAD/Makefile",
+    "https://github.com/brechtsanders/xlsxio",
+    "https://github.com/brechtsanders/xlsxio/commits/master",
+    "https://github.com/brechtsanders/xlsxio/issues?q=is%3Aissue",
+    "https://github.com/brechtsanders/xlsxio/issues?page=2&q=is%3Aissue",
+    "https://github.com/brechtsanders/xlsxio/issues?q=is%3Aissue%20slow%20OR%20performance%20OR%20speed%20OR%20namespace%20OR%20date",
+    "https://github.com/brechtsanders/xlsxio/issues/151",
+    "https://github.com/brechtsanders/xlsxio/issues/123",
+    "https://github.com/brechtsanders/xlsxio/issues/142",
+    "https://github.com/brechtsanders/xlsxio/issues/136",
+    "https://github.com/brechtsanders/xlsxio/issues/29",
+    "https://github.com/brechtsanders/xlsxio/issues/88",
+    "https://github.com/brechtsanders/xlsxio/pull/148",
+    "https://github.com/brechtsanders/xlsxio/pull/150",
+    "https://raw.githubusercontent.com/Chiorufarewerin/python-xlsxio/HEAD/README.md",
+    "https://raw.githubusercontent.com/Chiorufarewerin/python-xlsxio/HEAD/benchmark/benchmark.py",
+    "https://raw.githubusercontent.com/Chiorufarewerin/python-xlsxio/HEAD/benchmark/generate_xlsx.py",
+    "https://raw.githubusercontent.com/Chiorufarewerin/python-xlsxio/HEAD/setup.py",
+    "https://raw.githubusercontent.com/Chiorufarewerin/python-xlsxio/HEAD/xlsxio/xlsxio_read.pyx",
+    "https://pypi.org/pypi/python-xlsxio/json",
+    "https://pypi.org/pypi/openpyxl/json",
+    "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl",
+    "https://github.com/tafia/calamine"
+  ],
+  "confidence": 0.8
+}
