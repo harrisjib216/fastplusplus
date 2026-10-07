@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/mtrebi/memory-allocators",
+  "one_liner": "Teaching-grade C++ linear, stack, pool and first-fit free-list allocators; README claims the free list runs about 3x faster than malloc.",
+  "what_it_does": "Four allocator classes derive from an abstract Allocator (virtual Allocate(size, alignment), Free(ptr), Init()) and carve memory out of one large buffer that Init() gets from malloc: LinearAllocator (bump pointer, Reset only), StackAllocator (bump pointer with LIFO rollback plus Push/Pop markers), PoolAllocator (one fixed chunk size) and FreeListAllocator (address-sorted free list with coalescing). It is not a malloc replacement: there is no operator new hook, no std::allocator or std::pmr adaptor, no realloc, and a full allocator trips an assert. The CMake project builds only the benchmark executable, not a library; the README with diagrams and complexity notes is the main product.",
+  "how_it_is_fast": "It skips the general-purpose allocator per call by taking one big block up front and giving up generality. Linear and stack allocators just advance an offset (the stack keeps rollback offsets in a std::vector, so nothing is written into user memory); the pool hands out chunks by a bump offset and recycles freed chunks through an intrusive LIFO list stored inside them, both O(1) with no headers. The free-list allocator walks an address-ordered singly linked list (first fit, O(free blocks)), writes a 16-byte size and padding header, and coalesces with neighbours on free. There are no size classes, thread caches or locks.",
+  "when_to_use": [
+    "Learning or teaching how arena, stack, pool and free-list allocators work; the README walks through each with diagrams and complexity analysis.",
+    "As a starting point for a single-threaded per-frame arena (linear allocator reset every frame) or nested scratch scopes (stack Push/Pop), once you add your own error handling.",
+    "Fixed-size objects allocated and freed in any order by one thread, where a pool with an intrusive free list is enough, after fixing the Reset issue noted below.",
+    "Quick experiments comparing allocation strategies on your own workload, provided you rebuild the harness (real operation count, optimized build, finer timer)."
+  ],
+  "when_not_to_use": [
+    "As a general-purpose malloc replacement: the free-list allocator is O(n) per allocation and free, carries open correctness bugs, and was only measured with LIFO frees; use a production allocator instead.",
+    "Multithreaded code: no allocator has locks, atomics or thread-local caches (issue #30 asking about concurrency is open).",
+    "Alignment above 8 bytes or 32-bit targets: the free list rebuilds a freed block from the header address and only works when alignment padding is zero (open issue #18 shows the 32-bit failure), and the linear allocator checks offset alignment instead of address alignment.",
+    "Code that must survive running out of memory: pool and free-list exhaustion is an assert, so NDEBUG builds overrun the pool buffer or dereference a null node; LinearAllocator::Free is assert(false).",
+    "Code that needs standard-library integration (std::allocator, std::pmr memory_resource): none is provided."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the C++ standard library (StackAllocator uses std::vector, which itself allocates from the heap)",
+    "min_toolchain": "C++11 (CMakeLists sets cxx_std_11); CMake 3.5 to build the demo",
+    "platforms": "any hosted C++11 platform; 64-bit assumed (open 32-bit free-list corruption, issue #18)",
+    "thread_safety": "none: no locks or atomics in any allocator; single-threaded use only",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "FreeListAllocator bugs: FindBest never updates smallestDiff (it returns the last fitting block) and reports the list's last node as previousNode, so remove() can leave an allocated block on the free list; use FIND_FIRST. Allocate splits off any remainder above 0 bytes even when it is smaller than the 16-byte free-node header, so the header write spills into the neighbouring block (open issue #4 since 2018). Free places the freed node at the header address rather than the block start, which is only correct when alignment padding is 0, and a block freed above every free node or into an empty list is never inserted unless it happens to merge with the last node, so memory leaks once the allocator has filled.",
+    "PoolAllocator: Reset() zeroes the bump offset but keeps the free list, so after a Reset a chunk still on the free list is handed out again by the bump path (two live owners of one chunk); Init() mallocs a new buffer without freeing the old one, and leftover free-list nodes then point into the leaked old buffer. Allocate asserts size == chunk size and ignores alignment.",
+    "StackAllocator::Free ignores its pointer and pops the last saved offset, so an out-of-order free silently releases the wrong allocation; Pop(marker) does not trim the per-allocation markers, so mixing Pop with Free can move the top back up; CalculatePadding returns a full alignment step for an already aligned address, so each stack allocation wastes 8 bytes (issue #25). The README build command uses -S memory-allocator while the clone directory is memory-allocators.",
+    "Harness flaws behind the charts: Benchmark.h hard-codes OPERATIONS to 10 (a stack array of m_nOperations pointers broke MSVC, issue #6) and the timer has millisecond resolution, so the shipped program prints 0 ms; the main.cpp buffer sizes cannot hold 1M 4096-byte blocks, and the default build has no optimization flags. The charted test allocates all N blocks before freeing them in reverse, so at 1M operations malloc must grow the heap to about 4 GB of live blocks and fault in each one, the free list stays at one node (stack-like), linear and stack never write to the memory they return, and the old O(n) pool Init (since replaced) pulled the pool's page faults into Init, so the 'without Init' chart removes them for the pool only. The malloc gap is therefore likely dominated by heap growth and first-touch page faults rather than allocator logic."
+  ],
+  "pick_this_over_siblings_when": "Pick this as reading material; for code you will ship, fast-alloc (pool and stack allocators with Google Benchmark numbers on a named CPU) or privateMwb ArenaAllocator (measured against std::pmr::monotonic_buffer_resource) are better arena and pool bases, and a TLSF allocator such as XenoAtom.Allocators or rlsf replaces this O(n) free list with O(1) general-purpose allocation in a fixed buffer.",
+  "verified_claims_summary": "First-party only: README prose says the free-list allocator is 'about three times better than malloc', backed by two charts of a block-size-4096 allocate-all-then-free-in-reverse test up to about 1M operations, with no CPU, compiler, flags or libc named. Read off the charts, malloc (a CAllocator wrapper over libc malloc/free) takes about 1500 ms against about 425 ms for the free list with Init timed and about 360 ms without (roughly 3.5x and 4.2x, derived from page data), with pool, stack and linear far lower; the shipped harness runs only 10 operations, so the charts cannot be reproduced from the repo and predate the 2024-2026 stack and pool rewrites.",
+  "status_note": "A 2017 tutorial repo with community fixes merged through 2026 (last commit 2026-09-21; MIT; 2.0k stars, 171 forks): good reading material and an easy source-drop, but it has no tests and allocator bugs reported since 2018 (#4, #18, #21) are still open, so do not vendor the free-list or pool allocators unchanged.",
+  "sources_read": [
+    "https://github.com/mtrebi/memory-allocators",
+    "https://github.com/mtrebi/memory-allocators/commits",
+    "https://github.com/mtrebi/memory-allocators/issues?q=is%3Aissue",
+    "https://github.com/mtrebi/memory-allocators/issues/4",
+    "https://github.com/mtrebi/memory-allocators/issues/18",
+    "https://github.com/mtrebi/memory-allocators/issues/21",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/README.md",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/Allocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/Benchmark.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/IO.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/Utils.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/CAllocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/LinearAllocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/StackAllocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/PoolAllocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/FreeListAllocator.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/SinglyLinkedList.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/SinglyLinkedListImpl.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/StackLinkedList.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/StackLinkedListImpl.h",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/Allocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/Benchmark.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/CAllocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/LinearAllocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/StackAllocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/PoolAllocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/FreeListAllocator.cpp",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/docs/images/operations_over_time.png",
+    "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/docs/images/operations_over_time_no_init.png"
+  ],
+  "confidence": 0.75
+}

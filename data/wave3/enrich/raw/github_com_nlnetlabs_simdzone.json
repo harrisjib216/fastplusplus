@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/nlnetlabs/simdzone",
+  "one_liner": "SIMD DNS zone-file (presentation format) parser in C; about 4x Knot DNS's zscanner on the .se zone.",
+  "what_it_does": "Parses DNS master/zone files (RFC 1035 presentation format, including $INCLUDE, $ORIGIN, $TTL, generic \\# RDATA and modern types such as SVCB/HTTPS) into wire-format resource records. The C API is callback-based: you fill a zone_options_t (origin in wire format, default TTL and class, accept/log/include callbacks), hand it caller-owned scratch buffers, and call zone_parse() on a path or zone_parse_string() on a padded buffer; each record arrives as owner name, type, class, TTL and RDATA in network order. It is not a drop-in for Knot's zs_* scanner API or NSD's old zonec; it is a deserializer only (a serializer is listed as future work). Since NSD 4.10.0 it is NSD's zone and IXFR parser.",
+  "how_it_is_fast": "It follows simdjson's two-stage design: stage 1 classifies 64-byte blocks with SIMD compares and nibble-table shuffles into bitmasks for newlines, backslashes, quotes, semicolons, blanks and special characters, finds escaped characters with simdjson's odd/even-sequence trick (code copied from simdjson), resolves quoted regions with prefix-XOR, and writes field-start and delimiter positions to a tape using popcount and trailing-zero counts. Comments still need a short branching loop because quotes and semicolons can nest either way. Stage 2 parses fields from the tape with type-specific parsers; RR type and class mnemonics are resolved through a generated perfect hash (magic multiply into a 256-entry table) and verified with an SSE compare. The AVX2 (Haswell) or SSE4.2+PCLMULQDQ (Westmere) kernel is picked at run time, with a scalar fallback.",
+  "when_to_use": [
+    "Loading large zone files (TLD-scale: the .se zone is 1.36 GB, .com about 12-24 GB) where parse time dominates reloads, e.g. an authoritative server, zone signer or zone-diff tool",
+    "x86-64 servers with AVX2 or SSE4.2, where the 0.73-0.81 GB/s kernels apply; the scalar fallback still measured about 2x Knot's zscanner in the same run",
+    "You want validated wire-format RDATA per record through a callback and will build your own in-memory zone",
+    "A C99, BSD-3-Clause dependency with no third-party runtime libraries that is already shipped inside NSD"
+  ],
+  "when_not_to_use": [
+    "Small zones or one-off parses, where start-up and I/O dominate and Knot's zscanner or ldns are already integrated",
+    "ARM64, RISC-V or other non-x86 targets expecting SIMD speed: only the scalar fallback kernel exists there, and MSVC builds probably get only the fallback because kernels are gated on -march flags",
+    "You need a serializer (wire to presentation text) or a zone object model: neither exists",
+    "Untrusted zone input with $INCLUDE left on (set no_includes), or reliance on strict NSEC validation in generic notation (open bug #232)",
+    "You need the speedup confirmed for your own zone mix: the only public cross-parser numbers are one zone file from the co-author's 2024 harness"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time (C standard library only); cmocka for tests, Doxygen and Sphinx for docs, all optional",
+    "min_toolchain": "C99 compiler; CMake 3.10+ (an autoconf build is also shipped, as used by NSD); SIMD kernels need a GCC or Clang that accepts -march=westmere and -march=haswell",
+    "platforms": "x86-64 with AVX2 or SSE4.2 kernels chosen at run time; any other architecture (aarch64, RISC-V, big-endian) via the scalar fallback; Linux, BSDs (NSD CI covers FreeBSD, OpenBSD, NetBSD), MinGW and MSVC builds are supported by the CMake file",
+    "thread_safety": "not documented; all parser state lives in the caller's zone_parser_t and buffers and zone.c holds no mutable globals, so one parser per thread should be safe (inferred from source)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "zone_parse_string() requires the input to be null-terminated and padded by ZONE_BLOCK_SIZE (64) bytes (issue #174); issue #267, opened 2026-09-16, reports that strings ending in a token at an exact multiple of 64 bytes failed to parse, with a fix commit (d7bbff5) referenced but the issue still open.",
+    "Open bug #232 (since 2024-09): check_nsec never advances its data pointer, so malformed NSEC type bitmaps given in generic \\# notation can pass validation.",
+    "The origin must be supplied in wire format, owner names and RDATA are handed to the callback in reusable scratch buffers (copy what you keep), and the ZONE_KERNEL environment variable overrides kernel selection on every parse.",
+    "Harness caveats behind the quoted numbers: lemire/zone_benchmarks was last updated 2024-06-28 and pins simdzone aab6386; its README table predates the current bench.cpp (row names differ, no read_file or zonec rows); record counts are accumulated but never compared across parsers (both runs abort on any parse error, so a partial parse would not pass silently); Knot mmaps the whole file while simdzone reads 16 KB windows with fread, and both inside the timed region."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings parses zone files: Unbound, Hickory DNS, NailDNS and Bundy are DNS servers and the rest are QUIC/HTTP3 stacks, so pick simdzone whenever the bottleneck is reading presentation-format zone data, for example under one of those servers or a zone tool.",
+  "verified_claims_summary": "On the 1,361,515,551-byte Sweden (.se) zone file, a full parse that counts records in a callback ran at 0.81 GB/s with the AVX2 kernel, 0.73 GB/s with SSE4.2 and 0.38 GB/s scalar versus 0.19 GB/s for Knot DNS 3.3.4's zscanner (about 4.3x, 3.8x and 2.0x, derived from page data), best of repeated runs in Daniel Lemire's zone_benchmarks (CMake Release, Ubuntu 24.04 Docker image, Knot from the distro package, CPU model and compiler not stated). NLnet Labs' NSD 4.10.0 announcement reports 1.6x to 3.8x faster zone loading end to end after the switch from the Flex+Bison parser, less for NSEC3 zones (search snippet only; the page is blocked here).",
+  "status_note": "Actively maintained by NLnet Labs (last commit 2026-09-30, recent fixes in September 2026) and shipped as NSD's parser since 4.10.0, which search results show vendored in NetBSD's and OpenBSD's NSD source trees; BSD-3-Clause and copyable, though version 0.1.0 carries a few open validation and padding bugs.",
+  "sources_read": [
+    "https://github.com/NLnetLabs/simdzone",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/README.md",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/include/zone.h",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/zone.c",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/haswell/parser.c",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/haswell/simd.h",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/generic/scanner.h",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/westmere/type.h",
+    "https://raw.githubusercontent.com/NLnetLabs/simdzone/HEAD/src/bench.c",
+    "https://github.com/NLnetLabs/simdzone/tree/main/src",
+    "https://github.com/NLnetLabs/simdzone/issues?q=is%3Aissue",
+    "https://github.com/NLnetLabs/simdzone/issues/267",
+    "https://github.com/NLnetLabs/simdzone/issues/232",
+    "https://github.com/lemire/zone_benchmarks/commits/main",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/benchmarks/bench.cpp",
+    "https://raw.githubusercontent.com/lemire/zone_benchmarks/HEAD/benchmarks/simdzonehelper.h",
+    "https://raw.githubusercontent.com/CZ-NIC/knot/master/src/libzscanner/scanner.rl",
+    "https://raw.githubusercontent.com/NLnetLabs/nsd/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/NLnetLabs/nsd/HEAD/doc/RELNOTES",
+    "WebSearch: simdzone NSD 4.10 zone load time faster parser benchmark (snippets of nlnetlabs.nl NSD 4.10.0 announcement and community.nlnetlabs.nl 4.10.0rc1 thread)",
+    "https://nlnetlabs.nl/news/2024/Jun/13/nsd-4.10.0-released/ (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.8
+}

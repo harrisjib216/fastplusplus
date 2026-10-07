@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/kimwalisch/libpopcnt",
+  "one_liner": "Single-header C/C++ array popcount with runtime CPU dispatch (AVX512 VPOPCNTDQ, AVX2, NEON, SVE); beats a scalar POPCNT loop on mid-size and large buffers.",
+  "what_it_does": "Counts the 1 bits in a byte buffer through one function, uint64_t popcnt(const void* data, uint64_t size), callable from C and C++ (extern \"C\"). It replaces a hand-written loop of std::popcount or __builtin_popcountll over an array, not std::popcount on a single word, and it has no bitset container, rank/select or two-array (AND/XOR) counting. It works on any CPU and turns on hardware paths only when CPUID (x86) or HWCAP (ARM SVE) says they are available, so no -mavx2 is needed.",
+  "how_it_is_fast": "On x86 it runs CPUID once, caches the result in an atomic and picks a kernel by CPU and size: AVX512 VPOPCNTDQ from 40 bytes (4x unrolled vpopcntq into four accumulators, masked byte load for the tail); on AVX2-only CPUs, from 96 bytes, Mula's nibble-lookup popcount (vpshufb plus vpsadbw) in a plain loop below 1 KB and the Harley-Seal carry-save-adder tree over 16 vectors per iteration (Mula, Kurz and Lemire, 'Faster Population Counts Using AVX2 Instructions') from 1 KB; otherwise a scalar popcnt loop over 8-byte memcpy loads with a byte-assembled tail. ARM uses NEON vcnt with byte accumulators widened every 31 iterations, or SVE svcnt with four accumulators when HWCAP reports SVE. Building with -march=native removes the CPUID checks.",
+  "when_to_use": [
+    "You already hold a raw bit buffer (bitmap, Bloom filter, fingerprint, XORed vectors) of roughly 100 bytes or more and need its total bit count.",
+    "Shipping one x86 binary to unknown CPUs: target-attribute kernels plus CPUID dispatch give AVX2 or AVX512 speed without compiling the whole program with -mavx2 or -mavx512.",
+    "Large buffers on CPUs with AVX512 VPOPCNTDQ; the README reports 133.5 GB/s for a 16 KB array on an AMD EPYC 9R14 (L1-resident, no baseline given).",
+    "C code bases: the header compiles as C, using C11 atomics or a __sync compare-and-swap for the one-time CPUID cache.",
+    "AArch64 Linux, Android or Windows servers with SVE, where runtime SVE dispatch works with GCC 14+ or Clang 16+ and no special flags."
+  ],
+  "when_not_to_use": [
+    "Single words or tiny arrays: below 40 bytes (AVX512 CPUs) or 96 bytes (AVX2 CPUs) it runs the same scalar POPCNT loop you would write yourself, plus a CPUID-cache load and size branches; std::popcount is enough.",
+    "Hamming distance or intersection counts over two arrays: the API counts one buffer only, so you must materialize the AND or XOR first (fused operations were asked about in issue #2 and are not in the current API).",
+    "Rank/select queries or set operations: use a succinct bit vector or bitset library instead.",
+    "Data streamed from DRAM: the published GB/s come from re-counting one small cached array, so for large out-of-cache buffers memory bandwidth, not the kernel, likely sets the speed.",
+    "Old toolchains: GCC below 5 gets no AVX2 path and GCC below 11 no AVX512 path, and clang-cl below 22 needs /arch flags, all without any warning."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (uses <atomic> in C++ or <stdatomic.h> in C11, <immintrin.h> on x86, <arm_neon.h>/<arm_sve.h> on ARM; <sys/auxv.h> or <windows.h> for SVE detection)",
+    "min_toolchain": "C99 or C++11 class compiler; GCC 4.2+ or Clang 3.0+ for hardware POPCNT, GCC 5+ / Clang 3.8+ / MSVC 2017 (1910)+ for AVX2 dispatch, GCC 11+ / Clang 9+ for AVX512, GCC 14+ / Clang 16+ for runtime SVE dispatch; CMake 3.9 only for its tests and benchmark",
+    "platforms": "any; accelerated on x86/x86-64 (POPCNT, AVX2, AVX512 VPOPCNTDQ+BW), AArch64 (NEON, SVE), PPC64 (POPCNTD via builtin); portable integer fallback elsewhere (WebAssembly is in CI)",
+    "thread_safety": "thread-safe per README; CPUID and SVE detection results are cached in atomics with relaxed ordering (a data race in that init code was fixed in v4.0)",
+    "drop_in_for_baseline": "partial: one call replaces a loop of std::popcount or __builtin_popcountll over an array; it does not replace std::popcount on one integer or std::bitset::count"
+  },
+  "gotchas": [
+    "The fastest x86 path is chosen by compiler version as much as by CPU: older GCC or clang-cl builds silently fall back to scalar POPCNT, and CPUs with AVX-512 but no VPOPCNTDQ (for example the Xeon Platinum 8168 of the old README table) now use the AVX2 path, because v3.0 replaced the AVX512BW Harley-Seal kernel that the old table measured.",
+    "Helper functions are unprefixed (popcnt, popcnt64, popcnt64_bitwise, get_cpuid, run_cpuid, get_xcr0, CSA256, popcnt256); only macros got the LIBPOPCNT_ prefix in v3.0, so a project with its own popcnt64 or get_cpuid can hit compile-time name clashes. The x86 popcnt() is 'static' rather than 'static inline', so a translation unit that includes the header without calling it can trip -Wunused-function under -Wall -Werror.",
+    "On Windows ARM64 with SVE dispatch enabled the header includes <windows.h> into every translation unit that includes it (it guards NOMINMAX but not the rest of windows.h).",
+    "Harness flaws behind the published numbers: benchmark.cpp re-counts one array that fits in cache (16 KB by default) 10 million times, timed with std::clock, and computes a floating-point progress percentage on every iteration, so GB/s at the 23 and 101-byte CI sizes includes that overhead; its printed 'Algorithm' line is computed separately from the library's dispatch and does not show which AVX2 kernel ran; the CI job compares only against the previous release, never against a std::popcount loop. No correctness bug was found in the kernels (test1.cpp checks every suffix of a 100,000-byte random array against a bitwise reference)."
+  ],
+  "pick_this_over_siblings_when": "Pick libpopcnt when you only need the count of an existing raw buffer and want portable SIMD dispatch in one header; pick plf::bitset, BitLib or sul::dynamic_bitset when you need a bitset container with shifts and range operations, pasta::bit_vector for rank/select queries, and CRoaring for compressed sets where cardinality comes with set algebra.",
+  "verified_claims_summary": "All numbers are first-party. The 2019 v2.3 README table (Xeon Platinum 8168, GCC 5.4, flags and harness not named, speedups over sse-popcount's lookup-8 table) shows an unrolled builtin-popcnt loop at 4.75-8.58x, AVX2 Harley-Seal at 1.15-13.66x and the since-replaced AVX512BW Harley-Seal at 0.35-25.60x from 32 B to 4 KB; against the unrolled POPCNT loop that is about 1.7x (AVX2) and 3.2x (AVX512) at 4 KB, with AVX2 ahead only from 512 B and AVX512 from 1 KB (derived from page data). The v4.2 'up to 3x for 96 B to 1 KB' claim compares the new AVX2 popcnt256 loop with v4.1's scalar POPCNT loop (96-511 B) and Harley-Seal (512-1023 B) paths, only on CPUs without AVX512 VPOPCNTDQ, with no CPU or numbers given.",
+  "status_note": "Actively maintained (v4.2 in July 2026, last commit 2026-07-23, CI on Linux, macOS, Windows, FreeBSD, ARM64 and WebAssembly, including ASan/UBSan); BSD-2-Clause single header that is easy to vendor, with a Rust port published as the simd-popcnt crate (1.0.0).",
+  "sources_read": [
+    "https://github.com/kimwalisch/libpopcnt",
+    "https://github.com/kimwalisch/libpopcnt/commits",
+    "https://github.com/kimwalisch/libpopcnt/issues?q=is%3Aissue",
+    "https://github.com/kimwalisch/libpopcnt/issues/20",
+    "https://github.com/kimwalisch/libpopcnt/tree/master/test",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/README.md",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/libpopcnt.h",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/benchmark.cpp",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/.github/workflows/benchmark.yml",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/scripts/benchmark-vs-prev-release.sh",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/test/test1.cpp",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/v2.3/README.md",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/v4.1/libpopcnt.h",
+    "https://raw.githubusercontent.com/kimwalisch/libpopcnt/v3.1/libpopcnt.h",
+    "https://crates.io/api/v1/crates/simd-popcnt",
+    "https://github.com/WojciechMula/sse-popcount",
+    "WebSearch: 'Faster Population Counts Using AVX2 Instructions' (snippet: vectorized approach about twice as fast as the popcnt instruction on recent Intel processors; arXiv itself blocked here)"
+  ],
+  "confidence": 0.8
+}
