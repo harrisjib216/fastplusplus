@@ -17,3 +17,4 @@
 - Tulip Indicators (https://github.com/TulipCharts/tulipindicators): repo benchmark.c compares against TA-Lib but the result numbers live only on tulipindicators.org (blocked); retry from an unblocked environment (w1-mine-af, 2026-10-07).
 - upb (https://github.com/protocolbuffers/upb): tail-call parsing blog with GB/s numbers blocked; only code-size numbers reachable; retry (w1-mine-af, 2026-10-07).
 - utf8proc (https://github.com/JuliaStrings/utf8proc): bench/ has ICU and libunistring harnesses with no published results; issue #12 snippet shows utf8proc slower than ICU (w1-mine-af, 2026-10-07).
+- cpp-sort (https://github.com/Morwenn/cpp-sort): wiki benchmark graphs are imgur-hosted (blocked) with public scripts; retry where readable, likely tier A (w1-mine-m, 2026-10-07).
