@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/udp/json-parser",
+  "one_liner": "Two-file, non-recursive C89 DOM parser; parsed 1.5x faster than nlohmann/json 2.0.3 in a 2016 run, entirely on number-heavy input.",
+  "what_it_does": "json-parser turns a JSON buffer into a read-only tree of json_value nodes with json_parse or json_parse_ex (settings: max_memory cap, custom mem_alloc/mem_free with user data, optional C-style comments, value_extra bytes per node) and frees it with json_value_free. Nodes expose type, parent and length-prefixed arrays, object entries and strings; JSON_TRACK_SOURCE adds line and column per node, and C++ gets operator[] and conversion sugar. It does not serialize: output needs the separate json-builder library, and it is a C API, not a drop-in for nlohmann::json.",
+  "how_it_is_fast": "It scans the input twice: the first pass validates, creates one node per value and counts array and object lengths, string lengths and the total bytes of each object's key names; the second pass allocates exactly sized arrays and strings plus one block per object holding its entries and all key names, then copies the characters in. Numbers are parsed by hand in the first pass (digit accumulation, fraction divided by pow(10, digits), then multiplied by pow(10, exponent)) instead of strtod, which is cheap and locale-free but not correctly rounded; that number path is where the canada.json advantage over nlohmann/json comes from. Parsing and freeing use parent pointers instead of recursion.",
+  "when_to_use": [
+    "C89 or embedded C code that wants two vendorable files (json.c, json.h) with no dependencies beyond libm and a plain read-only DOM for configs and messages.",
+    "Untrusted input where stack depth and memory must be bounded: parsing never recurses, and json_settings.max_memory caps the total allocation; a custom allocator (arena, pool) can be plugged in with user data.",
+    "Read-mostly documents dominated by integers and strings, where the exact-size allocations keep each node's arrays and key names contiguous.",
+    "Tools that need per-value source positions for error reporting (JSON_TRACK_SOURCE)."
+  ],
+  "when_not_to_use": [
+    "Data where doubles must come back bit-exact: only 37 of 66 double-parse conformance tests pass (nlohmann 66 of 66), because mantissa, fraction and exponent are combined with separate floating-point operations.",
+    "Parse throughput as the goal: in the same 2016 run cJSON parsed the three files in 24.7 ms, RapidJSON in 7.9 ms and sheredom/json.h canada.json in 9.4 ms, against json-parser's 47.3 ms; on citm_catalog.json plus twitter.json it was about 5% slower than nlohmann/json 2.0.3.",
+    "Round-tripping documents: the companion json-builder prints doubles with sprintf(\"%g\") (6 significant digits, unchanged at HEAD), so parse-then-serialize silently truncates coordinates, prices and timestamps stored as doubles.",
+    "Large objects queried by key: the C++ operator[] does a linear strcmp scan over the entries, and there is no hash index.",
+    "Integers outside int64 or unsigned 64-bit values: json_int_t is signed only; HEAD converts overflowing integers to double, while the 1.1.0-era code measured in the benchmark overflowed signed arithmetic (issue #185)."
+  ],
+  "integration": {
+    "form": "source-drop (json.c and json.h), or static and shared lib via the autoconf configure/Makefile with a pkg-config file",
+    "dependencies": "none (libm for pow); json-builder (separate repository) for serialization",
+    "min_toolchain": "C89 compiler; json_int_t is int_fast64_t under C99/C++11, long under C89, __int64 on MSVC",
+    "platforms": "any",
+    "thread_safety": "not documented; json.c has no mutable global state and no locale calls, so separate json_parse_ex calls are independent (inferred from source), and a parsed tree is plain data",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark detail behind the numbers: nativejson-benchmark's udpjsontest.cpp parses with settings.value_extra = json_builder_extra so json-builder can later print the tree, which adds an int and two size_t (about 24 bytes on 64-bit) to every node; the reported 17.2 MB parse footprint and part of the parse time include that, so a parse-only user allocates less. The stringify and prettify rows time json-builder, not json-parser, and its %g output on canada.json is lossy, so those rows are not comparable.",
+    "The measured commit differs from HEAD in number handling: at 7053321 the fraction digits accumulate in json_int_t and integer digits have no overflow check; HEAD accumulates the fraction in a double and converts overflowing integers to double (September 2026 commits including 'Fix improper rejection of long floats' for #178; the UBSan overflow report #185 is closed) and fixes surrogate-pair decoding. Both versions apply the exponent as a separate pow(10, e) multiply, so values near the double limits can overflow to inf or underflow to 0 (for example 0.1e309).",
+    "json_parse_ex strcpy's its message into the caller's error buffer without a length; pass at least json_error_max (128) bytes. Issue #175 (unbounded error writes) is open for a v2.0.0 API change.",
+    "No version after 1.1.0 (configure.ac still says 1.1.0 and the GitHub releases page is empty); the maintained repository is github.com/json-parser/json-parser and the September 2026 fixes exist only on master."
+  ],
+  "pick_this_over_siblings_when": "Pick json-parser over cJSON (about 1.9x faster parse in the same run, recursive with a 1000-level CJSON_NESTING_LIMIT, built-in printing with %1.15g/%1.17g) or sheredom/json.h when you need a non-recursive C89 parser with a hard memory cap, pluggable allocator and source positions; pick cJSON or yyjson when throughput or exact numbers matter more.",
+  "verified_claims_summary": "In nativejson-benchmark's 2016 sample (clang 7.0, release build with NDEBUG and -march=native, Core i7-4980HQ, macOS), json-parser parsed canada, citm_catalog and twitter in 47.3 ms total against nlohmann/json 2.0.3's 72.5 ms, Jansson 2.7's 112.1 ms, json-c 0.12.1's 134.6 ms and JsonCpp 1.0.0's 165.5 ms; the lead over nlohmann rests on canada.json (29.5 vs 55.6 ms), where its inexact number parser does less work, and it is slightly slower than nlohmann on the other two files. The project itself publishes no numbers.",
+  "status_note": "Revived in 2026 (repository moved to the json-parser organisation, fixes through 2026-09-19, still versioned 1.1.0 with no packaged release), BSD-2-Clause and two files, so easy to vendor; usable and copyable, but the speed entry is a 2016 parse run and serialization comes from a separate, lossy library.",
+  "sources_read": [
+    "https://github.com/json-parser/json-parser",
+    "https://github.com/json-parser/json-parser/commits/master",
+    "https://github.com/json-parser/json-parser/issues?q=is%3Aissue",
+    "https://github.com/json-parser/json-parser/issues/175",
+    "https://github.com/json-parser/json-parser/issues/178",
+    "https://github.com/json-parser/json-parser/issues/185",
+    "https://github.com/json-parser/json-parser/releases",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/README.md",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/json.c",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/json.h",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/AUTHORS",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/json-parser/json-parser/HEAD/Makefile.in",
+    "https://raw.githubusercontent.com/json-parser/json-parser/7053321/json.c",
+    "https://raw.githubusercontent.com/json-parser/json-parser/7053321/json.h",
+    "https://raw.githubusercontent.com/json-parser/json-builder/HEAD/json-builder.c",
+    "https://raw.githubusercontent.com/json-parser/json-builder/HEAD/json-builder.h",
+    "https://raw.githubusercontent.com/json-parser/json-builder/HEAD/README.md",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/udpjsontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/build/premake5.lua",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail15.json",
+    "https://raw.githubusercontent.com/DaveGamble/cJSON/HEAD/cJSON.c",
+    "https://raw.githubusercontent.com/DaveGamble/cJSON/HEAD/cJSON.h"
+  ],
+  "confidence": 0.75
+}

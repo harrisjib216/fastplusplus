@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/json-c/json-c",
+  "one_liner": "Long-standing reference-counted C JSON DOM; in a 2016 independent run it stringified a parsed canada.json 4x faster than Jansson, losing elsewhere.",
+  "what_it_does": "json-c parses JSON text into a reference-counted tree of json_object values (json_tokener_parse, or the incremental json_tokener_parse_ex that accepts input in chunks) and serializes trees back with json_object_to_json_string_ext (plain, spaced, pretty, tab, no-slash-escape flags). It also ships JSON Pointer (RFC 6901), json_patch, json_c_visit tree walking, deep copy and equality helpers. Its C API differs from Jansson's json_t API, so switching means rewriting call sites.",
+  "how_it_is_fast": "It is not a speed-oriented design: every value is its own malloc, every object carries its own linkhash table, and numbers go through strtod. The measured stringify win comes from a parse-time cache: the tokener stores a strdup of each double's original text (json_object_new_double_s, still in json_tokener.c at HEAD) and installs a serializer that memcpy's that text back, so re-emitting a parsed, number-heavy document skips double-to-text conversion; doubles created in code still go through snprintf(\"%.17g\"). Output goes into one growing printbuf per call.",
+  "when_to_use": [
+    "Parse-then-re-emit pipelines over number-heavy documents (GeoJSON coordinates, telemetry arrays) where doubles are passed through unchanged: the cached original text is written back byte-for-byte, which is both the source of the canada.json win (16.3 ms vs Jansson 64.2 ms) and exact numeric round-tripping (27 of 27 roundtrip conformance tests).",
+    "C programs that receive JSON in pieces (sockets, pipes) and want an incremental tokener that resumes across buffers without assembling the full document first.",
+    "Projects that want a widely packaged, ABI-versioned system library (symbol versions since 0.15) with JSON Pointer and JSON Patch support rather than a vendored single file.",
+    "Building and editing small-to-medium JSON trees in C where parse throughput is not the bottleneck."
+  ],
+  "when_not_to_use": [
+    "Parse-bound workloads: in the same 2016 run json-c 0.12.1 parsed the three files in 134.6 ms against cJSON 24.7 ms, udp/json-parser 47.3 ms, nlohmann/json 72.5 ms and RapidJSON 7.9 ms (sums derived from page data).",
+    "Serializing string- and object-heavy documents: on citm_catalog.json and twitter.json json-c stringified 2.4-2.7x slower than Jansson (9.99/4.55 ms vs 3.76/1.93 ms) and also behind nlohmann/json and JsonCpp.",
+    "Memory-constrained parsing: the 2016 run recorded 33.7 MB and 390,651 allocations to parse the 2.2 MB canada.json (nlohmann 5.3 MB); 0.15 cut object and array overhead, but each object still allocates its own hash table and each double keeps a strdup of its text.",
+    "Validating untrusted input with the default entry point: json_tokener_parse is lenient and accepted 12 of the suite's invalid documents (trailing commas, single quotes, a leading zero, raw tab and newline in strings, text after the closing bracket, incomplete exponents such as [0e]); pass JSON_TOKENER_STRICT through json_tokener_set_flags for RFC behaviour.",
+    "Multi-threaded parsing on NetBSD, Solaris 11.3 or older and native Windows: open issue #855 reports that json_tokener_parse's locale switching disturbs other threads' strtod/sprintf."
+  ],
+  "integration": {
+    "form": "shared lib and static lib (CMake by default, meson build added in 0.19)",
+    "dependencies": "none (libc; libm when needed)",
+    "min_toolchain": "Plain C compiler (gcc, clang, MSVC, clang-cl; C89 build fixed in 0.19); CMakeLists.txt requires CMake 3.9+, README recommends 3.16+",
+    "platforms": "any: Linux and other Unix, macOS, AIX, Windows (MSVC, MinGW, vcpkg), Android, Amiga/MorphOS",
+    "thread_safety": "Partial. Separate trees in separate threads are fine; reference counting is atomic only when built with -DENABLE_THREADING=ON (off by default); json_object_to_json_string_ext writes into a buffer stored on the object, so concurrent stringify of one object needs external locking (the header says to strdup the result); each parse call switches the numeric locale with uselocale/newlocale, and issue #855 (open) reports cross-thread interference on platforms that fall back to setlocale.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark detail behind the numbers: nativejson-benchmark reports the minimum of 10 stringify trials on the same DOM, and json-c's json_object_to_json_string_ext keeps its output printbuf on the root object and only resets it, so trials 2-10 write into an already grown 7 MB buffer while the recorded memory and allocation counts (21 allocations) come from trial 0 only; libraries that build a fresh output buffer each call pay growth and page faults on every trial. This is a small edge compared with the number-text cache, which is the main reason for the canada.json result.",
+    "The speed of serializing numbers depends on where they came from: a parsed double re-emits its original text (so 1.0E+2 stays 1.0E+2), while json_object_new_double or json_object_set_double values are printed with %.17g (for example 0.1 becomes 0.10000000000000001); json_c_set_serialization_double_format changes the format globally or per thread.",
+    "Default serialization escapes every '/' as '\\/' unless JSON_C_TO_STRING_NOSLASHESCAPE (0.13+) is passed, so output is larger than other libraries' on URL-heavy data such as twitter.json.",
+    "The measured release is 0.12.1 (2016). Later releases changed the cost profile with no comparable public numbers: 0.13 removed variadic printf from serialization and stored small strings inline, 0.15 split json_object into per-type structs (project bench: 5.8% faster, 6-12% less memory) and shrinks parsed arrays (9% faster, 39-50% less peak memory), 0.16 replaced ctype calls in the tokener and serializer. Avoid 0.17 (ABI break, flagged in the ChangeLog)."
+  ],
+  "pick_this_over_siblings_when": "Pick json-c over Jansson or cJSON when you need an incremental tokener, JSON Pointer/Patch, or exact pass-through of parsed number text, or when it is already the system library; pick cJSON (about 5x faster parse in the same run), Jansson (faster stringify of string-heavy documents) or yyjson when throughput is the goal.",
+  "verified_claims_summary": "In nativejson-benchmark's 2016 sample (clang 7.0, release build with NDEBUG and -march=native, Core i7-4980HQ, macOS), json-c 0.12.1 stringified the parsed canada, citm_catalog and twitter DOMs in 30.8 ms total against Jansson 2.7's 69.9 ms, nlohmann/json 2.0.3's 87.7 ms and JsonCpp 1.0.0's 94.3 ms, but the whole margin is canada.json, where it copies each double's cached input text instead of formatting it; it is slower than Jansson, nlohmann and JsonCpp on the other two files. The project makes no speed claim.",
+  "status_note": "Actively maintained (0.19 released 2026-06-27, merges through 2026-10-04), MIT, packaged by most Linux distributions; usable and copyable, but the speed entry rests on a 2016 run of 0.12.1 and on a parse-time cache that shifts cost from stringify to parse.",
+  "sources_read": [
+    "https://github.com/json-c/json-c",
+    "https://github.com/json-c/json-c/commits/master",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/README.md",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_tokener.c",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_tokener.h",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_object.c",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_object.h",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_object_private.h",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/printbuf.c",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/linkhash.c",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/json_util.c",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/issues_closed_for_0.13.md",
+    "https://github.com/json-c/json-c/tree/master/bench",
+    "https://raw.githubusercontent.com/json-c/json-c/HEAD/bench/README.bench.md",
+    "https://raw.githubusercontent.com/json-c/json-c/json-c-0.12.1-20160607/json_tokener.c",
+    "https://raw.githubusercontent.com/json-c/json-c/json-c-0.12.1-20160607/json_object.c",
+    "https://raw.githubusercontent.com/json-c/json-c/json-c-0.12.1-20160607/printbuf.c",
+    "https://github.com/json-c/json-c/issues?q=is%3Aissue+performance+OR+slow+OR+speed",
+    "https://github.com/json-c/json-c/issues/855",
+    "https://github.com/json-c/json-c/issues/552",
+    "https://github.com/json-c/json-c/issues/947",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/jsonctest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/build/premake5.lua"
+  ],
+  "confidence": 0.75
+}

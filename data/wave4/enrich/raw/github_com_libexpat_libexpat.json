@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/libexpat/libexpat",
+  "one_liner": "Long-lived C99 streaming (SAX-style) XML parser; beats libxml2 only when libxml2 builds a DOM, not against libxml2's own SAX.",
+  "what_it_does": "Expat is a non-validating, stream-oriented XML 1.0 (fourth edition) push parser: you create an XML_Parser, register C callbacks (start/end element, character data, namespaces, entities and so on) and feed bytes with XML_Parse or XML_GetBuffer plus XML_ParseBuffer, in as many chunks as you like, ending with isFinal set. It builds no tree, so any document structure is the caller's job. Its API is unrelated to libxml2's, so moving from libxml2 (DOM or SAX) means rewriting the parsing code.",
+  "how_it_is_fast": "The tokenizer is table-driven: each encoding has a 256-entry byte-class table (asciitab.h, utf8tab.h, latin1tab), and xmltok_impl.c is included three times with different macros to stamp out specialised scanners for 8-bit, UTF-16LE and UTF-16BE input. Input is scanned in place with no tree or node allocations; element and attribute names and values are copied into string pools so callbacks get NUL-terminated strings. It is plain scalar C with no SIMD, which is why DOM parsers such as pugixml still beat it on throughput.",
+  "when_to_use": [
+    "Streaming large or unbounded XML (feeds, logs, OpenStreetMap-style dumps, network streams) where memory must stay near the buffer size: in libsimdxml's run its peak RSS was 25.44 MiB on a 10 MB file vs 197.37 MiB for libxml2's DOM.",
+    "Parsing untrusted XML in C or C++ where you want a mature, OSS-Fuzz-tested, distro-packaged library with built-in billion-laughs and allocation-amplification limits.",
+    "Push parsing of data that arrives in chunks (sockets, decompression output), filling Expat's own buffer via XML_GetBuffer to avoid an extra copy.",
+    "Replacing a libxml2 DOM parse in code that only walks the document once and throws the tree away."
+  ],
+  "when_not_to_use": [
+    "Raw throughput: in the same libsimdxml table pugixml (DOM) ran at 271.1 MB/s vs Expat's 86.9 MB/s at 1 MB, and quick-xml at 195.2 vs 64.6 MB/s in the base-clock table, both about 3x (derived from page data).",
+    "You already use libxml2's SAX or xmlReader API: no like-for-like data shows Expat faster, and bemayer/xml-benchmark has libxml2 SAX ahead even in the groups its depth limit cannot affect (1KB 0.028 vs 0.046 ms; DBLP and OSM extracts 104.8 vs 234.5 ms).",
+    "You need a DOM, XPath, DTD or schema validation, or HTML parsing; Expat does none of these (it does not even check namespace URIs).",
+    "Tiny documents parsed one per parser: per-parser setup dominates, and bemayer's 1KB row has Expat slower than both libxml2 SAX and quick-xml.",
+    "Environments that cannot follow frequent security releases: 2.8.1, 2.8.4, 2.8.5 and 2.9.0 all shipped CVE fixes between May and October 2026."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Autotools or CMake build; CMake FetchContent supported with SOURCE_SUBDIR expat/)",
+    "dependencies": "none beyond the C library (uses getentropy, arc4random or similar entropy sources for the hash salt)",
+    "min_toolchain": "C99: GCC 4.5+ (GCC 4.8.1+ when used from C++), Clang 3.5+, MSVC 17.0/2022+; the test suite needs C++11",
+    "platforms": "any; Linux, macOS, Windows (prebuilt win32 binaries), FreeBSD and MinGW in CI",
+    "thread_safety": "not documented in doc/reference.html beyond the rule that parsing and cleanup functions must not be called from a handler on the parser that invoked it; use one XML_Parser per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Open security tracker: the README banner and issue #1160 (open since 2026-03-06) say Expat has unfixed security issues, about 28 non-public reports (DoS loops, NULL dereferences, out-of-bounds access, parser re-entry); releases through 2.9.0 (2026-10-05) keep shipping CVE fixes, so pin to release tags and update promptly.",
+    "DoS protections can reject legitimate input: billion-laughs protection rejects entity amplification above 100x once 8 MiB of output is reached (XML_ERROR_AMPLIFICATION_LIMIT_BREACH), and since 2.7.2 an allocation tracker enforces 100x amplification past a 64 MiB threshold and fails with an out-of-memory error; tune with XML_SetBillionLaughsAttackProtection* and XML_SetAllocTrackerMaximumAmplification/ActivationThreshold.",
+    "Chunked feeding: XML_Parse returning OK does not mean all input was parsed, tokens split across buffers wait for more data, and since 2.6.0 reparse deferral delays retries of large tokens (XML_SetReparseDeferralEnabled turns it off); XML_Parse copies input, so XML_GetBuffer plus XML_ParseBuffer is the documented fast path. 2.9.0 also removed XML_GetAttributeInfo/XML_ATTR_INFO and XML_MIN_SIZE (now build errors) and deprecated the 32-bit location functions and XML_LARGE_SIZE.",
+    "Harness flaw in the like-for-like counter-evidence: bemayer/xml-benchmark's report_generator.py averages a 'wide' and a 'deep' file under each size label, and generate_data.py's deep files for the 100KB to 100MB labels nest 1,706 to 5,000 levels (5.6 to 100 MiB, not the labelled size). libxml2's parser (parser.c v2.9.14 read; the Dockerfile installs Debian bookworm's package) halts with 'Excessive depth in document: 256' unless XML_PARSE_HUGE is set, which bench.cpp does not set, and neither the Expat nor the libxml2 bench.cpp checks the parse return value. So libxml2's SAX and DOM times in those groups may come from aborted parses; only the 1KB and real-world groups are clean, and they still favour libxml2 SAX."
+  ],
+  "pick_this_over_siblings_when": "Pick Expat over yxml, quick-xml, pugixml, LightningXML or Parshred when you must stream chunked or very large XML from C or C++ with bounded memory and want a parser developed since 1997 and fuzzed by OSS-Fuzz, with entity handling, namespaces and UTF-8/UTF-16/ISO-8859-1/US-ASCII input; if the document fits in memory and speed matters, pugixml or another DOM sibling is about 3x faster, and yxml is the faster minimal streaming option.",
+  "verified_claims_summary": "Third-party run from the README of a competing project (KrzysztofKowalski/libsimdxml; harness not published, Expat and libxml2 versions, compiler and flags unstated) on an Intel i7-4850HQ at about 3.3 GHz with turbo: Expat with SAX callbacks parsed a synthetic 1 MB file in 11.525 ms (86.9 MB/s) vs 26.507 ms (37.8 MB/s) for libxml2 building a DOM, about 2.3x, and the 10 MB file in 121.381 vs 263.196 ms, with peak RSS 7.38 vs 24.81 MiB and 25.44 vs 197.37 MiB. This measures streaming against tree construction, not one parser's speed against the other's; an earlier base-clock run gave 15.495 vs 35.168 ms.",
+  "status_note": "Actively maintained (release 2.9.0 on 2026-10-05, maintainer funded by Munich's Open Source Sabbatical from 2026-08-01 for up to six months), MIT-licensed and in every major distro, but issue #1160 lists unfixed non-public security reports; the only speed win on record is SAX vs libxml2's DOM, and the bemayer like-for-like comparison mixes in deep files where libxml2 may abort at depth 256.",
+  "sources_read": [
+    "https://github.com/libexpat/libexpat",
+    "https://github.com/libexpat/libexpat/issues/1160",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/README.md",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/Changes",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/doc/reference.html",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/lib/xmltok.c",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/lib/xmltok_impl.c",
+    "https://raw.githubusercontent.com/libexpat/libexpat/HEAD/expat/lib/xmlparse.c",
+    "https://raw.githubusercontent.com/KrzysztofKowalski/libsimdxml/HEAD/README.md",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/report/index.html",
+    "https://github.com/bemayer/xml-benchmark/tree/main/benchmarks",
+    "https://github.com/bemayer/xml-benchmark/tree/main/benchmarks/expat",
+    "https://github.com/bemayer/xml-benchmark/tree/main/benchmarks/libxml2",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/expat/bench.cpp",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/expat/Dockerfile",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/expat/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/libxml2/bench.cpp",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/libxml2/Dockerfile",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/libxml2/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/benchmarks/runner.sh",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/tools/generate_data.py",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/tools/download_data.py",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/tools/common.py",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/tools/report_generator.py",
+    "https://raw.githubusercontent.com/bemayer/xml-benchmark/HEAD/results/results.jsonl",
+    "https://raw.githubusercontent.com/GNOME/libxml2/v2.9.14/parser.c"
+  ],
+  "confidence": 0.65
+}
