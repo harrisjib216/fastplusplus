@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/warmcat/libwebsockets",
+  "one_liner": "Pure C client/server library for WebSockets, HTTP/1-2-3 and MQTT; in a 2016 competitor table it used ~5.7x less memory per connection than WebSocket++.",
+  "what_it_does": "A C library that implements WebSocket, HTTP/1, HTTP/2, HTTP/3/QUIC, WebTransport and MQTT clients and servers behind one event-driven API, from embedded RTOS targets up to server hosts. You register an array of lws_protocols, each with a callback that receives reasons such as LWS_CALLBACK_RECEIVE and LWS_CALLBACK_SERVER_WRITEABLE, and you send with lws_write() only inside the writeable callback. It is not a drop-in for WebSocket++: the API is C callbacks over a lws_context, not C++ endpoint objects and handlers on Asio.",
+  "how_it_is_fast": "Compact per-connection state (a struct lws plus your per_session_data_size block and an rx buffer sized by the protocol's rx_buffer_size) driven by one serialized poll/epoll loop, or by libuv, libevent, libev, sd-event, glib or uloop if you ask for one. Sends are flow-controlled by peer writability (lws_callback_on_writable), so the library avoids queueing data the socket cannot take. Optional SMP mode runs up to 32 service threads on one context, and the least-loaded thread accepts each new connection. No benchmark in the current repo backs any speed claim.",
+  "when_to_use": [
+    "Embedded or constrained targets (ESP32/FreeRTOS, ARM Linux) that need WebSocket or HTTP client/server code in plain C with a small, configurable footprint",
+    "Servers holding very many mostly idle WebSocket connections, where memory per connection matters more than echo throughput (the only rows where it beat WebSocket++ in the 2016 table)",
+    "Projects that already run libuv, libevent, libev, glib or sd-event and want WebSockets on the same loop",
+    "Products that need several protocols (ws, h2, h3/QUIC, MQTT, WebTransport) and a choice of TLS backend (OpenSSL, mbedTLS, wolfSSL, BoringSSL, GnuTLS, SChannel and others) from one library"
+  ],
+  "when_not_to_use": [
+    "High message-rate echo or fan-out workloads: the same 2016 table put libwebsockets about 2x behind WebSocket++ on short and huge messages, and 6x and 4x behind uWebSockets",
+    "C++ code that wants an idiomatic Asio-style API (WebSocket++ or Boost.Beast); lws is callback-reason C code with strict write discipline",
+    "Multithreaded apps that want to send from any thread: only lws_cancel_service() is thread-safe, so every other call has to be handed to the service thread",
+    "Pinning an old release: the README calls pre-5.0 releases effectively deprecated, with many security fixes only on v5.0-stable and main",
+    "Builds where you cannot follow fast-moving ABI changes (LWS_PRE headroom grew from 16 to 32 bytes on 64-bit in the development branch)"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (both built by default via CMake)",
+    "dependencies": "a TLS library unless LWS_WITH_SSL is off (OpenSSL by default for h1/h2 on *nix; GnuTLS for QUIC/h3; mbedTLS, wolfSSL, BoringSSL, AWS-LC, LibreSSL, BearSSL, openHiTLS or SChannel as alternatives); optional libuv, libevent, libev, glib, sd-event or uloop; optional zlib (LWS_WITH_ZLIB, needed for permessage-deflate, which is off by default via LWS_WITHOUT_EXTENSIONS=ON)",
+    "min_toolchain": "C compiler plus CMake 3.10 or later; minimum C standard not documented",
+    "platforms": "Linux (x86 and ARM), Windows (Visual Studio and MinGW), macOS, NetBSD, ESP32/FreeRTOS and other RTOS targets",
+    "thread_safety": "Single-threaded serialized event loop; only lws_cancel_service() may be called from other threads. SMP service (count_threads, up to 32 threads) needs -DLWS_MAX_SMP>1 at build time and user-spawned service threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the benchmark's lws echo server (benchmarks/lws.cpp, written by the uWebSockets author) loops several lws_write() calls inside one WRITEABLE callback. lws has rejected that since v2.5 ('Illegal back-to-back write'), so the harness cannot run unchanged against any current release, and the numbers describe lws 2.0 only. It also copies every message twice (std::string append, then a fresh heap Message), copies a 100 MB payload in the huge-message test, leaves rx_buffer_size at its default and links a prebuilt /usr/lib/libwebsockets.a with unknown build flags, while uWS was compiled from source at -O3.",
+    "Harness flaw: scalability.cpp reports memory as the total line of pmap for the listening process. That is mapped virtual size, shared libraries included, not resident memory. uWS ran at 1M connections and the others at 500k, so fixed costs were spread differently. The throughput client counts echoed bytes without parsing frames, and connection rate comes from 10 blocking client threads, so the 'equal' connection row may be limited by the client.",
+    "Default v5 *nix builds enable HTTP/3, which forces GnuTLS instead of OpenSSL unless you pick another QUIC-capable TLS library or turn HTTP/3 off (CMakeLists.txt). Code compiled against older headers must be rebuilt for the larger LWS_PRE, and must always spell the headroom as LWS_PRE.",
+    "2025 CVEs: CVE-2025-11677 (use-after-free in lws_handshake_server when a LWS_CALLBACK_HTTP_CONFIRM_UPGRADE handler is used), CVE-2025-11678 (stack overflow in async DNS label parsing), CVE-2025-11679/11680 (PNG decoder OOB read/write with LWS_WITH_UPNG) and CVE-2025-1866 (Win32 pointer arithmetic, before 4.3.4). The maintainer reports an ongoing audit that keeps finding and fixing issues."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sockudo-ws, Courierust or nexus-async-web (all Rust, and the first measured against uWebSockets) when you need C, an RTOS or embedded target, many protocols in one library or a choice of TLS backend; for raw WebSocket message throughput in a C++ or Rust server, the catalogued uWebSockets-class options are the better bet.",
+  "verified_claims_summary": "The only numbers are the 2016 uWebSockets README table (iCyberon fork, uWS v0.6.3 era). The uWS author's Linux harness (g++ -std=c++11 -O3, lws 2.0 on the libev backend, WebSocket++ 0.7.0 on Asio, no CPU, compiler version or kernel given) rated each server only against uWS. Cross ratios derived from page data put libwebsockets about 5.7x lighter in memory and about 4x faster at connection setup than WebSocket++, but about 2x slower on 20-byte and 100 MB echo throughput, and behind uWS on every row.",
+  "status_note": "Very active (v5.0, commits into October 2026, 5.3k stars), MIT with CC0 examples, and broadly deployed. The performance evidence is a decade-old competitor table on an API generation that no longer accepts the benchmark's write pattern, so treat its speed as unmeasured for current versions.",
+  "sources_read": [
+    "https://github.com/warmcat/libwebsockets",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/README.md",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/changelog",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/READMEs/README.coding.md",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/READMEs/README.build.md",
+    "https://raw.githubusercontent.com/warmcat/libwebsockets/HEAD/include/libwebsockets/lws-protocols-plugins.h",
+    "https://github.com/warmcat/libwebsockets/issues?q=is%3Aissue+performance",
+    "https://github.com/warmcat/libwebsockets/issues/3030",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/README.md",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/Makefile",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/lws.cpp",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/wsPP.cpp",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/scalability.cpp",
+    "https://raw.githubusercontent.com/iCyberon/uWebSockets/HEAD/benchmarks/throughput.cpp",
+    "https://www.sentinelone.com/vulnerability-database/cve-2025-11678/ (WebSearch snippet only)",
+    "https://www.cvelogic.com/cve/CVE-2025-11677 (WebSearch snippet only)"
+  ],
+  "confidence": 0.5
+}
