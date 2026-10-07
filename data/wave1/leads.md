@@ -23,3 +23,4 @@
 - libgd (https://github.com/libgd/libgd): vips-bench has jpg-gd at 5.47 s, 6.67x slower than libvips and slower than ImageMagick 4.44 s; not faster, no record written (w1-mine-t, 2026-10-07).
 - geogram paper-access retier lead (https://github.com/BrunoLevy/geogram): SIGGRAPH 2026 ParallelDelaunay3d paper, arXiv 2605.06408 (blocked); independent numbers would lift the record to B (batch-58, 2026-10-07).
 - sofa-buffers/corelib-c-cpp (https://github.com/sofa-buffers/corelib-c-cpp): first-party arena serializer, beats nanopb 2.09x msg/s but not protobuf wire format; uncatalogued (protobuf-c enricher, 2026-10-07).
+- plf::queue (https://github.com/mattreecebentley/plf_queue, Zlib): README claims +10-65% vs std::queue; not catalogued (Indiesort enricher, 2026-10-07).

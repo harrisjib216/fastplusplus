@@ -21188,10 +21188,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier C: CHANGES 0.8 numbers (qsort 300010 vs 679414 cycles, bsearch 553 vs 3352) date from 2001 or earlier with no benchmark code, compiler, flags, CPU or glibc version. The measured qsort was since replaced (2003-11-02 rewrite, 2006-08-16 'faster qsort', 2019 rand_i pivot); a 2016 nullprogram animation (snippet only) shows glibc at 307 frames vs dietlibc 0.32 at 503, so probably not faster today; the 6x bsearch gap is likely a first-call/PLT artefact; the current qsort uses a byte-swap loop with no recursion bound. Abandoned (mirror archived 2023-09-05, last commit 2019-03-18); GPL-2.0-or-later; fefe.de blocked."
+      "Tier C: CHANGES 0.8 numbers (qsort 300010 vs 679414 cycles, bsearch 553 vs 3352) date from 2001 or earlier with no benchmark code, compiler, flags, CPU or glibc version. The measured qsort was since replaced (2003-11-02 rewrite, 2006-08-16 'faster qsort', 2019 rand_i pivot); a 2016 nullprogram animation (snippet only) shows glibc at 307 frames vs dietlibc 0.32 at 503, so probably not faster today; the 6x bsearch gap is likely a first-call/PLT artefact; the current qsort uses a byte-swap loop with no recursion bound. Abandoned (mirror archived 2023-09-05, last commit 2019-03-18); GPL-2.0-or-later; fefe.de blocked.",
+      "Enricher: the closest harness is t.c in the 2001 commit 344deb2; it times one rdtsc call each with SIZE 100000 (not the 1000 the changelog quotes); the warm-up qsort(array,2) sorts 8 bytes so glibc 2.2's msort uses an alloca buffer, and the timed glibc call is its first over 1024 bytes and pays sysconf(_SC_PHYS_PAGES) (stdio parse of /etc/mtab and /proc/meminfo) plus malloc/free; bsearch gets no warm-up; the in-repo test/qsort.c comparator has an inverted loop that always returns 0, so its sort check never fires. Bugs in the measured code: the 2001 qsort never moves the left scan past pivot-equal keys, so equal or few-distinct input goes quadratic (Python port: 1,001,948 comparisons, depth 993 on 1000 equal ints); the 2001 bsearch shrinks the window by num, not num+1, reads past the array end, misses present keys and reads base[0] when nmemb is 0 (fixed across 0.10/0.11/0.13/0.15). Pivot history: rightmost pivot 2006-08-16 to 2012-08-27 (635fb76, quadratic on sorted input), random pivot via rand() in 2012, rand_i swapped in 2019. HEAD qsort makes about 1.8x more comparator calls than merge sort on random keys (15,814 vs 8,735); byte swaps; -Os on x86_64; no recursion depth bound; rand_i static seed races across threads."
     ],
     "measurements": [
-      "verifier batch-56 (wave 1)"
+      "verifier batch-56 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {
@@ -21243,10 +21245,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier C: README figures (+146% vs std::sort on 496-byte structs, crossover 152 bytes; +28% vs std::list::sort under 272 bytes) are first-party with no compiler, flags, CPU, element counts or stdlib named; the repo has no timing code (plf_indiesort_test_suite.cpp has none); the headline was +130% in older releases; the win applies only to element types over 152 bytes. plflib.org blocked (snippet: Haswell with GCC)."
+      "Tier C: README figures (+146% vs std::sort on 496-byte structs, crossover 152 bytes; +28% vs std::list::sort under 272 bytes) are first-party with no compiler, flags, CPU, element counts or stdlib named; the repo has no timing code (plf_indiesort_test_suite.cpp has none); the headline was +130% in older releases; the win applies only to element types over 152 bytes. plflib.org blocked (snippet: Haswell with GCC).",
+      "Enricher: no benchmark code in the repo, so the numbers cannot be rerun; the 152-byte switch to plain std::sort is hard-coded from Haswell+GCC runs. Unstable (std::sort on indices). On std::list it moves values between nodes instead of relinking, so iterators see different values (not list::sort semantics). Scratch buffers have no RAII; the small-element list path skips destructors of moved-from temporaries. The test suite checks sortedness only; its large_struct is 496 bytes, matching the README type."
     ],
     "measurements": [
-      "verifier batch-60 (wave 1)"
+      "verifier batch-60 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {
@@ -21267,10 +21271,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Tier C: all six 'Before' numbers match PR #53 (encode 4.0x/2.3x, decode 1.30x/1.12x vs Google protobuf C++) but only 'Release mode' is stated with no CPU, compiler or protobuf version; the PR is unmerged and its 'After' optimisation has a length-counting bug; encode output is not protected by DoNotOptimize; both decoders get a zero-padded 64-byte buffer with results unchecked; 45-byte message; the headline ratio comes from unsafe_mode. Apache-2.0, active."
+      "Tier C: all six 'Before' numbers match PR #53 (encode 4.0x/2.3x, decode 1.30x/1.12x vs Google protobuf C++) but only 'Release mode' is stated with no CPU, compiler or protobuf version; the PR is unmerged and its 'After' optimisation has a length-counting bug; encode output is not protected by DoNotOptimize; both decoders get a zero-padded 64-byte buffer with results unchecked; 45-byte message; the headline ratio comes from unsafe_mode. Apache-2.0, active.",
+      "Enricher (test/benchmark/main.cpp, PR #53): encode output is never passed to DoNotOptimize or ClobberMemory, so the inlined encoder can be partly eliminated while protobuf's out-of-line call cannot; with the zero-padded decode buffer both decoders stop at the zero byte but protobuf's ParseFromArray failure is ignored while protopuf returns success; protobuf decoded without an Arena; the 4.0x headline is unsafe_mode. Code bugs outside the numbers: safe_mode skip_map.at() throws std::out_of_range on wire types 3/4/6/7; varint decode has no 10-byte cap (shift past width is undefined behaviour); field number 0 is accepted as end of message; decode dispatches through std::unordered_map plus std::function per field, not compile time; unpacked repeated scalars are silently dropped (issue #47 closed without fix); the nested size pass is quadratic in depth; fixed/float fields assume a little-endian host; no oneof (#14)."
     ],
     "measurements": [
-      "verifier batch-53 (wave 1)"
+      "verifier batch-53 (wave 1)",
+      "enricher (wave 1)"
     ]
   },
   {

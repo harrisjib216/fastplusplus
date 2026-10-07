@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/pragmatwice/protopuf",
+  "one_liner": "Header-only C++20 protobuf-wire-compatible codec with messages as template types; encodes a tiny message 2-4x faster than libprotobuf.",
+  "what_it_does": "protopuf encodes and decodes the Protocol Buffers wire format without protoc: a message is declared as a C++ type, e.g. message<uint32_field<\"id\", 1>, string_field<\"name\", 3>>, and fields are accessed by name or number (msg[\"name\"_f], msg[1_i]). message_coder<T>::encode<Mode>(msg, span) writes into a caller-supplied byte span and decode<Mode>(span) returns the message plus the unread bytes. Values live in plain std::string, std::vector and integer members; safe_mode (the default since #44) wraps results in std::optional and bounds-checks, while unsafe_mode skips all checks. It is not a drop-in for libprotobuf: there are no generated classes, reflection, descriptors, JSON mapping or arenas.",
+  "how_it_is_fast": "Encoding is fully templated and inlined: each field's key is a compile-time constant ((number << 3) | wire type), the field list is walked with a fold over base classes, and output goes straight into a caller buffer with no virtual calls or library boundary; unsafe_mode also removes every bounds check. Embedded-message lengths are computed by a recursive size pass (skipper::encode_skip) right before each nested message is written. Decoding is less static than the README suggests: each field key is looked up in a per-message std::unordered_map of std::function handlers (decode_map, and skip_map for unknown fields), which is why the decode win is small.",
+  "when_to_use": [
+    "Small, flat or shallow messages on a hot encode path where you control the schema and want to emit protobuf-compatible bytes without linking libprotobuf or running protoc",
+    "Header-only builds or constrained targets where libprotobuf's binary size and build integration are the bigger cost (no codegen step, CMake INTERFACE target, vcpkg/Conan packages)",
+    "Talking to protobuf peers with simple schemas (scalars, strings, bytes, nested and repeated messages, packed repeated scalars, maps) where encode latency matters more than decode",
+    "C++20 codebases that prefer describing messages as types next to the code over maintaining .proto files"
+  ],
+  "when_not_to_use": [
+    "Decode-heavy services: the only published decode numbers are 1.12x (safe_mode) and 1.30x (unsafe_mode) over libprotobuf on one 45-byte message, measured against protobuf without an Arena; per-field hash-map plus std::function dispatch leaves little headroom",
+    "Untrusted input in unsafe_mode (no bounds checks at all; issue #41 was an out-of-bounds read and write), and even safe_mode is not hardened against malformed input (see gotchas)",
+    "Schemas that need oneof (issue #14 open), unknown-field preservation (unknown fields are skipped and lost on re-encode), groups, proto2 extensions, reflection or JSON mapping",
+    "Deeply nested messages: every embedded level reruns the size pass over its whole subtree before writing, so size computation grows with nesting depth squared, unlike libprotobuf's cached sizes",
+    "Big-endian targets with fixed32/fixed64/float/double fields: the default std::bit_cast path writes host byte order without a swap (only the INT_CONVERSION_RECURSIVE_IMPL fallback is byte-order independent)"
+  ],
+  "integration": {
+    "form": "header-only (CMake INTERFACE target protopuf; vcpkg port protopuf 3.1.0, Conan Center protopuf up to 3.1.0)",
+    "dependencies": "none at runtime; GoogleTest for the optional unit tests, libprotobuf and Google Benchmark only for the optional compatibility and benchmark targets",
+    "min_toolchain": "C++20: GCC 11+, Clang 12+, MSVC 14.29 (VS 2019 16.9)+, Apple Clang 17 (Xcode 16.4)+; GCC 10 fails on an NTTP CTAD bug (PR96331); CMake 3.16 for the provided build",
+    "platforms": "any platform with a C++20 compiler for varint, string and message fields; fixed-width and floating-point fields assume a little-endian host on the default bit_cast path (not documented)",
+    "thread_safety": "not documented; encode and decode are free functions over caller-owned data, and the shared decode/skip maps are const globals built during dynamic initialization, so concurrent decodes after startup only read shared state",
+    "drop_in_for_baseline": "false: wire-compatible with protobuf in both directions for the supported field types, but the API (template message types, span-based encode/decode, optional results) replaces protoc-generated classes entirely"
+  },
+  "gotchas": [
+    "Decoding matches on the full key (field number plus wire type), so a repeated scalar must be declared as array_field (packed) to read proto3 output from protobuf, and an unpacked encoding of the same field is silently skipped; issue #47 (proto3 repeated int32 not decoded) was closed with no code change. Any key with field number 0 ends the message as a success instead of an error.",
+    "safe_mode is not fully safe on malformed input: an unknown field with wire type 3, 4, 6 or 7 reaches skip_map<Mode>.at() and throws std::out_of_range instead of returning an empty optional, and varint decoding has no 10-byte cap, so overlong varints shift by 7*i past the integer width (undefined behaviour) rather than being rejected.",
+    "decode_map and skip_map are inline variable templates holding std::unordered_map<..., std::function> built by dynamic initialization, with unordered initialization across translation units: decoding from another global's constructor can touch an unconstructed map. Despite the constexpr markers, decode cannot run at compile time.",
+    "Benchmark harness (test/benchmark/main.cpp, the source of the PR #53 numbers): the encode loops discard the result and never pass the output buffer to DoNotOptimize or ClobberMemory, so stores from the fully inlined protopuf encoder may be partly dead-code-eliminated while protobuf's out-of-line SerializeToArray (which also runs ByteSizeLong) cannot be. Both decoders get the 64-byte zero-padded buffer: both stop at the zero byte after the 45 real bytes, so the work matches, but protopuf reports success while protobuf's ParseFromArray result (a failure on tag 0) is ignored. protobuf decodes into a fresh non-Arena message every iteration, and the 4.0x encode headline is unsafe_mode (safe_mode is 2.3x)."
+  ],
+  "pick_this_over_siblings_when": "Pick protopuf over pbtools or protobuf-c when you are in C++20 and want protobuf wire compatibility without a code generator or a C runtime library; pbtools has a reproducible multi-message encode and decode comparison against libprotobuf 3.6.1, which protopuf lacks. zpp::bits also speaks protobuf through zpp::bits::pb_protocol, but its README calls that mode experimental and 2-5x slower than its native format, so use zpp::bits (native format) when both ends are your own C++ and protopuf when the bytes must be real protobuf.",
+  "verified_claims_summary": "The only numbers are the 'Before' table in contributor basiliscos's unmerged PR #53 (opened 2025-07-08), produced by the repo's Google Benchmark harness 'in Release mode' with no CPU, compiler, flags or libprotobuf version given. One 45-byte proto3 message (Class with a name and 3 Students) encodes in 17.2 ns (unsafe_mode) and 29.7 ns (safe_mode) vs 68.0 ns for libprotobuf SerializeToArray (about 4.0x and 2.3x), and decodes in 188 ns and 217 ns vs 244 ns for ParseFromArray (about 1.30x and 1.12x); the PR's faster 'After' decode figures come from a change the maintainer found a length-counting bug in.",
+  "status_note": "Lightly maintained: functional changes stopped in May 2025 (safe_mode became the default in November 2024, bytes_field fix in May 2025), followed only by a README note in June 2025 and a CI fix on 2026-10-02, with PR #53 and oneof (#14) still open; Apache-2.0, header-only and packaged in vcpkg and Conan, so easy to adopt for simple schemas, but the speed evidence is a single unpinned contributor run.",
+  "sources_read": [
+    "https://github.com/PragmaTwice/protopuf",
+    "https://github.com/PragmaTwice/protopuf/commits/master",
+    "https://github.com/PragmaTwice/protopuf/pull/53",
+    "https://github.com/PragmaTwice/protopuf/issues?q=is%3Aissue",
+    "https://github.com/PragmaTwice/protopuf/issues/47",
+    "https://github.com/PragmaTwice/protopuf/issues/34",
+    "https://github.com/PragmaTwice/protopuf/tree/master/include/protopuf",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/README.md",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/test/benchmark/main.cpp",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/test/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/test/benchmark/message.proto",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/message.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/coder.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/coder_mode.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/skip.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/varint.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/array.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/field.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/byte.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/int.h",
+    "https://raw.githubusercontent.com/PragmaTwice/protopuf/HEAD/include/protopuf/float.h",
+    "https://raw.githubusercontent.com/microsoft/vcpkg/master/ports/protopuf/vcpkg.json",
+    "https://raw.githubusercontent.com/conan-io/conan-center-index/master/recipes/protopuf/config.yml",
+    "https://raw.githubusercontent.com/eyalz800/zpp_bits/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
