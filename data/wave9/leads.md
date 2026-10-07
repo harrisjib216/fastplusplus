@@ -48,3 +48,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - xpack (ebiggers/xpack): lzbench 1.8: 171/890 MB/s at 33.54% vs zlib -1 119/383 at 36.45%. Not catalogued (enricher lead, 2026-10-07).
 - liblzg (mbitsnbites/liblzg): minor lead from the LZMAT enrichment, not opened.
 - zstd (wave0-seed, tier B, general-lossless incumbent): lzbench 2.4 rows (zstd -1 411/1351 MB/s vs zlib -1 89.0/297 MB/s, gcc 15.2.0, EPYC 9555P) would support a retier to A consistent with retier-02; re-found by w9-mine-c (2026-10-07).
+- hypersonic-rle-kit (successor of rle8): benchmarked TurboRLE 7f6e486 (April 2023) and beats trle on enwik9.bwt in ratio and speed; not catalogued (verifier lead, 2026-10-07).

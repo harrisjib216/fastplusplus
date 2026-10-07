@@ -1,0 +1,65 @@
+{
+ "id": "https://github.com/gfx/cpp-timsort",
+ "one_liner": "Header-only C++20 TimSort and TimSort-merge; beats std::sort/std::stable_sort only on presorted, reversed or run-structured input.",
+ "what_it_does": "A single-header port of Python's and OpenJDK's TimSort exposing gfx::timsort (stable sort) and gfx::timmerge (stable merge of two adjacent sorted subranges). The 3.x API mirrors std::ranges::stable_sort and std::ranges::inplace_merge: iterator plus sentinel or a whole range, an optional comparator (default std::ranges::less) and an optional projection, returning the end iterator. It is a drop-in for the stable algorithms in shape, not for std::sort's speed on random data.",
+ "how_it_is_fast": "TimSort scans the input for natural runs (non-decreasing, or strictly decreasing runs reversed in place), extends short runs to a minimum run length (32-64 since v2.0.1) with binary insertion sort, and merges runs on a stack under the length invariants. Merges first gallop (exponential plus binary search) to skip the prefix and suffix that are already in place, then switch between one-at-a-time merging and galloping mode when one side keeps winning. An already sorted or strictly reversed input is a single run, so it costs n-1 comparisons (plus one reverse), which is where all the claimed wins come from.",
+ "when_to_use": [
+  "Stable sorting of data that is already mostly ordered: re-sorting a vector after appending a few elements, nearly sorted timestamps or log records, inputs made of a few long ascending or descending runs.",
+  "Merging two sorted halves with little overlap, such as appending a sorted batch to a sorted vector: timmerge gallops past the in-place parts (README GCC 10.2 run: 0.11 ms vs 4.29 ms per 100 int merges when the halves are already in order).",
+  "Elements with expensive comparisons or moves, such as std::string or composite keys, where galloping saves comparisons: the README merge run shows timmerge 1.5x faster than std::inplace_merge on randomly overlapping std::string halves and 2.7x on swapped halves.",
+  "C++20 code that wants a stable sort with projections and sentinel or proxy-iterator support (std::views::zip works from v3.0.1).",
+  "Porting Python or Java code whose performance assumptions rely on TimSort's run adaptivity."
+ ],
+ "when_not_to_use": [
+  "Random or uniformly distributed keys: the README run has timsort 1.8x slower than std::sort on 100000 random ints (1.256 s vs 0.695 s for 100 sorts) and 1.45x slower than std::stable_sort (0.869 s); the same holds for std::string.",
+  "Memory-constrained code: merges allocate a temporary buffer of up to half the range, and an allocation failure throws std::bad_alloc instead of falling back to an in-place O(n log^2 n) merge as std::stable_sort and std::inplace_merge can.",
+  "Merging heavily overlapping halves of cheap types: timmerge was slower than std::inplace_merge on randomly overlapping int halves (37.0 ms vs 33.4 ms average per 100 merges).",
+  "Pre-C++20 toolchains: 3.x needs C++20 concepts and ranges, and the C++11 (2.x.y) and C++03 (1.x.y) branches are no longer actively maintained.",
+  "Non-random-access containers (std::list, forward ranges) or parallel sorting: it requires random-access iterators and runs single-threaded with no execution-policy overloads."
+ ],
+ "integration": {
+  "form": "header-only",
+  "dependencies": "none (standard library only); the tests use Catch2, fetched by CMake",
+  "min_toolchain": "C++20 for 3.x (CI: GCC 10, Clang 11 on Ubuntu; MSVC 19.37; MinGW-w64 GCC 12; GCC 10 and Clang 17 on macOS); CMake 3.14+ for the install target; branch 2.x.y needs C++11, 1.x.y C++03",
+  "platforms": "any (portable scalar C++, no intrinsics); CI on Linux, Windows (MSVC, MinGW) and macOS",
+  "thread_safety": "not documented; each call builds its own local TimSort object and keeps no global state, so concurrent calls on disjoint ranges are independent (read from the source)",
+  "drop_in_for_baseline": "partial: same call shape as std::ranges::stable_sort / std::stable_sort and std::ranges::inplace_merge (namespace gfx), but random-access only, no allocation-failure fallback, no execution policies, and it is a replacement for std::sort only when a stable result is wanted and the input is presorted"
+ },
+ "gotchas": [
+  "Every branch (1.x.y, 2.x.y, 3.0.1) writes the adaptive gallop threshold back as minGallop_ = (std::min)(minGallop, 1), where OpenJDK's TimSort.java writes back max(minGallop, 1) ('minGallop < 1 ? 1 : minGallop') and CPython stores the adapted value. After the first merge of a timsort call, every later merge therefore starts in galloping mode almost at once. Results stay correct and stable; it may cost extra comparisons on random input (not measured here) and does not inflate any claimed win, since sorted and reversed inputs are single runs with no merges and each timmerge call starts fresh at MIN_GALLOP 7.",
+  "v3.0.0 returned wrong results on proxy iterators such as std::views::zip (issue #40, fixed in v3.0.1 on 2024-12-03); use 3.0.1. The 3.0.1 header still defines GFX_TIMSORT_VERSION_PATCH 0 (the macros say 3.0.0 while CMake says 3.0.1), so do not gate code on the version macros.",
+  "A comparator that is not a strict weak ordering is only caught by an assertion when GFX_TIMSORT_ENABLE_ASSERT is defined (Java's TimSort throws instead). If a comparator throws mid-merge, the elements already moved into the internal buffer are destroyed during unwinding and the range keeps moved-from values in their place; exception guarantees are not documented.",
+  "No published number reflects the current 3.x code: the README sort output is from the 2015 example/bench.cpp built with Apple LLVM 7.0.0 at -O2 (before the v2.0.1 minRunLength fix, issue #33), the merge output was built with -std=c++11 from 2.x-era code, and no CPU model is given. bench_sort has no sortedness check (bench_merge checks is_sorted) and each timing includes a std::copy of the 100000-element input, which narrows the ratios rather than inflating them."
+ ],
+ "pick_this_over_siblings_when": "Pick it over pdqsort or vergesort when you need a stable result with C++20 projections and the data is presorted or run-structured; both are unstable sorts whose catalogued wins are on random-data distributions where gfx::timsort loses to std::sort. For stable sorting of primitive keys on random or mixed data pick fluxsort, quadsort or blitsort, which beat std::stable_sort there while gfx::timsort is 1.45x slower than it; among these siblings only gfx::timmerge replaces std::inplace_merge.",
+ "verified_claims_summary": "The project's own README runs, no CPU model: with Apple LLVM 7.0.0 (libc++ inferred), -O2, 100 copy-then-sort passes over 100000 elements, timsort beat std::sort 2.4x on reversed ints and 2.7x on sorted ints (1.35-1.7x on std::string) and std::stable_sort up to 30x on reversed ints, but lost 1.8x to std::sort and 1.45x to std::stable_sort on random ints. With GCC 10.2.0 on Manjaro x86_64 (libstdc++ inferred), timmerge beat std::inplace_merge on all std::string cases (1.5x random overlap, 2.7x swapped halves, 578x when the halves are already in order, a degenerate case) and lost slightly on randomly overlapping int halves.",
+ "status_note": "Low activity (last commit and release v3.0.1 on 2024-12-03, one open enhancement issue, 319 stars, on Conan Center as timsort/3.0.1), MIT-licensed single header that is easy to vendor; the older C++11 and C++03 branches are unmaintained, and the code clamps its gallop threshold with std::min where OpenJDK uses max (a performance deviation that leaves results correct and does not touch the benchmarked wins).",
+ "sources_read": [
+  "https://github.com/timsort/cpp-TimSort",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/README.md",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/LICENSE",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/include/gfx/timsort.hpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/CMakeLists.txt",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/benchmarks/bench_sort.cpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/benchmarks/bench_merge.cpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/benchmarks/benchmarker.hpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/HEAD/benchmarks/CMakeLists.txt",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/1.x.y/include/gfx/timsort.hpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/2.x.y/include/gfx/timsort.hpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/v3.0.0/include/gfx/timsort.hpp",
+  "https://raw.githubusercontent.com/timsort/cpp-TimSort/v3.0.1/include/gfx/timsort.hpp",
+  "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.base/share/classes/java/util/TimSort.java",
+  "https://raw.githubusercontent.com/python/cpython/main/Objects/listobject.c",
+  "https://github.com/timsort/cpp-TimSort/issues?q=is%3Aissue",
+  "https://github.com/timsort/cpp-TimSort/issues?q=minGallop",
+  "https://github.com/timsort/cpp-TimSort/issues/40",
+  "https://github.com/timsort/cpp-TimSort/issues/33",
+  "https://github.com/timsort/cpp-TimSort/issues/24",
+  "https://github.com/timsort/cpp-TimSort/issues/18",
+  "https://github.com/timsort/cpp-TimSort/issues/5",
+  "https://github.com/timsort/cpp-TimSort/releases",
+  "https://github.com/timsort/cpp-TimSort/commits/3.x.y",
+  "https://github.com/timsort/cpp-TimSort/wiki/Benchmark-results"
+ ],
+ "confidence": 0.85
+}
