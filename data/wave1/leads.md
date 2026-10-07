@@ -14,3 +14,6 @@
 - rpp (https://github.com/TheNumbat/rpp): blog thenumb.at/rpp blocked; snippet says about 20 s vs under 3 s compile time across two code bases with no named baseline; retry from an unblocked environment for a possible tier C compile-time record (w1-mine-ac, 2026-10-07).
 - s2n-tls (https://github.com/aws/s2n-tls): public Criterion harness vs OpenSSL and rustls in bindings/rust/standard/benchmarks but no published numbers; running it would give tier A (w1-mine-ac, 2026-10-07).
 - MPack (https://github.com/ludocode/mpack): fastest C MessagePack library in the schemaless shootout (2.13 vs 6.42 us write vs cmp); not catalogued (cmp enricher, 2026-10-07).
+- Tulip Indicators (https://github.com/TulipCharts/tulipindicators): repo benchmark.c compares against TA-Lib but the result numbers live only on tulipindicators.org (blocked); retry from an unblocked environment (w1-mine-af, 2026-10-07).
+- upb (https://github.com/protocolbuffers/upb): tail-call parsing blog with GB/s numbers blocked; only code-size numbers reachable; retry (w1-mine-af, 2026-10-07).
+- utf8proc (https://github.com/JuliaStrings/utf8proc): bench/ has ICU and libunistring harnesses with no published results; issue #12 snippet shows utf8proc slower than ICU (w1-mine-af, 2026-10-07).
