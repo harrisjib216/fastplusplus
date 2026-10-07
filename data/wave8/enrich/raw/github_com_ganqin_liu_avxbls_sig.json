@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/ganqin-liu/avxbls-sig",
+  "one_liner": "AVX-512 IFMA BLS12-381 BLS signature code (keygen, sign, aggregate, verify) layered on blst; paper claims at least 1.57x over blst.",
+  "what_it_does": "Research library that re-implements the hot paths of BLS signatures on BLS12-381 (sk-to-pk, signing with the public key in G1 or in G2, hash-to-curve, subgroup checks, pairing aggregation and final verification) with AVX-512 vector code. Each routine is a separate *_vec counterpart of a blst call (pointe1_sign_vec, sign_in_g2_vec, groupcheck_g1_vec, blst_pairing_chk_n_aggr_pk_in_g1_vec, pairing_finalverify_vec) that takes blst's own blst_p1/blst_p2/blst_pairing structs, so call sites can switch one at a time. There is no packaged library or documented API: you compile src/*.c with the repo makefile and link the vendored libblst.a; test.c is both the self-test and the benchmark.",
+  "how_it_is_fast": "Fp elements of the 381-bit prime are held as 8 limbs in radix 2^48 and multiplied with AVX-512IFMA vpmadd52lo/hi (52x52-bit multiply-accumulate), with several independent field operations packed into one register (2x2, 4x2 and 8x1 lane layouts for Fp and Fp2). Point addition and doubling formulas in G1 and G2 are rescheduled so their independent multiplications fill parallel lanes. G1 scalar multiplication keeps blst's constant-time structure (GLV split via the beta endomorphism, Booth-encoded width-5 windows, full-table masked gather), the G1 subgroup check uses the sigma/times(-z) endomorphism test, and the Miller loop and final exponentiation reuse the sibling avxbls pairing code. Hash-to-curve is available both as vectorised standard SSWU (hash_to_g1_vec/hash_to_g2_vec) and as vectorised SwiftEC, a cheaper SWIFT-style encoding using sqrt(-3), which is the compiled default.",
+  "when_to_use": [
+    "Single-thread latency of BLS12-381 signing, aggregation or verification on Intel Ice Lake, Tiger Lake, Sapphire Rapids or newer, or AMD Zen 4 and newer (AVX-512 IFMA present).",
+    "Prototyping or researching vectorised pairing-based cryptography where you want per-operation cycle counts of a blst call and its AVX-512 counterpart from one harness (test.c prints both).",
+    "Code that already links blst and wants to swap selected hot calls (sk_to_pk, subgroup checks, final verify) for vector versions while keeping blst types and serialization.",
+    "Closed systems that control both signer and verifier, where the non-standard SwiftEC hash is acceptable, or builds that set SWIFTEC_ON to 0 to keep standard SSWU hashing."
+  ],
+  "when_not_to_use": [
+    "Interoperable BLS (Ethereum consensus, Filecoin, Chia, IETF ciphersuites) with the default build: bindings/fp12_avx.h sets SWIFTEC_ON 1, so messages hash with SwiftEC instead of RFC 9380 SSWU and signatures will not verify against standard implementations.",
+    "CPUs without AVX-512 IFMA (AMD before Zen 4, Intel Alder Lake and later client parts with AVX-512 disabled, ARM): there is no runtime dispatch or scalar fallback for the *_vec routines.",
+    "Production signing services: research prototype with 0 stars, no releases, no API documentation, self-tests that print error counts instead of failing, and all compiler warnings suppressed (-w).",
+    "Throughput-oriented batch verification across many cores: only single-call, single-thread paths are vectorised and measured; blst's multi-threaded and batch paths are not compared."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "blst (vendored source in src_blst/ and build_blst/, built into libblst.a by build.sh; a prebuilt libblst.a is also committed)",
+    "min_toolchain": "GCC with AVX-512 IFMA intrinsics; makefile hard-codes /opt/gcc-13.3/bin/gcc with -O3 -march=native -mtune=native; C11 (aligned_alloc)",
+    "platforms": "x86-64 with AVX-512F/VL and AVX-512IFMA, Linux-oriented makefile",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — the *_vec functions take blst structs and mirror blst signatures, but they are separate names, and the default SwiftEC hashing changes H(m) and therefore every signature; rebuild with SWIFTEC_ON 0 for blst-compatible hashing"
+  },
+  "gotchas": [
+    "Harness flaw: with the committed SWIFTEC_ON 1, the aggregation benchmarks (bench_g1/g2_aggmode1, bench_g1/g2_aggregate) time vendored blst_pairing_chk_n_aggr_* and chk_n_mul_n_aggr_*, which hash with standard SSWU (Hash_to_G2/G1 in src_blst/aggregate.c), against *_vec versions that hash with SwiftEC (src/aggregate_avx.c), so the aggregation speedup mixes vectorisation with a cheaper, non-standard hash-to-curve. The signing rows compare the authors' scalar blst_swiftec_g1/g2 plus blst signing, not stock blst signing.",
+    "Self-tests are soft: p1signtest, p2signtest, maptog1test and maptog2test count mismatches and print 'error=N' but return 0, aggcorrecttest prints FAIL without stopping, and no test checks that a bad signature is rejected; read ./test output rather than trusting the exit code.",
+    "bench_coreverify_g2 (commented out of main) is broken: under SWIFTEC_ON it writes a 288-byte G2 point from swiftec_g2_vec into a 144-byte blst_p1 (stack overflow hidden by -w) and derives the G2 public key from the G1 generator BLS12_381_G11; do not re-enable it as is.",
+    "SwiftEC hash_to_field reads 48 bytes of expand_message_xmd output per Fp element (swiftec_g1_vec, swiftec_e1_impl, swiftec_g2_vec) instead of RFC 9380's 64, so field elements carry modulo-p bias, and blst_swiftec_g2 ignores the aug argument. README says to run ./bin/test, but the makefile builds ./test."
+  ],
+  "pick_this_over_siblings_when": "Pick it over hchengv/avxbls when you need the signature-scheme layer (hash-to-curve, signing, subgroup checks, aggregate and final verify) rather than only the optimal ate pairing it builds on. VROOM (SimonLangowski) reports a larger pairing gain over BLST (3.9x on its own bench) with RNS Montgomery arithmetic but offers no BLS signing API.",
+  "verified_claims_summary": "The repo publishes no numbers; test.c prints rdtsc-averaged cycles (cpuid-serialised TSC reference cycles, 10,000-100,000 iterations after a 1,000-10,000 iteration warm-up) for each blst call next to its *_vec counterpart, with blst built from the vendored ADX x64 assembly and the vector code by GCC 13.3 -O3 -march=native. The only headline is the TCHES 2026 paper (ePrint 2026/947, abstract seen through search snippets only, eprint.iacr.org EGRESS_BLOCKED): at least 1.57x faster than blst's x64 assembly on an Intel Core i3-1005G1 (Ice Lake), without per-operation tables or a statement of which hash-to-curve the aggregation rows used.",
+  "status_note": "Active research code (22 commits from December 2025 to 2026-03-12, 0 stars, no issues, no releases) under Apache-2.0 and small enough to vendor, but a prototype: hard-coded /opt/gcc-13.3 compiler path, warnings suppressed, soft self-tests and non-standard SwiftEC hashing on by default.",
+  "sources_read": [
+    "https://github.com/ganqin-liu/avxbls-sig",
+    "https://github.com/ganqin-liu/avxbls-sig/commits",
+    "https://github.com/ganqin-liu/avxbls-sig/issues",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/README.md",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/test.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/makefile",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/build.sh",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/bindings/fp12_avx.h",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/bindings/intrin.h",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/aggregate_avx.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/e1ops_avx.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/e2ops_avx.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/swiftec_blst.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/rdtsc64.S",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src/fp12_avx.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src_blst/aggregate.c",
+    "https://raw.githubusercontent.com/ganqin-liu/avxbls-sig/HEAD/src_blst/server.c"
+  ],
+  "confidence": 0.6
+}
