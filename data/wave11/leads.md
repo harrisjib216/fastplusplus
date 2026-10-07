@@ -5,3 +5,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - dsx-ai-factory/model-streamer: the Run:ai Model Streamer repo moved here; check whether the old id should fold into it.
 - google/nsync (the Apache-2.0 mutex library behind Cosmopolitan's pthread_mutex_t fast path): not catalogued (wave 11 batch 51 verifier, 2026-10-07); seed candidate.
 - Kokkos (wave 11, kokkos/kokkos): arXiv 2411.05009 PIC paper, C to B once the PDF is reachable.
+- whippet (wingo/whippet): embeddable GC in C (MIT) with a bdw backend and mt-gcbench derived from GCBench; README has no numbers (enricher lead, 2026-10-07).

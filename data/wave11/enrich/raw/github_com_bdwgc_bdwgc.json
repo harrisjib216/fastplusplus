@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/bdwgc/bdwgc",
+  "one_liner": "Conservative mark-sweep garbage collector for C and C++; first-party GCBench runs beat glibc malloc/free on small-object allocation.",
+  "what_it_does": "A garbage-collecting replacement for malloc and operator new: call GC_MALLOC (or GC_MALLOC_ATOMIC for pointer-free data) and drop the free calls; the collector finds live objects by conservatively scanning stacks, registers, static data and the heap, with no pointer tagging or compiler support. It can also take over malloc/realloc/free wholesale (REDIRECT_MALLOC / enable_redirect_malloc), run as a leak detector (FIND_LEAK), and offers C++ gc/gc_cleanup base classes plus gc_allocator.h for STL containers; the cord string library ships with it.",
+  "how_it_is_fast": "Non-moving mark-sweep (Boehm-Weiser 1988): allocation pops from segregated per-size, per-kind free lists of 8- or 16-byte granules carved from HBLKSIZE pages, and free is optional, so per-object deallocation work becomes batched collection that is cheap when most objects are small and short-lived. Sweeping is lazy (a page is swept only when an allocation finds its free list empty) and uses size-specialised unrolled sweep loops; fully empty pages go back to the block allocator after touching only headers. With THREAD_LOCAL_ALLOC each thread refills private free lists in bulk through GC_malloc_many (about one HBLKSIZE at a time) and allocates without the global allocator lock, and PARALLEL_MARK splits marking across cores with a shared work queue modelled on Endo, Taura and Yonezawa.",
+  "when_to_use": [
+    "Language runtimes and compilers that emit C or need a collector with easy C interop (the overview names this as a main use).",
+    "Allocation-heavy code built from many small pointer-linked objects (trees, lists, cons cells, ASTs) where ownership is hard to track; the docs say the collector may be faster than malloc/free when objects are very small.",
+    "Multi-threaded allocation on multi-core machines with thread-local allocation and parallel marking enabled (the CMake and autoconf defaults); scale.md shows two clients in 12.3 s against 24.55 s for malloc/free on two CPUs.",
+    "Legacy C code with leaks or unclear ownership, either linked against libgc with malloc redirected or built in FIND_LEAK mode to report leaks.",
+    "Large pointer-free buffers allocated with GC_MALLOC_ATOMIC, which are neither cleared nor scanned."
+  ],
+  "when_not_to_use": [
+    "Programs dominated by large objects: the overview says the collector is slower than malloc/free there, and objects above about 100 KB need GC_malloc_ignore_off_page to avoid false retention.",
+    "Latency-bound or real-time code: collections stop the world by default (the README cites about 5 ms per MB of live data on 2007 hardware), and incremental mode needs VM dirty-bit support and has its own costs (issue #681: gctest 7231 ms with incremental plus parallel mark versus 2305 ms without).",
+    "Memory-tight deployments: a collected heap needs headroom (GC_free_space_divisor defaults to 3) and the docs expect higher space overhead than explicit malloc/free.",
+    "Builds without thread-local allocation on many cores: every GC_malloc then takes the global allocator lock; V's bundled amalgamation (thread-local allocation off) stayed flat at about 18 M allocations/s from 4 to 16 threads while libc malloc reached about 33 M/s (vlang/v issue #27488).",
+    "Code that hides pointers (XOR-linked lists, pointers kept only in system-malloc memory or thread-local storage, compressed or encrypted pointers) or that needs deterministic destruction."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libgc, plus optional libcord and libgccpp or libgctba for C++); a single-file amalgamation extra/gc.c also exists",
+    "dependencies": "none required; pthreads for threaded builds; libatomic_ops only where the compiler lacks atomic intrinsics (notably MSVC)",
+    "min_toolchain": "Plain C compiler; CMake 3.10+ (recommended), autoconf/automake, Zig (experimental), nmake or Makefile.direct; gc_cpp.h has C++98, C++11, C++14 and C++17 code paths",
+    "platforms": "Flat 32- or 64-bit address spaces: Linux, Android, BSDs, macOS, iOS, Windows (Win32/Win64), Solaris, HP/UX, Tru64, Irix, OS/2 and others; dynamic-library root scanning and incremental mode are limited to some of them",
+    "thread_safety": "Thread-safe in the default CMake and autoconf builds (threads, parallel mark and thread-local allocation ON); clients define GC_THREADS before including gc.h so thread creation is wrapped, or register foreign threads with GC_allow_register_threads and GC_register_my_thread. Makefile.direct's default and the one-line manual build are not thread-safe; calling GC routines from a signal handler is unsafe by default.",
+    "drop_in_for_baseline": "partial: REDIRECT_MALLOC or '#define malloc(n) GC_malloc(n)' replaces malloc, but pointers stored in system-malloc memory or thread-local storage are invisible to the collector, dynamic-library data roots must be supported on the platform, and free becomes optional rather than required"
+  },
+  "gotchas": [
+    "GC_malloc returns zeroed memory (calloc semantics), so it is not an apples-to-apples malloc; use GC_MALLOC_ATOMIC for pointer-free data, which is neither cleared nor scanned. Calling GC_free on very small objects (8 bytes or less) is documented as a probable performance loss.",
+    "Parallel marking can hurt: issue #320 (Wybe) reports a single-threaded program taking 54 s on a 1-core machine and 220 s on a 12-core machine, fixed only by GC_NPROCS=1, while scale.md warns that GC_NPROCS=1 can cause a 10x slowdown for multi-threaded clients; issue #619 (open) reports a hang with GC_allow_register_threads plus parallel mark on an M1 Max.",
+    "THREAD_LOCAL_ALLOC swaps the allocator lock to spin-then-queue, which slows the standard (non-thread-local) allocation calls; issue #453 still saw a 100-million-node linked-list build take 5.55 s on one thread and 9.21 s on two with thread-local allocation on (closed without a visible fix note).",
+    "Benchmark harness flaw, not a correctness bug: the headline 2.0x compares a thread-safe collector with a 2000-era glibc malloc that paid LinuxThreads locking when pthreads was linked (20.90 s against 10.51 s unlinked), the parallel-mark rows use a second CPU that the malloc run leaves idle, and the multi-client GCBench variant is not published (hboehm.info is unreachable here and the repo holds no GCBench), so the numbers cannot be reproduced."
+  ],
+  "pick_this_over_siblings_when": "Pick bdwgc over SGCL when you need a collector for C, or for C++ without rewriting to SGCL's tracked_ptr types, on platforms beyond Apple Silicon, with decades of production use behind it; pick Mesh, IsoAlloc or another malloc replacement when you keep explicit free and want lower memory or hardening rather than automatic reclamation.",
+  "verified_claims_summary": "First-party only: docs/scale.md times a multi-client variant of Boehm's GCBench (C, binary trees, mostly small objects) on a dual Pentium III/500 with Linux 2.2.12, a 2000 collector release and contemporary glibc, compiler and flags unstated: 9 s for the thread-unsafe GC against 10.51 s for malloc/free (about 1.17x), 10.3 s thread-safe against 20.90 s with pthreads linked (about 2.0x), and 12.3 s against 24.55 s for two clients with parallel mark and thread-local allocation using both CPUs (about 2.0x, derived from page data). An independent 2026 V-language issue (Ryzen 7 5800H, 64-byte allocations) measured 18.5 M against 13.0 M allocations/s for libc malloc on one thread (about 1.42x, derived from page data) but about 18 M against 32-33 M at 4-16 threads with thread-local allocation disabled in V's bundled build.",
+  "status_note": "Actively maintained (commits on 2026-10-06, latest stable 8.2.12 from February 2025, 8.3.0 in development) under an MIT-style permissive notice and packaged by most distributions, so copyable; the speed claim rests on a 25-year-old first-party run plus one independent 2026 microbenchmark, with no correctness bug found behind the published numbers but no reproducible harness in the repo.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/README.md",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/docs/scale.md",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/docs/overview.md",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/docs/gcdescr.md",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/docs/macros.md",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/include/gc/gc.h",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/include/gc/gc_cpp.h",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/include/gc/gc_allocator.h",
+    "https://raw.githubusercontent.com/bdwgc/bdwgc/HEAD/include/gc/gc_inline.h",
+    "https://github.com/bdwgc/bdwgc",
+    "https://github.com/bdwgc/bdwgc/commits/master",
+    "https://github.com/bdwgc/bdwgc/releases",
+    "https://github.com/bdwgc/bdwgc/tree/master/tests",
+    "https://github.com/bdwgc/bdwgc/issues?q=is%3Aissue+performance",
+    "https://github.com/bdwgc/bdwgc/issues/320",
+    "https://github.com/bdwgc/bdwgc/issues/453",
+    "https://github.com/bdwgc/bdwgc/issues/619",
+    "https://github.com/bdwgc/bdwgc/issues/681",
+    "https://github.com/vlang/v/issues/27488",
+    "https://github.com/vlang/v/pull/27544",
+    "https://github.com/wingo/whippet",
+    "https://github.com/wingo/whippet/blob/main/benchmarks/README.md",
+    "http://www.hboehm.info/gc/gc_bench/ (EGRESS_BLOCKED)",
+    "WebSearch snippet: CVE-2012-2673 integer overflows in GC_generic_malloc and calloc before 7.2"
+  ],
+  "confidence": 0.8
+}
