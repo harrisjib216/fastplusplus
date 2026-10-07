@@ -4938,6 +4938,90 @@
     }
   },
   {
+    "name": "Cutelyst",
+    "repo_url": "https://github.com/cutelyst/cutelyst",
+    "language": "C++",
+    "domain": "networking-and-servers",
+    "category": "http-servers-frameworks",
+    "baseline": "Drogon (C++ web framework, HttpArena's maintainer-written Drogon entry); the same results directory also holds Express, Flask and Django rows, and the listed incumbents nginx and actix-web, which beat Cutelyst on baseline-4096 and json-tls-4096",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "HttpArena HTTP/1.1 profiles, each the best of three 5 s runs (scripts/benchmark.sh) with the gcannon load generator: baseline (mixed GET/POST /baseline11 summing query parameters and body, 4096 connections), limited-conn (same, connections closed after 10 requests), pipelined (16x pipelining, reference-only and excluded from the composite score), json-tls (JSON serialization over HTTP/1.1 TLS, 4096 connections) and async (GET /delay/10, a flat 10 ms timer over 32,000 held connections, ceiling 3.2M req/s).",
+    "claimed_speedup": "Against Drogon on HttpArena (all ratios derived from page data): baseline-4096 2,153,860 vs 2,022,710 req/s (1.06x); limited-conn-4096 1,736,401 vs 1,694,883 (1.02x); json-tls-4096 326,846 vs 253,055 (1.29x); pipelined-4096 (reference-only profile) 10,167,331 vs 7,801,404 (1.30x); async-32000 761,563 vs 143,001 (5.3x, but the Drogon entry runs every delay timer on its single main loop, so this row measures the entry, not Drogon). Against slower stacks on baseline-4096: Express 525,879 (4.1x), Flask 77,319 (27.9x), Django 29,206 (73.7x). The category's listed incumbents on the same board are faster: baseline-4096 nginx 3,284,513 and actix 2,775,120 req/s (Cutelyst 0.66x and 0.78x), json-tls-4096 nginx 1,313,755 and actix 1,157,219 (Cutelyst 0.25x and 0.28x), async-32000 actix 2,112,168 (0.36x); Cutelyst beats actix only on limited-conn-4096 (1,736,401 vs 1,135,157, 1.53x) and beats nginx only on pipelined-4096 (10,167,331 vs 4,037,345, 2.5x).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/cutelyst.json",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Cutelyst: g++ from the ubuntu:26.04 image (version not stated), C++23, CMAKE_BUILD_TYPE=Release with no extra flags, Ninja; Cutelyst built from upstream commit 5ec5ce95d80a87b38ea45a326945bb22e515a23a (its libraries overlaid on the v5.1.0 .deb in the runtime image), Qt 6 from Ubuntu, Cutelee v6.2.0, ASql commit eebafdde (frameworks/cutelyst/Dockerfile and CMakeLists.txt in MDA2AV/HttpArena). Drogon: built on the unpinned drogonframework/drogon:latest image (per drogon's docker/ubuntu/Dockerfile: Ubuntu 22.04, g++-11, Drogon master at image build time built by build.sh with CMAKE_BUILD_TYPE=release), app built with CMake Release, C++20, and libjemalloc preloaded (frameworks/drogon/Dockerfile).",
+    "hardware": "AMD Ryzen Threadripper PRO 3995WX 64-Cores (128 threads), 251 GiB RAM, Ubuntu 24.04.4 host, kernel 6.17.0-22, Docker 29.3.0 (runc), performance governor (site/data/current.json); per scripts/lib/profiles.sh the server container is pinned to cpuset 0-31,64-95 (32 physical cores plus SMT siblings) and the load generator runs on the remaining CPUs of the same machine.",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-09-11",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "977 stars",
+    "has_code": true,
+    "tradeoffs": "Full-stack Qt-based framework: needs Qt 6 and the Qt event loop, uses QJsonDocument and QString throughout, so footprint and API are tied to Qt. Catalyst-style controllers and routing, HTTP/1.1, HTTP/2, FastCGI and WebSockets in one engine (Cutelyst::Server).",
+    "caveats": "Margins over Drogon on the scored throughput profiles are small (1.06x baseline, 1.02x limited-conn) from best-of-three 5 s runs with no variance reported. The async 5.3x row is not evidence about Drogon: HttpArena's Drogon entry (frameworks/drogon/main.cc) schedules each delay with app().getLoop()->runAfter, the main event loop, so all 32,000 timers fire on one thread (Drogon CPU 812% vs Cutelyst 6172%), while Cutelyst's entry uses a per-worker QTimer. Pipelined is a reference-only profile. The runs are weeks apart: all Cutelyst rows were saved on 2026-10-06 (PR #1520), Drogon's rows were last saved on 2026-09-06 (PRs #1455 and #1460) on an unpinned drogon:latest image built with g++-11, so compiler generation and harness state differ between the two rows. The category's listed incumbents on the same board are faster: nginx 3,284,513 and actix 2,775,120 req/s vs Cutelyst 2,153,860 on baseline-4096; nginx 1,313,755, h2o 1,229,462 and actix 1,157,219 vs 326,846 on json-tls-4096; actix 2,112,168 vs 761,563 on async-32000; nginx 2,626,297 vs 1,736,401 on limited-conn-4096. Drogon beats Cutelyst on latency-500k-8cpu (374,962 vs 329,347 req/s), on mean latency and CPU in latency-1m (108.1 us vs 137.6 us, 3551.7% vs 3825.6%) and in 8gbit-512 (102.5 us vs 120.5 us, 304.0% vs 342.7%). Express beats Cutelyst on json-tls-4096 (394,866 vs 326,846 req/s). Cutelyst's database profiles are very weak: async-db-1024 and fortunes-1024 both reached 384 req/s with 2.0-2.3 s mean latency and 22-43% CPU (Express 173,099 and 58,855), which looks like a stall in its per-thread ASql pool (about 3 connections per worker thread), so Cutelyst does not win on database or template workloads. The entry was written by Cutelyst's own author (meta.json maintainers: dantti, PRs #1479 and #1520), and its Dockerfile pins an upstream commit (2026-09-11, 'Add http chunked for HttpArena benchmarks') that adds chunked request bodies for this benchmark. The live leaderboard (www.http-arena.com) is blocked here and rankings may have changed. The Cutelyst README links HttpArena and historical TechEmpower Round 23 results but quotes no numbers.",
+    "found_via": [
+      "seed-list mining backfill: awesome-cpp 'Web Application Framework' list (https://github.com/fffaraz/awesome-cpp#Web Application Framework), then https://github.com/cutelyst/cutelyst README BENCHMARKS section pointing at HttpArena"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.8,
+    "assignment_ids": [
+      "w5-mine-h"
+    ],
+    "id": "https://github.com/cutelyst/cutelyst",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "A",
+      "tier_reason": "Every quoted number matches site/data/results/cutelyst.json and the sibling drogon/express/flask/django.json files in MDA2AV/HttpArena; the benchmark code is public (frameworks/cutelyst/{Dockerfile,CMakeLists.txt,main.cpp,root.cpp,app.cpp}, frameworks/drogon/{Dockerfile,main.cc}, scripts/benchmark.sh, scripts/lib/profiles.sh), both entries build with CMake Release, and the CPU model (Threadripper PRO 3995WX) is in site/data/current.json, so tier A holds as for wtx on the same harness. The verdict is a downgrade of the claim, not of the tier: the async 5.3x row is an artifact of the Drogon entry's code, and the category's listed incumbents on the same board (nginx, actix-web) beat Cutelyst on the main profiles.",
+      "notes": "Numbers and ratios versus Drogon, Express, Flask and Django are exact, and license (BSD-3-Clause), 977 stars, last commit 2026-09-11 (not a fork, not archived) are confirmed, so tier A stays; the claim is downgraded because the async 5.3x win comes from the Drogon entry scheduling every timer on its main loop, Drogon's rows are a month older and built on an unpinned g++-11 image, and the category's listed incumbents nginx and actix-web on the same board beat Cutelyst on baseline-4096, json-tls-4096 and async. Record shortcomings: not faster than nginx or actix-web; only 1.02-1.06x over Drogon on scored throughput profiles; database and template profiles stall at 384 req/s; entry written by Cutelyst's author with a benchmark-specific upstream commit. The record's 'single 5 s runs' was corrected to best of three 5 s runs.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/cutelyst.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/drogon.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/express.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/flask.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/django.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/actix.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/nginx.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/h2o.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/current.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/README.md",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/Dockerfile",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/CMakeLists.txt",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/meta.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/main.cpp",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/root.cpp",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/cutelyst/app.cpp",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/drogon/Dockerfile",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/drogon/CMakeLists.txt",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/drogon/meta.json",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/drogon/main.cc",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/benchmark.sh",
+        "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/lib/profiles.sh",
+        "https://raw.githubusercontent.com/drogonframework/drogon/master/docker/ubuntu/Dockerfile",
+        "https://raw.githubusercontent.com/drogonframework/drogon/master/build.sh",
+        "https://github.com/MDA2AV/HttpArena/commits/main/site/data/results/cutelyst.json",
+        "https://github.com/MDA2AV/HttpArena/commits/main/site/data/results/drogon.json",
+        "https://github.com/MDA2AV/HttpArena/pull/1520",
+        "https://github.com/cutelyst/cutelyst",
+        "https://github.com/cutelyst/cutelyst/commits"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "baseline-4096: Cutelyst 2,153,860 req/s vs Drogon 2,022,710 req/s (1.06x, derived from page data) and vs Express 525,879 (4.1x), Flask 77,319 (27.9x), Django 29,206 (73.7x) (all derived from page data). async-32000 (GET /delay/{ms}): 761,563 vs Drogon 143,001 (5.3x, derived) and Express 487,281 (1.6x, derived). pipelined-4096: 10,167,331 vs Drogon 7,801,404 (1.30x, derived). json-tls-4096: 326,846 vs Drogon 253,055 (1.29x, derived). limited-conn-4096: 1,736,401 vs Drogon 1,694,883 (1.02x, derived). Cutelyst's own file only holds its rows; the baseline rows come from the sibling result files drogon.json, express.json, flask.json and django.json in the same directory.",
+      "baseline": "Drogon (C++ web framework); the same HttpArena result set also holds Express, Flask and Django rows",
+      "compiler_and_flags": "g++ from the Ubuntu 26.04 image (version not stated), C++23, CMAKE_BUILD_TYPE=Release (no extra flags) for Cutelyst 5.1 plus upstream commit 5ec5ce95, Qt 6, Cutelee 6.2.0 and ASql; see frameworks/cutelyst/Dockerfile and CMakeLists.txt in MDA2AV/HttpArena",
+      "hardware": "AMD Ryzen Threadripper PRO 3995WX 64-Cores (128 threads), 251 GiB RAM, Ubuntu 24.04.4 host, kernel 6.17.0-22, Docker 29.3.0, performance governor (site/data/current.json)",
+      "workload": "HttpArena baseline profile (mixed GET/POST with query parsing, HTTP/1.1, 4096 connections, 5 s run, 64 load-generator threads) plus async, pipelined, json-tls and limited-conn profiles, each framework run in Docker on one 64-core host.",
+      "caveats": "Margins over Drogon are small (1.02x to 1.06x on baseline and limited-conn) from single 5 s runs with no variance reported, so only the async, pipelined and json-tls rows are clear wins. Drogon beats Cutelyst on latency-500k-8cpu (374,962 vs 329,347 req/s), on mean latency in latency-1m (108.1 us vs 137.6 us) and on CPU in that profile (3551.7% vs 3825.6%). Express beats Cutelyst on json-tls-4096 (394,866 vs 326,846 req/s). Cutelyst's database profiles are very weak: async-db-1024 and fortunes-1024 both reached 384 req/s (Express 173,099 and 58,855), which looks like a connection-pool or driver limit, so Cutelyst does not win on database or template workloads. The entry was submitted by Cutelyst's own author (meta.json maintainers: dantti) with a Dockerfile pinned to an upstream commit that adds chunked request bodies for this benchmark, and the results file was last updated on 2026-10-06; the live leaderboard (www.http-arena.com) was not reachable here and rankings may have changed. HttpArena entries are written by each framework's own maintainers, so tuning effort differs across rows. The Cutelyst README links HttpArena and historical TechEmpower Round 23 results but quotes no numbers; the cutelyst.org TechEmpower round 15 blog post was blocked here."
+    }
+  },
+  {
     "name": "Granian",
     "repo_url": "https://github.com/emmett-framework/granian",
     "language": "Rust",
@@ -5540,6 +5624,70 @@
     "corrected_fields": {
       "last_commit": "2026-09-22",
       "caveats": "Margin over nginx is small (~3%); CPU model not specified, only core count/clock given; numbers come from the project's own benchmark, not independently reproduced; benchmark and nginx config are both included in the same doc (section 8) so it is reproducible in principle"
+    }
+  },
+  {
+    "name": "cpp-httplib",
+    "repo_url": "https://github.com/yhirose/cpp-httplib",
+    "language": "C++",
+    "domain": "networking-and-servers",
+    "category": "http-servers-frameworks",
+    "baseline": "C++ REST SDK (cpprestsdk) v2.10.15 HTTP server",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Independent shootout (guteksan/REST-CPP-benchmark, 2020): 10 Python producer processes (postInLoop.py, http.client, a new TCP connection per request, printing under a shared lock) each POST N=200 or 1000 small JSON messages to a /test echo endpoint that sleeps t=0 or 200 ms; services use C=28 or C=4 worker threads and run Local (same machine) or over a VPN; metric is time from the service's first logged request reception to its last reply (log4cplus timestamps), one run per cell.",
+    "claimed_speedup": "Read from images/rest_all.PNG (time from first request received to last reply, 10 producers x N requests). Local, N=1000, t=0 ms, C=28: cpp-httplib v0.5.8 3.015 s vs C++ REST SDK 3.401 s (1.13x faster, derived from page data). In the other five cells where C++ REST SDK completed (all C=28) cpp-httplib is slower or tied: VPN N=1000 t=0 3:31.510 vs 1:52.476 (1.88x slower, derived from page data); Local N=200 t=200 40.359 s vs 40.281 s; Local N=1000 t=200 3:21.790 vs 3:21.415; VPN N=200 t=200 1:22.168 vs 1:01.523 (1.34x slower, derived from page data); VPN N=1000 t=200 6:51.648 vs 5:11.715 (1.32x slower, derived from page data). In all six C=4 cells C++ REST SDK deadlocked while cpp-httplib finished (e.g. 1.915 s at Local N=1000 t=0). In the Local sprint cell cpp-httplib is slower than Crow (1.536 s), Pistache (1.059 s), Restbed (1.333 s) and Restinio (1.025 s), and it is marked worst (red) in 7 of the 12 cells.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/guteksan/REST-CPP-benchmark",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "CMake -DCMAKE_BUILD_TYPE=Release, CMAKE_CXX_STANDARD 14, thread pool left at the library default (CPPHTTPLIB_THREAD_POOL_COUNT define commented out in basic-httplib/main.cpp); compiler and version not stated",
+    "hardware": "28x Intel Xeon CPU E5-2660 v4 @ 2.0 GHz, 64 GB RAM, Ubuntu 16.04.3 LTS",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-07",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "16.9k stars",
+    "has_code": true,
+    "tradeoffs": "Single-header, blocking socket I/O with a thread pool only; HTTP/1.1 only (no HTTP/2 or HTTP/3); 32-bit platforms not supported. Easiest integration of the six frameworks compared, but no event loop, so many idle connections cost threads.",
+    "caveats": "Weak and mostly unfavourable evidence. cpp-httplib's authors make no speed claim; the repo's benchmark/ directory builds a Crow v1.3.1 server beside cpp-httplib (Makefile bench-all, bombardier -c 10 -d 5s, -O2, CPPHTTPLIB_THREAD_POOL_COUNT=16) but publishes no numbers, and benchmark/ab.sh compares two cpp-httplib git refs, not another library; ab.sh itself warns that the same binary varies by +/-20% run to run, which covers the single 1.13x cell below. The only numbers found are third-party, from a small 2020 shootout (130 stars, all 17 commits in May-June 2020) testing cpp-httplib v0.5.8 and C++ REST SDK v2.10.15, both far older than the current v0.60.0 (released 2026-10-07). The win over C++ REST SDK holds in one cell only (Local, N=1000, t=0 ms, C=28: 3.015 s vs 3.401 s); in the matching VPN cell cpp-httplib is 1.88x slower (3:31.510 vs 1:52.476), it ties or trails in the Local t=200 ms cells and trails in every VPN C=28 cell; in the C=4 cells it 'wins' only because C++ REST SDK deadlocks when threads are fewer than producers. It is slower than Crow, Pistache, Restbed and Restinio in the sprint cell and is marked worst in 7 of 12 cells; the shootout's analysis singles out its doubled VPN overhead (210 s per 1000 requests) and its large degradation at C=4. The shootout README's phrase that Restinio was over 3 times faster than 'the worst Cpp-REST-SDK followed by Httplib' ranks Httplib second-worst, which matches the table. Harness: Python client opening a new connection per request, server-side logging through log4cplus twice per request, about 10,000 requests per cell, a single run per cell with no repeats or variance; faster frameworks finish the same load in about 1 s, so the 3 s figures are server-bound rather than client-capped. The published basic-httplib/main.cpp leaves CPPHTTPLIB_THREAD_POOL_COUNT commented out, so the C=4 runs needed a recompile not in the repo. Numbers exist only as a table image; compiler and version not stated. The guessed baseline (OpenSSL) and category (tls) were wrong; the repo is an HTTP server and client library and was refiled under http-servers-frameworks.",
+    "found_via": [
+      "seed-record pass from https://github.com/fffaraz/awesome-cpp#Networking; evidence found via microsoft/cpprestsdk issue #1432 'C++ REST frameworks benchmark' which links https://github.com/guteksan/REST-CPP-benchmark"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w5-mine-g"
+    ],
+    "id": "https://github.com/yhirose/cpp-httplib",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "B",
+      "tier_reason": "The only numbers are an independent but obscure single-run 2020 shootout (guteksan/REST-CPP-benchmark, 130 stars, 17 commits, compiler unstated) whose results table image shows cpp-httplib beating C++ REST SDK in just one of the six cells where both completed (Local N=1000 t=0 C=28, 3.015 s vs 3.401 s, 1.13x) and losing or tying in the other five (up to 1.88x slower over VPN), so it does not show the win B requires; public code, CPU model and CMake Release flags are present but the compiler is not, so not A.",
+      "notes": "Real, very popular library (16.9k stars, MIT, active, v0.60.0 on 2026-10-07) but not shown faster than its baseline: of six completed comparisons against C++ REST SDK it wins one by 1.13x (single run, within its own repo's stated +/-20% noise), ties two and loses three (up to 1.88x slower), and it is the worst of six frameworks in 7 of 12 cells. Record shortcomings: not faster except one cell, obscure single-run 2020 shootout on v0.5.8, compiler unstated, baseline wins in C=4 cells only by deadlocking; the record's own caveats misread the VPN cell as the win and misread the README's 'followed by Httplib' wording, both fixed in the corrected caveats.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/README.md",
+        "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/images/rest_all.PNG",
+        "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-httplib/main.cpp",
+        "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-httplib/CMakeLists.txt",
+        "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/postInLoop.py",
+        "https://github.com/guteksan/REST-CPP-benchmark",
+        "https://github.com/guteksan/REST-CPP-benchmark/commits",
+        "https://github.com/yhirose/cpp-httplib",
+        "https://github.com/yhirose/cpp-httplib/commits",
+        "https://github.com/yhirose/cpp-httplib/tree/master/benchmark",
+        "https://raw.githubusercontent.com/yhirose/cpp-httplib/HEAD/benchmark/Makefile",
+        "https://raw.githubusercontent.com/yhirose/cpp-httplib/HEAD/benchmark/ab.sh"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Local, N=1000, t=0 ms, C=28: cpp-httplib v0.5.8 3.015 s vs C++ REST SDK 3.401 s (about 1.13x faster, derived from page data; numbers read from images/rest_all.PNG). With 4 service threads the C++ REST SDK deadlocked and cpp-httplib finished in 1.915 s. In the same table cpp-httplib is slower than Crow (1.536 s), Pistache (1.059 s), Restbed (1.333 s) and Restinio (1.025 s).",
+      "workload": "Independent shootout: 10 Python producer processes each POST 1000 small JSON messages to a /test echo endpoint with 0 ms handling time on the same machine, 28 service threads; metric is wall time from first request to last reply.",
+      "caveats": "Weak and mixed evidence. cpp-httplib's authors make no speed claim; the repo has a benchmark/ directory that builds a Crow v1.3.1 server beside cpp-httplib (Makefile bench-all) but publishes no numbers. The only numbers found are third-party and from 2020 (cpp-httplib v0.5.8, C++ REST SDK v2.10.15, both much older than the current release v0.60.0). The 1.13x win over C++ REST SDK holds in one table cell only: at N=1000, t=0 ms over VPN with C=28 cpp-httplib took 3:31.510 against 1:52.476, and in the t=200 ms cells it ties or trails (3:21.790 against 3:21.415 local C=28; 14:31.857 against deadlock over VPN C=4). It is slower than Crow, Pistache, Restbed and Restinio in the sprint cell, and the shootout README's wording that Httplib 'followed' Restinio in the sprint cases does not match its own table. The harness is client-bound and noisy: a Python http.client loop opens a new connection per request and prints under a lock, services log through log4cplus, only about 10,000 requests per cell (about 3k req/s), single run per cell with no repeats or variance, C++ REST SDK deadlocks when threads are fewer than producers. Numbers exist only as a table image in the README; the README text states just 'over 3 times faster' for Restinio against C++ REST SDK. Compiler version not stated. Own A/B script benchmark/ab.sh in the repo compares two cpp-httplib refs, not another library. The guessed baseline (OpenSSL) and category (tls) were wrong; the repo is an HTTP server and client library and was refiled under http-servers-frameworks."
     }
   },
   {
@@ -7320,33 +7468,35 @@
     "language": "C",
     "domain": "networking-and-servers",
     "category": "http-servers-frameworks",
-    "baseline": "nginx",
+    "baseline": "nginx 1.7.9 (HTTP/1.1 local benchmark); nginx 1.9.10 in the later EC2 static-file chart",
     "baseline_in_list": true,
     "metric": "throughput",
     "workload": "612-byte static file on two Amazon EC2 c3.8xlarge instances (server + client) in one placement group, 250 concurrent clients, wrk (HTTP/1) and h2load (HTTP/2), one worker per server (h2o num-threads: 1, nginx worker_processes 1), nginx open_file_cache enabled vs H2O's built-in open-file cache; plus first-paint/load times of an http2rulez.com fork in Chrome 45, Firefox 41 and Safari iOS 9.0.1 over a tc/netem-simulated 8Mbps/100ms link; plus an older reverse-proxy chart (h2o 0.9.0 vs nginx 1.7.7).",
     "claimed_speedup": "Static-file chart (612-byte file, 250 clients, req/s per core; bar heights read from the chart gridlines, so approximate): nginx 1.9.10 vs H2O 1.7.0-beta4 ~74K vs ~108K (HTTP/1.1, ~1.5x), ~45K vs ~79K (HTTP/1.1 TLS, ~1.7x), ~77K vs ~340K (HTTP/2 TLS, ~4.4x). Download-timings chart (labelled values, 8Mbps/100ms, H2O 1.5.0 HTTP/2 vs nginx 1.9.5 HTTP/1.1 / HTTP/2): load 2.96 vs 3.32/3.17 s (Chrome 45), 2.74 vs 3.01/2.82 s (Firefox 41), 2.97 vs 3.28/3.06 s (Safari iOS 9.0.1); first paint 1.74 vs 2.44/3.00 s (Chrome), 1.27 vs 1.48/1.83 s (Firefox), but on Safari 2.01 s vs 1.85/2.56 s, so H2O's first paint is slower than nginx HTTP/1.1 there. Ratios derived from page data.",
     "evidence_tier": "C",
-    "benchmark_url": "https://h2o.examp1e.net/benchmarks.html",
+    "benchmark_url": "https://raw.githubusercontent.com/h2o/h2o/9ef1ad7/srcdoc/benchmarks.mt",
     "baseline_stdlib": [],
     "compiler_and_flags": null,
-    "hardware": "2x Amazon EC2 c3.8xlarge instances (server + client)",
+    "hardware": "Ubuntu 14.04 x86-64 in VMware Fusion 7.1.0 on OS X 10.9.5, MacBook Pro 15-inch Early 2013 (CPU model not stated); the later chart used two Amazon EC2 c3.8xlarge instances",
     "compared_against_cpp_std_directly": null,
     "license": "MIT",
     "usability": "copyable",
-    "last_commit": "2026-09-10",
+    "last_commit": "2026-10-06",
     "maintenance_status": "active",
     "is_fork_of": null,
     "stars_or_usage": "11.5k stars",
     "has_code": true,
-    "tradeoffs": "H2O's open-file-cache trades memory for lower file-serving latency; HTTP/3 and mruby scripting add complexity vs nginx.",
+    "tradeoffs": "C server that can also be used as a library; HTTP/1.x, HTTP/2 and experimental HTTP/3. Smaller module and ecosystem surface than nginx; configuration is YAML.",
     "caveats": "First-party page. It was last changed in 2016 (benchmark update 2016-02-04, typo fix 2016-08-23), so it compares H2O 1.5/1.7 with nginx 1.9.x; the reverse-proxy chart (h2o 0.9.0 vs nginx 1.7.7) is called 'old' on the page. Static-file values exist only as bar heights, but the download-timing chart has labelled values. Single-worker runs only, so multi-core scaling is not shown. H2O is not faster everywhere: on Safari iOS its first paint (2.01 s) is slower than nginx HTTP/1.1 (1.85 s). No CPU model, compiler or build flags are stated for either server.",
     "found_via": [
-      "GitHub: h2o/h2o README -> project website h2o.examp1e.net/benchmarks.html"
+      "GitHub: h2o/h2o README -> project website h2o.examp1e.net/benchmarks.html",
+      "seed-list mining backfill: seed-record pass from https://github.com/oz123/awesome-c#Networking-and-Internet (listed as H20); numbers from srcdoc/benchmarks.mt in the h2o/h2o repository history"
     ],
     "is_evidence_for_known": false,
-    "confidence": 0.3,
+    "confidence": 0.7,
     "assignment_ids": [
-      "w5-http-servers-gh-cpp"
+      "w5-http-servers-gh-cpp",
+      "w5-mine-i"
     ],
     "id": "https://github.com/h2o/h2o",
     "verification": {
@@ -7368,9 +7518,9 @@
       "numbers_found_on_page": true
     },
     "corrected_fields": {
-      "claimed_speedup": "Charts show H2O completing the static-file benchmark faster than nginx and reaching first-paint/full-download sooner than nginx on the simulated slow network; exact requests/sec and millisecond values are shown only as embedded PNG chart images, not as numbers in the page text",
-      "workload": "612-byte static file serving on two Amazon EC2 c3.8xlarge instances (server+client), 250 concurrent clients, wrk (HTTP/1) and h2load (HTTP/2), nginx open_file_cache enabled vs H2O's built-in file cache; also a first-paint/download-completion comparison over a simulated 8Mbps/100ms-latency network.",
-      "caveats": "Benchmark page itself calls the reverse-proxy chart 'old'; the static-file chart carries no visible date but the page appears essentially unchanged since ~2015; numbers are only visible in chart images, not extractable as text; no compiler/build flags stated for either server."
+      "claimed_speedup": "HTTP/1.1, 6-byte content: 75,483 vs 37,289 requests/second.core (about 2.0x, derived from page data); 4,096-byte content: 59,673 vs 43,988 (about 1.36x, derived from page data). The same page's HTTP/2 table lists h2o/0.9.0 at 272,300 and 116,022 but compares only against nghttpd and trusterd, not nginx.",
+      "workload": "Static-content HTTP/1.1 serving of a 6-byte and a 4,096-byte response, wrk -c 500 -d 30 -t 1, scores recorded as requests/second per core, h2o/0.9.0 against nginx/1.7.9 on Ubuntu 14.04 in VMware Fusion on a MacBook Pro 15-inch Early 2013.",
+      "caveats": "First-party numbers from 2015 (h2o 0.9.0, nginx 1.7.9); the current docs page replaced the tables with PNG charts (h2o 1.7.0 against nginx 1.9.10 with open_file_cache on c3.8xlarge, 612-byte file, 250 clients, wrk and h2load) whose values are not in the page text, so they could not be quoted. H2O build flags and CPU model are not stated, the benchmark ran in a VM on a laptop, and the nginx config is only linked as a gist. Scores are normalised per core. An older ab -c 500 -n 100000 -k run (nginx/1.7.4 35,822 and 32,885 vs H2O 76,690 and 67,866 requests/second) appears in a fork's README. No independent third-party run was reachable (project site, Fossies and nghttp2 wiki results did not include H2O against nginx). The h2o.examp1e.net site itself was blocked, so the figures come from the repo's srcdoc source at commit 9ef1ad7 (Sep 2015); the Feb 2016 commit 05588bf replaced the tables with charts."
     }
   },
   {

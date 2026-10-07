@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/mrpt/mrpt",
+  "one_liner": "MRPT's portable, versioned binary archive (CArchive); via the gtsam2mrpt_serial bridge it serializes GTSAM factor graphs about 2x faster than Boost.",
+  "what_it_does": "mrpt-serialization is MRPT's binary archive layer: mrpt::serialization::CArchive wraps any mrpt-io stream (memory, file, socket, gzip/zstd stream) and exposes << / >> operators for primitives, strings, STL containers and registered CSerializable classes, writing little-endian with per-class version bytes. The measured artifact is the separate MRPT/gtsam2mrpt_serial library, which adds << / >> overloads for gtsam::Values, gtsam::NonlinearFactorGraph, single values and factors on top of CArchive. It is not a drop-in for Boost.Serialization: you call archiveFrom(stream) and the stream operators instead of gtsam::serializeToBinaryStream, and the file format is different.",
+  "how_it_is_fast": "CArchive writes each primitive as a raw little-endian memcpy into the stream (byte swapping only on big-endian hosts), with no object tracking, no pointer registry and no per-archive header. The GTSAM bridge dispatches each value, factor and noise model by dynamic_cast and writes a short string type tag plus the raw doubles, avoiding Boost's polymorphic-pointer machinery (BOOST_CLASS_EXPORT GUID lookup, class-id tables and shared_ptr tracking). The output stream is a plain realloc-grown buffer (CMemoryStream, 4 KB growth steps) in the benchmark.",
+  "when_to_use": [
+    "You already use GTSAM with MRPT (for example in MOLA or a ROS 2 SLAM stack) and want to save or send factor graphs and Values about 2x faster to write than GTSAM's Boost binary archive.",
+    "You need a binary format that stays readable across endianness, word size and OS, which Boost binary archives do not guarantee.",
+    "Graphs built only from Pose2/Pose3/Point2/Point3/Rot2/Rot3 values with PriorFactor and BetweenFactor and the standard noise models (including robust m-estimators).",
+    "You want transparent gzip or zstd compression or socket transport through mrpt-io streams without extra glue code.",
+    "Projects on GTSAM 4.3+, which dropped Boost and therefore its built-in serialization, where the bridge is one of few ready-made binary formats."
+  ],
+  "when_not_to_use": [
+    "Read-heavy workloads: the published plot shows deserialization at parity with Boost for about 276 to 22001 factors (1.0-1.2x), not the README's 2x.",
+    "Graphs with any other factor type (projection, IMU, smart, custom factors) or value type (calibrations, NavState, vectors): the bridge throws 'Serialization not implemented'.",
+    "Generic C++ object serialization unrelated to GTSAM or MRPT types: you would have to write per-class code against CArchive, and general serializers in the catalog are faster and documented with stronger evidence.",
+    "Workloads that rely on deserialized factors sharing one noise-model object: the bridge recreates a separate noise model per factor, while Boost restores the shared_ptr aliasing.",
+    "Projects that cannot take MRPT 3.x (the bridge requires MRPT >= 3.0 and mola_common's CMake helpers; RHEL builds are not available on ROS 2 Humble)."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "mrpt_serialization (needs mrpt_common, mrpt_rtti; jsoncpp optional for its JSON/YAML scheme archives); the GTSAM bridge also needs mrpt_io, mrpt_math, mrpt_poses, mrpt_random, mola_common (CMake macros) and GTSAM 4.2 (Boost) or >= 4.3",
+    "min_toolchain": "C++17, CMake 3.16 (mrpt_serialization) / 3.10 (gtsam2mrpt_serial); MRPT >= 3.0 for the bridge",
+    "platforms": "Linux on x86_64 and arm64 (ROS 2 build farm: Ubuntu, RHEL 9/10 x86_64, Fedora); MRPT also ships Windows builds; little- and big-endian hosts handled by MRPT_IS_BIG_ENDIAN conversions",
+    "thread_safety": "not documented; a CArchive is a stateful wrapper around one stream, so use one archive per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the numbers: tests/main.cpp times gtsam::serializeToBinaryStream / deserializeFromBinaryStream, which construct a boost binary_oarchive / binary_iarchive (header write or read) inside the timed region twice per repetition, while the MRPT archive is created before the CTimeLoggerEntry starts; this inflates the small-graph ratios (about 3.7x serialize and 2.7x deserialize at 12 factors).",
+    "Deserialization is the weak side by construction: deserialize_factor builds a throwaway gtsam::Values per factor to decode one value, compares the type tag against a chain of std::string literals, and allocates a fresh noise model per factor (sharing is lost), which matches the near-parity deserialization plot.",
+    "Pose3 and Rot3 are stored as yaw/pitch/roll Euler angles via mrpt::math::TPose3D and rebuilt from a rotation matrix, so round trips are approximate (the tests compare with GTSAM's equals() tolerance), not bit-exact; Boost stores the 9 rotation-matrix entries (or the quaternion with GTSAM_USE_QUATERNIONS), so the two timed paths do different work per rotation (trig conversion and 3 doubles vs 9 copied doubles).",
+    "The 2026-09-25 release (0.4.0) fixed noise-model serialization bugs (Constrained models dropped their sigmas, null m-estimators wrote a corrupt stream, unknown m-estimators were not rejected, factors with more than 65535 keys were mis-written); the 2022 benchmark graph used only isotropic models, so those paths were not timed, but older files with mixed Constrained models lost data."
+  ],
+  "pick_this_over_siblings_when": "Pick it over HPS, zpp::bits or Cap'n Proto only when the objects are GTSAM factor graphs and you are already on MRPT: it is the only catalogued option with ready-made GTSAM support and an endian-stable, versioned format, while HPS (also measured against Boost.Serialization) and zpp::bits are general-purpose and have stronger, generic benchmarks.",
+  "verified_claims_summary": "First-party plots (MRPT 2.4.4, Boost 1.71, Ubuntu 20.04, Intel Core i7-6700HQ, compiler and build type not stated) compare gtsam2mrpt_serial over in-memory CMemoryStream against GTSAM's Boost binary archive into std::stringstream for graphs of 12 to 22001 factors: serialization is about 1.7-2.2x faster from 56 factors up, deserialization about 1.0-1.2x from 276 factors up (derived from page data, log-axis bar reading); only the 12-factor point reaches 2.7-3.7x, partly from Boost archive construction inside the timer.",
+  "status_note": "MRPT is actively maintained (BSD-3-Clause, ROS 2 Humble to Rolling packages) and the bridge had releases 0.3.0 and 0.4.0 in September 2026, but the benchmark plots date from 2022-04-19 and were not regenerated: the current generator makes 12N+1 factors with robust noise models instead of the plotted 11N+1, the profiling code compiles only against Boost-based GTSAM 4.2, the project sets no default CMAKE_BUILD_TYPE, and the byte sizes the harness records are not published.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/README.md",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/tests/main.cpp",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/tests/sampleData.cpp",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/tests/sampleData.h",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/tests/boost-exports.h",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/package.xml",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/CHANGELOG.rst",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/src/serialize.cpp",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/include/gtsam2mrpt_serial/serialize.h",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/include/gtsam2mrpt_serial/gtsam_detect_version.h",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/docs/profiling-ser.png",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/HEAD/docs/profiling-deser.png",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/2b2713fad591d9dd84fde0177d95b69d5733bbd7/gtsam2mrpt_serial/tests/main.cpp",
+    "https://raw.githubusercontent.com/MRPT/gtsam2mrpt_serial/2b2713fad591d9dd84fde0177d95b69d5733bbd7/CMakeLists.txt",
+    "https://github.com/MRPT/gtsam2mrpt_serial/tree/2b2713fad591d9dd84fde0177d95b69d5733bbd7",
+    "https://github.com/MRPT/gtsam2mrpt_serial/commits/develop",
+    "https://github.com/MRPT/gtsam2mrpt_serial/commit/386cff904c5b11ab85d827049c709153a4ff19a3",
+    "https://github.com/MRPT/gtsam2mrpt_serial/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/borglab/gtsam/4.2/gtsam/base/serialization.h",
+    "https://github.com/mrpt/mrpt",
+    "https://github.com/mrpt/mrpt/tree/develop",
+    "https://github.com/MRPT/mrpt/issues?q=is%3Aissue+serialization",
+    "https://raw.githubusercontent.com/MRPT/mrpt/develop/modules/mrpt_serialization/package.xml",
+    "https://raw.githubusercontent.com/MRPT/mrpt/develop/modules/mrpt_serialization/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MRPT/mrpt/develop/modules/mrpt_serialization/include/mrpt/serialization/CArchive.h",
+    "https://raw.githubusercontent.com/MRPT/mrpt/develop/modules/mrpt_io/include/mrpt/io/CMemoryStream.h",
+    "https://raw.githubusercontent.com/MRPT/mrpt/develop/modules/mrpt_io/src/CMemoryStream.cpp",
+    "https://raw.githubusercontent.com/borglab/gtsam/4.2/gtsam/geometry/Rot3.h"
+  ],
+  "confidence": 0.75
+}
