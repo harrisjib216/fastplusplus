@@ -61,3 +61,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - BlazeDiff (teimurjan/blazediff, 349 stars, MIT, Rust/JS/Python): claims 4.4-4.9x faster than odiff on 4K and about 50% faster than pixelmatch, BENCHMARKS.md in the repo; not catalogued (honeydiff enricher, 2026-10-07); seed candidate.
 - esp-arduino-libs/ESP32_JPEG (Espressif decoder, 20 ms vs JPEGDEC 23 ms on ESP32-S3; precompiled libesp_codec.a, so reference at best): JPEGDEC enricher lead (2026-10-07).
 - VRSFML (vittorioromeo/VRSFML): SFML fork with modern GL plus DrawableBatch/instanced headers, 105 stars, no numbers found (enricher lead, 2026-10-07).
+- Wav2Letter++ (facebookresearch/wav2letter, now flashlight/wav2letter): first-party paper arXiv 1812.07625 (over 2x vs ESPnet, Kaldi, OpenSeq2Seq) blocked; C to B once the PDF is readable (2026-10-07).
