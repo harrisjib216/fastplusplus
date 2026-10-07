@@ -1,1 +1,2 @@
 - AOCC (amd.com/en/developer/aocc.html, wave 2, reference C): Phoronix Milan-X and Zen 4 articles blocked; retier to B or A once phoronix.com or openbenchmarking.org is reachable (2026-10-07).
+- AOCL-LibM (https://github.com/amd/aocl-libm-ose, BSD-3-Clause, v5.3.2): AMD's vector math library behind AOCC's -fveclib edge (upstream Clang 19 gained -fveclib=AMDLIBM); not catalogued, benchmarks not checked (AOCC enricher, 2026-10-07).

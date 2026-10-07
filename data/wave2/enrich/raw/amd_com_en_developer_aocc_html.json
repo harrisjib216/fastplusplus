@@ -1,0 +1,59 @@
+{
+  "id": "https://amd.com/en/developer/aocc.html",
+  "one_liner": "AMD's closed-source LLVM/Clang-based C/C++/Fortran compiler for Zen whose binaries ran about 8% faster than GCC 11.2's.",
+  "what_it_does": "AOCC is AMD's binary-only fork of LLVM/Clang plus a classic-Flang Fortran front end (flang1/flang2), shipped as a tarball of clang, clang++, flang, lld, llvm-ar and libomp under an AMD EULA. It replaces gcc/g++ or upstream clang as CC/CXX with GCC/Clang-style flags; C++ code compiles against a GCC installation's libstdc++ headers and library, selected with --gcc-toolchain or a clang.cfg file. Each release pins one LLVM base (3.2 on Clang 13.0, 4.0 on 14.0.6, 4.1/4.2 on 16.0.3, 5.0 to 5.2 on 17.0.6) and adds AMD's own optimization passes and -mllvm switches on top.",
+  "how_it_is_fast": "Upstream LLVM -O3 plus AMD passes tuned with Zen cost models: whole-program structure peeling and pointer/integer field compression under -flto (-fstruct-layout=1..7, per a search snippet of the AOCC user guide), extra loop transformations exposed as -mllvm switches (-enable-loop-reversal, -enable-gather, -vectorize-non-contiguous-memory-aggressively), aggressive inlining (-finline-aggressive), and, per Phoronix's AOCC 5.0 coverage, improved SLP/loop vectorization, LICM and control/data-flow optimizations plus Zen 5 tuning. Vectorized math calls can be routed to AMD's AOCL-LibM with -fveclib=AMDLIBM (5.2 bundles a Zen 5-tuned AOCL-LibM 5.3). Which of these passes run at plain -O3 -march=native -flto, the setting Phoronix measured, is not documented in anything readable here.",
+  "when_to_use": [
+    "Compute-bound C, C++ or Fortran (HPC kernels, codecs, simulation) deployed on AMD EPYC or Ryzen Zen machines that you can rebuild per target; SVT-AV1 showed the largest AOCC 5.0 gains on Zen 5",
+    "Codebases that already build cleanly with Clang, where a few percent more throughput without source changes is worth a per-workload benchmark (GCC or Clang still won about a third of the 56 Milan-X tests)",
+    "HPC sites with Spack or EasyBuild that can install the EULA tarball (spack install aocc +license-agreed, EasyBuild accept_eula) and expose it as a module",
+    "Fortran or mixed codes such as WRF that ship an AOCC configure stanza with AMD-tuned flags and AMDLIBM",
+    "A new Zen generation before upstream compilers carry its tuning: AOCC 4.0 beat GCC 12.2, which lacked znver4 tuning, by about 17% geomean on 4th Gen EPYC"
+  ],
+  "when_not_to_use": [
+    "You need the source, redistribution or distro packaging: binary-only AMD EULA, Spack declares redistribute(source=False, binary=False) and LicenseRef-AMD-Proprietary",
+    "Targets other than x86 Linux (Windows, macOS, aarch64, RISC-V): AOCC targets 32- and 64-bit Linux x86 only",
+    "Code that needs C++ language or library support newer than Clang 17: AOCC 5.0, 5.1 and 5.2 all stay on LLVM 17.0.6 (Nov 2023)",
+    "Intel CPUs or mixed fleets: tuning targets Zen and no published gains exist elsewhere (EasyBuild's AOCC 5.1 test only shows it installs on an Intel i7-1260P)",
+    "Workloads where upstream Clang already matches it (Phoronix's AOCC 5.0 run on 2P EPYC 9755 found minimal differences from upstream LLVM/Clang in many tests), or when the goal is faster compilation rather than faster binaries"
+  ],
+  "integration": {
+    "form": "compiler toolchain (prebuilt binary tarball: clang, clang++, flang, lld, LLVM tools, libomp)",
+    "dependencies": "A GCC installation for libstdc++ headers and runtime (and libquadmath for flang); libxml2, zlib, ncurses, libtool per the Spack recipe; binutils, ncurses, zlib, libxml2, libffi per the EasyBuild 5.1.0 easyconfig",
+    "min_toolchain": "Linux x86-64; EasyBuild pairs AOCC 3.2 with GCCcore 11.2/11.3 and AOCC 5.1 with GCCcore 15.2; C++ language level is that of the pinned Clang (17 for AOCC 5.x)",
+    "platforms": "x86-64 Linux only, tuned for AMD Zen 1 to Zen 5; installs and runs on Intel x86-64 but no gains shown there",
+    "thread_safety": "Not applicable (compiler); OpenMP programs use the bundled LLVM libomp",
+    "drop_in_for_baseline": "partial: a clang-compatible driver that can replace gcc/g++ through CC/CXX and compiles C++ against GCC's libstdc++, so objects link with GCC-built libraries; but it is binary-only, x86-64 Linux only, does not accept every GCC-only flag or extension, and AMD-specific -mllvm flags tie build files to AOCC"
+  },
+  "gotchas": [
+    "GCC selection is silent: AOCC's clang picks whatever GCC install it finds for headers and libstdc++ unless told; Spack writes clang.cfg with --gcc-toolchain and EasyBuild writes --gcc-install-dir cfg files (5.0+) or wrapper scripts (before 5.0) and sanity-checks the 'Selected GCC installation' line. Its binaries are named clang, clang++, flang and lld like upstream LLVM, so PATH order decides which compiler a build gets; Spack issue #49543 reports 'spack compiler find' producing an unusable entry for AOCC 4.2/5.0 until cc was pointed at clang-16/clang-17.",
+    "Optimizer bug history: OpenBLAS PR #2665 (2020) traced complex and double-complex lapack-test failures to AOCC flang over-optimization; OpenBLAS's Makefile.system still adds -fno-unroll-loops whenever flang --version reports AMD on Linux x86-64, for every AOCC version.",
+    "The best results lean on AMD-only knobs: WRF's AOCC stanza uses -fveclib=AMDLIBM, -finline-aggressive and linker-passed -mllvm -enable-loop-reversal/-enable-gather/-vectorize-non-contiguous-memory-aggressively at -Ofast -ffast-math (which changes floating-point semantics), and says optimized flags must be requested from AMD toolchain support; -fstruct-layout acts only under -flto. Of these, only -fveclib=AMDLIBM reached upstream (Clang 19; absent in 18).",
+    "Version lag: each release pins one LLVM base (3.2 on 13.0, 4.0 on 14.0.6, 4.1/4.2 on 16.0.3, 5.0 to 5.2 on 17.0.6), so upstream LLVM fixes, diagnostics and C++ features after 17 are missing, and the Milan-X comparison pitted an LLVM 13-based AOCC against a newer Clang 14."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (zapcc, TinyCC, MIR/c2m, cg_clif) make compilation faster; AOCC is the only one aimed at the run time of the generated code, so pick it when binary throughput on AMD Zen matters and build time does not (c2m's code runs at about 92% of gcc -O2, while AOCC's ran about 8% faster than GCC 11.2 at -O3 in Phoronix's Milan-X test).",
+  "verified_claims_summary": "Phoronix built 56 C/C++ Phoronix Test Suite programs with AOCC 3.2 (LLVM 13 base), Ubuntu 22.04's GCC 11.2 and Clang 14.0, all at -O3 -march=native -flto, on a 2P EPYC 7773X Milan-X server; AOCC binaries were about 8% faster than GCC's by geometric mean and fastest in 66% of tests, Clang 14 about 2% (so AOCC roughly 6% over Clang 14, derived from page data). These figures come from search snippets because phoronix.com and the OpenBenchmarking result 2204117-NE-EPYC7773X86 are blocked here; later Phoronix runs report AOCC 4.0 about 17% over GCC 12.2 on 4th Gen EPYC (68 tests, GCC 12 lacked znver4 tuning) and about 4% on Zen 4 Ryzen, and AOCC 5.0 on Zen 5 often close to upstream Clang.",
+  "status_note": "Actively released (Spack and EasyBuild carry 3.2.0 to 5.2.0, 5.2.0 added to Spack 2026-05-29, all 5.x on LLVM 17.0.6) but binary-only under an AMD EULA, so it is a reference entry that can be installed and used but not copied, patched or redistributed; the numbers are snippet-only and a retier waits on phoronix.com or openbenchmarking.org access.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/spack/spack-packages/develop/repos/spack_repo/builtin/packages/aocc/package.py",
+    "https://github.com/spack/spack/issues?q=aocc+is%3Aissue",
+    "https://github.com/spack/spack/issues/49543",
+    "https://github.com/llvm/llvm-project/issues?q=aocc",
+    "https://raw.githubusercontent.com/easybuilders/easybuild-easyblocks/develop/easybuild/easyblocks/a/aocc.py",
+    "https://github.com/easybuilders/easybuild-easyconfigs/tree/develop/easybuild/easyconfigs/a/AOCC",
+    "https://raw.githubusercontent.com/easybuilders/easybuild-easyconfigs/develop/easybuild/easyconfigs/a/AOCC/AOCC-5.1.0-GCCcore-15.2.0.eb",
+    "https://github.com/easybuilders/easybuild-easyconfigs/issues?q=AOCC",
+    "https://github.com/easybuilders/easybuild-easyconfigs/pull/25050",
+    "https://raw.githubusercontent.com/wrf-model/WRF/master/arch/configure.defaults",
+    "https://github.com/OpenMathLib/OpenBLAS/issues?q=aocc",
+    "https://github.com/OpenMathLib/OpenBLAS/pull/2665",
+    "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/develop/Makefile.system",
+    "https://raw.githubusercontent.com/llvm/llvm-project/release/17.x/clang/include/clang/Driver/Options.td",
+    "https://raw.githubusercontent.com/llvm/llvm-project/release/18.x/clang/include/clang/Driver/Options.td",
+    "https://raw.githubusercontent.com/llvm/llvm-project/release/19.x/clang/include/clang/Driver/Options.td",
+    "https://github.com/orgs/amd/repositories?q=aocc",
+    "https://github.com/amd/aocl-libm-ose",
+    "https://raw.githubusercontent.com/amd/aocl-libm-ose/master/LICENSE"
+  ],
+  "confidence": 0.6
+}
