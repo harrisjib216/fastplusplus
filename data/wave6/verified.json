@@ -4952,6 +4952,77 @@
     }
   },
   {
+    "name": "LMDB",
+    "repo_url": "https://github.com/LMDB/lmdb",
+    "language": "C",
+    "domain": "storage-and-data",
+    "category": "embedded-kv",
+    "baseline": "RocksDB (rust-rocksdb 0.22.0 with LZ4, 4 GiB LRU block cache, bloom filters, OptimisticTransactionDB snapshot reads); SQLite (rusqlite 0.37 bundled, default settings, BLOB PRIMARY KEY table) is also in the table, but its adapter re-prepared every SQL statement per operation (see caveats)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "redb author's comparison harness as of commit d6773ef (2025-08-08): 5M random pairs (24-byte keys, 150-byte values) bulk-loaded in one transaction, 1,000 individual synchronous write transactions, 100 batches of 1,000 writes, 1M random point reads and 500k random 10-element range scans (each run twice and printed as two rows), random reads with 4, 8, 16 and 32 threads (about 5.1M lookups split across the threads), then removal of about 2.55M keys in one transaction; 4 GiB cache for the engines that take one (4 GiB map size for LMDB, no cache pragma for SQLite); LMDB driven through the Rust heed 0.22 binding.",
+    "claimed_speedup": "Times in ms, lower is better, from the redb README table (last regenerated 2025-08-08); all ratios derived from page data. Against RocksDB: random reads 637 vs 2911 (4.6x); random range reads 565 vs 2734 (4.8x); random reads with 4, 8, 16 and 32 threads 840 vs 3995 (4.8x), 427 vs 2147 (5.0x), 216 vs 1478 (6.8x) and 125 vs 1100 (8.8x); individual sync writes 1598 vs 2432 (1.5x); bulk load 9232 vs 13969 (1.5x). LMDB loses to RocksDB on batch writes (942 vs 451, 2.1x slower) and removals (10435 vs 6900, 1.5x slower), and its uncompacted file is 2.61 GiB vs 893.18 MiB (3.0x larger). Against SQLite (handicapped adapter, see caveats): random reads 637 vs 4283 (6.7x); random range reads 565 vs 8431 (14.9x); 16 and 32 threads 216 vs 23022 (107x) and 125 vs 26536 (212x); individual writes 1598 vs 7040 (4.4x); batch writes 942 vs 2625 (2.8x); bulk load 9232 vs 15341 (1.7x); removals 10435 vs 10323 (parity, LMDB 1% slower); uncompacted size 2.61 GiB vs 1.09 GiB (LMDB 2.4x larger).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://raw.githubusercontent.com/cberner/redb/master/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "cargo bench (the bench profile inherits release optimisation; the workspace Cargo.toml adds debug = true); rustc version not stated (workspace MSRV 1.89). C compiler and flags for the bundled LMDB (heed 0.22), RocksDB (rust-rocksdb 0.22.0, lz4 feature) and SQLite (rusqlite 0.37 bundled) come from those crates' build scripts and are not stated.",
+    "hardware": "Ryzen 9950X3D with Samsung 9100 PRO NVMe (per README)",
+    "compared_against_cpp_std_directly": false,
+    "license": "OLDAP-2.8",
+    "usability": "copyable",
+    "last_commit": "2026-08-19",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "about 3.0k stars on the GitHub mirror; embedded in OpenLDAP and widely bound from other languages",
+    "has_code": true,
+    "tradeoffs": "Single writer at a time (readers never block); copy-on-write B+tree with no compaction or compression, so the file is larger than compacting engines (the same table shows 2.61 GiB uncompacted vs 893 MiB for RocksDB and 1.09 GiB for SQLite); fixed maximum map size must be chosen up front; no SQL layer or secondary indexes; removals and mixed workloads are less favourable (loses removals to RocksDB and fjall in the same table).",
+    "caveats": "The numbers come from a competing project's (redb) README, not from the LMDB authors, and LMDB is reached through the heed 0.22 Rust wrapper. The table was last regenerated on 2025-08-08 (commit d6773ef; the 2026-07-15 commit only removed the sled column), so it reflects that commit's harness and crate versions (rusqlite 0.37, rust-rocksdb 0.22.0), not the current crates/redb-bench-compare harness (rusqlite 0.38, rocksdb 0.24, median of 3 runs) that the README now links. At that commit the SQLite adapter called conn.prepare or execute inside every get, range scan, insert and delete, so each SQLite operation recompiled its SQL statement; SQLite also ran with no tuning pragmas (rollback journal, no WAL, default page cache of about 2 MB versus 4 GiB for redb, RocksDB and fjall), and in the threaded rows each lookup is its own autocommit statement on a per-thread connection, which likely explains why SQLite slows down as threads are added (7000 ms with 4 threads, 26536 ms with 32 threads for the same 5.1M lookups). The SQLite ratios, above all the 107x and 212x threaded ones, therefore overstate LMDB's lead over a normally used SQLite; current master prepares the read statements once per reader, but the README was not re-run. RocksDB was configured sensibly (4 GiB block cache, bloom filters, snapshot reads), and against it LMDB wins reads by 4.6-8.8x but loses batch writes and removals and uses about 3x more disk. Compiler version and flags are not stated. The primary LMDB claim, the Symas/lmdb.tech microbench against SQLite, BerkeleyDB, Kyoto Cabinet and LevelDB, could not be opened (host blocked). A second, weaker data point from Mozilla's kvbench (mykmelez/kvbench README, Rust bindings, hardware not stated) shows LMDB opening a database about 8x faster than LevelDB (166.70 us vs 1.3895 ms, derived from page data) but slower on a single synchronous 1-byte put (114.74 us vs 58.691 us).",
+    "found_via": [
+      "seed-record pass (seed-list mining backfill): listed in the awesome-cpp and awesome-c Database sections as an ultra-fast embedded key-value store; evidence found in the redb README benchmark table and its public benchmark source crates/redb-bench-compare/benches/lmdb_benchmark.rs"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w6-mine-a"
+    ],
+    "id": "https://github.com/lmdb/lmdb",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "B",
+      "tier_reason": "Independent third-party measurement: redb's author ran a public harness (crates/redb-bench/benches/lmdb_benchmark.rs and common.rs at commit d6773ef, the 2025-08-08 commit that last regenerated the README table) on a stated CPU (Ryzen 9950X3D), but the rustc version and the C compiler and flags for the bundled LMDB, RocksDB and SQLite are not stated, so it falls short of A. Tier B rests on the RocksDB comparison; the SQLite rows come from a handicapped adapter and include >50x ratios that on their own would cap the entry at C.",
+      "notes": "README numbers match the record, but the SQLite comparison is handicapped: the harness that produced them (commit d6773ef) re-prepared every SQL statement per call, ran SQLite untuned, and the 107x/212x threaded ratios are harness artifacts, so I rebased the baseline on RocksDB (also a category baseline, same table, sensible config: 4.6-8.8x on reads, LMDB slower on batch writes and removals) and kept SQLite rows with the flaw spelled out; tier stays B. Record shortcoming: SQLite baseline handicapped (per-call statement preparation, default cache, no WAL), README table from 2025-08 harness not current one, compiler and flags unstated. Metadata: OLDAP-2.8 (libraries/liblmdb/LICENSE), about 3.0k stars, read-only mirror of openldap.org (not a GitHub fork), last commit 2026-08-19 on default branch mdb.master3 (record said 2026-06-24), active.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/cberner/redb/master/README.md",
+        "https://raw.githubusercontent.com/cberner/redb/master/crates/redb-bench-compare/benches/lmdb_benchmark.rs",
+        "https://raw.githubusercontent.com/cberner/redb/master/crates/redb-bench-compare/benches/common/mod.rs",
+        "https://raw.githubusercontent.com/cberner/redb/master/crates/redb-bench-compare/Cargo.toml",
+        "https://raw.githubusercontent.com/cberner/redb/master/crates/redb-bench/src/lib.rs",
+        "https://raw.githubusercontent.com/cberner/redb/master/Cargo.toml",
+        "https://github.com/cberner/redb/commits/master/README.md.atom",
+        "https://raw.githubusercontent.com/cberner/redb/d6773ef554d059e3f8ca357fe4931f2c5995c340/README.md",
+        "https://raw.githubusercontent.com/cberner/redb/d6773ef554d059e3f8ca357fe4931f2c5995c340/Cargo.toml",
+        "https://raw.githubusercontent.com/cberner/redb/d6773ef554d059e3f8ca357fe4931f2c5995c340/crates/redb-bench/Cargo.toml",
+        "https://raw.githubusercontent.com/cberner/redb/d6773ef554d059e3f8ca357fe4931f2c5995c340/crates/redb-bench/benches/lmdb_benchmark.rs",
+        "https://raw.githubusercontent.com/cberner/redb/d6773ef554d059e3f8ca357fe4931f2c5995c340/crates/redb-bench/benches/common.rs",
+        "https://github.com/LMDB/lmdb",
+        "https://github.com/LMDB/lmdb/commits/mdb.master3.atom",
+        "https://raw.githubusercontent.com/LMDB/lmdb/mdb.master3/libraries/liblmdb/LICENSE",
+        "https://raw.githubusercontent.com/mykmelez/kvbench/HEAD/README.md"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline": "SQLite (rusqlite 0.38 bundled, default settings, BLOB PRIMARY KEY table)",
+      "claimed_speedup": "Times in ms, lower is better, as printed in the redb README table (ratios derived from page data): random reads 637 vs 4283 for SQLite (6.7x); random range reads 565 vs 8431 (14.9x); random reads with 16 threads 216 vs 23022 (107x) and with 32 threads 125 vs 26536 (212x); individual writes 1598 vs 7040 (4.4x); batch writes 942 vs 2625 (2.8x); bulk load 9232 vs 15341 (1.7x); removals 10435 vs 10323 (parity). Disk use after load is 2.61 GiB for LMDB vs 1.09 GiB for SQLite (LMDB 2.4x larger).",
+      "workload": "redb author's comparison harness: 5M bulk-loaded random pairs (24-byte keys, 150-byte values), 1,000 individual sync writes, batch writes, 1M random point reads, 500k random 10-element range scans, multi-threaded random reads, removals, with a 4 GiB cache setting for the engines that take one; LMDB driven through the Rust heed 0.22 binding.",
+      "compiler_and_flags": "Rust benchmark crate built through cargo bench (bench profile sets debug = true; rustc version and C compiler flags for the bundled LMDB and SQLite are not stated); heed and rusqlite (bundled SQLite) as pinned in crates/redb-bench-compare/Cargo.toml",
+      "last_commit": "2026-06-24",
+      "caveats": "The numbers come from a competing project's (redb) README, not from the LMDB authors, and LMDB is reached through the heed Rust wrapper. SQLite is run with default settings (no WAL and no tuning pragmas visible in the harness source) in a plain BLOB PRIMARY KEY table, so it is not a best-case SQLite. Compiler version and flags are not stated, which keeps the tier at B rather than A. The primary LMDB claim, the Symas/lmdb.tech microbench against SQLite, BerkeleyDB, Kyoto Cabinet and LevelDB, could not be opened (host blocked), so no numbers from it are recorded. A second, weaker data point from Mozilla's kvbench (mykmelez/kvbench, Rust bindings, hardware not stated) shows LMDB opening a database about 8x faster than LevelDB (166.70 us vs 1.3895 ms, derived from page data) but slower on single synchronous puts (about 114 us vs 58 us)."
+    }
+  },
+  {
     "name": "MatrixKV",
     "repo_url": "https://github.com/PDS-Lab/MatrixKV",
     "language": "C++",
@@ -5837,6 +5908,66 @@
       "claimed_speedup": "Load phase: >8x RocksDB insert throughput (986,009 vs 122,899 inserts/sec), 88% shorter load duration, 99.9th-percentile insert latency 1.6ms vs 19.5ms; run phase up to ~6x more throughput across workloads A-D; tail latency reduced up to 91% for writes and 42% for reads; bytes written to SSD reduced by up to 85%",
       "workload": "YCSB 0.17.0 workloads A-D (load + run phases), 2TB dataset consisting of 2 billion 1,000-byte records, 96 client threads; HSE 1.7.0 vs RocksDB 6.6.4",
       "caveats": "First-party vendor benchmark (HSE/Micron project docs), not independently reproduced; compiler and build flags not stated; project appears abandoned"
+    }
+  },
+  {
+    "name": "LevelDB",
+    "repo_url": "https://github.com/google/leveldb",
+    "language": "C++",
+    "domain": "storage-and-data",
+    "category": "embedded-kv",
+    "baseline": "SQLite3 3.7.6.3 (also Kyoto Cabinet 1.2.67 TreeDB)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Google's July 2011 db_bench-derived suite: 1 million entries with 16-byte keys and 100-byte values (about 50% compressible), sequential and random reads and writes, 4 MB cache, asynchronous writes, plus batch, synchronous, large-value, no-compression and larger-cache variants.",
+    "claimed_speedup": "Baseline run, ops/sec LevelDB vs SQLite3: sequential reads 4,030,000 vs 383,000 (10.5x, derived from page data); sequential writes 779,000 vs 48,600 (16.0x, derived); random writes 164,000 vs 9,860 (16.6x, derived); batch random writes 221,000 vs 22,000 entries/s (10x, derived). Not faster everywhere: random reads 129,000 vs 134,000 for SQLite3 and 151,000 for Kyoto TreeDB; 100,000-byte values 1,100 vs 1,600 ops/sec sequential writes and 480 vs 1,600 random writes.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/google/leveldb/HEAD/doc/benchmark.html",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Partly stated: LevelDB built with tcmalloc and Snappy (revision 33), assertions disabled; SQLite3 tuned with exclusive locking mode and write-ahead logging; TreeDB built with LZO 2.03 and TSMALL/TLINEAR options. Compiler and optimization level not stated.",
+    "hardware": "Six-core Intel Xeon X5650 @ 2.67GHz, 12 MB L3, 12 GB DDR3-1333, SATA 7200 RPM disks, ext3 and ext4 machines",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-03-11",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "about 39.5k stars; used by Chromium (IndexedDB) and many bindings",
+    "has_code": true,
+    "tradeoffs": "LSM tree with ordered keys, no transactions (WriteBatch only), single process access, compaction pauses and write amplification (large values written twice, 1,100 vs 1,600 SQLite ops/sec at 100 KB); only a single process may open a database at a time; no SQL, relational model or indexes and no client-server layer (per its README Limitations).",
+    "caveats": "Numbers are from Google's July 2011 page (LevelDB revision 39 vs SQLite 3.7.6.3 and Kyoto Cabinet 1.2.67 TreeDB), first-party, with the benchmark code in the repo; compiler and optimisation flags are not stated, so the tier is C. The SQLite side was reasonably tuned (WAL, exclusive locking mode, reused prepared statements, a 4 MB cache of 1024-byte pages) but is a 2011 release, and the baseline runs have synchronous writes off for every engine. LevelDB loses on random reads (129,000 ops/s vs 134,000 for SQLite3 and 151,000 for Kyoto TreeDB) and with 100,000-byte values (1,100 vs 1,600 ops/s sequential and 480 vs 1,600 random writes). Synchronous writes are near parity on ext3 (100 vs 88 ops/s), and the page says ext4 drops LevelDB to about 31 sync writes per second while SQLite3 does not noticeably drop, so on ext4 SQLite3 wins synchronous writes. RocksDB and LMDB, the other category baselines, are not in this benchmark. The README says the repository receives very limited maintenance (only critical fixes and changes needed by internal clients are reviewed). Mozilla's kvbench (mykmelez/kvbench, Rust bindings) measured LMDB opening a database about 8x faster than LevelDB, while LevelDB was faster on a single synchronous 1-byte put (58.691 us vs 114.74 us).",
+    "found_via": [
+      "seed-record pass (seed-list mining backfill): listed in the awesome-cpp Database section as a fast key-value storage library; evidence found in doc/benchmark.html in the repository"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.8,
+    "assignment_ids": [
+      "w6-mine-a"
+    ],
+    "id": "https://github.com/google/leveldb",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party Google page (July 2011) with public benchmark code (benchmarks/db_bench.cc, db_bench_sqlite3.cc, db_bench_tree_db.cc, all still in the repo) and a stated CPU (Xeon X5650), but no compiler or optimisation flags, so it falls short of A; first-party with partial methodology is C.",
+      "notes": "All claimed numbers and derived ratios match doc/benchmark.html (seq reads 10.5x, seq writes 16.0x, random writes 16.6x, batch random writes 10x vs SQLite3), and the losses (random reads, large values) are recorded. Fixed baseline_in_list to true (SQLite is in the embedded-kv baseline list) and replaced a caveat sentence that named std::map as a suggested baseline. Metadata checks out: BSD-3-Clause, about 39.5k stars, last commit 2026-03-11, active but README declares very limited maintenance; record shortcomings: 2011 numbers, compiler and flags unstated, loses random reads and large values, ext4 sync writes slower than SQLite.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/doc/benchmark.html",
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench.cc",
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench_sqlite3.cc",
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/benchmarks/db_bench_tree_db.cc",
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/README.md",
+        "https://raw.githubusercontent.com/google/leveldb/HEAD/LICENSE",
+        "https://github.com/google/leveldb",
+        "https://github.com/google/leveldb/commits/main.atom",
+        "https://raw.githubusercontent.com/mykmelez/kvbench/HEAD/README.md"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline_in_list": false,
+      "caveats": "Numbers are from 2011 (LevelDB revision 39, SQLite 3.7.6.3) with first-party benchmark code (benchmarks/db_bench.cc, db_bench_sqlite3.cc, db_bench_tree_db.cc in the repo, all present); compiler and flags are not stated, so the tier is C. The file's synchronous-write section is on ext3 and the doc itself says ext4 drops LevelDB to about 31 sync writes per second. The suggested baselines (std::map, RocksDB) are not in the benchmark. Random reads, and large values, are cases where it does not beat the baselines in this same table; Mozilla's kvbench (mykmelez/kvbench, Rust bindings) found LMDB about 8x faster than LevelDB at opening a database."
     }
   },
   {
@@ -7132,6 +7263,72 @@
       "stars_or_usage": "120 stars",
       "workload": "Single-threaded insert/contains/remove/get_index/full-traversal/range-scan and 12-thread concurrent (90/10 and 50/50 read/write mix) benchmarks over 100,000 existing 8-byte or 64-byte entries, Criterion median estimates at commit 7e3ac23",
       "caveats": "Single-vendor benchmark (author's own Criterion suite on one machine); no independent reproduction; exact compiler flags beyond Criterion's default release profile not itemized."
+    }
+  },
+  {
+    "name": "Infinity",
+    "repo_url": "https://github.com/infiniflow/infinity",
+    "language": "C++",
+    "domain": "parsing-and-text",
+    "category": "text-search-and-indexing",
+    "baseline": "Elasticsearch 8.13.4 (full-text and dense vector search); Qdrant 1.9.2 also measured",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Repo benchmark doc (docs/references/benchmark.md): 100,000 generated full-text OR queries (top 10) on 33M English Wikipedia documents with 16 Python clients, and L2 top-100 vector search on SIFT1M (10,000 queries) and GIST1M (1,000 queries), reporting QPS, recall, P95 latency, index build time, memory and disk; the vector tables do not state the client count (the doc's commands use 16).",
+    "claimed_speedup": "Enwiki full-text (33M documents, 16 Python clients): 13731 QPS vs 1340 for Elasticsearch (10.2x, derived from page data) and 179 for Quickwit; P95 latency 1.37 ms vs 14.75 ms (10.8x, derived); insert and build index 1562 s vs 2289 s (1.5x, derived); memory 10.0 GB vs 21.0 GB. SIFT1M (top 100): 16320 QPS vs 934 for Elasticsearch (17.5x, derived) and 1303 for Qdrant (12.5x, derived) at recall 0.973 vs 0.992 and 0.979. GIST1M: 2200 QPS vs 305 and 339 (7.2x and 6.5x, derived) at recall 0.946 vs 0.885 and 0.947. Infinity is slower than Qdrant at insert and index build (74 s vs 46 s on SIFT1M, 463 s vs 366 s on GIST1M) and uses more disk on SIFT1M (792 MB vs 418 MB).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/infiniflow/infinity/main/docs/references/benchmark.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated: all engines run from Docker images (elasticsearch:8.13.4 with ES_JAVA_OPTS=-Xms16384m -Xmx32000m, qdrant/qdrant:v1.9.2, quickwit/quickwit:0.8.1, infiniflow/infinity:nightly); no build flags for Infinity.",
+    "hardware": "Intel Core i5-13500H, 16 vCPU, 32 GB RAM, 1 TB disk, OpenSUSE Tumbleweed x86_64",
+    "compared_against_cpp_std_directly": false,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-09-23",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "about 4.7k stars",
+    "has_code": true,
+    "tradeoffs": "Single-node AI-native database whose index and engine are specialised for hybrid search; lower recall than Elasticsearch on SIFT1M (0.973 vs 0.992); needs AVX2 on x86_64; time to build the vector index is slower than Qdrant on both datasets (74 s vs 46 s on SIFT1M insert plus build, 463 s vs 366 s on GIST1M); Elasticsearch uses more memory (21.0 GB vs 10.0 GB on Enwiki) but Infinity needs about the same vCPU.",
+    "caveats": "First-party benchmark by the Infinity authors on one laptop-class CPU (i5-13500H, 32 GB). The table names Infinity v0.2.0 (about 2024) but the run command uses the floating infiniflow/infinity:nightly image and the current release is 0.7.x, so the measured build is not pinned. The vector comparison is not like for like: Infinity's SIFT config builds HNSW (M 16, ef_construction 200, ef 200) with LVQ 8-bit encoding, while Elasticsearch and Qdrant index float32 vectors with default search settings (Elasticsearch num_candidates 200), and Infinity's SIFT1M recall (0.973) is below both. Queries come from Python clients that talk HTTP/JSON to Elasticsearch and Qdrant (the Qdrant client does not enable gRPC) but Thrift to Infinity, so client-side serialisation may account for part of the QPS gap. Elasticsearch gets -Xmx32000m on a 32 GB machine, leaving little memory for the OS page cache Lucene relies on; Lucene itself is not measured separately. Infinity loses to Qdrant on vector index build time and SIFT1M disk use. None of the category's listed baselines (B-tree/LSM in RocksDB, LevelDB, LMDB, SQLite; learned indexes) is measured. The README headline claims (0.1 ms vector latency and 15K+ QPS; 1 ms and 12K+ QPS full-text on 33M documents) are in the same range as the doc table.",
+    "found_via": [
+      "seed-record pass (seed-list mining backfill): listed in the awesome-cpp Database section as an AI-native database with incredibly fast vector and full-text search; evidence found in the repository's docs/references/benchmark.md (published at infiniflow.org/docs/dev/benchmark, host blocked here)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w6-mine-a"
+    ],
+    "id": "https://github.com/infiniflow/infinity",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "A",
+      "tier_reason": "First-party benchmark by the Infinity authors with a public driver (python/benchmark/run.py plus clients/ and configs/) and a stated CPU (Intel Core i5-13500H), but no compiler or flags: every engine runs from a Docker image, Infinity from the floating infiniflow/infinity:nightly tag while the table says v0.2.0. Missing compiler and flags fails A, and first-party numbers with partial methodology are C.",
+      "notes": "Numbers match the doc table, but tier A was not justified: no compiler or flags, Docker nightly image, first-party, so C. Shortcomings to record: first-party, unpinned nightly build, LVQ-quantised index vs float32 competitors at lower recall, HTTP/JSON vs Thrift client protocols, Elasticsearch heap set to machine RAM, slower than Qdrant at index build; baseline_in_list set to false because Elasticsearch is not an indexes-category baseline, and the full-text comparison against Elasticsearch (Lucene) fits text-search-and-indexing better than indexes, so consider a category override. Metadata checks out: Apache-2.0, about 4.7k stars, last commit 2026-09-23, active.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/docs/references/benchmark.md",
+        "https://github.com/infiniflow/infinity",
+        "https://github.com/infiniflow/infinity/tree/main/python/benchmark",
+        "https://github.com/infiniflow/infinity/commits/main.atom",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/clients/qdrant_client.py",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/clients/elasticsearch_client.py",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/clients/infinity_client.py",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/configs/qdrant_sift.json",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/configs/elasticsearch_sift.json",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/configs/infinity_sift.json",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/configs/infinity_enwiki.json",
+        "https://raw.githubusercontent.com/infiniflow/infinity/main/python/benchmark/configs/elasticsearch_enwiki.json"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline_in_list": true,
+      "claimed_speedup": "Enwiki full-text: 13731 QPS vs 1340 for Elasticsearch (10.2x, derived from page data), P95 latency 1.37 ms vs 14.75 ms (10.8x, derived), index build 1562 s vs 2289 s (1.5x, derived). SIFT1M vector search: 16320 QPS vs 934 for Elasticsearch (17.5x, derived) and 1303 for Qdrant (12.5x, derived); GIST1M: 2200 QPS vs 305 and 339 (7.2x and 6.5x, derived). Recall is 0.973 vs 0.992 (Elasticsearch) and 0.979 (Qdrant) on SIFT1M.",
+      "workload": "Repo benchmark doc: full-text OR queries on 33M English Wikipedia documents with 16 Python clients, and L2 vector search on SIFT1M (10,000 queries) and GIST1M (1,000 queries), reporting QPS, recall, P95 latency, index build time, memory and disk.",
+      "compiler_and_flags": "Not stated: Elasticsearch, Qdrant and Infinity run from Docker images (ES_JAVA_OPTS=-Xms16384m -Xmx32000m for Elasticsearch); no compile flags for Infinity.",
+      "caveats": "First-party benchmark by the Infinity authors on a single laptop-class CPU, 16 Python clients may bound the client side. The doc table says Infinity v0.2.0 (about 2024) but the run command uses the infiniflow/infinity:nightly image, so the exact build is not pinned; the README now ships 0.7.x. Elasticsearch is given a 32 GB maximum heap on a 32 GB machine. Lucene itself is not measured separately (Elasticsearch is built on Lucene). Tier A is given because the benchmark driver (python/benchmark/run.py), dataset links, versions and CPU model are public, but compiler and flags are not applicable or stated and the nightly tag drifts; a stricter reading would put it at C. The README headline claims (0.1 ms vector latency, 15K+ QPS; 1 ms and 12K+ QPS full-text) are in the same range as the doc table."
     }
   },
   {

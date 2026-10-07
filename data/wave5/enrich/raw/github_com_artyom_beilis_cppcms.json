@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/artyom-beilis/cppcms",
+  "one_liner": "C++11 web framework (FastCGI/SCGI/HTTP) with trigger-invalidated page cache; 2008 first-party case study shows ~41x uncached WordPress throughput.",
+  "what_it_does": "CppCMS is a C++ web application framework (not a CMS): you write application classes with URL dispatch, forms, sessions, JSON-RPC and views, compile them into one binary, and serve them through FastCGI or SCGI behind an existing web server or through its built-in HTTP backend. Views are written as templates that the cppcms_tmpl_cc tool turns into C++ code. It replaces a PHP/Java/C# application stack, not a web server, so adopting it means rewriting the application.",
+  "how_it_is_fast": "Application logic and templates are compiled C++ rather than interpreted. The built-in cache (cache_interface: fetch_page/store_page/fetch_frame) invalidates by triggers: every fragment fetched while building a page adds its key as a dependency, and rise(\"article_123\") drops every page that used it, so pages stay cached until their data actually changes. Cached pages are stored already gzip-compressed (separate _Z:/_U: keys), the cache lives in process-shared memory when worker processes are preforked (shmem_allocator) or in a separate TCP cache server, and connections are handled by a booster::aio reactor (epoll, kqueue, /dev/poll, poll or select) that hands synchronous requests to a worker thread pool.",
+  "when_to_use": [
+    "Read-heavy content sites (blogs, wikis, news) whose pages can be cached with trigger invalidation: the case study's gap widens as the cache miss ratio rises (3% miss: 1940 vs 176 fetches/s against WordPress with WP-Cache-2, snippet only).",
+    "Deployments that already run nginx, lighttpd or Apache and want a compiled application behind FastCGI or SCGI rather than a standalone server.",
+    "Memory-constrained hosts: the benchmarks_all case study reports Java/Tomcat and Mono/Asp.Net using one or two orders of magnitude more memory than CppCMS (snippet only).",
+    "Projects pinned to C++11 that need an MIT-licensed framework with sessions, forms, localisation (Booster.Locale) and caching in one package."
+  ],
+  "when_not_to_use": [
+    "You need WebSocket or HTTP/2: neither is documented, and issue #97 ('Does cppcms support websockets?', 2023-02-13) has no maintainer answer.",
+    "You want an actively developed ecosystem: the last commits are a 2.0.1 version bump (2025-11-02) and a CMake 4 fix (2025-12-18) after gaps of a year or more, and 40 issues are open, several unanswered since 2019-2021.",
+    "You need evidence against a modern C++ framework or server: the only numbers compare a 2008-era CppCMS blog with WordPress 2.5 on PHP 5.2, and with Java/C#/PHP blogs in a separate case study; there is no comparison with nginx, Drogon or other C++ frameworks.",
+    "Your traffic is mostly uncacheable per-user pages: the large ratios come from the cache-miss scenarios against a slow PHP baseline, and the cached 0% miss case is only about 3.2x.",
+    "Windows deployments that need multiple worker processes: service.cpp throws 'Prefork is not supported under Windows and Cygwin'."
+  ],
+  "integration": {
+    "form": "shared lib and static lib (both built by default), plus the bundled Booster library",
+    "dependencies": "Python at build time (CMake aborts without it; it runs the template compiler); optional zlib (gzip output), OpenSSL or libgcrypt (AES session encryption), ICU, PCRE and iconv (Booster locale and regex)",
+    "min_toolchain": "C++11 (-std=c++11 set for GCC, Clang and Intel; MSVC supported); CMake 3.5+, CMake 4 compatible since 2025-12-18",
+    "platforms": "Linux, FreeBSD, NetBSD, Solaris (SunOS flags in CMakeLists) and Windows (MSVC, MinGW, Cygwin; no prefork there); reactor selectable among epoll, kqueue, /dev/poll, poll and select",
+    "thread_safety": "applications_pool is documented as thread safe; synchronous applications are created by the pool and run on the worker thread pool (optionally thread_specific), while an asynchronous application is a single instance running in the event-loop thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Evidence is snippet only: cppcms.com is blocked here, so benchmarks_php and benchmarks_all were read through WebSearch summaries. This session's summary lists lighttpd 1.4.13, FastCGI, PHP 5.2, XCache 1.2.1, MySQL 5.0, WP-Cache-2 with the author's patch, Athlon XP 64 with 1 GB RAM on Debian Etch, and gives WordPress 711 fetches/s at 0% miss (an earlier summary printed 71) plus a 5% row of 1790 vs 118.",
+    "Harness limits: it compares two different blog applications (language, data access and cache design all differ), so it does not isolate framework overhead; benchmarks_all used only 1000 requests at a maximum concurrency of 5 per data point (snippet), and that page itself says the C#, Java and PHP implementations behaved very similarly.",
+    "The benchmarked blog is not in the GitHub repo: it lives in the project's SourceForge SVN (blog/trunk, last changed 2012-02-01), and neither the revision tested nor the compiler and flags are stated.",
+    "Cached pages are stored per encoding (gzip and plain under separate keys), so a page requested by both kinds of client occupies the cache twice; templates are compiled C++, so view changes need a rebuild (or a rebuilt view shared library)."
+  ],
+  "pick_this_over_siblings_when": "Pick CppCMS over Drogon or Sogou Workflow when you deploy behind an existing server via FastCGI/SCGI, want the trigger-invalidated page and fragment cache, or must stay on C++11; pick Drogon for WebSocket, async database clients, coroutines and active maintenance, and note that Qbix Server is the catalogued option if the goal is only to speed up an existing PHP stack rather than rewrite it in C++.",
+  "verified_claims_summary": "In a first-party, roughly 2008 case study on an AMD Athlon XP 64 with 1 GB RAM (Debian Etch; compiler and flags not stated), a CppCMS blog served 310 fetches/s uncached against 7.6 for WordPress 2.5 on PHP 5.2 with XCache behind lighttpd/FastCGI (about 41x, derived from page data), and 2300 vs 711 fetches/s at 0% cache miss, 1940 vs 176 at 3% and 570 vs 13 at 40% against WordPress with WP-Cache-2 (about 3.2x, 11x and 44x, derived). A second case study (CppCMS 0.99.3 vs PHP 5.2.6, Mono 2.6.7 and JSP on Tomcat 6.0.18) shows about 3.3-4.3x at 0% miss; all figures come from search snippets of blocked pages.",
+  "status_note": "Slowly maintained rather than active (version 2.0.1 in November 2025 and a CMake 4 fix in December 2025, otherwise sparse commits since 2020) and MIT-licensed since 1.2; usable as a built library, but the performance evidence is a 2008-era app-vs-PHP comparison read only through search snippets.",
+  "sources_read": [
+    "https://github.com/artyom-beilis/cppcms",
+    "https://github.com/artyom-beilis/cppcms/commits/master",
+    "https://github.com/artyom-beilis/cppcms/tree/master/src",
+    "https://github.com/artyom-beilis/cppcms/issues",
+    "https://github.com/artyom-beilis/cppcms/issues/97",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/README.md",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/booster/CMakeLists.txt",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/cppcms/cache_interface.h",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/cppcms/applications_pool.h",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/src/cache_interface.cpp",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/src/cache_storage.cpp",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/src/service.cpp",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/src/http_api.cpp",
+    "https://raw.githubusercontent.com/artyom-beilis/cppcms/HEAD/src/thread_pool.cpp",
+    "https://sourceforge.net/p/cppcms/code/HEAD/tree/",
+    "https://sourceforge.net/p/cppcms/code/HEAD/tree/blog/",
+    "http://cppcms.com/wikipp/en/page/benchmarks_php (EGRESS_BLOCKED; WebSearch snippet only)",
+    "https://cppcms.com/wikipp/en/page/benchmarks_all (not opened; WebSearch snippet only)"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/an-tao/drogon",
+  "one_liner": "Async C++17/20 HTTP/1.1 web framework; its own 2018 hello-world test shows 1.6-1.7x nginx keep-alive throughput.",
+  "what_it_does": "Drogon (the an-tao/drogon URL now redirects to drogonframework/drogon) is a full asynchronous HTTP/1.0/1.1 application framework for C++17/20: controllers declared with macros (HttpSimpleController, HttpController) or lambda handlers, filters and AOP advices, sessions, WebSocket, CSP server-side views, async PostgreSQL/MySQL/SQLite/Redis clients with an ORM, and the drogon_ctl generator. Handlers take a request and a callback that receives an HttpResponsePtr, or are C++20 coroutines. It replaces nginx only for the dynamic-application part; it is not a configurable static server, reverse proxy or load balancer.",
+  "how_it_is_fast": "It runs on trantor, a one-event-loop-per-thread reactor (epoll on Linux, kqueue on macOS/BSD); on Linux each IO thread gets its own listening socket so accepts spread across threads without a shared acceptor. Requests are parsed incrementally, and one read can drain several pipelined requests. The benchmarked handler calls setExpiredTime(0), which tells the framework to cache the response per IO thread forever: after the first hit, HttpServer::httpRequestHandling returns the cached response without calling the controller, and HttpResponseImpl reuses its pre-rendered buffer, rewriting only the Date bytes once per second.",
+  "when_to_use": [
+    "You are writing the application server itself in C++ and want high request rates for small dynamic responses on many keep-alive connections (the wiki run: 508K-573K req/s on 2x Xeon E5-2670 with 16 IO threads).",
+    "Endpoints whose responses can be cached in memory with setExpiredTime(): repeated hits skip the handler and send a pre-rendered buffer.",
+    "Services that want async DB/Redis clients, an ORM, sessions and WebSocket in one framework rather than nginx plus a separate application runtime.",
+    "C++20 codebases that prefer co_await handlers over callback chains."
+  ],
+  "when_not_to_use": [
+    "As an nginx replacement for static files, TLS termination, reverse proxying or load balancing: the wiki compares against a hand-written nginx hello_world module, not those roles.",
+    "If you need the 1.6-1.7x over nginx to hold: two later third-party runs with published nginx configs or versions put nginx ahead (cinatra docs: nginx 239,629 vs Drogon 216,982 req/s; gonwan/webframework-benchmark: nginx 1.28.2 336k/s vs Drogon 1.8.7 320k/s).",
+    "You need an HTTP/2 or HTTP/3 server: the README lists HTTP 1.0/1.1 support (server and client) only.",
+    "Handlers call blocking libraries or do long CPU work: each IO loop is single-threaded, so one blocked handler stalls every connection on that loop.",
+    "Responses differ per request (auth, per-user data): the setExpiredTime(0) caching that the benchmark relies on does not apply, so expect lower numbers."
+  ],
+  "integration": {
+    "form": "static lib (CMake; shared lib via BUILD_SHARED_LIBS)",
+    "dependencies": "trantor (submodule or installed), jsoncpp, zlib, libuuid or Boost (UUID); optional OpenSSL/Botan, Brotli, yaml-cpp, spdlog, libpq, MySQL/MariaDB client, SQLite3, hiredis, coz-profiler",
+    "min_toolchain": "C++17 with a complete std::filesystem (CMake aborts otherwise); C++20 is selected automatically when <coroutine> is found; CMake 3.5+. The benchmark's gcc 7.3.0 lacks std::filesystem, so current Drogon no longer builds with the compiler used for the measured numbers.",
+    "platforms": "Linux (epoll), macOS, FreeBSD, OpenBSD (kqueue), HaikuOS and Windows per the README; per-thread listeners are Linux-only (#ifdef __linux__ in ListenerManager.cc).",
+    "thread_safety": "Each connection is owned by one IO-loop thread and its handlers run there; work from other threads is queued into the loop (queueInLoop). The response cache is per IO thread (IOThreadStorage).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the nginx side is a hand-written hello_world module whose source and nginx.conf were never published, and the Chinese version of the same page (CHN-14) adds that nginx may have been misconfigured and not reached its maximum throughput; the English page drops that sentence. nginx's keepalive_requests defaulted to 100 at the time (the cinatra doc's config notes '#default 100'), so a default config would force reconnects in the keep-alive rows; whether that applied is unknown.",
+    "The Drogon number measures a cached response: setExpiredTime(0) means 'always cache', so after the first request per thread the controller never runs and only a pre-rendered buffer with a patched Date header is written. The nginx module, by contrast, presumably built its response per request (not documented).",
+    "Table inconsistencies: the no-keep-alive 100-connection row ran httpress with -t 12 while every other row used -t 16, and its nginx entry '31/49' (max/min) has max below min; client placement (same host or separate) and optimisation flags are not stated.",
+    "The run dates from 2018 (issue #17 of 2018-12-12 already links the wiki page) on CentOS 7.4 and gcc 7.3.0, so it measured a pre-1.0, C++14-era Drogon; the current examples/benchmark/main.cc uses a registerSyncAdvice on '/' and setThreadNum(0) instead of the BenchmarkCtrl setup on the page."
+  ],
+  "pick_this_over_siblings_when": "Pick Drogon over Sogou Workflow or cinatra when you want a full web framework with ORM, sessions, views and async DB/Redis clients; if raw throughput against nginx is the criterion, cinatra's own published run (with its nginx config) had cinatra and nginx both ahead of Drogon, and H2O or nginx remain the choices for static serving and proxying.",
+  "verified_claims_summary": "On a Dell server with two Xeon E5-2670 (16 cores, 32 threads), CentOS 7.4 and gcc 7.3.0 (flags not stated), a 2018 Drogon with 16 IO threads returning a cached 20-byte '<p>Hello, world!</p>' served 508K-573K req/s with keep-alive and 141K-155K without, against 314K-333K and 40K-52K for nginx with 16 workers and an unpublished custom module, all driven by httpress at 100/1,000/10,000 connections (best and worst of five runs). That is about 1.6-1.7x with keep-alive and about 2.9-4.5x without (derived from page data); the author's Chinese text attributes part of the gap to a possibly misconfigured nginx.",
+  "status_note": "Actively maintained under drogonframework/drogon (v1.9.13 in CMakeLists, 14.3k stars, MIT), but this record's id is the old an-tao/drogon URL of the same project, which the catalogue already lists as https://github.com/drogonframework/drogon (Go net/http baseline), so it is a second id for one project and the nginx claim itself rests on a 2018 first-party run that later third-party runs contradict.",
+  "sources_read": [
+    "https://github.com/an-tao/drogon",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/README.md",
+    "https://raw.githubusercontent.com/drogonframework/drogon-docs/HEAD/ENG/ENG-14-Benchmarks.md",
+    "https://raw.githubusercontent.com/drogonframework/drogon-docs/HEAD/CHN/CHN-14-性能测试.md",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/examples/benchmark/main.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/examples/benchmark/BenchmarkCtrl.h",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/examples/benchmark/BenchmarkCtrl.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/src/HttpServer.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/src/HttpResponseImpl.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/src/HttpControllersRouter.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/src/ListenerManager.cc",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/inc/drogon/HttpResponse.h",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/lib/inc/drogon/HttpAppFramework.h",
+    "https://raw.githubusercontent.com/drogonframework/drogon/HEAD/CMakeLists.txt",
+    "https://github.com/drogonframework/drogon/issues?q=is%3Aissue+benchmark+nginx",
+    "https://github.com/drogonframework/drogon/issues/17",
+    "https://raw.githubusercontent.com/qicosmos/cinatra/HEAD/lang/coroutine_based_http_lib.md",
+    "https://github.com/gonwan/webframework-benchmark"
+  ],
+  "confidence": 0.75
+}

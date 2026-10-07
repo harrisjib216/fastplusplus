@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/idealvin/coost",
+  "one_liner": "Asynchronous double-buffered logger inside the coost C++17 base library; first-party numbers claim it beats glog and synchronous spdlog.",
+  "what_it_does": "co/log is the logging module of coost, a base library that also ships flags, go-style coroutines, networking, JSON and an allocator. The API is variadic concatenation, not format strings: log::info(\"hello \", 23), plus log::debug/warn/error/fatal and glog-style log::check/check_eq/check_notnull assertions that print a stack trace and abort. All output goes to one process-wide logger writing logs/<exename>.log with size rotation (256 MB, 8 files by default) or daily rotation, configured through coost's own flag system; log::set_write_cb redirects output to a single callback.",
+  "how_it_is_fast": "Each thread formats its line into a thread-local co::string by appending arguments with coost's own integer/float conversion (no format-string parsing) and copies a pre-rendered timestamp string instead of calling strftime per line. The finished line is appended under one std::mutex to a shared in-memory buffer, and a background thread wakes every log_flush_ms (128 ms by default) or when the buffer passes half its capacity, swaps it with a second buffer and writes it to the file in one call (double buffering). The caller never touches the file, so the measured cost is mostly a memcpy plus a mutex.",
+  "when_to_use": [
+    "You already build on coost (its flags, coroutines or RPC) and want logging that matches its conventions with no extra dependency.",
+    "Bursty single-process logging where hot-path cost matters more than per-line timestamp precision and an occasional dropped burst is acceptable.",
+    "Services that want crash reporting built in: co/log installs signal handlers (SIGSEGV, SIGABRT, SIGFPE, SIGBUS, SIGILL) and dumps a stack trace into the log and a .fatal file.",
+    "Linux, macOS, Windows or FreeBSD on x86/x64/ARM/ARM64 with a C++17 compiler, where a glog-style check/fatal API is wanted."
+  ],
+  "when_not_to_use": [
+    "You need guaranteed delivery: when the shared buffer exceeds max_log_buffer_size (32 MB by default) co/log discards the oldest half of the buffer and writes a '......' marker instead of blocking.",
+    "Many threads logging concurrently at high rates: every line takes the same global std::mutex, and the project's own numbers show 8 threads taking about 3.5x as long as 1 thread for the same 1 million lines.",
+    "You need multiple loggers, multiple sinks, structured or JSON output, or format strings; there is one global logger, one file and one optional callback.",
+    "You do not want a whole framework: co/log needs coost's flag::parse, co::string, fs and thread code, and it changes process-wide signal handling.",
+    "Lowest-latency logging: the catalogued Quill, fmtlog, NanoLog and XTR publish single-digit-nanosecond hot paths with reproducible harnesses."
+  ],
+  "integration": {
+    "form": "static lib (libco, built with xmake or CMake; shared build possible)",
+    "dependencies": "none required (libbacktrace optional for stack traces on Linux/macOS); log pulls in the rest of coost (flag, string, fs, time, thread)",
+    "min_toolchain": "C++17 (gcc, clang, MSVC); default builds use -O2 (xmake 'faster', CMake -O2 -g)",
+    "platforms": "Linux, macOS, Windows, FreeBSD; x86, x64, ARM, ARM64 (CI covers Linux, macOS, Windows, Windows-arm64, FreeBSD)",
+    "thread_safety": "Thread-safe: per-thread formatting buffer, one global mutex around the shared buffer, single background writer thread.",
+    "drop_in_for_baseline": "partial — glog-like severity and check macros, but a different call syntax (variadic concatenation instead of LOG(INFO) << or fmt strings), configuration through coost flags, and a single global logger instead of spdlog's named loggers and sinks"
+  },
+  "gotchas": [
+    "Harness flaw behind the spdlog table: the harness lives on the separate 'benchmark' branch (benchmark/log_bm.cc, linked only from readme_cn.md). It times co/log's asynchronous in-memory path against spdlog 1.8.5 basic_logger_mt, a synchronous mutex-protected file sink, not spdlog's async logger; the Linux rows were run under the Windows Subsystem for Linux (stated in benchmark/readme.md), where spdlog took 2.08 s versus 0.46 s on native Windows, so the 13-24x Linux ratios mostly measure WSL file I/O for the synchronous side. The harness uses the old LOG << / log::exit() / flag::init API, so the numbers predate the current code, and the main README's Windows row (0.117704 vs 0.461156) differs from the branch readme's (0.104795 vs 0.534900). No glog harness exists in either branch.",
+    "Lossy under overload: a burst larger than max_log_buffer_size (32 MB, minimum 1 MB) before the writer drains drops the oldest half of the buffered lines; neither benchmark counts the lines written, and a 1 million-line run of roughly 40-80-byte lines is about the size of that buffer.",
+    "The logging thread is started from a flag::parse after-parse hook; if the program never calls flag::parse, lines accumulate in memory and are never written (log::close() then returns without flushing because the thread never started).",
+    "Timestamps are copied from a string the background thread refreshes on each wake-up (every 128 ms by default, sooner under load), so a line's time can lag the real time by up to log_flush_ms; the logger also installs handlers for SIGINT, SIGTERM, SIGQUIT, SIGSEGV, SIGABRT, SIGFPE, SIGBUS and SIGILL and sets SIGPIPE to ignored at static initialization."
+  ],
+  "pick_this_over_siblings_when": "Pick co/log only when you already use coost and want its integrated flags, check macros and crash stack traces; for standalone low-latency logging Quill, fmtlog or binlog are better documented and have reproducible harnesses, and BqLog or slick-logger publish multi-threaded comparisons against spdlog's async mode rather than its synchronous file sink.",
+  "verified_claims_summary": "The spdlog rows come from benchmark/log_bm.cc on the 'benchmark' branch: 1 million lines (32 'x' characters plus an integer) split across 1-8 threads, co/log's asynchronous logger against spdlog 1.8.5's synchronous basic_logger_mt file sink, benchmark target built with xmake 'fastest' (-O3); Linux rows ran under the Windows Subsystem for Linux (0.087 s vs 2.08 s at 1 thread, 23.8x), native Windows rows show 3.9x at 1 thread, and no CPU, compiler or storage is named. The glog write-speed table (18.9x-151x on four platform/disk combinations) has no harness anywhere in the repository, and the co/json-vs-rapidjson table comes from benchmark/json_bm.cc, which also times simdjson but the README leaves those rows out and times stringify with a single call.",
+  "status_note": "Actively maintained (commits through 2026-09-28, CI on five platforms, paid commercial support offered), MIT-licensed with some bundled code under Apache-2.0/Boost, BSD-2-Clause and public-domain terms, but co/log cannot be vendored on its own without coost's flag, string, fs and thread modules.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/readme_cn.md",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/include/co/log.h",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/src/log.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/test/log.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/LICENSE.md",
+    "https://github.com/idealvin/coost",
+    "https://github.com/idealvin/coost/tree/master/src",
+    "https://github.com/idealvin/coost/commits/master",
+    "https://github.com/idealvin/coost/issues?q=is%3Aissue+spdlog",
+    "https://github.com/idealvin/coost/issues?q=is%3Aissue+%E6%97%A5%E5%BF%97",
+    "https://github.com/idealvin/coost/issues/294",
+    "https://github.com/idealvin/coost/tree/benchmark",
+    "https://github.com/idealvin/coost/tree/benchmark/benchmark",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/log_bm.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/json_bm.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/rapidjson.h",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/spdlog/version.h"
+  ],
+  "confidence": 0.8
+}

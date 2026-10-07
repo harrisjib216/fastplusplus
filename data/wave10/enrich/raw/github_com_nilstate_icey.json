@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/nilstate/icey",
+  "one_liner": "Single-threaded libuv + llhttp HTTP/1.1 server inside a C++20 media toolkit; 34% more keep-alive req/s than Go net/http on one vCPU.",
+  "what_it_does": "The http module of icey (formerly LibSourcey) provides an asynchronous HTTP/1.1 server and client, WebSocket upgrade, chunked and multipart streaming, cookies and forms, all on a libuv event loop. You construct an http::Server on an address, then either connect lambdas to its Connection signal (which fires for every request's headers on a ServerConnection) or install a ServerConnectionFactory that creates a ServerResponder per request. It is a C++ library API, not a replacement for Go's net/http; its main use inside icey is serving signalling, WebSocket and HTTP media streams next to the WebRTC, TURN and FFmpeg modules.",
+  "how_it_is_fast": "Everything runs on one libuv loop with no locking: signals are LocalSignal (NullSharedMutex), and ServerConnection objects are recycled through a LIFO ConnectionPool (default 128) via reset() instead of being reallocated. Hot-path trims from the 2.1.0 release include pre-formatted status lines for common codes, single-pass header assembly with a pre-computed reserve, a uv_write_t freelist in Stream, cached peer addresses and an intrusive non-atomic refcount; parsing is llhttp. Against Go the gain is the absence of goroutine scheduling and GC on a tight empty-response loop; the benchmark's raw libuv+llhttp ceiling (96,088 req/s) shows icey's abstractions cost about 25% of that.",
+  "when_to_use": [
+    "You already use icey for WebRTC, TURN, Symple signalling or FFmpeg pipelines and want HTTP/WebSocket endpoints on the same libuv loop without adding a second framework",
+    "Small-response HTTP/1.1 keep-alive APIs or control endpoints where per-request overhead dominates and one core per server instance (SO_REUSEPORT for more cores) fits",
+    "Streaming HTTP to browsers (MJPEG via multipart/x-mixed-replace, chunked responses, WebSocket) from a C++ media process",
+    "Embedding an HTTP server in a C++20 application on Linux, macOS or Windows where a CMake FetchContent build with libuv/llhttp is acceptable"
+  ],
+  "when_not_to_use": [
+    "Connection-per-request traffic: with Connection: close the published run shows no gain (icey 14,330 vs Go 14,723 req/s)",
+    "You need HTTP/2, HTTP/3, a router, middleware or strict RFC compliance: the module is HTTP/1.1 only, routing is your own responder code, and the Server class comment says it is 'not strictly standards compliant' (for example, responses carry no Date header unless you add one)",
+    "Multi-core throughput claims matter: only single-vCPU numbers are published; the SO_REUSEPORT 'multi' and Node cluster variants that benchmark.sh runs are not in the results table",
+    "LGPL-2.1+ is a problem for static linking into proprietary binaries",
+    "You want a dedicated, independently benchmarked C++ web framework rather than one module of a 16-module media toolkit"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake modules; link icey::base, icey::net, icey::http)",
+    "dependencies": "libuv 1.50, llhttp 9.2.1, zlib 1.3.1 and nlohmann/json 3.11.3 (fetched by CMake); OpenSSL 3.x optional for HTTPS/WSS",
+    "min_toolchain": "C++20, CMake 3.21; GCC 12+, Clang 15+, AppleClang 15+ (Xcode 15) or MSVC 2022",
+    "platforms": "Linux, macOS, Windows (SO_REUSEPORT multicore mode Linux 3.9+)",
+    "thread_safety": "One server per event loop; signals use NullSharedMutex, so a server and its connections must only be touched from their loop thread. Multi-core means one Server per thread, each with its own uv::ScopedLoop and setReusePort().",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry: icey's benchmark responses carry no Date header (and neither do the raw libuv responses), while Go net/http adds Date and Node adds Date, Connection and Keep-Alive. Server::DateCache is refreshed every second but nothing in src/http/src (HEAD or tag 2.3.0) writes it into a response, so docs/modules/http.md wrongly credits a 'date cache' for the 72,209 req/s row. Go spends extra formatting and bytes per response that icey skips; the effect is probably small next to the 4.7 us per-request gap (derived from page data), but the comparison is not like-for-like.",
+    "Connection: close rows are not symmetric either: icey's 'single' handler sends a Connection: close header but never calls close(), and because wrk's request is keep-alive, ServerConnection::onComplete readies the socket for another request, so wrk tears the connection down; Go, Node and the raw libuv server close it server-side.",
+    "Server::Connection is documented as 'Signals when a new connection has been created' but is emitted from ServerConnection::onHeaders on every request. Lambdas attached inside it (the README's conn->Payload += ... pattern) are never deduplicated (FunctionDelegate equality is always false) and ConnectionPool reuse via reset() does not detach Payload slots, so slots pile up across keep-alive requests and pooled sockets. Use a ServerResponder factory for per-request state. (From reading server.cpp, signal.h and delegate.h; not run.)",
+    "Results table is hand-edited and single-run: its labels differ from what benchmark.sh prints (e.g. 'Raw libuv+llhttp (baseline)' for the keep-alive raw row, 'Go 1.25 (single)'), the icey rows are misaligned by 6 characters, the multi-core and Node cluster rows are dropped, and the numbers date from 2.1.0 (2026-03-19); the C++ compiler is not named."
+  ],
+  "pick_this_over_siblings_when": "Pick icey when the HTTP server lives inside a C++ media or WebRTC process that already runs icey's libuv loop. For a standalone C++ HTTP service, Drogon, Crow or aeronet beat Go net/http in multi-core, third-party or broader runs (the-benchmarker, TechEmpower-style code, Beast comparisons) and include routing that icey's http module lacks.",
+  "verified_claims_summary": "First-party wrk 4.1.0 run (-t4 -c100 -d10s, one run) on a single vCPU of an i7-11800H, Linux 6.8, with wrk on the same vCPU: an empty 200 OK keep-alive handler served 72,209 req/s (1.43 ms) on icey vs 53,878 req/s (2.31 ms) on default go1.25.0 net/http, Node v20.19.5 at 45,514 and a hand-written libuv+llhttp server at 96,088. With Connection: close icey and Go tie (14,330 vs 14,723 req/s). icey was a CMake Release, C++20 build with logging off; the compiler is unstated, and icey's responses omit the Date header that Go and Node send.",
+  "status_note": "Actively maintained (2.5.0 released 2026-06-19, commits through 2026-09-30, 1.4k stars under the renamed sourcey/libsourcey repo) and usable as a CMake FetchContent dependency under LGPL-2.1+; the HTTP numbers have not been re-measured since 2.1.0, and 2.5.0's changelog lists a broad memory-safety hardening pass across sockets and HTTP.",
+  "sources_read": [
+    "https://github.com/nilstate/icey",
+    "https://github.com/nilstate/icey/tags",
+    "https://github.com/nilstate/icey/tree/main/src/http/src",
+    "https://github.com/nilstate/icey/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/README.md",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/README.md",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/benchmark.sh",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/httpperf.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/go-server.go",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/node-server.js",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/perf/CMakeLists.txt",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/docs/modules/http.md",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/VERSION",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/include/icy/http/server.h",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/server.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/connection.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/response.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/message.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/client.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/websocket.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/http/src/parser.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/base/include/icy/signal.h",
+    "https://raw.githubusercontent.com/nilstate/icey/HEAD/src/base/include/icy/delegate.h",
+    "https://raw.githubusercontent.com/nilstate/icey/2.3.0/src/http/src/server.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/2.3.0/src/http/src/connection.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/2.3.0/src/http/perf/README.md",
+    "https://raw.githubusercontent.com/nilstate/icey/2.3.0/src/http/perf/httpperf.cpp",
+    "https://raw.githubusercontent.com/nilstate/icey/2.3.0/README.md"
+  ],
+  "confidence": 0.75
+}
