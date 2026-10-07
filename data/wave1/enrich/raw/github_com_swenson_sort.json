@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/swenson/sort",
+  "one_liner": "Single C89 header that macro-generates type-specialised quick, heap, tim, merge and shell sorts that beat libc qsort.",
+  "what_it_does": "You #define SORT_NAME, SORT_TYPE and optionally SORT_CMP, include sort.h, and get functions such as int64_quick_sort(arr, n), int64_tim_sort, int64_heap_sort, int64_merge_sort, int64_merge_sort_in_place, int64_shell_sort and int64_binary_insertion_sort for that one element type; defining SORT_EXTRA also pulls in sort_extra.h (grail sort, sqrt sort, rec_stable_sort, selection and bubble sort). It is not a qsort-compatible void* interface: every call site moves to a generated typed function and the comparator becomes a macro. SORT_DEF static lets the compiler drop unused routines.",
+  "how_it_is_fast": "The win over qsort is compile-time specialisation: SORT_CMP and SORT_SWAP expand inline on SORT_TYPE, so there is no indirect comparator call and no byte-wise generic swap per step. The current quick sort is introsort-like: median-of-5 pivot (two nested median-of-three), Lomuto partition with an all-equal early exit, recursion on the smaller side and a loop on the larger, a switch to heap sort after about lg N partition rounds, and optimal sorting networks (BITONIC_SORT_2..16) for ranges of 16 or fewer. Tim sort detects runs, extends them to minrun with binary insertion and merges through a buffer of min(A,B) elements; galloping was reverted in 2020.",
+  "when_to_use": [
+    "C code (C89 plus stdint.h and long long) that sorts arrays of one primitive or struct type through qsort and can accept a compile-time comparator macro.",
+    "You want several algorithms behind one header: timsort for partially ordered data or expensive comparisons, heap sort for O(1) extra memory with an n log n worst case, quick sort for random data.",
+    "Stable sorting without an O(n) buffer: in-place grail sort and sqrt sort from sort_extra.h.",
+    "Builds that must not link a library: everything is in the header, and SORT_DEF static removes unused routines (issue #86 reported about 30 kB per instantiated type at -Oz without it)."
+  ],
+  "when_not_to_use": [
+    "C++ code: std::sort already inlines the comparator, and no measurement against std::sort, pdqsort or any other modern sort exists (issue #85 asking for a std::sort comparison has been open since February 2023).",
+    "When you need current performance evidence: the only published table is a single 2014 run of code that has since been replaced.",
+    "Full-range int64 keys or floating-point keys with the README's subtraction comparator: comparator results are truncated to int inside quick sort, binary insertion and in-place merge, so the output can be unsorted (see gotchas); keep the default '<'-based SORT_CMP.",
+    "Programs that cannot tolerate exit() on allocation failure (tim sort) or arrays above INT_MAX elements with the sort_extra.h routines, which use int lengths (issue #89).",
+    "Non-trivially-copyable C++ types unless SORT_SAFE_CPY is defined to 1; the default copies with memcpy/memmove and allocates with malloc."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C standard library headers stdlib.h, stdio.h, string.h, stdint.h)",
+    "min_toolchain": "C89 with stdint.h and long long (Makefile builds with -std=c89 -pedantic -Wno-long-long); CI builds with gcc 10-13 and clang 13-15 on Ubuntu 22.04, the default compiler on macOS, and MSVC (stresstest only); also compiles as C++.",
+    "platforms": "any; uses __builtin_clzll when the compiler has it and a portable fallback otherwise",
+    "thread_safety": "Not documented. The code keeps no mutable global state (only a const shell-gap table), so concurrent calls on different arrays are safe from code reading; tim sort and merge sort malloc/realloc a buffer on every call.",
+    "drop_in_for_baseline": "partial — replaces qsort only after rewriting each call to a generated typed function (NAME_quick_sort(arr, n)) with the comparator expressed as a SORT_CMP macro; there is no qsort-compatible void* entry point, and quick, heap, shell and in-place merge sort are not stable."
+  },
+  "gotchas": [
+    "Comparator results are stored in an int (int cmp in QUICK_SORT_PARTITION, const int val in BINARY_INSERTION_FIND, int cv in the in-place merge), so the README's own example '#define SORT_CMP(x, y) ((x) - (y))' on int64_t is wrong beyond overflow: differences wider than 32 bits truncate, e.g. keys that are multiples of 2^32 all compare equal, and for more than 16 of them the partition's all-equal shortcut returns without sorting the range. With double keys a subtraction comparator truncates differences below 1.0 to 0 (the README only warns of 'stability problems'). Found by code reading, not executed; demo, benchmark and stresstest only sort lrand48 values below 2^31, so nothing in the repo exercises it.",
+    "MEDIAN has a copy-paste bug: in the a >= b branch it computes 'AC' as SORT_CMP(dst[a], dst[b]) instead of dst[a] vs dst[c], so for the ordering b < a < c it returns c, the maximum. Output stays correct but pivot quality drops on random data; open PR #84 (December 2022, unmerged) rewrites MEDIAN and reports 4-25% faster quick sort.",
+    "Allocation failure: tim sort prints to stderr and calls exit(1); merge sort does not check the malloc result. In C++ SORT_SAFE_CPY defaults to 0, so classes are moved with memcpy unless you define it to 1.",
+    "The bundled tests cannot fail CI on a wrong result: stresstest's run_tests returns 0 even after printing FAILED, so main never returns 1; verify() checks only order, not that the output is a permutation; and the Windows job passes /DDSET_SORT_EXTRA, which defines DSET_SORT_EXTRA, so the sort_extra.h routines are never built there. The current demo.c and benchmark.c also override SORT_CSWAP with branchless MIN/MAX on int64, a tuning the README usage section does not mention."
+  ],
+  "pick_this_over_siblings_when": "Pick it over pdqsort, crumsort or fluxsort when you need a C89 header with a menu of algorithms, including in-place stable grail/sqrt sort and timsort, instantiated per type by macros. For raw speed on primitive keys the catalogued siblings (pdqsort, crumsort, Highway vqsort) carry newer and much stronger benchmarks, while this entry's only numbers are from 2014.",
+  "verified_claims_summary": "The README table is one run of demo.c sorting 10,000 lrand48 int64_t values on an unnamed 2014-era MacBook Pro with macOS libc qsort as the baseline: quick sort 579 us and heap sort 592 us vs qsort 1285 us (about 2.2x, derived from page data); compiler and flags are not stated (the Makefile at that commit used CFLAGS = -O3 -g -Wall -std=c89 with CC ?= gcc). The table is unchanged since commit 47934fc (May 4, 2014), so it measured the old quick sort (middle-element pivot, two recursive calls, binary insertion below 16, no depth limit; the version behind the stack overflow in issue #62), not the 2019 median-of-5/heap-fallback/sorting-network quick sort that ships now.",
+  "status_note": "Stale (last commit February 13, 2024; issues #62, #85 and #89 and PR #84 unanswered) but MIT-licensed, a single dependency-free header with CI on gcc, clang and MSVC, and easy to vendor if you keep the default comparator.",
+  "sources_read": [
+    "https://github.com/swenson/sort",
+    "https://github.com/swenson/sort/commits",
+    "https://github.com/swenson/sort/commits/HEAD/README.md",
+    "https://github.com/swenson/sort/issues?q=is%3Aissue",
+    "https://github.com/swenson/sort/issues/62",
+    "https://github.com/swenson/sort/issues/85",
+    "https://github.com/swenson/sort/issues/86",
+    "https://github.com/swenson/sort/issues/89",
+    "https://github.com/swenson/sort/issues/39",
+    "https://github.com/swenson/sort/pulls?q=is%3Apr",
+    "https://github.com/swenson/sort/pull/63",
+    "https://github.com/swenson/sort/pull/84",
+    "https://github.com/swenson/sort/pull/84/files",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/README.md",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/sort.h",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/sort_extra.h",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/demo.c",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/benchmark.c",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/stresstest.c",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/multidemo.c",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/Makefile",
+    "https://raw.githubusercontent.com/swenson/sort/HEAD/.github/workflows/test.yml",
+    "https://raw.githubusercontent.com/swenson/sort/47934fc724f14795ce9f1a11e04703b37ece6614/README.md",
+    "https://raw.githubusercontent.com/swenson/sort/47934fc724f14795ce9f1a11e04703b37ece6614/demo.c",
+    "https://raw.githubusercontent.com/swenson/sort/47934fc724f14795ce9f1a11e04703b37ece6614/sort.h",
+    "https://raw.githubusercontent.com/swenson/sort/47934fc724f14795ce9f1a11e04703b37ece6614/Makefile",
+    "https://raw.githubusercontent.com/swenson/sort/8a036f197c5b155bf19380df608fd1ca2cc54fba/README.md"
+  ],
+  "confidence": 0.8
+}

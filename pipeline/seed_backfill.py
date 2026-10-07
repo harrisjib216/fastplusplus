@@ -64,7 +64,7 @@ def main():
         assigned = {p["repo_url"].lower() for a in manifest["assignments"] if a.get("batch") == "mine" for p in a["projects"]}
         if args.skip_assigned:
             items = [s for s in items if s["repo_url"].lower() not in assigned]
-        letters = iter(c for c in string.ascii_lowercase + string.ascii_uppercase)
+        letters = iter([c for c in string.ascii_lowercase] + [a + b for a in string.ascii_lowercase for b in string.ascii_lowercase])
         prompts_dir, raw_dir = wdir / "prompts", wdir / "raw"
         prompts_dir.mkdir(exist_ok=True); raw_dir.mkdir(exist_ok=True)
         for i in range(0, len(items), args.group):
