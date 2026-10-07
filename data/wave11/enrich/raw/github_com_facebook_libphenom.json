@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/facebook/libphenom",
+  "one_liner": "Archived Facebook C eventing framework (epoll/kqueue/ports job scheduler); first-party gut check shows 1.07-1.39x libevent events/s.",
+  "what_it_does": "A C99 application framework built around 'jobs': callbacks dispatched immediately, when a descriptor becomes ready (NBIO), on a timer, or on named thread pools, plus buffered streams, OpenSSL streams, hash tables, lists, a JSON variant type, counters and a printf with custom formatters. It is not a libevent drop-in: you embed a ph_job_t, set fd and callback, arm it with ph_job_set_nbio(job, PH_IOMASK_READ, timeout) and must re-arm after every dispatch, then hand the main thread to ph_sched_run().",
+  "how_it_is_fast": "Each scheduler thread ('emitter') owns its own epoll (or kqueue/port) descriptor and jobs are hashed onto emitters by emitter_affinity, so there is no shared event queue. On Linux readiness uses EPOLLONESHOT and a re-arm is a single epoll_ctl(EPOLL_CTL_MOD), with the job's believed kernel state (kmask) cached so it never has to probe with a failing ADD; on kqueue, deferred re-arms are batched into one kevent() call. Commit 41b6106 credits the gain to less bookkeeping per event, removed sanity checks in ph_job_set_nbio() and that syscall avoidance; Concurrency Kit epoch reclamation and per-thread counters keep the hot path free of locks.",
+  "when_to_use": [
+    "Maintaining or studying an existing libphenom-based C service, or mining its design (per-thread emitters, one-shot re-arm, epoch-based job freeing) for your own loop.",
+    "Multi-threaded C servers that want readiness dispatch, thread pools, timers and buffered TLS streams from one framework rather than gluing libevent, a pool and OpenSSL BIOs together.",
+    "Linux, OS X or illumos hosts where you can pin old dependencies (Concurrency Kit 0.5.x, OpenSSL 1.0.x) and vendor the code yourself."
+  ],
+  "when_not_to_use": [
+    "Anything new: archived 2019-03-09, last code commit 2016-01-28, and the README sends users to folly; libev, libuv or libhv are maintained alternatives.",
+    "Modern toolchains: configure accepts only Concurrency Kit 0.5.0-0.5.1 (issue #84 reports a static-assert build failure with newer CK, still open) and the OpenSSL glue uses a static BIO_METHOD and direct BIO field access, which do not compile against OpenSSL 1.1 or 3.x without patching.",
+    "Code written against libevent's API: there is no compatibility layer, and every NBIO job is one-shot and must be re-armed explicitly.",
+    "Fine-grained timers: the timer wheel ticks every 100 ms (WHEEL_INTERVAL_MS), so timeouts are coarse.",
+    "FreeBSD/OpenBSD: the kqueue port is described as not tried in a while, and issue #48 (tests/timer failures on FreeBSD) is still open."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools/libtool build, pkg-config libphenom)",
+    "dependencies": "Concurrency Kit 0.5.0-0.5.1, OpenSSL (1.0.x API), pthreads, pkg-config; autoconf, automake and libtool to build; libevent only for the optional iopipes comparison (--enable-libevent-comparison)",
+    "min_toolchain": "C99 (configure selects -std=gnu1x on GCC 4.6+, gnu99 below); README says GCC 4.3 or later works best; -O2 is forced because CK breaks without optimization, and -Werror is on unless --enable-lenient",
+    "platforms": "Linux (epoll, timerfd), OS X (kqueue), illumos/Solaris (port_create); FreeBSD 9.1 and OpenBSD 5.2 kqueue builds unmaintained; x86-64 and i686 flags in configure",
+    "thread_safety": "Multi-threaded scheduler: jobs are hashed onto scheduler threads by emitter_affinity and jobs with the same hash run serially with respect to each other; ph_job_set_nbio from another thread is deferred and applied by the owning emitter; freeing jobs goes through ph_job_free and an epoch grace period",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 1.39x Linux number: iopipes.c drives libevent with non-persistent EV_READ events re-added via event_add() in every callback. In libevent 2.0's epoll backend (changelist off by default) a fired non-persistent event is removed with epoll_ctl(EPOLL_CTL_DEL) and the re-add issues epoll_ctl(EPOLL_CTL_ADD), so libevent pays two epoll_ctl calls per event where libphenom pays one EPOLL_CTL_MOD; with EV_PERSIST libevent would pay none. libevent's kqueue backend batches such changes into the next kevent() call, which fits the gap shrinking to 1.07x on OS X (inference from the code, not measured).",
+    "Smaller asymmetries in the same harness: libphenom's NBIO thread is CPU-pinned by default (tid affinity) while the libevent loop is not, and libphenom's 'dispatched' counter also counts its own internal jobs (a 100 ms timerfd tick and the deadline), a negligible inflation of about 10 events/s.",
+    "Every NBIO job is one-shot (EPOLLONESHOT): forget to call ph_job_set_nbio() again in the callback and the descriptor goes silent; since July 2014 an epoll_ctl failure calls ph_panic() and aborts the process instead of returning an error.",
+    "The build pins Concurrency Kit to 0.5.0-0.5.1 and uses pre-1.1 OpenSSL internals, so expect patching before it compiles on a current distribution."
+  ],
+  "pick_this_over_siblings_when": "Pick libphenom only if you need its integrated job scheduler, thread pools and TLS streams in plain C and accept vendoring a frozen codebase; for a minimal single-threaded loop libev (also measured faster than libevent) is smaller and maintained, and libhv covers the same 'faster libevent with batteries' ground with active maintenance and a 4-thread pingpong benchmark.",
+  "verified_claims_summary": "One first-party commit message (41b6106, June 2013) reports single ~1 s runs of tests/bench/iopipes.t with 1024 AF_UNIX socketpairs on one scheduler thread: 366,624 vs 264,129 events/s against libevent on Linux (about 1.39x) and 505,155 vs 471,385 on OS X (about 1.07x), on two unnamed machines with unstated compiler, flags and libevent version. The libevent side uses non-persistent events that cost it an extra epoll_ctl per event on Linux, so the Linux ratio overstates the scheduler difference.",
+  "status_note": "Abandoned: archived by Facebook on 2019-03-09 with the last code change in January 2016; Apache-2.0 and copyable, but it needs Concurrency Kit 0.5.x and OpenSSL 1.0.x-era APIs, so treat it as reference code rather than a dependency.",
+  "sources_read": [
+    "https://github.com/facebook/libphenom",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/README.markdown",
+    "https://github.com/facebook/libphenom/commit/41b6106",
+    "https://github.com/facebook/libphenom/commits/master",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/tests/bench/iopipes.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/include/phenom/job.h",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/include/phenom/sysutil.h",
+    "https://github.com/facebook/libphenom/tree/master/corelib",
+    "https://github.com/facebook/libphenom/tree/master/corelib/nbio",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/nbio/epoll.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/nbio/common.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/nbio/kqueue.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/job.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/job.h",
+    "https://github.com/facebook/libphenom/tree/master/corelib/openssl",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/openssl/bio_bufq.c",
+    "https://raw.githubusercontent.com/facebook/libphenom/HEAD/corelib/openssl/init.c",
+    "https://github.com/facebook/libphenom/issues?q=is%3Aissue",
+    "https://github.com/facebook/libphenom/issues/84",
+    "https://github.com/facebook/libphenom/issues/73",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.0.21-stable/event.c",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.0.21-stable/epoll.c",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.0.21-stable/kqueue.c"
+  ],
+  "confidence": 0.75
+}

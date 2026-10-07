@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/hewlettpackard/nvthreads",
+  "one_liner": "pthreads replacement that makes lock-based C/C++ programs crash-consistent on NVM; beats Atlas and Mnemosyne, slower than pthreads.",
+  "what_it_does": "NVthreads is a research shared library (libnvthread.so) that intercepts pthread_create, mutexes, condition variables, barriers and malloc so an unmodified lock-based program gets durability: every critical section becomes a failure-atomic region and its heap writes are redo-logged to an NVM file system. Normal execution needs no code changes; resuming after a crash needs a few lines using nvmalloc(size, name), isCrashed() and nvrecover(dest, size, name) to re-attach named persistent allocations. It competes with Atlas (lock-inferred undo logging) and Mnemosyne (durable transactions), not with thread pools.",
+  "how_it_is_fast": "It reuses the DThreads design: threads run as processes with copy-on-write private pages (mprotect plus a page-fault handler tracks dirty 4 KB pages), so no individual store is instrumented and uncommitted writes never reach shared memory, which removes the need for an undo log. At each lock release the dirty pages are written as whole-page redo-log entries plus an end-of-log marker and made durable with fdatasync, then diffs are merged into shared state; application data itself is never force-flushed (no-force, like ARIES), and only the log is ordered. Per-mutex tokens replace DThreads' single global token for some workloads, and dependence tracking between nested critical sections delays log commit until the outermost lock is released.",
+  "when_to_use": [
+    "Research or prototyping on persistent memory: making an existing lock-based pthreads program crash-consistent with almost no code changes.",
+    "Iterative batch computations (k-means, PageRank) where resuming from the last completed critical section after a crash saves hours; the paper reports 1.4x-1.9x faster convergence after late crashes in k-means.",
+    "Workloads that synchronize rarely and dirty few pages: the paper's Phoenix apps other than reverse_index logged 27 to about 12K dirty pages and ran at 1.1x-1.5x of pthreads.",
+    "Comparing against fine-grained persistence systems (Atlas, Mnemosyne) on page-dense write patterns, where page-granularity logging amortizes best."
+  ],
+  "when_not_to_use": [
+    "Any program that needs speed over plain pthreads: it is always slower except linear_regression (0.3x, false sharing removed), and 4.1x-6.7x slower on canneal, ferret, reverse_index and dedup, with canneal not scaling at all.",
+    "Lock-free code, atomics, reader-writer locks, spinlocks or semaphores: the paper says lock-free structures are unsupported and libdthread.cpp intercepts none of rwlock, spinlock or sem_* calls.",
+    "Programs that write a few bytes per page across many pages, or synchronize very often: each lock release writes a full 4 KB page image per dirty page (logs reached 11 GB for reverse_index and 29 GB for canneal with truncation disabled).",
+    "Production or modern NVM: the README calls it a research prototype not to be deployed in production, it predates real Optane/CXL persistent memory, and the emulated-NVM file system (dummy_nvmfs) targets Linux 3.16.7.",
+    "Projects that cannot accept GPL-2.0 for a library that replaces pthreads at link time."
+  ],
+  "integration": {
+    "form": "shared lib (libnvthread.so / libnvthread32.so built by src/Makefile; link or preload in place of libpthread)",
+    "dependencies": "libdl and libpthread; g++ with multilib for the 32-bit build; a file system mounted at /mnt/ramdisk with /mnt/ramdisk/nvthreads (the dummy_nvmfs kernel module adds emulated NVM delays; a plain directory works without delays); crash state kept in /tmp/nvlib.crash",
+    "min_toolchain": "g++ (version not documented); src/Makefile builds with -g -m64 -msse2 -O3 -DNDEBUG -fPIC -DLOCK_OWNERSHIP -DDETERM_MEMORY_ALLOC",
+    "platforms": "Linux x86-64 and x86-32 only (clone-based processes, mprotect page tracking, x86 inline assembly); dummy_nvmfs for Linux 3.16.7",
+    "thread_safety": "It is the threading layer: shared heap data must be protected by mutexes, and updates become visible to other threads only at synchronization points (DThreads-style isolation), so racy code behaves differently than under pthreads",
+    "drop_in_for_baseline": "partial — it links in place of pthreads for lock-based programs without code changes, but recovery needs nvmalloc/nvrecover calls, and it shares no API with Atlas or Mnemosyne"
+  },
+  "gotchas": [
+    "Harness flaw behind the Atlas comparison: NVthreads' durability cost is an injected 1,000 ns per write() call on a DRAM tmpfs (mknvmfs1000 mounts wr_delay_ns_fixed=1000, wr_delay_ns_per_kb=0, and fdatasync on that file system is the only flush), a figure the paper derives by assuming clflushopt is 8x cheaper than its own 6,400 ns clflush-per-page estimate; the Xeon X5650 test machine has no clflushopt, and Atlas on the same machine paid real clflush costs (half its overhead, per the paper). The paper's own Figure 11 shows the five write-heavy apps degrading once the page-write delay passes about 1 us, so the 'faster than Atlas' margins depend on hardware the test box did not have.",
+    "Paper and repository inconsistencies: the text says 9 of 14 apps run under 28% overhead, but its Table 2 lists only 8 at 1.2x or below (kmeans is 1.5x and streamcluster 3.7x); only reverse_index and canneal used the per-mutex-token build, so the per-app numbers mix two library variants; the Atlas-ported PARSEC/Phoenix sources that eval/eval-atlas.py runs live at a private path (/mnt/ssd/terry/workspace/Atlas-github/multicore-tests/...), and the third-parties/ directory the README and eval/Default.mk reference is not in the repository, so the Atlas and DThreads columns cannot be rebuilt from it.",
+    "Only heap memory obtained through the intercepted malloc is logged (the commit path logs only when _isHeap), globals are not persisted, and pointers inside recovered objects are not relocated: issue #3 reports st1->next dereferences failing after recovery, so each linked object needs its own named nvmalloc/nvrecover.",
+    "Open issue #4 (2018): three threads contending for one mutex can hang with probability high enough to notice, spinning at 100% CPU waiting for the token in xrun.h. Other rough edges: pthread_kill is unsupported, sched_yield is a no-op, pthread_attr settings are ignored, the 64-bit protected heap is fixed at 8 GB and globals at 40 MB, ReadConfig returns before reading /tmp/nvthread.config so the log path is hard-coded, and a stale /tmp/nvlib.crash makes the next run take the recovery path."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued thread-pool siblings (citor, Fork Union, Taskflow-style schedulers, Weave) offer crash consistency, and all of them aim to beat a scheduler on speed; pick NVthreads only when the requirement is durability of a lock-based pthreads program on persistent memory and a 1.1x to 6.7x slowdown over pthreads is acceptable.",
+  "verified_claims_summary": "The EuroSys 2017 paper (doc/nvthreads-eurosys.pdf) runs 12 threads on two Xeon X5650s (Ubuntu 14.04, Linux 3.16.7) with NVM emulated by a delay-injecting tmpfs: NVthreads beats Atlas by 7% to 100x on 10 of the 12 PARSEC/Phoenix apps Atlas could run (it is 7% and 50% slower on streamcluster and reverse_index), is 3x-30x faster than Atlas and Mnemosyne on a 4 MB page-modification microbenchmark, and runs a Slashdot PageRank iteration in 170 ms vs 500 ms (Atlas) and 5 s (Mnemosyne) and a LiveJournal iteration in 5 s vs 29 s (Atlas), while plain pthreads stays faster everywhere but linear_regression. The benchmark apps were built with gcc -march=core2 -mtune=core2 -O5 -g (eval/Default.mk; compiler version unstated), and the Atlas comparison credits NVthreads with an assumed clflushopt cost the test CPU lacked.",
+  "status_note": "Abandoned research prototype (last commit 2017-08-02, two open issues including a token-wait hang), GPL-2.0, x86 Linux only; its wins over Atlas and Mnemosyne rest on an emulated 1 us page-write cost that assumes clflushopt the test CPU lacked, so read it as a design reference for page-granularity redo logging rather than a dependency.",
+  "sources_read": [
+    "https://github.com/HewlettPackard/nvthreads",
+    "https://github.com/HewlettPackard/nvthreads/tree/master",
+    "https://github.com/HewlettPackard/nvthreads/commits/master",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/README.md",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/COPYING",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/doc/nvthreads-eurosys.pdf",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/mknvmfs1000",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/src",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/include/logger.h",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/include/xpersist.h",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/include/xdefines.h",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/include/xrun.h",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/include/nvrecovery.h",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/source/libdthread.cpp",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/source/logger.cpp",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/source/nvrecovery.cpp",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/src/source/xthread.cpp",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/eval",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/eval/Default.mk",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/eval/eval-atlas.py",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/eval/README",
+    "https://raw.githubusercontent.com/HewlettPackard/nvthreads/HEAD/eval/README_fix.txt",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/third-parties",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/tests",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/tests/atlas",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/apps",
+    "https://github.com/HewlettPackard/nvthreads/tree/master/apps/pagerank",
+    "https://github.com/HewlettPackard/nvthreads/issues?q=is%3Aissue",
+    "https://github.com/HewlettPackard/nvthreads/issues/3",
+    "https://github.com/HewlettPackard/nvthreads/issues/4",
+    "https://github.com/HewlettPackard/dummy_nvmfs"
+  ],
+  "confidence": 0.8
+}
