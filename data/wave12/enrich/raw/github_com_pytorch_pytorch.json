@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/pytorch/pytorch",
+  "one_liner": "PyTorch: eager-mode C++/CUDA tensor and autograd framework; old community benchmarks show faster CNN forward+backward than TensorFlow 1.x.",
+  "what_it_does": "General deep learning framework: a NumPy-like tensor library (ATen) with CPU and GPU kernels, a tape-based reverse-mode autograd engine, and nn modules and optimizers. You use it from Python, or from C++ through LibTorch. Models are ordinary Python code run eagerly (define-by-run). torch.compile can JIT-compile them. Replacing TensorFlow means porting the model and training loop; it is not a drop-in API.",
+  "how_it_is_fast": "Each Python op dispatches with little overhead into C++ ATen kernels, which launch asynchronously on CUDA streams, so the host stays ahead of the GPU. Convolutions and GEMMs go to cuDNN and cuBLAS. With torch.backends.cudnn.benchmark=True, which the measured harness sets, cuDNN autotunes the fastest algorithm per layer shape. A CUDA caching allocator reuses device memory, avoiding cudaMalloc/cudaFree and the syncs they imply. The autograd engine runs the backward graph in C++. Newer releases add torch.compile (TorchInductor generating Triton kernels) and CUDA graphs, but the measured 0.3.0 and 1.0.0 versions predate them.",
+  "when_to_use": [
+    "Default choice for GPU training and research in Python: active project (release 2.14.1 on 2026-09-30), CUDA 13, ROCm and Intel GPU backends, the largest model ecosystem.",
+    "Dynamic models with data-dependent control flow, where eager define-by-run autograd avoids static-graph workarounds.",
+    "CNN training on a single NVIDIA GPU where per-step framework overhead matters. ResNet-152 forward+backward at batch 16 took 142.5 ms against 191.0 ms for TensorFlow 1.12 on an RTX 2080 Ti, and 180.2 ms against 269.8 ms for TensorFlow 1.4 on a Titan V (old versions).",
+    "Data-parallel ResNet-50 training at FP32. Upstream PyTorch 1.6.0 led upstream TensorFlow 2.3 and upstream MXNet 1.6.0 at 8, 16 and 32 V100s in OneFlow's DLPerf (10021.29 img/s at 32 GPUs).",
+    "C++ applications that need autograd or a trained model without Python: LibTorch ships the same C++ core."
+  ],
+  "when_not_to_use": [
+    "As evidence that PyTorch 2.x beats TensorFlow 2.x with XLA or JAX today: the measured versions are 0.3.0, 1.0.0 and 1.6.0 against TensorFlow 1.4-1.12 and 2.3.",
+    "Mixed-precision multi-GPU throughput with 2020 containers. In DLPerf, NGC PyTorch reached 22551.16 img/s on 32 V100s at fp16, against 29171.69 for NGC TensorFlow 1.x with XLA, 24734.22 without XLA, and 30713.68 for NGC MXNet.",
+    "Loading untrusted checkpoints with torch.load. It is pickle-based, and CVE-2025-32434 (CVSS 9.3, from search snippets) allowed code execution even with weights_only=True up to 2.5.1, fixed in 2.6.0. Prefer safetensors or a current release.",
+    "Old Python or minimal deployments: wheels need Python 3.10+, and the Linux wheel pulls in the CUDA 13 toolkit, cuDNN 9, NCCL, NVSHMEM, cuSPARSELt and Triton as dependencies.",
+    "VGG-style models dominated by large convolutions and dense layers on Volta and Turing cards, where TensorFlow matched or beat it in the same harness: V100 vgg16 train 71.7 ms (TensorFlow 1.5) against 83.5 ms, 2080 Ti 90.8 ms (TensorFlow 1.12) against 95.5 ms."
+  ],
+  "integration": {
+    "form": "Python package with C++/CUDA shared libraries (pip wheels, docker images); LibTorch shared-library distribution for C++",
+    "dependencies": "Linux wheel 2.14.1: CUDA 13.0.3 toolkit components (cuBLAS, cudart, cuFFT, cuFile, CUPTI, cuRAND, cuSOLVER, cuSPARSE, nvJitLink, NVRTC, NVTX), cuDNN 9.24, cuSPARSELt, NCCL 2.30.7, NVSHMEM, Triton 3.8. Also sympy, networkx, jinja2, fsspec, filelock, typing-extensions and setuptools. Source builds use MKL or oneDNN on CPU and need cuDNN 9.0+ for CUDA.",
+    "min_toolchain": "Python 3.10+. Source build: a compiler with full C++20 support (GCC 11.3.0+ on Linux) and Visual Studio on Windows. ROCm 4.0+ for AMD builds.",
+    "platforms": "Wheels for CPython 3.10-3.14 (including free-threaded 3.14t) on Linux x86-64 and aarch64 (manylinux_2_28), macOS 14+ arm64 and Windows x86-64. GPU backends: NVIDIA CUDA, AMD ROCm (Linux only), Intel GPU (Linux and Windows).",
+    "thread_safety": "Since 1.6, concurrent backward() calls from several threads run in parallel on CPU. With shared parameters, .grad accumulation races and results are non-deterministic (documented). Use torch.autograd.grad to avoid this. GPU work is asynchronous per stream.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the measured training rows: u39kun's 'train' is forward plus backward of a bogus sum loss with no optimizer step, and the two sides are not symmetric. TensorFlow fetches every gradient tensor to the host each step (sess.run(self.grad)). It also builds the graph with phase_train=False, so BatchNorm uses moving statistics and dropout is off, and it uses tf_cnn_benchmarks' ResNet v1 (stride in the 1x1 conv). PyTorch runs torchvision's ResNet with the stride in the 3x3 conv (the v1.5 layout, which NVIDIA puts at about 5% slower) and BatchNorm in training mode. It also computes an input gradient that flows back through .cuda() to a CPU tensor. The effects cut both ways and none was measured, so the 1.34x-1.50x training ratios are not a clean framework comparison.",
+    "Harness flaw in the PyTorch 1.0.0 eval rows: the harness wraps the input in Variable(x, volatile=True). In 1.0.0 that flag only warns 'volatile was removed and now has no effect' (python_legacy_variable.cpp). With no torch.no_grad(), the 2080 Ti eval passes recorded autograd graphs for the parameters. This handicaps PyTorch, so its 41.8 ms against 43.6 ms ResNet-152 eval win is conservative.",
+    "On Ampere and later GPUs, torch.backends.cudnn.allow_tf32 defaults to True, so 'FP32' convolutions run in TF32 unless disabled. Matmul TF32 has defaulted to False since 1.12, with finer fp32_precision controls after 2.9. Match these settings before comparing against another framework.",
+    "GPU ops are asynchronous: timing without torch.cuda.synchronize() measures kernel launch only (the u39kun harness does synchronize). The caching allocator keeps freed memory reserved, so nvidia-smi over-reports usage. Allocation sizes that change every step (for example a varying batch) can fragment memory; expandable_segments, still experimental, addresses this."
+  ],
+  "pick_this_over_siblings_when": "Pick PyTorch over MXNet for anything new: MXNet is archived, and upstream PyTorch matched or beat upstream MXNet from 8 GPUs up in DLPerf. Flashlight is the C++-native framework that reported lower overhead than PyTorch 1.8 in its own paper. For transformer inference only, CTranslate2, FasterTransformer or ByteTransformer beat PyTorch baselines (eager or TorchScript) in their catalogued benchmarks.",
+  "verified_claims_summary": "In u39kun/deep-learning-benchmark, a community harness, the mean of 20 timed iterations after 20 warm-ups was measured with batch 16 and synthetic 224x224 input, forward+backward without an optimizer step, in NVIDIA NGC containers. With PyTorch 0.3.0 against TensorFlow 1.4.0 (CUDA 9.0.176, cuDNN 7.0) on a Titan V at FP32, ResNet-152 train took 180.2 against 269.8 ms and VGG16 train 108.8 against 157.2 ms. With PyTorch 1.0.0 against TensorFlow 1.12.0 (CUDA 10.0, cuDNN 7.4.2) on an RTX 2080 Ti, ResNet-152 train took 142.5 against 191.0 ms, while TensorFlow won VGG16 train. OneFlow's DLPerf v1.0 (Oct 2020, up to 32 V100-SXM2-16GB) adds PyTorch 1.6.0 at 10021.29 against TensorFlow 2.3 at 9418.44 img/s for FP32 ResNet-50; upstream PyTorch was not run with AMP there.",
+  "status_note": "Very active (last commit 2026-10-07, release 2.14.1 on 2026-09-30, 103.8k stars, 5k+ open issues). The repo carries a BSD-style license, and the PyPI wheel lists a composite licence for bundled code. It is the safe default, but the catalogued speed evidence is 2017-2020 era and asymmetric.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/benchmark.py",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/frameworks/pytorch/models.py",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/frameworks/tensorflow/models.py",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/frameworks/tensorflow/tf_models/resnet_model.py",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/frameworks/tensorflow/tf_models/convnet_builder.py",
+    "https://raw.githubusercontent.com/u39kun/deep-learning-benchmark/HEAD/frameworks/tensorflow/tf_models/vgg_model.py",
+    "https://raw.githubusercontent.com/pytorch/vision/v0.2.0/torchvision/models/resnet.py",
+    "https://raw.githubusercontent.com/pytorch/pytorch/v1.0.0/torch/csrc/autograd/python_legacy_variable.cpp",
+    "https://raw.githubusercontent.com/Oneflow-Inc/DLPerf/HEAD/reports/dlperf_benchmark_test_report_v1.md",
+    "https://raw.githubusercontent.com/NVIDIA/DeepLearningExamples/e470c2150abf4179f873cabad23945bbc920cc5f/MxNet/Classification/RN50v1.5/README.md",
+    "https://github.com/pytorch/pytorch",
+    "https://raw.githubusercontent.com/pytorch/pytorch/HEAD/README.md",
+    "https://raw.githubusercontent.com/pytorch/pytorch/HEAD/docs/source/notes/autograd.md",
+    "https://raw.githubusercontent.com/pytorch/pytorch/HEAD/docs/source/notes/cuda.md",
+    "https://pypi.org/pypi/torch/json",
+    "WebSearch: CVE-2025-32434 torch.load weights_only (snippets of wiz.io, sentinelone.com, osv.dev and cvelogic.com; pages not opened)"
+  ],
+  "confidence": 0.75
+}
