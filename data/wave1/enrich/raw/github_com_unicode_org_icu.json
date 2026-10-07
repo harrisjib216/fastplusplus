@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/unicode-org/icu",
+  "one_liner": "ICU4C's RuleBasedCollator: locale-aware UCA/CLDR string comparison and sort keys, charted by its authors as faster than glibc strcoll.",
+  "what_it_does": "ICU4C is the Unicode Consortium's C/C++ internationalization library; its collation service compares strings and builds binary sort keys in CLDR-defined, locale-tailored order. You open a collator once (ucol_open / Collator::createInstance), set attributes (strength, alternate=shifted, case-first, numeric), then call ucol_strcoll on UTF-16, ucol_strcollUTF8 on UTF-8, or ucol_getSortKey to get memcmp-comparable byte keys. It is not a drop-in for strcoll/strxfrm: it needs a collator object instead of setlocale, its native string type is UTF-16, and its ordering (CLDR root plus tailorings) differs from glibc's ISO 14651 locale files.",
+  "how_it_is_fast": "Since the ICU 53 collation v2 rewrite, compare first skips the identical prefix of both strings, then takes a fast-Latin path (CollationFastLatin: a precomputed weight table for U+0000..U+017F and U+2000..U+203F) and otherwise walks collation elements incrementally through a code-point trie, stopping at the first primary difference instead of building full keys. Root data is shared read-only, and only small tailoring tables are per locale. Sort keys are compressed (primary-weight compression and run-length compression of common secondary/tertiary weights), which is what the 'keylen' chart column rewards.",
+  "when_to_use": [
+    "Sorting, comparing or indexing human-language text in many locales where glibc locale collation is the alternative, especially on glibc 2.21+ where strcoll regressed badly for some inputs.",
+    "Databases and search indexes that store sort keys (e.g. PostgreSQL ICU collations): ICU keys are compact, versioned through the collator version, and consistent with ucol_strcoll.",
+    "You need the same collation order on Linux, macOS, Windows, Android and Java (ICU4J), rather than whatever each platform's C library ships.",
+    "Repeated comparisons of the same strings (sorting millions of rows): generate sort keys once and memcmp them, as ICU's guide recommends.",
+    "You need tailoring options glibc lacks: numeric collation, alternate=shifted (ignore punctuation), case-first, script reordering, custom rules."
+  ],
+  "when_not_to_use": [
+    "Byte or code-point order is acceptable: C/POSIX and PostgreSQL's builtin C.UTF8 sorted 1M random ASCII strings in 470-486 ms against 765-770 ms for ICU (thebuild.com, PostgreSQL 17.1, snippet only).",
+    "Binary size matters: the full ICU data file (icudt64l.dat) is 27 MiB uncompressed and 11 MiB gzipped unless trimmed with the ICU Data Build Tool.",
+    "Your text is UTF-8 and you call the UTF-16 APIs: converting first adds a pass (use ucol_strcollUTF8); specialised libraries such as libutf benchmark themselves faster than ICU 78.3 on UTF-8 input.",
+    "Sort-key generation is the hot path: ICU's guide says generating keys for two strings is 5-10x slower than comparing them directly, and the ICU 53 v2 rewrite made ucol_getSortKey slower than v1 (snippet of the ICU v2 perf page).",
+    "Stored sort keys or indexes must survive library upgrades unchanged: ICU says to regenerate keys whenever any part of ICU is updated."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libicuuc + libicui18n + libicudata (data can be filtered by locale and feature with the ICU Data Build Tool); usually already installed as a system library",
+    "min_toolchain": "Building ICU4C requires C11 and C++17 (user guide); the C API (ucol_*) is callable from C",
+    "platforms": "Linux, macOS, Windows (MSVC 2017/2019 project files, Cygwin), Android and others; portable C/C++ with no SIMD requirement",
+    "thread_safety": "Const APIs of one collator can be used concurrently, and a frozen Collator can be shared across threads; for non-const use clone a collator per thread (ICU design guide).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stale baseline behind the claim: the first-party charts compare ICU4C 3.8 with glibc 2.12.3 and ICU4C 4.8 with glibc 2.13 (about 2008-2011). Both sides changed afterwards: glibc's 2014 strcoll rewrite (bug 15884, cache removed, 22-42% faster in most locales per the patch thread, snippet only) and its later regression for strings that differ late in multibyte text, and ICU 53's collation v2 (compareUTF8 up to 4.7x faster than ICU 52, getSortKey slower). The chart percentages are deltas, not ratios, and the chart says strcoll swings about 10% with code alignment.",
+    "The public harness (icu4c/source/test/perf/collationperf/collperf.cpp) feeds ICU UTF-16 strings and feeds glibc UTF-8 copies converted up front, times whole loops with gettimeofday at millisecond resolution, measures key length with strlen, and never checks that both libraries produce the same order. They do not: CLDR and glibc locale data sort differently, so the comparison is between two different collations, not one function done faster.",
+    "PostgreSQL numbers mix library speed with PostgreSQL policy: per the verifier, PostgreSQL uses abbreviated sort keys for ICU collations but disables them for libc, so the 4.7x (thebuild.com, de-AT) is partly PostgreSQL's sort path. A pgsql-hackers thread, 'Slow performance of collate en_US.utf8' (snippet only), reports C about 4.8 ms, ICU about 13 ms and glibc en_US.utf8 about 73 ms, and says glibc 2.17 performed about the same as ICU, so ICU's lead depends heavily on glibc version and input shape.",
+    "Sort keys and collation order change between ICU/CLDR versions; check the collator version and rebuild indexes after upgrades. Turning on normalization mode costs 10-40% in comparisons per ICU's guide; the C++ API has no stable ABI, so system libraries should expose only the C API (symbols carry a version suffix)."
+  ],
+  "pick_this_over_siblings_when": "Pick ICU4C when you need full CLDR locale coverage, tailorings and versioned sort keys from C or C++. libutf benchmarks faster collation and NFC than ICU 78.3 on UTF-8 input, and ICU4X is the Rust rewrite with smaller data, so consider them when DUCET-style ordering suffices or a Rust dependency is fine. ICU is also the baseline that most siblings (libutf, uni-algo, encoding_rs, Boost.Text) measure against, so it is the safe default rather than the fastest option.",
+  "verified_claims_summary": "The ICU project's own collation charts (icu.unicode.org, egress-blocked here, so known only from search snippets) run an ICU4C RuleBasedCollator with default options against glibc 2.12.3/2.13 strcoll and strxfrm over per-language name lists, 1000 passes per locale, and report percentage deltas favouring ICU on en_US strcoll; hardware and compiler were not readable. Independent PostgreSQL measurements (thebuild.com, PostgreSQL 17.1 on a 4 GB Linode: ICU de-AT 770 ms vs libc de_AT 3645 ms; pgsql-hackers: ICU about 13 ms vs en_US.utf8 about 73 ms) are also snippet-only and go through PostgreSQL's sort code.",
+  "status_note": "Actively maintained (last commit 2026-10-06, Unicode-3.0 licence) and installed on almost every OS, so adoption is easy; but the speed evidence is a 2008-2011 first-party chart against a pre-2014 glibc plus snippet-only PostgreSQL numbers, so treat it as the correct-and-usually-faster default for locale collation rather than a measured speed library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/README.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/icu4c/readme.html",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/icu4c/source/test/perf/collationperf/collperf.cpp",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/icu4c/source/test/perf/collationperf/readme.html",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/collation/index.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/collation/concepts.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/collation/architecture.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/collation/api.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/icu/design.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/icu_data/buildtool.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/docs/userguide/icu4c/build.md",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/icu4c/source/i18n/collationfastlatin.h",
+    "https://raw.githubusercontent.com/unicode-org/icu/HEAD/icu4c/source/i18n/rulebasedcollator.cpp",
+    "https://icu.unicode.org/charts/collation-icu4c-glibc (EGRESS_BLOCKED; WebSearch snippets only)",
+    "https://icu.unicode.org/design/collation/v2/perf (WebSearch snippet only)",
+    "https://sourceware.org/ml/glibc-cvs/2014-q4/msg00058.html (WebSearch snippet only)",
+    "https://thebuild.com/blog/talk-fast-the-speed-of-various-collations/ (WebSearch snippet only)",
+    "https://www.postgresql.org/message-id/bc394bbb-c325-4b2b-b443-0fad58781b0f%40postgrespro.ru (EGRESS_BLOCKED; WebSearch snippets only)"
+  ],
+  "confidence": 0.6
+}
