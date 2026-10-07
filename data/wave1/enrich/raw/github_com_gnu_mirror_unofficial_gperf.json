@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/gnu-mirror-unofficial/gperf",
+  "one_liner": "Build-time generator of perfect-hash C/C++ lookup code for fixed keyword sets; about 2-5x faster lookups than std::unordered_map in third-party tests.",
+  "what_it_does": "gperf reads a keyword list (optionally with a user struct per keyword) and emits C or C++ source with two functions, hash(str, len) and in_word_set(str, len), that recognise a keyword with one table probe and return a pointer to its entry or NULL. It is the classic tool for compiler reserved words, opcodes and command tables; GCC, g++ and GNU indent use its output. It is not a container: the set is frozen at build time, and you call a generated function (a Perfect_Hash class with static members under %language=C++) instead of map::find.",
+  "how_it_is_fast": "The hash is len plus a sum of 'associated values' looked up for a few selected byte positions (chosen automatically to minimise the number of positions, or set with -k), so a lookup is a handful of table reads, one bounds check and a single string compare against the one candidate slot. The associated values are searched at generation time until every keyword lands in a distinct slot; tables are near-minimal by default and can be made sparser with -s, which the manual notes speeds up unsuccessful searches. Alternative outputs include C switch statements (-S), constant tables (-C) and a position-independent string pool for shared libraries (-P).",
+  "when_to_use": [
+    "Small to medium static keyword sets (tens to a few thousand keys; the manual says it is tuned for about 1000 and works on over 15,000) such as reserved words, HTTP header or field names, opcodes or config keys.",
+    "Plain C code or older C++ toolchains where constexpr perfect-hash libraries (mph needs C++20, frozen C++14) are not an option; the default output is ANSI C and K&R C is still supported.",
+    "Lookups dominated by misses on short strings: the length range and hash range checks reject most non-keywords before any string compare (about 6x faster than std::unordered_map on all-miss runs in the qlibs/mph harness).",
+    "When you need per-keyword payload structs, ASCII case-insensitive matching (%ignore-case), or a PIC-friendly string pool for a shared library."
+  ],
+  "when_not_to_use": [
+    "Large key sets: generation time grows sharply; rurban/Perfect-Hash reports every gperf run on a 99,171-word dictionary killed after 65-386 s, and gsauthof/phashtable reports it does not finish on 1.4 million ISINs.",
+    "Sets that change at runtime, or that must be loaded from data at startup; gperf output is compiled source.",
+    "Hit-heavy hot paths where the fastest option matters: in the same third-party harnesses qlibs/mph is about 2-3x faster than gperf on hits, and ConstexprCore/perfect_hash claims 1.08 vs 0.23 billion queries/s.",
+    "Very small sets of very short fixed-length keys: in the qlibs/mph README table gperf is about 1.4x slower than std::unordered_map on 5 four-character keys with both compilers.",
+    "Keywords that collide on every choice of byte positions (some permutation/anagram sets): -D makes the function handle them with extra comparisons, so it is no longer perfect."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "the gperf executable at build time (GNU autotools build, or a distro package); the generated code needs only <string.h> for strcmp/strncmp (emitted when -I/%includes is given)",
+    "min_toolchain": "generated code: ANSI C by default, K&R C or C++ via -L; generator: a C++ compiler (the mirror's 2020 commit made it C++17 compliant)",
+    "platforms": "any; generated code is portable C, and the generator builds on Unix-like systems and native Windows (MSVC/clang link fix in 2020)",
+    "thread_safety": "not documented; generated lookups only read static tables (const with -C/%readonly-tables) and keep no state, so concurrent lookups are safe in practice",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "By default the input string must be NUL-terminated and exactly len bytes long; pass std::string_view or buffers only with %compare-strncmp (-c), and keywords containing NUL bytes need %compare-lengths (-l), which can greatly enlarge the output when the table range is large.",
+    "Harness notes for the A-tier numbers (qlibs/mph benchmark branch, perfect_hashing): the miss keys are runs of 2 to 11 '.' characters (string_views built from &\"...........\"[i%10]), which gperf rejects on the length or hash-range check before any compare, and hits and misses come in fixed blocks of P percent per 100 lookups, so the miss rows are cheap and branch-predictable rather than adversarial. Each 1024-key run streams three vectors of 102.4 million string_views (about 1.6 GB each, derived from benchmark.hpp), so the fastest contenders may sit near a memory-bandwidth floor that compresses the gap between mph and gperf more than the gap between gperf and std::unordered_map. The Makefile's default CXXFLAGS is -Ofast; the notebook overrides it with -O3, and CXX=clang++-18 is hard-coded.",
+    "The qlibs/mph README nanobench rows measure gperf output that was pasted into lambdas, given an extra index[] table and compared with strcmp; they time hits only, seed the key order from std::random_device, and use boost::hash rather than std::hash for the std::unordered_map baseline.",
+    "The generator is GPL-3.0-or-later, but per the manual its output takes the licence of your keyword input; this GitHub mirror stops at gperf 3.2 (released 2022-01-05, last commit 2022-02-08), while upstream shipped 3.2.1 and 3.3 (3.3 documentation dated April 2025, generator 2-2.5x faster; WebSearch snippets only, Savannah and the distro patch pages are blocked here), so take sources from GNU or a distro package."
+  ],
+  "pick_this_over_siblings_when": "Pick gperf over qlibs/mph, frozen or constexpr-phf when you need C output, a pre-C++20 toolchain or a mature, distro-packaged generator, and over Perfect::Hash or cmph only for small keyword sets; pick mph or ConstexprCore/perfect_hash for the fastest hit lookups in modern C++, and triehash or strager/perfect-hash-tables if their gperf-beating keyword-recognition numbers match your workload.",
+  "verified_claims_summary": "gperf's own docs give no timings; in the third-party qlibs/mph perfect_hashing harness (i7-12650H, -O3 -march=native, built with clang++-18 despite clang++-19 and g++-13 panel labels, libstdc++ std::unordered_map<std::string_view, int> with std::hash) 1024 string keys of length 1-8 took about 0.46 s for 102.4 million all-hit lookups vs about 2.14 s (about 4.5 vs 21 ns per lookup, 4.3-4.7x), about 6x on all-miss runs and 4-5x at 32 keys, with values read off plots. Secondary sources agree in direction: the qlibs/mph README nanobench shows 1.5-2.3x except a 1.4x loss on 5 four-character keys, and Kronuz/constexpr-phf shows 14 vs 29 ns per lookup on 192 field names (GCC 11, -O3).",
+  "status_note": "The GNU project is maintained (3.3 in 2025 per snippets) but this mirror is stale since 2022; the generator is GPL while its output is unencumbered, so generated tables are freely copyable into any codebase.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/gnu-mirror-unofficial/gperf/HEAD/README",
+    "https://raw.githubusercontent.com/gnu-mirror-unofficial/gperf/HEAD/NEWS",
+    "https://raw.githubusercontent.com/gnu-mirror-unofficial/gperf/HEAD/doc/gperf.texi",
+    "https://github.com/gnu-mirror-unofficial/gperf/commits",
+    "https://github.com/qlibs/mph",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/Makefile",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/gperf.cpp",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/unordered_map.cpp",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/mph.cpp",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/benchmark.hpp",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/perfect_hashing/Dockerfile",
+    "https://raw.githubusercontent.com/qlibs/mph/benchmark/benchmark/benchmark.cpp"
+  ],
+  "confidence": 0.7
+}

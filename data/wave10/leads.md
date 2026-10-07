@@ -60,3 +60,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - AmusementClub/vapoursynth-nssfactory (CUDA BM3D port, 1 star): first-party PR #23 numbers beat bm3dcuda on an RTX 5080 (732 vs 636 fps). Lead from BM3DCUDA enricher (e125).
 - BlazeDiff (teimurjan/blazediff, 349 stars, MIT, Rust/JS/Python): claims 4.4-4.9x faster than odiff on 4K and about 50% faster than pixelmatch, BENCHMARKS.md in the repo; not catalogued (honeydiff enricher, 2026-10-07); seed candidate.
 - esp-arduino-libs/ESP32_JPEG (Espressif decoder, 20 ms vs JPEGDEC 23 ms on ESP32-S3; precompiled libesp_codec.a, so reference at best): JPEGDEC enricher lead (2026-10-07).
+- VRSFML (vittorioromeo/VRSFML): SFML fork with modern GL plus DrawableBatch/instanced headers, 105 stars, no numbers found (enricher lead, 2026-10-07).
