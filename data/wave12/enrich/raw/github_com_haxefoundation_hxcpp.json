@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/haxefoundation/hxcpp",
+  "one_liner": "Runtime and build tool for Haxe's C++ target; native output beats the HashLink/JIT and Neko VM targets on CPU-bound benchmarks.",
+  "what_it_does": "hxcpp supplies the headers, runtime library (garbage collector, strings, arrays, Dynamic and anonymous objects, threads, sys APIs) and the haxelib build tool that turn the Haxe compiler's -cpp output into a native executable or library via the platform C++ compiler. The same Haxe source that runs on HashLink or Neko is switched to it by changing the target flag (haxe -cpp <dir> instead of -hl/-neko); it also ships the cppia host for running scripted Haxe without a C++ rebuild.",
+  "how_it_is_fast": "Ahead-of-time translation of statically typed Haxe to C++ compiled by g++/clang/MSVC (the default Linux toolchain passes -O2), so typed arithmetic, arrays and method calls become plain native code instead of bytecode run by the Neko interpreter or HashLink's JIT. Memory is managed by an Immix-style mark-region collector (src/hx/gc/Immix.cpp) with conservative stack scanning and an opt-in generational mode (HXCPP_GC_GENERATIONAL), which the HashLink benchmark runner enables for the cpp target.",
+  "when_to_use": [
+    "You already write Haxe and want the fastest native target for CPU-bound code: numeric loops, typed arrays and allocation-heavy trees (2018: Mandelbrot 0.13 s vs 4.28 s HL/JIT and 9.65 s Neko).",
+    "Shipping a native desktop, mobile or console binary from Haxe (Linux, macOS, Windows, Android, iOS toolchains are in toolchain/) where neither a JS engine nor the HashLink VM is wanted.",
+    "Code that must link with existing C/C++ libraries through Haxe externs.",
+    "Development loops can use cppia scripts and keep full C++ builds for releases."
+  ],
+  "when_not_to_use": [
+    "Fast edit-build cycles: each small benchmark took about 2 s to build in the 2018 run versus 0.02 to 0.2 s for js, hl and neko; the HXCPP_COMPILE_CACHE object cache (docs/CompileCache.md) avoids recompiling unchanged runtime files, but generated code still goes through the C++ compiler.",
+    "Code dominated by anonymous structures or Dynamic access: Anonymous ran 0.38 s on cpp versus 0.29 s on HL/JIT and 0.02 s on Node in 2018.",
+    "When Node (V8) or the JVM target is acceptable: they matched or beat cpp on several rows in both runs (2025 Anonymous 0.02/0.03 s vs 0.1 s; Mandelbrot 0.07 s vs 0.13 s), and Node's 2018 total was lower once counted once (see gotchas).",
+    "Projects that need HashLink/C (hlc), HashLink's own AOT C path: the benchmarks never produced a valid hlc number, so it is unknown whether hxcpp beats it.",
+    "Code that cannot tolerate a conservative stop-the-world GC or that runs foreign threads without registering them with the collector."
+  ],
+  "integration": {
+    "form": "haxelib package: runtime headers plus a static runtime library and build tool that compile the generated C++ into an executable or shared library",
+    "dependencies": "Haxe 4 compiler and haxelib; a C++ toolchain (g++ by default on Linux, clang on Apple, MSVC on Windows); bundled third-party sources (mbedtls, sqlite, zlib, pcre2) built on demand",
+    "min_toolchain": "Haxe 4 (Changes.md: 'Removed Haxe 3 support'); C++ standard not documented beyond an optional HXCPP_CPP17 define",
+    "platforms": "Linux (x86, x86-64, Raspberry Pi), macOS, Windows (including Arm64), Android, iOS; emscripten mentioned in docs",
+    "thread_safety": "Multi-threaded with a conservative stop-the-world GC: threads must cooperate, call GCEnterBlocking/GCExitBlocking around blocking system calls, and foreign threads must attach with SetTopOfStack (docs/ThreadsAndStacks.md)",
+    "drop_in_for_baseline": "partial: same Haxe source, switch -hl/-neko to -cpp, but it needs a C++ toolchain and much longer builds, and some library behaviour has differed between targets (Changes.md lists fixes aligning indexOf and directory reading with other targets)"
+  },
+  "gotchas": [
+    "The gist's 2018 totals double-count JavaScript: every block lists two rows labelled js with near-identical runtimes, each js row set sums to 0.43 to 0.45 s (truncated), while the js total is 0.962 s, matching their sum; every other target's total matches its own row sum. Counted once, Node's total (about 0.45 to 0.53 s) is below cpp's 0.717 s, so 'C++ fastest overall' does not hold for 2018 (derived from page data); the wins over HashLink (5.68 s) and Neko (27.16 s) are unaffected.",
+    "Every 2025 hlc row fails with 'result 0 but expected ...', and 0 is exactly the expected output of the suite's _Startup program, which suggests the gist runner kept executing a stale hlc binary (inference). The result check caught it, but it leaves no hlc number at all.",
+    "Timings are whole-process wall time minus a per-target startup time taken from _Startup, averaged until 1 s accumulates and truncated to 0.01 s (other/benchs/Benchs.hx), so cpp cells of 0 or 0.01 s are at the timer's resolution and small ratios are noise. Haxe, hxcpp and C++ compiler versions are not given; hxcpp's default Linux build is g++ -O2 without LTO (-flto only with HXCPP_OPTIMIZE_LINK), and whether the gist kept the upstream -D HXCPP_GC_GENERATIONAL is unknown.",
+    "Anonymous-structure field reads go through a virtual __Field(String) lookup returning a boxed hx::Val (include/hx/Anon.h), which explains the Anonymous row. Generational GC is opt-in and needs write barriers in native extern code; issue #740 asking what it takes to enable it has been open since 2018 with no answer."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are Wasm and EVM engines (Wasmi, WAMR, wasm3, wasm2go, PolkaVM), which run portable bytecode; pick hxcpp only when the source language is Haxe. Like wasm2go, it gets its speed by translating to a host language's compiler instead of interpreting or JIT-compiling.",
+  "verified_claims_summary": "An independent gist (tong) ran HashLink's other/benchs suite (Anonymous, BinaryTrees, Fib, FloatArray, IntArray, Mandelbrot, NBodies) across Haxe targets on an Intel Core i5-6600 in 2018 and an AMD Ryzen 7 7700 in 2025: hxcpp's total runtime was 0.72 s versus 5.68 s for HashLink/JIT and 27.16 s for Neko (about 7.9x and 38x, derived from page data), and in 2025 cpp beat hl on every row (for example Mandelbrot 0.13 s vs 1.32 s). Compiler, flags and Haxe/hxcpp versions are not stated, the 2018 JS total is double-counted and hlc never produced a valid result.",
+  "status_note": "Active (last commit 2026-09-22 by Haxe Foundation contributors, 3,138 commits, 194 open issues) under a one-condition BSD licence, with bundled third-party code (mbedtls, sqlite, zlib, pcre2) under its own terms; it is the standard native target for any Haxe project.",
+  "sources_read": [
+    "https://github.com/HaxeFoundation/hxcpp",
+    "https://github.com/HaxeFoundation/hxcpp/commits/master",
+    "https://github.com/HaxeFoundation/hxcpp/tree/master/docs",
+    "https://github.com/HaxeFoundation/hxcpp/issues?q=is%3Aissue+performance",
+    "https://github.com/HaxeFoundation/hxcpp/issues/740",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/haxelib.json",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/Changes.md",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/toolchain/linux-toolchain.xml",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/toolchain/gcc-toolchain.xml",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/toolchain/common-defines.xml",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/docs/ThreadsAndStacks.md",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/docs/CompileCache.md",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/include/hx/Anon.h",
+    "https://raw.githubusercontent.com/HaxeFoundation/hxcpp/HEAD/src/hx/gc/Immix.cpp",
+    "https://gist.github.com/tong/84992efadb204c2140e24dbdbeeee06c",
+    "https://github.com/HaxeFoundation/hashlink/tree/master/other/benchs",
+    "https://raw.githubusercontent.com/HaxeFoundation/hashlink/HEAD/other/benchs/Benchs.hx",
+    "https://raw.githubusercontent.com/HaxeFoundation/hashlink/HEAD/other/benchs/benchs.hxml",
+    "https://raw.githubusercontent.com/HaxeFoundation/hashlink/HEAD/other/benchs/Anonymous.hx",
+    "https://raw.githubusercontent.com/HaxeFoundation/hashlink/HEAD/other/benchs/_Startup.hx"
+  ],
+  "confidence": 0.7
+}

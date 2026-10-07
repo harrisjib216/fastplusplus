@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/bsaleil/lc",
+  "one_liner": "Research Scheme JIT using lazy basic-block versioning; generated code edges out Gambit and Chez on 38 classic benchmarks.",
+  "what_it_does": "LC is a standalone JIT compiler for a subset of R5RS Scheme on Linux x86-64: `./lc file.scm` expands the program with a modified Gambit front end and generates x86-64 machine code lazily, block by block, as execution reaches it. It is a command-line runtime, not an embeddable library, and it is not a drop-in Scheme system (no first-class continuations, limited eval, no multi-tasking or stack-overflow detection).",
+  "how_it_is_fast": "Lazy basic block versioning (BBV, Chevalier-Boisvert and Feeley): each basic block is compiled on first execution and specialised for the type context that reached it, so type checks seen once are removed from later code, with a version cap (the experiments use --max-versions 5). Interprocedural extensions propagate argument and return types through per-closure entry-point and return-point tables, and eager flonum unboxing keeps floats unboxed in registers and stack slots, which is where the largest wins (fftrad4, nucleic) come from.",
+  "when_to_use": [
+    "Studying or reproducing BBV and interprocedural code specialisation for a dynamic language; the codebase is under 15 KLOC of Scheme written by one person.",
+    "Benchmark-style Scheme programs with type-stable fixnum or flonum hot code (Gabriel and Gambit suite programs), where LC beat Gambit and Chez on more than half of 38 programs.",
+    "Flonum-heavy loops over heterogeneous vectors, where eager unboxing gave the best rows (fftrad4: Gambit 3.29x to 4.03x and Chez 4.60x to 5.10x of LC's time).",
+    "A reference design when building a baseline JIT without an interpreter or profiling tier: warm-up equals compile time."
+  ],
+  "when_not_to_use": [
+    "Any production Scheme work: last commit 2019-05-11, one closed issue, single author, and it needs the author's Gambit fork on PATH at build and run time.",
+    "Programs that need call/cc, full eval, threads, stack-overflow safety or vector bounds checks; LC omits them, and that omission is part of its speed edge over safe-mode Gambit and Chez.",
+    "Code where unsafe-mode Gambit or Chez is acceptable: the average lead shrinks to 1.12x and 1.09x and LC loses on a large minority of benchmarks.",
+    "Loop-heavy flonum vector code such as fft, where Pycket's tracing JIT was 3.40x faster than LC with heterogeneous vectors (1.63x with f64vectors).",
+    "Platforms other than Linux x86-64."
+  ],
+  "integration": {
+    "form": "standalone JIT executable (bash launcher that runs gsc -i over compiled Gambit .o1 modules)",
+    "dependencies": "modified Gambit Scheme (github.com/bsaleil/gambit, fork of gambit/gambit, LGPL/Apache-2.0) built with --enable-single-host and its gsc on PATH; bash; Python 3 for the benchmark scripts",
+    "min_toolchain": "the bsaleil/gambit fork (a 2019-era Gambit 4.9 tree); no other version documented",
+    "platforms": "Linux x86-64 only",
+    "thread_safety": "single-threaded; the thesis says multi-tasking is not implemented",
+    "drop_in_for_baseline": "partial: runs plain R5RS-style programs like the Gambit benchmark suite, but lacks first-class continuations, full eval, threads and safety checks that Gambit and Chez provide"
+  },
+  "gotchas": [
+    "The 'excluding compilation time' numbers come from main.scm's --time mode, which runs the whole program once, resets globals and the stack, forces a GC and then times a second in-process run; Gambit and Chez are timed on their single run in a fresh process. That removes JIT cost as intended but also gives LC warmed memory, so the Fig. 6.16 ratios compare a warm second run with a cold first run.",
+    "The committed harness runs Gambit and Chez with generic arithmetic and heterogeneous vectors (the fixnum/flonum-specialised fl+/fx+ macro block in prefix/Gambit.scm is commented out), and prefix/Gambit.scm has no (not safe) while prefix/ChezScheme.scm and the Chez compile command carry neither an optimize-level nor the (import (rnrs) ...) line the thesis cites; the thesis's safe/unsafe Gambit and optimize-level 2/3 Chez runs were configured outside the committed scripts, and run.py has every system except LC5 commented out with /home/bapt paths.",
+    "README build steps clone the 'stable' branch (last updated 2018-08-29, before the 2019 thesis-era commits such as 'Improve div ops') and run `make debug`, which builds LC with gsc -debug and assertions on (config-debug.scm); the release target is plain `make`. This matters most for compile-inclusive timings such as the Pycket comparison.",
+    "Correctness is checked: every benchmark's ok? predicate prints '*** wrong result ***' and run.py aborts on '***' or any stderr output, so the timed runs did produce the expected results; the thesis does not say whether its averages are arithmetic or geometric means of the per-benchmark ratios, and the VMIL 2018 Pycket figure includes GC time while the thesis version excludes it."
+  ],
+  "pick_this_over_siblings_when": "Pick LC over Chez Scheme only to study or extend BBV for Scheme; Chez is the production choice and is within about 9% of LC in unsafe mode. Against Higgs, LC is the Scheme counterpart of the same Montreal BBV line of work and adds interprocedural entry/return-point specialisation and flonum unboxing.",
+  "verified_claims_summary": "In Saleil's 2019 PhD thesis (Intel Core i7-7700K, Linux, 38 Gambit-suite benchmarks, mean of 8 of 10 runs, GC and compile time excluded), Gambit v4.9.3 code takes 1.38x (safe) and 1.12x (unsafe) of LC's time on average and Chez 9.5.2 takes 1.27x and 1.09x, with fftrad4 the best case; including JIT compile time, LC takes 0.87x of Pycket's time (faster on 22 of 38). The peer-reviewed VMIL 2018 paper (i7-4870HQ) reports LC 1.47x faster than Gambit on average and faster on 26 of 38.",
+  "status_note": "Abandoned research artifact (last commit 2019-05-11) under BSD-3-Clause; usable for experiments and as a reference implementation of BBV, but it depends on an unmaintained Gambit fork and the committed harness needs hand edits (paths, system list, safety modes) to reproduce the thesis numbers.",
+  "sources_read": [
+    "https://github.com/bsaleil/lc",
+    "https://github.com/bsaleil/lc/commits/master",
+    "https://github.com/bsaleil/lc/branches/all",
+    "https://github.com/bsaleil/lc/issues?q=is%3Aissue",
+    "https://github.com/bsaleil/lc/tree/master/tools/benchtimes/bench",
+    "https://github.com/bsaleil/gambit",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/README.md",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/lazy-comp.template",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/main.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/strat1.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/copy-with-declare.sh",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/config-release.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/config-debug.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/ecoop17-paper.sh",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/run.py",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/num-iters.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/prefix/Gambit.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/prefix/ChezScheme.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/prefix/LC.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/suffix/LC.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/suffix/Gambit.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/suffix/ChezScheme.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/bench/fib.scm",
+    "https://raw.githubusercontent.com/bsaleil/lc/HEAD/tools/benchtimes/bench/fftrad4.scm",
+    "https://raw.githubusercontent.com/bsaleil/bsaleil.github.io/master/docs/BaptisteSaleilPhD.pdf",
+    "https://raw.githubusercontent.com/bsaleil/bsaleil.github.io/master/docs/vmil18.pdf"
+  ],
+  "confidence": 0.75
+}

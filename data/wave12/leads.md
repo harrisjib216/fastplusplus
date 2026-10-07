@@ -59,3 +59,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - MOSFHET (lmcad-unicamp/MOSFHET, optimised TFHE software): unverified lead from the riscv-sbt enricher (2026-10-06); crypto, outside wave 12.
 - HaxeFoundation/hxcpp (beats Neko and HashLink in both gist runs, not catalogued) and the benchs.haxe.org multi-target suite (blocked here; HaxeBenchmarks/benchmark-runner commits no results) (HashLink enricher, 2026-10-06). mighty-gerbils/gerbil is weak (1.13x over Guile in all.csv).
 - asumagic/asllvm (LLVM AngelScript JIT, no numbers in README; weak) and Hazelight UnrealEngine-Angelscript StaticJIT (gated fork, unreachable): angelsea enricher leads (2026-10-07).
+- Pycket (pycket/pycket, Racket tracing JIT on RPython): not catalogued (hxcpp/LC enricher, 2026-10-07); seed candidate.
