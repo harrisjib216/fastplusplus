@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/sheredom/json.h",
+  "one_liner": "Public-domain single-header C/C++ JSON parser into one read-only allocation; out-parsed nlohmann/json v2.0.3 in a 2016 shootout.",
+  "what_it_does": "Parses UTF-8 JSON into a read-only DOM of linked-list objects and arrays held in a single caller-freed allocation (json_parse, or json_parse_ex with flags, a custom allocator callback and an error/location result struct). It also writes a DOM back out minified or pretty, and can clone a subtree into its own allocation (json_extract_value). Optional flags accept JSON5 and Bitsquid 'simplified JSON' extensions (comments, trailing commas, unquoted keys, hex, Infinity/NaN). Not a drop-in for nlohmann/json: plain C structs, no mutation, no typed access, numbers left as text.",
+  "how_it_is_fast": "Two-pass design: a first scan (json_get_value_size) validates the input and sums the exact DOM and string-data sizes, then one malloc is made and a second pass (json_parse_value) fills it, so the whole document costs one allocation instead of one per node (2 allocations in the benchmark vs 170,254 for nlohmann on canada.json). Numbers are copied as their source text with no string-to-double conversion, and the writer copies that text back verbatim with no double formatting. The scanners are plain byte-at-a-time loops; there is no SIMD.",
+  "when_to_use": [
+    "C or C++98-era code that wants a dependency-free, public-domain single header (tests build as gnu89, C99, C11 and C++98 through C++20 on gcc, clang and MSVC).",
+    "Load-once, read-only documents such as config or asset files where one allocation freed with one free() (or carved from an arena via the alloc callback) is the main attraction.",
+    "Inputs that need JSON5 or simplified-JSON leniency (comments, trailing commas, unquoted keys, hex, Infinity/NaN) or byte-offset/line locations for error reporting.",
+    "Round-tripping documents where numbers must come back exactly as written: the suite records 27/27 roundtrip passes because number text is copied verbatim (nlohmann v2.0.3 failed roundtrip24-27)."
+  ],
+  "when_not_to_use": [
+    "Raw throughput matters: RapidJSON beat it on every file in the same run (4.8/2.0/1.2 ms vs 9.4/5.1/2.4 ms parse), and the catalogued yyjson and simdjson are far faster still.",
+    "Number-heavy input: canada.json used 18,010,128 bytes vs 5,293,488 for nlohmann (3.4x), and every numeric read still needs your own strtod.",
+    "You need to build or mutate documents: the DOM is read-only and there is no construction API; cJSON or nlohmann fit better.",
+    "Untrusted input on an old copy: more than 15 closed issues report heap overflows, out-of-bounds reads and a stack overflow (2022 to October 2026, most recently #132 on 2026-10-01); only vendor a current revision.",
+    "Key lookup by name: objects are singly linked lists with no lookup helper (open feature request #79), so access is a linear walk."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libc: stddef.h, string.h, stdlib.h, inttypes.h)",
+    "min_toolchain": "C89 (gnu89) or C++98; gcc, clang, MSVC, TCC or Open Watcom (any other compiler hits an #error)",
+    "platforms": "any; README lists Windows, macOS and Linux",
+    "thread_safety": "not documented; json.h has no global state, so separate parses on separate buffers do not share anything",
+    "drop_in_for_baseline": "partial: it covers parse and write of standard JSON, but the API is C structs with linked lists, read-only, and numbers stay strings, so nlohmann/json call sites must be rewritten"
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: nativejson-benchmark's sheredomjsonhtest.cpp 'emulates' number parsing with atof() whose result is discarded; LLVM 3.7 (the base of Apple clang 7.0) marks atof nounwind and readonly and deletes unused side-effect-free calls, so on canada.json the measured parse very likely did no number conversion at all, while nlohmann converted all of them (not confirmed by disassembly).",
+    "Second harness flaw: the stringify/prettify emulation memcpy's the json_number_s struct's first field (the char* to the number text) into a double and sprintf's that pointer bit pattern, so it formats garbage subnormals, not the document's numbers; json.h's own writer only copies number text.",
+    "Every function is defined in the header with weak linkage (json_weak, __inline on MSVC), so there is no single-implementation macro; each translation unit compiles the full parser and the linker folds the copies.",
+    "Free the DOM with whatever matches the allocator you passed (plain free() by default); there is no json_free and no realloc-style growth (issue #109), and writers only gained allocator callbacks (json_write_minified_ex, json_write_pretty_ex) on 2026-08-24.",
+    "The 2016 revision that was measured accepted invalid JSON (raw tabs and newlines in strings, trailing content, malformed exponents) and did not decode \\u escapes; current code fixes these, and nesting depth is capped by JSON_MAX_RECURSION (default 1000)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over cJSON or udp/json-parser when you want one public-domain header, a single-allocation read-only DOM, JSON5 flags and lossless number text; pick yyjson (MIT, also a compact read-only DOM, and much faster) whenever speed is the reason you are looking, and cJSON when you must build or edit documents.",
+  "verified_claims_summary": "In nativejson-benchmark's 2016 sample run (clang 7.0 at full optimization with -march=native, Core i7-4980HQ, macOS), json.h parsed canada/citm_catalog/twitter in 9.4/5.1/2.4 ms vs nlohmann/json v2.0.3 at 55.6/9.9/7.0 ms (4.3x on the three-file total) and stringified 1.8-4.3x faster, but RapidJSON beat it, the measured revision failed 16 conformance tests, and its number conversion was a discarded atof() the optimizer very likely removed, so the canada.json gap overstates the real difference.",
+  "status_note": "Active (last commit 2026-10-06, with a burst of 2026 correctness and memory-safety fixes) and Unlicense public domain, so it is easy to vendor, but vendor a current revision and treat the 2016 benchmark ratios as stale and inflated.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sheredom/json.h/HEAD/README.md",
+    "https://raw.githubusercontent.com/sheredom/json.h/HEAD/json.h",
+    "https://raw.githubusercontent.com/sheredom/json.h/HEAD/test/CMakeLists.txt",
+    "https://github.com/sheredom/json.h/issues",
+    "https://github.com/sheredom/json.h/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/sheredom/json.h/issues/109",
+    "https://github.com/sheredom/json.h/commits",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/src/tests/sheredomjsonhtest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/sample/conformance.csv",
+    "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.7.0/llvm/lib/Transforms/IPO/FunctionAttrs.cpp",
+    "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.7.0/llvm/lib/Transforms/Utils/Local.cpp",
+    "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-3.7.0/llvm/include/llvm/IR/Instruction.h"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/target/libdart",
+  "one_liner": "C++14 JSON library whose finalized flat binary packets parse 9.2x faster than nlohmann/json and read with zero parsing.",
+  "what_it_does": "Dart is a binary on-the-wire JSON representation plus a high-level C++14 API (std::map/std::vector-like dart::object and dart::array, typed and dynamic packets) and an ABI-stable C89 binding layer. JSON text is converted in and out through RapidJSON or sajson (and YAML through libyaml); the result is either a mutable, copy-on-write dart::heap or an immutable, contiguous dart::buffer whose bytes can be sent over a socket, file or shared memory and reopened by a receiver with no parsing or allocation. It is not a drop-in for nlohmann/json: a different API, sorted keys, and two representations to choose between.",
+  "how_it_is_fast": "The finalized path tokenizes with sajson (when built with DART_USE_SAJSON) and then lowers the tree in one pass into a single aligned allocation laid out as sorted object vtables, so a document costs a few large allocations instead of one per node and std::string key. Key lookup is a binary search over a lexicographically sorted vtable whose 8-byte entries cache a 2-byte key prefix, so the search stays inside the small vtable until a likely match (described in IMPLEMENTATION.md). Numbers are stored at the narrowest exact width (int16/int32/int64, float only when the double round-trips), and finalized reads never allocate.",
+  "when_to_use": [
+    "Pipelines that parse a message once and fan it out to other processes, machines or shared-memory queues: a finalized dart::buffer is a contiguous, little-endian, architecture-independent byte block readers can use without reparsing.",
+    "Read-heavy access to objects with many keys: top-level key lookups took 3803 ns vs 8471 ns for nlohmann/json and 6180 ns for RapidJSON per pass over 10 packets with 22 keys each.",
+    "Streams of small (about 1 KB) documents where a sajson-backed finalized parse (27682 ns per 10.7 KB pass, about 386 MB/s, derived from page data) is enough and an STL-like API matters more than peak tokenizer speed.",
+    "C++14 code that wants idiomatic construction from STL types plus a stable C89 ABI for bindings."
+  ],
+  "when_not_to_use": [
+    "Raw parse-and-discard throughput: sajson alone parsed the same input in 14360 ns (1.9x faster than Dart, which wraps it), and simdjson or yyjson are faster still.",
+    "Mutation-heavy work: the dynamic dart::heap parse took 158967 ns, 3.5x slower than RapidJSON's DOM (45588 ns) and only 1.6x faster than nlohmann; going from mutable to finalized needs an explicit lowering step.",
+    "Anything that needs insertion-ordered keys, exact 64-bit integers or correctly rounded doubles while using the sajson-backed fast path (see gotchas).",
+    "Projects that need a maintained dependency: the repository was archived on 2024-07-16 with the last commit on 2021-09-11, and it also requires GSL plus RapidJSON or sajson.",
+    "Memory-tight services: every finalized parse allocates eight times the JSON text size."
+  ],
+  "integration": {
+    "form": "header-only (optional static/shared dart_abi library for the C89 interface)",
+    "dependencies": "Microsoft GSL (or gsl-lite); RapidJSON or sajson for JSON conversion; libyaml optional for YAML; Google Benchmark only for the benchmarks",
+    "min_toolchain": "C++14; clang 3.8+, gcc 5.0+, Apple clang 8.3+, MSVC about 19.22",
+    "platforms": "Linux and macOS primarily; Windows experimental; a 32-bit build option exists; the wire format is little-endian regardless of host",
+    "thread_safety": "Default refcounting is std::shared_ptr (atomic) with copy-on-write, so packets can be shared across threads; dart::unsafe_ptr instantiations and view types are not thread-safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured fast path is not the default build: the library option use_sajson is OFF, but benchmark/CMakeLists.txt defines DART_USE_SAJSON whenever sajson.h is found. In that path sajson keeps only 32-bit integers (larger ones become doubles, so Dart types them as decimals and loses precision above 2^53) and parses doubles by accumulating digits and multiplying by a power-of-ten table, which is not correctly rounded; the 2016 sajson in nativejson-benchmark failed 28 of 66 double tests. The benchmark input (10 packets, 150 integers all below 2^31, no floating-point values) never exercises either case, while nlohmann converts with full int64/correctly rounded semantics.",
+    "Harness details: every Dart row uses dart::unsafe_ptr (non-atomic refcount) rather than the default std::shared_ptr; the key-lookup counter adds the packet count per packet instead of the key count, so its 'parsed key lookups/s' label is mis-scaled (the ns column is unaffected); the YAJL generator emits false for true values.",
+    "basic_buffer::from_json allocates json.size() * 8 bytes for every finalized parse (marked FIXME in the source) and keeps that block as the packet storage.",
+    "Network constructors only check for null and 8-byte alignment; call dart::is_valid() on bytes from an untrusted source before wrapping them. Subscript returns a temporary, so obj[\"nested\"].pop_back() silently mutates a copy and obj[\"k\"] = v does not compile."
+  ],
+  "pick_this_over_siblings_when": "Pick libdart over sajson, simdjson or yyjson only when you want the parsed result as a relocatable zero-copy binary buffer with fast sorted-key lookup and an STL-like C++ API; for parse-and-read-once workloads sajson (which Dart wraps), simdjson or yyjson are faster, and simdjson and yyjson are still maintained.",
+  "verified_claims_summary": "One single-run Google Benchmark on a 2018 MacBook Pro (8 x 2.3 GHz, -O3, compiler and nlohmann version not stated) over 10 generated JSON packets of about 1 KB: Dart's sajson-backed finalized parse took 27682 ns per pass vs 254695 ns for nlohmann/json (9.2x), dynamic parse 158967 ns (1.6x), top-level key lookups 3803 vs 8471 ns (2.2x) and finalized serialization 36241 vs 68175 ns (1.9x); sajson alone took 14360 ns and RapidJSON 45588 ns, so the parse win is mostly sajson versus nlohmann.",
+  "status_note": "Abandoned (archived 2024-07-16, last commit 2021-09-11) but Apache-2.0 and header-only, so vendorable; the headline 9.2x depends on building with sajson, whose 32-bit integer cap and non-correctly-rounded double parsing change number fidelity relative to the default RapidJSON path and to nlohmann.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/target/libdart/HEAD/README.md",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/PARSING.md",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/IMPLEMENTATION.md",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/ADVANCED.md",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/benchmark/configurable.cc",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/benchmark/input.json",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart.h",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/common.h",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/common.tcc",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/connector/json.tcc",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/buffer/buffer.h",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/buffer/api.tcc",
+    "https://raw.githubusercontent.com/target/libdart/HEAD/include/dart/buffer/detail.tcc",
+    "https://github.com/target/libdart/tree/master/include/dart",
+    "https://github.com/target/libdart/tree/master/include/dart/buffer",
+    "https://github.com/target/libdart/issues?q=is%3Aissue",
+    "https://github.com/target/libdart/issues/3",
+    "https://raw.githubusercontent.com/chadaustin/sajson/master/include/sajson.h",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/sample/conformance.csv"
+  ],
+  "confidence": 0.75
+}
