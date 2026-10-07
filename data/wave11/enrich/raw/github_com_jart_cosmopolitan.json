@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/jart/cosmopolitan",
+  "one_liner": "Portable libc whose pthread_mutex_t (Google nsync underneath) beat glibc 2.7x and musl 9.6x on a contended 30-thread lock test.",
+  "what_it_does": "Cosmopolitan is a whole C library plus a GCC/Clang toolchain (cosmocc) that emits one Actually Portable Executable for Linux, macOS, Windows, FreeBSD, OpenBSD and NetBSD. Its pthread_mutex_lock/unlock keep the standard POSIX API, so existing pthread code recompiles unchanged, but you only get them by building the whole program with cosmocc against Cosmopolitan libc. Private, non-recursive mutexes are routed to a vendored and modified copy of Google's nsync mutex; process-shared mutexes and Apple Silicon use a Drepper-style futex/ulock lock instead.",
+  "how_it_is_fast": "nsync keeps the whole lock in one 32-bit word with a compare-and-swap fast path, spins with exponential backoff before sleeping (pthread_delay_np spins 1 to 64 iterations, then sched_yield), and parks waiters on a spinlock-protected list, each waiter on its own semaphore. It is a barging lock: an arriving thread may take a free lock ahead of queued waiters, and a 'designated waker' bit means an unlock wakes at most one sleeper until that thread runs, which avoids wake storms. On the 30-thread test this keeps threads out of the kernel: 25 ms of system time against 2,988 ms for glibc. After the first call the mutex caches a direct function pointer (mutex->_lock), so later locks skip the type dispatch.",
+  "when_to_use": [
+    "You already ship, or are willing to ship, cosmocc-built binaries and have private (non-process-shared) mutexes that many threads hit at once on x86-64 Linux.",
+    "Throughput-bound code where a hot lock is taken and released in short critical sections by tens of threads on a many-core machine (the test machine was a Threadripper PRO 7995WX on Linux 6.8).",
+    "One binary has to run on Linux, FreeBSD, OpenBSD and Windows: on the same test Cosmo was about 1.7x faster than FreeBSD libc and 2.8x faster than OpenBSD libc, and much faster than Cygwin (native Windows SRWLOCK was not measured).",
+    "You want POSIX mutex semantics plus cosmocc -mdbg lock-order (deadlock cycle) checking during development."
+  ],
+  "when_not_to_use": [
+    "Apple Silicon: Cosmo skips nsync there and uses ulock, and the same test shows it about 1.4x slower than Apple's libc (65,118 us vs 45,443 us).",
+    "You need fairness or bounded wait times: the lock lets newcomers jump queued waiters, and its starvation guard (MU_LONG_WAIT) only engages after a waiter has been woken 30 times without getting the lock. The benchmark measured aggregate throughput only.",
+    "An existing glibc or musl program, a shared library, or anything that must interoperate with the host libc: Cosmopolitan's pthread_mutex_t is a 64-byte struct of its own and cannot be linked into a glibc process. To get the same algorithm there, use google/nsync directly.",
+    "Process-shared (PTHREAD_PROCESS_SHARED) or ERRORCHECK mutexes: shared ones never take the nsync path, and errorcheck ones run deadlock tracking on every lock, so the measured speedup does not apply to them.",
+    "macOS older than Darwin 23.1.0, Windows before 8, and other platforms outside the README's support table (open issue #1446: nsync futex assertion crash in mutex_test on Darwin 17.7)."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Cosmopolitan toolchain (cosmocc, a repackaged GCC/Clang) and Cosmopolitan libc; nsync is vendored in third_party/nsync (Apache-2.0)",
+    "min_toolchain": "cosmocc release from cosmo.zip (bundled GCC/Clang); the repo builds with GNU Make",
+    "platforms": "x86-64 (AMD K8+ / Intel Core+) and aarch64; Linux 2.6.18+, Windows 8+, macOS Darwin 23.1.0+, FreeBSD 13, OpenBSD 7.3, NetBSD 9.2",
+    "thread_safety": "It is a mutex with POSIX pthread_mutex semantics. It blocks thread cancellation while waiting. Recursive mutexes refuse unlocks from another thread or from a forked child (EPERM). Errorcheck mode works only for mutexes in static memory (.data/.bss).",
+    "drop_in_for_baseline": "partial: source-compatible with the pthread_mutex_* API, but only inside programs built with cosmocc against Cosmopolitan libc; not ABI-compatible with glibc or musl"
+  },
+  "gotchas": [
+    "The fast path applies only to private, non-recursive, non-errorcheck mutexes in non-debug builds on non-Apple-Silicon hosts. Recursive private mutexes also use nsync but wrap it in owner and depth bookkeeping. cosmocc -mdbg runs deadlock tracking on every lock.",
+    "Benchmark harness limits: footek_test starts its timer before mutex init and thread creation and stops it after pthread_join, so thread start-up is inside the timed region. Each row is one run. The glibc and musl rows use PTHREAD_MUTEX_DEFAULT only; glibc's spinning PTHREAD_MUTEX_ADAPTIVE_NP type and other spin-then-park locks were not tried. The FUTEX, SPIN and many fleet rows are Cosmo-only, with no host-libc comparison.",
+    "The 2.7x comes from comparing a spinning lock that lets newcomers jump the queue against a baseline that sleeps in futex (glibc 2,988 ms of system time vs 25 ms). Critical sections that are longer, or that block, will not see the same gap.",
+    "The lock code still gets correctness fixes: commits on 2026-05-20 fixed an EINTR bug in pthread_cond_timedwait, a past-timestamp lock bug on Windows and XNU, and a NetBSD lock signal bug."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (atomic_queue, moodycamel, Boost.Lockfree, xenium, oneTBB queues) replace a mutex-plus-queue with a lock-free structure, and eventpp::SpinLock is a pure spinlock. Pick Cosmopolitan's mutex when you need a general blocking POSIX mutex around arbitrary shared state, and only if the program is built with cosmocc anyway; for a single shared queue the lock-free siblings usually remove the lock altogether.",
+  "verified_claims_summary": "footek_test.c has 30 threads each run 100,000 lock/increment/unlock rounds on one PTHREAD_MUTEX_DEFAULT mutex, timing wall-clock including thread create and join. On Linux 6.8 with an AMD Threadripper PRO 7995WX, Cosmo took 40,965 us vs 111,560 us for glibc (about 2.7x) and 392,765 us for musl (about 9.6x). These are single first-party runs with compiler, flags and libc versions unrecorded, and on Apple M2 Ultra Cosmo was about 1.4x slower than Apple libc.",
+  "status_note": "Actively maintained (last commit 2026-10-06; lock fixes in May 2026). ISC-licensed core with Apache-2.0 nsync. The mutex cannot be copied out on its own because it is tied to the libc's futex, TLS and thread internals, so outside Cosmopolitan use upstream google/nsync.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/test/libc/thread/footek_test.c",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/libc/intrin/pthread_mutex_lock.c",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/libc/intrin/pthread_mutex_unlock.c",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/libc/intrin/pthread_delay_np.c",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/libc/thread/thread.h",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/third_party/nsync/mu.c",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/third_party/nsync/mu.h",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/third_party/nsync/common.internal.h",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/third_party/nsync/README.cosmo",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/README.md",
+    "https://raw.githubusercontent.com/jart/cosmopolitan/HEAD/LICENSE",
+    "https://github.com/jart/cosmopolitan",
+    "https://github.com/jart/cosmopolitan/commits/master",
+    "https://github.com/jart/cosmopolitan/issues?q=is%3Aissue+mutex",
+    "https://github.com/jart/cosmopolitan/issues/1446"
+  ],
+  "confidence": 0.8
+}

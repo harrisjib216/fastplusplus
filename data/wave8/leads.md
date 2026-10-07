@@ -135,3 +135,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - XGBoost-FastForest (guitargeek/XGBoost-FastForest): minimal C++ inference for XGBoost models. Not catalogued.
 - libdivide (ridiculousfish/libdivide): header-only constant division u16-s64 plus SIMD, claims up to 10x/5x over div, has a benchmark program. Not catalogued (enricher lead, 2026-10-07).
 - fast_division (lemire/fast_division): BSD-3; Apple M1 clang 12: 0.31 vs 0.91 ns/op at divisor 19. Not catalogued.
+- Rapier (dimforge/rapier): Rust physics engine; Godot Rapier blog (snippet only) says faster than Jolt on 3 of 5 scenes. Not catalogued (enricher lead, 2026-10-07).

@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/gromacs/gromacs",
+  "one_liner": "GPU-resident molecular dynamics engine; on one 6N4O PME benchmark 1.04-2.40x NAMD 3.0b5 and 1.11-1.65x OpenMM 8.1 throughput.",
+  "what_it_does": "GROMACS is a complete molecular dynamics toolkit, not a drop-in library: gmx grompp turns an .mdp parameter file plus a GROMACS-format topology (.top/.gro) into a run input (.tpr), and gmx mdrun integrates it on CPUs, GPUs, thread-MPI or MPI. Systems parametrized for AMBER or CHARMM must first be expressed as a GROMACS topology (the benchmark ships its own topol.top for the AMBER-built 6N4O system). Programmatic use goes through libgromacs, the gmxapi Python package and the optional NB-LIB nonbonded C++ API under api/.",
+  "how_it_is_fast": "Short-range forces use the Verlet cut-off scheme with cluster-pair (nbnxm) pair lists, dynamic list pruning and hand-written SIMD kernels (SSE2 through AVX-512, NEON, SVE, VSX) or CUDA/SYCL/HIP/OpenCL kernels. In GPU-resident mode (-update gpu) nonbonded forces, PME (GPU FFT via cuFFT or VkFFT), update and LINCS/SETTLE constraints all run on the GPU, so coordinates and forces stay on the device between neighbour-search steps while the CPU can take bonded forces concurrently. mdrun also auto-tunes at start-up: it raises nstlist with a matching Verlet buffer and, with -tunepme on by default, scales the Coulomb cut-off and PME grid spacing together to balance work while keeping equivalent model physics.",
+  "when_to_use": [
+    "Explicit-solvent biomolecular MD with PME on a single NVIDIA GPU, where the benchmark shows it ahead of both NAMD 3.0b5 (GPU-resident) and OpenMM 8.1 on all 11 GPUs, by at least 1.23x over both on 9 of them (derived from page data), with its largest margins on consumer cards (RTX 4070: 54.0 vs 22.5 and 33.6 ns/day).",
+    "Throughput farms of many independent single-GPU runs (equilibration, replicas, free-energy windows) where ns/day per GPU is the cost driver.",
+    "Mixed or non-NVIDIA hardware: one code base runs on CUDA, SYCL (Intel GPUs with oneAPI, AMD GPUs with AdaptiveCpp), HIP and OpenCL, plus CPU-only clusters with SIMD kernels.",
+    "Multi-GPU or multi-node runs with domain decomposition and GPU PME decomposition (cuFFTMp or HeFFTe builds) when one GPU is not enough."
+  ],
+  "when_not_to_use": [
+    "When AMBER pmemd.cuda is an option: in the same suite AMBER 22 is faster than GROMACS on 5 of 11 GPUs (V100 36.89 vs 25.13 ns/day, RTX 3090 43.42 vs 33.03), so GROMACS is not the fastest code on that page.",
+    "Workflows that need features the GPU-resident path lacks: per the mdrun docs, GPU update is not supported with mass or constraint free-energy perturbation, virtual sites, Ewald surface correction, replica exchange, constraint pulling, orientation restraints or computational electrophysiology, and LJ-PME and PME orders other than 4 do not run on GPUs; those runs fall back to CPU update and lose much of the advantage.",
+    "Custom-force or Python-scripted method development, where OpenMM's API (custom forces, integrators) is the better fit even at lower ns/day.",
+    "Embedding MD inside another C++ product under a permissive licence: GROMACS is LGPL-2.1 and its README asks that modified versions be labelled as derived work and not called official GROMACS.",
+    "V100-class GPUs, where its lead over NAMD 3.0b5 in this suite shrinks to 1.04x (25.13 vs 24.26 ns/day)."
+  ],
+  "integration": {
+    "form": "built application plus shared/static libgromacs (CMake); gmxapi Python package; optional NB-LIB C++ API install (GMX_INSTALL_NBLIB_API)",
+    "dependencies": "FFT library (FFTW3 by default, MKL, or bundled slow fftpack; GMX_BUILD_OWN_FFTW can download FFTW); optional CUDA toolkit 12.1+ (main branch), SYCL compiler (oneAPI DPC++ 2024.0+ or AdaptiveCpp 24.02+), ROCm/HIP or OpenCL; optional MPI, cuFFTMp, HeFFTe, VkFFT",
+    "min_toolchain": "C++17; on the current main branch GCC 11+, Clang 14+ or MSVC 2019, CMake 3.28+; CUDA 12.1+ and compute capability 5.0+ for CUDA builds (older releases such as the benchmarked 2023.3 had lower minimums, not checked)",
+    "platforms": "Linux, macOS and Windows; x86-64 (SSE2, SSE4.1, AVX, AVX2, AVX-512), AArch64 (NEON, SVE), POWER (VSX); GPUs: NVIDIA (CUDA), AMD (SYCL/AdaptiveCpp or HIP), Intel (SYCL/oneAPI), Apple M-series (OpenCL)",
+    "thread_safety": "Not documented for library use; mdrun parallelizes internally with OpenMP threads, thread-MPI ranks or MPI.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw that understates GROMACS rather than inflating it: the NgFEP script runs only 10,000 steps (10 ps) without -resethway or -resetstep, so the reported ns/day includes start-up and the PME tuning phase that the mdrun docs say these options exist to exclude; it also forces -bonded cpu with -update gpu and keeps nstenergy/nstlog at 100 and tau_t 0.1 ps, while the mdrun docs warn that frequent energy computation and coupling carry large overhead in GPU-resident runs. NAMD and OpenMM ran 100,000 steps. This fits the gap to MDBench (GROMACS 2023.2 at 88.4 ns/day on an A100 for 6n4o, snippet only, against 59.5 here).",
+    "The 'fixed 144^3 PME grid, 0.8 nm cut-off' in the workload is not guaranteed for GROMACS: pmeTuningIsSupported() in src/gromacs/ewald/pme_load_balancing.cpp enables the default -tunepme whenever nonbondeds run on a GPU, so mdrun may have run a larger Coulomb cut-off with a coarser grid (equivalent accuracy, but not the same grid NAMD and AMBER used).",
+    "Rankings flip with versions and run settings: an MDBench snippet shows NAMD 3.0b3 at 42.06 ns/day against GROMACS 2021.4 at 29.5 ns/day on the same A100 for 6n4o, the reverse of this suite, so treat the 1.5x A100 lead as specific to GROMACS 2023 GPU-resident runs.",
+    "Builds are tied to one SIMD level chosen at configure time (GMX_SIMD, default AUTO detects the build host), so a binary built on a newer node can fail or run slowly elsewhere; the known-issues page also lists a severe SVE slowdown with LLVM 20 and test failures with GCC 12-14 on POWER9."
+  ],
+  "pick_this_over_siblings_when": "No other molecular dynamics engine is catalogued in geometry-spatial; the spatial-index siblings (nanoflann, ArborX, Pkd-tree) are libraries for neighbour queries you embed, whereas GROMACS's cell and pair lists are internal to mdrun, so pick it when you need whole MD simulations rather than a reusable neighbour-search structure.",
+  "verified_claims_summary": "An independent lab suite (NgFEP/NgFEP-assessment) ran the 6N4O Argonaute2/miR-122 system (AMBER-parametrized, PME, 0.8 nm cut-off, 1 fs, NPT) five times per GPU with GROMACS 2023.3 (-nb gpu -pme gpu -update gpu -bonded cpu, 4 OpenMP threads), NAMD 3.0b5 multicore-CUDA in GPU-resident mode and OpenMM 8.1 CUDA mixed precision; per-GPU means recomputed this session from all 48 .dat files the plotting notebook reads match the record (A100 59.47 vs 39.19 vs 36.00 ns/day; 1.04-2.40x NAMD and 1.11-1.65x OpenMM over 11 GPUs, derived from page data). Builds, compilers, CUDA and driver versions and host CPUs are not stated, and thermostats, barostats and run lengths differ between codes.",
+  "status_note": "Actively developed (GitHub read-only mirror of gitlab.com/gromacs/gromacs, 24,268 commits, last commit 2026-10-06), LGPL-2.1 and packaged widely; usable as an application today, but library reuse is limited to libgromacs, gmxapi and the opt-in NB-LIB API.",
+  "sources_read": [
+    "https://github.com/gromacs/gromacs",
+    "https://github.com/gromacs/gromacs/tree/main/api",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/README",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/src/gromacs/ewald/pme_load_balancing.cpp",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/src/gromacs/mdrun/md.cpp",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/docs/install-guide/index.rst",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/docs/user-guide/mdrun-performance.rst",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/docs/user-guide/known-issues.rst",
+    "https://raw.githubusercontent.com/gromacs/gromacs/main/api/nblib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/README.md",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/GROMACS-benchmark/GROMACS_inputs/gromacs_production.mdp",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/GROMACS-benchmark/benchmark_6n4o_gromacs/cerebro/scripts/1_run_benchmark.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/GROMACS-benchmark/benchmark_6n4o_gromacs/cerebro/scripts/2_extract_results.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/NAMD-benchmark/NAMD_inputs/namd3_input.in",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/NAMD-benchmark/benchmark_6n4o_namd/case/scripts/1_run_namd3_bench.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/NAMD-benchmark/benchmark_6n4o_namd/case/scripts/2_extract_results.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/OPENMM-benchmark/OPENMM_inputs/openmm_input.py",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/OPENMM-benchmark/benchmark_6n4o_openmm/case/scripts/1_run_benchmark.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/OPENMM-benchmark/benchmark_6n4o_openmm/case/scripts/2_extract_results.sh",
+    "https://raw.githubusercontent.com/NgFEP/NgFEP-assessment/main/c-MD/{AMBER,GROMACS,NAMD,OPENMM}-benchmark/benchmark_6n4o_*/{sylvaner,case,cerebro,rioja,tesla,amarel}/*_results_*.dat (all 48 files listed in c-MD/plot/avg-sd.ipynb)",
+    "https://mdbench.ace-net.ca/mdbench/benchmark/23 (EGRESS_BLOCKED; WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}

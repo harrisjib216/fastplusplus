@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/jrouwe/joltphysics",
+  "one_liner": "Multicore C++ rigid-body physics and collision library; as single-threaded wasm it beats Ammo.js (Bullet) once bodies sleep, not while they collide.",
+  "what_it_does": "Jolt is a game and VR physics engine: rigid bodies with many shape types, constraints and motors, ragdolls, character controllers, vehicles, soft bodies, sensors, ray and shape casts, buoyancy and an optional double-precision large-world mode. You create a PhysicsSystem with your own broad-phase layer and object-layer filter interfaces, add bodies through a BodyInterface by BodyID, and call PhysicsSystem::Update with a job system and temp allocator. It is not API-compatible with Bullet; ports exist as bindings (C, C#, JavaScript via JoltPhysics.js, Rust, Zig, Java, Python) and engine integrations (Godot, Source Engine, Unreal plugins).",
+  "how_it_is_fast": "The step is split into jobs on a job system: islands of touching or constrained bodies are built and solved in parallel, and large islands are split (the PerformanceTest Pyramid scene exists to profile this). The broad phase is a per-layer quad tree whose 4-wide nodes are tested with one SIMD instruction; moving bodies widen nodes lock-free and a tight tree is rebuilt in the background during the step. Islands at rest go to sleep and drop out of the simulation entirely, which is where the PlayCanvas numbers show the 10x gap (0.09 vs 0.95 ms for 400 settled bodies). Math uses SSE2 to AVX-512 or NEON, and v5.6.0 added a cheaper friction model (average contact point, 15% faster on the Pyramid test per the release notes).",
+  "when_to_use": [
+    "Native games or VR on multicore desktops and consoles with hundreds to thousands of bodies, especially worlds where most bodies come to rest (debris, props), so sleeping islands cost almost nothing.",
+    "Engines that run collision queries, streaming of body batches or navigation-mesh work on other threads while the simulation steps; the body lock interface and background broad-phase rebuild are built for this.",
+    "Lock-step or rollback networking that needs deterministic simulation: same binary gives identical results, and CROSS_PLATFORM_DETERMINISTIC makes it deterministic across compilers, OSes and architectures at about 8% cost.",
+    "Web scenes through JoltPhysics.js where bodies spend most frames settled; in the PlayCanvas test the settled and rolling-sphere scenes ran 1.7x to 10.6x cheaper than Ammo.js (derived from page data).",
+    "Large open worlds that need double precision (JPH_DOUBLE_PRECISION) or a Godot project, where Jolt is an integrated physics option."
+  ],
+  "when_not_to_use": [
+    "Single-threaded WebAssembly scenes dominated by bodies falling and colliding: in PR #9581 Jolt was 1.4x slower than Ammo.js (5.76 vs 4.16 ms) and level in two other scenes, and the PlayCanvas adapter cannot use the multithreaded JoltPhysics.js build because that build does not work with JS callbacks or in Safari.",
+    "Static-heavy server worlds configured naively: issue #1081 reports more than 200 ms per tick at about 10k static colliders where PhysX and Bepu stayed under 5 ms at 2 million (a search snippet attributes the reply to a broad-phase layer misconfiguration mixing static and dynamic bodies), so follow the static/moving layer split.",
+    "Code that relies on Bullet behaviour or API: per the PlayCanvas port there is no rolling friction, angular velocity is capped near 47 rad/s by default, contact impulses are not reported directly, and friction/restitution combine by geometric mean and maximum unless overridden.",
+    "When you need a proven speed lead over PhysX or Rapier: Pierre Terdiman's PEEL runs in discussion #327 found the Jolt and PhysX curves intersect and look 'pretty much the same' once settings are aligned, and the Godot Rapier plugin's own blog (search snippet only) reports Rapier faster on 3 of 5 scenes with Jolt crashing its joint grid.",
+    "Robotics distance or contact queries without dynamics, where a narrow-phase library such as Coal is lighter."
+  ],
+  "integration": {
+    "form": "static lib by default (CMake; shared via JPH_BUILD_SHARED_LIBS), also npm jolt-physics (wasm, wasm-compat, asm and multithread flavours)",
+    "dependencies": "none beyond the C++ standard library; the v5.6.0 GPU compute and hair code (JPH_USE_DX12, JPH_USE_VK, JPH_USE_MTL, on by default) needs dxc and spirv-cross on macOS unless switched off",
+    "min_toolchain": "C++17; Visual Studio 2022+, Clang 16+ or GCC 12+; CMake 3.20+; no RTTI or exceptions by default",
+    "platforms": "Windows x86/x64/ARM64, Linux x86/x64/ARM32/ARM64/RISC-V64/LoongArch64/PowerPC64LE, FreeBSD, Android, macOS, iOS, MinGW64, a console; x86 minimum SSE2, AArch64 NEON; WebAssembly via JoltPhysics.js",
+    "thread_safety": "Documented: a locking BodyInterface (hashed mutex array) and a non-locking variant; no body or constraint access while PhysicsSystem::Update runs; contact, activation and step listeners are called from multiple threads in nondeterministic order.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw that works against Jolt in the colliding rows: the PlayCanvas adapter always installs a ContactListenerJS whose OnContactValidate, OnContactAdded and OnContactPersisted cross from wasm into JavaScript for every contact manifold on every substep, to force Bullet's multiplicative friction and restitution (JoltPhysics.js 1.1.0 does not bind PhysicsSystem::SetCombineFriction or SetCombineRestitution; the PR puts this at about 0.8 ms of the 5.76 ms). It also gives every dynamic body LinearCast CCD, which the Ammo path does not use, and cuts the penetration slop from 2 cm to 5 mm. The 'wasm' flavour is built without WASM SIMD (the JoltPhysics.js README says only the multithreaded builds enable it). The numbers therefore measure a scalar, callback-laden wasm adapter, not native Jolt against native Bullet. The settled-row win is fair: the Ammo path leaves dynamic bodies with ACTIVE_TAG, so they can deactivate too.",
+    "The default x86 CMake options turn on AVX2, AVX, SSE4.2, LZCNT, TZCNT, F16C and FMA, so a default build dies with illegal instructions on older CPUs; Build/README.md gives the flags to turn them off. Defines such as JPH_DEBUG_RENDERER, JPH_DOUBLE_PRECISION and the RTTI setting must match between Jolt and your code, or you get link errors or a RegisterTypes abort.",
+    "Bodies do not wake when created or when a neighbour is removed, and Body::SetLinearVelocity does not wake a body (use BodyInterface::SetLinearVelocity or ActivateBodiesInAABox).",
+    "JoltPhysics.js 1.1.0 pins Jolt v5.6.0, which predates unreleased fixes such as HeightFieldShape::SetHeights corrupting its bounding volume tree when the block count is not a power of 2, and a GJK CastShape case that returned the wrong contact point."
+  ],
+  "pick_this_over_siblings_when": "Pick Jolt over Coal when you need a full simulation (broad phase, solver, sleeping, constraints, characters, multithreaded stepping) rather than FCL-style distance and collision queries for robotics, and over BVH libraries such as madmann91/bvh or TinyBVH, which build ray-tracing hierarchies and simulate nothing.",
+  "verified_claims_summary": "PlayCanvas engine PR #9581 (open, third party) timed RigidBodyComponentSystem#step(1/60) in Node.js for 400 bodies, minimum of 5 runs, with Jolt as the single-threaded JoltPhysics.js 1.1.0 wasm build (Jolt v5.6.0, no WASM SIMD) against Ammo.js (version not stated): settled boxes 0.09 vs 0.95 ms, rolling spheres 3.46 vs 5.86 ms and settled boxes with listeners 1.13 vs 2.82 ms favour Jolt, while falling boxes 5.76 vs 4.16 ms, mixed falling 4.44 vs 4.33 ms and falling with listeners 6.81 vs 6.32 ms favour Ammo. No CPU, Node or Ammo version, compiler flags or benchmark script are published, and nothing native or multithreaded was measured.",
+  "status_note": "Very active (last commit 2026-10-04, v5.6.0 the latest release with further fixes unreleased, issues answered and closed quickly), MIT-licensed, 11.7k stars and shipped in Horizon Forbidden West and Death Stranding 2; the PlayCanvas backend that produced these numbers is still an open PR.",
+  "sources_read": [
+    "https://github.com/playcanvas/engine/pull/9581",
+    "https://github.com/playcanvas/engine/pull/9581/files",
+    "https://raw.githubusercontent.com/playcanvas/engine/feat/jolt-physics-backend/src/framework/physics/jolt/jolt-physics-world.js",
+    "https://raw.githubusercontent.com/playcanvas/engine/feat/jolt-physics-backend/src/framework/physics/jolt/jolt-physics-body.js",
+    "https://raw.githubusercontent.com/playcanvas/engine/feat/jolt-physics-backend/src/framework/physics/jolt/jolt-contacts.js",
+    "https://raw.githubusercontent.com/playcanvas/engine/feat/jolt-physics-backend/src/framework/physics/ammo/ammo-physics-world.js",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/README.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Docs/PerformanceTest.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Docs/Architecture.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Docs/ReleaseNotes.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Build/README.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Build/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics/master/Jolt/Core/Core.h",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics.js/main/package.json",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics.js/main/README.md",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics.js/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jrouwe/JoltPhysics.js/main/JoltJS.idl",
+    "https://github.com/jrouwe/JoltPhysics/issues/1081",
+    "https://github.com/jrouwe/JoltPhysics/discussions/327",
+    "https://github.com/jrouwe/JoltPhysics/issues?q=is%3Aissue+performance",
+    "https://jrouwe.nl/jolt/JoltPhysicsMulticoreScaling.pdf (EGRESS_BLOCKED)",
+    "https://godot.rapier.rs/blog/v0-35-0 (EGRESS_BLOCKED; WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}
