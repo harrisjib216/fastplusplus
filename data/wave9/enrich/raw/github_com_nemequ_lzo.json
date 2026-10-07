@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/nemequ/lzo",
+  "one_liner": "LZO1X-1: byte-aligned LZ77 block codec; 5.6x faster compression, 1.9x faster decompression than zlib -1, 30% larger output.",
+  "what_it_does": "Oberhumer's LZO is an ANSI C library of byte-aligned LZ77 block compressors (LZO1, 1A, 1B, 1C, 1F, 1X, 1Y, 1Z, 2A) that compress one memory buffer into another; LZO1X-1 is the recommended speed level and LZO1X-999 a slow, near-optimal encoder whose output the same LZO1X decompressor reads. The API is not zlib-compatible: call lzo_init(), then lzo1x_1_compress(src, len, dst, &dst_len, wrkmem) with a caller-allocated LZO1X_1_MEM_COMPRESS work buffer, and decompress the same block with lzo1x_decompress_safe() (bounds-checked) or lzo1x_decompress() (unchecked). The core format has no framing, length header or checksum, so the caller stores sizes and integrity data; miniLZO packs LZO1X-1 and both LZO1X decompressors into one .c file plus three headers.",
+  "how_it_is_fast": "LZO1X-1 is a greedy, single-probe LZ77 parser: it hashes the next four bytes with a multiplicative hash (0x1824429d) into a 16,384-entry table of 16-bit positions, accepts a candidate only if the 4-byte word compares equal, extends matches 8 bytes at a time with XOR plus count-trailing-zeros on 64-bit little-endian builds, and on a miss advances 1 + (pending literal run >> 5) bytes so incompressible stretches are skipped quickly. Output tokens are strictly byte aligned (LZO.FAQ), with 2-byte codes for short matches within 2 KiB and 3-4 byte codes up to a 48 KiB window and no entropy-coding stage, so decoding is a token loop of unaligned 8- and 4-byte copies that needs no work memory. The missing entropy stage is also why the output is about 30% larger than zlib -1 on silesia.tar.",
+  "when_to_use": [
+    "You must read or write existing LZO1X data or interoperate with liblzo2 users (the record notes liblzo2 ships in many Linux distributions and the Linux kernel carries its own LZO1X port), so changing format is not an option.",
+    "A GPL-compatible C or C++ program that currently calls zlib at level 1 for in-memory blocks and cares more about CPU than bytes: lzbench 2.4 shows 500 vs 89.0 MB/s compression and 561 vs 297 MB/s decompression on silesia.tar for 47.45% vs 36.45% output.",
+    "Memory-starved or embedded targets: decompression needs no work memory, LZO1X-1(11) needs only a 2,048-entry dictionary, and miniLZO compiles to about 6 KiB on i386 (minilzo/README.LZO).",
+    "Executable packers and similar tools that need overlapping (in-place) decompression, which LZO documents and demonstrates in examples/overlap.c."
+  ],
+  "when_not_to_use": [
+    "Any new format where you can pick the codec: on the same lzbench 2.4 table LZ4 1.10.0 compresses faster (550 MB/s) at the same ratio (47.60%) and decompresses 6.8x faster (3832 MB/s), and zstd 1.5.7 -1 gives a 27% smaller output (34.53%) at 411 / 1351 MB/s (derived from page data).",
+    "Pre-compressed assets: LZO1X-999 (7.40 MB/s compress, 531 MB/s decompress, 35.53%) is dominated by lz4hc 1.10.0 -12 (10.4 / 3813 MB/s, 36.45%) and by zstd -1 on both size and decode speed.",
+    "Proprietary or permissively licensed products: the code is GPL-2.0-or-later and a non-GPL licence must be bought from the author.",
+    "Untrusted or possibly corrupted input through lzo1x_decompress(): LZO.FAQ says the standard decompressor 'will probably crash your application' on bad data, and even the safe variant does not detect all corruption without your own checksum.",
+    "You need gzip/zlib-compatible output or a streaming API: LZO is block-only and not deflate; libdeflate 1.26 -1 (202 / 783 MB/s, 34.68%) or zlib-ng 2.3.3 -1 (196 / 466 MB/s, 44.41%) stay deflate-compatible."
+  ],
+  "integration": {
+    "form": "static lib (CMake or Autotools; shared optional) or source-drop (miniLZO: minilzo.c, minilzo.h, lzoconf.h, lzodefs.h)",
+    "dependencies": "none",
+    "min_toolchain": "ANSI C (C90) compiler, also compiles as C++ per LZO.TXT; CMake 3.0+ (3.4.3 for Windows shared builds) or Autoconf",
+    "platforms": "any flat 32- or 64-bit memory model (LZOAPI.TXT); portable C with unaligned 4/8-byte copy fast paths when LZO_OPT_UNALIGNED32/64 are enabled; optional legacy i386 assembler decompressors",
+    "thread_safety": "LZO.TXT: 'Algorithm is thread safe'; no shared state after lzo_init(), but each concurrent compress call needs its own wrkmem buffer.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the decompression number: lzbench 2.4 (bench/lz_codecs.cpp) times lzo1x_decompress, the unchecked decoder, while the rival rows run checked decoders (LZ4_decompress_safe, zlib uncompress, which also verifies the Adler-32 trailer, libdeflate, ZSTD_decompressDCtx). lzbench never times lzo1x_decompress_safe, the variant you need for external data; a 2007 LKML thread, seen only as a search snippet, put the unchecked path about 1-8% ahead. The 1.9x lead over zlib -1 survives, but it is an upper bound.",
+    "Decompression speed is build-sensitive: the earlier lzbench 2.0.1 table (gcc 14.2.0, EPYC 9554) listed lzo1x 2.10 -1 at 513 / 696 MB/s versus 500 / 561 MB/s in lzbench 2.4 (gcc 15.2.0, EPYC 9555P), a 19% decompression drop while LZ4 rose 3% and zlib -1 fell 8% (derived from page data).",
+    "LZO1X-1 compresses in independent 49,152-byte pieces: lzo1x_1.c switches the dictionary to 16-bit positions, which turns on LZO_DETERMINISTIC in lzo1x_c.ch, so the hash table is cleared for every piece and matches never reach back across a piece boundary; incompressible input can grow to len + len/16 + 64 + 3 bytes (LZO.FAQ).",
+    "The shipped examples/simple.c decompresses with the unchecked lzo1x_decompress, so code copied from it is unsafe on external data; CVE-2014-4607 (integer overflow in the safe decompressor on 32-bit with more than 16 MiB per call) was fixed in 2.07. A format-compatible MIT-licensed C++14 reimplementation exists (jackoalan/lzokay) but it mirrors LZO1X-999 and publishes no speed numbers."
+  ],
+  "pick_this_over_siblings_when": "Pick LZO over LZ4, Snappy or zstd only when you must stay compatible with existing LZO1X data or tooling: on lzbench 2.4, LZ4 matches its ratio with faster compression and 6.8x faster decompression, and zstd -1 is close on compression speed with a 27% smaller output. Against the deflate siblings (zlib-ng, libdeflate, libslz) LZO compresses faster but gives up deflate compatibility and writes 1% (libslz -1) to 37% (libdeflate -1) more bytes (derived from page data).",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0 release binary building both codecs at -O3, fastest of runs with at least 8 s per phase, one thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar of 211,947,520 bytes) measured lzo1x 2.10 -1 at 500 MB/s compression and 561 MB/s decompression with 47.45% output, against zlib 1.3.2 -1 at 89.0 and 297 MB/s with 36.45%: about 5.6x and 1.9x faster for about 30% more bytes (derived from page data). The LZO decompression figure is for the unchecked lzo1x_decompress, the zlib figure for checked uncompress including Adler-32 verification.",
+  "status_note": "Upstream has not released since LZO 2.10 (2017-03-01) and the GitHub copy is an unofficial release-per-commit mirror with no issues and one open pull request, but the code is mature, dependency-free and easy to vendor via miniLZO, provided GPL-2.0-or-later or a purchased commercial licence fits.",
+  "sources_read": [
+    "https://github.com/nemequ/lzo",
+    "https://github.com/nemequ/lzo/commits",
+    "https://github.com/nemequ/lzo/pulls?q=is%3Apr",
+    "https://github.com/nemequ/lzo/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/README",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/doc/LZO.TXT",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/doc/LZOAPI.TXT",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/doc/LZO.FAQ",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/NEWS",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/minilzo/README.LZO",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/include/lzo/lzo1x.h",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/include/lzo/lzoconf.h",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo1x_1.c",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo1x_c.ch",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo1x_d.ch",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo1x_d1.c",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo1x_d2.c",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/config1x.h",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo_conf.h",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/src/lzo_dict.h",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/examples/simple.c",
+    "https://raw.githubusercontent.com/nemequ/lzo/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/Makefile",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/bench/lz_codecs.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/bench/lzbench.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/bench/lzbench.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/bench/codecs.h",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/lz/lzo/lzo1x_d.ch",
+    "https://raw.githubusercontent.com/inikep/lzbench/v2.4/lz/lzo/lzo1x_c.ch",
+    "https://github.com/jackoalan/lzokay",
+    "https://raw.githubusercontent.com/jussyDr/lzo1x/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
