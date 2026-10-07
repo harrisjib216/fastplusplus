@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/igraph/igraph",
+  "one_liner": "C network-analysis library with Python/R/Mathematica bindings; 5-49x faster than pure-Python NetworkX on loading, PageRank, k-core, SCC.",
+  "what_it_does": "igraph is a C library (C99 core, some C++14 parts) with several hundred graph algorithms: paths, centralities, components, cores, community detection, isomorphism, layouts, random-graph generators and file readers/writers. Graphs are igraph_t objects with integer vertex and edge ids 0..n-1; functions return igraph_error_t codes and fill igraph_vector_* outputs. It is not a drop-in for NetworkX or Boost.Graph: most users reach it through python-igraph (PyPI package 'igraph', 1.0.0), R igraph or IGraph/M, which add attribute handling on top of the C core.",
+  "how_it_is_fast": "The graph is stored as an indexed edge list: flat integer vectors from/to, sorted index permutations oi/ii and cumulative per-vertex offsets os/is (O(|V|+|E|) memory), so neighbour scans are contiguous array walks in C instead of CPython dict-of-dicts traversals. The algorithms are standard ones compiled to C: Batagelj-Zaversnik O(m) core decomposition (NetworkX's core_number uses the same algorithm in Python), two-pass iterative-DFS strongly connected components, BFS for unweighted shortest paths, and the vendored C++ PRPACK solver for PageRank, with optional OpenMP used notably by PageRank. Most of the measured gap over NetworkX is compiled code versus the interpreter, not an algorithmic novelty.",
+  "when_to_use": [
+    "Python or R analysis of static graphs with roughly 10^5-10^7 edges where NetworkX takes seconds to minutes per whole-graph query (PageRank, coreness, strongly connected components, edge-list loading)",
+    "C or C++ code that needs a broad, maintained algorithm catalogue (community detection, centralities, isomorphism, generators) and can accept GPL-2.0-or-later",
+    "Build-once, query-many workloads: create the graph from one edge vector in bulk, then run many whole-graph algorithms",
+    "When an accurate PageRank matters: the default PRPACK path solves to a 1e-10 tolerance regardless of the eps argument"
+  ],
+  "when_not_to_use": [
+    "Peak single-machine speed on large graphs: in the same 2020 table graph-tool, NetworKit and LightGraphs beat igraph on nearly every algorithm (Pokec PageRank 23.39 s vs 1.1 / 0.21 / 0.24 s) and SNAP is faster on PageRank and Google shortest path",
+    "Proprietary or permissively licensed products: GPL-2.0-or-later is copyleft",
+    "Graphs edited one edge at a time: the sorted oi/ii indexes and cumulative os/is offsets must be maintained on every change (inferred from the igraph_t layout), so batch edits",
+    "Many tiny queries on a huge weighted graph: fixed per-call checks can dominate; open issue #2300 measured A* on a 10,000-vertex complete graph at 0.014 s without weight validation and 11.8 s with it",
+    "Multi-threaded embedding built without thread-local storage or against external BLAS/ARPACK/GLPK: igraph_error.h says the error-handling stack is likely not thread-safe"
+  ],
+  "integration": {
+    "form": "static lib by default (BUILD_SHARED_LIBS OFF) or shared lib, built with CMake; also prebuilt Python wheels (PyPI 'igraph'), the R package and Mathematica IGraph/M",
+    "dependencies": "none mandatory; GMP (mini-gmp fallback), BLAS, LAPACK, ARPACK, GLPK and plfit use system copies or vendored internal ones; optional libxml2 (GraphML), OpenMP and bundled Infomap; flex/bison optional",
+    "min_toolchain": "C99 plus a C++14 compiler (required since 1.0), CMake 3.18+",
+    "platforms": "no architecture restriction documented; CI on Azure Pipelines and MinGW; igraph_int_t is 64-bit on 64-bit targets and 32-bit otherwise (IGRAPH_INTEGER_SIZE AUTO)",
+    "thread_safety": "IGRAPH_ENABLE_TLS (AUTO, on when the compiler supports thread-local storage) makes igraph globals thread-local and sets IGRAPH_THREAD_SAFE; the build file notes this should really hold only with all-internal dependencies, and igraph_error.h still says error handling is likely not thread-safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default error handler igraph_error_handler_abort prints a message and aborts the process; embedders must install their own with igraph_set_error_handler and check the returned igraph_error_t codes.",
+    "Edge-list readers create vertices 0..max id, so 1-based or gappy id files gain isolated phantom vertices; this is what made the benchmark's Pokec shortest-path row search from an isolated vertex 0.",
+    "Harness flaw behind the cited PageRank row: python-igraph 0.8.2's default PRPACK implementation ignores eps (its docstring says eps and niter apply only to the old power method; the C core always passes 1e-10), while NetworkX 2.4 stops when the L1 change is below N*tol, i.e. after one power iteration with tol=1e-3 on these graphs, and SNAP iterates to an L1 change below 1e-3; the 10-15x ratio and SNAP's PageRank lead therefore compare unequal accuracy. A user-supplied eps also does not speed igraph up.",
+    "1.0 broke the 0.10 API (igraph_integer_t renamed igraph_int_t, PageRank parameter order changed, RNG_BEGIN/RNG_END removed so callers must seed the RNG or call igraph_setup()); the unreleased main branch also fixes an igraph_adjlist_init property-cache bug (IGRAPH_PROP_HAS_MULTI set wrongly) that could make several functions return invalid results."
+  ],
+  "pick_this_over_siblings_when": "Pick igraph over Graaf (a lightweight C++ alternative to Boost.Graph whose own perf benchmarks show it slower than Boost) when you need a large, mature algorithm set with Python/R bindings and can live with GPL; Graaf only makes sense for a small embedded C++ graph container, and neither is the fastest option against NetworKit or graph-tool.",
+  "verified_claims_summary": "A third-party suite (timlrx/graph-benchmarks, 2020) timed python-igraph 0.8.2 from conda-forge against NetworkX 2.4 on Python 3.8, medians of 100 runs (10 on Pokec) on a GCE n1-standard-16 (Haswell 2.3 GHz, no CPU model or compiler flags): loading about 5-8x, PageRank 10-15x, k-core 24-49x, strongly connected components 5.6-16x and shortest path 8-27x faster on amazon0302, web-Google and soc-Pokec. The Pokec shortest-path row is invalid (igraph and SNAP start from an isolated phantom vertex 0, NetworkX from node 1), and the PageRank row is not like-for-like: NetworkX 2.4 stops once the L1 change is below N*tol, which with tol=1e-3 on graphs of hundreds of thousands of nodes means after one power iteration, while igraph's PRPACK ignores eps=1e-3 and solves to 1e-10 and SNAP iterates until the L1 change is below 1e-3; igraph wins despite doing more work, but the ratios (and SNAP's PageRank lead) do not compare equal accuracy.",
+  "status_note": "Actively maintained (1.0.0 released with a stable-API versioning policy alongside 0.10.17 on 2025-09-19, then 1.0.1; commits continue on main) with 2.0k stars and widely used R and Python bindings, copyable only into GPL-compatible projects; the cited 2020 numbers carry two harness flaws (the Pokec shortest-path row starts igraph at an isolated phantom vertex, and PageRank pits a 1e-10 PRPACK solve against a single NetworkX power iteration).",
+  "sources_read": [
+    "https://github.com/igraph/igraph",
+    "https://github.com/igraph/igraph/releases",
+    "https://github.com/igraph/igraph/issues?q=is%3Aissue+is%3Aopen+label%3Aperformance",
+    "https://github.com/igraph/igraph/issues/2300",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/README.md",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/etc/cmake/features.cmake",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/etc/cmake/dependencies.cmake",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/etc/cmake/tls.cmake",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/include/igraph_datatype.h",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/include/igraph_error.h",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/src/centrality/prpack.cpp",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/src/centrality/coreness.c",
+    "https://raw.githubusercontent.com/igraph/igraph/HEAD/src/connectivity/components.c",
+    "https://raw.githubusercontent.com/igraph/igraph/0.8.2/src/prpack.cpp",
+    "https://raw.githubusercontent.com/igraph/python-igraph/0.8.2/src/igraph/__init__.py",
+    "https://raw.githubusercontent.com/igraph/python-igraph/0.8.2/src/_igraph/graphobject.c",
+    "https://pypi.org/pypi/igraph/json",
+    "https://raw.githubusercontent.com/networkx/networkx/networkx-2.4/networkx/algorithms/link_analysis/pagerank_alg.py",
+    "https://raw.githubusercontent.com/networkx/networkx/networkx-2.4/networkx/algorithms/core.py",
+    "https://raw.githubusercontent.com/snap-stanford/snap/master/snap-core/centr.h",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/code/igraph_profile.py",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/code/networkx_profile.py",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/code/snap_profile.py",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/code/benchmark.py",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/run_profiler.sh",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/setup/setup.md",
+    "https://raw.githubusercontent.com/timlrx/graph-benchmarks/HEAD/data/download_data.sh",
+    "https://github.com/networkit/networkit"
+  ],
+  "confidence": 0.8
+}

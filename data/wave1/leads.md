@@ -25,3 +25,4 @@
 - sofa-buffers/corelib-c-cpp (https://github.com/sofa-buffers/corelib-c-cpp): first-party arena serializer, beats nanopb 2.09x msg/s but not protobuf wire format; uncatalogued (protobuf-c enricher, 2026-10-07).
 - plf::queue (https://github.com/mattreecebentley/plf_queue, Zlib): README claims +10-65% vs std::queue; not catalogued (Indiesort enricher, 2026-10-07).
 - catid/leopard and catid/fecal (erasure codes, Leopard encodes 3x faster than Wirehair in its own table) and kkos/oniguruma (regex; beats TRE on .{0,2}(alt) 127 vs 3425 ms in the sljit harness): check catalogue before seeding (Wirehair/TRE enricher, 2026-10-07).
+- NetworKit (https://github.com/networkit/networkit, MIT) and graph-tool (https://git.skewed.de/count0/graph-tool): both beat igraph in the timlrx/graph-benchmarks table; not catalogued (igraph enricher, 2026-10-07). Jumprope (https://github.com/josephg/jumprope-rs, Rust, 2-3x faster than librope) goes to the cross-language queue.

@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/josephg/librope",
+  "one_liner": "Two-file C99 skip-list UTF-8 rope with O(log n) insert/delete at character offsets; beats flat strings on large documents.",
+  "what_it_does": "librope stores a mutable UTF-8 string as a rope so that inserting or deleting text at a character position costs O(log n) instead of shifting the whole buffer. The C API is small: rope_new / rope_new2 (custom malloc/realloc/free hooks), rope_insert(r, pos, utf8), rope_del(r, pos, n), rope_char_count / rope_byte_count, rope_write_cstr / rope_create_cstr to export the whole text, and ROPE_FOREACH to walk the node chunks. Positions are Unicode code points; UTF-16 (wchar) positions are available through separate functions when compiled with -DROPE_WCHAR=1. It is not a drop-in for char* or std::string: there is no indexing, substring or search API.",
+  "how_it_is_fast": "The text is split into nodes holding up to ROPE_NODE_STR_SIZE (136) bytes of UTF-8, linked as a skip list whose every link records how many characters it skips, so locating a character offset is an O(log n) descent like an order-statistic tree, with no rebalancing (node heights are random with a 25% promotion chance, ROPE_BIAS). An insert that fits is a memmove inside one small node; otherwise the node is split and new nodes are spliced in, so no edit moves more than a node's worth of bytes. With ROPE_WCHAR each link also carries a UTF-16 unit count, giving O(log n) UTF-16-to-character offset conversion at roughly 30-35% throughput cost.",
+  "when_to_use": [
+    "Editor buffers, OT/CRDT document replay or collaborative-editing servers in C or C++ where documents are kilobytes to megabytes and edits land at arbitrary character offsets",
+    "Keystroke-level edit streams (inserts and deletes of a few characters), which is the measured workload",
+    "Interop with JavaScript, Java, C# or Objective-C positions: build with -DROPE_WCHAR=1 and use rope_insert_at_wchar / rope_del_at_wchar instead of O(n) offset conversion",
+    "Projects that want a dependency-free, MIT-licensed two-file C99 source drop with pluggable allocators"
+  ],
+  "when_not_to_use": [
+    "Small strings: the README claims a win only above a few hundred bytes (no measurement in the repo; open issue #10 asks whether the roughly 200-byte crossover still holds), and every rope allocates an oversized head block of about 8.8 KB on 64-bit targets",
+    "Reading parts of the text: there is no substring, character-at, line/column or search API, only whole-string export or per-node iteration (substring request issue #6 open since 2018)",
+    "New code that can use Rust: the author's maintained rewrite Jumprope (josephg/jumprope-rs, gap buffer in each skip-list node) is 2-3x faster on the same traces",
+    "Concurrent access to one rope, or untrusted edit streams where a predictable skip-list shape matters: node heights come from the unseeded global random(), and Jumprope later added a 'ddos_protection' RNG feature for that reason",
+    "Builds that need tested MSVC or Apple Silicon support: the code relies on POSIX ssize_t and random() (a _WIN32 shim maps random() to rand()), and the Makefile forces -arch x86_64 on macOS"
+  ],
+  "integration": {
+    "form": "source-drop (rope.c and rope.h; the Makefile can also build librope.a)",
+    "dependencies": "none beyond libc",
+    "min_toolchain": "C99 (Makefile uses -std=c99); needs POSIX ssize_t and random(); the public structs nest a flexible-array-member struct inside another struct, which GCC and Clang accept as an extension (the header has extern \"C\" guards for C++ use)",
+    "platforms": "not documented beyond POSIX-style C; Windows only via a random() to rand() shim; Makefile hard-codes -arch x86_64 on Darwin",
+    "thread_safety": "Not synchronized: rope.h says not to access the same rope from multiple threads; separate ropes still share libc random() state for node heights",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the cited table (jumprope-rs rope_benches, first-party): the 'Raw string' baseline finds each byte offset by scanning char_indices from the start and grows by pushing one '\\0' per byte, so 26-240x mostly measures that O(n) scan; the realworld loop only asserts the final char_len, never the content (CRope::to_string is unimplemented), so librope's output on those traces is not checked; rope.c is built by the cc crate, which does not define NDEBUG, so its assert() calls stay live, and each insert allocates a CString (both slightly handicap librope); rope_del is declared '-> u32' on the Rust side although it returns void in C.",
+    "Memory: ROPE_SIZE is sizeof(rope) + sizeof(rope_node) * ROPE_MAX_HEIGHT, which reserves a 144-byte node per level where a 16-byte link would do (about 8.8 KB per rope instead of about 1.1 KB at height 60; computed from the struct layout); nodes are never merged, since deletes shrink nodes in place and free them only when empty, and mid-node inserts split off the tail as its own node.",
+    "No allocation-failure handling: rope_new2 and alloc_node dereference the allocator's result without a NULL check, so OOM crashes rather than returning an error.",
+    "UTF-8 handling is lax and out-of-range positions are clamped: the validator only checks lead and continuation bit patterns (it accepts 5- and 6-byte forms, overlong encodings and surrogates), invalid input returns ROPE_INVALID_UTF8 without inserting, rope_insert/rope_del silently clamp positions past the end, and the header comment says each height is half as likely while the code uses a 25% promotion bias."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings (bstring, buffet, FastString, Str, zuu_string_view, to_static_string, jank persistent_string) offer O(log n) edits in the middle of a large document; pick librope for editor-style workloads on kilobyte-plus texts from C, and bstring or buffet for ordinary small-string handling in C, where librope's 8.8 KB-per-rope overhead and missing read API would hurt.",
+  "verified_claims_summary": "In the author's jumprope-rs criterion harness on a single core of a Ryzen 5800X (Rust calling a vendored rope.c with ROPE_MAX_HEIGHT 20 through FFI, built by the cc crate at the cargo release opt level, compiler versions not stated), librope replayed four real editing traces in 1.59-16.28 ms against 41-3908 ms for a naive Rust String that rescans characters on every edit (about 26-240x, derived from page data), beat Ropey (16.28 vs 25.16 ms on automerge-paper) and lost 2-3x to Jumprope. There are no std::string, plain C buffer or SGI crope numbers: librope's own test/benchmark.c defines 'c string' and 'sgirope' rows but its loop runs only the first implementation.",
+  "status_note": "Abandoned since 2021-10 (the author says it works but points users to Jumprope), yet MIT-licensed, two files and C99, so easy to vendor; the only numbers are first-party and their harness has flaws (String baseline row commented out and rescanning characters per edit, length-only result check, assert()s left enabled, traces loaded from a hard-coded /home/seph path), so read the 26-240x as rope versus a char-scanning flat string, not versus std::string.",
+  "sources_read": [
+    "https://github.com/josephg/librope/issues?q=is%3Aissue",
+    "https://github.com/josephg/librope/issues/10",
+    "https://github.com/josephg/librope/issues/6",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/README.md",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/rope.h",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/rope.c",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/Makefile",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/test/benchmark.c",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/test/tests.c",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/test/tests.h",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/test/slowstring.c",
+    "https://raw.githubusercontent.com/josephg/librope/HEAD/test/slowstring.h",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/README.md",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/build.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/main.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/rope.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/edittablestr.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.c",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.h",
+    "https://raw.githubusercontent.com/rust-lang/cc-rs/main/src/lib.rs",
+    "https://raw.githubusercontent.com/rust-lang/cc-rs/main/src/flags.rs",
+    "https://raw.githubusercontent.com/rust-lang/cc-rs/main/src/tool.rs"
+  ],
+  "confidence": 0.75
+}
