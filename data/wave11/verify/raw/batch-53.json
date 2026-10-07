@@ -1,0 +1,91 @@
+[
+  {
+    "id": "https://github.com/mtrebi/memory-allocators",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README text ('about three times better than malloc') plus two chart images (docs/images/operations_over_time.png and operations_over_time_no_init.png) comparing the custom allocators with a CAllocator that wraps libc malloc/free; benchmark code is public (src/Benchmark.cpp, src/main.cpp) but no CPU, compiler, flags or libc version is stated and the shipped harness cannot reproduce the charted 1M-operation runs, so C.",
+    "corrections": {
+      "claimed_speedup": "README 'Time complexity': 'Malloc is without doubt the worst allocator'; the free list allocator 'is A much better choice than malloc as a general purpose allocator ... It's about three times better than malloc'; linear, stack and pool are faster still but impose restrictions. Exact figures exist only in two chart images (block size 4096, up to about 1M operations; values read off the charts, approximate): with Init() in the timed region malloc about 1500 ms, FREE LIST SEQ about 425 ms, pool about 365 ms, stack about 60 ms, linear about 20 ms; without Init() malloc about 1500 ms, free list about 360 ms, pool about 80 ms, stack and linear about 20 ms. Malloc/free-list ratio about 3.5x with Init and about 4.2x without (derived from page data, chart readings).",
+      "stars_or_usage": "2.0k stars, 171 forks",
+      "caveats": "First-party, tier C: no hardware, compiler, flags or libc version stated, and the repo's default build (README: plain cmake, no CMAKE_BUILD_TYPE; CMakeLists.txt sets only cxx_std_11) has no optimization flags for the custom allocators while libc malloc is prebuilt optimized. The shipped harness cannot reproduce the charts: Benchmark.h defines OPERATIONS as 10 (the `#if 0` branch for the real count is disabled) and main.cpp constructs Benchmark(OPERATIONS), so each round runs 10 operations; the allocator sizes in main.cpp also cannot hold 1M 4096-byte blocks (free list 1e8 bytes, about 24k blocks; pool 16 MiB, 4096 chunks; linear and stack 1e9 bytes, about 244k), so the charts came from an unpublished configuration. The charted free list is 'FREE LIST SEQ' with frees in reverse (LIFO) order, which keeps the free list at one node and makes it behave like a stack; random-order frees would walk the list. The linear and stack allocators never write into the returned memory (the stack keeps its markers in a std::vector), while malloc writes an in-band header into each fresh 4096-byte block, so part of the gap is likely first-touch page faults rather than allocator logic. The timed region includes Init() (one large malloc plus setup), which the README itself says distorts the curves. Correctness bugs in the allocators: FreeListAllocator::FindBest never updates smallestDiff and returns the last node as previousNode; FreeListAllocator::Free never inserts a block whose address is above every free node (it is lost); PoolAllocator::Init mallocs a new buffer each round without freeing the old one. The charts predate later fixes and rewrites ('Stack allcoator bugfix' 2024-05-23, PoolAllocator O(1) initialization 2026-04-02, stack rollback refactor 2026-04-12, empty pool free list fix 2026-09-03), so numbers are on code later changed for correctness. The three-times claim is for the free list only; the faster allocators drop general-purpose semantics. Baseline is plain libc malloc, not jemalloc, tcmalloc or mimalloc."
+    },
+    "notes": "Record is accurate; chart readings match the images (malloc about 1500 ms, free list about 360 ms without Init at 1M ops). Shortcomings to record: unoptimized default build, harness hard-coded to 10 operations and undersized pools so charts are not reproducible, LIFO-only free-list run, likely page-fault asymmetry (malloc writes headers, linear/stack never touch memory), FindBest/Free bugs, numbers predate 2024-2026 allocator fixes; baseline only glibc-style malloc.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/README.md",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/Benchmark.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/main.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/includes/Benchmark.h",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/CAllocator.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/FreeListAllocator.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/PoolAllocator.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/LinearAllocator.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/src/StackAllocator.cpp",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/docs/images/operations_over_time.png",
+      "https://raw.githubusercontent.com/mtrebi/memory-allocators/HEAD/docs/images/operations_over_time_no_init.png",
+      "https://github.com/mtrebi/memory-allocators",
+      "https://github.com/mtrebi/memory-allocators/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/nvidia/nccl",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The only numbers are one user's tables in gloo issue #158 (Gloo benchmark command shown, NCCL command, buffer placement and process count not shown, no CPU model or compiler); not a peer-reviewed or recognized third-party suite and not reproducible, so C at best. Kept at C, but the claim was overstated: NCCL loses at every size up to 32 KB on IB and up to 64 KB on TCP, not only at 1 KB.",
+    "corrections": {
+      "claimed_speedup": "gloo issue #158 (Dec 26 2018, user report; NCCL 2.3.7 vs Gloo commit 1d9e62a, 5000 iterations). IB RDMA 100 Gbps: NCCL faster only from 64 KB up: 64 KB 0.13 ms vs 0.155 ms, 128 KB 0.09 ms vs 1.073 ms, 256 KB 0.13 ms vs 20.161 ms (largest size in that table); Gloo faster from 1 KB to 32 KB (1 KB 0.039 ms vs NCCL 0.16 ms; 32 KB 0.088 ms vs 0.15 ms). TCP/IP sockets: NCCL faster from 128 KB up: 128 KB 3.66 ms vs 5.614 ms, 256 KB 6.25 vs 10.980, 512 KB 7.12 vs 20.544, 1 MB 11.91 vs 39.855, 2 MB 20.9 vs 78.237; Gloo faster from 1 KB to 64 KB (1 KB 0.354 ms vs NCCL 1.89 ms; 64 KB 3.813 ms vs 4.02 ms). Largest ratio about 155x at 256 KB on IB, 3.7x at 2 MB on TCP (derived from page data).",
+      "baseline": "Gloo CPU allreduce_ring (gloo/benchmark/main.cc CPU benchmark, run with -s 2), compared against NCCL on GPUs",
+      "workload": "Allreduce latency by message size (1 KB to 256 KB on IB RDMA, 1 KB to 2 MB on TCP/IP) between two servers with 8 NVIDIA V100 GPUs each, NCCL 2.3.7 versus Gloo commit 1d9e62a running its CPU-buffer allreduce_ring benchmark with -s 2 and 5000 iterations (user-posted GitHub issue; NCCL-side command not shown).",
+      "license": "Apache-2.0 for most of the project; some parts keep a BSD-3-Clause license (LICENSE.txt)",
+      "caveats": "Weak, apples-to-oranges evidence for such a notable project: the only reachable numbers are one user's report filed against Gloo (reporter: 'gloo has poor performance for large size all-reduce'). The Gloo command is './benchmark ... -s 2 ... allreduce_ring', and allreduce_ring is the CPU-memory algorithm in gloo/benchmark/main.cc (the GPU variants are cuda_allreduce_* in cuda_main.cc), so Gloo ran on host buffers with 2 processes while the NCCL command, buffer placement and rank count are not shown. Gloo's 20.161 ms at 256 KB on IB looks like a Gloo ibverbs pathology rather than a representative baseline. NCCL lost at every size up to 32 KB on IB and up to 64 KB on TCP. Versions are from 2018 (NCCL 2.3.7). The repository README and nccl-tests carry no baseline numbers. Published studies (OSU MVAPICH2-GDR papers, arXiv 1707.09414 and 1810.11112, snippet only since arXiv is blocked) report MVAPICH2-GDR beating NCCL for small messages (up to 17x for 8-byte allreduce per snippet), so NCCL is not uniformly faster than MPI. No CPU model, compiler or flags. Category and domain are a best fit (GPU collective communication has no dedicated category)."
+    },
+    "notes": "Numbers verified on gloo issue #158 but the record understated Gloo's wins (Gloo faster 1-32 KB on IB, 1-64 KB on TCP) and missed that Gloo ran its CPU allreduce_ring with 2 processes against GPU NCCL; tier stays C, claim corrected. License is Apache-2.0 with BSD-3-Clause parts; metadata (5.1k stars, 1.4k forks, last commit 2026-09-17, active) confirmed.",
+    "urls_opened": [
+      "https://github.com/facebookincubator/gloo/issues/158",
+      "https://raw.githubusercontent.com/facebookincubator/gloo/main/gloo/benchmark/main.cc",
+      "https://raw.githubusercontent.com/facebookincubator/gloo/main/gloo/benchmark/cuda_main.cc",
+      "https://raw.githubusercontent.com/NVIDIA/nccl/HEAD/LICENSE.txt",
+      "https://github.com/NVIDIA/nccl",
+      "https://github.com/NVIDIA/nccl/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/kimwalisch/libpopcnt",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party only: the current ChangeLog's 'up to 3x' line has no hardware, compiler or baseline code, and CI compares only against the previous release; the older v2.3 README Speedup table does compare the library's AVX2/AVX512 Harley-Seal algorithms with an unrolled __builtin_popcount loop on a named CPU (Xeon Platinum 8168, GCC 5.4) but names neither the benchmark program nor the flags, so C.",
+    "corrections": {
+      "benchmark_url": "https://github.com/kimwalisch/libpopcnt/blob/v2.3/README.md",
+      "claimed_speedup": "v2.3 README 'Speedup' table (Intel Xeon Platinum 8168, GCC 5.4; speedup over sse-popcount's lookup-8 table algorithm): builtin-popcnt-unrolled 4.75x at 32 B to 7.94x at 4096 B; avx2-harley-seal 1.15x at 32 B, 8.46x at 512 B, 13.66x at 4096 B; avx512-harley-seal 0.35x at 32 B, 15.12x at 1024 B, 25.60x at 4096 B. Against the scalar POPCNT baseline (builtin-popcnt-unrolled) that is about 1.7x for AVX2 and 3.2x for AVX512 at 4096 B, and slower below 256-512 B (derived from page data; libpopcnt picks the fastest algorithm per size). Current ChangeLog 4.2 (2026-07-07): 'Up to 3x faster popcount for medium arrays (96 bytes to 1 KB) using a simple AVX2 popcnt256 loop instead of scalar POPCNT or Harley-Seal' (no numbers or hardware); ChangeLog 2.2: 'Up to 6x faster on old x86 CPUs without POPCNT' (baseline not named). Current README example: 133.5 GB/s for a 16 KB array with the AVX512 algorithm on an AMD EPYC 9R14 (no baseline).",
+      "baseline": "scalar POPCNT loop (unrolled __builtin_popcountll, the std::popcount-style baseline) and the lookup-8 table algorithm; for the 4.2 claim, the library's own earlier scalar POPCNT or Harley-Seal paths",
+      "hardware": "v2.3 README table: Intel Xeon Platinum 8168. ChangeLog 4.2 claim: not stated. Current README example run: AMD EPYC 9R14 (2023), AVX512 algorithm, 16 KB array.",
+      "compiler_and_flags": "v2.3 README table: GCC 5.4, flags not stated. ChangeLog claims: not stated. README says build with -O3 or -O2 and no -mavx2 needed (runtime CPUID dispatch).",
+      "caveats": "First-party evidence only. The library's benchmark program and benchmark.yml CI compare the current code only against its own previous release (job fails if more than 2% slower). The best 'faster than' numbers are an old README table (removed by v3.0, 2024) measured on a Xeon Platinum 8168 with GCC 5.4: the algorithm names and the lookup-8 link point to Wojciech Mula's sse-popcount harness, the program and flags are not named, and the table measures the algorithms rather than necessarily libpopcnt.h itself; the AVX512 path it measured was later replaced (v3.0 swapped AVX512BW Harley-Seal for AVX512 VPOPCNTDQ). Against a plain unrolled POPCNT loop the SIMD paths win only on arrays of a few hundred bytes and up (about 1.7x AVX2 and 3.2x AVX512 at 4 KB, derived) and lose on small arrays, where the library dispatches to scalar POPCNT. The 4.2 'up to 3x' figure compares the new medium-array path with the library's own older paths, with no published numbers in the ChangeLog or the commit (923c433). The AVX2 Harley-Seal algorithm comes from the Mula, Kurz and Lemire paper 'Faster Population Counts using AVX2 Instructions' (peer-reviewed numbers for the algorithm, not for libpopcnt; arXiv blocked here)."
+    },
+    "notes": "Record accurate; added the v2.3 README Speedup table (Xeon Platinum 8168, GCC 5.4) as the clearest comparison with a scalar POPCNT baseline, with derived ratios; still first-party with flags and harness unnamed, so C. Metadata confirmed: BSD-2-Clause, 370 stars, 44 forks, last commit 2026-07-23, active.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/ChangeLog",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/README.md",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/benchmark.cpp",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/HEAD/.github/workflows/benchmark.yml",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/v2.3/README.md",
+      "https://raw.githubusercontent.com/kimwalisch/libpopcnt/v3.0/README.md",
+      "https://raw.githubusercontent.com/transmission/libpopcnt/HEAD/README.md",
+      "https://github.com/kimwalisch/libpopcnt/blob/v2.3/README.md",
+      "https://github.com/kimwalisch/libpopcnt",
+      "https://github.com/kimwalisch/libpopcnt/commits",
+      "https://github.com/kimwalisch/libpopcnt/commit/923c43377278edc97de155ea70ac3ab20f397f3e"
+    ]
+  }
+]
