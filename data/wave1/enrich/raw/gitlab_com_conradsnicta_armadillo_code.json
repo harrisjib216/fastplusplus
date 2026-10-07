@@ -1,0 +1,73 @@
+{
+  "id": "https://gitlab.com/conradsnicta/armadillo-code",
+  "one_liner": "Matlab-style C++ linear algebra front end over BLAS/LAPACK; expression templates beat IT++ and Newmat on chained expressions.",
+  "what_it_does": "Armadillo is a C++ dense and sparse linear algebra library (Mat, Col, Row, Cube, SpMat and 200+ functions) with deliberately Matlab-like syntax, aimed at turning research code into production code. It is a front end, not a BLAS: matrix products go to the linked BLAS (OpenBLAS recommended, MKL, Apple Accelerate) and decompositions (eig, SVD, QR, Cholesky, solve, inv) go to LAPACK, with ARPACK or the built-in NEWARP and SuperLU for sparse eigen problems and sparse solves. It replaces hand-written BLAS/LAPACK call sequences and older C++ matrix libraries such as IT++ and Newmat, but through its own API rather than as a drop-in.",
+  "how_it_is_fast": "Delayed evaluation through expression templates: operators return lightweight Op/Glue marker types, and assignment walks that type tree at compile time to emit one fused, auto-vectorisable loop without temporaries (e.g. Z = 0.4*X + 0.6*Y becomes a single loop). Pattern rewrites pick cheaper kernels: inv(A)*b becomes an xGESV solve, A*A.t() goes to xSYRK, diagmat(), trace() and as_scalar() products compute only the needed elements, and 3- and 4-operand matrix products are reordered by a heuristic that compares intermediate result sizes (glue_times_meat.hpp). solve() inspects the matrix at run time for banded, triangular and symmetric positive definite structure and dispatches to matching LAPACK routines, matrices of up to 16 elements live in an in-object buffer (ARMA_MAT_PREALLOC), and square products up to 4x4 use unrolled code instead of a BLAS call (gemm_emul_tinysq in mul_gemm.hpp).",
+  "when_to_use": [
+    "Porting Matlab/Octave prototypes to C++ with near one-to-one syntax while keeping LAPACK-backed decompositions (eig_sym, svd, qr, chol, solve) running on OpenBLAS, MKL or Accelerate",
+    "Code dominated by compound element-wise expressions, submatrix views and structured products (diagmat(A)*B, trace(A*B), A*A.t(), inv(A)*b), where the rewrites avoid temporaries or pick a cheaper routine; the 2025 paper reports 43-68% less time for fused element-wise and submatrix expressions and 87-96% for diagonal-aware products versus Armadillo's own naive paths",
+    "Solving linear systems whose structure (banded, triangular, sympd) is not known at the call site: the adaptive solve() cut time 68-91% on banded and 73-84% on triangular systems versus plain LU, with 0.1-1.6% detection overhead on unstructured dense inputs (2020 paper, first-party)",
+    "Projects tied to the R or mlpack ecosystems (RcppArmadillo, mlpack, ensmallen, CARMA for NumPy), or needing dense, sparse and cube types in one Apache-2.0 library",
+    "Small matrices of fixed size: mat::fixed types are recommended up to about 10x10 (FAQ), and matrices of up to 16 elements avoid heap allocation by default"
+  ],
+  "when_not_to_use": [
+    "You need faster GEMM or LAPACK kernels themselves: large products and decompositions run at the speed of the linked BLAS/LAPACK (FAQ: 'speed is dependent on the implementation of BLAS'), and without BLAS a rudimentary built-in multiply is used; pick a tuned BLAS or a library with its own kernels",
+    "External BLAS/LAPACK dependencies are not acceptable: inv(), solve(), svd() and other decompositions require LAPACK (config.hpp), and sparse solve needs SuperLU 5.2-7.0 as a shared library",
+    "Many threads each running small-matrix code: issue #260 reports 10x10 work on a Ryzen 9 7950X taking 428 ms sequentially but 1349.59 ms in parallel, and issue #285 reports 15x15 work going from about 600 us single-threaded to about 10 ms per thread with 10 threads (Armadillo 12.6.7, OpenBLAS 0.3.26); both are closed, but the replies need a GitLab login and the cause was not visible",
+    "You need measured evidence against current competitors: the only head-to-head numbers are first-party, against IT++ and Newmat on a 2008-era toolchain; no Armadillo-versus-Eigen, Blaze or BLAS numbers were reachable (the Blaze benchmark wiki returned 404 and the independent LAMP_benchmark repo publishes code but no results)",
+    "Code that leans on C++ auto or composes generic expression objects: the README warns that auto mishandles the library's short-lived expression temporaries"
+  ],
+  "integration": {
+    "form": "header-only (include/armadillo plus armadillo_bits), with an optional CMake-built libarmadillo runtime wrapper around BLAS/LAPACK/ARPACK/SuperLU; ARMA_DONT_USE_WRAPPER links BLAS/LAPACK directly",
+    "dependencies": "BLAS and LAPACK (OpenBLAS strongly recommended; Intel MKL and Apple Accelerate supported); optional ARPACK (built-in NEWARP covers real sparse eigensolvers), SuperLU 5.2.x-7.0.x shared library for spsolve(), HDF5, FFTW3",
+    "min_toolchain": "C++14 (minimum since 15.0); GCC or Clang with -O2/-O3, Xcode 8+, MSVC 2019 or MinGW; fp16 element types need C++23",
+    "platforms": "Linux, macOS (Accelerate or OpenBLAS), Windows x64 (MSVC project, prebuilt OpenBLAS in examples/lib_win64); architecture-neutral source, SIMD only through compiler auto-vectorisation (FAQ: -O3, -march=native for AVX)",
+    "thread_safety": "No general guarantee is documented. std::mutex is used internally by default (ARMA_USE_STD_MUTEX); issue #219 reported a data race and leak in Cube::slice() under concurrent access (closed 2022); RNG seeding is per thread under OpenMP; with -fopenmp, element-wise functions run in parallel above 320 elements on at most 8 threads (ARMA_OPENMP_THRESHOLD, ARMA_OPENMP_THREADS).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the newer first-party evidence: in the ICCAE 2025 paper (Fig. 1, Ryzen 7640U, GCC 14.2 -O3 -march=native, OpenBLAS 0.3.26, mean of 1000 runs), the 'optimised' trace(A*B) times are 5.98e-11 to 2.71e-10 s and a'*diagmat(B)*c times are 7.21e-10 to 8.54e-10 s, flat from 100x100 to 1000x1000 and below one or a few cycles at 3.5 GHz, although the fused code needs n^2 and n multiply-adds; the fused trace is inline header code (fn_trace.hpp), so the compiler can hoist or drop it in a timing loop with unchanged inputs. The 99.96-99.99% reductions in those two rows are timing artifacts; diagmat(A*B), which does the same n^2 work, reports 87-96%. Neither the 2025 harness nor the speed.html harness is in the repository.",
+    "The speed.html wins over IT++ and Newmat come from expression rewriting, not faster kernels: the 2.5x four-matrix-chain gain over IT++ at both sizes matches the 2.63x multiply-add reduction from right-to-left ordering (800M vs 304M for the 1000x800 chain, derived from page data), and the 1086x on trans(p)*inv(diagmat(q))*r at 100x100 is consistent with the baseline building and inverting a dense matrix (O(n^3)) against Armadillo's O(n) loop (the IT++ code is not shown, so this is an inference). The IT++/Newmat comparison text is now commented out of faq.html.",
+    "Expression rewrites can backfire on tiny matrices: issue #275 timed out = inv(A)*B over one million 3x3 float matrices at 0.059 s in 10.5.1 but 0.255-0.261 s from 11.0.0 to 14.4.1, while a named temporary (tmp = inv(A); out = tmp*B) took 0.039-0.040 s in 14.2.1-14.4.1, so the in-expression path (which rewrites inv(A)*B as a solve) was the slow one; the 15.6.1 source now has an 'inv tiny matrix optimisation' path for real N <= 3 operands. The chain reordering is a size heuristic for 3 and 4 operands, not an optimal matrix-chain search.",
+    "Safety defaults cost time: size and bounds conformance checks (ARMA_CHECK_CONFORMANCE) and non-finite checks (ARMA_CHECK_NONFINITE) are on by default, and since 10.5 matrix constructors zero-fill unless given fill::none; the docs mark ARMA_DONT_CHECK_CONFORMANCE as 'NOT RECOMMENDED'."
+  ],
+  "pick_this_over_siblings_when": "Pick Armadillo over Eigen or Blaze when you want Matlab-style syntax, the broadest LAPACK-backed decomposition and adaptive-solve coverage, sparse support and R/mlpack bindings, and are happy to let OpenBLAS or MKL do the heavy kernels; pick Eigen (its own GEMM kernels, which its sibling entry reports beating OpenBLAS in some size bands) or Blaze when you cannot link an external BLAS, and BLASFEO when tiny-matrix kernel speed is the bottleneck.",
+  "verified_claims_summary": "The only head-to-head numbers are first-party: arma.sourceforge.net/speed.html times Armadillo against IT++ and Newmat on an Intel Core2 Duo (2 GHz, 2 MB cache), Linux 2.6.26, GCC 4.3.0 with unstated flags and an unpublished harness, reporting roughly 10-15x on 4x4 additions, 1-6x on 100x100 additions, 2.5x and 10-20x on a four-matrix product chain, 2-44x on a submatrix row copy and up to 1086x (IT++) on trans(p)*inv(diagmat(q))*r. The project's later papers compare its optimised paths with its own naive paths rather than with other libraries (ICCAE 2025 on a Ryzen 7640U with GCC 14.2 and OpenBLAS 0.3.26: 16-97% less time per expression, with the 99.99% trace and as_scalar rows invalid; 2020 adaptive solver on a Core i5-5200U with GCC 10.1 and OpenBLAS 0.3.9: 68-91% banded, 73-84% triangular and 17-28% sympd versus plain LU).",
+  "status_note": "Actively maintained (15.6.1 on default branch 15.6.x, last commit 2026-10-02, 200 of 201 GitLab issues closed) and Apache-2.0 with a NOTICE.txt attribution requirement, but all speed evidence is first-party and the ICCAE 2025 paper's trace(A*B) and a'*diagmat(B)*c rows are timing artifacts (sub-nanosecond, flat across 100-1000 sizes), so those 99.99% reductions should not be cited.",
+  "sources_read": [
+    "https://gitlab.com/api/v4/projects/6604173?license=true",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/README.md",
+    "https://arma.sourceforge.net/speed.html",
+    "https://arma.sourceforge.net/faq.html",
+    "https://gitlab.com/api/v4/projects/6604173/repository/tree?ref=15.6.x",
+    "https://gitlab.com/api/v4/projects/6604173/repository/tree?ref=15.6.x&path=include/armadillo_bits",
+    "https://gitlab.com/api/v4/projects/6604173/repository/tree?ref=15.6.x&path=misc",
+    "https://gitlab.com/api/v4/projects/6604173/repository/tree?ref=15.6.x&path=tests2",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/config.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/arma_config.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/arma_version.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/compiler_check.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/glue_times_meat.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/Mat_bones.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/mul_gemm.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/mp_misc.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/include/armadillo_bits/fn_trace.hpp",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/docs.html",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/CHANGELOG.html",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/armadillo_iccae_2025.pdf",
+    "https://gitlab.com/armadillo-lib/armadillo-code/-/raw/15.6.x/armadillo_solver_2020.pdf",
+    "https://gitlab.com/api/v4/projects/6604173/issues?search=performance",
+    "https://gitlab.com/api/v4/projects/6604173/issues_statistics",
+    "https://gitlab.com/api/v4/projects/6604173/issues/260",
+    "https://gitlab.com/api/v4/projects/6604173/issues/268",
+    "https://gitlab.com/api/v4/projects/6604173/issues/275",
+    "https://gitlab.com/api/v4/projects/6604173/issues/285",
+    "https://gitlab.com/api/v4/projects/6604173/issues/219",
+    "https://github.com/HPAC/LAMP_benchmark",
+    "https://github.com/HPAC/LAMP_benchmark/tree/master/results",
+    "https://github.com/HPAC/LAMP_benchmark/tree/master/cpp",
+    "https://raw.githubusercontent.com/HPAC/LAMP_benchmark/HEAD/README.md",
+    "https://bitbucket.org/blaze-lib/blaze/wiki/Benchmarks"
+  ],
+  "confidence": 0.75
+}

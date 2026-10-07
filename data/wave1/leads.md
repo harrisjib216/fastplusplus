@@ -1,1 +1,2 @@
 - jemalloc (wave0-seed, tier C): w1-mine-c found independent numbers in 7a6163/ruby-alloc-bench (vs glibc); candidate retier C to B after a verifier check.
+- HPAC/LAMP_benchmark (TOMS 2022 Armadillo/Eigen mapping tests, code only, paper on arXiv blocked): independent retier source for Armadillo. Bandicoot (coot.sourceforge.io): GPU Armadillo-like, not catalogued (enricher leads, 2026-10-07).
