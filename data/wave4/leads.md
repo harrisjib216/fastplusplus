@@ -8,3 +8,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records. S
 - bemayer/xml-benchmark (https://github.com/bemayer/xml-benchmark): independent, CI-run, monthly cross-language XML shootout (found by the yaml-toml-xml registry agent). Harvest its other C/C++ winners against libxml2/pugixml.
 - flatcc (https://github.com/dvidelabs/flatcc): C FlatBuffers implementation; its benchmark doc claims about 10% faster encode than Google flatbuffers C++, decode tied (first-party, no compiler stated). Found by the binary-schemas blogs agent.
 - zig-flatbuffers and lalinsky/msgpack.zig: Zig libraries that match or beat s2s on some fixtures of the third-party Zig serialization suite (found by the s2s enricher). Not catalogued.
+- conjure_enum (fix8mt/conjure_enum): C++20 enum reflection comparing itself to magic_enum, claims unverified; not catalogued (enricher lead, 2026-10-07).

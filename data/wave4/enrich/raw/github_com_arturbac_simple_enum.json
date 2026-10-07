@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/arturbac/simple_enum",
+  "one_liner": "Header-only C++20 enum-to-string and string-to-enum for bounded enums, with 16-183x less instantiation time than magic_enum's default-range enum_name.",
+  "what_it_does": "Gives enum_name(value) returning std::string_view, enum_cast<E>(std::string_view) returning expected<E, enum_cast_error>, enum_index, a ranges-compatible enum_view, an enum-indexed bitfield, and std::format, fmt, glaze JSON and std::error_code integrations. You declare each enum's bounds in one of three ways: first/last enumerators inside the enum, a consteval adl_enum_bounds(E) function found by ADL that returns simple_enum::adl_info{first, last}, or a simple_enum::info<E> specialization for enums you cannot edit. Enums without bounds fall back to the range [0, default_unbounded_upper_range], which is 10 by default and can be overridden with a macro. The call syntax resembles magic_enum, but the namespace, return types and bounds requirement differ.",
+  "how_it_is_fast": "It uses the same __PRETTY_FUNCTION__/__FUNCSIG__ trick as magic_enum: it instantiates se::f<value>() and parses the enumerator name out of the signature string. It does this only for the values in the declared [first, last] range, so the work grows with the range width. magic_enum 0.9.5's default scan covers [-128, 127], clamped to 0-127 for a uint8_t enum. Only the first value scans for the qualified-name prefix (first_pass). Every later value starts at that saved offset and only searches for the closing ']' (cont_pass). Hard-coded per-compiler offsets and a one-letter namespace (se) keep the strings short. The result is a constexpr array of (pointer, length) pairs, so a runtime enum_name is a range check plus an array index. enum_cast runs a lower-bound search over an index array that is sorted at compile time, using a binary/linear hybrid tuned for about 256 entries.",
+  "when_to_use": [
+    "Codebases with many enums where magic_enum's compile time is a measurable cost and you can annotate each enum with first/last or an adl_enum_bounds function.",
+    "Dense, contiguous enums of any size: the README measures a 104-enumerator enum at about 12 ms of instantiation time, against about 200 ms for magic_enum at its default range.",
+    "Enums whose values lie far outside [-128, 127], for example the README's adl_enum_bounds example starting at -15345953: only the width of the range matters, not where it starts.",
+    "Third-party enums you cannot modify (the info<> specialization, e.g. std::memory_order).",
+    "Projects that already use glaze JSON, std::format or fmt and want enum names in serialization and formatting without hand-written tables."
+  ],
+  "when_not_to_use": [
+    "Sparse enums with a wide range: each value between first and last instantiates one se::f<value>(), so an enum spanning 0 to 1,000,000 is impractical. Holes cost compile time and come back as empty names.",
+    "Enums you will not annotate: the unbounded default covers only 0 to 10, values outside it silently give an empty string_view, and issue #34 reports conversion warnings for an 8-value enum because the library casts 8 and 9 into it.",
+    "Flag/bitmask enums: the README still lists 'enum bitmasks support' as planned, unlike magic_enum's flags mode.",
+    "C++17 projects, or builds with CMAKE_CXX_STANDARD below 23: the headers need C++20, and the top-level CMakeLists.txt stops with a FATAL_ERROR 'Minimum required standard is C++23'.",
+    "Toolchains with C++26 static reflection: magic_enum's current docs say it switches to standard reflection automatically there, so the 2024 comparison against magic_enum's __PRETTY_FUNCTION__ scan may no longer hold."
+  ],
+  "integration": {
+    "form": "header-only (an optional C++ module build produces a static library)",
+    "dependencies": "none for the core (standard library only); glaze, fmt optional for those integrations",
+    "min_toolchain": "C++20 for the headers (README), GCC 10+ or Clang 13+ enforced by #error checks, MSVC tested; the repo's own CMake build requires C++23 and CMake 3.28",
+    "platforms": "any target, but only on GCC, Clang or MSVC (relies on their __PRETTY_FUNCTION__/__FUNCSIG__ layouts; other compilers hit #error)",
+    "thread_safety": "not documented; enum_name and enum_cast are noexcept and read only constexpr static tables",
+    "drop_in_for_baseline": "partial: enum_name(value) has the same call shape as magic_enum::enum_name, but the namespace differs, enum_cast returns expected<E, enum_cast_error>, and enums outside 0-10 need declared bounds"
+  },
+  "gotchas": [
+    "enum_name returns a string_view into the compiler's __PRETTY_FUNCTION__ string, ending before the ']' and not null-terminated, so do not pass .data() to C APIs. The tables point into one full signature string per value in the range.",
+    "Bug fixes landed on 2026-10-01 after the v0.9.5 release commit (PR #39): before them, the first hole in a sparse range was named \"0\", enum_cast(\"0\") or enum_cast(\"\") could match an invalid entry, and an index-to-enum lookup narrowed the index before the range check (an int8 index of 200 became -56 and was accepted). Use master after that date or a later tag.",
+    "Benchmark harness flaw: simple_enum runs with exact bounds, but magic_enum runs at its default range: 256 values for the int-based enums and 128 for the uint8_t enum E, which explains E's lower 86 ms. An equal-range magic_enum run (customize::enum_range) is not measured. Each library's four per-enum figures come from one translation unit with a different call order (simple_enum.cc calls lorem_ipsum_long first, magic_enum.cc calls E first), so shared one-time instantiation cost falls on different rows.",
+    "The table cannot be reproduced from the repo at HEAD: time_trace/CMakeLists.txt links magic_enum::magic_enum and reflect::reflect, but no CMake file fetches them, no file adds -ftime-trace, and SIMPLE_ENUM_ENABLE_TIME_TRACE is not a declared option. The magic_enum_enum_cast_tt target links only simple_enum."
+  ],
+  "pick_this_over_siblings_when": "No enum-reflection library is catalogued in this category yet; the siblings (Cista++, struct_pack, YAS, bitsery, FBE and others) are serializers. Use simple_enum alongside them when you need enum/string conversion for those formats; it ships glaze integration, and compile time matters more than flag-enum support.",
+  "verified_claims_summary": "First-party README table for simple_enum v0.2.0 (2024), measured with clang 17 -ftime-trace on an AMD Ryzen 9 5900X running Gentoo Linux. It reports the template instantiation time of one enum_name call per enum: 12.2 vs 199.9 ms against magic_enum 0.9.5 for 104 enumerators, 5.3 vs 178.9 ms for 40, 2.6 vs 86.1 ms for 16 (labelled 15), and 0.83 vs 151.6 ms for 3. reflect (main of 2024-02-02) totals 46 to 69 ms including code generation. These are compile-time figures only, magic_enum ran at its default range, and there is no runtime benchmark.",
+  "status_note": "Active single-maintainer project (44 stars, v0.9.5, bug-fix and clang 23 CI commits on 2026-10-01), BSL-1.0 and header-only so easy to vendor, but the performance table dates from v0.2.0 and has not been regenerated.",
+  "sources_read": [
+    "https://github.com/arturbac/simple_enum",
+    "https://github.com/arturbac/simple_enum/commits",
+    "https://github.com/arturbac/simple_enum/tree/master/include/simple_enum",
+    "https://github.com/arturbac/simple_enum/issues?q=is%3Aissue",
+    "https://github.com/arturbac/simple_enum/issues/33",
+    "https://github.com/arturbac/simple_enum/issues/34",
+    "https://github.com/arturbac/simple_enum/pull/39",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/README.md",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/cmake/preset-workflow.json",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/cmake/unit_test_integration.cmake",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/include/simple_enum/simple_enum.hpp",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/include/simple_enum/core.hpp",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/include/simple_enum/enum_cast.hpp",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/CMakeLists.txt",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/simple_enum.cc",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/magic_enum.cc",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/reflect.cc",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/enum_definitions.h",
+    "https://raw.githubusercontent.com/arturbac/simple_enum/HEAD/time_trace/enum_cast_tt.cc",
+    "https://raw.githubusercontent.com/Neargye/magic_enum/master/doc/limitations.md",
+    "https://raw.githubusercontent.com/Neargye/magic_enum/v0.9.5/include/magic_enum/magic_enum.hpp",
+    "WebSearch: arturbac simple_enum magic_enum compile time enum_name benchmark"
+  ],
+  "confidence": 0.75
+}
