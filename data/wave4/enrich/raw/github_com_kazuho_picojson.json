@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/kazuho/picojson",
+  "one_liner": "Single-header C++03-compatible JSON DOM on std::map/std::vector; stringified 1.09x faster than nlohmann/json 2.0.3 in a 2016 run, parses 1.9x slower.",
+  "what_it_does": "PicoJSON parses JSON into a picojson::value variant whose arrays are std::vector<value> and objects are std::map<std::string, value>, and serializes a value back to a std::string, an ostream or any output iterator (optionally indented). Parsing takes any iterator pair (char pointers, std::string iterators, istreambuf_iterator) and returns the end position; a templated parse-context interface gives a SAX-like streaming mode (null_parse_context, examples/streaming.cc). Access is is<T>()/get<T>() with exceptions on type mismatch. It is a different API from nlohmann/json, not a drop-in.",
+  "how_it_is_fast": "There is no speed technique: the parser is an iterator-generic recursive descent that reads one byte at a time through input<Iter>::getc(), copies each number into a temporary std::string before strtod, and heap-allocates every string, array and object separately (714,703 allocations for the three benchmark files against 254,045 for nlohmann 2.0.3). Its stringify edge in the 2016 run comes from appending everything to one std::string through std::back_inserter (16-18 allocations per file, against 3,821 for nlohmann 2.0.3 on twitter.json), with numbers printed by snprintf %.17g. The statistics-traversal edge is partly a harness artefact (see gotchas).",
+  "when_to_use": [
+    "Small configuration or RPC payloads (KB range) in a C++ codebase that wants one dependency-free header and plain std::vector/std::map access to the result.",
+    "Old toolchains: the header keeps C++03 fallbacks (rvalue references and std::isnan only when available), so it builds where nlohmann/json 3.x (C++11) or Boost.JSON cannot.",
+    "Parsing straight from a std::istream or any input iterator without first buffering the whole document.",
+    "Code that already uses PicoJSON and only needs compact stringify of small documents, where the 2016 run showed it slightly ahead of nlohmann 2.0.3 on all three files (canada 71.5 vs 76.3 ms, citm_catalog 5.4 vs 7.2 ms, twitter 3.2 vs 4.2 ms)."
+  ],
+  "when_not_to_use": [
+    "Parse throughput: in the same 2016 CSV it parsed the three files in 140.3 ms against nlohmann 2.0.3's 72.5 ms, cJSON's 24.7 ms and RapidJSON's 7.9 ms; zzzJSON's later table (i7-6700, g++ 7.3 -O3, versions not stated) has it stringifying the nativejson-benchmark files in 108 ms against nlohmann's 24 ms, so the stringify edge did not survive newer nlohmann releases.",
+    "Untrusted input: a number that overflows a double (for example 1e400) makes value(double) throw std::overflow_error out of parse() instead of returning an error (open issues #94 from 2017 and #162 from 2025; PR #165 to catch it was closed unmerged on 2026-10-05), and the depth limit added in PR #135 only counts arrays (see gotchas).",
+    "64-bit integers, exact decimals or byte-exact round-trips: integers go through double unless PICOJSON_USE_INT64 is defined, numbers are printed with %.17g (1.2345 becomes 1.2344999999999999), keys come back sorted by std::map, and '/' is escaped as \\/; 11 of 27 round-trip tests fail in nativejson-benchmark.",
+    "Builds with -fno-exceptions (issue #117) or code that includes immintrin.h on GCC 11+, whose _serialize() macro collides with picojson's private _serialize member (issue #141, open).",
+    "Projects that need a maintained dependency: the last commit is 2021-01-17 and 34 issues and 27 pull requests are open."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library only; uses localeconv() from <locale.h> unless PICOJSON_USE_LOCALE is 0)",
+    "min_toolchain": "C++03 or later (C++11 features are used when detected); CI history covers gcc and clang via make test, and MSVC warnings are suppressed in the header",
+    "platforms": "any",
+    "thread_safety": "Concurrent reads of a const value are safe in the default build, but the operator>> interface stores its error in a global (README: not thread-safe), parse and serialize call localeconv() for every number, non-const get(key)/get(idx) return a reference to a function-local static null on a miss, and with PICOJSON_USE_INT64 a const get<double>() rewrites the value in place.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 2.4x statistics figure: nativejson-benchmark's nlohmanntest.cpp walks the DOM with it.key() and v.get<std::string>(), which in nlohmann 2.0.3 return std::string by value (json.hpp lines 2897 and 7289), so nlohmann's walk copies every key and string (325 and 3,804 allocations in its citm_catalog and twitter statistics rows) while picojsontest.cpp takes const references and allocates nothing; the twitter row (0.664 vs 0.090 ms, 7.4x) is mostly copying, and canada.json, whose short keys fit the small-string buffer (0 allocations in nlohmann's row), shows 1.68x (0.990 vs 0.589 ms, derived from page data).",
+    "From reading picojson.h at HEAD (not executed): default_parse_context::parse_object_start checks depths_ but never decrements it, so the DEFAULT_MAX_DEPTHS=100 limit from PR #135 applies only to arrays and a document of deeply nested objects ({\"a\":{\"a\":...}}) recurses without bound; null_parse_context also increments depths_ for every object member.",
+    "The two-argument parse(value&, const std::string&) discards the end iterator, so trailing garbage such as [\"x\"]] or {} \"y\" is accepted without error; with the four-argument form you must compare the returned iterator with the end yourself. This, plus leading zeros accepted via strtod (013), is why 4 of 34 parse-validation tests fail.",
+    "get<T>() on the wrong type throws std::runtime_error (PICOJSON_ASSERT), and constructing a value from NaN or infinity throws std::overflow_error; there is no non-throwing build mode."
+  ],
+  "pick_this_over_siblings_when": "Pick PicoJSON over json.h, cJSON or Jansson only when you want a C++ header that hands back std::vector/std::map and builds on pre-C++11 compilers; for speed, Boost.JSON, yyjson or simdjson parse many times faster, and even among the 2016 nativejson-benchmark entries udp/json-parser (47.3 ms) and json.h parsed far faster than PicoJSON's 140.3 ms.",
+  "verified_claims_summary": "In nativejson-benchmark's committed 2016 sample (Apple clang 7.0, optimize Full with -march=native, Core i7-4980HQ, macOS), PicoJSON 1.3.0 stringified canada, citm_catalog and twitter in 80.2 ms total against nlohmann/json 2.0.3's 87.7 ms (1.09x) and JsonCpp 1.0.0's 94.3 ms (1.18x), and its statistics walk took 0.89 vs 2.17 ms, a gap inflated by the harness copying strings on the nlohmann side; it parsed about 1.9x slower than nlohmann. The project makes no speed claim.",
+  "status_note": "Unmaintained since 2021-01-17 (1.3.1-dev, no release since 1.3.0 in 2015) with open DoS reports on number overflow; BSD-2-Clause and a single header, so easy to vendor, but its speed entry rests on a 2016 run against a 2016 nlohmann release that newer versions overtake.",
+  "sources_read": [
+    "https://github.com/kazuho/picojson",
+    "https://github.com/kazuho/picojson/commits",
+    "https://github.com/kazuho/picojson/issues",
+    "https://github.com/kazuho/picojson/issues?q=is%3Aissue+depth+OR+stack+OR+overflow+OR+crash",
+    "https://github.com/kazuho/picojson/issues/94",
+    "https://github.com/kazuho/picojson/issues/162",
+    "https://github.com/kazuho/picojson/issues/90",
+    "https://github.com/kazuho/picojson/issues/141",
+    "https://github.com/kazuho/picojson/pulls?q=is%3Apr+depth+OR+nest+OR+overflow+OR+performance+OR+speed",
+    "https://github.com/kazuho/picojson/pull/135/files",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/README.mkdn",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/picojson.h",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/Changes",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/Makefile",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kazuho/picojson/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/build/premake5.lua",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/test.h",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/picojsontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/nlohmanntest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/jsoncpptest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip13.json (through roundtrip27.json)",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail07.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail08.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail10.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail13.json",
+    "https://raw.githubusercontent.com/nlohmann/json/v2.0.3/src/json.hpp",
+    "https://raw.githubusercontent.com/dacez/zzzjson/HEAD/README.md",
+    "https://raw.githubusercontent.com/ibireme/yyjson_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ibireme/yyjson_benchmark/HEAD/CMakeLists.txt"
+  ],
+  "confidence": 0.8
+}

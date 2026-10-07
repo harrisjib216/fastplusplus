@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/kgabis/parson",
+  "one_liner": "Two-file C89 JSON DOM with dot-path access; parsed 1.85x faster than JsonCpp 1.0.0 in a 2016 run, mostly on number-heavy canada.json.",
+  "what_it_does": "Parson parses a NUL-terminated string or file into a tree of JSON_Value nodes (json_parse_string, json_parse_file, plus _with_comments variants that strip /* */ and // first) and serializes it back compactly or pretty-printed to a malloc'd string, a caller buffer or a file. Values are read and written through typed getters and setters, including dot-notation paths such as json_object_dotget_string(obj, \"commit.author.name\") that also create intermediate objects on set. It adds deep copy, equality and a simple shape check (json_validate, not JSON Schema). It is a C API, not a drop-in for JsonCpp's C++ Json::Value.",
+  "how_it_is_fast": "It is not built for speed: the parser walks the input with a char pointer, calls strtod directly on the buffer for numbers, and mallocs every node separately (each string twice: a worst-case buffer, then a trimmed copy). Its 2016 parse lead over JsonCpp 1.0.0 and json-c 0.12.1 comes almost entirely from canada.json, the number-heavy file (64.6 vs 142.5 and 105.8 ms). Serialization is slow by design: json_serialize_to_string runs a full size-computing pass, then json_serialize_to_buffer runs that pass again before the writing pass, so every number goes through sprintf(\"%1.17g\") three times; that matches its 110.9 ms stringify total against json-c's 30.8 ms in the same run.",
+  "when_to_use": [
+    "C or C++ projects that want two files to vendor (parson.c, parson.h), C89 compatibility and an MIT licence for reading configs or API responses in the KB to low-MB range.",
+    "Code that addresses nested fields by path: json_object_dotget_* and json_object_dotset_* replace chains of lookups and auto-create intermediate objects.",
+    "Memory-constrained parsing where JsonCpp or json-c are the alternative: the 2016 run used 9.1 MB for the three files against 24.6 MB (JsonCpp) and 49.9 MB (json-c), and json_set_allocation_functions plugs in a custom allocator.",
+    "Config files with comments, through json_parse_string_with_comments / json_parse_file_with_comments."
+  ],
+  "when_not_to_use": [
+    "Parse throughput: in the 2016 CSV cJSON parsed the same three files in 24.7 ms, udp/json-parser in 47.3 ms and RapidJSON in 7.9 ms against Parson's 89.5 ms, and Parson lost to JsonCpp and Qt on citm_catalog.json and to json-c and Qt on twitter.json.",
+    "Serialization-heavy work: stringify was slower than JsonCpp, nlohmann/json 2.0.3 and json-c (3.6x) in 2016, and zzzJSON's later table (i7-6700, g++ 7.3 -O3, versions not stated) has Parson at 857 ms stringify across its corpora against 431 ms for JsonCpp and 217 ms for nlohmann.",
+    "Strict validation of untrusted JSON: since 1.4.0 (2022-03-06) it accepts trailing commas in arrays and objects, json_parse_string parses only the first value and ignores trailing text, and object keys are hashed with an unseeded djb2 hash and linear probing, so crafted colliding keys can make large-object parsing quadratic.",
+    "Documents with duplicate keys: json_object_add refuses a key already present, so the whole parse returns NULL instead of keeping the first or last value.",
+    "Non-NUL-terminated buffers or programs that change LC_NUMERIC: there is no length-bounded parse call, and strtod/sprintf follow the C locale, so a comma-decimal locale breaks number parsing and output."
+  ],
+  "integration": {
+    "form": "source-drop (parson.c + parson.h); CMake and meson files also build a static or shared library",
+    "dependencies": "none (C standard library and libm)",
+    "min_toolchain": "C89 compiler (tests build with -std=c89 -pedantic-errors and as C++ with g++); CMake 3.5+ or meson 0.46+ if used",
+    "platforms": "any; a 2023 fix (1.5.3) covers macOS sprintf deprecation and CI runs on GitHub Actions",
+    "thread_safety": "Separate values can be parsed and serialized concurrently, but the allocator hooks, slash escaping, float format and number-serializer settings are process globals; the header says json_set_escape_slashes is not thread safe and json_set_allocation_functions must be called once before any other call.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured revision is not today's code: nativejson-benchmark pins c22be79 (2016), whose parson.c stored objects as arrays with a linear duplicate-key scan and hard limits of 960 keys per object (OBJECT_MAX_CAPACITY), 122,880 elements per array and 19 levels of nesting; objects became hash maps in 1.2.0 (2021-08-05), MAX_NESTING is now 2048, and serialization changed in 2021 and 1.5.0 (2022). Current speed relative to JsonCpp is unmeasured.",
+    "Harness flaws (not in the catalogued parse claim): the suite's Parson Prettify calls json_serialize_to_string, the compact serializer, so that row is void; and its Statistics walk looks every member up by name with json_object_get_value(o, name) instead of json_object_get_value_at(o, i), a linear scan per member against the 2016 object arrays, so Parson's statistics rows (0.997 ms on twitter.json against 0.090 for PicoJSON) measure the harness, not the DOM.",
+    "Slashes are escaped as \\/ on output unless json_set_escape_slashes(0) is called, numbers print with %1.17g (1.2345 becomes 1.2344999999999999), and 13 of 27 round-trip and 3 of 34 parse-validation tests failed in the 2016 run (trailing text after the first value was accepted).",
+    "Recent memory-safety fixes: an out-of-bounds read in is_valid_utf8 on truncated multi-byte sequences was fixed on 2026-09-15 (1.5.4), after earlier reports of a stack buffer overflow in parson_sprintf (#221) and an out-of-bounds read on unterminated strings (#222); use 1.5.4 or later for untrusted input."
+  ],
+  "pick_this_over_siblings_when": "Pick Parson over cJSON, Jansson or json-c when dot-path access, a two-file C89 drop-in and low parse memory matter more than speed; pick cJSON (3.6x faster parse in the same 2016 run) or udp/json-parser for parse speed, json-c for serialization (3.6x faster stringify), and yyjson when throughput is the goal.",
+  "verified_claims_summary": "In nativejson-benchmark's committed 2016 sample (Apple clang 7.0, optimize Full with -march=native, Core i7-4980HQ, macOS), the 2016 Parson revision c22be79 parsed canada, citm_catalog and twitter in 89.5 ms total against JsonCpp 1.0.0's 165.5 ms (1.85x), json-c 0.12.1's 134.6 ms (1.50x) and Qt 5.6's 125.0 ms (1.40x), a lead that comes from canada.json; it was slower than nlohmann/json 2.0.3, cJSON and RapidJSON, and its stringify was slower than every library but Qt. The project makes no speed claim.",
+  "status_note": "Active (1.5.4 on 2026-09-15 with a memory-safety fix), MIT, two files and easy to vendor; the speed entry rests on a 2016 run of a pre-hash-map revision against 2016 baselines, so treat it as a lightweight-API pick rather than a speed pick.",
+  "sources_read": [
+    "https://github.com/kgabis/parson",
+    "https://github.com/kgabis/parson/commits",
+    "https://github.com/kgabis/parson/commits/master?until=2021-08-10",
+    "https://github.com/kgabis/parson/commit/c22be79",
+    "https://github.com/kgabis/parson/issues?q=is%3Aissue+slow+OR+performance+OR+speed+OR+hash+OR+overflow+OR+CVE+OR+crash",
+    "https://github.com/kgabis/parson/issues/37",
+    "https://github.com/kgabis/parson/issues/230",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/README.md",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/parson.c",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/parson.h",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/Makefile",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/meson.build",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/package.json",
+    "https://raw.githubusercontent.com/kgabis/parson/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kgabis/parson/c22be79/parson.c",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/build/premake5.lua",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/test.h",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/parsontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/jsoncpptest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/jsonctest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/picojsontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip13.json (through roundtrip27.json)",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail07.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail08.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail10.json",
+    "https://raw.githubusercontent.com/dacez/zzzjson/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

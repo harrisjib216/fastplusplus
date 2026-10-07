@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/odedevs/ode",
+  "one_liner": "Long-lived C/C++ rigid-body dynamics engine with joints and built-in collision; Gazebo's fork ran slightly faster than Bullet in OSRF benchmarks.",
+  "what_it_does": "ODE simulates articulated rigid bodies in maximal coordinates: worlds, bodies, many joint types (ball, hinge, slider, universal, PU, PR, double ball, double hinge and more) and contacts with Coulomb friction, plus its own collision layer (spaces and geoms such as box, sphere, capsule, cylinder, plane, ray, convex, heightfield and triangle meshes via OPCODE or GIMPACT, optionally libccd). The API is C (dWorld*, dBody*, dJoint*, dGeom*, dSpace*) with thin C++ wrappers; it is not API-compatible with Bullet, though Gazebo-classic lets you switch between the two with a command-line flag.",
+  "how_it_is_fast": "dWorldQuickStep is an iterative projected Gauss-Seidel/SOR LCP solver whose cost is linear in constraint rows times a fixed iteration count (O(m*N) time, O(m) memory) instead of the Dantzig big-matrix solve in dWorldStep, trading accuracy for bounded per-step cost. Bodies are grouped into islands that can be stepped on separate threads through ODE's threading interface, resting bodies can be auto-disabled, and broadphase uses simple, hash, quadtree or sweep-and-prune spaces. The Gazebo fork that was benchmarked added OSRF's own solver changes (inertia-ratio reduction, partial warm starting) described in the SIMPAR 2014 paper.",
+  "when_to_use": [
+    "Robot simulation with articulated mechanisms and a modest number of bodies (the benchmarks cover 1 to 101 boxes), especially if you already target Gazebo-classic, whose default engine is ODE.",
+    "Embedding a stable, dependency-free physics library behind a C API in C or C++ code, with a choice of single or double precision and a BSD-3-Clause licence option.",
+    "Interactive or near-real-time simulation where a fixed QuickStep iteration count (20 by default upstream, 50 under Gazebo's SDF defaults) is preferred to exact contact forces.",
+    "Stacks and resting contact combined with auto-disable, the case the QuickStep documentation names as its strength."
+  ],
+  "when_not_to_use": [
+    "Accuracy-critical contact: the QuickStep docs warn of poor accuracy for near-singular systems (high friction, strong motors, legged robots standing on the ground), and in the ROSCon 2014 stacking test Bullet showed lower stack position error than ODE.",
+    "Very large collision scenes: hash-space collide2 recomputes and discards its hash table and degrades to O(n^2) (issue #34, open since 2014), and nested hash spaces with about 531,000 boxes hit an assertion in collision_space.cpp (issue #93, August 2026).",
+    "Convex-heavy or heightfield-heavy scenes: open issues report too few convex-convex contact points (#56) and small spheres falling through convex heightfield edges (#71).",
+    "When you need the benchmarked behaviour: the published numbers come from Gazebo's 2014-era fork with OSRF solver changes, while upstream has since changed QuickStep threading, constraint ordering and the box-plane collider.",
+    "Reduced (generalized) coordinates for long kinematic chains: ODE uses maximal coordinates and relies on the iterative constraint solver to hold joints together, whereas Simbody and DART use generalized coordinates."
+  ],
+  "integration": {
+    "form": "shared lib (default BUILD_SHARED_LIBS=ON) or static lib",
+    "dependencies": "none required; bundles OPCODE, GIMPACT, libccd and OU; OpenGL and GLU only for the demos and DrawStuff",
+    "min_toolchain": "CMake 3.10+; a C/C++ compiler (GCC, Clang, MSVC, MinGW); the build was set to C++11 in April 2026 (commit for #91)",
+    "platforms": "Windows (MSVC, MSYS2), Linux, macOS per the CI badges; 32- and 64-bit; single or double precision (double by default on 64-bit)",
+    "thread_safety": "Call dInitODE2 and then dAllocateODEDataForThread in every thread that uses ODE; separate worlds can run in parallel; threaded collision of separate spaces needs the ODE_WITH_OU build option (TLS caches); with threaded stepping, body callbacks may be called from several threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the free-floating boxes benchmark (scpeters/benchmark boxes.cc at commit 55c3b05): boxes are spawned 1.8 m apart along y in a blank world with no ground plane and identical initial velocities, so they never touch; the 'collision' rows only add collision shapes to the broadphase and no contact is ever solved (the linear position error 0.0245 equals the analytic semi-implicit Euler error 0.5*g*dt*t). Each configuration ran once, and ODE's own with/without-collision pairs differ by up to 18% in the wrong direction at 81 and 101 boxes, noise as large as the ODE-Bullet gap.",
+    "What the box timings mostly measure is Gazebo's per-step overhead: one box costs about 51 us per step with ODE and 64 us with Bullet, while the marginal cost per extra box is similar (about 7.4 vs 6.7 us without collision shapes, 6.1 vs 6.5 us with them; derived from page data). The authors' Multibody 2015 slides summarise accuracy versus computational time as 'comparable', and the stacking slide (0.4 vs 0.5) states no stack size, step size or iteration count and has no CSV.",
+    "Every number measures OSRF's ODE fork bundled in Gazebo-classic, not odedevs/ode: upstream defaults QuickStep to 20 iterations (Gazebo's SDF default is 50), keeps warm starting compiled out (#define WARM_STARTING commented in quickstep.cpp), has no inertia-ratio reduction, and since 2025 runs LCP solving single-threaded by default.",
+    "dxHashSpace::collide() deliberately faults the host program when a scene is large enough to overflow its integer cell counters (2017 changelog), so check space sizing; a threaded-job data race (issue #70) was fixed only in July 2020, so use 0.16.2 or later when stepping with threads."
+  ],
+  "pick_this_over_siblings_when": "Pick ODE over Jolt Physics (the other catalogued rigid-body engine, faster than Bullet via Ammo.js only in a mixed result) when you need ODE's articulated-joint set, a plain C API, double precision or Gazebo-classic compatibility; for collision or distance queries alone, Coal (HPP-FCL) is the catalogued GJK option.",
+  "verified_claims_summary": "Inside Gazebo-classic with OSRF's bundled ODE fork (not upstream), the ROSCon 2014 stacking slide reports a real-to-simulated time ratio of 0.4 for ODE vs 0.5 for Bullet, with no parameters given. The 2015 free-floating boxes CSV (0.0005 s step, 10 s simulated, one run per configuration, CPU and compiler unstated) has ODE faster in 10 of 12 configurations (1 box 0.102 vs 0.127) but slower at 81 and 101 boxes without collision shapes (101 boxes 1.582 vs 1.476), and the boxes never collide.",
+  "status_note": "Maintained but slow-moving: last tag 0.16.6 (2025-01-16), repository moved to GitHub in April 2026 with 26 open issues migrated, latest commit 2026-08-07; dual BSD-3-Clause/LGPL-2.1+ and dependency-free so easy to vendor, but its only speed evidence is a 2014-2015 measurement of Gazebo's fork in which the timed boxes never collide.",
+  "sources_read": [
+    "https://github.com/odedevs/ode",
+    "https://github.com/odedevs/ode/commits/master",
+    "https://github.com/odedevs/ode/tags",
+    "https://github.com/odedevs/ode/issues",
+    "https://github.com/odedevs/ode/issues/93",
+    "https://github.com/odedevs/ode/issues/34",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/README.md",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/CHANGELOG.txt",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/include/ode/objects.h",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/include/ode/odeinit.h",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/include/ode/threading.h",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/ode/src/quickstep.cpp",
+    "https://raw.githubusercontent.com/odedevs/ode/HEAD/ode/src/step.cpp",
+    "https://github.com/scpeters/benchmark/tree/master",
+    "https://github.com/scpeters/benchmark/tree/master/test_results",
+    "https://github.com/scpeters/benchmark/tree/master/pdf",
+    "https://github.com/scpeters/benchmark/commits/master/test_results/BENCHMARK_boxes_model_count.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/roscon2014_scpeters.pdf",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/multibody2015_scpeters.pdf",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/simpar2014.pdf",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_model_count.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_dt.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/boxes.cc",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/boxes.hh",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/scpeters/benchmark/55c3b05/boxes.cc",
+    "https://raw.githubusercontent.com/gazebosim/sdformat/sdf9/sdf/1.6/physics.sdf"
+  ],
+  "confidence": 0.75
+}
