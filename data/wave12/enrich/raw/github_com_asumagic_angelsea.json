@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/asumagic/angelsea",
+  "one_liner": "Alpha MIR-based AngelScript JIT; author reports about 5x over the stock interpreter on call loops, 0-40% over BMS JIT.",
+  "what_it_does": "angelsea plugs into an unmodified AngelScript 2.37.0+ engine through the asIJITCompilerV2 interface: set asEP_INCLUDE_JIT_INSTRUCTIONS, asEP_JIT_INTERFACE_VERSION 2 and asEP_BUILD_WITHOUT_LINE_CUES, construct angelsea::Jit with a JitConfig and call engine->SetJITCompiler. Scripts and bindings stay as they are; functions are compiled lazily after 15,000 JIT-entry hits by default (eager mode and an async compile callback exist), and any bytecode it cannot handle falls back to the interpreter at JIT entry points.",
+  "how_it_is_fast": "A bytecode-to-C translator (bytecode2c) emits one C function per AngelScript function with VM field offsets baked in, and MIR's c2mir compiles that C in memory to machine code (MIR optimisation level 2). Most of the advertised win is call overhead: generated code calls registered generic functions directly with per-function pooled asCGeneric objects, has a direct native-call path with optional stack elision, and fast script call/return paths, skipping VM bookkeeping such as suspend checks and program/stack-pointer updates (the hack_ignore_* defaults).",
+  "when_to_use": [
+    "An existing AngelScript-based game or app on 64-bit x86 (Linux gcc/clang, Windows MinGW or MSVC) whose scripts spend much time calling registered application functions, especially through asCALL_GENERIC.",
+    "You already use the BlindMindStudios JIT on 64-bit and want a maintained-ish replacement with better coverage; the author measured +0 to 40% over it on King Arthur's Gold.",
+    "Long-running scripted hot loops where lazy compilation keeps cold #included code out of the JIT and async compilation hides compile latency.",
+    "As a base for ahead-of-time translation of AngelScript to C (the bytecode2c output is plain C, though the README says AOT is not yet viable)."
+  ],
+  "when_not_to_use": [
+    "32-bit x86, macOS x86-64 (fails CI, issue #3) or big-endian targets; aarch64 Linux and macOS are experimental and untested on a real app.",
+    "Engines that run AngelScript contexts on multiple threads: the README says the JIT is not thread-safe with multithreaded contexts or engines (issue #7 open).",
+    "Hosts that rely on suspending scripts (line callbacks, timeouts), on C++ exceptions thrown by registered functions, or on inspecting the calling context from native callbacks: the default hacks ignore all three during JIT execution.",
+    "Production builds that need stability guarantees: alpha quality, a downstream MIR fork required, async compile failures crash the app (issue #24 open), and no commits since 2025-09-16.",
+    "Huge script functions: MIR compile cost can reach gigabytes, so functions over 25,000 bytecode bytes are skipped by default."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "AngelScript 2.37.0+ (asIJITCompilerV2), fmt, MIR via the asumagic/mir downstream fork; all vendored as git submodules; Catch2 and nanobench only for tests",
+    "min_toolchain": "C++20 (cxx_std_20), CMake",
+    "platforms": "x86-64 Linux (gcc, clang) and Windows (MinGW, MSVC); aarch64 Linux and macOS experimental; no 32-bit x86, no macOS x86-64, no big-endian",
+    "thread_safety": "Not thread-safe with multithreaded AngelScript contexts or engines (README, issue #7); asynchronous compilation is supported with one codegen thread at a time",
+    "drop_in_for_baseline": "partial — attaches to the stock engine through asIJITCompilerV2 with three engine properties and no script changes, but requires AngelScript 2.37+, the 64-bit platforms above, line cues disabled, and accepting the default semantic hacks"
+  },
+  "gotchas": [
+    "Harness note on the ~5x figure: the generic ABI benchmark (tests/abi.cpp, tests/scripts/abi.as) binds noarg to generic_noarg_hack and add_obj to generic_add_obj_hack, which write asCGeneric::returnVal and read stackPointer/currentObject directly through AngelScript's private as_generic.h header instead of the virtual asIScriptGeneric calls; with near-empty callees the loop measures pure call dispatch, the case the JIT optimises most, so ordinary generic bindings (GetArgDWord, SetReturnDWord) would show a smaller ratio. No results, CPU or compiler are committed for this or the native-ABI and brainfuck benchmarks.",
+    "The benchmark config is not the shipped default: tests use eager compilation and experimental_stack_elision = true, while the library defaults to lazy compilation after 15,000 hits and stack elision off.",
+    "Part of the speed comes from relaxed semantics enabled by default: hack_ignore_suspend (asBC_SUSPEND ignored, so script suspension and line-callback timeouts do not fire in JIT code), hack_ignore_exceptions (C++ exceptions from application functions are not handled on direct system calls) and hack_ignore_context_inspect (program and stack pointers not updated, breaking callees that use the debug interface; issue #26 tracks m_callingSystemFunction).",
+    "Upstream MIR miscompiles its code (GVN load/store optimisations, integer sign-extension issue #423, jump-optimisation use-after-free issue #424); the asumagic/mir fork works around them and the config warns that MIR level 3 is known broken."
+  ],
+  "pick_this_over_siblings_when": "Pick angelsea over the BlindMindStudios AngelScript JIT on 64-bit x86 or aarch64 with AngelScript 2.37+, since BMS is unmaintained, x86-only and falls back to the interpreter often per this README; keep BMS for 32-bit x86. Against switching the scripting language to Luau or Daslang it is the only option here that speeds up an existing AngelScript codebase in place.",
+  "verified_claims_summary": "First-party only: the README's ~5x is the JIT versus the stock AngelScript interpreter in the same engine (interpreter module built without JIT instructions, both without line cues) on 1-million-iteration loops calling a near-empty registered generic function, timed with nanobench in relative mode, with no CPU, compiler, flags or results published. The +0 to 40% over the BlindMindStudios JIT comes from a private King Arthur's Gold dev build with no published workload or hardware.",
+  "status_note": "Stale since 2025-09-16 (alpha, 12 open issues including crash-on-async-compile-failure #24 and multithreaded-context support #7) but BSD-2-Clause, CMake-vendorable with submodules, and exercised by its author on a commercial game's dev build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/README.md",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/include/angelsea/config.hpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/include/angelsea.hpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/abi.cpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/scripts/abi.as",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/benchmark.hpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/megatests.cpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/common.hpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/common.cpp",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AsuMagic/angelsea/HEAD/doc/TESTS.md",
+    "https://github.com/AsuMagic/angelsea/issues?q=is%3Aissue",
+    "https://github.com/AsuMagic/angelsea/issues/24",
+    "https://github.com/AsuMagic/angelsea/issues/7",
+    "https://github.com/AsuMagic/angelsea/commits/main",
+    "https://raw.githubusercontent.com/asumagic/asllvm/HEAD/README.md",
+    "https://raw.githubusercontent.com/quarnster/asaot/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
