@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/attractivechaos/klib",
+  "one_liner": "Single-header C macro hash table (open addressing, 2-bit flags); about 4x less CPU and 3x less memory than std::unordered_map on integer counting.",
+  "what_it_does": "khash.h is the hash table component of klib: KHASH_INIT (or the KHASH_MAP_INIT_INT / INT64 / STR and KHASH_SET_INIT_* shortcuts) expands a macro into a struct type and a set of static inline functions for one key/value type pair. You work with bucket indices (khint_t) through kh_put, kh_get, kh_del, kh_exist, kh_key and kh_val rather than iterators or operator[]. It is plain C (it also compiles as C++), so it is not a drop-in for std::unordered_map; porting means rewriting call sites.",
+  "how_it_is_fast": "Open addressing over power-of-two tables with triangular quadratic probing (step i*(i+1)/2, version 0.2.8), keys and values in two separate flat arrays and occupancy kept in a separate 2-bit-per-bucket flag array, so there is no per-entry allocation or node pointer as in a chained std::unordered_map. Growth reallocs the key and value arrays and rehashes in place with a cuckoo-like kick-out loop, so it needs only about 0.25 bytes per bucket of extra working space instead of a second full table. Maximum load factor is 0.77; the default integer hash is the identity, which is cheap but relies on keys already being well distributed.",
+  "when_to_use": [
+    "C code (or C++ code that must stay template-free) that maps 32- or 64-bit integers to small POD values and counts or deduplicates millions of keys, the udb2 workload where it used about 4.1x less CPU and 2.9x less memory than std::unordered_map at 12.3M distinct keys.",
+    "Memory-bound jobs: with 4-byte keys and values it held 12.3M keys in about 172 MB peak RSS versus 494 MB for std::unordered_map, and less than absl, robin_hood, ska and tsl::robin_map (216-577 MB) in the same udb2 runs.",
+    "Codebases that already vendor klib or htslib-style code, where khash is the house hash table and adding a C++ dependency is not an option.",
+    "Embedding with a custom allocator: kmalloc, kcalloc, krealloc and kfree are overridable macros."
+  ],
+  "when_not_to_use": [
+    "C++ projects that can take a dependency: absl::flat_hash_map, boost::unordered_flat_map, ankerl::unordered_dense or tsl::robin_map give a typed, RAII, iterator-based API and matched or beat khash's time on the udb2 server runs (2019: absl 3.49 s, tsl::robin_map 2.78 s, khash 4.06 s at N=50M), at higher memory.",
+    "New C code: the author's own khashl.h (same repo; Fibonacci hashing, linear probing, 1 bit per bucket, no tombstones) was faster and smaller on the same 2019 server run (3.59 s / 132 MB versus 4.06 s / 171 MB); khash.h's algorithm has been frozen since 2013 and only typo fixes landed after 2015.",
+    "Structured integer keys (multiples of a power of two, aligned pointers cast to integers) with the default identity hash: only the low bits pick the bucket, so such keys pile into a fraction of the table; use kh_int_hash_func2 (Wang hash) or your own mixer.",
+    "Delete-heavy or shrinking workloads: deletes leave tombstones and there is no automatic shrinking (TODO in kh_put; issue #121 open since 2019).",
+    "Tables that could exceed about 1.65 billion entries (2^31 buckets times 0.77): bucket indices are 32-bit khint_t and growth past 2^31 buckets is not possible (see gotchas)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (stdlib.h, string.h, limits.h)",
+    "min_toolchain": "C99 for inline (or C89 with kh_inline defined by the user; MSVC uses __inline); also compiles as C++",
+    "platforms": "any; portable C, no SIMD or intrinsics",
+    "thread_safety": "not documented; no internal locking. kh_get takes a const table pointer, so concurrent readers with no writer look safe by inspection; any kh_put can rehash and move every entry.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Growth stops at 2^31 buckets (found by reading khash.h, not tested): kh_resize(h, n_buckets + 1) runs kroundup32 on 2^31+1, which wraps to 0, so the resize becomes a no-op that still returns 0 (success); the table keeps filling past the 0.77 load bound and, once every bucket is occupied, kh_put for an absent key returns the starting bucket, which holds a different key, with *ret = 0 ('already present') instead of an error.",
+    "kh_put does not initialise the value for a new key: check *ret (1 new, 2 reused tombstone, 0 present, -1 allocation failure) and set kh_val yourself; returned indices are invalidated by any later kh_put because rehash moves entries in place.",
+    "String tables (KHASH_MAP_INIT_STR) store only the const char* pointer with the X31 hash; the caller owns the strings and must free them while iterating before kh_destroy (issue #136 shows the double-free pattern this invites).",
+    "The udb2 numbers come from keys that common.c pre-scrambles with the Wang hash before the identity hash is applied, so the benchmark never exercises the identity hash's weakness on structured keys; memory is peak RSS (monotonic across rounds), time is getrusage user+sys CPU from one run per N including about 0.06-0.13 s of key generation."
+  ],
+  "pick_this_over_siblings_when": "Pick khash over uthash or Collections-C when you need a C hash table for small POD keys and care about memory and speed (flat arrays, no per-entry nodes); pick absl::flat_hash_map, boost::unordered_flat_map or ankerl::unordered_dense instead in C++, and prefer the same author's khashl.h for new C code.",
+  "verified_claims_summary": "In attractivechaos/udb2 (counting occurrences of 32-bit keys, about 25% distinct, six growing rounds), the 2018 server run (Xeon E5-2683 v3, gcc 5.4.0, khash at -O2, std::unordered_map from libstdc++ at -O3) took 5.46 s CPU and 172 MB peak RSS for khash versus 22.22 s and 494 MB for std::unordered_map at N=50M (about 4.1x CPU, 2.9x memory, derived from log data); the 2019 server run gives 4.06 s / 171 MB versus 17.21 s / 519 MB, and both runs print identical unique-key counts and checksums for every implementation.",
+  "status_note": "The klib repo is active (last commit 2025-12-22, 4.7k stars) but khash.h itself is effectively frozen (algorithm 0.2.8 from 2013, last edit a 2018 typo fix) with the author's development moved to khashl.h; MIT-licensed, one header, widely vendored (git carries a copy), easy to copy.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/attractivechaos/klib/master/README.md",
+    "https://raw.githubusercontent.com/attractivechaos/klib/master/khash.h",
+    "https://raw.githubusercontent.com/attractivechaos/klib/master/khashl.h",
+    "https://github.com/attractivechaos/klib",
+    "https://github.com/attractivechaos/klib/commits/master/khash.h",
+    "https://github.com/attractivechaos/klib/issues?q=is%3Aissue+khash",
+    "https://github.com/attractivechaos/klib/issues/185",
+    "https://github.com/attractivechaos/klib/issues/136",
+    "https://github.com/attractivechaos/klib/issues/121",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/README.md",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/common.c",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/khash/test.c",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/khash/test-1.c",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/khash/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/c++11/test.cpp",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/c++11/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/__logs/180929-server.tgz",
+    "https://raw.githubusercontent.com/attractivechaos/udb2/master/__logs/191228-server.tgz",
+    "https://code.googlesource.com/git/+/refs/heads/seen/khashl.h (WebSearch snippet only)",
+    "https://git.kpda.ru/ports/ncdu/commit/2d7619009177e0c8abcedeb4c00f7d9ed222a8d5 (WebSearch snippet only: ncdu moved from khash.h to khashl.h for reduced memory)"
+  ],
+  "confidence": 0.8
+}
