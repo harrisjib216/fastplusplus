@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/msteinert/bstring",
+  "one_liner": "Maintained fork of Paul Hsieh's Bstrlib: length-prefixed, auto-growing C strings that avoid strcat-style rescans of char* code.",
+  "what_it_does": "Replaces NUL-terminated char buffers with a bstring, a pointer to struct tagbstring {int mlen; int slen; unsigned char *data}, where data stays NUL-terminated so bdata(b) can be passed to char* APIs. The API is its own (bfromcstr, bconcat, bassign, binstr, bfindreplace, bsplit, bformat, stream readers, optional UTF-8 helpers), not a drop-in for <string.h>; functions validate arguments and return BSTR_ERR instead of overrunning buffers. This fork adds Meson builds, Check tests, libFuzzer targets and CI, and removes upstream's C++ CBString wrapper and the const_bstring type.",
+  "how_it_is_fast": "Length is stored, so appends copy only the new bytes at slen (memmove) instead of rescanning the destination as strcat does, and length queries are O(1). Capacity grows to the next power of two above the request (snapUpSize), using realloc when the string fills more than 7/8 of its buffer and malloc+copy otherwise, so repeated appends amortize to linear time. Character searches use memchr (bstrchr) or a 256-bit character bitmap (binchr, like strcspn); substring search (binstr, used by bfindreplace) is a 2x-unrolled brute-force scan, not Two-Way.",
+  "when_to_use": [
+    "C code that builds strings incrementally (logs, protocol messages, templating) where char* code would call strcat or strlen repeatedly on a growing buffer.",
+    "C projects that want bounds-checked string handling with explicit error returns, plus split, find/replace and formatted append, in one BSD-3-Clause (or GPL-2.0) library.",
+    "Mixed codebases that still pass strings to char* APIs: the data stays NUL-terminated, and bsStatic/blk2tbstr wrap existing buffers without allocation.",
+    "Linux and BSD distributions where a packaged, maintained shared library (libbstring, soversion 1) is preferred over vendoring."
+  ],
+  "when_not_to_use": [
+    "C++ code: the fork has no CBString wrapper, and std::string today has amortized appends and small-string optimization, so the 2000s std::string results do not carry over.",
+    "Short fixed strings where char* code already tracks its end pointer: the measured assignment and replace rows ranged from 86% to 218% of char* speed, a wash on gcc.",
+    "Strings over INT_MAX bytes (lengths are int) or heap-less/freestanding targets (needs malloc, realloc, vsnprintf).",
+    "Substring search on long or adversarial inputs: binstr is brute force with an O(n*m) worst case, unlike glibc's strstr/memmem.",
+    "Performance-critical choices that need current numbers: the only benchmarks are upstream's percentages from a 1.62 GHz Athlon XP and a 1 GHz Power 4."
+  ],
+  "integration": {
+    "form": "shared lib (Meson; bstrlib.c and bstraux.c can also be dropped into a tree)",
+    "dependencies": "C library only (memcpy, memmove, malloc, realloc, free, vsnprintf); Check for tests, Doxygen for docs, clang/libFuzzer for fuzzing",
+    "min_toolchain": "C99 (meson c_std=c99); Meson + Ninja for the provided build",
+    "platforms": "any hosted C platform; CI includes FreeBSD, NetBSD, OpenBSD and OpenIndiana VMs (vmactions); MSVC warnings addressed (#103)",
+    "thread_safety": "no global or static state; distinct bstrings are independent, and a shared bstring needs external locking for writes (or write protection for read-only use)",
+    "drop_in_for_baseline": "partial: bdata() gives a NUL-terminated char* for reading, but creating and modifying strings needs the bstring API"
+  },
+  "gotchas": [
+    "Harness flaws behind the headline numbers (upstream cbench.c): the scan row times bstring on 'Dot. 123. Some more data.', where '.' sits at offset 3 and \"123\" at offset 5, against strchr/strstr over the 60-byte TESTSTRING1, which contains neither, so the char* side scans the whole string twice. The 21700-23700% concatenation row times strcat rescanning a growing 15.5 KB buffer 500 times per pass (quadratic) against bconcat's append.",
+    "Correctness bug in the char* concatenation baseline: accum is ((sizeof TESTSTRING1) + 1) * 250 = 15500 bytes, but 250 appends of 60 + 2 characters fill 15500 bytes and the final NUL lands at index 15500, a one-byte overrun of a static array (undefined behavior). It does not change the timing much, but the baseline code is not valid C.",
+    "bstraux helpers had memory-safety bugs that this fork fixed only in March 2026: an out-of-bounds read in bNetStr2Bstr on a crafted netstring length (#149), and OOM plus a leak in bUuDecodeEx on malformed input (#148). Upstream websnarf/bstrlib (last commit 2016-11-02) has no such fixes, so use this fork rather than upstream.",
+    "Lengths are int and negative mlen/slen act as invalid markers; bconcat and similar functions handle aliased arguments (e.g. appending a string to itself) by copying first; bsStatic strings are write-protected at runtime, so modifying or destroying them through the API fails with BSTR_ERR rather than trapping. Check every return code."
+  ],
+  "pick_this_over_siblings_when": "Pick bstring over buffet (the other C string library in the catalogue) when you want a mature, distro-packaged, fuzzed API with find/replace, split and formatting rather than small-string optimization; the C++ siblings (FastString, MengRao/str, jank persistent_string) target std::string and are the better choice inside C++.",
+  "verified_claims_summary": "Upstream Bstrlib's cbench.c (operations per second, results given as percentages of char* speed) ran on a 1.62 GHz Athlon XP with WATCOM 11.0c, Visual C++ 6.0, Intel C++ 6.0 and Cygwin gcc 3.3.3, and on a 1 GHz Power 4 with gcc 3.3.3. Flags are not stated; the shipped makefiles use -O3. Concatenation was 40x to 237x faster than repeated strcat. Scan was 0.89x to 2.14x, but on unequal inputs. Assignment (0.89x to 2.18x), replace (0.86x to 1.47x) and char extraction (about 1x) were close to parity. None of this was re-measured on the msteinert fork.",
+  "status_note": "Actively maintained (v1.1.1 on 2026-09-04, last commit 2026-09-12; fuzzing, CodeQL and Scorecard in CI) and dual-licensed BSD-3-Clause or GPL-2.0. Upstream is unmaintained since 2016, and its benchmark numbers date from the gcc 3.3 era.",
+  "sources_read": [
+    "https://github.com/msteinert/bstring/issues?q=is%3Aissue",
+    "https://github.com/msteinert/bstring/commits",
+    "https://github.com/msteinert/bstring/pulls?q=is%3Apr+fix",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/README.md",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/COPYING",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/meson.build",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/bstring/meson.build",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/bstring/bstrlib.h",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/bstring/bstrlib.c",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/bstring/bstraux.h",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/doc/comparisons.md",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/doc/introduction.md",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/doc/security.md",
+    "https://raw.githubusercontent.com/msteinert/bstring/HEAD/doc/porting.md",
+    "https://raw.githubusercontent.com/websnarf/bstrlib/HEAD/bstrlib.c",
+    "https://bstring.sourceforge.net/features.html",
+    "https://prdownloads.sourceforge.net/bstring/examples-09282006.zip?download"
+  ],
+  "confidence": 0.8
+}

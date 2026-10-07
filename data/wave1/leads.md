@@ -13,3 +13,4 @@
 - GATL (https://github.com/laffernandes/gatl): fastest geometric-algebra library in the ga-benchmark 2020-02-05 run by wall-clock time (golds 111 vs Versor 23); not catalogued. gafro (https://gitlab.com/gafro/gafro) also uncatalogued (Versor enricher, 2026-10-07).
 - rpp (https://github.com/TheNumbat/rpp): blog thenumb.at/rpp blocked; snippet says about 20 s vs under 3 s compile time across two code bases with no named baseline; retry from an unblocked environment for a possible tier C compile-time record (w1-mine-ac, 2026-10-07).
 - s2n-tls (https://github.com/aws/s2n-tls): public Criterion harness vs OpenSSL and rustls in bindings/rust/standard/benchmarks but no published numbers; running it would give tier A (w1-mine-ac, 2026-10-07).
+- MPack (https://github.com/ludocode/mpack): fastest C MessagePack library in the schemaless shootout (2.13 vs 6.42 us write vs cmp); not catalogued (cmp enricher, 2026-10-07).
