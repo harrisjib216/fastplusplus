@@ -47,3 +47,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - libbzip2-rs (trifectatechfoundation/libbzip2-rs): c2rust port of bzip2, snippet claims 14% faster level-1 compress; port of a listed project, duplicate rule applies.
 - xpack (ebiggers/xpack): lzbench 1.8: 171/890 MB/s at 33.54% vs zlib -1 119/383 at 36.45%. Not catalogued (enricher lead, 2026-10-07).
 - liblzg (mbitsnbites/liblzg): minor lead from the LZMAT enrichment, not opened.
+- zstd (wave0-seed, tier B, general-lossless incumbent): lzbench 2.4 rows (zstd -1 411/1351 MB/s vs zlib -1 89.0/297 MB/s, gcc 15.2.0, EPYC 9555P) would support a retier to A consistent with retier-02; re-found by w9-mine-c (2026-10-07).
