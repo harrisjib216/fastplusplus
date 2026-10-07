@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/imazen/zenquant",
+  "one_liner": "Pure-Rust 256-colour palette quantizer in OKLab with perceptual masking; smaller PNG/GIF than libimagequant, not faster.",
+  "what_it_does": "Reduces truecolor RGB or RGBA images to an indexed palette (up to 256 entries) for PNG, GIF and lossless WebP. The API takes typed pixel slices (&[rgb::RGB<u8>] or &[rgb::RGBA<u8>]) plus a QuantizeConfig (output format, Fast/Balanced/Best preset, max colours, optional SSIMULACRA2 target or floor, pixel cap) and returns palette, indices and a tRNS alpha table. build_palette/remap share one palette across animation frames, and *_with_stop variants accept a cancellation token. It is not a drop-in for libimagequant's Attributes/Image/remap API.",
+  "how_it_is_fast": "It is tuned for size and perceptual quality rather than speed: an OKLab histogram is split by median cut, then refined by k-means weighted with butteraugli-inspired adaptive-quantization masks so palette entries go to smooth gradients and skin tones instead of noisy texture. A format-aware palette sort, adaptive Floyd-Steinberg dithering and an optional Viterbi dynamic program that lengthens index runs help deflate and LZW compress the output. Hot loops (sRGB to OKLab, nearest-palette search, k-means) use archmage runtime SIMD dispatch (AVX2+FMA, NEON, WASM SIMD128) with a scalar fallback.",
+  "when_to_use": [
+    "Producing palette PNG, APNG or GIF where file size at a given butteraugli score matters more than encode time (README: Best 586 KB PNG vs imagequant s1 d100 637 KB at about the same ~542 vs ~546 ms).",
+    "Pure-Rust, no_std + alloc or WASM builds that require #![forbid(unsafe_code)] and no C dependency.",
+    "Animation encoders that need one shared palette across frames and a per-frame quality floor (with_min_ssim2 returns QualityNotMet so the encoder can fall back to truecolor).",
+    "Server pipelines that need cooperative cancellation of slow Best-preset runs (quantize_with_stop) and a pixel-count cap (default 120 MP).",
+    "Projects already on imazen's zenpng, zengif or zenwebp, where zenquant is the default quantizer."
+  ],
+  "when_not_to_use": [
+    "When speed is the goal: in the README table zenquant Fast (~321 ms) only ties imagequant s4 (~315 ms) and loses to quantette k-means (~265 ms), and Best costs the same as imagequant s1 d100.",
+    "When per-pixel fidelity or looks matter most: the README itself says quantette k-means leads SSIMULACRA2 (83.9 vs 82.9) and DSSIM (0.00050 vs 0.00058) and that imagequant looks best to the eye.",
+    "Closed-source network services without a licence purchase: AGPL-3.0-only network copyleft unless you buy the commercial licence ($1 startup tier for under $1M revenue and fewer than 5 employees).",
+    "Untrusted input on the released crate: 0.1.3 caps pixel count only in quantize/quantize_rgba; extending the cap to remap/build_palette is still in the unreleased 0.1.4 changelog and issue #4 ('Server hardening') was open in June 2026.",
+    "Risk-averse production use: 2 stars, two dependents (zenpng, zengif, both imazen's), first release 2026-03-05, and a README notice that the code was developed with Claude and 'Not all code manually reviewed'."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rgb, imgref, num-traits (libm), thiserror, linear-srgb, archmage, magetypes, enough",
+    "min_toolchain": "Rust 1.92 (edition 2024)",
+    "platforms": "any Rust target; SIMD paths for x86-64 AVX2+FMA, aarch64 NEON and wasm32 SIMD128 with scalar fallback",
+    "thread_safety": "not documented; each call is single-threaded with no thread-pool dependency, so parallelize across images in the caller",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the README's ~ms column comes from the default mode, which quantizes 8 images at once in scoped threads, times a single unwarmed run per quantizer per image, lets imagequant 4 (default features, rayon threads) spawn its own pool on top, and reuses cached per-image results and their old timings from cache.json unless --recalc is passed; benchmarks/README.md calls these numbers 'fine for the quality columns, not for timing claims', and no --benchmark (single-thread, min-of-4-after-warm-up) result or CPU/rustc record is committed.",
+    "Harness flaw: every zenquant row runs in OutputFormat::Png mode, so the GIF column never exercises its GIF tuning, and the PNG column re-encodes the reconstructed RGB pixels through zenpng's auto-indexing, so each quantizer's own palette order (zenquant's luminance sort) does not reach the measured PNG size. benchmarks/README.md says all contenders use 'same default dithering', but the code gives color_quant no dithering, quantizr 0.5, imagequant 0.5 or 1.0, quantette Floyd-Steinberg and zenquant its adaptive dither.",
+    "with_target_ssim2, with_min_ssim2, ssimulacra2_estimate() and butteraugli_estimate() use an internal MPE estimator, not real SSIMULACRA2 or butteraugli, so the quality floor is approximate.",
+    "Version and licence drift: crates.io serves 0.1.3 (2026-04-10) while main is 0.1.4 (the manifest had regressed to 0.1.2 after the 0.1.3 release, per CHANGELOG), the build_palette/remap *_with_stop APIs are unreleased, and the licence changed from AGPL-3.0-or-later (0.1.0, 0.1.1) to AGPL-3.0-only OR LicenseRef-Imazen-Commercial from 0.1.2."
+  ],
+  "pick_this_over_siblings_when": "Pick zenquant over pngquant/libimagequant or quantette when the smallest palette PNG or GIF at a good butteraugli score, a pure-Rust forbid(unsafe) no_std build, shared animation palettes or a quality floor matter more than speed; pick quantette for the fastest run and best per-pixel metrics, and libimagequant for the best-looking output and the longest track record.",
+  "verified_claims_summary": "First-party README table (2026-03-04 run of examples/quantizer_comparison.rs, 50 images from CID22, CLIC 2025 and screenshots, 256 colours, rustc, CPU and OS unrecorded): zenquant Best has butteraugli 3.17 vs 4.10 and a PNG of 586 KB vs 637 KB (about 8% smaller, derived from page data) against imagequant 4 at speed 1 with full dithering, at ~542 vs ~546 ms. Those times come from the approximate multi-threaded, cached mode, so the record supports a size and butteraugli advantage, not a speed one.",
+  "status_note": "Actively developed by Imazen (250 commits, last on 2026-09-27; 0.1.3 on crates.io with 8,680 downloads) and copyable under AGPL-3.0-only or a paid commercial licence, but it is six months old, has 2 stars, and is AI-assisted code that the README says is not fully reviewed.",
+  "sources_read": [
+    "https://github.com/imazen/zenquant",
+    "https://github.com/imazen/zenquant/commits",
+    "https://github.com/imazen/zenquant/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/README.md",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/examples/quantizer_comparison.rs",
+    "https://raw.githubusercontent.com/imazen/zenquant/HEAD/src/lib.rs",
+    "https://crates.io/api/v1/crates/zenquant",
+    "https://crates.io/api/v1/crates/zenquant/reverse_dependencies?per_page=20"
+  ],
+  "confidence": 0.7
+}
