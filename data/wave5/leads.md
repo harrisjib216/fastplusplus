@@ -9,3 +9,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 
 Seeded as w5-seed-leads (Caladan, Machnet) on 2026-09-26. milo was found by the http-parsers gh-any search.
 - iceoryx2 (eclipse-iceoryx/iceoryx2): Rust core with C/C++ bindings; README benchmark plots vs other IPC on i7-13700H, rustc 1.81, gcc 14.2.1. Not catalogued (enricher lead, 2026-10-07).
+- libuv (wave 11, filesystems-and-io, tier D): w5-mine-c found PR 3952 (io_uring 8x over its own thread pool, reverted to opt-in in 1.49.0); libuv is also the event-loops-io incumbent, so a retier of the wave 11 record is the only place for it.
