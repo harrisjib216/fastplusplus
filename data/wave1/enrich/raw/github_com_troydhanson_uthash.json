@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/troydhanson/uthash",
+  "one_liner": "Header-only intrusive C hash table (macros); in one third-party benchmark it iterates and erases faster than std::unordered_map but loses most lookups.",
+  "what_it_does": "uthash turns any C struct into a hash-table element: the user embeds a UT_hash_handle member and manipulates the table through macros (HASH_ADD_INT, HASH_FIND_STR, HASH_DEL, HASH_ITER, HASH_SORT and generic HASH_ADD/HASH_FIND with key pointer and length). The table is just a pointer to the first element, initialised to NULL; the user allocates and frees elements. It is not a drop-in for std::unordered_map: there is no value_type, no RAII and no iterator object, and the same file also ships utlist, utarray and utstring helpers.",
+  "how_it_is_fast": "It is a node-based separate-chaining table like std::unordered_map, so it is not fast in general; its wins over libstdc++ come from layout details. Every handle is on a doubly linked insertion-order list (hh.prev/hh.next), so iteration and unlinking need no predecessor search, and each bucket points straight at its chain head with the 32-bit hash cached in each handle (compared before the key). libstdc++'s table, by contrast, is one singly linked list whose buckets store the node before the bucket's first node, and walking a bucket checks the following node's hash to detect the bucket's end (hashtable.h layout comment), which adds dependent loads on misses and erasures. Growth is bucket doubling triggered when one chain reaches 10 items (times a per-bucket expand_mult), not a load-factor limit.",
+  "when_to_use": [
+    "Plain C code that needs a hash index over existing structs without templates or code generation: one header, macros only.",
+    "Elements must keep fixed addresses, carry their own storage, or sit in several hashes at once (one UT_hash_handle per table).",
+    "Insertion-order iteration over large node-based tables, the one operation where it beat std::unordered_map in every run (about 2.3-2.6x in the 0-20M-key heatmap, 1.45-1.73x summed over the 0-200,000-key run, derived from the published CSV).",
+    "Cold-cache tables with millions of keys and frequent erasures or failed lookups, where it was 1.1-1.6x faster than std::unordered_map in the 0-20M-key run."
+  ],
+  "when_not_to_use": [
+    "Performance is the goal: the benchmark's author concludes uthash 'should be avoided due to all-around poor performance' and the open-addressing tables (Verstable, CC cc_map, boost::unordered_flat_map, absl, ankerl) are far faster; uthash's own user guide says faster and more memory-efficient tables now exist.",
+    "Small integer keys with lookup or replace-heavy traffic: 32-bit-key inserts, replacements and existing-key lookups were slower than std::unordered_map in the 0-20M run, and in the 0-200,000-key run uthash lost every insert, lookup, replace and erase case except 64-bit/448-bit erase (std/uthash 0.53-0.91x summed adjusted averages, derived from CSV).",
+    "Memory-constrained programs: each element carries a 56-byte UT_hash_handle on x86-64 plus its own malloc block, on top of the bucket array.",
+    "Keys that are structs with padding, floats or pointers to data, unless you supply HASH_FUNCTION and HASH_KEYCMP: the defaults hash (Jenkins) and memcmp raw bytes.",
+    "Concurrent writers: no internal synchronisation."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libc malloc/free, memcmp, memset, strlen)",
+    "min_toolchain": "Any C or C++ compiler; needs <stdint.h> unless HASH_NO_STDINT is defined; uses __typeof or decltype when available, with a NO_DECLTYPE fallback",
+    "platforms": "any; user guide lists Linux, Windows (Visual Studio 2008 and 2010), Solaris, OpenBSD, FreeBSD and Android as tested",
+    "thread_safety": "Caller must lock: concurrent readers are allowed (since 1.5), but add, delete and sort need an exclusive (write) lock; the guide suggests a pthread rwlock",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: the shim cannot apply the benchmark's MAX_LOAD_FACTOR of 0.875, because uthash doubles buckets only when one chain reaches 10 x (expand_mult+1) items. The article nevertheless says every table except GCC's std::unordered_map grows at 0.875. A simulation of uthash.h's expansion rule with random 32-bit hashes (scratch script, not measured in the benchmark) gives about 0.9-3.4 items per bucket up to 20M keys, against std's 0.44-0.875. So uthash ran with fewer buckets and longer chains, which hurts its lookups rather than inflating its wins.",
+    "Harness: the iteration benchmark walks 1,000 elements (main.cpp breaks at k == 1000 in both the 2024-05-24 and 2024-05-29 revisions around the 2024-05-28 runs), while the article, graphs and CSV call it 'iterate over 5,000 keys'. Ratios are unaffected. The iterated table is insert-only, so uthash's insertion-order list probably matches allocation order, while libstdc++'s list is grouped by bucket; the iteration win may shrink after heavy erase and reinsert churn. The erase benchmark also removes a contiguous run of insertion order, a drawback the author acknowledges.",
+    "The benchmark bypasses uthash's defaults: the shim passes a precomputed MurmurHash3-finalizer or FNV-1a hash through HASH_FIND_BYHASHVALUE and HASH_ADD_BYHASHVALUE, truncated to unsigned int, and redefines HASH_KEYCMP. Default uthash, which hashes with Jenkins over the key bytes and compares with memcmp, was not measured.",
+    "The head pointer must start as NULL, and add and delete operations can change it. On malloc failure uthash calls exit(-1) unless you define HASH_NONFATAL_OOM or override uthash_fatal. HASH_FUNCTION and HASH_KEYCMP are macros, so each one applies to every table that uses it in a translation unit. In C++, hh.next needs an explicit cast."
+  ],
+  "pick_this_over_siblings_when": "Pick uthash over Verstable, abseil, Boost.Unordered or ankerl::unordered_dense only when you need an intrusive, node-stable table in plain C with insertion-ordered iteration and accept slower lookups and more memory; for speed in C use Verstable, and in C++ use boost::unordered_flat_map or ankerl::unordered_dense.",
+  "verified_claims_summary": "Jackson Allan's c_cpp_hash_tables_benchmark compared uthash v2.3.0 with libstdc++ std::unordered_map, both using the same MurmurHash3-finalizer or FNV-1a hash and std set to max_load_factor 0.875. It was built with GCC 13.2.0 (MinGW-w64, -O3 -DNDEBUG, C++20) and run on a Ryzen 7 5800H locked at 90% frequency under Windows. Over 0-20M keys uthash iterated 2.3-2.6x faster and erased existing and nonexisting keys 1.1-1.6x faster, but lost 32-bit inserts, replacements and existing-key lookups. In the 0-200,000-key run it won only iteration.",
+  "status_note": "Maintained (v2.4.0 released 2026-06-25, maintainers favour keeping it unchanged). It is a BSD-1-Clause single header that is trivial to vendor, but it is a convenience choice, not a performance one.",
+  "sources_read": [
+    "https://github.com/troydhanson/uthash",
+    "https://github.com/troydhanson/uthash/issues?q=is%3Aissue+performance+OR+slow+OR+bug+OR+overflow",
+    "https://github.com/troydhanson/uthash/issues/119",
+    "https://raw.githubusercontent.com/troydhanson/uthash/HEAD/README.md",
+    "https://raw.githubusercontent.com/troydhanson/uthash/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/troydhanson/uthash/HEAD/src/uthash.h",
+    "https://raw.githubusercontent.com/troydhanson/uthash/HEAD/doc/userguide.txt",
+    "https://raw.githubusercontent.com/troydhanson/uthash/HEAD/doc/ChangeLog.txt",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/config.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/shims/uthash/shim.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/shims/std_unordered_map/shim.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/blueprints/uint32_uint32_murmur/blueprint.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/blueprints/uint64_struct448_murmur/blueprint.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/blueprints/cstring_uint64_fnv1a/blueprint.h",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/docs/index.md",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/HEAD/docs/result_2024-05-28T04_06_21.csv",
+    "https://github.com/JacksonAllan/c_cpp_hash_tables_benchmark/commits/main/main.cpp",
+    "https://github.com/JacksonAllan/c_cpp_hash_tables_benchmark/commit/f1b93d7",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/f1b93d7/main.cpp",
+    "https://raw.githubusercontent.com/JacksonAllan/c_cpp_hash_tables_benchmark/4ff5b8e/main.cpp",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13.2.0/libstdc++-v3/include/bits/hashtable.h"
+  ],
+  "confidence": 0.8
+}
