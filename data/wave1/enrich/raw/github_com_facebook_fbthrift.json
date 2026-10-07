@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/facebook/fbthrift",
+  "one_liner": "Meta's C++ Thrift serialization and RPC framework; its Binary/Compact protocols encode and decode about 2-3x faster than libprotobuf in Meta's own microbenchmark.",
+  "what_it_does": "fbthrift is Meta's evolved branch of Apache Thrift: an IDL compiler (rewritten from scratch) that generates C++ (and Python, Hack, Java, Rust) structs plus a set of wire protocols (Binary, Compact, cursor-based) and an asynchronous RPC server. It is not a drop-in for protobuf: you write .thrift IDL, get generated cpp2 structs with field_ref accessors (obj.field() = x), and serialize them with protocol writers into folly::IOBuf chains; the wire format is Thrift's, not protobuf's.",
+  "how_it_is_fast": "The generated cpp2 code writes each field straight into a folly::IOBufQueue with templated BinaryProtocolWriter/CompactProtocolWriter, so there is no reflection or size pre-pass (protobuf computes ByteSizeLong before writing). Containers are plain std::vector/std::map, and Binary uses fixed-width integers that need no varint work. The optional CursorBasedSerializer (CurSe) reads and writes fields in increasing field-id order directly against the buffer without materializing the whole struct, which can skip object construction when you only need some fields.",
+  "when_to_use": [
+    "You already run folly (or Meta's open-source stack: wangle, fizz, mcrouter) and want a schema-based format plus RPC in one framework",
+    "Encode-heavy services with small-to-medium structs of scalars, short strings, lists and maps, where the ~2.2-3.1x serialize gap over libprotobuf (no arena) in the source-comment numbers matters",
+    "Cross-language service-to-service traffic between C++, Python, Hack, Java or Rust where you control both ends and do not need protobuf wire compatibility",
+    "Streaming or partial access to large structs via CursorBasedSerializer, when fields are read in field-id order and you can skip materializing the object"
+  ],
+  "when_not_to_use": [
+    "You need protobuf wire compatibility or gRPC interop: Thrift Binary/Compact are different formats; hpp-proto or iguana struct_pb keep the protobuf wire format",
+    "You want a light dependency: the runtime pulls in folly, fizz, wangle, zstd, Boost, OpenSSL, glog/gflags and fmt, and the OSS CMake build breaks often (open issues #707 old-ABI build failure, #682 undefined references, #664 linker errors, #650 configure failure)",
+    "You need a stable versioned API: releases are weekly date tags (v2026.10.05.00, v2026.09.28.00, ...) cut from Meta's monorepo, with no semver or ABI promise",
+    "Big-endian targets with Frozen2 layouts: issue #668 (open) reports Frozen2 serialized data is not portable across byte orders",
+    "Toolchains older than C++20: the CMake build sets cxx_std_20 (GCC 10 needs -fcoroutines)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "folly, fizz, wangle, zstd, Boost, OpenSSL, zlib, fmt, gflags, glog (thrift compiler alone needs only Boost, CMake and fmt); fetched or built by build/fbcode_builder/getdeps.py",
+    "min_toolchain": "C++20 (cxx_std_20 in CMakeLists.txt); GCC 10 needs -fcoroutines, GCC 11+ or recent clang preferred",
+    "platforms": "Linux, macOS, Windows (CI badges for all three via getdeps); x86-64 and aarch64 not separately documented",
+    "thread_safety": "not documented for generated structs (plain value types with no internal synchronization); protocol writers/readers and CursorSerializationWrapper are per-call objects",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: the Protobuf Array and ZeroCopy serialize rows call ByteSizeLong() explicitly and then SerializeToArray / SerializeToZeroCopyStream, which call ByteSizeLong() again internally (protobuf message_lite.cc), so Protobuf does two full size passes; this is why the String row, despite an extra copy into an IOBuf, is 12-15% faster than Array. Use the String row as the fair comparator: Binary is about 2.2x (Small), 2.7x (Medium) and 3.1x (Large) faster at serialize, not 2.6-3.5x.",
+    "The benchmark schema is proto2 with unpacked repeated int32 (no [packed=true]), so each of the 10 list elements carries its own tag; proto3 would pack them by default. Together with no protobuf Arena, one-by-one list/map population inside the timed serialize loop and a 5-entry protobuf Map, the setup favors Thrift; the deserialize gap (1.7-2.1x) is the more robust number.",
+    "CurSe's serialize rows write constants straight to the cursor with no struct built, so its 3.6-4.3x over Protobuf is not like-for-like; when every field is read, CurSe deserialize is slightly slower than plain Binary (427.60 ns vs 396.13 ns Small). CursorSerializationWrapper only supports BinaryProtocol (static_assert) and requires fields in increasing field-id order.",
+    "The benchmark is not wired into the OSS CMake build (no CMakeLists in thrift/lib/cpp2/protocol/benchmark; it also needs Meta's Carbon/mcrouter types), so the numbers can only be rerun inside fbcode with buck2 mode/opt-clang-lto."
+  ],
+  "pick_this_over_siblings_when": "Pick fbthrift over hpp-proto or iguana (struct_pb) when you can drop protobuf wire compatibility and want an integrated multi-language RPC stack on folly; pick those two when you must stay on protobuf's wire format with a much lighter dependency footprint. Over Apache Thrift, it buys a modern C++20 code generator, async server and cursor serialization at the cost of a much heavier dependency tree.",
+  "verified_claims_summary": "Meta's folly::Benchmark run pasted into ThriftProtocolBenchmarks.cpp (2025-11-18, buck2 mode/opt-clang-lto, clang, CPU and protobuf version unstated) shows Thrift Binary serializing a synthetic struct of 1/3/9 field groups in 380 ns / 936 ns / 2.72 us versus libprotobuf (no arena) at 832-998 ns / 2.55-3.04 us / 8.32-9.60 us, and deserializing in 396 ns / 1.06 us / 3.15 us versus 661-681 ns / 2.08-2.18 us / 6.58-6.68 us. Both sides build the object inside the timed serialize loop, and the Protobuf Array/ZeroCopy rows pay a redundant size pass.",
+  "status_note": "Very active (weekly tags, latest v2026.10.05.00; Apache-2.0, 2.7k stars), and production-proven at Meta, but the open-source CMake build is heavy and breaks regularly, so plan on pinning a tag and building the whole folly stack.",
+  "sources_read": [
+    "https://github.com/facebook/fbthrift",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/README.md",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/CMakeLists.txt",
+    "https://github.com/facebook/fbthrift/tree/main/thrift/lib/cpp2/protocol/benchmark",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ThriftProtocolBenchmarks.cpp",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ThriftProtocolBenchmarkHelper.h",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ThriftProtocolBenchmarkHelper.cpp",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ProtobufTestData.proto",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ThriftTestData.thrift",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/benchmark/ProtoBufBuild.sh",
+    "https://raw.githubusercontent.com/facebook/fbthrift/main/thrift/lib/cpp2/protocol/CursorBasedSerializer.h",
+    "https://raw.githubusercontent.com/protocolbuffers/protobuf/main/src/google/protobuf/message_lite.cc",
+    "https://github.com/facebook/fbthrift/issues",
+    "https://github.com/facebook/fbthrift/issues/668",
+    "https://github.com/facebook/fbthrift/issues/707",
+    "https://github.com/facebook/fbthrift/tags"
+  ],
+  "confidence": 0.75
+}
