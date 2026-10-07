@@ -58,3 +58,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Clownacy/clownresampler (single-header integer windowed-sinc) and igankevich/lanczos-resampler: search snippets only, not opened. iPlug2 Extras LanczosResampler.h and chowdsp_utils LanczosResampler are ports of the sst/Surge code (duplicates). Leads from sst-basic-blocks enricher (e122).
 - remade_ffmpeg_rs crates/rusty_webp: not catalogued, claims unchecked. Lead from rusty_gif/rusty_jpeg enricher (e119).
 - AmusementClub/vapoursynth-nssfactory (CUDA BM3D port, 1 star): first-party PR #23 numbers beat bm3dcuda on an RTX 5080 (732 vs 636 fps). Lead from BM3DCUDA enricher (e125).
+- BlazeDiff (teimurjan/blazediff, 349 stars, MIT, Rust/JS/Python): claims 4.4-4.9x faster than odiff on 4K and about 50% faster than pixelmatch, BENCHMARKS.md in the repo; not catalogued (honeydiff enricher, 2026-10-07); seed candidate.
