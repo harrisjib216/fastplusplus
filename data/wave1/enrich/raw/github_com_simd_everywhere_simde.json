@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/simd-everywhere/simde",
+  "one_liner": "Header-only C99 library implementing x86 (MMX to AVX2, parts of AVX-512), Neon and WASM SIMD intrinsics on any target, beating scalar ports.",
+  "what_it_does": "SIMDe lets code written against one vendor's SIMD intrinsics compile and run on another architecture: include simde/x86/sse2.h (or avx2.h, arm/neon.h, wasm/simd128.h) instead of the native header and call simde_mm_* functions on simde__m128-style types, or define SIMDE_ENABLE_NATIVE_ALIASES to keep the original names. When the target supports the original instruction it calls it directly, so x86 code on x86 is unchanged. Its use case is porting an existing hand-vectorized code base (for example x86 SSE/AVX to Arm Neon) without first rewriting it, which keeps it vectorized instead of falling back to a scalar build.",
+  "how_it_is_fast": "Each intrinsic is a compile-time cascade: the native instruction if available, else an equivalent from the target's own ISA (Neon, WASM SIMD128, AltiVec/z vector, LoongArch LSX, partial RVV), else GCC/Clang vector extensions and __builtin_shufflevector/__builtin_convertvector, else a plain loop annotated with OpenMP 4 SIMD or loop pragmas for the auto-vectorizer. After inlining, a translated intrinsic often becomes one or a few target instructions, so the gain reported for VVenC/VVdeC on Arm is the gain of keeping the SIMD code paths instead of compiling the scalar fallback. Optional SIMDE_FAST_* macros drop exact NaN, rounding-mode and conversion-range emulation for speed.",
+  "when_to_use": [
+    "Porting an existing code base written with SSE/AVX intrinsics to Arm (Graviton, Apple silicon, Android) or WebAssembly, where the alternative is the scalar fallback build.",
+    "Getting a vectorized port running first and profiling it, then rewriting only the hottest kernels in native Neon, as the AWS Graviton guide and Fraunhofer's VVdeC work did.",
+    "Keeping one intrinsics source tree across x86, Arm, POWER, s390x, LoongArch, RISC-V and emscripten in CI, or developing Neon code on an x86 machine without an emulator.",
+    "C or C++ projects that need a dependency-free header drop-in; it is packaged by Debian and other distributions."
+  ],
+  "when_not_to_use": [
+    "Writing new portable SIMD code from scratch: a portable abstraction (xsimd, Highway) or native intrinsics per target avoid emulating one ISA's semantics on another.",
+    "Kernels that dominate run time on the non-native target: translated code cannot fuse operations the way a hand port can, and some fallbacks (exact NaN handling for min/max, round-to-even on ARMv7, current-rounding-mode conversions) are slow; nothing warns when a call falls back to a scalar loop (issue #310, open since 2020).",
+    "Targets or ISA subsets without native mappings, where the fallback depends on the auto-vectorizer: performance then hinges on -O3 plus -fopenmp-simd -DSIMDE_ENABLE_OPENMP and varies by target, so each port needs its own benchmarks.",
+    "Code that relies on x86 side effects SIMDe cannot reproduce portably: _mm256_test* flags, _mm256_zeroupper/zeroall, and MXCSR bits other than the rounding mode.",
+    "Anyone needing a recent stable release: the last stable tag is v0.8.2 (2024-04-30) and v0.8.4 has been at release candidate since 2025 (rc3 2026-02-22)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none at run time; <math.h>/<fenv.h> needed for some functions to be defined; OpenMP SIMD flags optional; meson >= 0.64 only for the test suite",
+    "min_toolchain": "C99 (the MSVC subset works); usable from C++; CI-tested back to GCC 4.8, Clang 3.8 and MSVC 2013, plus ICC and IBM XL",
+    "platforms": "any C99 target; CI covers x86, x86-64, AArch64, ARMv8, ARMv7, ARMv5, PPC64, s390x, MIPS Loongson, RISC-V 64, LoongArch64 and emscripten; acceleration depends on the target's SIMD extension",
+    "thread_safety": "not documented; intrinsics are stateless value functions, but SIMDE_MM_SET_ROUNDING_MODE and simde_mm_setcsr emulate MXCSR through fesetround(), changing the floating-point environment",
+    "drop_in_for_baseline": "partial: replaces the native intrinsic headers rather than a scalar library; with SIMDE_ENABLE_NATIVE_ALIASES the original names work (the README calls this error-prone and recommends it only for testing), and char-based Intel signatures become int8_t"
+  },
+  "gotchas": [
+    "Compiling with -ffast-math or -ffinite-math-only silently defines SIMDE_FAST_MATH or SIMDE_FAST_NANS (simde-common.h), switching emulated intrinsics to the target's own NaN, rounding and conversion-range behaviour: _mm_min_ps then maps straight to vminq_f32, which returns NaN where SSE returns the non-NaN operand. Define SIMDE_NO_FAST_* to keep exact x86 results.",
+    "Including the native header after a SIMDe header with native aliases enabled causes compile errors; on 32-bit Windows x86 some MMX and __m64-using SSE/SSE2 functions may return wrong results with native aliases.",
+    "The catalogue's speedup is not measured against SIMDe alternatives: the 'over 200%' VVenC/VVdeC figure (Arm Community blog, 2024-06-26, retelling Bross et al., 'Open and optimized VVC Implementations on ARM Architectures', MHV '23, ACM, per the VVdeC wiki) is SIMDe-translated SIMD versus the scalar build, known here only from search snippets, with no hardware, compiler or flags.",
+    "Search snippets of Fraunhofer's FOSDEM 2024 talk 'VVdeC<>Arm' (slides EGRESS_BLOCKED) say hand-written arm_neon.h kernels ranged from about 0.5x to 3.0x of their SIMDe versions and gained 0-10% on average for the whole decoder over 11 JVET sequences, with the authors concluding SIMDe 'does a decent job'; VVdeC v2.1 (2023-11-08) shipped that 'initial native ARM SIMD implementation'."
+  ],
+  "pick_this_over_siblings_when": "Pick SIMDe over xsimd when the code already exists as x86 or Neon intrinsics and must run elsewhere unchanged; xsimd (or Highway) is the better base for new code because it exposes a portable vector type instead of one vendor's instruction set. SLEEF and NumKong are complementary: they supply vectorized math functions and similarity kernels, not a translation layer.",
+  "verified_claims_summary": "No reproducible benchmark exists: SIMDe's repo, README and wiki carry no numbers, and the only figures are search snippets of a blocked Arm Community blog (VVenC/VVdeC ported from SSE/AVX to Neon with SIMDe, 'over 200% performance gains', baseline apparently the unvectorized build, no hardware or compiler given) and of a blocked arXiv paper (2309.16509, an RVV-enhanced SIMDe 1.51x to 5.13x faster than the original SIMDe on XNNPACK, a different baseline).",
+  "status_note": "Actively maintained (3.1k stars, 323 forks, 129 open issues, last commit 2026-09-30) and MIT-licensed, but releases lag: v0.8.2 (2024-04-30) is the latest stable tag and v0.8.4 is at rc3; evidence stays tier C on snippets only, and a thread that can open developer.arm.com, archive.fosdem.org or the MHV '23 paper (DOI 10.1145/3588444.3591001) could add hardware and per-kernel numbers.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/README.md",
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/COPYING",
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/simde/simde-common.h",
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/simde/simde-arch.h",
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/simde/x86/sse.h",
+    "https://raw.githubusercontent.com/simd-everywhere/simde/HEAD/meson.build",
+    "https://github.com/simd-everywhere/simde",
+    "https://github.com/simd-everywhere/simde/wiki/FAQ",
+    "https://github.com/simd-everywhere/simde/releases",
+    "https://github.com/simd-everywhere/simde/tags",
+    "https://github.com/simd-everywhere/simde/issues?q=is%3Aissue+label%3Aperformance",
+    "https://github.com/simd-everywhere/simde/issues?q=is%3Aissue+slow",
+    "https://github.com/simd-everywhere/simde/issues/291",
+    "https://github.com/simd-everywhere/simde/issues/310",
+    "https://raw.githubusercontent.com/aws/aws-graviton-getting-started/main/SIMD_and_vectorization.md",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/README.md",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvdec/HEAD/README.md",
+    "https://github.com/fraunhoferhhi/vvdec/wiki/Changelog",
+    "https://github.com/fraunhoferhhi/vvdec/wiki/Publications",
+    "https://github.com/Sahamec/VVdeC2_ARM_Neon",
+    "https://developer.arm.com/community/arm-community-blogs/b/tools-software-ides-blog/posts/porting-to-arm-intrinsics-with-simde (EGRESS_BLOCKED; search snippet only)",
+    "https://archive.fosdem.org/2024/schedule/event/fosdem-2024-2400-vvdec-arm-optimizing-an-open-source-vvc-decoder-for-arm-architectures (EGRESS_BLOCKED; search snippet only)",
+    "https://publica.fraunhofer.de/entities/publication/51a5dcb1-c96e-4d73-88b0-1e5c335fd32f (EGRESS_BLOCKED)",
+    "https://gitlab.citsem.upm.es/victor.arandal/vvenc-simde-neon (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.65
+}

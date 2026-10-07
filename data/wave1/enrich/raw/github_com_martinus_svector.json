@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/martinus/svector",
+  "one_liner": "Single-header C++17 small vector packing 7 inline bytes into an 8-byte object; avoids std::vector's heap allocation for tiny sequences.",
+  "what_it_does": "ankerl::svector<T, N, Allocator> is a std::vector-like container that keeps up to N elements (at most 127) inside the object and only moves to the heap when it outgrows them. It implements the whole std::vector API plus std::erase/erase_if, C++23 range members when the library provides std::from_range_t, and a resize_and_overwrite extension. It is a near drop-in replacement: the extra inline-capacity template parameter, iterators that are raw T*, and a move that is noexcept only when T's move is are the visible differences.",
+  "how_it_is_fast": "Small-buffer optimization (SBO/SVO) with a tagged pointer: bit 0 of the first byte says direct (inline) or indirect (heap) mode, in direct mode the other 7 bits are the size, and in indirect mode the first word is a pointer to a heap block holding size, capacity and elements. Staying inline skips malloc/free entirely, which is where the measured gains come from. Trivially copyable elements are relocated with memcpy, small trivially copyable inline buffers are moved and swapped by copying the whole buffer, and the capacity doubles starting from the inline capacity rather than from 1.",
+  "when_to_use": [
+    "Many short-lived or numerous sequences that usually hold 1-7 small elements (adjacency lists, token lists, per-node children) where std::vector's first allocation dominates.",
+    "Memory-bound structures holding millions of tiny vectors of 1-byte elements: svector<uint8_t, 7> is 8 bytes versus 24 for an empty std::vector and 24 for absl::InlinedVector.",
+    "Code that needs a small vector with a custom or std::pmr allocator (added in August 2026, present from v1.3.0) and wants std::vector semantics for propagate_on_container_* traits.",
+    "Element-heavy workloads such as emplace_back or front insertion of std::string, where the README measures it level with or slightly ahead of std::vector."
+  ],
+  "when_not_to_use": [
+    "Hot loops of push_back or operator[] on trivially copyable elements: the mode check costs 15.3 vs 8.5 instructions per push_back (2.2x slower) and 16.8 vs 10.0 per random subscript (about 18% slower).",
+    "When absl::InlinedVector is acceptable: it fills inline storage 2.6x faster (0.48 vs 1.26 ns per element) and appends faster (0.51 vs 0.66 ns).",
+    "Containers that are swapped or moved often while inline: swap is element-wise (2.15 ns for 7 uint64_t, 35.6 ns for 7 short std::string) where std::vector is always three pointer exchanges (1.66 ns).",
+    "Big-endian targets, allocators with fancy pointers, over-aligned element types (static_assert caps alignment at __STDCPP_DEFAULT_NEW_ALIGNMENT__), or more than 127 inline elements: all rejected at compile time.",
+    "Projects pinned to v1.0.x (the only versions on Conan Center): see the data-corruption bugs fixed in v1.1.0 below."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (boost and abseil only for the optional comparison benchmarks)",
+    "min_toolchain": "C++17; CI builds C++17 and C++20 on Linux, macOS and Windows (MSVC) and C++23 on Linux, plus a 32-bit build",
+    "platforms": "little-endian only (static_assert where __BYTE_ORDER__ is defined); 32-bit and 64-bit; CI on Linux, macOS and Windows",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial: same API plus extras, but needs the inline capacity template argument, iterators are T*, move is noexcept only when T's move is, no fancy-pointer allocators"
+  },
+  "gotchas": [
+    "The headline 3.1x 'build 7 inline' win (1.26 vs 3.85 ns per element) is against a std::vector that is never reserved: test/bench/solo.cpp's build_inline starts from an empty std::vector and emplaces 7 elements, so libstdc++ reallocates at capacities 1, 2, 4 and 8 (4 allocations and 4 frees per vector, consistent with the README's 61.6 instructions per element). A reserve(7) baseline, which would do one allocation, is not measured, so the gap against carefully written std::vector code is smaller than shown.",
+    "Versions before v1.1.0 (2026-07-28) had serious correctness bugs: push_back(v[0]) or assign(n, v[0]) could segfault on reallocation (#50, open from 2023-04 to 2026-07), erase(it, it) and insert of an empty range silently blanked every element from that position onwards (#65, #66), a throwing element constructor caused a double destroy in insert() (#68) and leaks in resize() and growth (#70, #74), and move was unconditionally noexcept (#63). Conan Center's recipe still lists only 1.0.2 and 1.0.3; vendor v1.4.0 or later instead.",
+    "The '1 byte overhead' figure applies to 1-byte elements: inline data starts at offset alignof(T), so for 8-byte-aligned T (uint64_t, std::string) the direct-mode overhead is 8 bytes, and svector<std::string, 7> is 232 bytes.",
+    "Two of the README's bolded wins over std::vector are inside the run-to-run spread it states (about 7% for std::string workloads): emplace_back std::string (22.64 vs 23.52 ns, 3.9%) and insert at front std::string (1320.2 vs 1415.2 ns, 6.7%); the emplace_back gap also reflects svector's growth starting at capacity 7 (11 reallocations for 10000 elements versus 15 for std::vector). The 12% shuffle+sort lead runs std::sort over raw contiguous storage in every container, so it is not explained by the container design, which the README itself says stops mattering once the work is on the elements."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued sequence containers it is the only small-buffer vector: pick it over fast_vector, eastl::vector or veque when most vectors stay tiny and object size or allocation count matters, and pick those (or std::vector) when vectors are large and appends or indexing dominate, where svector's mode check makes it slower.",
+  "verified_claims_summary": "Measured with nanobench in test/bench/solo.cpp, one container per process and the median of 9 processes, gcc 16.1.1 -std=c++17 -O3 -DNDEBUG with libstdc++ on an AMD Ryzen 9 7950X pinned with taskset: building 7 inline uint8_t costs 1.26 ns per element versus 3.85 ns for an unreserved std::vector (about 3.1x, derived from page data), with smaller or noise-level gains on std::string emplace, front insertion and shuffle+sort, and losses on push_back (2.2x), random operator[] (about 18%) and swap.",
+  "status_note": "Active single-maintainer project (v1.4.0 tagged 2026-08-05, last commit 2026-09-02 a dependabot bump, 0 open issues) with a large July-August 2026 rework largely co-authored with an AI assistant that added allocator support, C++23 range members, CMake/meson install and fuzzing in CI; MIT and a single header, easy to vendor at a pinned version.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/README.md",
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/include/ankerl/svector.h",
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/test/bench/solo.cpp",
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/scripts/bench/render_charts.py",
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/meson.build",
+    "https://raw.githubusercontent.com/martinus/svector/HEAD/LICENSE",
+    "https://github.com/martinus/svector",
+    "https://github.com/martinus/svector/commits",
+    "https://github.com/martinus/svector/tags",
+    "https://github.com/martinus/svector/issues",
+    "https://github.com/martinus/svector/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/martinus/svector/issues/50",
+    "https://github.com/martinus/svector/issues/66",
+    "https://github.com/martinus/svector/issues/74",
+    "https://raw.githubusercontent.com/conan-io/conan-center-index/master/recipes/svector/config.yml",
+    "https://raw.githubusercontent.com/microsoft/vcpkg/master/ports/svector/vcpkg.json"
+  ],
+  "confidence": 0.85
+}
