@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/yaml/libyaml",
+  "one_liner": "Portable C89 YAML 1.1 parser/emitter (the engine under PyYAML's C loaders); about 6-7x yaml-cpp's YAML::Load throughput.",
+  "what_it_does": "LibYAML is a small C library for parsing and emitting YAML. It has three layers: a token scanner (yaml_parser_scan), an event parser (yaml_parser_parse, one event per call), and a document loader (yaml_parser_load) that builds an index-based yaml_document_t of string scalars, sequences and mappings. The emitter mirrors this with an event API and a document dumper. It is not a drop-in for yaml-cpp: there is no typed Node, no operator[] lookup and no as<T>() conversion, so you consume events or walk the document yourself.",
+  "how_it_is_fast": "It is a hand-written two-stage pipeline: a scanner with a token queue, a 'simple key' lookahead and an indentation stack for block collections, feeding an LL(1) recursive-descent parser written as an explicit state machine that emits events one at a time. Input passes through a 16 KB raw buffer that is decoded and validated into a 48 KB UTF-8 buffer, and nothing is materialised unless you call the loader. So the cost is one pass, a character-by-character copy of each scalar into a growable string and one malloc per scalar, anchor or tag. There is no SIMD and no zero-copy path. That copying is why in-place parsers such as rapidyaml are 3-4x faster than libyaml on the same file, while libyaml still beats yaml-cpp's DOM-building YAML::Load by about 6-7x.",
+  "when_to_use": [
+    "C or C++ code that needs a YAML parser and emitter every Linux distribution already packages, with a stable C ABI (libtool-versioned shared library) and no dependencies beyond libc.",
+    "Hot config-loading paths currently using yaml-cpp's YAML::Load, where you can consume events or build your own light tree: 86.79 vs 11.71 MB/s on a 4 KB CI file in rapidyaml's suite.",
+    "Streaming large or multi-document input through the event API (yaml_parser_parse) without building a tree; memory stays at the fixed reader buffers plus the current event.",
+    "When parse results must match PyYAML's C loaders or other language bindings that wrap libyaml.",
+    "Generating YAML from C with the event-level emitter or yaml_emitter_dump."
+  ],
+  "when_not_to_use": [
+    "Peak parse throughput: rapidyaml's ryml_yaml_* rows parse the same travis.yml at 286.67-346.22 MB/s against libyaml's 86.79 MB/s (3.3-4.0x, derived from page data), and catalogued siblings yam and yeptris claim 1.6-13x and 2.2-4.1x over libyaml.",
+    "You want a typed, queryable DOM (node[\"key\"].as<int>()): libyaml returns string scalars with style and tag only and does no type resolution.",
+    "Strict YAML 1.2 behaviour: the scanner follows the 1.1 grammar (since 0.2.3 it accepts %YAML 1.2 directives); open issue #351 (GLD Serializer Benchmark) reports spec-compliance misses in 0.2.5; libfyaml targets 1.2.",
+    "Untrusted, deeply nested input on the 0.2.5 release that distributions ship: nesting limits exist only on master and in 0.2.6-rc.1, and issue #251 (the loader cycles on 1,048,576 '{' characters) is still open.",
+    "You need a custom allocator or arena: yaml_malloc/yaml_realloc/yaml_free call malloc/realloc/free directly (feature request #178 open since 2020)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools or CMake build; packaged as libyaml in most distributions)",
+    "dependencies": "none (libc only)",
+    "min_toolchain": "C89 compiler; CMake 3.10+ on current master, or autoconf/libtool/make (./bootstrap) for a git checkout",
+    "platforms": "any: portable C with no SIMD or architecture-specific code; Linux, macOS and Windows (CMake/MSVC, YAML_DECLARE_STATIC for static builds)",
+    "thread_safety": "Not documented. Parser and emitter state lives in per-object structs, so use one yaml_parser_t per thread; the exception is the master-only nesting limit, a process-wide plain int (MAX_NESTING_LEVEL, default 1000) changed by yaml_set_max_nest_level without synchronisation.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (output fidelity, not speed): rapidyaml's LibyamlParser wrapper (bm/libyaml.hpp) discards libyaml's decoded scalar and stores the raw source slice m_input.str + start_mark.index instead. libyaml's mark.index counts characters, not bytes (SKIP/READ do index++ while advancing the pointer by the UTF-8 width), so on any non-ASCII input the slices are shifted. Quoted, escaped and block scalars are stored undecoded, and aliases are a no-op case. travis.yml is pure ASCII (4067 bytes, no anchors), and the timed loop still includes libyaml's full scan plus its per-scalar malloc'd copies, so the headline row is not inflated. It does measure libyaml events plus a cheap borrowed-string ryml tree, not libyaml's own yaml_parser_load DOM, for which no number exists.",
+    "Unequal versions and a single run: libyaml is cloned from master at build time (post-0.2.5 nesting-limit commits), while yaml-cpp is pinned to commit 587b24e2 of 2019-11-30, between 0.6.3 and 0.7.0, so it misses later yaml-cpp releases. Each row is one Google Benchmark repetition (14930 vs 2024 iterations), and the result JSON names the binary ryml-bm-parse-0.15.2.",
+    "A parser takes its input only once: yaml_parser_set_input_string/_file/set_input assert(!parser->read_handler), so you must call yaml_parser_delete and yaml_parser_initialize per document stream. Under NDEBUG the assert is compiled out and the misuse goes unchecked. Do not mix yaml_parser_load with yaml_parser_scan/yaml_parser_parse on one parser.",
+    "Security record: past fuzzing found heap overflows and stack overflows, mostly in the emitter, now closed. Issues for CVE-2024-35325/35326/35328/35329 are still open; the maintainer disputes 35326/35328/35329 as API misuse (structs not initialised with the library's init functions)."
+  ],
+  "pick_this_over_siblings_when": "Pick libyaml over rapidyaml, fkYAML or libfyaml when you want a plain-C dependency that every distribution already ships and whose behaviour matches PyYAML and the other libyaml bindings. Pick rapidyaml (3.3-4.0x faster on the same file), yam or yeptris when throughput matters, and libfyaml when you need YAML 1.2 with a C document API.",
+  "verified_claims_summary": "In rapidyaml's own parse suite (bm/bm_parse.cpp, Google Benchmark v1.9.5, g++ 16.1 Release C++17 per the build-directory name, 20 logical CPUs at 4279 MHz whose 1 MiB L2 and 19.25 MiB L3 fit a 10-core part, model not named, scaling and ASLR off, one repetition on 2026-07-07), libyaml master events fed into a ryml tree parsed the 4067-byte travis.yml at 86.79 MB/s (0.047 ms). yaml-cpp's YAML::Load (2019 commit 587b24e2) reached 11.71 MB/s (0.347 ms), 7.41x slower; the README's compile_commands.json row shows 135.06 vs 22.53 MB/s (6.00x).",
+  "status_note": "Active but slow-moving: the last stable release is 0.2.5 (June 2020), 0.2.6-rc.1 was tagged in April 2026 and master last changed on 2026-08-21 (nest-depth getter); MIT-licensed, small portable C, so taking it from distribution packages or vendoring it is low-risk.",
+  "sources_read": [
+    "https://github.com/yaml/libyaml",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/ReadMe.md",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/announcement.msg",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/Changes",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/License",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/include/yaml.h",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/yaml_private.h",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/api.c",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/scanner.c",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/parser.c",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/loader.c",
+    "https://raw.githubusercontent.com/yaml/libyaml/HEAD/src/reader.c",
+    "https://github.com/yaml/libyaml/commits/master",
+    "https://github.com/yaml/libyaml/tags",
+    "https://github.com/yaml/libyaml/issues?q=is%3Aissue+slow+OR+performance+OR+CVE+OR+overflow+OR+crash",
+    "https://github.com/yaml/libyaml/issues/251",
+    "https://github.com/yaml/libyaml/issues/302",
+    "https://github.com/yaml/libyaml/issues/351",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/README.md",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/bm/bm_parse.cpp",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/bm/bm_common.hpp",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/bm/libyaml.hpp",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/bm/CMakeLists.txt",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml/HEAD/bm/cases/travis.yml",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml-data/master/bm/results/0.16.0-pre/linux-release/ryml-bm-parse-travis.txt",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml-data/master/bm/results/0.16.0-pre/linux-release/ryml-bm-parse-travis.json",
+    "https://raw.githubusercontent.com/biojppm/rapidyaml-data/master/bm/results/0.16.0-pre/linux-release/ryml-bm-parse-travis.md",
+    "https://github.com/jbeder/yaml-cpp/commit/587b24e2eedea1afa21d79419008ca5f7bda3bf4",
+    "https://github.com/jbeder/yaml-cpp/commit/587b24e2eedea1afa21d79419008ca5f7bda3bf4.patch"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/neargye/magic_enum",
+  "one_liner": "Macro-free C++17 enum reflection (enum to string, string to enum, iteration); compiles faster than conjure_enum at scale.",
+  "what_it_does": "Header-only library that gives any enum (scoped or unscoped, no macros, no edits to the enum) name lookup, string and integer casts, value/name/entry arrays, enum_switch/enum_for_each over constexpr values, flag operations, iostream/std::format/{fmt} support and enum-indexed containers (array, bitset, set). The core calls are magic_enum::enum_name(e) returning a std::string_view and magic_enum::enum_cast<E>(string or integer) returning an optional. It is the incumbent of this category: enchantum and simple_enum, both already catalogued, are measured against it, and conjure_enum (the baseline here) is built on its technique.",
+  "how_it_is_fast": "Without C++26 reflection it probes every value in [MAGIC_ENUM_RANGE_MIN, MAGIC_ENUM_RANGE_MAX] (default -128..127) by instantiating a function template and parsing __PRETTY_FUNCTION__/__FUNCSIG__, in 256-wide macro-unrolled blocks (MAGIC_ENUM_FOR_EACH_256) that set a validity bitset, then builds compact static arrays of values and bare enumerator names. Storing only the short identifier, not the namespace-qualified string, is what the enchantum README credits for magic_enum's smaller binaries and faster builds than conjure_enum. At run time, enum_name on a contiguous enum is an O(1) offset index (value minus min); sparse and flag enums fall back to a linear scan, and string-to-enum is a linear name compare unless MAGIC_ENUM_ENABLE_HASH turns both into a constexpr hash switch. Master (since 2026-08-31, unreleased) selects a C++26 std::meta::enumerators_of backend automatically, which removes the range scan where the compiler supports P2996 and expansion statements.",
+  "when_to_use": [
+    "You need enum to string and string to enum for third-party or legacy enums that you cannot annotate, on C++17 compilers (GCC 9+, Clang 5+, MSVC 2017 15.3+).",
+    "Enums with values inside roughly -128..127, or ones you can give a tight per-enum enum_range, where the probe cost stays small (enchantum's ideal-range case 0..50: about 8-18 s for 100 enums of 50 members).",
+    "You already depend on conjure_enum or a hand-rolled __PRETTY_FUNCTION__ scheme and want shorter builds and smaller binaries: in the enchantum table magic_enum compiles 1.4x to 6.6x faster than conjure_enum and its Clang executables are 2.1x to 2.6x smaller (derived from page data).",
+    "You need breadth: flags, wide-char names, case-insensitive casts, std::format/{fmt} formatters, enum containers, C++20 module target and packaging in vcpkg, Conan, Meson, Bazel and ROS."
+  ],
+  "when_not_to_use": [
+    "Compile time matters most: enchantum compiles the same generated files 2.7x to 8.1x faster with its out-of-bounds check disabled (1.1x to 6.4x with its default ENCHANTUM_CHECK_OUT_OF_BOUNDS_BY=2, derived from page data) and produces smaller objects, and simple_enum is faster in most rows (enchantum README).",
+    "Enums with large or scattered values: with a -1024..1024 range magic_enum timed out (>20 min) on GCC, Clang and MSVC for 200 enums in the enchantum benchmark, and values outside the range silently produce empty names.",
+    "Forward-declared enums, enums inside templates (Clang problems per issues #164 and #65), or aliased enumerators (aliases share one name; ShapeKind::Box comes back as ConvexBegin).",
+    "Hot-path parsing of strings into enums with many members unless you define MAGIC_ENUM_ENABLE_HASH: the default enum_cast(string) is a linear compare over all names.",
+    "Large translation units in IDEs: issue #207 reports very slow MSVC IntelliSense after including the header."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (optional {fmt} for magic_enum_format.hpp)",
+    "min_toolchain": "C++17; GCC 9+, Clang 5+, MSVC 15.3+ (VS 2017), Xcode 10+; C++20 module target needs CMake 3.28+",
+    "platforms": "any platform those compilers target (compiler-specific __PRETTY_FUNCTION__/__FUNCSIG__ parsing; unsupported compilers fail to compile unless MAGIC_ENUM_NO_CHECK_SUPPORT is defined)",
+    "thread_safety": "not documented; the API is stateless constexpr noexcept functions returning string_views into static tables",
+    "drop_in_for_baseline": "partial: same idea and similar operations as conjure_enum, but a different namespace and call names (magic_enum::enum_name vs FIX8::conjure_enum<T>::enum_to_string) and range macros (MAGIC_ENUM_RANGE_MIN/MAX vs FIX8_CONJURE_ENUM_MIN_VALUE/MAX_VALUE)"
+  },
+  "gotchas": [
+    "Harness and baseline caveat: the baseline's own README (fix8mt/conjure_enum, section 9) measures a one-enum, 64-member translation unit and finds parity, Clang 0.3 s vs 0.3 s and MSVC 0.376 s vs 0.343 s (magic_enum about 9% faster), so the 1.4x to 6.6x gaps in the enchantum table only appear with hundreds of enums per TU; that harness also built conjure_enum with FIX8_CONJURE_ENUM_ALL_OPTIMIZATIONS while enchantum used FIX8_CONJURE_ENUM_MINIMAL only.",
+    "The enchantum tables were last edited May to July 2025 (README commits) and do not state the magic_enum version, so at best v0.9.7 or v0.9.8 was measured; the timing driver is not published (benchmarks/gen.py only writes the sources) and the runs were at -O3 or /Ox on the author's Windows 10 machine with no CPU given.",
+    "Range edges: values outside [MAGIC_ENUM_RANGE_MIN, MAGIC_ENUM_RANGE_MAX] return an empty name or nullopt with no warning; (max - min) must stay below UINT16_MAX; flag enums ignore the range macros and never reflect zero.",
+    "Big ranges can hit constexpr step limits ('constexpr evaluation hit maximum step limit'); the docs tell you to raise -fconstexpr-steps, -fconstexpr-ops-limit or /constexpr:steps. Do not mix #include and import magic_enum in one program, and keep the reflection backend setting consistent across TUs."
+  ],
+  "pick_this_over_siblings_when": "Pick Magic Enum over Enchantum or simple_enum when you want the most widely packaged and feature-complete option (flags, wide strings, formatters, containers, modules) and your enums fit a small range; pick Enchantum when build time and binary size dominate, and simple_enum when you can add first/last markers to your own enums.",
+  "verified_claims_summary": "A rival library's README (ZXShady/enchantum) compiled generated translation units that call enum_name once per enum (200 enums of 16 members, 32 of 200, 100 of 50) at -O3 or /Ox with GCC, Clang and MSVC, averaging 10 runs: magic_enum took 47 s vs conjure_enum 97.1 s on GCC Small, 18 s vs 52.9 s on Clang Big and 37 s vs 244.9 s on MSVC Big, with conjure_enum running out of heap on MSVC Small; magic_enum itself timed out at range -1024..1024 everywhere and lost every row to enchantum. No CPU is stated, the timing script is unpublished and the baseline's own small benchmark shows the two libraries at parity, so this is compile-time evidence only and nothing about run-time speed.",
+  "status_note": "Actively maintained (last commit 2026-10-05, latest release v0.9.8, C++26 reflection backend on master since 2026-08-31 with one open g++-16 segfault report, #467) and MIT-licensed header-only, so it is easy to adopt; treat the speed claim as a build-time comparison against a niche rival, not a reason to prefer it over Enchantum.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Neargye/magic_enum/HEAD/README.md",
+    "https://raw.githubusercontent.com/Neargye/magic_enum/HEAD/doc/limitations.md",
+    "https://raw.githubusercontent.com/Neargye/magic_enum/HEAD/include/magic_enum/magic_enum.hpp",
+    "https://github.com/Neargye/magic_enum",
+    "https://github.com/Neargye/magic_enum/commits/master",
+    "https://github.com/Neargye/magic_enum/releases",
+    "https://github.com/Neargye/magic_enum/issues",
+    "https://github.com/Neargye/magic_enum/issues?q=is%3Aissue+compile+time",
+    "https://raw.githubusercontent.com/ZXShady/enchantum/HEAD/README.md",
+    "https://raw.githubusercontent.com/ZXShady/enchantum/HEAD/benchmarks/gen.py",
+    "https://github.com/ZXShady/enchantum/commits/main/README.md",
+    "https://github.com/fix8mt/conjure_enum",
+    "https://raw.githubusercontent.com/fix8mt/conjure_enum/HEAD/README.md",
+    "https://raw.githubusercontent.com/fix8mt/conjure_enum/HEAD/examples/cbenchmark.cpp"
+  ],
+  "confidence": 0.75
+}

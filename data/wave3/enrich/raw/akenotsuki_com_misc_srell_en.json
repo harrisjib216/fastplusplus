@@ -1,0 +1,55 @@
+{
+  "id": "https://akenotsuki.com/misc/srell/en",
+  "one_liner": "Header-only ECMAScript regex engine with the std::regex class design; a 2023 competitor shootout timed it far ahead of std::regex.",
+  "what_it_does": "SRELL (std::regex-like library) is a backtracking regular-expression template library that reproduces the std::regex interface (basic_regex, regex_search, regex_match, regex_iterator, match_results, regex_error) in namespace srell, with an engine that follows current ECMAScript (lookbehind, named and duplicate named groups, \\p{} Unicode properties, dotall, sticky, v-mode, (?ims-ims:) modifiers). It has typedefs for char, wchar_t, UTF-8 in char (u8cregex), char8_t, char16_t and char32_t, so it handles Unicode natively instead of by code unit. Swapping std:: for srell:: usually compiles, but grammar and edge-case behaviour follow ECMAScript, not the std::regex variant.",
+  "how_it_is_fast": "The compiled pattern is a backtracking NFA that the author tunes with first-character analysis: an 'entry state selector' (since 4.019) picks where matching can start, literal patterns go through a Boyer-Moore-Horspool search, and the candidate start positions are found with memchr or an SSE4.2 _mm_cmpestri range scan (since 4.061, chosen at run time via cpuid/__builtin_cpu_supports; memchr preferred when AVX2 is present since 2026.03). Many pattern-specific rewrites (single-character-class runs A*B, C{n,m}, shared-prefix alternatives) cut backtracking, and a unified pointer-based backtrack stack is used for contiguous iterators. There is no DFA or Thompson-NFA path, so worst-case time is still exponential.",
+  "when_to_use": [
+    "C++ code already written against std::regex where matching is slow and you want a header-only replacement with the same class and function names.",
+    "Patterns that need JavaScript semantics or features std::regex lacks: lookbehind, named groups, \\p{Script=...} properties, case folding across all of Unicode.",
+    "Matching UTF-8, UTF-16 or UTF-32 text by code point (u8cregex, u16regex, u32regex) without converting to wide strings first.",
+    "Projects that must vendor a dependency-free, BSD-2-Clause header and can build with old compilers (pre-C++11 is still considered in the change history).",
+    "Search-heavy loops on x86-64 where a literal or small character class starts the pattern, so the BMH or SIMD start-position scan does most of the work."
+  ],
+  "when_not_to_use": [
+    "Untrusted patterns or inputs: it is a backtracking engine, so catastrophic patterns hit the backtrack limit (2^21 failures by default) and throw regex_error(error_complexity) instead of running in linear time; prefer an RE2-family engine there.",
+    "Multi-pattern or bulk stream scanning (IDS signatures, log grepping at GB/s): Hyperscan or Vectorscan compile many patterns into one automaton and are in a different throughput class.",
+    "Builds where compile time or binary size matter: the Matcheroni author's sheet notes it adds a lot to build time and binary size by default, and the 'minimized' mode (SRELL_NO_UNICODE_DATA and other SRELL_NO_* macros) is still slow to build.",
+    "Code that relies on std::regex basic, extended, awk, grep or egrep grammars: those flags are defined as 0 in srell.hpp and silently fall back to ECMAScript.",
+    "Teams that need a public bug tracker or vetted releases: bugs go to the author by email, and the change history lists a steady stream of optimiser bugs that returned wrong matches or crashed."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none; srell.hpp plus srell_ucfdata2.h (case folding) and srell_updata3.h (Unicode properties), or the merged single-header version",
+    "min_toolchain": "Change history (4.100) still fixes pre-C++11 builds; FreeBSD port declares c++11-lang; char16_t/char32_t typedefs need C++11 and u8regex needs C++20 char8_t; int and size_t must be at least 32 bits since 4.100",
+    "platforms": "any; x86/x64 gets an SSE4.2 (and AVX2-aware) start-position scan with a run-time CPU check, disabled by defining SRELL_NO_SIMD",
+    "thread_safety": "Not documented. search() is a const member of basic_regex and keeps backtracking state in a per-call search-state object, so sharing one compiled regex read-only across threads appears safe (inferred from srell.hpp, not stated by the author).",
+    "drop_in_for_baseline": "partial — same class and function names in namespace srell and the default grammar is ECMAScript in both, but SRELL follows current ECMAScript semantics, ignores the non-ECMAScript grammar flags, can throw error_complexity on heavy backtracking, and adds SRELL-specific flags and char8_t/char16_t/char32_t support"
+  },
+  "gotchas": [
+    "Backtracking is capped: each search attempt fails with error_complexity after 1 << 21 backtrack failures (lowered from 1 << 24 in 4.055), which throws regex_error unless the quiet flag or SRELL_NO_THROW is used; define SRELL_NO_LIMIT_COUNTER to remove the cap (and accept hangs).",
+    "srell::regex on char works on bytes; use u8cregex (or u8regex with char8_t) to match UTF-8 by code point, otherwise \\w, '.' and \\p{} see code units.",
+    "The optimiser has a history of correctness bugs found after release: wrong leftmost matches from the 4.019 entry-state selector (fixed 4.026/4.027, August 2023), /(?:a|ab|abc)$/ matching 'ac' (4.021 to 4.037), a 64-bit crash on /ab|ac|ad/ (4.020 to 4.033), memory corruption in u32regex with SIMD (fixed 4.064), crashes on /(?:|)a/ (fixed 2026.00) and wrong results for /(|\\w*)+/ (fixed 2026.05); pin a recent version.",
+    "Bug reports go to the author by email; the only GitHub presence is the data-man/SRELL mirror, which asks not to file issues there."
+  ],
+  "pick_this_over_siblings_when": "Pick SRELL over Hyperscan, Vectorscan or rejit when you need captures, backreferences, lookaround and Unicode properties behind the std::regex API in a single header; pick re2jit or another RE2-family engine when patterns or inputs are untrusted and linear-time matching matters more than ECMAScript features.",
+  "verified_claims_summary": "The only numbers are search-snippet figures from Matcheroni's 2023 results sheet (aappleby's own shootout of the mariomka/regex-benchmark Email, URI and IPv4 patterns, -O3, compiler reportedly GCC 14, CPU, std::regex implementation and SRELL version unstated): SRELL about 0.0174 vs std::regex 0.724 (about 41x, derived from page data, unit not visible), with Boost, CTRE and Matcheroni in between. A second snippet of per-pattern values shows SRELL slower than std::regex on Email, but its sub-millisecond whole-file times do not fit the first set and probably come from another run or harness, so the ranking is unconfirmed.",
+  "status_note": "Actively maintained by a single author (version 2026.07 of 2026-09-17 adds Unicode 18.0.0, eight releases between March and September 2026), BSD-2-Clause and header-only, so it is easy to vendor; the cited speed rests on a competitor's one-shot harness in which the timer starts after each regex iterator is constructed (so the first search is untimed for std::regex, Boost and SRELL but not for Matcheroni or CTRE), each pattern runs once with no repetition, match counts are never cross-checked, and the SRELL case is now commented out and no longer compiles (unqualified read()/timestamp_ms()); the measured SRELL build (mid-2023, about 4.019-4.022) predates several match-correctness fixes and the SIMD prefilter, so the numbers are neither current nor reproducible.",
+  "sources_read": [
+    "https://www.akenotsuki.com/misc/srell/en/ (EGRESS_BLOCKED)",
+    "https://github.com/data-man/SRELL",
+    "https://raw.githubusercontent.com/data-man/SRELL/trunk/README.md",
+    "https://raw.githubusercontent.com/data-man/SRELL/trunk/readme_en.txt",
+    "https://raw.githubusercontent.com/data-man/SRELL/trunk/history_en.txt",
+    "https://raw.githubusercontent.com/data-man/SRELL/trunk/license.txt",
+    "https://raw.githubusercontent.com/data-man/SRELL/trunk/srell.hpp",
+    "https://raw.githubusercontent.com/aappleby/Matcheroni/HEAD/README.md",
+    "https://raw.githubusercontent.com/aappleby/Matcheroni/53d152f/README.md",
+    "https://raw.githubusercontent.com/aappleby/Matcheroni/HEAD/examples/regex/regex_benchmark.cpp",
+    "https://github.com/aappleby/Matcheroni/tree/53d152f/matcheroni",
+    "https://github.com/aappleby/Matcheroni/commits/main/matcheroni/benchmark.cpp",
+    "https://raw.githubusercontent.com/aappleby/Matcheroni/7ab1506/matcheroni/benchmark.cpp",
+    "https://raw.githubusercontent.com/freebsd/freebsd-ports/main/devel/srell/Makefile",
+    "https://raw.githubusercontent.com/BurntSushi/rebar/HEAD/benchmarks/engines.toml"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/marzer/tomlplusplus",
+  "one_liner": "Header-only C++17 TOML 1.0 parser and serializer; parses 18x to 430x faster than toml11 v4.2.0 in a third-party matrix.",
+  "what_it_does": "Parses TOML v1.0.0 text (from a string_view, stream or file) into a DOM of toml::table, toml::array and toml::value<T> nodes, and serializes that DOM back to TOML, JSON or YAML through formatter objects. Access is by operator[] chains with value<T>() / value_or() extraction and for_each visitation. It is not a drop-in for toml11: toml11 returns a toml::value with toml::find/get helpers and attached comments, while toml++ returns a toml::table (or a parse_result wrapper when exceptions are off).",
+  "how_it_is_fast": "A hand-written recursive-descent parser that pulls codepoints from a UTF-8 reader built on Bjoern Hoehrmann's DFA decoder, decoding in 32-codepoint blocks with a 128-codepoint history ring for short look-back, instead of the combinator-style scanner chain toml11 v4 uses. Each node stores only a source_region (line/column begin and end plus a shared path pointer); comments are discarded rather than attached to values. Tables are std::map<key, unique_ptr<node>> and every value is its own heap node, so it is a conventional allocating DOM, not an arena or zero-copy design; its lead comes from toml11 being slow (0.1-1.9 MB/s in the cited run), not from SIMD or arena tricks.",
+  "when_to_use": [
+    "You use toml11 (v4.2 or earlier) or a comparable comment-preserving C++ parser and config loading time matters: the cited matrix shows 18x-430x shorter parse times on 0.25-1.5 MB files, and an open toml11 PR measures about 15-18x on a 122-line config (about 0.1-0.12 ms per parse for toml++).",
+    "C++17 projects that want a maintained, toml-test-conformant TOML 1.0 reader with a typed DOM, path-style lookup and round-trip output to TOML, JSON or YAML.",
+    "Builds without exceptions or RTTI (game engines, embedded-ish targets): TOML_EXCEPTIONS=0 switches to a parse_result return type.",
+    "Teams that want a single header to vendor, or a compiled mode (TOML_HEADER_ONLY=0 plus TOML_IMPLEMENTATION in one TU) to cut compile time; meson, CMake, vcpkg and Conan packaging exist."
+  ],
+  "when_not_to_use": [
+    "Throughput is the goal: in the same matrix cpptoml beats it on all 8 shapes it can parse, tomlc17 on 3 shapes, and teptris (the benchmark author's C library) by 3.2-7.5x; toml++ ran at 22-60 MB/s, which is a mid-pack speed, not a fast one.",
+    "You need comments, whitespace or key order preserved for editing configs in place: toml++ drops comments (toml11 keeps them, and tables here are sorted std::map, so original key order is lost on re-emit).",
+    "Projects on current toml11 (v4.4.0 or later): its release notes claim toml::parse got 2x faster after the measured v4.2.0, and an open PR (#320) cuts it another 4x, so the gap is far smaller than the 18x-430x headline.",
+    "Inputs that need TOML 1.1 syntax by default: the library advertises full TOML v1.0.0 support; newer-spec items such as newlines in inline tables or \\e escapes only work behind TOML_ENABLE_UNRELEASED_FEATURES.",
+    "Compile-time-sensitive codebases using the header-only default: the single header is large (the parser implementation alone is about 116 KB) and is instantiated in every including TU unless compiled mode is used."
+  ],
+  "integration": {
+    "form": "header-only (optional compiled mode via TOML_HEADER_ONLY=0 and TOML_IMPLEMENTATION; C++20 module support)",
+    "dependencies": "none",
+    "min_toolchain": "C++17; tested on Clang 8+, GCC 8+, MSVC VS2019",
+    "platforms": "any; CI-tested on x64, x86 and ARM (Windows ARM64 added March 2026)",
+    "thread_safety": "not documented; parse calls share no global state that the README mentions, but a parsed table is an ordinary mutable container with no internal locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The last tagged release is v3.4.0; several parser fixes exist only on master: TOML_MAX_NESTED_VALUES lowered from 256 to 128 after a stack overflow on deeply nested arrays and inline tables (issue #292, March 2026), UB on the malformed input \"[&\" (#294) and a precondition violation on '[[[' headers (#301, May 2026). For untrusted input, pin a recent master commit rather than v3.4.0.",
+    "Benchmark harness notes: the cited ledger compiles both header-only adapters inside bench_parse, whose CMakeLists appends -O2 after the Release -O3 (equal for toml++ and toml11), and the toml11 row also times a per-iteration copy into a std::vector; neither changes the size of the toml11 gap, but no compiler is named and only an Apple M1 Max run reports toml++ figures.",
+    "The benchmark corpus is synthetic (seed 42) with 30,000-60,000 keys in a single table on the scalar shapes; toml++ inserts every key into a std::map and allocates every value separately, so those shapes measure allocator and tree-insert cost more than typical small config files do.",
+    "With exceptions disabled toml::parse returns toml::parse_result, a table-or-error wrapper, instead of toml::table; code written for one mode does not compile unchanged in the other."
+  ],
+  "pick_this_over_siblings_when": "Pick toml++ over teptris when you want a mature, widely packaged C++17 API with a typed DOM and JSON/YAML output and can accept 3-8x slower parsing; pick teptris when parse throughput dominates and a young C API is acceptable. TOMLDecoder (Swift), toml-spanner (Rust) and go-toml (Go) beat toml++ or their own baselines but only matter if you are not in C++.",
+  "verified_claims_summary": "In the teptris benchmark ledger (run 3, 2026-09-13, Apple M1 Max, Release -O3 -flto=thin with -O2 on the bench target, compiler unnamed, min of 10 after 1 warmup) toml++ v3.4.0 parsed nine generated 0.25-1.5 MB TOML files in 5.4-65.2 ms against 452-5,169 ms for toml11 v4.2.0, about 18x-430x faster (derived from page data). A separate open toml11 PR (#320, i5-12600KF, 10,000 parses of a 122-line file) shows toml++ about 15-18x faster than toml11 before that PR and about 3.8-4.8x after it.",
+  "status_note": "Actively maintained on master (last commit 2026-07-21, bug-fix PRs from many contributors), MIT-licensed, 2.2k stars; releases lag master, with v3.4.0 still the latest tag, so recent safety fixes require tracking master.",
+  "sources_read": [
+    "https://github.com/marzer/tomlplusplus",
+    "https://github.com/marzer/tomlplusplus/commits/master",
+    "https://github.com/marzer/tomlplusplus/releases",
+    "https://github.com/marzer/tomlplusplus/issues?q=is%3Aissue+performance+OR+slow+OR+crash+OR+overflow",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/README.md",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/meson.build",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/examples/parse_benchmark.cpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/toml.hpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/preprocessor.hpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/parser.inl",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/table.hpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/node.hpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/array.hpp",
+    "https://raw.githubusercontent.com/marzer/tomlplusplus/HEAD/include/toml++/impl/parse_result.hpp",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/LEDGER.md",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/bench_tomlplus.cpp",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/bench_toml11.cpp",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/bench_main.cpp",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/benchmarks/bench_common.hpp",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/scripts/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/scripts/gen_bench_corpus.py",
+    "https://raw.githubusercontent.com/leptris/teptris/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/cktan/tomlc17/HEAD/README.md",
+    "https://github.com/ToruNiina/toml11/pull/320",
+    "https://github.com/ToruNiina/toml11/releases"
+  ],
+  "confidence": 0.8
+}
