@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/jmcnamara/libxlsxwriter",
+  "one_liner": "ANSI C write-only XLSX library; same API family as Python XlsxWriter, about 4.4x faster than it on a 200k-cell sheet.",
+  "what_it_does": "Creates Excel 2007+ .xlsx files from C: numbers, strings, formulas, formats, charts, images, data validation, conditional formatting, tables, comments and macros. The API is a C transliteration of the same author's Python XlsxWriter (workbook_new, workbook_add_worksheet, worksheet_write_string/number, workbook_close), so porting code is mechanical, but it is a C library, not a Python drop-in. It cannot read or modify existing files. Output goes to a file or, with lxw_workbook_options.output_buffer, to a memory buffer.",
+  "how_it_is_fast": "Mostly it is compiled C doing what the Python library does in the interpreter: cells are malloc'd structs kept in per-worksheet red-black trees (BSD tree.h) keyed by row and column, shared strings are deduplicated in a red-black tree with strcmp, and the cell-writing loop bypasses the generic XML writer and fprintf's each <c> element directly. Each XML part is written to a temp file (tmpfileplus) or, with USE_MEM_FILE, an open_memstream buffer, then deflated by bundled minizip at Z_DEFAULT_COMPRESSION. constant_memory mode flushes each row as the next one starts and writes inline strings, so memory stays at about one row. The optional USE_DTOA_LIBRARY build swaps printf('%.16G') for Milo Yip's Grisu-style emyg_dtoa, which the docs say is 40-50 percent faster on numeric data (no numbers published).",
+  "when_to_use": [
+    "Generating reports or data exports as .xlsx from C or C++ services where Python XlsxWriter or openpyxl is the bottleneck or the runtime is unavailable.",
+    "Large row-ordered exports (millions of cells) with constant_memory mode, where memory must stay flat regardless of sheet size.",
+    "Workbooks that need real Excel features (formats, charts, conditional formatting, data validation, images, tables) rather than a bare CSV-to-XLSX dump.",
+    "Embedded or portable builds: ANSI C, only zlib required, builds on Linux, BSDs, macOS, iOS, Windows (MSVC, MinGW), 32/64-bit and big-endian targets.",
+    "As the engine under a higher-level binding: R's writexl and other language wrappers already sit on it."
+  ],
+  "when_not_to_use": [
+    "Reading, editing or round-tripping existing .xlsx files: it is write-only; use a reader such as xlsxio or openpyxl.",
+    "When rust_xlsxwriter is an option: the same author's own hyperfine run has rust_xlsxwriter with its zlib feature at 152.6 ms versus 210.9 ms for libxlsxwriter on the same 200k-cell sheet (1.38x faster).",
+    "Multi-core throughput on one workbook: the docs say the library is single-threaded and 'optimized but not highly optimized'; each string write does a calloc, strdup and tree insert, then frees the copy if the string already exists.",
+    "Writing out of row order or editing earlier rows in constant_memory mode: data must arrive row by row, and inline strings can grow the file 20-100 percent and are unsupported by some viewers.",
+    "Programs running under a decimal-comma locale with the default build: numbers are formatted with locale-dependent fprintf, which produced corrupt files (issue #64); build with USE_DTOA_LIBRARY or force the C locale."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Makefile builds libxlsxwriter.a and .so; CMake 3.16+ and zig build also provided)",
+    "dependencies": "zlib (CMake requires 1.2.8+); bundled minizip (or USE_SYSTEM_MINIZIP), tmpfileplus temp files (or USE_STANDARD_TMPFILE / USE_MEM_FILE), Openwall MD5 for image dedup (or USE_OPENSSL_MD5 / USE_NO_MD5), optional emyg_dtoa",
+    "min_toolchain": "ANSI C (the Makefile compiles with -ansi -pedantic -O3); README lists GCC, Clang, Xcode, MSVC 2015, ICC, TCC, MinGW and MinGW-w64",
+    "platforms": "Linux, FreeBSD, OpenBSD, macOS, iOS, Windows, MSYS/MSYS2, Cygwin; 32 and 64 bit; big and little endian; no SIMD or arch-specific code",
+    "thread_safety": "Not documented beyond 'the library is currently single threaded'; a workbook and its worksheets must be driven from one thread. Separate workbooks share no obvious mutable globals in the code read, but this is not a documented guarantee.",
+    "drop_in_for_baseline": "partial — the C function names and options mirror Python XlsxWriter's methods one to one, so translating code is easy, but it is a different language; Python callers need a wrapper (the Impeller Cython wrapper targets a modified fork, not upstream)."
+  },
+  "gotchas": [
+    "The default build formats doubles with fprintf('%.16G'), which is locale-dependent (decimal comma under de_DE corrupts the file, issue #64; the docs suggest setlocale/uselocale or USE_DTOA_LIBRARY, which is off by default) and keeps only 16 significant digits, so doubles that need 17 digits are not written exactly.",
+    "Even in standard mode every XML part is first written to a temp file in the system tmp dir (or tmpdir option) before zipping; on hosts with /tmp in RAM, or without a writable tmp dir, use the tmpdir option or USE_MEM_FILE (not available with MSVC).",
+    "In constant_memory mode, writing in column-major order silently keeps only the first column (docs), and worksheet_set_row, merge ranges and formatting changes apply only to the current row.",
+    "Fixed memory-safety bugs on non-benchmarked paths show the attack surface: stack overflow in worksheet_set_selection (#447, 2024), read overflows in cell-name parsing in utility.c (#459, 2024), heap overflow with 256+ item data-validation lists and quadratic memory in default table columns (fixed 2026-07-07, after release 1.2.4); take a build from main or newer than 1.2.4 when inputs are untrusted."
+  ],
+  "pick_this_over_siblings_when": "Pick it over XLSX I/O (xlsxio) when the job is writing richly formatted workbooks with charts, validation or conditional formatting; xlsxio's catalogued evidence is for reading .xlsx, which libxlsxwriter cannot do at all. Pick it over DuckDB, Polars or the CSV parsers only when the deliverable must be a native Excel file rather than CSV or a dataframe.",
+  "verified_claims_summary": "In rust_xlsxwriter's performance docs, written by the same author as libxlsxwriter and Python XlsxWriter, hyperfine (warmup 3) timed whole processes writing a 4,000 x 50 sheet of alternating 12345 and 'Foo': C/libxlsxwriter 210.9 ms mean versus Python XlsxWriter 919.1 ms (4.36x), with Python start-up and import inside the Python figure and no compiler, flags, libxlsxwriter build options, Python version or CPU stated; the same run puts rust_xlsxwriter with zlib ahead of C at 152.6 ms. Independent but via a wrapper: rOpenSci's writexl README times writexl (libxlsxwriter inside) at 12.3 s versus openxlsx2 at 19.6 s for nycflights13::flights (336,776 x 19), median of 2 runs, with equal file sizes.",
+  "status_note": "Active (release 1.2.4 on 2026-01-06, security and memory fixes committed 2026-07-07), 1.8k stars, FreeBSD-variant BSD-2-Clause licence, copyable; the cited speedup is first-party with an undocumented build (the Makefile defaults to -O3, but CMake has no default build type), and the C row's 34.1 ms of system time versus 16.4 ms for Rust (derived from page data) is consistent with libxlsxwriter's default temp-file staging of each XML part, so a USE_MEM_FILE build may be faster than the published figure.",
+  "sources_read": [
+    "https://github.com/jmcnamara/libxlsxwriter",
+    "https://github.com/jmcnamara/libxlsxwriter/commits",
+    "https://github.com/jmcnamara/libxlsxwriter/issues?q=is%3Aissue+performance+OR+slow+OR+locale+OR+CVE",
+    "https://github.com/jmcnamara/libxlsxwriter/issues/64",
+    "https://github.com/jmcnamara/libxlsxwriter/issues/426",
+    "https://github.com/jmcnamara/libxlsxwriter/issues/459",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/License.txt",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/docs/src/working_with_memory.dox",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/docs/src/getting_started.dox",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/include/xlsxwriter.h",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/include/xlsxwriter/common.h",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/include/xlsxwriter/workbook.h",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/include/xlsxwriter/worksheet.h",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/include/xlsxwriter/utility.h",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/packager.c",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/utility.c",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/xmlwriter.c",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/worksheet.c",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/workbook.c",
+    "https://raw.githubusercontent.com/jmcnamara/libxlsxwriter/HEAD/src/shared_strings.c",
+    "https://raw.githubusercontent.com/jmcnamara/rust_xlsxwriter/main/src/performance.rs",
+    "https://raw.githubusercontent.com/ropensci/writexl/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
