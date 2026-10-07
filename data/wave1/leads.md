@@ -21,3 +21,4 @@
 - RasterDuck/vectormathbench (https://github.com/RasterDuck/vectormathbench): GLM vs DirectXMath, RTM and move::vectormath; BENCHMARKS.md empty, results in intermediate-benchmarks.md; uncatalogued (w1-mine-p, 2026-10-07).
 - libgcrypt (https://github.com/gpg/libgcrypt): two external comparisons blocked (gnupg.org/blog/20131215-gcrypt-bench.html; 2018 nettle-bugs thread, AES-128-CBC on i7-6820HQ: libgcrypt 1172, OpenSSL 1153, nettle 850 MB/s per search summary); retry where reachable (w1-mine-t, 2026-10-07).
 - libgd (https://github.com/libgd/libgd): vips-bench has jpg-gd at 5.47 s, 6.67x slower than libvips and slower than ImageMagick 4.44 s; not faster, no record written (w1-mine-t, 2026-10-07).
+- geogram paper-access retier lead (https://github.com/BrunoLevy/geogram): SIGGRAPH 2026 ParallelDelaunay3d paper, arXiv 2605.06408 (blocked); independent numbers would lift the record to B (batch-58, 2026-10-07).
