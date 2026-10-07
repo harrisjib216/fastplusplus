@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/rgamble/libcsv",
+  "one_liner": "Small streaming ANSI-style C CSV reader/writer with callbacks; only speed evidence is a 2012 Ruby wrapper beating Ruby's csv.",
+  "what_it_does": "libcsv is a two-file C library (libcsv.c plus csv.h) that parses CSV pushed to it in arbitrary chunks: you call csv_parse(p, buf, len, cb1, cb2, data) as bytes arrive, it calls cb1 once per field (pointer and length) and cb2 once per record, and csv_fini flushes a final record that lacks a newline. It also writes quoted fields (csv_write, csv_fwrite and the *2 variants with a custom quote). Delimiter, quote character, the set of space and terminator characters, strict mode and allocator (realloc/free) are configurable; it is not a drop-in for any standard API.",
+  "how_it_is_fast": "The parser is a byte-at-a-time finite-state machine with four states (ROW_NOT_BEGUN, FIELD_NOT_BEGUN, FIELD_BEGUN, FIELD_MIGHT_HAVE_ENDED) that copies parser state into locals for the loop and copies field bytes into one reusable growable buffer, so there is no per-field allocation and memory is bounded by the longest field. There is no SIMD, no memchr-style scanning and no zero-copy path; the 10x in the record comes from tokenizing in C instead of in a Ruby-level parser, not from any special algorithm.",
+  "when_to_use": [
+    "C or C++ code that receives CSV in arbitrary chunks (sockets, pipes, decompressor output) and wants a push parser with field and record callbacks plus a void* user pointer.",
+    "Messy real-world files: by default it accepts stray quotes in unquoted fields and unescaped quotes, with an opt-in CSV_STRICT mode that reports the first violation.",
+    "Streaming very large files with bounded memory, since only the current field is buffered.",
+    "Writing a binding for another language or tool; Ruby (Rcsv) and Perl (Text-CSV-LibCSV) wrappers already exist.",
+    "Projects that prefer a distro-packaged shared library (libcsv3 / libcsv-dev) over vendoring a header-only C++ parser."
+  ],
+  "when_not_to_use": [
+    "Raw throughput: it parses one byte per loop iteration with function-pointer checks and no SIMD; the only published figure works out to about 27 MB/s through Rcsv including Ruby string creation (166,591 bytes x 10 in 0.062 s, derived from page data), while SIMD siblings such as zsv report GB/s.",
+    "Zero-copy field views over an mmap'd buffer: every field byte is copied into the internal buffer (issue #32 asks for a CSV_NO_ALLOC option and has no reply).",
+    "Static linking into a proprietary binary without relink provisions (LGPL-2.1-or-later).",
+    "Needs beyond tokenizing: no header mapping, type conversion, parallel parsing or random access.",
+    "Projects that need an active upstream: last commit August 2021, open PRs from 2018 and 2022 unmerged, CMake and Meson requests unanswered."
+  ],
+  "integration": {
+    "form": "shared lib (autotools/libtool, distro package libcsv3) or source-drop of libcsv.c + csv.h",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "C99 compiler in practice: despite the 'pure ANSI C' description, HEAD mixes declarations and statements in csv_parse, csv_fini and csv_increase_buffer (PR #26 'Hoist declarations to conform to ANSI' open since 2022); csv.h has extern \"C\" guards for C++",
+    "platforms": "any (portable byte-oriented C, no SIMD or OS-specific code)",
+    "thread_safety": "not documented; the code keeps all mutable state in the caller-owned struct csv_parser (only a const error-string table is global), so separate parsers can run in separate threads, but one parser must not be shared without locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: Rcsv's committed bench.rb cannot produce the stdlib row. Its test/test_rcsv.csv header contains a field ' \"\"\"\"' (space before an opening quote), and CSV.parse raises CSV::MalformedCSVError 'Illegal quoting in line 1.' (reproduced this session with Ruby 3.3.6 / csv 3.2.8 on both the 2012 and current copies of the file); bench.rb's own comment says to remove the header quotes by hand. The README table dates from Rcsv's initial commit (2012-11-16, 'Tested on REE 1.8.7 and Ruby 1.9.3', libcsv 3.0.x before the 3.0.3 upgrade of 2013-01-11), so it was measured on an unpublished edited file with unstated Ruby, compiler and CPU.",
+    "The baseline has moved: with the header quotes removed, Ruby 3.3.6's csv 3.2.8 parsed the file 10 times in 0.123-0.139 s on an Intel Xeon @ 2.10GHz in this session versus 0.58 s in the README, so the 9.7x ratio is stale (different hardware; Rcsv itself was not rebuilt or re-timed).",
+    "Defaults differ from RFC 4180: leading and trailing spaces and tabs are stripped from unquoted fields, blank lines are not reported unless CSV_REPALL_NL is set, malformed quoting is accepted unless CSV_STRICT is set, and fields are not NUL-terminated unless CSV_APPEND_NULL is set. The cb1 pointer refers to the reused internal buffer and is only valid during the callback; csv_parse signals errors by returning fewer bytes than given, so callers must compare the return value and call csv_error.",
+    "The internal buffer grows linearly by blk_size (default 128 bytes) per realloc, so a multi-megabyte quoted field triggers tens of thousands of reallocs unless csv_set_blk_size raises it; csv_get_blk_size is documented in csv.3 but not declared in csv.h or defined in libcsv.c (link error), and NULL-parser checks in csv_parse, csv_error, csv_get_delim and csv_get_quote are assert()s that vanish under NDEBUG. The FAQ examples still call csv_init(&p) on a pointer, the pre-3.0 API."
+  ],
+  "pick_this_over_siblings_when": "Pick libcsv over zsv, fast-cpp-csv-parser or Vince's CSV Parser only when you want a tiny C-ABI push parser plus writer that tolerates malformed quoting and ships as a distro package; when throughput matters pick those siblings, which publish C/C++ measurements while libcsv publishes none. For Ruby users, zsv-ruby has current numbers against Ruby's CSV (4.3-6.2x), whereas the libcsv-backed Rcsv figures are from 2012.",
+  "verified_claims_summary": "Rcsv, a Ruby C extension embedding libcsv in strict mode and returning every field as a Ruby string, parsed an 889-line, 167 KB mixed-quoting CSV 10 times in 0.062 s real versus 0.619 s for Ruby's csv library (labelled FasterCSV, which implies Ruby 1.9.3 rather than 1.8.7), under Benchmark.bmbm in November 2012; Ruby version, compiler, flags and CPU are unstated, and the committed harness raises on the stdlib side unless the header is edited by hand. Nothing measures libcsv against another C or C++ parser.",
+  "status_note": "Abandoned since August 2021 (28 commits, open PRs from 2018 and 2022) but stable at 3.0.3, distro-packaged and small enough to vendor under LGPL-2.1-or-later; its only speed evidence is a 2012 Ruby-wrapper run whose committed harness throws CSV::MalformedCSVError on the baseline side, so treat the 9.7x as stale and not reproducible as published.",
+  "sources_read": [
+    "https://github.com/rgamble/libcsv",
+    "https://github.com/rgamble/libcsv/commits/master",
+    "https://github.com/rgamble/libcsv/issues?q=is%3Aissue",
+    "https://github.com/rgamble/libcsv/issues/32",
+    "https://github.com/rgamble/libcsv/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/README",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/FAQ",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/libcsv.c",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/csv.h",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/csv.3",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/Makefile.am",
+    "https://raw.githubusercontent.com/rgamble/libcsv/HEAD/COPYING",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/README.md",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/bench.rb",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/test/test_rcsv.csv",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/ext/rcsv/rcsv.c",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/ext/rcsv/extconf.rb",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/ext/rcsv/libcsv.c",
+    "https://raw.githubusercontent.com/arp/rcsv/HEAD/ext/rcsv/csv.h",
+    "https://raw.githubusercontent.com/arp/rcsv/f9cd754/README.md",
+    "https://raw.githubusercontent.com/arp/rcsv/f9cd754/test/test_rcsv.csv",
+    "https://raw.githubusercontent.com/arp/rcsv/f9cd754/ext/rcsv/rcsv.c",
+    "https://github.com/arp/rcsv/commits/master/bench.rb",
+    "https://github.com/arp/rcsv/commits/master/README.md",
+    "https://github.com/tc3t/dfglib/blob/master/misc/csvPerformanceRuns.md",
+    "https://raw.githubusercontent.com/BurntSushi/rust-csv/0.14.7/README.md"
+  ],
+  "confidence": 0.8
+}
