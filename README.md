@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1883 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 199 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [COPYABLE.md](COPYABLE.md): 1905 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 202 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 34 candidates that failed verification.
 
-Tiers across both lists: A 446, B 394, C 1149, D 93.
+Tiers across both lists: A 449, B 397, C 1162, D 99.
 
 ## Evidence tiers
 
@@ -29,7 +29,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | Domain | Category | Entries | A | B | C | D |
 |---|---|---|---|---|---|---|
 | compression-and-encoding | entropy-coders | 26 | 2 | 5 | 19 | 0 |
-| compression-and-encoding | general-lossless | 62 | 22 | 10 | 27 | 3 |
+| compression-and-encoding | general-lossless | 64 | 22 | 10 | 28 | 4 |
 | compression-and-encoding | integer-bitpacking | 24 | 2 | 2 | 19 | 1 |
 | compression-and-encoding | succinct-structures | 30 | 8 | 7 | 11 | 4 |
 | crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
@@ -37,16 +37,16 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
 | crypto-and-hashing | non-crypto-hashes | 30 | 6 | 17 | 7 | 0 |
 | crypto-and-hashing | signatures-kem | 20 | 7 | 5 | 8 | 0 |
-| interpreters-and-vms | bytecode-vms-and-wasm | 53 | 8 | 15 | 27 | 3 |
-| interpreters-and-vms | embedded-scripting | 56 | 6 | 27 | 21 | 2 |
-| interpreters-and-vms | jits | 57 | 12 | 10 | 34 | 1 |
+| interpreters-and-vms | bytecode-vms-and-wasm | 56 | 9 | 16 | 28 | 3 |
+| interpreters-and-vms | embedded-scripting | 57 | 6 | 27 | 22 | 2 |
+| interpreters-and-vms | jits | 60 | 12 | 11 | 36 | 1 |
 | interpreters-and-vms | language-interpreters | 50 | 11 | 10 | 27 | 2 |
-| media-and-graphics | color-and-resampling | 57 | 4 | 5 | 42 | 6 |
-| media-and-graphics | font-shaping-text-layout | 23 | 1 | 2 | 18 | 2 |
-| media-and-graphics | image-codecs | 72 | 17 | 6 | 40 | 9 |
-| media-and-graphics | rasterizers-2d | 33 | 2 | 6 | 20 | 5 |
+| media-and-graphics | color-and-resampling | 61 | 4 | 5 | 44 | 8 |
+| media-and-graphics | font-shaping-text-layout | 24 | 1 | 2 | 19 | 2 |
+| media-and-graphics | image-codecs | 75 | 18 | 7 | 41 | 9 |
+| media-and-graphics | rasterizers-2d | 34 | 2 | 6 | 20 | 6 |
 | media-and-graphics | unicode-utf8 | 3 | 0 | 0 | 2 | 1 |
-| media-and-graphics | video-audio | 58 | 3 | 3 | 45 | 7 |
+| media-and-graphics | video-audio | 60 | 3 | 3 | 46 | 8 |
 | networking-and-servers | dns-quic-http3 | 16 | 0 | 6 | 10 | 0 |
 | networking-and-servers | event-loops-io | 36 | 6 | 7 | 23 | 0 |
 | networking-and-servers | http-parsers | 23 | 5 | 1 | 17 | 0 |
@@ -54,12 +54,12 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
 | networking-and-servers | websocket-grpc-rpc | 22 | 5 | 2 | 15 | 0 |
 | numerics-and-science | autodiff-and-ml-kernels | 81 | 12 | 16 | 52 | 1 |
-| numerics-and-science | big-integer-arbitrary-precision | 41 | 10 | 3 | 25 | 3 |
+| numerics-and-science | big-integer-arbitrary-precision | 42 | 10 | 3 | 26 | 3 |
 | numerics-and-science | blas-lapack | 55 | 14 | 12 | 23 | 6 |
 | numerics-and-science | fft | 46 | 12 | 9 | 19 | 6 |
 | numerics-and-science | geometry-spatial | 62 | 5 | 9 | 45 | 3 |
-| numerics-and-science | random-and-quasi-random | 59 | 15 | 4 | 37 | 3 |
-| numerics-and-science | sparse-and-solvers | 55 | 7 | 25 | 20 | 3 |
+| numerics-and-science | random-and-quasi-random | 60 | 15 | 4 | 38 | 3 |
+| numerics-and-science | sparse-and-solvers | 56 | 7 | 25 | 20 | 4 |
 | parsing-and-text | csv-tabular | 12 | 2 | 0 | 10 | 0 |
 | parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
 | parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |
@@ -68,7 +68,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | text-search-and-indexing | 10 | 3 | 0 | 7 | 0 |
 | parsing-and-text | unicode-utf8 | 16 | 6 | 0 | 10 | 0 |
 | runtime-and-systems | allocators-gcs | 28 | 4 | 4 | 18 | 2 |
-| runtime-and-systems | coroutines-fibers | 18 | 0 | 1 | 14 | 3 |
+| runtime-and-systems | coroutines-fibers | 19 | 0 | 1 | 15 | 3 |
 | runtime-and-systems | filesystems-and-io | 46 | 1 | 9 | 33 | 3 |
 | runtime-and-systems | logging-tracing | 16 | 11 | 0 | 5 | 0 |
 | runtime-and-systems | profilers-and-instrumentation | 20 | 0 | 5 | 10 | 5 |
@@ -81,7 +81,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | stdlib-replacements | async-tasks-threadpools | 8 | 5 | 1 | 1 | 1 |
 | stdlib-replacements | bitsets-and-succinct | 6 | 3 | 0 | 3 | 0 |
 | stdlib-replacements | concurrency-queues-locks | 8 | 6 | 0 | 2 | 0 |
-| stdlib-replacements | hash-maps-sets | 19 | 13 | 1 | 5 | 0 |
+| stdlib-replacements | hash-maps-sets | 20 | 14 | 1 | 5 | 0 |
 | stdlib-replacements | io-and-filesystem | 4 | 1 | 0 | 3 | 0 |
 | stdlib-replacements | k-mer-dictionaries | 3 | 1 | 2 | 0 | 0 |
 | stdlib-replacements | math-simd-linear-algebra | 10 | 2 | 2 | 5 | 1 |

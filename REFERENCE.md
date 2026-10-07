@@ -2781,6 +2781,44 @@ Zig word-hash codec (Density-style) that encodes faster than lz4 --fast=20 and z
 
 [repo](https://github.com/VantorreWannes/firetrail) · [benchmark](https://raw.githubusercontent.com/VantorreWannes/firetrail/HEAD/README.md)
 
+##### DeLZSA (ivagorRetrocomp)  `Assembly (i8080, PDP-11)`  `no license`  `unknown`  `Tier D`
+
+Intel 8080 and PDP-11 assembly decompressors for the LZSA1/LZSA2 formats; code no longer publicly reachable, no speed figures.
+
+**Beats:** LZSA reference decompressor (emmanuel-marty/lzsa) — No benchmark exists: nothing was measured for DeLZSA against the LZSA reference decompressor or anything else, and the code cannot be inspected. The record is kept at tier D as a pointer from the LZSA README's External links.
+
+**Known shortcoming:** Repository and owner page return 404, as does the 2019 predecessor gitlab.com/ivagor/lzsa8080; only the emmanuel-marty/lzsa README link and search snippets remain. No code, no numbers, no licence; kept at D under the keep-and-document rule (private-repo precedent) with has_code false.
+
+**Known shortcoming:** Enricher: repo, owner page and raw README 404 on every branch, the GitLab predecessor ivagor/lzsa8080 is gone, and no mirror was found in 3 searches; confidence 0.3. Side note: the LZSA README says LZSA1 decodes 'faster than LZ4' while its own table shows 90% of LZ4_HC.
+
+**Independent measurement:** a reachable repository with any speed numbers
+
+**Independent measurement:** a reachable repository
+
+**How:** Not documented: no source or README could be read. Any speed comes from the LZSA format itself, which is byte-aligned and avoids 16-bit arithmetic on 8-bit CPUs; the LZSA README puts LZSA1 at about 90% and LZSA2 at about 75% of LZ4 decompression speed on 8-bit systems (ZX7 at 47.73%), measured on its own Z80/6502 decoders, not on DeLZSA.
+
+**Use it when:**
+- You are writing software for an Intel 8080 or KR580-class machine, or a PDP-11 family machine, want LZSA-packed assets, and can obtain a copy of Gorodetsky's routines from another source.
+- You want a reference for porting the LZSA2 nibble-and-token decoder to a CPU without an existing LZSA routine and the code turns up again.
+- Retro or demoscene projects where packed size matters more than decode speed (LZSA2 compresses about as well as ZX7 on the LZSA README corpus).
+
+**Skip it when:**
+- Any modern-CPU workload: this is retro-CPU assembly; use the LZSA C decompressor, LZ4 or zstd instead.
+- Anything that needs code you can vendor today: the GitHub repo, the owner account and the GitLab predecessor are all gone, so there is nothing to copy and no license.
+- Z80, 6502, 65816, 6809, 8088 or x86 targets: the LZSA repo ships its own size- and speed-optimized decoders for those.
+- When you need a measured speed or size figure for the 8080 or PDP-11 routine: none was ever seen.
+
+**Vs siblings:** Only when the target is an 8080 or PDP-11 and you can find the routines elsewhere; for every other CPU use the decoders shipped in LZSA itself, and on modern machines LZ4 or lz4ultra give faster decoding with maintained code.
+
+**Gotchas:**
+- Dead link: github.com/ivagorRetrocomp/DeLZSA, github.com/ivagorRetrocomp and raw.githubusercontent.com README paths (HEAD, main, master) all return 404; the 2019 GitLab home gitlab.com/ivagor/lzsa8080 returns '404 Project Not Found' and GitLab has no user named ivagor.
+- The listed baseline is not comparable: the LZSA reference decompressor is portable C for modern machines, while DeLZSA targets 8080 and PDP-11, so 'faster than baseline' has no defined meaning here.
+- The only nearby numbers are LZSA format figures from the LZSA README (LZSA1 90%, LZSA2 75% of LZ4 decode speed on a ZX Spectrum and C64 file set), measured with other people's Z80/6502 decoders; that README's text also says LZSA1 decompresses 'faster than LZ4 on 8-bit systems' while its own table shows 90% of LZ4_HC -19 -B4 -BD.
+
+**Status:** Gone: repo, owner account and GitLab predecessor are all 404 (last seen linked from the LZSA README, whose last change was 2023-02-13), license unknown, so it is reference-only with nothing to vendor.
+
+[repo](https://github.com/ivagorRetrocomp/DeLZSA)
+
 #### integer-bitpacking
 
 ##### SFVInt  `C++`  `no license`  `unknown`  `Tier C`
@@ -3385,6 +3423,48 @@ Unlicensed three-step tutorial for a fixed 5x5 float Gaussian blur; it beats Ope
 **Status:** Abandoned since 2021-03-25, with issues #1 and #3 unanswered. It has no license, so it is reference-only, and the SIMD stages need an OpenCV from before 4.11 (or the legacy-operators header) to compile.
 
 [repo](https://github.com/zanazakaryaie/fastGaussianBlur) · [benchmark](https://github.com/zanazakaryaie/fastGaussianBlur)
+
+##### honeydiff (vizzly-testing)  `Rust`  `MIT`  `active`  `Tier D`
+
+Closed-source Rust image-diff engine for Node (CIEDE2000, AA suppression, SSIM/GMSD); no current benchmark against odiff or pixelmatch.
+
+**Beats:** none compared (candidates odiff and pixelmatch) — There is no current cross-library measurement: the README lists only Honeydiff's own core timings (Vizzly screenshot ~2.81 ms default and ~2.18 ms strict, 18.3 MP tall screenshot ~147 ms default and ~4.34 ms strict, 1080p SSIM ~14.7 ms, GMSD ~10.9 ms) with no hardware stated, though CHANGELOG 0.11.1 names local Criterion runs on Apple Silicon. The only head-to-head the author published (README of 2026-05-19, v0.10.3, end-to-end CLI on the tall fixture) has odiff 4.2.1 at ~0.41 s against Honeydiff's ~1.27 s default and ~0.42 s exact mode.
+
+**Known shortcoming:** No baseline comparison anywhere; the repo is binary-only (no Rust source, Cargo.toml and r-honeydiff 404) and benchmarks/BENCHMARK_RESULTS.md is 404; the changelog has self-comparisons only and its 0.8.1 SSIM figures predate the 0.11.0 correctness change. Kept at D under the keep-and-document rule, reference (has_code false), 14 stars.
+
+**Known shortcoming:** Enricher: the README claimed '6x faster than odiff (79 ms vs 474 ms)' until commit 4021bb5 (2026-05-19) removed it; the replacement text says Honeydiff times are core-only (preloaded images, no PNG decode or startup), and the author's own end-to-end CLI run on the tall fixture gives odiff 4.2.1 about 0.41 s against Honeydiff default about 1.27 s and exact/no-AA about 0.42 s, so odiff was about 3.1x faster than the default mode (derived from page data) and the 6x claim is withdrawn. README rows change every release (after the 0.11 metric change Full HD went 18.9 to 31.6 ms and 4K 77.7 to 131 ms; gone by v0.15.0), the benchmark doc and docs/REFERENCES.md are 404, and there is no harness or hardware for the current table. AA suppression had false-negative bugs (fixed 0.11.0/0.12.0) and capped early-exit comparisons could report false identity (fixed 0.12.0). The shipped npm 0.17.0 binary (rustc 1.98.1, rayon, image 0.25.10 default features) is SSE2-only on x86-64 with no AVX; the engine repo is private.
+
+**Independent measurement:** any comparison against odiff or pixelmatch
+
+**Independent measurement:** end-to-end comparison against odiff with a public harness
+
+**How:** The engine source is not public, so this comes from the CHANGELOG and symbol names in the shipped Linux x64 binary: rows are scanned in parallel on a rayon pool (compare_work collects per-row ScanSummary/RowDeltas), pixels with identical RGB skip the Lab conversion, and exact/no-AA count-only comparisons scan raw RGB rows directly (0.11.1). CIEDE2000 is computed in f64 through an sRGB-to-linear lookup table, regions are labelled with a union-find over row spans, SSIM uses a separable Gaussian blur in f64 with a direct path for small images, GMSD runs on 2x-downsampled luma, and height shifts are matched by row checksums. The x86-64 binary has no AVX instructions in its honeydiff_core functions (SSE2 only), so the speed comes from threads and short-circuits, not wide SIMD.
+
+**Use it when:**
+- Node.js 22+ visual-regression pipelines (browser or app screenshots) that need a perceptual CIEDE2000 tolerance and anti-aliasing suppression rather than a raw pixel count.
+- Diff triage tooling that wants region bounds, Delta E statistics, SSIM/MS-SSIM/GMSD and diff fingerprints from one call, for example to group the same header change across many pages.
+- Full-page screenshots whose height changed by one inserted or removed block (alignHeightChanges: true keeps later changes visible).
+- Strict gates on very tall screenshots with threshold 0, antialiasing false and minimumRegionPixels 1: the author reports ~4.34 ms core time for an 18.3 MP (750x24,412) fixture versus ~147 ms in default mode.
+- Teams that also want WCAG contrast screening and CVD simulation from the same native package.
+
+**Skip it when:**
+- When end-to-end speed is the goal: the author's own README of 2026-05-19 (v0.10.3) measured odiff 4.2.1 at ~0.41 s against Honeydiff default ~1.27 s and exact/no-AA ~0.42 s on the tall fixture, so odiff was about 3.1x faster than the default mode (derived from page data).
+- When you need the engine source, a Rust crate, a C/C++ or Python API, or to build it yourself: the engine lives in a private repo (package.json points to vizzly-testing/r-honeydiff, 404), nothing is on crates.io or PyPI, and the MIT licence covers only the JS loader you can see.
+- On Intel macOS, musl/Alpine Linux or Node older than 22: prebuilt binaries exist only for macOS ARM64, Linux glibc x64/ARM64 and Windows x64, and the loader throws on anything else.
+- Where API stability matters: pre-1.0 with breaking changes in 0.4.0 (ESM only), 0.5.0 (YIQ options replaced by CIEDE2000), 0.11.0 (SSIM/MS-SSIM/GMSD values changed) and 0.16.0 (include flags and result fields removed).
+- Content with large anti-aliased or gradient areas in default mode: the AA path is ~34x the exact path on the tall fixture (147 vs 4.34 ms), and CHANGELOG 0.11.1 says synthetic full-surface gradient stress cases got slower after the stricter AA checks.
+
+**Vs siblings:** Pick it over odiff when you need Delta E thresholds, anti-aliasing suppression, region statistics or SSIM/GMSD inside Node and can accept a closed engine; pick odiff (open source, with a published hyperfine comparison against ImageMagick and pixelmatch) when raw end-to-end speed or a standalone CLI matters, since Honeydiff's own README measured odiff about 3x faster than its default mode. imgdiff is obsolete.
+
+**Gotchas:**
+- Withdrawn odiff claim: until 2026-05-19 the README said '6x faster than odiff (79ms vs 474ms)' on a 750x24,162 screenshot (Apple M-series). Commit 4021bb5 removed it, stated that the Honeydiff table is core time on preloaded images without PNG decode, process startup or file output, and reported end-to-end CLI runs on the tall fixture where odiff 4.2.1 (~0.41 s) beat Honeydiff default (~1.27 s) and matched exact/no-AA (~0.42 s). The 6x figure therefore appears to have set Honeydiff core time against an end-to-end odiff run; do not cite it.
+- No harness, hardware or fixtures are published (benchmarks/BENCHMARK_RESULTS.md and docs/REFERENCES.md return 404) and the README table changes every release: after the 0.11 metric-correctness change Full HD default went from ~18.9 to ~31.6 ms and 4K from ~77.7 to ~131 ms (v0.10.3 vs v0.11.1 READMEs), and by v0.15.0 those synthetic rows were replaced with the Vizzly and tall-screenshot fixtures. Core time excludes PNG decode, which dominates real runs (tall fixture exact: ~4.9 ms core vs ~0.42 s CLI).
+- The suppression logic has had false-negative bugs, the dangerous kind for regression tests: AA detection hid flat full-surface colour regressions (fixed 0.11.0) and thin border or divider recolouring (fixed 0.12.0), capped early-exit comparisons could report false identity (fixed 0.12.0, early exit removed in 0.16.0), and the 0.8.1 SSIM skip returned 1.0 when only AA-filtered pixels differed. The 0.8.1 '5x faster SSIM' (239 to 51 ms at 1920x1080) used integral images, i.e. a box window, before 0.11.0 switched to the Gaussian-weighted SSIM of the paper. Pin versions and re-baseline after upgrades.
+- Packaging: the 0.17.0 tarball is 14.7 MB (36 MB unpacked) with all four platform binaries; the Linux x64 .node is unstripped with debug info (10.3 MB) and carries an AVIF encoder (rav1e) and EXR/TIFF/GIF codecs from the image crate's default features; the x86-64 build uses SSE2 only.
+
+**Status:** Actively released (0.17.0 on 2026-09-06, single maintainer, release-tag commits only) but reference-only: the public repo is a JS loader plus binaries, the Rust engine is private, and the author's own May 2026 end-to-end run shows odiff faster, so the earlier '6x faster than odiff' README claim should be treated as withdrawn.
+
+[repo](https://github.com/vizzly-testing/honeydiff) · [benchmark](https://github.com/vizzly-testing/honeydiff)
 
 #### font-shaping-text-layout
 
@@ -6008,6 +6088,49 @@ Hardware proposal: a small in-order support core runs malloc/free for all cores;
 **Status:** Abandoned since 2013-05-07 with no license (all rights reserved) and HEAD sources that do not compile as a library; reference only.
 
 [repo](https://github.com/bytemaster/fc_malloc) · [benchmark](https://github.com/bytemaster/fc_malloc/blob/master/README.md)
+
+#### coroutines-fibers
+
+##### bluebox  `C`  `no license`  `stale`  `Tier C`
+
+Toy Redis-protocol server (SET/GET/DEL/PING) showcasing Neco coroutines; first-party memtier run shows 2.4x redis-server throughput.
+
+**Beats:** redis-server (its epoll event loop) — One first-party memtier_benchmark run with default options (4 threads x 50 connections, pipeline 1, 1:10 SET:GET, 32-byte values) on Linux with an AMD Ryzen 9 5950X gave Bluebox 493,346 ops/sec at 0.405 ms average (p99 0.463 ms) against redis-server with persistence off at 207,735 ops/sec and 0.963 ms (p99 1.871 ms), about 2.4x (derived from page data). Compiler, Redis and memtier versions are unstated, Bluebox used two extra Neco write threads, and every GET was a miss because of memtier's shared default seed.
+
+**Known shortcoming:** First-party single run of a 4-command toy server against full Redis: Bluebox gets two extra Neco write threads on Linux (NECO_USEWRITEWORKERS, NECO_MAXIOWORKERS 2) while Redis ran single-threaded by default; the Redis run used memtier_benchmark from PATH and the Bluebox run a local ./memtier_benchmark, so the clients may differ; GETs only exercise the miss path. SET was disabled by an if (0) in commit 25a2011 (2025) and restored in 2190cd7, after the README numbers (fcde463, 2024-04-15). No LICENSE file, so reference only; demo app for the catalogued Neco; 29 stars, stale since 2025-05-27.
+
+**Known shortcoming:** Enricher: memtier by default clones one object generator per client with a constant seed (no --distinct-client-seed or --randomize), so all 200 clients replay the same key sequence and both tables show 0.00 hits; the store held about 909 keys, so the run measures connection handling plus a miss lookup in a tiny table. Closed loop at pipeline 1 means ops/s = 200 / average latency, so the 2.4x is round-trip cost per request, with Neco's two I/O threads doing every write() and the scheduler calling epoll_ctl before every read against redis-server's single io-thread; unpinned, client binaries differ. Bugs outside the measured path: cmdDEL leaks key and value, read_integer0 reads buf[-1] and checks stale errno (SET k "" can fail), KEYS ignores its pattern, hashmap seeds fixed at 0,0.
+
+**Independent measurement:** same-client, same-thread-count comparison
+
+**Independent measurement:** randomised-key memtier run with equal thread counts
+
+**How:** Each connection is a blocking-style read/dispatch loop inside a Neco coroutine (llco assembly context switch, about 11 ns per the Neco README) over a 4 KiB buffered neco_stream; replies are buffered and flushed when the read buffer drains or after 1,000 pipelined commands. Keys live in tidwall's open-addressing Robin Hood hashmap keyed with xxHash3. On Linux the vendored Neco enables write workers by default (NECO_USEWRITEWORKERS, NECO_MAXIOWORKERS 2), so every write() is handed to one of two I/O threads while the scheduler thread re-arms an EPOLLONESHOT registration and reads; the server therefore spreads its syscalls over up to three threads, against one thread for default redis-server. That offload and the much smaller per-command work (no ACL checks, stats, keyspace notifications, expiry or object encoding) likely explain most of the gap; the README isolates neither from coroutine switching.
+
+**Use it when:**
+- Reading or adapting a coroutine-per-connection RESP or line-protocol server in C on Neco: the read-args, dispatch and flush-on-empty-buffer loop in src/bluebox.c is short and clear.
+- Reproducing the Neco versus redis-server comparison on Linux with a fairer harness (memtier --distinct-client-seed or --randomize, a key range that produces hits, pinned client and server cores, Redis io-threads matched to Neco's I/O workers).
+- Local experiments on how Neco's Linux write-worker offload changes latency with hundreds of connections and one request in flight each (memtier's default pipeline 1).
+- A throwaway local endpoint for client code that only issues GET/SET/DEL/PING, when Redis features and licensing do not matter.
+
+**Skip it when:**
+- As a Redis replacement: only SET (no EX/NX options), GET, DEL, PING, QUIT, DBSIZE and KEYS (which ignores its pattern); no persistence, expiry, eviction or maxmemory, auth, TLS, replication, transactions or non-string types.
+- In shipped code: the repository has no LICENSE file, so Bluebox's own code carries no grant; take the MIT-licensed neco.c and hashmap.c from their own repositories instead.
+- On untrusted networks: the key hashmap uses fixed seeds 0,0 (hash flooding), each bulk argument may be up to 500 MB with no memory cap, and DEL leaks the stored key and value buffers.
+- When you need multi-core scaling: one Neco scheduler serves all connections (Neco lists a scalable multithreaded runtime as a non-goal); only write() calls leave that thread.
+- As evidence that Neco beats an epoll loop: the benchmark compares whole servers with different feature sets and thread counts, not event loops.
+
+**Vs siblings:** Pick Bluebox only as a worked example of a Neco-based network server; for the coroutine library itself take Neco (same author, MIT, about 11 ns switches, no baseline), libdill or libmill for C coroutines with published switch costs against Go and Boost.Context, or iqiyi libfiber if you want a server-level QPS comparison against libco.
+
+**Gotchas:**
+- Harness flaw affecting both runs: memtier_benchmark clones one object generator per client with a constant seed unless --distinct-client-seed or --randomize is given, so all 200 clients (4 threads x 50) replay the same R:R key sequence and GETs land on keys that were never SET; that is why both tables show 0.00 hits. The store held only about 909 distinct 32-byte keys (10,000 requests per client, 1 in 11 a SET), so the run measures connection handling plus a miss lookup in a tiny table, not a key-value workload.
+- Closed loop with one request in flight per connection: ops/sec equals 200 connections divided by average latency (200 / 0.96274 ms = 207.7k, 200 / 0.40524 ms = 493.5k, derived from page data), so the 2.4x is the per-request round-trip cost of each server with unpinned client threads on the same 16-core machine; client binaries also differ (memtier_benchmark from PATH versus ./memtier_benchmark).
+- Unequal threads: the vendored Neco (already at README commit fcde463) sends every write() to up to 2 I/O worker threads through a mutex and condition variable, and re-arms EPOLLONESHOT with an epoll_ctl call before every read, while redis-server at its default io-threads 1 does all reads and writes on one thread; compare against Redis with io-threads enabled before crediting coroutines.
+- Code bugs outside the measured path: cmdDEL removes entries without bulk_release of the stored key and value (leak per deleted key); read_integer0 reads buf[-1] on an empty length line and never clears errno before strtoll, so a stale errno (Neco's epoll_ctl MOD-then-ADD leaves ENOENT) can reject a valid zero length such as SET k "" as 'invalid bulk length'. The 2025 commits 25a2011 (SET body disabled) and 2190cd7 (restored) postdate the README numbers.
+
+**Status:** Stale since 2025-05-27 (10 commits, 29 stars, 1 fork, no issues) and unlicensed, so reference reading only; the reusable parts, Neco and hashmap.c, are MIT in their own repositories.
+
+[repo](https://github.com/tidwall/bluebox) · [benchmark](https://github.com/tidwall/bluebox)
 
 #### filesystems-and-io
 

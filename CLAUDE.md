@@ -185,10 +185,28 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 
 ## Status (2026-10-06)
 
-- Waves 1-12 are finished except the open items below. Lists after the 2026-10-06 wave 12 session: COPYABLE 1883,
-  REFERENCE 199, REJECTED 34. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads and the
+- Waves 1-12 are finished except the open items below. Lists after the 2026-10-07 backlog seed sweep: COPYABLE 1905,
+  REFERENCE 202, REJECTED 34. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads and the
   RetroWrite enrichment, wave 12 seed leads and paper-access retiers in data/wave12/leads.md; then the
   QUEUE extensions: waves 13-14, cross-language claims, presentation).
+- Backlog seed sweep (2026-10-07, QUEUE "Unfinished work"): 29 uncatalogued leads from data/wave{8,9,10,11,12}/leads.md
+  seeded in one pass (w8-seed-m, w9-seed-d, w10-seed-e/f, w11-seed-a, w12-seed-e; 6 Sonnet agents), 12 verify batches
+  (w8 162-163, w9 63, w10 104-107, w11 50, w12 92-94), 22 verified and enriched, 4 duplicates (mps-flash-attention is a
+  binding of metal-flash-attention, YAFU shares avx-ecm's only claim, goant is a Go port of ant, dsx-ai-factory/
+  model-streamer is the renamed run-ai repo, recorded with a repo_url correction), 0 rejects. New A entries:
+  tsl::array_map (wave 9, hash-maps-sets by category override), ConvectionKernels (wave 10), evm.zig (wave 12); B:
+  JPEGDEC, hxcpp, Cuik; C or D for the rest (bluebox, zurand, SpLLT, bzip2gpu, DeLZSA repo 404, zenquant not faster,
+  BoofCV, Canvas-Txt, nssfactory, honeydiff withdrawn 6x, Simd slower than OpenCV in user issues, scany, clownresampler,
+  angelsea, Box86, FAFO). Enricher-driven retiers: avxbls-sig B to C (harness compares SwiftEC hashing against blst's
+  SSWU), LC A to C (warm second run vs cold baselines, generic-arithmetic prefixes), AssemblyScript-style caveat
+  corrections for hxcpp (JS rows double-counted), zurand (randompack built without AVX2), evm.zig (mock-host storage
+  rows, stale baseline versions), BoofCV (unequal kernels), Canvas-Txt (cached mode, UAX-29 breaks), nssfactory
+  (bm3dcuda BM3Dv2 ambiguity), JPEGDEC (TJpgDec not at its fastest; open OOB write #119), bzip2gpu (stateless RLE1
+  decoder, CRC unchecked), Simd, FAFO (precomputed write sets), Box86 (stale). Retier files: wave8 retier-15, wave9
+  retier-06, wave10 retier-39, wave11 retier-02, wave12 retier-01. Wave-aware helper copies (WAVE=N) of check_ids,
+  addretier, gen_enrich and mk_verify live in the scratchpad; gen_enrich must skip prompts of entries later marked
+  duplicate (stale prompts for maskedvbyte, iczelia/bzip3 and nanorand-rs were deleted). RetroWrite (wave 11) still
+  needs the user's go before its enricher is relaunched.
 - Wave 12 (interpreters-and-vms) closed 2026-10-06 in one cloud session: searches b1-b8 for all 4 categories
   (32 raw files; b7/b8 on WebSearch snippets plus github.com since blogs and HN were blocked, 36 records) plus
   seed-a..d (28 lead projects); 239 merged, 90 verify batches with 236 verdicts (confirm 209, downgrade 22,

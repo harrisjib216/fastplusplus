@@ -4219,6 +4219,49 @@ Microsoft Research C library for FourQ ECDH and SchnorrQ signatures; up to 5.6x 
 
 #### bytecode-vms-and-wasm
 
+##### evm.zig (evmz, Zig EVM execution engine)  `Zig`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Pre-1.0 Zig EVM with tail-call dispatch; first-party runs beat evmone baseline and revm on storage and snailtracer fixtures.
+
+**Beats:** evmone (v0.23.0, baseline and advanced interpreters) and revm (=43.0.2 raw interpreter, Interpreter::run_plain) — Author-run VM-core benchmark (deployed runtime bytecode called repeatedly, analysis outside the timed window, fixed Osaka, median of five 100-run medians) on an Apple M1 Max with ReleaseFast and XKCP Keccak: evmz beats evmone-baseline 1.05x to 5.27x on 9 of 14 evm-bench-style fixtures (snailtracer 3.00x, ERC20 transfer 1.66x) and loses on 5, and beats revm's raw interpreter on every row; the older AMD EPYC Genoa KVM run is near parity with evmone-baseline except snailtracer 1.74x. The baselines were evmone 0.23.0-dev built by Zig's clang at -O2 and revm 41.0.0 with fat LTO, and the storage rows are skewed by differing mock hosts.
+
+**Known shortcoming:** VM-core only; the harness checks only success status with no cross-engine output or gas check; evmone-base is faster on 5 of 14 M1 rows and near parity on the older AMD KVM run; evmone was built by Zig's clang rather than its own CMake build; XKCP Keccak is used on the evmz side only; first-party, 3 stars. Not the rejected cryptuon/zig-evm.
+
+**Known shortcoming:** Enricher: the storage rows measure mock hosts, not dispatch: the evmone mock host (bench/evmone/vm_loop.cpp) uses std::map with 52-byte keys and two EVMC callbacks per SLOAD/SSTORE while the evmz host (bench/src/common.zig) uses a Zig AutoHashMap with fused loadStorage/storeStorage and one getOrPut, so SLOAD 3.97x, SSTORE 5.27x and part of the ERC20 margins come from host data structures; the arithmetic loop is at parity (1.05x). The M1 table (2026-08-13, unchanged since d8f5e95) ran evmone commit 786c96f1 (0.23.0-dev) and revm 41.0.0, and PR #65 (2026-09-10) bumped the harness to evmone v0.23.0 and revm 43.0.2 without re-measuring, so the record's baseline versions were wrong; Zig passes -O2 rather than -O3 for C/C++ under ReleaseFast, so evmone was built at -O2; the EVMC adapter was removed (#33), so it is not drop-in.
+
+**Independent measurement:** output- and gas-checked comparison with evmone's own build
+
+**Independent measurement:** shared-host comparison with evmone's own -O3 build
+
+**How:** Tail-call threaded dispatch: each opcode handler takes the instruction pointer, stack pointer and gas as register arguments, charges gas, executes and jumps to the next handler with @call(.always_tail) (src/interpreter/tail_dispatch.zig), so there is no central loop or per-op capability check. Fork rules, tracing and single-stepping are comptime choices that produce separate specialized dispatch tables, jump validity comes from a precomputed JUMPDEST bitmask, and the executor uses preallocated pooled frames, stacks and buffers. The host interface also offers fused loadStorage/storeStorage callbacks that return access warmth and value in one call, which the benchmark host implements with a single hash-map getOrPut.
+
+**Use it when:**
+- A Zig codebase that needs an embeddable EVM interpreter and can track a pre-1.0 API pinned to a commit.
+- Specialized or custom-fork EVMs (L2 rule changes, extra precompiles, custom opcodes) where compile-time specialization via Spec.extend beats runtime switches.
+- zkVM guest work: the same stateless block validator compiles for SP1, ZisK and OpenVM with bounded pools.
+- Compute-heavy contract execution (the snailtracer row: 19.97 ms vs evmone-baseline 59.80 ms on M1, 33.35 vs 57.98 ms on the AMD run), if you can re-measure on your own hardware first.
+
+**Skip it when:**
+- Production consensus or anything handling value: version 0.0.0, unaudited, public API changes between commits, 3 stars and no external users documented.
+- C/C++ or Rust clients wanting a drop-in for evmone or revm: there is no EVMC adapter any more and only an experimental C API.
+- Workloads dominated by MSTORE, LOG or many small Keccak calls: evmone-baseline is faster on the M1 MSTORE loop (0.67x), LOG0 rows (0.58x and 0.69x), LOG4 0-byte (0.80x) and ten-thousand-hashes (0.86x).
+- x86-64 servers if you expect the M1 margins: the older AMD EPYC Genoa run is within about 7% of evmone-baseline on 9 of 14 rows and only clearly ahead on snailtracer (1.74x), SSTORE (1.41x) and MSTORE (1.44x).
+- Teams that cannot follow Zig toolchain churn: main requires Zig 0.16.x and each release supports one Zig minor.
+
+**Integration:** module · none for the pure-Zig core codecs (rlp, mpt, ssz with .core = false); the EVM core pulls lazy C dependencies for crypto: libsecp256k1 v0.8.0 (default since #69), blst, mcl, and optional XKCP Keccak · Zig 0.16.0 (minimum_zig_version in build.zig.zon); main tracks Zig 0.16.x · native x86-64 and aarch64 (benchmarked on Linux x86-64 and macOS arm64); RV64 guest builds for SP1, ZisK, OpenVM
+
+**Vs siblings:** Pick evmz over evmone or revm only when you are in Zig, want compile-time fork specialization or zkVM guest builds, and accept pre-release risk; evmone remains the mature C++ interpreter with an EVMC ABI and revm the Rust incumbent with a large user base. Guillotine's catalogued README table shows it at rough parity with evmone on ERC20 rows, so neither newcomer has a clear win over evmone beyond its own first-party runs.
+
+**Gotchas:**
+- Harness flaw in the storage rows: the evmone runner's mock host (bench/evmone/vm_loop.cpp) stores slots in a std::map (red-black tree keyed by a 52-byte array) and every SLOAD/SSTORE goes through two EVMC callbacks (access_storage, then get_storage or set_storage), while evmz's mock host (bench/src/common.zig) uses a Zig AutoHashMap with fused loadStorage/storeStorage callbacks that do one getOrPut; revm's sidecar uses Rust's SipHash HashMap. The storage-sload-loop fixture is 1000 iterations of 8 SLOADs of slot 0, so the 3.97x SLOAD and 5.27x SSTORE wins over evmone-baseline (and part of the ERC20 margins) measure mock-host data structures and callback count as much as the interpreter, unlike the arithmetic loop where the engines are at parity (1.05x).
+- The published M1 table (dated 2026-08-13, unchanged in bench/README.md since commit d8f5e95) was produced by a harness that pinned evmone at commit 786c96f1 (0.23.0-dev) and revm =41.0.0; PR #65 (2026-09-10) moved the harness to evmone v0.23.0 and revm =43.0.2 without refreshing the tables, so the baseline versions the repo now names are not the ones measured.
+- Compiler asymmetry: evmone and intx are compiled inside the Zig build by Zig's bundled clang, and Zig passes -O2 (not -O3) for C/C++ sources in ReleaseFast while Zig code gets its -O3 equivalent; evmone's own CMake Release build would use CMake's -O3 default. The M1 run also gives evmz the optional XKCP Keccak while evmone uses its bundled keccak.c.
+- Cross-engine correctness is not checked: each runner only requires a success status, and compare.zig never compares return data, gas used or logs between engines (EEST conformance runs in CI cover evmz's semantics separately).
+
+**Status:** Actively developed (last commit 2026-10-05, 174 commits, 0 issues filed) and dual MIT OR Apache-2.0, but pre-release version 0.0.0 with an unstable API, AI-assisted development (AGENTS.md, CLAUDE.md) and only first-party benchmarks whose published tables lag the current harness.
+
+[repo](https://github.com/0xjojoex/evm.zig) · [benchmark](https://github.com/0xjojoex/evm.zig/blob/main/bench/README.md)
+
 ##### jz (dy/jz)  `JavaScript`  `MIT`  `active`  `Tier A`
 
 Ahead-of-time compiler from a static JavaScript subset to WebAssembly; about 2.3x faster than V8 running the same numeric kernels.
@@ -4660,6 +4703,49 @@ Dependency-free C++17 WebAssembly 1.0 interpreter whose eager parse-and-instanti
 **Status:** Dormant: the last code change was 2023-03-03 (last release 0.8.0, 2022-06-28, also the latest fizzy crate), later commits are README-only and 2024 security reports are unanswered; Apache-2.0, dependency-free and small enough to vendor if you carry the GCC 15/libc++ 19 build patches.
 
 [repo](https://github.com/wasmx/fizzy) · [benchmark](https://raw.githubusercontent.com/wasmi-labs/wasmi-benchmarks-plots/HEAD/data/amd-epyc-7763/lin-scale/geomean-startup.svg)
+
+##### hxcpp (Haxe C++ backend and runtime)  `C++`  `BSD-1-Clause`  `active`  `Tier B`
+
+Runtime and build tool for Haxe's C++ target; native output beats the HashLink/JIT and Neko VM targets on CPU-bound benchmarks.
+
+**Beats:** NekoVM and HashLink (HL/JIT) Haxe targets; also compared with Haxe's JVM/Java and JavaScript (Node) targets — An independent gist (tong) ran HashLink's other/benchs suite (Anonymous, BinaryTrees, Fib, FloatArray, IntArray, Mandelbrot, NBodies) across Haxe targets on an Intel Core i5-6600 in 2018 and an AMD Ryzen 7 7700 in 2025: hxcpp's total runtime was 0.72 s versus 5.68 s for HashLink/JIT and 27.16 s for Neko (about 7.9x and 38x, derived from page data), and in 2025 cpp beat hl on every row (for example Mandelbrot 0.13 s vs 1.32 s). Compiler, flags and Haxe/hxcpp versions are not stated, the 2018 JS total is double-counted and hlc never produced a valid result.
+
+**Known shortcoming:** Independent tong gist of the HashLink other/benchs suite (cpp total 0.7166 s vs hl 5.678 s vs neko 27.16 s): no compiler, flags or versions stated, the gist runner is unpublished, hlc was never compared (failed in 2025), JVM and Node match or beat cpp on several rows, times truncated to 0.01 s.
+
+**Known shortcoming:** Enricher: the 2018 gist totals double-count JavaScript (two rows per block labelled js, each set summing 0.43-0.45 s, so the js total of 0.962 s is their sum); counted once, Node (about 0.45-0.53 s) beats cpp (0.717 s), so 'C++ fastest overall' is false for 2018 while the wins over HashLink (5.68 s) and Neko (27.16 s) stand. Every 2025 hlc row reports 'result 0', the _Startup output, so no HL/C number exists (likely a stale binary). Times truncated to 0.01 s, default g++ -O2 without LTO, Anonymous objects are slow through a virtual __Field lookup returning boxed hx::Val.
+
+**Independent measurement:** published runner with versions
+
+**Independent measurement:** published runner with versions and single-counted rows
+
+**How:** Ahead-of-time translation of statically typed Haxe to C++ compiled by g++/clang/MSVC (the default Linux toolchain passes -O2), so typed arithmetic, arrays and method calls become plain native code instead of bytecode run by the Neko interpreter or HashLink's JIT. Memory is managed by an Immix-style mark-region collector (src/hx/gc/Immix.cpp) with conservative stack scanning and an opt-in generational mode (HXCPP_GC_GENERATIONAL), which the HashLink benchmark runner enables for the cpp target.
+
+**Use it when:**
+- You already write Haxe and want the fastest native target for CPU-bound code: numeric loops, typed arrays and allocation-heavy trees (2018: Mandelbrot 0.13 s vs 4.28 s HL/JIT and 9.65 s Neko).
+- Shipping a native desktop, mobile or console binary from Haxe (Linux, macOS, Windows, Android, iOS toolchains are in toolchain/) where neither a JS engine nor the HashLink VM is wanted.
+- Code that must link with existing C/C++ libraries through Haxe externs.
+- Development loops can use cppia scripts and keep full C++ builds for releases.
+
+**Skip it when:**
+- Fast edit-build cycles: each small benchmark took about 2 s to build in the 2018 run versus 0.02 to 0.2 s for js, hl and neko; the HXCPP_COMPILE_CACHE object cache (docs/CompileCache.md) avoids recompiling unchanged runtime files, but generated code still goes through the C++ compiler.
+- Code dominated by anonymous structures or Dynamic access: Anonymous ran 0.38 s on cpp versus 0.29 s on HL/JIT and 0.02 s on Node in 2018.
+- When Node (V8) or the JVM target is acceptable: they matched or beat cpp on several rows in both runs (2025 Anonymous 0.02/0.03 s vs 0.1 s; Mandelbrot 0.07 s vs 0.13 s), and Node's 2018 total was lower once counted once (see gotchas).
+- Projects that need HashLink/C (hlc), HashLink's own AOT C path: the benchmarks never produced a valid hlc number, so it is unknown whether hxcpp beats it.
+- Code that cannot tolerate a conservative stop-the-world GC or that runs foreign threads without registering them with the collector.
+
+**Integration:** haxelib package: runtime headers plus a static runtime library and build tool that compile the generated C++ into an executable or shared library · Haxe 4 compiler and haxelib; a C++ toolchain (g++ by default on Linux, clang on Apple, MSVC on Windows); bundled third-party sources (mbedtls, sqlite, zlib, pcre2) built on demand · Haxe 4 (Changes.md: 'Removed Haxe 3 support'); C++ standard not documented beyond an optional HXCPP_CPP17 define · Linux (x86, x86-64, Raspberry Pi), macOS, Windows (including Arm64), Android, iOS; emscripten mentioned in docs
+
+**Vs siblings:** The catalogued siblings are Wasm and EVM engines (Wasmi, WAMR, wasm3, wasm2go, PolkaVM), which run portable bytecode; pick hxcpp only when the source language is Haxe. Like wasm2go, it gets its speed by translating to a host language's compiler instead of interpreting or JIT-compiling.
+
+**Gotchas:**
+- The gist's 2018 totals double-count JavaScript: every block lists two rows labelled js with near-identical runtimes, each js row set sums to 0.43 to 0.45 s (truncated), while the js total is 0.962 s, matching their sum; every other target's total matches its own row sum. Counted once, Node's total (about 0.45 to 0.53 s) is below cpp's 0.717 s, so 'C++ fastest overall' does not hold for 2018 (derived from page data); the wins over HashLink (5.68 s) and Neko (27.16 s) are unaffected.
+- Every 2025 hlc row fails with 'result 0 but expected ...', and 0 is exactly the expected output of the suite's _Startup program, which suggests the gist runner kept executing a stale hlc binary (inference). The result check caught it, but it leaves no hlc number at all.
+- Timings are whole-process wall time minus a per-target startup time taken from _Startup, averaged until 1 s accumulates and truncated to 0.01 s (other/benchs/Benchs.hx), so cpp cells of 0 or 0.01 s are at the timer's resolution and small ratios are noise. Haxe, hxcpp and C++ compiler versions are not given; hxcpp's default Linux build is g++ -O2 without LTO (-flto only with HXCPP_OPTIMIZE_LINK), and whether the gist kept the upstream -D HXCPP_GC_GENERATIONAL is unknown.
+- Anonymous-structure field reads go through a virtual __Field(String) lookup returning a boxed hx::Val (include/hx/Anon.h), which explains the Anonymous row. Generational GC is opt-in and needs write barriers in native extern code; issue #740 asking what it takes to enable it has been open since 2018 with no answer.
+
+**Status:** Active (last commit 2026-09-22 by Haxe Foundation contributors, 3,138 commits, 194 open issues) under a one-condition BSD licence, with bundled third-party code (mbedtls, sqlite, zlib, pcre2) under its own terms; it is the standard native target for any Haxe project.
+
+[repo](https://github.com/HaxeFoundation/hxcpp) · [benchmark](https://gist.github.com/tong/84992efadb204c2140e24dbdbeeee06c)
 
 ##### LFI (Lightweight Fault Isolation)  `C`  `MIT`  `active`  `Tier B`
 
@@ -6720,6 +6806,49 @@ Cranelift, Wasmtime's Rust code generator: in a 2021 paper it compiled WebAssemb
 
 [repo](https://github.com/bytecodealliance/wasmtime) · [benchmark](https://raw.githubusercontent.com/sillycross/sillycross.github.io/master/assets/copy-and-patch.pdf)
 
+##### Cuik (C compiler with the TB backend)  `C`  `MIT`  `active`  `Tier B`
+
+MIT C11/C23 compiler and sea-of-nodes backend library (TB); about 2x clang -O0 and 12x gcc -O0 compile speed on a synthetic benchmark.
+
+**Beats:** clang 22.1.8 (LLVM) and gcc 16.2.1 / gcc-15 15.3.0, compile and build time at their default optimisation level — In nordlow/compiler-benchmark's 2026-09 sample run on an AMD Ryzen AI 7 350 under Arch Linux, an unpinned Cuik master build took 6.0, 60.6 and 57.6 us per generated function for check, compile and build. clang 22.1.8 took 15.4, 123.3 and 60.3, and gcc 16.2.1 took 18.2, 732.5 and 500.7, all at default -O0 settings (gcc and clang also with -Wall -Wextra) on a synthetic C program of one-line call-chain functions, with Cuik at 10,000 functions and the others at 40,000. That is about 2x clang and 12x gcc on compile, about 2.6x and 3x on check, a tie with clang on build, and slower than TinyCC on every column.
+
+**Known shortcoming:** nordlow/compiler-benchmark numbers (Cuik at an unpinned master) come from one parallel sample run where Compile exceeds Build for every C compiler (contention noise); the build win over clang is 1.05x, a tie; the README conclusion contradicts its own table (dmd 11.2x and LuaJIT 4.8x build faster); -xe is type checking only and Cuik's optimiser is off by default. An AOT C compiler, loose fit under jits.
+
+**Known shortcoming:** Enricher (nordlow/compiler-benchmark): Cuik ran 10,000 functions while the other compilers ran 40,000, so the per-function Run column is not comparable; Cuik's Build (57.6 us/function) is below its Compile (60.6) although Build includes the clang link, so contention noise is at least 5%; the 100 Hz psutil poll adds up to 10 ms per run, up to about 17% of Cuik's 60 ms check (derived); the harness never checks the built binary's exit code or output; run count defaults to 10 in code while the README says 5. Linux linking shells out to clang via system() and driver.c ignores the link result so a failed link still exits 0; -g emits CodeView only; the driver errors on -Wall and -std=c11; build.lua adds -march=haswell even on aarch64 hosts; open #37 (Linux calls with more than 5 arguments print garbage) is missed by the benchmark's one-argument functions.
+
+**Independent measurement:** pinned-commit repeated run
+
+**Independent measurement:** equal function counts with output checks
+
+**How:** The front end is a unity build with a generated DFA lexer (meta/lexgen.lua writes cuik_pp/dfa.h), arena allocation and mimalloc, and it lowers the typed AST straight into TB's graph builder. Without -O, TB skips the optimizer and per function runs Click-style global code motion (GCM) scheduling, a Rogers-style global register allocator (Briggs-Chaitin graph colouring is the alternative) and direct machine-code and object emission, with no separate assembler pass. Built with -j N, libCuik compiles translation units and functions on a thread pool; the default is single-threaded.
+
+**Use it when:**
+- You are building a language or JIT and want an MIT-licensed C library backend with a sea-of-nodes IR, x64/AArch64 codegen, in-memory JIT placement and object export, without linking LLVM.
+- Fast unoptimised (-O0-class) builds of small, self-contained C11/C23 programs on x86-64 Linux or Windows, where edit-compile latency matters more than code quality (about 2x clang -O0 and 12x gcc -O0 on compile in the nordlow benchmark).
+- C tooling that needs the front end as a library: stop after preprocessing, parsing or type checking and walk the result (the driver also has -bindgen, -objdump and -link modes).
+- Studying or extending a compact sea-of-nodes compiler (GCM, GVN, SCCP, SROA, Rogers and Briggs allocators are all in tb/).
+
+**Skip it when:**
+- Production code: the README says 'unfinished and buggy' and cuik_c/README.txt says 'NOT PRODUCTION-READY'. Open issues include a Linux call miscompile (#37), a segfault with struct varargs (#60), glibc <stdio.h> parse failures (#58), an infinite loop on attributes in struct fields (#53) and a sema crash (#42).
+- When you need optimised code: -O is opt-in, the optimizer is new (commit 'nbody.c running optimized!', Aug 2025) and there are no published code-quality numbers against clang or gcc at -O2.
+- When compile speed is the only goal: in the same table TinyCC (already catalogued) was faster on every column (check 2.9, compile 3.5, build 2.6 us/f against Cuik's 6.0, 60.6 and 57.6).
+- Large translation units or tight memory: the benchmark capped Cuik at 100 x 100 functions 'due to compiler stability limits', and its build peak RSS was 69.9 kB per function (about 0.7 GB for 10,000 functions, derived from page data) against clang's 8.8.
+- Existing GCC/Clang build scripts, musl (#36) or macOS (#29): the driver exits with an error on unknown flags such as -Wall or -std=c11, and on Linux the GNU toolchain hard-codes /usr/include/x86_64-linux-gnu include paths and needs clang on PATH to link.
+
+**Integration:** CLI executable, plus static or shared libraries (libCuik front end, libtb backend) built from source · mimalloc (git submodule); build needs Lua or LuaJIT, Ninja and Clang (default) or GCC (-gcc); on Linux, linking an executable runs the system clang · Clang or GCC with C11 <threads.h> (or build with -no_threads); the release build uses -O2 -DNDEBUG and appends -march=haswell on detected hosts · Hosts: Windows (MSVC toolchain), Linux x86-64 glibc (GNU toolchain), macOS (darwin toolchain, build issue #29 open); musl build fails (#36). Targets: x64, AArch64, MIPS32/64, wasm32
+
+**Vs siblings:** Choose Cuik/TB over TPDE when you have C source rather than LLVM IR and want no LLVM dependency, and over dstogov/ir or the copy-and-patch compilers (PochiVM, WasmNow) when you want a complete C front end together with a sea-of-nodes backend and object/JIT output in one MIT library. Choose TPDE (10-20x faster than LLVM -O0 with LLVM compatibility) or dstogov/ir (proven inside PHP's JIT) when you need a mature, tested backend. TinyCC (catalogued elsewhere) remains the faster plain C compiler.
+
+**Gotchas:**
+- On Linux the GNU toolchain links by calling system("clang ... -lc -lm -fPIE -o <out> <obj>"), and driver.c ignores cuiklink_invoke's return value. A failed link prints 'Linker exited with code N' but cuik still exits 0, so build systems do not notice. Every Cuik 'Build' number on Linux also includes a clang link.
+- -g always emits CodeView debug info (the driver hard-codes TB_DEBUGFMT_CODEVIEW, with a TODO), so gdb and lldb on Linux get no DWARF. The default build.lua appends -march=haswell whenever uname -m maps to a known arch, aarch64 included, so a default x86-64 build needs an AVX2-class CPU. The aarch64 host build looks broken (read from build.lua, not tested).
+- Issue #37, open since Feb 2024 with no reply: on Linux x86-64, a printf call with 8 arguments prints garbage for the arguments after the fifth (works on Windows). The benchmark's one-argument functions never hit it, and the harness never checks the built binary's exit code or output, so a miscompile would go unnoticed.
+- Harness flaws behind the numbers: Cuik ran a 4x smaller program (10,000 vs 40,000 functions) with per-function normalisation, so the Run column (mostly process start-up) cannot be compared across compilers. Cuik's Build (compile plus clang link) timed below its Compile (57.6 vs 60.6 us/f), which shows contention noise of at least 5% on the parallel, CPU-pinned harness. The 100 Hz psutil poll loop adds up to 10 ms per run, up to about 17% of Cuik's 60 ms check run (derived from page data). The Cuik binary is an unpinned '~master' build. Treat the 2x compile ratio against clang as approximate and the build result as a tie.
+
+**Status:** Active (last commit 2026-07-26; history restarted 2025-03-23 with 'Fresh start on the commit history', 32 commits since, 11 open issues) and MIT-licensed, but self-described as unfinished, buggy and not production-ready. It is usable for experiments or as an embeddable backend, not as a production C compiler. The benchmark numbers come from an unpinned build on a noisy parallel harness that compares different program sizes and never validates the built binaries.
+
+[repo](https://github.com/RealNeGate/Cuik) · [benchmark](https://github.com/nordlow/compiler-benchmark)
+
 ##### Dart SDK (Dart VM)  `Dart and C++ (the SDK includes the VM)`  `BSD-3-Clause`  `active`  `Tier B`
 
 Dart SDK's VM: adaptive JIT plus AOT compiler; beats PyPy 7.3.14 on all four plb2 tasks and LuaJIT 2.1 on three.
@@ -8154,6 +8283,47 @@ Rust typesetting system (markup language, compiler, CLI) that built mail-merge P
 
 #### image-codecs
 
+##### ConvectionKernels (CVTT BC6H decoder)  `C++`  `MIT`  `abandoned`  `Tier A`
+
+MIT texture-compression kernels (BC1-7, ETC1/2) whose scalar BC6H decoder narrowly beat bcdec in aras-p's 2022 single-thread test.
+
+**Beats:** bcdec (also AMD Compressonator cmp_core, DirectXTex, SwiftShader, Mesa in the same chart; BC6H unsigned decode only) — aras-p's public bcn_decoder_tester (20 runs per DDS file, one thread, every BC6H decoder producing float32 RGB, Windows builds RelWithDebInfo plus /Ob2) measured ConvectionKernels 350416d's BC6H unsigned decoder at 101 Mpix/s against bcdec e3ca0's 85 (1.19x) with VS2022 and 105 against 104 (a tie) with clang 14 on a Ryzen 5950X, and at 149 against SwiftShader's 143 and bcdec's 79 on an Apple M1 Max with Apple clang 13; DirectXTex was 3-4x slower, and on BC7 it trailed both bcdec and bc7enc_rdo.
+
+**Known shortcoming:** BC6H decode margin is tiny in the aras-p 2022 charts (1.19x over bcdec with VS2022, ties bcdec at 105 vs 104 Mpix/s on clang 14) and it is slower than bcdec and bc7enc_rdo on BC7; BC6H is marked Experimental; the harness times the internal UnpackOne, its hash check only warns, macOS flags are unstated (Windows presets RelWithDebInfo plus /Ob2, Ryzen 5950X). Abandoned since 2022-06-23.
+
+**Known shortcoming:** Enricher: mostly an encoder library that decodes only BC6H and BC7 with a scalar decoder; the BC6H decoder was broken until the measured commit 350416d (aras-p issue #6, fixed 2022-06-23), and Godot pins the same commit but applies 0001-revert-bc6h-reorg.patch (PR #73715), which swaps UnpackOne's generated BC6H read code back to the old descriptor tables, so Godot copies lack the measured decoder; public Decode functions take fixed 8-block batches; the harness hash check only warns; tie with bcdec on clang 14.
+
+**Independent measurement:** current re-run of bcn_decoder_tester
+
+**How:** The BC6H decoder loads the 128-bit block into four 32-bit words, shifts the 65- or 82-bit header out in one step, and runs a per-mode generated straight-line function (BC6H_IO g_readFuncs, one for each of the 14 modes) that gathers the scattered endpoint bits with constant masks and shifts, instead of walking a per-bit mode-descriptor table as the DirectXTex-derived layout does. Endpoints are then sign-extended, delta-decoded and unquantised in integer math, and the 16 pixels are interpolated with the BC6H weight tables; the decoder is plain scalar C++, so the gain comes from cheap bit extraction, not SIMD. The encoders (not part of the measured claim) use an SPMD design that processes 8 blocks per call with SSE2 16-bit math through ParallelMath, with a scalar fallback elsewhere.
+
+**Use it when:**
+- Bulk CPU decoding of BC6H (HDR) textures on x86-64 or Apple Silicon, single-threaded, where 1.0-1.2x over bcdec is worth an extra dependency (aras-p measured 101-149 Mpix/s).
+- You already vendor CVTT for BC6H, BC7 or ETC encoding (Godot ships it as thirdparty/cvtt) and want the matching decoder for round-trip error measurement.
+- You want BC6H output as half floats: UnpackOne writes FP16 bit patterns directly, so no float32 round trip is needed if the consumer takes FP16.
+- One MIT library covering both encode and decode of BC6H and BC7.
+
+**Skip it when:**
+- BC1-BC5 decoding: there are no decoders for them; use bcdec (every BCn format in one header) or etcpak (fastest BC1/BC3 in the same test).
+- BC7 decoding: slower than bcdec (124 vs 142 Mpix/s with VS2022, 121 vs 169 with clang 14) and 4-5x slower than bc7enc_rdo's bc7decomp (621 and 656 Mpix/s).
+- Where the margin must hold up: with clang 14 it ties bcdec (105 vs 104 Mpix/s), and bcdec has moved on since the measured e3ca0 while this repo has not changed since 2022-06-23.
+- Small builds: aras-p counts 9 source files and 487 KB of source to get two decoders, mostly encoder code; bcdec is one 69 KB header.
+- Projects that need maintained code: the README still labels BC6H 'Experimental' and the project has had no commits since 2022.
+
+**Integration:** source-drop / static lib (10 .cpp and 23 .h files; ConvectionKernels_SingleFile.cpp with CVTT_SINGLE_FILE builds everything as one translation unit; a Visual Studio project is included, no CMake) · none beyond the C/C++ standard headers (emmintrin.h when SSE2 is enabled) · C++ without a documented standard; aras-p built it as C++17 with Visual Studio 2022, clang 14 (clang-cl) and Apple clang 13 · any; SSE2 SIMD on x86/x64 (CVTT_USE_SSE2 is defined automatically when SSE2 is available), scalar ParallelMath elsewhere including ARM64 (no NEON path); the decoders are scalar on every platform
+
+**Vs siblings:** Pick ConvectionKernels only for BC6H decode throughput, or when you already ship its BC6H/BC7/ETC encoders; otherwise bcdec covers every BCn format in one header and tied or nearly tied it on BC6H, and bc7enc_rdo's bc7decomp (bc7enc family) is 4-5x faster on BC7. For BC7 encoding, bc7e and bc7enc have independent quality and speed measurements; CVTT's encoders have none in this catalogue.
+
+**Gotchas:**
+- Public DecodeBC6HU/DecodeBC6HS/DecodeBC7 always read 8 blocks (128 bytes) and write 8 output blocks; decoding a single block or an image whose block count is not a multiple of 8 needs padded buffers, or the cvtt::Internal::...::UnpackOne functions from ConvectionKernels_BC67.h that the benchmark used (not in the public header).
+- The BC6H decoder was broken until the day of the measurement: aras-p's issue #6 (2022-06-22) reported that UnpackOne produced 'something entirely else', and commit 350416d 'Fix bit framing error in BC6H decoder' (2022-06-23) fixed it; that commit is the one benchmarked and the last in the repo. Any copy taken from an older commit decodes BC6H incorrectly.
+- Godot's thirdparty/cvtt (pinned at 350416d) still applies 0001-revert-bc6h-reorg.patch from PR #73715 (February 2023, a BC6H quality-regression fix), which swaps the generated per-mode BC6H read/write code, including inside UnpackOne, back to the older per-bit mode-descriptor tables. Copies taken from Godot therefore do not contain the decoder that was measured.
+- Reserved or invalid BC6H mode bits decode silently to black with alpha 1.0, with no error return; the harness's output-hash check only prints a warning on mismatch, so bit-exactness of the timed output rests on the post's statement that only Compressonator differed on BC6H.
+
+**Status:** Abandoned since 2022-06-23 (the BC6H bit-framing fix that was benchmarked); MIT-licensed with a DirectXTex-derived notice, 53 stars, and vendored by Godot at that commit but with the BC6H reorganisation reverted. Copyable, but treat BC6H as the README does: experimental.
+
+[repo](https://github.com/elasota/ConvectionKernels) · [benchmark](https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/static/img/blog/2022/bcn-decode-win-vs2022.png)
+
 ##### ffpng  `C`  `MIT`  `active`  `Tier A`
 
 Single-header C PNG decoder for x86-64-v3 (AVX2) that decodes 1.12-1.20x faster than image-png, the Rust png crate.
@@ -8952,6 +9122,50 @@ SIMD multithreaded ETC1/ETC2/EAC/BC encoder: 500-1400x faster than Etc2Comp/ETCP
 **Status:** Actively maintained by Tracy's author (release 2.1 in February 2026, last commit 2026-09-13), BSD-3 and vendored by Godot; its 11 open issues are mostly quality and API complaints with no maintainer replies.
 
 [repo](https://github.com/wolfpld/etcpak) · [benchmark](https://raw.githubusercontent.com/nahjaeho/nahjaeho.github.io/master/papers/SA20/QUICKETC2_SA20.pdf)
+
+##### JPEGDEC (bitbank2)  `C++`  `Apache-2.0`  `active`  `Tier B`
+
+Baseline-JPEG decoder for microcontrollers and PCs; decoded 1.7x faster than TJpgDec and 3.4x faster than picojpeg on an ESP32-S3.
+
+**Beats:** TJpgDec (via Bodmer/TJpg_Decoder) and picojpeg (via Bodmer/JPEGDecoder); libjpeg-turbo and stb_image not compared — atomic14's independent ESP32-S3 harness (PlatformIO espressif32 unpinned, Arduino framework, -Ofast) decoded one 280x240 baseline 4:2:0 JPEG (23,362 bytes, restart interval 18) from RAM to RGB565 once per library per pass, timed with millis(): JPEGDEC 32 ms against 55 ms for Bodmer's TJpg_Decoder (TJpgDec R0.03 at JD_FASTDECODE 1) and 108 ms for Bodmer's JPEGDecoder (picojpeg), 1.7x and 3.4x. A later SIMD build of JPEGDEC was recorded at 23 ms without re-running the other rows, and Espressif's ESP32_JPEG was fastest at 20 ms; the README's own chart gives only JPEGDEC's per-MCU timings.
+
+**Known shortcoming:** Independent atomic14 ESP32-S3 table (32 and 23 ms vs TJpgDec 55 ms and picojpeg 108 ms) is one image and one run per library with versions unpinned: main.cpp hard-codes the JPEGDecoder decode-plus-draw figure as decode + 10 so only the decode column was measured, TJpgDec has a callback memcpy asymmetry, the 2024 23 ms row comes from a different session and possibly a different board, and ESP32_JPEG is faster (20 ms).
+
+**Known shortcoming:** Enricher: open out-of-bounds write (issue #119, confirmed at HEAD jpeg.inl:1827/1887): JPEGDecodeMCU_P indexes &sMCUs[iMCU & 0xffffff], so MCU_SKIP (-8) lands about 32 MB past the array and the DC store still runs; it triggers on colour progressive JPEGs decoded to grey or dithered output and on cropped progressive decodes (the measured baseline path is unaffected). Harness: the Bodmer TJpg_Decoder baseline ships tjpgdcnf.h with JD_FASTDECODE 1 and JD_TBLCLIP 0, not TJpgDec's fastest setup, and Espressif's esp_jpeg table shows 62 vs 46 ms (1.35x derived), so the lead over a tuned TJpgDec is nearer 1.3x; the TJpg draw callback pushes the previous block. Open #123 and #120 (NEON red/blue swap); AC codes over 10 bits rejected.
+
+**Independent measurement:** multi-image repeated run with pinned versions
+
+**Independent measurement:** comparison against TJpgDec at its fastest configuration
+
+**How:** Table-driven Huffman decoding: DC codes go through a 6-bit short table plus a long table for codes starting with five 1 bits (short codes have the magnitude bits folded into the entry), AC codes through a 10-bit short table plus a long table for codes starting with six 1 bits, read from a 32- or 64-bit bit buffer refilled with byte-swapped word loads; FF00 byte-stuffing is removed in bulk ahead of decode (SSE2/NEON in JPEGFilter). The integer AAN-style IDCT tracks which columns and rows hold non-zero coefficients and skips the empty ones, DC-only blocks are filled directly, 1/4 and 1/8 scaling use 2x2 and DC-only transforms, and MCUs outside a crop rectangle decode only their DC term. SIMD IDCT and colour conversion exist for x86-64 SSE2 and AArch64 NEON; on the ESP32-S3, hand-written assembly (s3_simd_420.S, s3_simd_444.S, s3_simd_dequant.S) does YCbCr-to-RGB565 conversion and dequantisation with the S3's 128-bit vector instructions (an S3 IDCT file is still marked _FUTURE).
+
+**Use it when:**
+- Showing baseline JPEGs on an MCU-driven LCD (ESP32, ESP32-S3, Cortex-M4/M7, Teensy and similar) where about 18-20 KB of RAM for the decoder is affordable and lower latency than TJpgDec or picojpeg matters.
+- MJPEG or camera-frame playback on an ESP32-S3 at small resolutions: atomic14 measured about 23-32 ms for a 280x240 frame, and pixels can be streamed to SPI DMA while the next MCU row decodes.
+- Images larger than the screen: built-in 1/2, 1/4, 1/8 scaling, cropping and Exif-thumbnail extraction avoid decoding pixels you will throw away.
+- E-paper or monochrome displays: the 1/2/4-bpp dithered output path saves a separate dithering pass.
+- Small dependency-free baseline decoding on a host (Linux, macOS, Windows x64) when one translation unit with SSE2/NEON is enough and decode speed versus libjpeg-turbo is not the deciding factor (no such comparison has been published).
+
+**Skip it when:**
+- Progressive JPEGs at full size: only a 1/8-scale DC thumbnail is produced. Use libjpeg-turbo on hosts, or lowzag for scaled progressive decoding on an ESP32.
+- Untrusted input on MCUs without memory protection: an out-of-bounds write in the progressive decoder is open (issue #119) and there is no fuzzing or hardening record in the repository.
+- Desktop throughput work: there is no measurement against libjpeg-turbo, and arithmetic coding, 12-bit and lossless JPEG are not listed as supported.
+- RAM-starved MCUs: each JPEGDEC object embeds about 17.9 KB of state, while TJpgDec runs in a 3.1-3.5 KB workspace.
+- ESP32-S3 boards with PSRAM where the whole frame can be buffered: Espressif's ESP32_JPEG decoded the same image faster (20 ms vs 23 ms), at the cost of a full output buffer and a precompiled binary library.
+
+**Integration:** source-drop / Arduino library (src/JPEGDEC.cpp includes src/jpeg.inl, plus three ESP32-S3 .S files); ESP-IDF component; linux/makefile builds a static library · none for the decoder core; Arduino.h on Arduino builds; library.properties lists bb_spi_lcd (for the JPEGDisplay helper); the ESP-IDF CMakeLists.txt REQUIRES esp-dsp and arduino-esp32; the S3 SIMD path is compiled only when esp-dsp's dsps_fft2r_platform.h is found · C++ class without exceptions or STL; uses GCC/Clang builtins (__builtin_bswap16/32/64), MSVC x64 supported since February 2025; language standard not documented · any 32- or 64-bit MCU or host; SIMD on x86-64 (SSE2 intrinsics only), AArch64 NEON and ESP32-S3; unaligned-load fast paths on ESP32, Cortex-M4/M7, Teensy, x86-64 and AArch64; byte-wise fallbacks elsewhere
+
+**Vs siblings:** Pick JPEGDEC for baseline JPEGs on a microcontroller streaming straight to a display with 20-32 KB of RAM to spare; pick lowzag when the files are progressive and must be shown scaled on an ESP32, and libjpeg-turbo (or jpeg-nitro for multi-threaded host decoding) on desktops, where JPEGDEC has no published comparison.
+
+**Gotchas:**
+- Open memory-safety bug (issue #119, April 2026, no maintainer reply): JPEGDecodeMCU_P computes &sMCUs[iMCU & 0xffffff], so when the decode loop passes MCU_SKIP (-8), as it does for the chroma blocks of a colour progressive JPEG decoded to 8-bit gray or dithered output (and, by the same code, for MCUs outside a crop area), the pointer lands about 32 MB past the 384-entry array and the DC store still happens; confirmed in the current jpeg.inl. The baseline path (JPEGDecodeMCU) checks iMCU < 0 and is not affected.
+- Harness flaw behind the 1.7x: Bodmer's TJpg_Decoder ships tjpgdcnf.h with JD_FASTDECODE 1 and JD_TBLCLIP 0, not TJpgDec's table-driven Huffman level 2 or table clipping. Espressif's esp_jpeg table (ESP32-S3, 320x180 image, RGB888) has TJpgDec at 62 ms in that configuration versus 46 ms with JD_TBLCLIP 1 and JD_FASTDECODE 2 (1.35x, derived from page data), so against a fully configured TJpgDec the lead would be nearer 1.3x (estimate, different image) at the old 32 ms figure. TJpgDec's decode-only callback also memcpys every block while JPEGDEC's returns at once, and its draw callback advances the DMA buffer index before pushing, so the decode+draw column displays the previous block (timing comparable, output wrong).
+- Each JPEGDEC object holds the whole JPEGIMAGE struct (about 17.9 KB), so keep it global, static or heap-allocated rather than on a small RTOS task stack; library.properties says 32K+ RAM MCUs, the README says 20K.
+- Building outside Arduino needs -D__LINUX__ (or __MACH__, ESP_PLATFORM, _WIN64, __MCUXPRESSO), otherwise the header pulls in Arduino.h; linux/makefile installs with sudo cp into /usr/local. Other open reports: baseline AC tables with codes over 10 bits that do not start with six 1 bits are rejected (the slow-table fallback is commented out), images that stopped loading after 1.6.1 on an STM32H743 (#123), and red/blue swapped for some images on the Apple M1 NEON path (#120).
+
+**Status:** Actively maintained (last commit 2026-03-13, NLnet-funded, Apache-2.0, 631 stars) and easy to vendor as one translation unit, but the progressive-path out-of-bounds write (#119) is open and the 1.7x lead was measured against TJpgDec in a non-fastest build configuration, so treat it as an upper bound.
+
+[repo](https://github.com/bitbank2/JPEGDEC) · [benchmark](https://github.com/atomic14/esp32-jpeg-perf-tests)
 
 ##### OpenJPH (HTJ2K encoder and decoder)  `C++`  `BSD-2-Clause`  `active`  `Tier B`
 
@@ -21411,6 +21625,50 @@ Header-only open-addressing hash map/set beating std::unordered_map on memory an
 
 [repo](https://github.com/greg7mdp/sparsepp) · [benchmark](https://martin.ankerl.com/2022/08/27/hashmap-bench-01/)
 
+##### tsl::array_map / array-hash (Tessil)  `C++`  `MIT`  `stale`  `Tier A`
+
+Header-only cache-conscious string hash map/set (Askitis array hash); about half the memory of std::unordered_map<std::string,T>, 1.3-2.3x faster lookups.
+
+**Beats:** std::unordered_map — Tessil's hat-trie benchmark (GCC 6.3, libstdc++, -std=c++11 -O3 -march=native, Intel i5-5200u, CityHash64 for all maps, 2017) inserted then looked up 13.1M shuffled Wikipedia titles: array_map read 138.24 vs 173.58 ns/key for std::unordered_map<std::string,int> (1.26x) at 678.73 vs 1246.60 MiB, inserted 249.52 vs 350.33 ns/key with reserve but 603.94 vs 590.88 without; on the Askitis short-key set it read 46.41 vs 105.05 ns/key (2.26x) at 1031.67 vs 2110.19 MiB. The author's 2017 hash-table-shootout CSV (Clang 5.0, same CPU, std::hash for all) agrees on direction: 3M 50-char keys read 1.70x faster but insert without reserve 1.20x slower (derived from page data).
+
+**Known shortcoming:** All figures come from the 2017 hat-trie README benchmark (public gist harness, GCC 6.3, -O3 -march=native, i5-5200U): inserts without reserve are not faster, reads are slower than hopscotch_map and dense_hash_map, no absl::flat_hash_map or tsl::robin_map column, best-of-20 is not in the gist, and the std::unordered_map insert copies the key twice. Filed under stdlib-replacements/hash-maps-sets by category override.
+
+**Known shortcoming:** Enricher: the lookups only test find() != end(), and array_map's find() never touches the separate values vector, so the extra random access to read a value is never timed while std::unordered_map's value sits in a node already loaded; StoreNullTerminator=false is non-default; the best-of-20 driver is not public. The 2017 shootout CSV (Clang 5.0, i5-5200U, tessil.github.io via raw.githubusercontent.com) shows insert without reserve slower (2.02 vs 1.68 s), slower erase and short-key reads behind robin_map, ska and hopscotch; long-key reads 1.70x faster (derived from page data). Only CI and CMake bumps since 2022; issue #12 (array_map<char,bool> fails to compile) open; no custom allocator.
+
+**Independent measurement:** modern comparison against absl::flat_hash_map and robin_map
+
+**Independent measurement:** lookup benchmark that reads the value
+
+**How:** It implements the array hash table of Askitis and Zobel ('Cache-conscious collision resolution in string hash tables', 2005): each bucket is one malloc'd buffer holding [16-bit key length][key chars][32-bit index] records back to back, ended by a sentinel, so a lookup is one hash, one pointer chase into a contiguous buffer and a length-then-memcmp scan, with no per-key node and no std::string heap indirection. Mapped values live in a separate std::vector<T>, which keeps the bucket buffers small; the default max load factor is 2.0 (about two keys per bucket) with power-of-two masking. The memory saving comes from dropping the 32-byte std::string plus node and pointer overhead per key.
+
+**Use it when:**
+- Millions of string keys where RSS matters: 678.73 vs 1246.60 MiB for 13.1M Wikipedia titles and 1031.67 vs 2110.19 MiB for 28.8M short Askitis keys against std::unordered_map<std::string,int>.
+- Build-once, read-many dictionaries where the key count is known so reserve() avoids rehash (insert with reserve 249.52 vs 350.33 ns/key on Wikipedia titles).
+- Lookup-heavy workloads on medium or long keys that do not fit in SSO: 50-char random keys at 3M entries read 0.616 s vs 1.049 s for std::unordered_map in the author's 2017 shootout (1.70x, derived from page data).
+- String dictionaries that must be saved and reloaded quickly: serialize/deserialize with the hash_compatible fast path skips rehashing every key.
+- C++11 code that wants an MIT, header-only, dependency-free container and can live with a string-only, non-node API.
+
+**Skip it when:**
+- Insert- or erase-heavy use without reserve: inserts are not faster (603.94 vs 590.88 ns/key on Wikipedia titles) and were 20% slower in the 2017 shootout (2.02 vs 1.68 s for 3M 50-char keys); erase was also slower (1.92 vs 1.66 s), because every append reallocs the bucket buffer and rehash re-hashes and copies every key.
+- Short keys where raw lookup speed matters most: open-addressing maps beat it (15-char keys at 3M: array_map 0.358 s vs tsl::robin_map 0.234, ska::flat_hash_map 0.249, tsl::hopscotch_map 0.260), and hopscotch_map also read Wikipedia titles faster (119.49 vs 138.24 ns/key).
+- Code that needs stable references, std::pair access, node extract/merge, bucket inspection or a custom allocator: any modification invalidates iterators, references and pointers, and memory comes from std::malloc/std::realloc and std::vector with no Allocator parameter (requested in issue #9).
+- Non-string keys (the shootout harness exits on its integer tests) or bool values: array_map<char, bool> fails to compile because the values vector is std::vector<bool> (issue #12, open since 2023-04).
+- Keys longer than 65,535 characters or more than 2^32 entries unless KeySizeT / IndexSizeT are widened; the insert throws std::length_error otherwise.
+
+**Integration:** header-only · none (Boost.Test only for the test suite) · C++11 (README: tested with GCC 4.8.4, Clang 3.5.0, Visual Studio 2015); string_view overloads and std::hash<string_view> default with C++17; CMake 3.10 for the optional exported target tsl::array_hash · any; CI runs GCC and Clang on Linux x64 (including an ASan/UBSan job) and macOS, and MSVC on Windows x64 and x86
+
+**Vs siblings:** Pick it over tsl::robin_map, tsl::hopscotch_map, absl::flat_hash_map or boost::unordered_flat_map keyed by std::string when memory per string key is the constraint and the map is mostly read (678.73 MiB vs 1077.99 for hopscotch_map and 1677.11 for google::dense_hash_map on Wikipedia titles, at 16% slower reads than hopscotch_map); if you also need prefix search or an even smaller footprint, tsl::htrie_map (402.25 MiB, built on this library) is the better fit.
+
+**Gotchas:**
+- Any insert, erase or rehash invalidates all iterators, references and pointers to keys and values; erase removes the key at once but may delay the mapped value's destructor until the erased fraction passes a threshold (0.6) or shrink_to_fit() is called.
+- Hash choice is on you: the default is std::hash<std::string_view> under C++17 and a plain FNV-1a otherwise (README: CityHash64 gave about 40% faster reads than FNV-1a), and the default power-of-two policy masks low bits, so use array_pg_map/set with weak or identity-like hashes.
+- Rehash needs spare memory because keys are copied, not moved: on Wikipedia titles peak RSS was 823.54 MiB against a final 678.73 MiB without reserve; call reserve() when the count is known.
+- Harness notes for the headline numbers: lookups only test find() != end(), and in array_map find() never touches the separate values vector, so reading the value (one more random access into std::vector<T>) is not timed while std::unordered_map's value sits in the node it already loaded; the benchmark also ran array_map with the non-default StoreNullTerminator=false, CityHash64 for every map, a baseline insert that copies the key twice, and a best-of-20 driver that is not in the public gist.
+
+**Status:** Maintenance mode rather than active: the last code change was in 2022 (std::max build fix, clang-format) and the 2023-2025 commits only update CI and CMake for v0.7.2 (2025-11-02); MIT, header-only and covered by an ASan/UBSan CI job, so it is easy to vendor, with the vector<bool> compile error (issue #12) still open.
+
+[repo](https://github.com/Tessil/array-hash) · [benchmark](https://github.com/Tessil/hat-trie#benchmark)
+
 ##### tsl::hopscotch_map (Tessil/hopscotch-map)  `C++`  `MIT`  `active`  `Tier A`
 
 Header-only C++17 hopscotch-hashing hash map/set, faster than std::unordered_map with dense_hash_map-like speed.
@@ -28297,6 +28555,49 @@ Experimental LZ4 legacy-format encoder using BriefLZ's optimal parser; output ma
 
 [repo](https://github.com/jibsen/blz4) · [benchmark](https://raw.githubusercontent.com/jibsen/blz4/HEAD/README.md)
 
+##### bzip2gpu (weissenberger)  `CUDA C++`  `MIT`  `stale`  `Tier C`
+
+Research CUDA decompressor for standard .bz2 streams that runs every stage except parsing on the GPU; reported faster than multicore CPU bzip2.
+
+**Beats:** multicore CPU bzip2 decompressor (exact program not named in the search snippet; candidates bzip2, pbzip2, lbzip2) — The repo has no benchmark or timing code (the timer macros in include/helpers.h are unused). All figures come from an unreproduced search snippet of the ICPP 2024 paper: up to 6.1x over an unnamed multicore CPU implementation for the inverse-BWT stage alone, up to 2400 MB/s for inverse BWT plus inverse MTF on an A100, and over 11.62 GB/s bzip2 decompression on a DGX H100. A DGX H100 is an 8-GPU server and the demo uses one GPU. Not documented: whether that figure is aggregate, whether it includes host transfers and the CPU parser, and the CPU model, baseline program or compiler flags behind any of the numbers.
+
+**Known shortcoming:** Numbers exist only as a search snippet of the ICPP 2024 abstract (iBWT up to 6.1x vs a multicore CPU, 11.62 GB/s on a DGX H100); the paper is blocked here (doi.org, dl.acm.org, uni-mainz). No timing code in the repo, the CPU baseline is unnamed, the 6.1x covers the inverse BWT stage only, and the block CRC32 is parsed but never verified in any of the 7 source files. 2 commits, last 2024-07-16. Paper-access retier candidate (B).
+
+**Known shortcoming:** Enricher: likely correctness bug in RLE1 (src/rle.cu is_run decides count bytes from the previous 9 bytes only, with no decoder state): a Python port mis-decodes 'a'x101+'b'x102+'c', 0x01x5+0x00x4+0x03 and any run of 511 or more 0xFB bytes, giving 18-50 false count bytes per MB on synthetic low-value 8-bit data (none on ELF binaries, int64 arrays or JSON); the CRC is never checked so wrong output goes unreported. RLE1 also runs across block boundaries, so lbzip2 (which ends blocks mid-run), pbzip2 and concatenated .bz2 streams can mis-decode (89 of 2000 random cut points wrong in the port); reference single-stream bzip2 is safe. The inverse BWT allocates a fixed about 10.3 GB on the device (800 blocks x 900 kB) whatever the input size; Huffman decode is one GPU thread per block; no bitstream validation (host heap overflow in parse_selectors on a bad selector, unbounded out_idx in decode_block); errors exit(1); the DGX H100 has 8 GPUs and the demo uses 1.
+
+**Independent measurement:** paper access and a CRC-checked end-to-end comparison
+
+**Independent measurement:** CRC-checked decode of lbzip2 and pbzip2 streams
+
+**How:** A CPU parser finds block headers by testing every bit offset for the 48-bit block magic in parallel with OpenMP. It then builds two-level Huffman lookup tables for each block. On the GPU, Huffman and RLE2 decoding uses one thread per bzip2 block with the tables in shared memory, and zero runs become skipped writes into a pre-zeroed buffer. Inverse MTF cuts each block into 10,000-byte pieces, computes each piece's MTF permutation in parallel and joins them with a Blelloch scan over permutation composition. Inverse BWT stable-sorts the last column with CUB segmented sort to get the LF permutation, then walks it with Helman-JaJa parallel list ranking (sublist heads every 32 positions). RLE1 is undone with a parallel run-detection predicate plus a Thrust scan/scatter/gather 'expand'.
+
+**Use it when:**
+- Bulk decompression of large existing .bz2 archives written by reference bzip2 (single stream, up to 2 GiB uncompressed each) when the next processing step runs on the GPU and can read the output from device memory.
+- Data-centre NVIDIA GPUs (compute capability 7.0+, A100/H100 class) with more than about 11 GB of free device memory, on Linux with CUDA 12.4.1+.
+- Studying or reproducing GPU inverse BWT and inverse MTF techniques (list ranking, permutation scan) from the ICPP 2024 paper.
+- Trusted, text-like inputs whose decompressed output you check yourself (for example against a stored hash), since the tool does not.
+
+**Skip it when:**
+- Untrusted or possibly corrupt archives. Block and stream CRC32s are parsed but never checked, and the parser and decoder do no bounds checks, so bad input can give silent garbage or memory corruption.
+- Archives from lbzip2 or pbzip2, concatenated .bz2 files, or data with runs of small byte values. The RLE1 stage can mis-decode these (see gotchas).
+- Streams over 2^31 - 1 uncompressed bytes (no batching). Small archives: Huffman decoding uses one GPU thread per 900 kB block, so few blocks leave the GPU mostly idle, and the inverse-BWT buffers are a fixed ~10 GB allocation whatever the input size.
+- GPUs with less than ~12 GB of memory, non-NVIDIA hardware, Windows or macOS.
+- Any need for compression, streaming, a stable library API or production support. The README says it 'is not suitable for production use'; the repo has 2 commits and no tests.
+
+**Integration:** source-drop · CUDA Toolkit 12.4.1+ (CUB and Thrust from the toolkit; src/rle.cu and include/thrust_custom_alloc.cuh hold modified Thrust code under Apache-2.0 with LLVM exceptions), OpenMP (libgomp), std::filesystem (-lstdc++fs) · C++17; GCC 11.4.1+; CUDA SDK 12.4.1+; GPU compute capability 7.0+ (README). The Makefile builds with -O3 -arch=native -march=native. · NVIDIA GPUs (cc 7.0+) on GNU/Linux. The host side is built with -march=native for the build machine. Other host architectures are not documented.
+
+**Vs siblings:** Pick it over lbzip2 (the catalogued multi-threaded bzip2: 62.7 vs 41.1 MB/s single-thread decompression in lzbench 2.4) only to decompress large reference-bzip2 archives on a data-centre GPU, keep the output on the device, and check the output yourself. lbzip2 verifies CRCs, has no size limit and handles multi-stream files. For new data, zstd or libbsc (both catalogued) are better format choices than any bzip2 decoder.
+
+**Gotchas:**
+- Likely RLE1 correctness bug, found from a Python port and not run on a GPU. is_run in src/rle.cu decides whether a byte is a run-length count from the 9 bytes before it only (preceded_by_run plus a backward parity chain), not from decoder state. The port gets 'a'x101 + 'b'x102 + 'c' wrong: 'c' is read as a count and becomes 99 extra 'b's. It also fails on 0x01x5 + 0x00x4 + 0x03 and on any run of 511 or more 0xFB bytes. It produced 18 and 50 false count bytes per MB on synthetic 8-bit low-value image and label-map data, but none on ELF binaries (ls, bash, libc), small-int64 arrays or JSON text. Because CRCs are never checked, the wrong output goes unreported.
+- RLE1 runs on all blocks concatenated, so a run split across a block boundary is decoded as one run. Reference bzip2 never splits a run across blocks within one stream: its pending run carries into the next block. lbzip2 does split runs: its encode.c collect() ends a full block mid-run. pbzip2 and cat'd .bz2 files are multi-stream, and the parser's block-magic scan accepts them silently. In the port, a 4-space indent split 2+2 across two streams turned the following 'r' into 114 spaces, and 89 of 2000 random cut points in a Python source file decoded wrong.
+- Memory: batch_iBWT allocates buffers for 800 blocks whatever the input size. At -9 (900 kB blocks) that is 2 x 720 MB of keys plus 3 x 2.88 GB of uint32 arrays, about 10.3 GB, even for the 10 MB test file. RLE1 then adds about 2 GB of Thrust buffers. The compressed input and the full output must also fit on the device.
+- No bitstream validation. A selector MTF index at or above the tree count writes past a host std::vector in parse_selectors. A tree count of 7 overflows the 6-table code_lengths slot, and decode_block never bounds out_idx. Randomised blocks (bzip2 0.9.0) are not handled (the flag is skipped). The block size is read once from the first stream header. The block finder reads one uint64 past the input buffer, and the API input size is in 64-bit words, not bytes.
+
+**Status:** Stale research artifact (2 commits, 2024-07-15 and 2024-07-16; 6 stars, 0 forks, no issues, no tests); MIT with Apache-2.0 Thrust-derived files, so copyable for study, but it should not be used as a production decompressor: it skips CRC checks and the RLE1 stage likely mis-decodes some inputs.
+
+[repo](https://github.com/weissenberger/bzip2gpu) · [benchmark](https://doi.org/10.1145/3673038.3673067)
+
 ##### c-blosc2 (Blosc2 shuffle+lz4)  `C`  `BSD-3-Clause`  `active`  `Tier C`
 
 Blocked, multithreaded meta-compressor (shuffle/bitshuffle filters plus LZ4, Zstd, zlib or BloscLZ) for typed binary arrays; outruns memcpy on compressible data.
@@ -32015,6 +32316,49 @@ Customizable Rust EVM from alloy-rs with a tail-call, static-table interpreter; 
 
 [repo](https://github.com/alloy-rs/evm2) · [benchmark](https://github.com/alloy-rs/evm2)
 
+##### FAFO (parallel EVM transaction scheduler on revm)  `Rust`  `MIT OR Apache-2.0`  `stale`  `Tier C`
+
+Pre-block transaction scheduler on revm and QMDB claiming 1.1M Merkleized ETH transfers/s on 96 cores; no sequential baseline.
+
+**Beats:** state-of-the-art sharded execution (paper's cost baseline); no sequential revm or pevm comparison found — The README and LayerZero Labs' own preprint (arXiv 2507.10757, 'Under submission', read only as search-result text) claim over 1.1 million native ETH transfers and over 0.5 million ERC-20 transfers per second on a 96-core server while Merkleizing every block, plus 91% lower cost than unnamed 'state-of-the-art sharded execution'; the repo has the bench-sendeth harness but no result files, no hardware, and no sequential revm, pevm or Block-STM run. Reading the harness shows those runs use million-transaction blocks, oracle write sets for 99% of ERC-20 transactions and no nonce or signature checks, so the figures are an upper bound for transfer-only traffic, not a like-for-like speedup over revm.
+
+**Known shortcoming:** README makes only first-party TPS and '91% cheaper than sharded' claims with no sequential revm or pevm baseline; the vendor preprint is unreachable here; transfer-only workloads; single commit 2025-06-26, stale; weak category fit (a transaction scheduler, not a VM).
+
+**Known shortcoming:** Enricher (bench-sendeth/src/common/parallel_transfer.rs): the ERC-20 runs hand 99 of every 100 transactions precomputed write sets (no_rwsets_pct = 1), so the revm pre-execution runs for only 1% of them, and the ETH runs skip it entirely (empty calldata gets an empty CrwSets, marked 'TODO: need review'); run_tx always sets disable_nonce_check = true; every transaction has nonce 0, gas price 0 and no signature; the beneficiary reward is skipped; non-access-set EVM errors hit panic!('not implemented'); TPS is submitted transactions over wall time with results never checked; the full ETH preset is 32 blocks of 1,048,576 transactions, so one Merkle root per million transfers; thread pools are hard-coded (12/64/16), so the 96-core scaling claim needs source edits. Workspace Cargo.toml says MIT only. The TPS figures are an upper bound, not a like-for-like comparison with revm.
+
+**Independent measurement:** comparison against sequential revm and pevm
+
+**Independent measurement:** like-for-like replay against sequential revm with signatures and nonce checks
+
+**How:** ParaLyze pre-executes a transaction on revm against current state to predict its read and write sets as 80-bit short hashes of accounts and storage slots. ParaFramer packs 4-transaction tasks into up to 64 frames (Framer<u64>) using ParaBloom, a per-frame Bloom-filter bitmap, so tasks inside a frame never conflict; the dispatcher runs frames on a 64-thread rayon pool with 12 warm-up (prefetch) threads, i.e. deterministic scheduling from predicted access sets instead of optimistic execute-and-validate as in Block-STM. Any transaction that touches state outside its predicted set is dropped by the access check, and QMDB's append-only Merkle storage keeps per-block root computation cheap on NVMe.
+
+**Use it when:**
+- Prototyping or researching a high-throughput EVM-compatible sequencer or rollup node where you control the whole execution stack and can run a many-core server with large NVMe storage.
+- Workloads dominated by native ETH and ERC-20 transfers spread over many accounts with low contention, which is the only shape the repo benchmarks.
+- When a state commitment per block is required at high throughput (light clients, stateless or ZK validation) and you are willing to adopt QMDB as the state store.
+- As a reference implementation of Bloom-filter conflict framing to compare against Block-STM style executors (pevm) on your own traces.
+
+**Skip it when:**
+- You want a faster executor inside an existing client: there is no reth/geth integration, no crates.io release (exepipe is publish = false), and the code is a single 'Initial commit' marked ongoing research.
+- You need exact Ethereum semantics: both run_tx and run_tx_with_disable_nonce_check pass disable_nonce_check = true, MpexHandler skips the beneficiary reward, and any EVM error other than an access-set violation hits handle_tx_execute_mpex_err, which is panic!("not implemented").
+- Contract-heavy or hot-contract traffic: nothing beyond plain transfers is benchmarked, and the README itself says gains are bounded by contention (hotn generator).
+- Small machines: the paper-size run initialises 2^30 accounts, the README asks for at least 256 GB of Docker virtual disk and 32 GB of memory, and thread pools are compile-time constants (12 warm-up, 64 execution, 16 simulation threads).
+- You need a maintained dependency: no commits since 2025-06-26, issues are restricted to collaborators, and the only pull request is an open typo fix.
+
+**Integration:** source-drop (Cargo workspace: exepipe, exepipe-common, codedb, hpfile, bench-sendeth, with QMDB vendored in-tree; not published to crates.io) · revm 20.0.0, alloy 0.11.1, rayon, crossbeam, threadpool, parking_lot, dashmap (workspace pins); QMDB in-tree; tikv-jemallocator on Linux for the benchmark binary · Rust 1.85.0 pinned in rust-toolchain.toml, edition 2021; .cargo/config.toml adds --cfg const_slice_from_raw_parts_mut · Linux recommended (README steers users to a VS Code Dev Container; jemalloc is Linux-gated); other platforms not documented
+
+**Vs siblings:** risechain/pevm is the closer sibling: Block-STM style optimistic parallel execution on revm with published sequential-revm baselines (22.1x on Uniswap swaps on Graviton3); pick FAFO only if you want deterministic pre-block framing plus per-block Merkleization on a large node and can live with research code. For single-thread EVM speed, revm, evmone or revmc are the relevant entries.
+
+**Gotchas:**
+- Harness flaw (bench-sendeth/src/common/parallel_transfer.rs): ERC-20 runs attach precomputed write sets (the sender and receiver balance slots) to 99 of every 100 transactions (no_rwsets_pct = 1), so the revm pre-execution ParaLyze needs in production runs for only 1% of the measured ERC-20 transactions; native ETH runs skip it entirely because SimulatorShard gives every empty-calldata transaction an empty CrwSets (commented 'TODO: need review'), which is correct for EOA-to-EOA transfers but would mis-schedule a value transfer into a contract whose receive() or fallback writes storage.
+- Throughput is transfer_txn_count divided by replay wall time: it counts transactions handed to the framer (the only assertion is framer.txns_processed == transfer_txn_count), never checks execution results, and every transaction carries nonce 0, gas price 0, a default hash and no signature, so signature recovery, nonce checks and fee accounting are absent from the measured path.
+- Paper-size runs use huge blocks: the full ETH preset (30 bits) replays 32 blocks of 2^20 = 1,048,576 transfers (2^25 in total) and the ERC-20 preset 256 blocks of 131,072, so 'Merkleizing every block' amortises one state root over about a million transfers; init-db and the database copy are excluded from the timed region.
+- Thread counts are fixed in source (Dispatcher::new(12, 64), ThreadPool::new(16), 4 simulator shards) with no CLI flag, so reproducing the 'near-linear scaling to 96 cores' curve needs code edits; the workspace Cargo.toml declares license MIT while the README and LICENSE files say MIT OR Apache-2.0.
+
+**Status:** Stale research drop (one 'Initial commit' on 2025-06-26, 65 stars, issues closed to the public) under MIT OR Apache-2.0; useful as a reference design, not as a production executor.
+
+[repo](https://github.com/LayerZero-Labs/fafo) · [benchmark](https://github.com/LayerZero-Labs/fafo/blob/main/README.md)
+
 ##### Guillotine (evmts)  `Zig`  `MIT`  `stale`  `Tier C`
 
 Early-alpha Zig EVM interpreter with tail-call threaded dispatch; first-party runs show it 1.05-1.48x faster than REVM, about level with evmone.
@@ -32979,6 +33323,49 @@ LLVM-based tier-up compiler for Wasm smart contracts inside Antelope's nodeos; c
 [repo](https://github.com/AntelopeIO/spring)
 
 #### embedded-scripting
+
+##### angelsea (MIR-based AngelScript JIT)  `C++`  `BSD-2-Clause`  `stale`  `Tier C`
+
+Alpha MIR-based AngelScript JIT; author reports about 5x over the stock interpreter on call loops, 0-40% over BMS JIT.
+
+**Beats:** AngelScript interpreter (stock bytecode VM, JIT instructions off); also BlindMindStudios AngelScript JIT — First-party only: the README's ~5x is the JIT versus the stock AngelScript interpreter in the same engine (interpreter module built without JIT instructions, both without line cues) on 1-million-iteration loops calling a near-empty registered generic function, timed with nanobench in relative mode, with no CPU, compiler, flags or results published. The +0 to 40% over the BlindMindStudios JIT comes from a private King Arthur's Gold dev build with no published workload or hardware.
+
+**Known shortcoming:** First-party only: about 5x is the JIT against the stock interpreter on a 1M generic-call micro benchmark (tests/abi.cpp) with no results file, CPU or flags, and the 0-40% over the BlindMindStudios JIT is a private anecdote from the author's application; alpha; stale since 2025-09-16.
+
+**Known shortcoming:** Enricher: the about 5x benchmark binds noarg and add_obj to generic_noarg_hack and generic_add_obj_hack, which poke asCGeneric fields through the private as_generic.h, with near-empty callees, so it measures pure call dispatch; the test configuration is eager compilation plus stack elision rather than the shipped defaults (lazy, 15000 hits); the default hacks ignore suspend, C++ exceptions and context inspection, so part of the speed is relaxed semantics. Open #24 (async compile failure crashes) and #7 (multithreaded contexts unsupported).
+
+**Independent measurement:** published comparison against the BMS JIT with hardware
+
+**Independent measurement:** default-configuration comparison against the BMS JIT with full semantics
+
+**How:** A bytecode-to-C translator (bytecode2c) emits one C function per AngelScript function with VM field offsets baked in, and MIR's c2mir compiles that C in memory to machine code (MIR optimisation level 2). Most of the advertised win is call overhead: generated code calls registered generic functions directly with per-function pooled asCGeneric objects, has a direct native-call path with optional stack elision, and fast script call/return paths, skipping VM bookkeeping such as suspend checks and program/stack-pointer updates (the hack_ignore_* defaults).
+
+**Use it when:**
+- An existing AngelScript-based game or app on 64-bit x86 (Linux gcc/clang, Windows MinGW or MSVC) whose scripts spend much time calling registered application functions, especially through asCALL_GENERIC.
+- You already use the BlindMindStudios JIT on 64-bit and want a maintained-ish replacement with better coverage; the author measured +0 to 40% over it on King Arthur's Gold.
+- Long-running scripted hot loops where lazy compilation keeps cold #included code out of the JIT and async compilation hides compile latency.
+- As a base for ahead-of-time translation of AngelScript to C (the bytecode2c output is plain C, though the README says AOT is not yet viable).
+
+**Skip it when:**
+- 32-bit x86, macOS x86-64 (fails CI, issue #3) or big-endian targets; aarch64 Linux and macOS are experimental and untested on a real app.
+- Engines that run AngelScript contexts on multiple threads: the README says the JIT is not thread-safe with multithreaded contexts or engines (issue #7 open).
+- Hosts that rely on suspending scripts (line callbacks, timeouts), on C++ exceptions thrown by registered functions, or on inspecting the calling context from native callbacks: the default hacks ignore all three during JIT execution.
+- Production builds that need stability guarantees: alpha quality, a downstream MIR fork required, async compile failures crash the app (issue #24 open), and no commits since 2025-09-16.
+- Huge script functions: MIR compile cost can reach gigabytes, so functions over 25,000 bytecode bytes are skipped by default.
+
+**Integration:** static lib · AngelScript 2.37.0+ (asIJITCompilerV2), fmt, MIR via the asumagic/mir downstream fork; all vendored as git submodules; Catch2 and nanobench only for tests · C++20 (cxx_std_20), CMake · x86-64 Linux (gcc, clang) and Windows (MinGW, MSVC); aarch64 Linux and macOS experimental; no 32-bit x86, no macOS x86-64, no big-endian
+
+**Vs siblings:** Pick angelsea over the BlindMindStudios AngelScript JIT on 64-bit x86 or aarch64 with AngelScript 2.37+, since BMS is unmaintained, x86-only and falls back to the interpreter often per this README; keep BMS for 32-bit x86. Against switching the scripting language to Luau or Daslang it is the only option here that speeds up an existing AngelScript codebase in place.
+
+**Gotchas:**
+- Harness note on the ~5x figure: the generic ABI benchmark (tests/abi.cpp, tests/scripts/abi.as) binds noarg to generic_noarg_hack and add_obj to generic_add_obj_hack, which write asCGeneric::returnVal and read stackPointer/currentObject directly through AngelScript's private as_generic.h header instead of the virtual asIScriptGeneric calls; with near-empty callees the loop measures pure call dispatch, the case the JIT optimises most, so ordinary generic bindings (GetArgDWord, SetReturnDWord) would show a smaller ratio. No results, CPU or compiler are committed for this or the native-ABI and brainfuck benchmarks.
+- The benchmark config is not the shipped default: tests use eager compilation and experimental_stack_elision = true, while the library defaults to lazy compilation after 15,000 hits and stack elision off.
+- Part of the speed comes from relaxed semantics enabled by default: hack_ignore_suspend (asBC_SUSPEND ignored, so script suspension and line-callback timeouts do not fire in JIT code), hack_ignore_exceptions (C++ exceptions from application functions are not handled on direct system calls) and hack_ignore_context_inspect (program and stack pointers not updated, breaking callees that use the debug interface; issue #26 tracks m_callingSystemFunction).
+- Upstream MIR miscompiles its code (GVN load/store optimisations, integer sign-extension issue #423, jump-optimisation use-after-free issue #424); the asumagic/mir fork works around them and the config warns that MIR level 3 is known broken.
+
+**Status:** Stale since 2025-09-16 (alpha, 12 open issues including crash-on-async-compile-failure #24 and multithreaded-context support #7) but BSD-2-Clause, CMake-vendorable with submodules, and exercised by its author on a commercial game's dev build.
+
+[repo](https://github.com/AsuMagic/angelsea) · [benchmark](https://github.com/AsuMagic/angelsea/blob/main/README.md)
 
 ##### Bolt  `C`  `MIT`  `active`  `Tier C`
 
@@ -34016,6 +34403,47 @@ User-mode x86-64 Linux emulator for Arm64, RISC-V and LoongArch hosts whose dyna
 
 [repo](https://github.com/ptitSeb/box64) · [benchmark](https://github.com/ptitSeb/box64)
 
+##### Box86 (x86 userspace emulator for ARM with dynarec)  `C`  `MIT`  `stale`  `Tier C`
+
+32-bit x86 Linux userspace emulator for armhf with a dynarec; author's 2022 7-Zip test: about 4.5x QEMU, 2.6x FEX.
+
+**Beats:** QEMU user-mode (x86 guest) and FEX; also Box86's own interpreter — In the Box86 author's March 2022 box86.org comparison (EGRESS_BLOCKED here; numbers from search-result text, which also says the 7-Zip build was version 16 from Ubuntu), 7-Zip as a 32-bit x86 guest scored Box86 3117 MIPS against native ARM 6157, FEX 1197 and QEMU user-mode 691, about 4.5x QEMU and 2.6x FEX (derived from snippet data), with no CPU, emulator versions or flags visible. The author's FOSDEM 2022 page gives hardware-labelled Box86-versus-native numbers only (7-Zip 16.02 'Tot' 40-61% of native across seven boards, e.g. ODROID N2 3811 vs 8981; dav1d 21-55%; glmark2 96-100%; OpenArena 72-86%), and the README's '5 to 10 times faster' DynaRec figure is against its own interpreter with no workload stated.
+
+**Known shortcoming:** The QEMU and FEX 7-Zip numbers (7z 3117 vs QEMU 691) are a 2022 first-party article by a competitor's author, read as snippets only (box86.org blocked) with no CPU model; the FOSDEM 2021 page (rajdakin/box86-fosdem2021-content performances.md) compares Box86 with native on named boards; the 5-10x dynarec claim is against its own interpreter with no method. Not a duplicate of Box64.
+
+**Known shortcoming:** Enricher: the QEMU and FEX 7-Zip numbers (3117 vs 6157 native, 1197 FEX, 691 QEMU) are confirmed only through search-result text with machine, versions and flags unknown; the FOSDEM page compares Box86 with native only. ~/.box86rc overrides /etc rc, which overrides the command line, so shipped profiles can silently override benchmark environment variables; fast defaults (STRONGMEM=0, FASTNAN=1, FASTROUND=1) relax semantics; September 2026 bug fixes postdate v0.3.8; maintenance is low-cadence (about 15 commits from 2025-06 to 2026-09), and Box64's Box32 now covers 32-bit binaries.
+
+**Independent measurement:** first-party table with hardware or an independent run
+
+**How:** The ARM dynarec translates x86 code in blocks over four passes (pass0 finds block extent and jumps, pass1 tracks flag use, pass2 sizes, pass3 emits), with a backward liveness pass (updateNeed) so x86 EFLAGS are only materialised when something reads them; MMX/SSE/SSE2 mostly map 1:1 onto NEON. Translated blocks are cached and guarded by page protection plus a hash signature, with a SIGSEGV handler catching writes to translated code. The biggest wins come from library wrapping, which runs GL, SDL or libc work at native speed, and from speed-over-accuracy defaults (STRONGMEM=0, FASTNAN=1, FASTROUND=1, x87 in float where possible).
+
+**Use it when:**
+- Running closed-source 32-bit x86 Linux games and tools (GameMaker, Unity3D, older Steam titles, steamcmd) on ARM boards that can still run AArch32 userspace (Raspberry Pi 2-4, ODROID N2, RK3399/RK3588, Phytium D2000/FT2000).
+- Running i386 Wine on ARM next to Box64, which needs Box86 (or Box32) for the 32-bit components.
+- Programs that spend most of their time in wrapped libraries (OpenGL, SDL, Vulkan): the author's FOSDEM 2022 page shows glmark2 at 96-100% of native and OpenArena at 72-86%.
+- Replacing qemu-i386 user-mode when throughput matters more than exact x87 precision or x86 memory ordering.
+
+**Skip it when:**
+- 64-bit-only ARM CPUs or distributions without an armhf multiarch or chroot: Box86 needs a 32-bit userspace and a 32-bit toolchain and is 'useless on 64-bit only systems'; use Box64's experimental Box32 mode or FEX there.
+- Hand-optimised SIMD code, especially SSSE3: one SSSE3 op can expand to 10 NEON ops (pmaddubsw), and dav1d runs at only 21-55% of native on the FOSDEM page; CPU-bound integer code (7-Zip) sits at 40-61%.
+- Software that needs x86 memory ordering or exact x87, NaN and rounding behaviour: the fast defaults relax all three, and multithreaded JIT guests (Mono, JVM) are switched to BIGBLOCK=0 STRONGMEM=1, which is slower.
+- Non-ARM hosts or x86_64 binaries: the dynarec is ARM-only (other targets such as PowerPC LE run the interpreter), and 64-bit guests need Box64.
+- When you need fast upstream fixes: the repo is in low-cadence maintenance with 186 open issues, including dynarec-only failures such as #1042 (La-Mulana runs only with dynarec disabled).
+
+**Integration:** standalone executable (CMake build from source, installs the box86 binary, a binfmt_misc entry, bundled x86 libs and /etc/box86.box86rc; Debian packaging in debian/) · armhf (32-bit) libc plus the 32-bit native libraries to be wrapped (SDL, OpenGL or gl4es, Vulkan); optional Zydis for TRACE builds; ccache recommended for development · CMake 3.10+, a 32-bit ARM GCC (gcc-arm-linux-gnueabihf on aarch64 hosts), -std=gnu11; docs recommend -DCMAKE_BUILD_TYPE=RelWithDebInfo with a board profile (-DRPI4=1, -DODROIDN2=1, -DRK3588=1 ...) · 32-bit little-endian ARM Linux userspace (armhf) on ARMv7, or on ARMv8 CPUs that keep AArch32 at EL0 with a multiarch or chroot setup; dynarec for ARM only
+
+**Vs siblings:** Pick Box86 over FEX or QEMU user-mode when the guest is 32-bit x86 and the host can run armhf: in the author's 2022 7-Zip run it reached about 50% of native against 19% for FEX and 11% for QEMU. Use Box64 for x86_64 guests (or its Box32 mode on 64-bit-only hosts), FEX on aarch64-only hardware or when you want stricter x86 semantics, and Blink to run x86-64 Linux programs on non-ARM hosts.
+
+**Gotchas:**
+- Config precedence is inverted from what most tools do: ~/.box86rc beats /etc/box86.box86rc, which beats the command line, so BOX86_* variables you set when benchmarking can be silently overridden by a shipped per-program profile.
+- JIT'd guest code is tracked with memory protection and a SIGSEGV handler, so gdb stops on many 'normal' segfaults; use `handle SIGSEGV nostop` and break in my_box86signalhandler.
+- Several correctness fixes landed in September 2026 after the newest CHANGELOG entry (v0.3.8): a use-after-free in aligned_realloc, a CVTTPS2PI lower-lane bounds check, an atfork loop out-of-bounds, interpreter LOCK 16-bit INC/DEC; build from master rather than an old package.
+- The QEMU and FEX numbers come from a 2022 article by the Box86 author, read here only through search-result text: the machine, the QEMU, FEX and Box86 versions and the build flags are not visible; QEMU and FEX keep 80-bit x87 in softfloat while Box uses hardware float, and 7-Zip's built-in benchmark ('7z b') runs one thread per core by default (4 threads in the FOSDEM sample output), so the scores also reflect each emulator's threading and atomics handling.
+
+**Status:** MIT-licensed, 3.8k stars and not archived, but in low-cadence maintenance (about 15 commits between 2025-06-22 and 2026-09-27, mostly opcodes, wrappers and bug fixes) while the Box64 README now offers Box32 as an alternative for 32-bit binaries; still the standard way to run i386 Linux binaries on armhf.
+
+[repo](https://github.com/ptitSeb/box86) · [benchmark](https://box86.org/2022/03/box86-box64-vs-qemu-vs-fex-vs-rosetta2/)
+
 ##### Copapy  `Python (tracing compiler) with C runner and stencils`  `MIT`  `active`  `Tier C`
 
 Python-traced copy-and-patch compiler for small realtime numeric graphs; beats NumPy 2.3.5 per-call overhead by 1.7-3.9x.
@@ -34420,6 +34848,49 @@ PHP 7.1+ compiled to JVM bytecode; claims 2.5x over PHP 5.6 and 1.1x over 7.0, b
 **Status:** Abandoned: last commit 2020-07-07, and a 2024 issue asking why it stalled has no maintainer reply. It is Apache-2.0 and usable for JVM-embedded PHP 7-style scripting, but it is only faster than obsolete Zend versions, and its benchmark has an asymmetric string test.
 
 [repo](https://github.com/jphp-group/jphp) · [benchmark](https://github.com/jphp-group/jphp)
+
+##### LC Scheme BBV JIT (bsaleil/lc)  `Scheme`  `BSD-3-Clause`  `abandoned`  `Tier C`
+
+Research Scheme JIT using lazy basic-block versioning; generated code edges out Gambit and Chez on 38 classic benchmarks.
+
+**Beats:** Gambit Scheme v4.9.3 and Chez Scheme v9.5.2 (mature AOT Scheme compilers, safe and unsafe modes); also Pycket (February 2019 build, Racket tracing JIT on RPython) for total time — In Saleil's 2019 PhD thesis (Intel Core i7-7700K, Linux, 38 Gambit-suite benchmarks, mean of 8 of 10 runs, GC and compile time excluded), Gambit v4.9.3 code takes 1.38x (safe) and 1.12x (unsafe) of LC's time on average and Chez 9.5.2 takes 1.27x and 1.09x, with fftrad4 the best case; including JIT compile time, LC takes 0.87x of Pycket's time (faster on 22 of 38). The peer-reviewed VMIL 2018 paper (i7-4870HQ) reports LC 1.47x faster than Gambit on average and faster on 26 of 38.
+
+**Known shortcoming:** Thesis and VMIL 2018 numbers (i7-7700K, flags stated, harness in tools/benchtimes): Gambit v4.9.3 takes 1.38x LC's time in safe mode but only 1.12x in unsafe mode, Chez 9.5.2 1.27x safe and 1.09x unsafe, so the lead is small once LC's skipped bounds, stack and polling checks are accounted for; GC and compile time excluded; the ECOOP 'up to 50%' compares LC's interprocedural mode with its own intraprocedural mode. Abandoned since 2019.
+
+**Known shortcoming:** Enricher: LC's --time (main.scm) runs the program once, resets globals, GCs and then times a second in-process run, while Gambit and Chez are timed on a single cold fresh-process run, so the thesis Fig. 6.16 ratios compare warm against cold. The committed harness also differs from the thesis setup: the Gambit prefix has (not safe), the Chez prefix has no optimize-level and no rnrs import, and the fl/fx specialised macros are commented out, so the baselines run generic arithmetic; the README builds the stable branch (2018-08-29) with make debug (asserts on); the thesis does not say whether means are arithmetic or geometric. Correctness checks are present (ok? predicate, run.py aborts on '***').
+
+**Independent measurement:** unsafe-mode comparison including GC and compile time
+
+**Independent measurement:** cold-vs-cold run with the thesis baseline settings
+
+**How:** Lazy basic block versioning (BBV, Chevalier-Boisvert and Feeley): each basic block is compiled on first execution and specialised for the type context that reached it, so type checks seen once are removed from later code, with a version cap (the experiments use --max-versions 5). Interprocedural extensions propagate argument and return types through per-closure entry-point and return-point tables, and eager flonum unboxing keeps floats unboxed in registers and stack slots, which is where the largest wins (fftrad4, nucleic) come from.
+
+**Use it when:**
+- Studying or reproducing BBV and interprocedural code specialisation for a dynamic language; the codebase is under 15 KLOC of Scheme written by one person.
+- Benchmark-style Scheme programs with type-stable fixnum or flonum hot code (Gabriel and Gambit suite programs), where LC beat Gambit and Chez on more than half of 38 programs.
+- Flonum-heavy loops over heterogeneous vectors, where eager unboxing gave the best rows (fftrad4: Gambit 3.29x to 4.03x and Chez 4.60x to 5.10x of LC's time).
+- A reference design when building a baseline JIT without an interpreter or profiling tier: warm-up equals compile time.
+
+**Skip it when:**
+- Any production Scheme work: last commit 2019-05-11, one closed issue, single author, and it needs the author's Gambit fork on PATH at build and run time.
+- Programs that need call/cc, full eval, threads, stack-overflow safety or vector bounds checks; LC omits them, and that omission is part of its speed edge over safe-mode Gambit and Chez.
+- Code where unsafe-mode Gambit or Chez is acceptable: the average lead shrinks to 1.12x and 1.09x and LC loses on a large minority of benchmarks.
+- Loop-heavy flonum vector code such as fft, where Pycket's tracing JIT was 3.40x faster than LC with heterogeneous vectors (1.63x with f64vectors).
+- Platforms other than Linux x86-64.
+
+**Integration:** standalone JIT executable (bash launcher that runs gsc -i over compiled Gambit .o1 modules) · modified Gambit Scheme (github.com/bsaleil/gambit, fork of gambit/gambit, LGPL/Apache-2.0) built with --enable-single-host and its gsc on PATH; bash; Python 3 for the benchmark scripts · the bsaleil/gambit fork (a 2019-era Gambit 4.9 tree); no other version documented · Linux x86-64 only
+
+**Vs siblings:** Pick LC over Chez Scheme only to study or extend BBV for Scheme; Chez is the production choice and is within about 9% of LC in unsafe mode. Against Higgs, LC is the Scheme counterpart of the same Montreal BBV line of work and adds interprocedural entry/return-point specialisation and flonum unboxing.
+
+**Gotchas:**
+- The 'excluding compilation time' numbers come from main.scm's --time mode, which runs the whole program once, resets globals and the stack, forces a GC and then times a second in-process run; Gambit and Chez are timed on their single run in a fresh process. That removes JIT cost as intended but also gives LC warmed memory, so the Fig. 6.16 ratios compare a warm second run with a cold first run.
+- The committed harness runs Gambit and Chez with generic arithmetic and heterogeneous vectors (the fixnum/flonum-specialised fl+/fx+ macro block in prefix/Gambit.scm is commented out), and prefix/Gambit.scm has no (not safe) while prefix/ChezScheme.scm and the Chez compile command carry neither an optimize-level nor the (import (rnrs) ...) line the thesis cites; the thesis's safe/unsafe Gambit and optimize-level 2/3 Chez runs were configured outside the committed scripts, and run.py has every system except LC5 commented out with /home/bapt paths.
+- README build steps clone the 'stable' branch (last updated 2018-08-29, before the 2019 thesis-era commits such as 'Improve div ops') and run `make debug`, which builds LC with gsc -debug and assertions on (config-debug.scm); the release target is plain `make`. This matters most for compile-inclusive timings such as the Pycket comparison.
+- Correctness is checked: every benchmark's ok? predicate prints '*** wrong result ***' and run.py aborts on '***' or any stderr output, so the timed runs did produce the expected results; the thesis does not say whether its averages are arithmetic or geometric means of the per-benchmark ratios, and the VMIL 2018 Pycket figure includes GC time while the thesis version excludes it.
+
+**Status:** Abandoned research artifact (last commit 2019-05-11) under BSD-3-Clause; usable for experiments and as a reference implementation of BBV, but it depends on an unmaintained Gambit fork and the committed harness needs hand edits (paths, system list, safety modes) to reproduce the thesis numbers.
+
+[repo](https://github.com/bsaleil/lc) · [benchmark](https://raw.githubusercontent.com/bsaleil/bsaleil.github.io/master/docs/BaptisteSaleilPhD.pdf)
 
 ##### libriscv  `C++`  `BSD-3-Clause`  `active`  `Tier C`
 
@@ -36028,6 +36499,49 @@ Python image-augmentation library on OpenCV and LUT kernels; 1.2-13x the through
 
 [repo](https://github.com/albumentations-team/albumentations) · [benchmark](https://github.com/albumentations-team/benchmark/tree/ab6e84d4c88485dd3ea1e045c03373a6bf4f488a)
 
+##### BoofCV  `Java`  `Apache-2.0`  `active`  `Tier C`
+
+Pure-Java computer vision library; the author's 2019 run beat OpenCV-Python on corners, histogram and Sobel but lost on blur and Canny.
+
+**Beats:** OpenCV (opencv-python 4.5.1.48 pip wheel, CPU) — The author's SpeedTestCV example outputs, both written on 2019-03-21 and never re-run, time BoofCV 0.33.1 under JMH (3 warm-up and 5 measured iterations, concurrency on) against opencv-python 4.0.0.21 timed by a Python loop (mean of 10 calls, multithreaded as shipped) on a 3648x2736 chessboard photo and a binary PNG, on unstated hardware. BoofCV led on Shi-Tomasi corners (7.2x), Hough (4.2x), histogram (3.1x), external contours (1.8x) and Sobel (1.7x), and trailed on Gaussian blur (OpenCV 3.0x), Canny (2.3x) and mean threshold (1.3x); the Hough, contour and Sobel wins compare different work.
+
+**Known shortcoming:** Both SpeedTestCV outputs were written in commit 0bd58bd (2019-03-21) and never re-run, so they measure BoofCV 0.33.1 against opencv-python 4.0.0.21; no hardware stated; BoofCV timed with JMH while OpenCV used a Python time.time() loop; the Hough row is not like for like (OpenCV HoughLines runs on the raw grey image); OpenCV is faster on blur, Canny and mean threshold. Java library, loose fit in color-and-resampling.
+
+**Known shortcoming:** Enricher (SpeedTestCV code): the Sobel row runs OpenCV with ksize=1 (1x3 central difference, no smoothing) against BoofCV's 3x3 Sobel and OpenCV allocates two outputs per call; the contour row has BoofCV thresholding dark pixels (38.9%) as foreground while OpenCV traces white (61.1%) with RETR_CCOMP against an external-only finder, so the regions are complementary; the Hough row runs on a 3648x2736 chessboard greyscale that is about 100% non-zero, so OpenCV votes with about 10M pixels; the histogram OpenCV figure is a single cold call; the threshMean error (plus or minus 9.822 on 20.495 ms) is noise. So the Hough, contour and Sobel wins are not like for like.
+
+**Independent measurement:** same-harness re-run on current versions with hardware stated
+
+**Independent measurement:** like-for-like kernels and thresholds on both sides
+
+**How:** Image operations come as type-specialised variants produced by a code generator (the build has an explicit autogenerate step), and hot operations have multithreaded implementations (for example ImplThresholdImageOps_MT) selected through the global BoofConcurrency.USE_CONCURRENT switch. Processor objects reuse preallocated output images instead of allocating per call. Some of the measured wins come from doing less work rather than faster kernels: its Hough polar detector votes only with gradient edges above a threshold, and its contour finder is an external-only linear-time tracer.
+
+**Use it when:**
+- JVM or Android applications that need computer vision without JNI or native OpenCV binaries (pure Java; a boofcv-android module exists).
+- Fiducial markers, QR codes, camera calibration or structure from motion inside a Java stack, where BoofCV offers ready-made pipelines.
+- Long-running, many-frame pipelines on the JVM that reuse output buffers, so JIT warm-up and allocation are amortised as in the JMH numbers.
+- Shi-Tomasi corners, histograms or gradient images on large grayscale frames, where the 2019 run had BoofCV ahead of opencv-python (with the caveats below).
+
+**Skip it when:**
+- Gaussian blur, Canny edges or local mean thresholding: OpenCV was 3.0x, 2.3x and 1.3x faster in the same author run.
+- Colour conversion or resampling: no row of the benchmark measures either, so nothing supports placing it in this category; the native siblings (fast_image_resize, kornia-rs, libvips, Pillow-SIMD) have like-for-like numbers.
+- C, C++ or Python projects: using it means embedding a JVM; there is no native build.
+- Short-lived or cold-start workloads: the JMH figures exclude JIT warm-up, which a one-shot command-line call pays.
+- When outputs must match OpenCV bit for bit: RGB-to-gray is a plain average by default and Gaussian blur rounds where OpenCV truncates, per the SpeedTestCV notes.
+
+**Integration:** Java library jars on Maven Central (org.boofcv:boofcv-core plus optional modules such as boofcv-swing, boofcv-ffmpeg, boofcv-javacv, boofcv-android, boofcv-kotlin) · EJML, GeoRegression, DDogleg, DeepBoof and args4j for the core; optional bytedeco FFmpeg and JavaCV native binaries (platform-specific, no longer bundled by default since 1.5.0) for the integration modules · Java 11 or newer to run (README); building from source uses the bundled Gradle wrapper with an autogenerate step · any JVM platform (desktop, server, Android); native code only in the optional FFmpeg and JavaCV modules
+
+**Vs siblings:** Pick BoofCV only when you are on the JVM and want a whole pure-Java vision stack; for colour conversion or resizing speed, fast_image_resize and kornia-rs carry like-for-like measurements, and OpenCV (also catalogued) won blur, Canny and thresholding in BoofCV's own comparison.
+
+**Gotchas:**
+- Harness flaw in the Sobel row (read this session in opencv/benchmark.py, unchanged since 2019): OpenCV is called with ksize=1, which OpenCV defines as a 3x1/1x3 derivative kernel with no smoothing, while BoofCV computes the 3x3 Sobel; OpenCV also allocates two new CV_16S outputs per call while BoofCV writes into preallocated images, so the 1.7x compares different operators and memory handling.
+- Harness flaw in the contour row: BoofCV thresholds binary.png with down=true, so dark pixels (38.9% of the 3648x2736 image) are foreground, while OpenCV traces the non-zero white pixels (61.1%) and is asked for RETR_CCOMP (outer and hole contours) against BoofCV's external-only finder; the two sides trace complementary regions, so the 1.8x is not like-for-like.
+- The 4.2x Hough row is an artefact: essentially every pixel of the grayscale chessboard photo is non-zero (checked this session), so OpenCV's HoughLines votes with all ~10 million pixels at 180 angles, whereas BoofCV votes only with gradient edges above 50. The OpenCV histogram row is a single cold call against a JMH average, and BoofCV's threshMean error (plus or minus 9.822 ms on 20.495 ms, about 48%) makes that row noise.
+- BoofConcurrency.USE_CONCURRENT is global state read at construction time: filters created before it is set keep the old threading mode.
+
+**Status:** Actively maintained (last commit 2026-10-06, 5,605 commits, 1.5.0 on Maven Central, 54 open issues) and Apache-2.0, so easy to adopt on the JVM, but the only OpenCV comparison is a seven-year-old first-party run with no hardware stated, and most of its wins rest on rows that are not like-for-like.
+
+[repo](https://github.com/lessthanoptimal/BoofCV) · [benchmark](https://github.com/lessthanoptimal/SpeedTestCV/blob/master/boofcv/readme.md)
+
 ##### CUDARGB2Y  `C++ (CUDA)`  `MIT`  `abandoned`  `Tier C`
 
 20-line CUDA kernel converting packed BGR8 already on the GPU to 8-bit gray; claims 5-30x over OpenCV's CPU cvtColor.
@@ -37254,6 +37768,50 @@ Pure-Rust SIMD YUV/RGB conversion crate (yuv) that matches or beats libyuv by 1.
 
 [repo](https://github.com/awxkee/yuvutils-rs) · [benchmark](https://github.com/awxkee/yuvutils-rs/blob/master/README.md)
 
+##### zenquant (imazen)  `Rust`  `AGPL-3.0-only OR LicenseRef-Imazen-Commercial`  `active`  `Tier C`
+
+Pure-Rust 256-colour palette quantizer in OKLab with perceptual masking; smaller PNG/GIF than libimagequant, not faster.
+
+**Beats:** libimagequant (imagequant crate 4, presets s1 d50, s1 d100, s4 d100); also quantette 0.5 k-means, quantizr, color_quant — First-party README table (2026-03-04 run of examples/quantizer_comparison.rs, 50 images from CID22, CLIC 2025 and screenshots, 256 colours, rustc, CPU and OS unrecorded): zenquant Best has butteraugli 3.17 vs 4.10 and a PNG of 586 KB vs 637 KB (about 8% smaller, derived from page data) against imagequant 4 at speed 1 with full dithering, at ~542 vs ~546 ms. Those times come from the approximate multi-threaded, cached mode, so the record supports a size and butteraugli advantage, not a speed one.
+
+**Known shortcoming:** Not faster: best about 542 ms, the same as imagequant s1 d100 (546 ms); the fast 321 ms mode only ties imagequant s4 (315 ms) and loses to quantette (265 ms); the win is file size and butteraugli score. The ms column comes from an approximate 8-thread run with cached timings, imagequant kept its default rayon threads while zenquant ran single-threaded, no CPU or rustc recorded; 2 stars, AI-generated-code notice.
+
+**Known shortcoming:** Enricher: the README ms column comes from an 8-thread default run with one unwarmed run per image, imagequant's rayon pool on top, and cache.json reusing old timings unless --recalc; no --benchmark result, CPU or rustc recorded. Every zenquant row runs OutputFormat::Png, so its GIF mode is never measured, and the PNG column re-encodes RGB through zenpng auto-indexing so its own palette sort is never measured; dithering is not equal (color_quant none, quantizr 0.5); the 'SSIM2 target/floor' uses an internal MPE estimate. crates.io 0.1.3 vs main 0.1.4, pixel cap on remap/build_palette unreleased, issue #4 open.
+
+**Independent measurement:** same-thread-count timing on stated hardware
+
+**Independent measurement:** warmed, single-threaded timing with equal dithering
+
+**How:** It is tuned for size and perceptual quality rather than speed: an OKLab histogram is split by median cut, then refined by k-means weighted with butteraugli-inspired adaptive-quantization masks so palette entries go to smooth gradients and skin tones instead of noisy texture. A format-aware palette sort, adaptive Floyd-Steinberg dithering and an optional Viterbi dynamic program that lengthens index runs help deflate and LZW compress the output. Hot loops (sRGB to OKLab, nearest-palette search, k-means) use archmage runtime SIMD dispatch (AVX2+FMA, NEON, WASM SIMD128) with a scalar fallback.
+
+**Use it when:**
+- Producing palette PNG, APNG or GIF where file size at a given butteraugli score matters more than encode time (README: Best 586 KB PNG vs imagequant s1 d100 637 KB at about the same ~542 vs ~546 ms).
+- Pure-Rust, no_std + alloc or WASM builds that require #![forbid(unsafe_code)] and no C dependency.
+- Animation encoders that need one shared palette across frames and a per-frame quality floor (with_min_ssim2 returns QualityNotMet so the encoder can fall back to truecolor).
+- Server pipelines that need cooperative cancellation of slow Best-preset runs (quantize_with_stop) and a pixel-count cap (default 120 MP).
+- Projects already on imazen's zenpng, zengif or zenwebp, where zenquant is the default quantizer.
+
+**Skip it when:**
+- When speed is the goal: in the README table zenquant Fast (~321 ms) only ties imagequant s4 (~315 ms) and loses to quantette k-means (~265 ms), and Best costs the same as imagequant s1 d100.
+- When per-pixel fidelity or looks matter most: the README itself says quantette k-means leads SSIMULACRA2 (83.9 vs 82.9) and DSSIM (0.00050 vs 0.00058) and that imagequant looks best to the eye.
+- Closed-source network services without a licence purchase: AGPL-3.0-only network copyleft unless you buy the commercial licence ($1 startup tier for under $1M revenue and fewer than 5 employees).
+- Untrusted input on the released crate: 0.1.3 caps pixel count only in quantize/quantize_rgba; extending the cap to remap/build_palette is still in the unreleased 0.1.4 changelog and issue #4 ('Server hardening') was open in June 2026.
+- Risk-averse production use: 2 stars, two dependents (zenpng, zengif, both imazen's), first release 2026-03-05, and a README notice that the code was developed with Claude and 'Not all code manually reviewed'.
+
+**Integration:** crate · rgb, imgref, num-traits (libm), thiserror, linear-srgb, archmage, magetypes, enough · Rust 1.92 (edition 2024) · any Rust target; SIMD paths for x86-64 AVX2+FMA, aarch64 NEON and wasm32 SIMD128 with scalar fallback
+
+**Vs siblings:** Pick zenquant over pngquant/libimagequant or quantette when the smallest palette PNG or GIF at a good butteraugli score, a pure-Rust forbid(unsafe) no_std build, shared animation palettes or a quality floor matter more than speed; pick quantette for the fastest run and best per-pixel metrics, and libimagequant for the best-looking output and the longest track record.
+
+**Gotchas:**
+- Harness flaw: the README's ~ms column comes from the default mode, which quantizes 8 images at once in scoped threads, times a single unwarmed run per quantizer per image, lets imagequant 4 (default features, rayon threads) spawn its own pool on top, and reuses cached per-image results and their old timings from cache.json unless --recalc is passed; benchmarks/README.md calls these numbers 'fine for the quality columns, not for timing claims', and no --benchmark (single-thread, min-of-4-after-warm-up) result or CPU/rustc record is committed.
+- Harness flaw: every zenquant row runs in OutputFormat::Png mode, so the GIF column never exercises its GIF tuning, and the PNG column re-encodes the reconstructed RGB pixels through zenpng's auto-indexing, so each quantizer's own palette order (zenquant's luminance sort) does not reach the measured PNG size. benchmarks/README.md says all contenders use 'same default dithering', but the code gives color_quant no dithering, quantizr 0.5, imagequant 0.5 or 1.0, quantette Floyd-Steinberg and zenquant its adaptive dither.
+- with_target_ssim2, with_min_ssim2, ssimulacra2_estimate() and butteraugli_estimate() use an internal MPE estimator, not real SSIMULACRA2 or butteraugli, so the quality floor is approximate.
+- Version and licence drift: crates.io serves 0.1.3 (2026-04-10) while main is 0.1.4 (the manifest had regressed to 0.1.2 after the 0.1.3 release, per CHANGELOG), the build_palette/remap *_with_stop APIs are unreleased, and the licence changed from AGPL-3.0-or-later (0.1.0, 0.1.1) to AGPL-3.0-only OR LicenseRef-Imazen-Commercial from 0.1.2.
+
+**Status:** Actively developed by Imazen (250 commits, last on 2026-09-27; 0.1.3 on crates.io with 8,680 downloads) and copyable under AGPL-3.0-only or a paid commercial licence, but it is six months old, has 2 stars, and is AI-assisted code that the README says is not fully reviewed.
+
+[repo](https://github.com/imazen/zenquant) · [benchmark](https://github.com/imazen/zenquant)
+
 ##### zimg  `C++`  `WTFPL`  `active`  `Tier C`
 
 C++ library for scaling, colourspace and bit-depth conversion of video frames; its 2018 README shows about 2x FFmpeg 4.0.2's filters.
@@ -37459,6 +38017,49 @@ Header-only AVX2 BGR-to-grayscale for 8-bit images; README claims roughly 3x fas
 
 [repo](https://github.com/komrad36/RGB2Y) · [benchmark](https://github.com/komrad36/RGB2Y)
 
+##### Simd (ermig1979)  `C++`  `MIT`  `active`  `Tier D`
+
+MIT C/C++ library of hand-vectorized image kernels (conversion, resize, filters) for x86 and Arm; no published win over OpenCV or libyuv.
+
+**Beats:** OpenCV (cv::resize and colour conversion) and libyuv; no published comparison found — No first-party numbers against OpenCV or libyuv exist; the repo's test mode only times Simd's scalar versus SIMD implementations. The only third-party figures found point the other way for resize and BgrToGray (issues #149 and #212, OpenCV 4.5.x 2.65x to 4-6x faster, thread counts unstated), while fwessels/go-cv-simd, a c2goasm Go port of Simd's SSE2 code, reports 3x3 Gaussian, mean and median filters 61-85% faster than OpenCV 2.x cvSmooth via go-opencv (filters only, OpenCV 2.x legacy C API, uninitialised images, hardware and image size not stated in the README).
+
+**Known shortcoming:** No published OpenCV or libyuv numbers: ResizeOpenCvSpecialTest in src/Test/TestResize.cpp has no committed output, the blocked github.io site is the repo's docs/ folder, and the simd.sourceforge.net mirror has no benchmarks. Kept at D under the keep-and-document rule; 2.3k stars, MIT, active.
+
+**Known shortcoming:** Enricher: the only third-party numbers run against it: issue #149 has Simd 9.789 ms vs OpenCV 4.5.1 3.689 ms upscaling 3328x1032 to 3752x1080 on an i7-10700, and issue #212 reports Resize and BgrToGray '4-6 times slower than OpenCV 4.5.5' on an i7-10750H, both unanswered with thread counts unstated (SimdGetThreadNumber defaults to 1 and most resizers are not parallelised). 8.0.166 (2026-10-01) removed public APIs (Fill*, CopyFrame, HOG, Neural, HAAR/LBP detection, 8-bit Synet) and dropped RISC-V and HVX; the SimdLib.cpp dispatcher is compiled -mavx2 -mfma with illegal-instruction reports (#71, #125 closed, #274 open); #299 fuzzer/ASan heap-buffer-overflow write in Avx512bw::TransformImageTranspose_4x4x16; #333 crash open. fwessels/go-cv-simd is a Go wrapper of its SSE2 code (duplicate if found).
+
+**Independent measurement:** published OpenCV comparison from its own test harness
+
+**Independent measurement:** committed output of its own OpenCV special test
+
+**How:** Each function has a scalar Base version plus hand-written intrinsics versions for SSE4.1, AVX2, AVX-512BW, AVX-512VNNI and AMX-BF16 on x86 and NEON and SVE2 on Arm, each compiled in its own translation unit with matching -m flags, and SimdLib.cpp picks the best one at runtime from CPUID. Byte resizers use fixed-point interpolation, and the BilinearOpenCv mode reproduces OpenCV's integer arithmetic so output matches cv::resize within 1 level.
+
+**Use it when:**
+- You need many pixel-level kernels (colour conversion, YUV planar conversions, reduce/stretch, statistics, motion-detection primitives) behind one MIT C API with runtime ISA dispatch, and do not want OpenCV's footprint.
+- Single-threaded per-frame processing on known x86 (AVX2/AVX-512) or Arm NEON hardware where you will benchmark against your current OpenCV build yourself.
+- You need bilinear resize that matches OpenCV output (SimdResizeMethodBilinearOpenCv) or PyTorch/Caffe coordinate mappings for neural-network preprocessing.
+- Embedded or plugin builds that need a static library with no external dependencies.
+
+**Skip it when:**
+- As a proven speedup over OpenCV: two user reports (issue #149: upscale 3328x1032 to 3752x1080, Simd 9.789 ms vs OpenCV 4.5.1 3.689 ms on an i7-10700; issue #212: Simd::Resize and Simd::BgrToGray '4-6 times slower than OpenCV4.5.5' on an i7-10750H) went unanswered and no counter-benchmark is published.
+- Multi-core throughput on large images: SimdGetThreadNumber defaults to 1 and only some functions (GEMM, Synet layers, ResizerNearest since 2025) are parallelized, while OpenCV and libyuv callers usually get threading or IPP for free.
+- High-quality resampling: there is no Lanczos or other windowed-sinc filter; use fast_image_resize or Pillow-SIMD class libraries for that.
+- Projects that need a stable API: release 8.0.166 (2026-10-01) removed SimdFill, SimdFillBgr, SimdFillBgra, SimdCopyFrame, the HOG, Neural, HAAR/LBP Detection and 8-bit Synet functions and dropped RISC-V and Hexagon HVX support; major versions moved 6 to 7 to 8 within 2026.
+- macOS or other non-Windows/Linux targets: the README lists only 32/64-bit Windows and Linux.
+
+**Integration:** static lib (default with CMake; DLL by default in the MSVS 2022 project; SIMD_SHARED for a shared lib) · none (OpenCV optional, test framework only); vcpkg port 'simd' · C++11 (-std=c++11), CMake 3.10, GCC/Clang or MSVS 2022; AVX-512BW TUs need GCC 5.5+, VNNI GCC 8+, AMX GCC 11+ with binutils 2.34+ · x86 and x86-64 (scalar, SSE4.1, AVX2, AVX-512BW, AVX-512VNNI, AMX-BF16 runtime-dispatched), ARM32/aarch64 NEON, SVE/SVE2 (off by default); Windows and Linux
+
+**Vs siblings:** Pick Simd over CompV, DeltaCV or KLERP when you need one maintained MIT library spanning conversion, resize and filters with AVX-512/AMX and SVE2 dispatch; for YUV conversion prefer libyuv or the measured sparkyuv/xxYUV, and for quality resampling prefer fast_image_resize or Pillow-SIMD, all of which publish numbers Simd lacks.
+
+**Gotchas:**
+- Harness: the only OpenCV comparison in the repo, ResizeOpenCvSpecialTest in src/Test/TestResize.cpp, is fair in shape (cv::setNumThreads matched to SimdGetThreadNumber, random BGR24 480x640 to 333x444, both sides rebuild their tables per call since Simd::Resize does Init/Run/Release each time) but runs only with -DSIMD_OPENCV=ON and -m=s and no output is committed; the default -m=a mode only compares Simd's own scalar and SIMD versions.
+- The CMake build compiles the dispatcher SimdLib.cpp with -mavx2 -mfma (plus -mavx512bw on Unix when SIMD_AVX512 is ON), and the test app built with SIMD_TARGET set uses the same flags; illegal-instruction reports on older CPUs recur (#71 and #125 closed, #274 open on an Atom Z3735F).
+- Memory-safety bugs in SIMD paths are still being found: #299 (STITCH fuzzer with AddressSanitizer) was a 16-byte heap-buffer-overflow write in Avx512bw::TransformImageTranspose_4x4x16 for a 32x4 BGRA image rotated 270 degrees, and #333 (2026-04-09, open) reports a crash in Avx2::AbsDifferenceSums3x3AutoTest.
+- Not every method supports every channel type: OpenCV-bilinear, bicubic and area resizers are byte-only, Caffe/PyTorch bilinear are float/BF16-only, and SimdResizerInit returns NULL for unsupported combinations (the C++ Simd::Resize then hits assert(0), which is a no-op in release builds).
+
+**Status:** Very active (monthly releases, 8.0.166 on 2026-10-01, about 5,950 commits, 2.3k stars, vcpkg port) and MIT-licensed, but the public API is pruned between major versions and the speed advantage over OpenCV is unmeasured, so treat it as tier D and benchmark against your own OpenCV build before switching.
+
+[repo](https://github.com/ermig1979/Simd) · [benchmark](https://github.com/ermig1979/Simd)
+
 ##### skcms  `C++`  `BSD-3-Clause`  `stale`  `Tier D`
 
 Skia's small ICC colour-management library (parse profiles, SIMD pixel transforms); no published speed comparison against Little CMS.
@@ -37620,6 +38221,50 @@ Zero-dependency JavaScript line breaker for HTML5 canvas text; up to 9.8x faster
 **Status:** Stale since 2023-11-25 (npm 1.0.3) with an open NaN bug that silently disables wrapping, though MIT, dependency-free and small enough to vendor and patch (skip measureText for empty strings); the baseline it beat has since been rewritten (canvas-txt v5).
 
 [repo](https://github.com/glideapps/canvas-hypertxt) · [benchmark](https://github.com/glideapps/canvas-hypertxt)
+
+##### Canvas-Txt v5  `TypeScript`  `MIT`  `active`  `Tier C`
+
+Canvas 2D text-box layout for JavaScript that wraps text about 9-11x faster than canvas-hypertxt's measuring mode by caching word widths.
+
+**Beats:** canvas-hypertxt (standard measuring mode) — First-party run of packages/canvas-txt/bench/compare.mjs on an unnamed Apple Silicon machine (Node version not stated, node-canvas ^3.2.3, canvas-hypertxt ^1.0.3): 5,000 splitText calls on 600-character lorem-ipsum strings at 400 px in 16px Arial, one timed pass per contender, took 51.3 vs 566.2 µs/op on never-repeating strings (about 11x) and 5.6 vs 48.3 µs/op on 500 cycled strings (about 8.6x, both derived from page data), while canvas-hypertxt was slightly faster when one string repeats (0.9 vs 1.1 µs/op, both answering from a result memo). canvas-txt ran its approximate cached mode, not its exact whole-line mode.
+
+**Known shortcoming:** No CPU model or Node version; the README's 'faster on every workload' is contradicted by its own same-text row (0.9 vs 1.1 us/op); the bench clears only the canvas-hypertxt cache while canvas-txt's width cache stays warm across scenarios; wrapping only, single run.
+
+**Known shortcoming:** Enricher: the bench times canvas-txt's default cached mode (summed per-word widths, kerning across word boundaries ignored) against canvas-hypertxt's standard mode, which measures every candidate substring exactly; canvas-txt's exact mode (cache: false) never runs in compare.mjs although the README says 'exact measuring'; only hypertxt's cache is cleared and the bench text has no punctuation. Correctness bug: wrap uses UAX-29 word segments as break points instead of UAX-14 line-break opportunities, so a comma, period or '$' can split or '-known' can start a line (reproduced with the repo's wrap.ts under bun: 'hello world' / ', again'), against the README's Unicode-correct wrapping claim.
+
+**Independent measurement:** cold-cache comparison on both sides
+
+**Independent measurement:** exact-mode comparison with UAX-14 breaks
+
+**How:** Text is cut into segments with Intl.Segmenter (word granularity), each segment's width is measured once per font and kept in a module-level Map (FIFO cap 10,000 segments per font key), and line fitting then sums cached numbers instead of calling measureText on growing substrings, which is what canvas-hypertxt's standard mode does character by character. Whole results are also memoised (500 split results and 500 layouts, FIFO) and returned frozen, so repeated identical calls are a Map lookup. The speedup therefore comes from avoiding measureText calls, which are especially slow in node-canvas (Pango/Cairo), the backend the benchmark used.
+
+**Use it when:**
+- Canvas apps that re-wrap the same vocabulary repeatedly (data grids, canvas editors, chart labels, games), where the per-font width cache stays warm.
+- Render loops that redraw unchanged text: layoutText once and paint with drawTextLayout every frame with no re-measuring.
+- Server-side image generation with node-canvas or skia-canvas, where measureText is costly and the cache saves the most.
+- Text with CJK, Thai or emoji where splitting inside a grapheme or surrogate pair is unacceptable and a whitespace-only splitter breaks badly.
+- You want a complete text-box renderer (alignment, ellipsis, justification, debug guides) in about 4 kB gzipped with zero dependencies.
+
+**Skip it when:**
+- Typeset-quality line breaking: breaks come from UAX-29 word boundaries, not UAX-14 line-break rules, so a trailing comma, period, closing parenthesis or the second half of a hyphenated word can start a new line (reproduced this session with the repo's wrap.ts).
+- One-off wrapping of unique text with an unfamiliar vocabulary: on a cold cache every segment still costs a measureText call, and the shipped benchmark never measures a cold-cache case.
+- You need kerning-exact line widths by default: the cached default sums per-segment widths; the exact whole-line mode (cache: false) exists but was not benchmarked.
+- Older runtimes: v5 needs Intl.Segmenter and ES2022 in browsers and Node 18 or newer (a whitespace-split fallback runs where Intl.Segmenter is absent, losing the Unicode handling).
+- Pure row-height prediction for virtualised lists of Latin text, where uWrap reports roughly 10x over canvas-hypertxt in browsers with a smaller footprint.
+
+**Integration:** module (npm package canvas-txt; ESM, CJS and an IIFE global window.canvasTxt) · none at runtime (node-canvas, canvas-hypertxt and canvas-txt@4.1.1 are devDependencies for tests and the benchmark) · Node >= 18 (engines field); modern evergreen browsers with Intl.Segmenter and ES2022; TypeScript types included · any JavaScript runtime with a Canvas 2D-like context (browsers, workers via OffscreenCanvas, node-canvas, skia-canvas)
+
+**Vs siblings:** Pick canvas-txt over canvas-hypertxt when you want a full text-box renderer with Unicode-aware segmentation and your text reuses a vocabulary, since its cached mode was about 9-11x faster on cycled and never-repeating strings; pick uWrap when you only need line counts or splits for Latin text in browser virtualised lists, and Pretext when you need DOM-free measurement for HTML layout rather than canvas drawing.
+
+**Gotchas:**
+- Harness flaw: the benchmark times canvas-txt's default cached mode, which sums per-segment widths and ignores kerning across segment boundaries, against canvas-hypertxt's standard mode, which measures every candidate substring with measureText; the README calls this 'exact measuring', but canvas-txt's own exact mode is cache: false (whole-line measuring), which compare.mjs never runs. The repo's tests check that cached and exact modes give identical breaks on 5 texts at 3 widths in node-canvas Arial, and that summed widths are within 0.5 px.
+- Benchmark cache handling is one-sided: only canvas-hypertxt's cache is cleared before each contender, so canvas-txt's never-repeating 600-character row starts with all 5,000 numeric prefixes and the lorem-ipsum vocabulary already measured by the earlier 100-character pass; the text has no punctuation, so the punctuation line-break behaviour above is never exercised, and the printed line-count sanity check is not reported.
+- Memoised layouts and split results are frozen and shared; mutating them throws in strict mode. Pass cache: false for mutable, unshared results.
+- Width caches are keyed by the font string and never notice a web font finishing loading: call clearMeasurementCache() after document.fonts.ready, or widths measured on the fallback font persist.
+
+**Status:** Active (v5.0.2 rewrite and all recent commits on 2026-08-10, co-authored with an AI assistant, every listed issue closed), MIT-licensed and dependency-free, so easy to adopt; the speed numbers are first-party, single-run and favour canvas-txt's warm cache, and its UAX-29-based wrapping can push punctuation onto a new line.
+
+[repo](https://github.com/geongeorge/Canvas-Txt) · [benchmark](https://github.com/geongeorge/Canvas-Txt)
 
 ##### displaywidth  `Go`  `MIT`  `active`  `Tier C`
 
@@ -39415,6 +40060,50 @@ Pure-Rust JPEG/MJPEG decoder and encoder with AVX2/NEON kernels; by its own meas
 
 [repo](https://github.com/Remade-With-Rust/rusty_jpeg) · [benchmark](https://github.com/Remade-With-Rust/rusty_jpeg)
 
+##### rusty_webp (remade_ffmpeg_rs crates/rusty_webp)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Pure safe-Rust WebP codec (image-webp fork): lossless encode 1.6-2.8x faster than libwebp m4, decode faster than FFmpeg.
+
+**Beats:** libwebp (default lossless effort m4, driven through FFmpeg 8.1.2's libwebp encoder); decode rows are against FFmpeg's native VP8/VP8L decoder, not libwebp — First-party only, against FFmpeg 8.1.2 on one pinned core with ABBA-interleaved pairs and child CPU time. Lossless VP8L encode (N=21, per the commit message) ran 1.6-2.8x faster than ffmpeg -c:v libwebp -lossless 1 at the default effort m4. Photo files came out 4-13% larger (but smaller than m0), and screen content up to 39% smaller. An 8K lossy decode test (N=31, two runs) ran 1.24-1.29x faster than FFmpeg's native VP8 decoder with bit-exact YUV output, and 8K lossless decode ran about 2.15x faster than FFmpeg's native VP8L decoder. CPU, OS, rustc flags, corpus files and the WebP harness are not published.
+
+**Known shortcoming:** First-party: the WebP harness and corpus are unpublished, CPU and flags unstated, the ffmpeg CLI child-process time is compared against an in-process arm, a custom allocator is used, the decode baseline is FFmpeg rather than libwebp and encode is compared only at method 4 (encode 1.6-2.8x faster but files 4-13% larger on photos). The record's 16-23x figure was upstream image-webp's encoder, not an earlier rusty_webp (corrected). Lives in crates/rusty_webp of remade_ffmpeg_rs, fork of image-rs/image-webp.
+
+**Known shortcoming:** Enricher: the WebP harness is still unpublished and the numbers exist only in the commit 26cad51 message; pinab.py does not fit (it needs an arm that prints 'total ms', which ffmpeg does not); the 'null-arm floor under 5%' is an ffmpeg-vs-itself noise floor, not an overhead bound; child CPU time includes launch, demux, input decode and ffmpeg's RGB32 conversion; the project's later codec-bench.ps1 (2026-09-06) warns that Windows TotalProcessorTime has a 15.625 ms tick lattice that faked earlier published deltas, and the OS of the WebP run is unstated. Lossy 1.24-1.29x is one 8K test over two N=31 runs (run spread, not corpus spread); lossless decode 2.15x has no N or file named; encode compared only against libwebp m4; decode baseline is FFmpeg's native decoder, never dwebp; bit-exact applies to the YUV path only. Cargo.toml says rust-version 1.80.1 but encoder.rs uses Option::is_none_or (Rust 1.82+); no palette, cross-colour or entropy image transforms; encode peak about 30 bytes per pixel. VP8L encoder and loop filter checked against spec, no correctness bug found.
+
+**Independent measurement:** published harness comparing against libwebp in-process
+
+**Independent measurement:** published harness against dwebp and cwebp m1-m6
+
+**How:** The encoder searches far less than libwebp at m4. It uses greedy hash-chain LZ77 over the ARGB pixels (32 candidates per position, cut to 8 and then 2 in long matchless stretches, an early exit at 128-pixel matches, and an unconditional distance-1 probe). It codes one Huffman group for the whole image, with no entropy image or histogram clustering. The color-cache size is picked from 0, 4, 6, 8 or 10 bits by a Shannon estimate. Per 16x16 tile it picks one of the 14 predictors by summed wrap-around residual magnitude, and the only other transform is subtract-green. A sampling dispatch skips the per-tile search on large run-heavy images. The decoder's speed-ups over upstream are a branch-free i16 select formulation of the normal loop filter, run over whole 16-lane (luma) or 8-lane (chroma) edges so the compiler can auto-vectorize it (no intrinsics), a block-scoped FastSession in the boolean decoder (one state snapshot and one validity check per coefficient block), a DC-only IDCT path, and native YUV output that skips RGB conversion.
+
+**Use it when:**
+- You must emit lossless WebP from pure Rust with no C, no FFI and #![forbid(unsafe_code)], and encode time matters more than the last 4-13% of file size on photographs.
+- Screen captures, UI and other repeated content, where the first-party corpus shows files up to 39% smaller than libwebp m4.
+- Video or YUV pipelines that ingest still lossy WebP: read_yuv420() returns the native 4:2:0 planes zero-copy, and the authors report bit-exact output against FFmpeg's decoder (webp to y4m) on their corpus.
+- Decoding animated WebP in Rust into composited canvas frames with per-frame durations (FFmpeg's native webp decoder errors on these files).
+- You use upstream image-webp and want better lossless compression: upstream's runs-only encoder was 35-53% larger than libwebp on photos, per this fork's NOTICE.md.
+
+**Skip it when:**
+- Lossy WebP encoding. There is no VP8 encoder, and animation encoding is not supported either.
+- Smallest lossless files. libwebp m4 is 4-13% smaller on photos. The encoder has no color-indexing (palette) transform, no cross-color transform and no entropy image, so low-colour graphics could fall further behind (an inference; the corpus results are given only as ranges).
+- You need to know how it compares with libwebp's decoder (dwebp). That was never measured: the decode baseline is FFmpeg's native VP8/VP8L decoder. Upstream image-webp puts its own decoding at 70-100% of libwebp, and before this fork's speed work it was 1.18x slower than FFmpeg on the 8K lossy test.
+- Lossless encoding of very large images on tight memory. Reading the code gives a peak of about 30 bytes per pixel (RGBA copy, residual copy, u32 pixel array, hash-chain links and a 12-byte token per pixel), which is about 1 GB for a 7680x4320 frame. This was derived from the code, not measured.
+- You need maturity or outside validation. It is one crate in a 6-star monorepo with two commits (both 2026-08-12) and 1,025 crates.io downloads, against 83 million for upstream image-webp. No numbers have been measured by anyone other than the authors.
+
+**Integration:** crate (rusty_webp 0.1.1 on crates.io; source in crates/rusty_webp of remade_ffmpeg_rs) · byteorder-lite 0.1, quick-error 2.0.1; dev only: rand 0.8, rusty_alloc-api (the house allocator used by the example bench) · Declared rust-version 1.80.1 (inherited from upstream), but encoder.rs calls Option::is_none_or, which became stable in Rust 1.82, so 1.82+ is needed in practice. Edition 2021; the workspace pins 1.95.0. · any Rust target: safe code only, with no arch-specific SIMD (the speed relies on auto-vectorization)
+
+**Vs siblings:** Pick it when the output has to be WebP and the program has to be pure safe Rust. nativewebp is the Go analogue (a pure-Go lossless WebP encoder), @napi-rs/image drives libwebp itself from Node, and libjxl's fjxl, fpnge or QOI/QOIR encode far faster when you are free to choose a different format.
+
+**Gotchas:**
+- The MSRV is wrong. Cargo.toml says 1.80.1, but the encoder's cache-size selection uses Option::is_none_or (stable since 1.82), so builds on 1.80 or 1.81 fail.
+- The bit-exactness claim covers the YUV path only (webp to y4m against FFmpeg). RGB output goes through fancy bilinear upsampling with libwebp's fixed-point constants and was not reported as compared against dwebp. The rff CLI switches to that path only when RFF_WEBP_UPSAMPLE is set.
+- Only the normal loop filter received the batched 16-lane kernels. Files encoded with VP8's simple loop filter still run the scalar per-pixel edge functions, so the decode speed-up may not carry over to them.
+- Encoder behaviour depends on content. Images over 262,144 pixels where at least 25% of sampled pixels repeat their left neighbour get one fixed 'top' predictor for the whole image instead of the per-tile search. Below that size the 14-way search always runs, at about 14 predictor evaluations per pixel.
+
+**Status:** The monorepo is active (506 commits, latest 2026-10-05), but the rusty_webp crate has not changed since it was created on 2026-08-12. The crate is MIT OR Apache-2.0, safe code with two small dependencies, and about 9.6k lines, so it is easy to vendor. The first-party numbers have no published harness to reproduce them.
+
+[repo](https://github.com/Remade-With-Rust/remade_ffmpeg_rs) · [benchmark](https://raw.githubusercontent.com/Remade-With-Rust/remade_ffmpeg_rs/HEAD/crates/rusty_webp/README.md)
+
 ##### wpd (WebP decoder)  `Rust and assembly, C ABI (wpd.h)`  `BSD-2-Clause`  `active`  `Tier C`
 
 Rust and hand-written assembly WebP decoder with a C ABI; 1.04-1.76x faster than libwebp 1.6.0 on one thread.
@@ -40535,6 +41224,48 @@ Rust GPU rasterizer for glyphs and vector paths (OpenGL, Metal, WebGL 2); claims
 **Status:** The repo is technically active (last commit 2026-04-23), but the activity is SIMD and build upkeep: the renderer has had no release since 0.5.0 in 2020, and the README still says it is under heavy development. MIT OR Apache-2.0 makes it easy to adopt from git main, but plan to own your fork.
 
 [repo](https://github.com/servo/pathfinder)
+
+##### scany (multi-threaded scanner, srwiley)  `Go`  `MIT`  `abandoned`  `Tier D`
+
+Pure-Go CL-AA antialiasing scanner for rasterx/oksvg; single-thread parity with ScanFT claimed, multi-thread speedup claimed, nothing measured.
+
+**Beats:** srwiley/scanFT ScanFT (Go port of the FreeType/golang freetype CL-AA gray antialiaser, same algorithm as FreeType ftgrays) — Nothing was measured: the README says single-threaded ScanS is within 1-2 percent of ScanFT (parity, not a win), one-thread ScanT about 10 percent slower, and multi-thread ScanT faster at an unstated, image-dependent thread count, with no hardware, Go version or figures. The repository's Go benchmarks only vary ScanT's thread count (1 to 32) and run ScanS on the gradient file, all on square inputs, and never time ScanFT or x/image/vector.
+
+**Known shortcoming:** Prose claim only (ScanS at parity with ScanFT, ScanT faster with more threads): no numbers, ScanFT never timed, the gradient benchmarks ignore b.N; 1 star, abandoned since 2022-01-17. Kept at D under the keep-and-document rule.
+
+**Known shortcoming:** Enricher (code reading): scany's SetBounds takes (height, width) while rasterx Filler/NewDasher call SetBounds(width, height), so non-square canvases break (landscape never paints right of column H-1, portrait drops rows from y=W) and every testdata SVG is square so tests never hit it; ScanT panics at 2 or more threads when content reaches above the top edge (negative cellWorkers index, rasterx passes lines unclipped); SetWinding and SetClip do nothing (no even-odd fill, no clipping, unlike ScanFT) and the sign is set once per scanline so counter-wound subpaths lose antialiasing, meaning the '1-2% of ScanFT' prose compares unequal work. No ScanFT or x/image/vector benchmark, no ScanS icon benchmark, grads benches ignore b.N, TestCompHalfCirc never fails.
+
+**Independent measurement:** any timed comparison against x/image/vector or scanx
+
+**Independent measurement:** like-for-like benchmark against ScanFT with clipping and winding implemented
+
+**How:** Both scanners use the CL-AA signed cover/area accumulation from cl-vectors (the same idea as FreeType ftgrays and AGG): each line is walked cell by cell in 26.6 fixed point, integer cover and area are added to a per-scanline linked list of cells kept sorted by x inside one flat slice with per-row sentinels, and each row is then swept left to right to emit alpha runs. ScannerT splits the work into three goroutine stages (line-to-cells, cell storage, sweep) with N goroutines of each; scanlines are assigned round-robin (row y goes to worker y mod N) so each worker owns its rows' lists without locks, while every single cell travels over a channel with a WaitGroup Add/Done. That per-cell channel traffic is why one-thread ScanT is about 10 percent slower per the README; the parallel sweep pays off mainly when the per-pixel rasterx.ColorFunc of a gradient dominates, because different rows are swept concurrently.
+
+**Use it when:**
+- Go code already rendering SVG through oksvg/rasterx that needs an MIT-licensed scanner instead of ScanFT's FreeType/GPL-licensed port, and only renders square canvases with all geometry on-canvas (see gotchas).
+- Gradient-heavy SVGs at large output sizes on multi-core machines, where ScannerT spreads per-pixel ColorFunc evaluation across rows; benchmark it yourself first, because no numbers are published.
+- Studying or teaching the CL-AA algorithm: about 1,100 lines of plain Go in three files (scans.go, scant.go, sweep.go), no assembly and no unsafe.
+
+**Skip it when:**
+- Non-square output: SetBounds is declared (height, width) but rasterx calls Scanner.SetBounds(width, height), so the scanner's row and column limits are swapped (code reading this session).
+- SVGs that rely on fill-rule="evenodd", clip rectangles, or subpaths of opposite orientation sharing a scanline: SetWinding and SetClip are no-ops and the coverage sign is fixed once per scanline.
+- ScanT with 2 or more threads on content that reaches above the top edge (partly off-canvas art, zoom/pan, strokes straddling y = 0): a negative slice index panics in a worker goroutine.
+- When you need a demonstrated speedup: neither ScanFT nor the golang.org/x/image/vector scanner is ever timed, while the same author's scanx publishes numbers against both.
+- Long-lived services: unmaintained since 2022-01-17, 1 star, and the tests make no assertions on output.
+
+**Integration:** module · golang.org/x/image/math/fixed and github.com/srwiley/rasterx in the library code; github.com/srwiley/oksvg in tests and the README usage; go.mod pins 2021 pseudo-versions (rasterx v0.0.0-20210519020934-456a8d69b780, oksvg v0.0.0-20211120171407-1837d6608d8c) · Go 1.17 (go.mod 'go 1.17') · any Go target (pure Go, no assembly, no unsafe)
+
+**Vs siblings:** Among the Go siblings, scanx (same author, same rasterx interface) publishes 3.2x over ScanFT's FTScanner and 74x over the x/image/vector GVScanner at 5x scale, and stilus publishes about 2x over x/image/vector, while scany publishes no numbers and has the defects above; pick scany only if you specifically need an MIT-licensed CL-AA scanner with row-parallel gradient sweeping on square, on-canvas, nonzero-winding SVGs, and measure it first.
+
+**Gotchas:**
+- Swapped bounds (code reading, not executed): ScannerS.SetBounds and ScannerT.SetBounds take (height, width), but the rasterx Scanner interface is SetBounds(w, h) and Filler.SetBounds, which NewDasher, NewStroker and NewFiller call (also at the 2021-05-19 rasterx commit pinned in go.mod), passes (width, height). Following the README (NewScanS(width, height, ...) then rasterx.NewDasher(w, h, scanner)) leaves the scanner with height = image width and width = image height: on a landscape canvas every cell right of column height-1 is pinned to that column so the right side is never painted, on a portrait canvas rows at or below y = width are dropped, and off-canvas geometry can index past the RGBA buffer. Every SVG in testdata is square (TestShapes6 500x500, icons 512x512), so the tests and benchmarks never exercise this.
+- Multi-thread crash (code reading, not executed): ScannerT routes each cell with s.cellWorkers[cy%s.threads]; Go's % keeps the sign, so with 2 or more threads any segment whose cell row lies above the image (cy < 0 and not a multiple of the thread count) indexes a negative slot and panics inside a goroutine, killing the process. rasterx forwards lines unclipped (Filler.lineF calls Scanner.Line directly). ScannerS and one-thread ScanT drop such rows safely in saveCell/cellSaver.
+- Not output-equivalent to ScanFT: SetWinding and SetClip are empty ('does nothing for now'), so evenodd fills render as nonzero and clip rectangles are ignored, both of which ScanFT implements. Coverage sign is taken from the first non-zero cell of each scanline rather than per cell (ScanFT's areaToAlpha takes the absolute value per cell); when a later subpath on the same row winds the other way its negative int16 alpha wraps to a huge uint32 in RGBACollector and is clamped to full opacity, so those edges lose antialiasing. The README's 'within 1 or 2 percent' therefore compares scanners that do not do the same work on every input.
+- Benchmark and test harness: no ScanFT or x/image/vector benchmark exists (ScanFT appears only in commented-out lines), there is no ScanS benchmark on the icon set, RunGradsT/RunGradsS draw a fixed 50 times and ignore b.N (ns/op is only meaningful if one 50-draw call exceeds -benchtime), TestCompHalfCirc only prints ScanT/ScanS green-channel mismatches without failing, and tests write PNGs into testdata/. The sweep also calls the Collector for zero-coverage gaps between cells, so gradient ColorFuncs are evaluated for pixels that receive no paint.
+
+**Status:** Abandoned (11 commits from 2021-12-12 to 2022-01-17, 1 star, 0 forks, no issues) but MIT-licensed and small enough to vendor; the swapped SetBounds arguments, the multi-thread negative-row panic and the missing even-odd/clip support found by code reading this session make it unsafe beyond square, fully on-canvas, nonzero-winding SVGs without patches.
+
+[repo](https://github.com/srwiley/scany) · [benchmark](https://github.com/srwiley/scany)
 
 ##### TGFX (Tencent Graphics)  `C++`  `BSD-3-Clause`  `active`  `Tier D`
 
@@ -41843,6 +42574,48 @@ Rust-built Python video reader over libavcodec for ML loading; its own table bea
 **Status:** Active (v0.4.5 on PyPI 2026-09-25, last commit 2026-09-30) and MIT for the Rust source, with (L)GPL FFmpeg binaries inside the wheels; frame-accuracy and colour fixes keep landing (decode near GOP boundaries #78, get_batch frames #90 fixed in v0.4.0, colours #153 after the last release), so pin a version and spot-check frames against a reference.
 
 [repo](https://github.com/gcanat/video_reader-rs) · [benchmark](https://github.com/gcanat/video_reader-rs)
+
+##### clownresampler  `C`  `0BSD`  `active`  `Tier D`
+
+Single-header C89 Lanczos-windowed-sinc resampler for 16-bit PCM, 0BSD; no speed claim or measurement against libsamplerate or anything else.
+
+**Beats:** libsamplerate (nearest incumbent; no baseline is named or timed by the project) — Nothing was measured: the README (three sentences), the header comments and the two FLAC-to-raw functional tests contain no timing code, no speed claim and no named baseline; libsamplerate is only the nearest incumbent assumed by the catalogue.
+
+**Known shortcoming:** No benchmark, speed claim or baseline anywhere in the repo; tests decode FLAC only with no timing; 16-bit PCM input only. Kept at D under the keep-and-document rule. 0BSD, 37 stars.
+
+**Known shortcoming:** Enricher: nothing is measured; scalar 3-lobe Lanczos with one division and one callback per output frame. Bug found by code reading: HighLevel_Init lacks the buffer-fit check that HighLevel_Adjust has, so when 2 x ceil(3 x in/min(in,out,lowpass)) x channels exceeds 4096 the fixed input_buffer[0x1000] overflows and the refill size wraps as size_t, and at exactly 4096 resampling stops silently (edge-case ratios only, e.g. 8 channels at about 86:1). C89 long typedefs make the kernel table 48 KB on LP64 (define CC_USE_C99_INTEGERS); the 'C++11 interface' uses a C++17 inline variable and drops Init/Adjust errors; the low-level API does not check the 16-channel limit.
+
+**Independent measurement:** any comparison against libsamplerate or soxr
+
+**Independent measurement:** any measurement against libsamplerate or soxr
+
+**How:** Nothing in the repository measures speed; the design simply keeps the per-sample work small and integer. Read positions advance in 16.16 fixed point, the Lanczos kernel is precomputed once into a 3-lobe table of 1024 entries per lobe (nearest-entry lookup, no interpolation), and each output frame is a scalar multiply-accumulate over 2 x 3 x stretch taps followed by one integer division to normalise by the summed kernel weights (a source TODO says 'divisions are slow'). There is no SIMD, no polyphase decomposition and no block processing: the output callback is invoked once per output frame.
+
+**Use it when:**
+- C89 or freestanding-ish targets (consoles, emulators, retro ports) that need a resampler with no dependencies and a public-domain-equivalent licence.
+- Streaming 16-bit integer PCM at ordinary ratios (for example 32 or 44.1 kHz to 48 kHz) where a short Lanczos-3 kernel is acceptable quality.
+- Code bases without an FPU in the audio path: after the one-time table build (which uses double sin()), resampling is integer-only.
+- Projects that want to vendor one header and read all of the resampler (about 1,400 lines, most of it comments, examples and integer typedefs).
+
+**Skip it when:**
+- When speed matters and must be shown: no benchmark, no comparison with libsamplerate, libsoxr, speexdsp or r8brain exists, and the scalar per-frame loop with a division and an indirect callback per output frame is not built for throughput.
+- Float or 24/32-bit input, or high-fidelity mastering: input is cc_s16l only and the default kernel is 3-lobe Lanczos with nearest-entry table lookup; no frequency-response or SNR figures are published.
+- Extreme downsampling or low-pass ratios with many channels in the high-level API (see gotchas: the fixed 0x1000-sample input buffer is not checked at init).
+- More than 16 channels (CLOWNRESAMPLER_MAXIMUM_CHANNELS) or callers that need variable-ratio downsampling wider than the ratio given at HighLevel_Init.
+
+**Integration:** header-only · none (C standard library: assert, fabs, sin, memset, memmove; all overridable by macros) · C89 for the C API; the C++ wrapper is gated on C++11 but declares an inline variable, which is a C++17 feature · any (portable scalar C, no SIMD)
+
+**Vs siblings:** Pick it over libsoxr, r8brain-free-src or SampleRateTap only when a single C89 0BSD header for 16-bit PCM matters more than measured speed and quality; those siblings carry third-party or first-party throughput tables against libsamplerate and this one carries none. LibFResample and the sst-basic-blocks LanczosResampler are the closer small-footprint alternatives, the former with published numbers.
+
+**Gotchas:**
+- From the code: ClownResampler_HighLevel_Init never checks that twice the stretched kernel radius fits the fixed cc_s16l input_buffer[0x1000], while ClownResampler_HighLevel_Adjust does. When 2 x ceil(3 x input_rate / min(input, output, low-pass rate)) x channels exceeds 4096 samples (for example 8 channels at about 86:1, or 16 channels at about 43:1), the leading-padding read and the memmove in HighLevel_Resample run past the buffer and the refill size (0x1000 - 2R x channels) / channels wraps as size_t; at exactly 4096 the refill asks for 0 frames and resampling stops silently.
+- With the default C89 typedefs cc_s32l is 'signed long', so on LP64 Linux/macOS the 6,144-entry kernel table is 48 KB instead of 24 KB; define CC_USE_C99_INTEGERS to get 32-bit int_least32_t entries.
+- The 'C++11 interface' (added 2026-06-27) uses an inline variable for its shared Precomputed table, so strict C++11/14 builds warn or fail; its Init and Adjust wrappers also discard the cc_bool result, so an unsupported channel count or ratio goes unnoticed. The low-level API documents but does not check the 16-channel limit (its stack accumulator array is sized 16).
+- Output frames are unclamped 32-bit values; the caller must clamp to 16 bits, as the examples do. Hissing on long runs of a constant non-zero sample was fixed only in April 2025 (after one reverted attempt).
+
+**Status:** Lightly maintained by its single author (104 commits, last 2026-06-27 adding a C++ interface and a flush function; two closed issues), 0BSD and small enough to vendor, but treat it as a portable convenience resampler rather than a proven fast one.
+
+[repo](https://github.com/Clownacy/clownresampler)
 
 ##### hmp3 (Helix MP3 encoder revival)  `C`  `RPSL-1.0 (Helix encoder sources in hmp3/); MIT (other files)`  `stale`  `Tier D`
 
@@ -46739,6 +47512,48 @@ AVX-512 command-line ECM factoring program running 8 or 16 curves per thread; ab
 **Status:** Standalone repo abandoned since 2021-03-09 (34 commits, 8 stars) but BSD-2-Clause and small enough to vendor; active development continued inside bbuhrow/yafu under factor/avx-ecm (commits through 2026-08-31, with added Karatsuba and AVX-512 P-1 files), which is the better source today.
 
 [repo](https://github.com/bbuhrow/avx-ecm) · [benchmark](https://github.com/bbuhrow/avx-ecm)
+
+##### avxbls-sig (AVX-512 BLS signatures on BLS12-381)  `C`  `Apache-2.0`  `active`  `Tier C`
+
+AVX-512 IFMA BLS12-381 BLS signature code (keygen, sign, aggregate, verify) layered on blst; paper claims at least 1.57x over blst.
+
+**Beats:** blst (supranational/blst x64 assembly: blst_sign_pk_in_g1/g2, hash_to_g1/g2, pairing aggregation) — The repo publishes no numbers; test.c prints rdtsc-averaged cycles (cpuid-serialised TSC reference cycles, 10,000-100,000 iterations after a 1,000-10,000 iteration warm-up) for each blst call next to its *_vec counterpart, with blst built from the vendored ADX x64 assembly and the vector code by GCC 13.3 -O3 -march=native. The only headline is the TCHES 2026 paper (ePrint 2026/947, abstract seen through search snippets only, eprint.iacr.org EGRESS_BLOCKED): at least 1.57x faster than blst's x64 assembly on an Intel Core i3-1005G1 (Ice Lake), without per-operation tables or a statement of which hash-to-curve the aggregation rows used.
+
+**Known shortcoming:** Repo has bench code and public flags but no numbers; the TCHES 2026 / ePrint 2026/947 claim of at least 1.57x over blst on an i3-1005G1 is from search snippets only (eprint.iacr.org blocked); reuses the catalogued avxbls pairing code.
+
+**Known shortcoming:** Enricher: bindings/fp12_avx.h sets SWIFTEC_ON 1, so the aggregation benches run vendored blst with the standard SSWU hash_to_G2/G1 (src_blst/aggregate.c) against the *_vec paths using SwiftEC, mixing vectorisation with a cheaper hash, and the sign rows compare the authors' scalar blst_swiftec_* code rather than stock blst signing. The default SwiftEC output is not RFC 9380, so signatures are not interoperable; self-tests print error=N and return 0 with no bad-signature test; the disabled bench_coreverify_g2 writes a 288-byte G2 point into a 144-byte blst_p1 (warning hidden by -w); the 48-byte hash_to_field gives modulo-p bias; README says ./bin/test while the makefile builds ./test. Paper 1.57x still snippet only.
+
+**Independent measurement:** paper tables once ePrint is reachable
+
+**Independent measurement:** same-hash comparison against stock blst
+
+**How:** Fp elements of the 381-bit prime are held as 8 limbs in radix 2^48 and multiplied with AVX-512IFMA vpmadd52lo/hi (52x52-bit multiply-accumulate), with several independent field operations packed into one register (2x2, 4x2 and 8x1 lane layouts for Fp and Fp2). Point addition and doubling formulas in G1 and G2 are rescheduled so their independent multiplications fill parallel lanes. G1 scalar multiplication keeps blst's constant-time structure (GLV split via the beta endomorphism, Booth-encoded width-5 windows, full-table masked gather), the G1 subgroup check uses the sigma/times(-z) endomorphism test, and the Miller loop and final exponentiation reuse the sibling avxbls pairing code. Hash-to-curve is available both as vectorised standard SSWU (hash_to_g1_vec/hash_to_g2_vec) and as vectorised SwiftEC, a cheaper SWIFT-style encoding using sqrt(-3), which is the compiled default.
+
+**Use it when:**
+- Single-thread latency of BLS12-381 signing, aggregation or verification on Intel Ice Lake, Tiger Lake, Sapphire Rapids or newer, or AMD Zen 4 and newer (AVX-512 IFMA present).
+- Prototyping or researching vectorised pairing-based cryptography where you want per-operation cycle counts of a blst call and its AVX-512 counterpart from one harness (test.c prints both).
+- Code that already links blst and wants to swap selected hot calls (sk_to_pk, subgroup checks, final verify) for vector versions while keeping blst types and serialization.
+- Closed systems that control both signer and verifier, where the non-standard SwiftEC hash is acceptable, or builds that set SWIFTEC_ON to 0 to keep standard SSWU hashing.
+
+**Skip it when:**
+- Interoperable BLS (Ethereum consensus, Filecoin, Chia, IETF ciphersuites) with the default build: bindings/fp12_avx.h sets SWIFTEC_ON 1, so messages hash with SwiftEC instead of RFC 9380 SSWU and signatures will not verify against standard implementations.
+- CPUs without AVX-512 IFMA (AMD before Zen 4, Intel Alder Lake and later client parts with AVX-512 disabled, ARM): there is no runtime dispatch or scalar fallback for the *_vec routines.
+- Production signing services: research prototype with 0 stars, no releases, no API documentation, self-tests that print error counts instead of failing, and all compiler warnings suppressed (-w).
+- Throughput-oriented batch verification across many cores: only single-call, single-thread paths are vectorised and measured; blst's multi-threaded and batch paths are not compared.
+
+**Integration:** source-drop · blst (vendored source in src_blst/ and build_blst/, built into libblst.a by build.sh; a prebuilt libblst.a is also committed) · GCC with AVX-512 IFMA intrinsics; makefile hard-codes /opt/gcc-13.3/bin/gcc with -O3 -march=native -mtune=native; C11 (aligned_alloc) · x86-64 with AVX-512F/VL and AVX-512IFMA, Linux-oriented makefile
+
+**Vs siblings:** Pick it over hchengv/avxbls when you need the signature-scheme layer (hash-to-curve, signing, subgroup checks, aggregate and final verify) rather than only the optimal ate pairing it builds on. VROOM (SimonLangowski) reports a larger pairing gain over BLST (3.9x on its own bench) with RNS Montgomery arithmetic but offers no BLS signing API.
+
+**Gotchas:**
+- Harness flaw: with the committed SWIFTEC_ON 1, the aggregation benchmarks (bench_g1/g2_aggmode1, bench_g1/g2_aggregate) time vendored blst_pairing_chk_n_aggr_* and chk_n_mul_n_aggr_*, which hash with standard SSWU (Hash_to_G2/G1 in src_blst/aggregate.c), against *_vec versions that hash with SwiftEC (src/aggregate_avx.c), so the aggregation speedup mixes vectorisation with a cheaper, non-standard hash-to-curve. The signing rows compare the authors' scalar blst_swiftec_g1/g2 plus blst signing, not stock blst signing.
+- Self-tests are soft: p1signtest, p2signtest, maptog1test and maptog2test count mismatches and print 'error=N' but return 0, aggcorrecttest prints FAIL without stopping, and no test checks that a bad signature is rejected; read ./test output rather than trusting the exit code.
+- bench_coreverify_g2 (commented out of main) is broken: under SWIFTEC_ON it writes a 288-byte G2 point from swiftec_g2_vec into a 144-byte blst_p1 (stack overflow hidden by -w) and derives the G2 public key from the G1 generator BLS12_381_G11; do not re-enable it as is.
+- SwiftEC hash_to_field reads 48 bytes of expand_message_xmd output per Fp element (swiftec_g1_vec, swiftec_e1_impl, swiftec_g2_vec) instead of RFC 9380's 64, so field elements carry modulo-p bias, and blst_swiftec_g2 ignores the aug argument. README says to run ./bin/test, but the makefile builds ./test.
+
+**Status:** Active research code (22 commits from December 2025 to 2026-03-12, 0 stars, no issues, no releases) under Apache-2.0 and small enough to vendor, but a prototype: hard-coded /opt/gcc-13.3 compiler path, warnings suppressed, soft self-tests and non-standard SwiftEC hashing on by default.
+
+[repo](https://github.com/ganqin-liu/avxbls-sig) · [benchmark](https://eprint.iacr.org/2026/947)
 
 ##### bigfft  `Go`  `BSD-3-Clause`  `abandoned`  `Tier C`
 
@@ -51775,6 +52590,50 @@ Pure-Dart PRNG classes (xorshift, xoshiro, splitmix64, mulberry32) implementing 
 
 [repo](https://github.com/rtmigo/xrandom_dart) · [benchmark](https://github.com/rtmigo/xrandom_dart)
 
+##### zurand  `C`  `MIT`  `active`  `Tier C`
+
+Stateless key-based R RNG package with C core; xoshiro256++ fills ~2.3x dqrng, ~8x runif(), thread-count-independent output.
+
+**Beats:** dqrng (R package) and base R runif()/rnorm() (Mersenne Twister); randompack x256++simd (SIMD xoshiro256++) is the closest competitor — R-level fills of 1e7 doubles, every package in one bench::mark() call, median of five rounds, R CMD INSTALL -O2 build with the compiler not named: on a GitHub-hosted AMD EPYC 7763 (AVX2, THP always) zurand xoshiro256pp gave 864 M/s uniform versus CRAN randompack x256++simd 688 (its scalar fallback on x86_64), dqrng 368 and runif() 104, and 366 M/s normal versus 355, dqrng 143, RcppZiggurat 125 and rnorm() 28; on a local Apple M1 2196 versus 1918 uniform and 739 versus 718 normal. Threaded rows (1801 M/s on 4 EPYC threads, 4984 on 8 M1 threads) compare zurand's OpenMP fills with single-threaded competitors.
+
+**Known shortcoming:** First-party README and vignette numbers against R packages (dqrng, base R, randompack) rather than std::mt19937, xoshiro or PCG directly; compiler never named (EPYC 7763 and M1). On madvise-mode Linux kernels zurand requests 2 MiB pages while the competitors do not; without that request it ties randompack (N2 uniform 268 vs 271 M/s) and its real lead over randompack is 1.01-1.26x; threaded rows are not like for like. 0 stars.
+
+**Known shortcoming:** Enricher: the x86_64 peer baseline was not SIMD. The benchmark workflow installs CRAN randompack 0.1.10 (2026-08-24), whose src/Makevars.in (since commit b8fe640, 2026-04-22) builds no avx2.o and never defines BUILD_AVX2, so its x256++simd generator ran the fallback of 8 interleaved scalar xoshiro256++ streams on the EPYC; the vignette's 'both vectorise (AVX2 on x86_64)' is wrong for that build. The fair peer gap is the M1 rows with NEON on both sides: 1.15x uniform, 1.01-1.03x normal, 0.97x at 1e5. Benchmarks use default min/max and mean/sd only (other values add a second full pass, unmeasured); the default xoshiro engine is slow for scattered reads (philox 7-11x faster per read); PractRand depth covers only the default engine (1 TB; normals 512 GB) with philox and threefry at 256 MB smoke tests.
+
+**Independent measurement:** same-page-size comparison against xoshiro and PCG
+
+**Independent measurement:** AVX2-enabled randompack build on the same host
+
+**How:** The default engine runs a xoshiro256++ recurrence (about five operations per word) on 512-word sub-chunks, each seeded by one Philox4x64-10 call from (key, sub-chunk index); independent sub-chunks are what let it run four lanes of AVX2 (runtime dispatch through a target("avx2") attribute) or eight NEON lanes plus two scalar streams on arm64, and split across OpenMP threads with bit-identical output. Uniforms are converted in registers by mantissa stuffing ((bits >> 12) | 0x3ff0..., minus 1 - 2^-53) and stored directly; normals use NumPy's ziggurat tables with a sign-folded table, a loop unrolled by four over a stack word buffer, and an out-of-line slow path whose fixed-point wedge brackets avoid most exp() calls. Platform tricks: madvise(MADV_HUGEPAGE) on outputs of 4 MiB or more on madvise-mode Linux kernels, and DC ZVA cache-line zeroing for large uniform fills on Apple Silicon.
+
+**Use it when:**
+- R simulations that must give identical numbers regardless of thread count, worker scheduling or call order (future/parallel maps): hand each task a key from rng_key(seed, n) or rng_fold().
+- Bulk fills of 1e6+ uniforms or normals in R on a multi-core machine: it is the only R package in its benchmark that threads at the R level (1801 M/s uniform on 4 EPYC 7763 cores; 4984 M/s uniform and 3143 M/s normal on an 8-core M1).
+- Single-threaded R code that currently calls runif()/rnorm() in hot loops and can switch API: about 8x (uniform) and 13x (normal) faster than base R on the EPYC runner.
+- R packages with C code that need per-thread random fills or streamed chunks that never hold the full vector in memory (zurand.h fill_*_at, stream_normal).
+- Very long virtual vectors read only in part (lazy vectors: x[1:1e6] of a lazy 1e8 vector took a tenth of the time of generating the 1e8).
+
+**Skip it when:**
+- Code that must reproduce existing set.seed()/runif() streams, or users who expect the global-RNG API: values and interface both differ, and changing engine or normal method changes every value.
+- C or C++ projects outside R: there is no standalone library (zurand.h includes Rinternals.h and keys come from R); use Randompack's C library, simdrng or Random123 directly.
+- Distributions beyond uniform, normal, bounded integer and raw bits (no exponential, gamma, binomial, sampling); dqrng and randompack cover more.
+- Small single-threaded fills: against randompack the lead is 1.01-1.08x on normals and 0.97x for 1e5 uniforms on the M1, and fills under 32,768 values never thread.
+- Risk-averse production use: version 0.1.0 created in September 2026, not yet on CRAN, 0 stars, a single author; PractRand depth so far covers only the default engine (1 TB; 512 GB for normals).
+
+**Integration:** R package (compiled shared library loaded by R; C API header inst/include/zurand.h for LinkingTo packages) · R only at run time (no Imports); OpenMP optional (on macOS configure links the libomp that R ships); bundles Random123 (BSD-3), NumPy ziggurat tables (BSD-3) and fdlibm exp/log1p · Minimum R version not documented (DESCRIPTION has no Depends); a C compiler R can use; AVX2 path needs GCC or Clang (target attribute, __builtin_cpu_supports); macOS OpenMP needs the mac.r-project.org OpenMP headers at build time · Linux (glibc and musl), macOS, Windows; x86_64 with optional AVX2 chosen at run time, aarch64 with NEON (DC ZVA on Apple only), scalar elsewhere; bit-identical output on all of these, 32-bit x87 excluded
+
+**Vs siblings:** Pick zurand over dqrng or randompack's R package when you need multi-threaded R-level fills or results that are bit-identical across thread counts and platforms with key-based substreams; pick Randompack (C library, R, Python, Julia, Fortran) for many distributions or non-R use, and OpenRAND or Random123 when you want counter-based generators in plain C++.
+
+**Gotchas:**
+- Harness flaw in the x86_64 peer comparison: the workflow installs CRAN randompack 0.1.10, whose src/Makevars.in (since commit b8fe640, 2026-04-22) compiles no avx2.o and never defines BUILD_AVX2, so its x256++simd engine on x86_64 runs the fallback of eight interleaved scalar xoshiro256++ streams; the vignette's 'both vectorise the generator (AVX2 on x86_64)' is wrong for that build, and the 1.26x uniform and 1.03x normal leads on the EPYC 7763 are over randompack's non-SIMD path. The Apple M1 rows (NEON on both sides: 1.15x uniform, 1.01-1.03x normal, 0.97x at 1e5) are the like-for-like ones.
+- The published numbers use default arguments only: rng_uniform(key, n, min, max) with other bounds and rng_normal(key, n, mean, sd) with mean != 0 or sd != 1 add a second full pass over the output (two-wide, FMA-free by design), which no benchmark row measures.
+- On Linux kernels in transparent-huge-page madvise mode (the Ubuntu default) zurand itself requests 2 MiB pages for outputs of 4 MiB or more and the competitors do not; on a Neoverse N2 without the request it is at parity with randompack (268 vs 271 M/s uniform). options(zurand.hugepages = FALSE) turns it off; the EPYC runner used THP 'always', so its rows are page-size fair.
+- The default xoshiro256pp engine reaches a scattered position by reseeding and stepping up to 511 times; for random-index reads of lazy vectors key with engine = "philox4x64" (7-11x faster per read). Benchmarking a devtools::load_all() build measures an -O0 build about ten times slower.
+
+**Status:** Actively developed (183 commits between late September and 2026-10-05, many co-authored with an AI coding assistant per the commit log), MIT, version 0.1.0 installable from GitHub but not yet on CRAN; streams carry a version tag so later fixes will not change existing keys' values; its x86_64 lead over randompack is measured against randompack's non-SIMD CRAN build, so treat the M1 margins (1.01-1.15x) as the honest peer gap.
+
+[repo](https://github.com/pedrobtz/zurand) · [benchmark](https://github.com/pedrobtz/zurand)
+
 ##### cxx-ziggurat  `C++`  `BSL-1.0`  `abandoned`  `Tier D`
 
 Single-header C++11 ziggurat sampler meant to replace std::normal_distribution; the repo publishes no speed numbers.
@@ -52227,6 +53086,47 @@ Multicore CPU SpMV library: CSX compressed format plus LLVM-JIT kernels per matr
 **Status:** Abandoned since 2018-06-10, when the last change added LLVM 6 support; BSD-3-Clause and copyable, but expect to port the Clang-based JIT before it builds against any LLVM newer than 6.
 
 [repo](https://github.com/cslab-ntua/sparsex) · [benchmark](https://dl.acm.org/doi/10.1145/3134442)
+
+##### SpLLT (task-based sparse Cholesky)  `Fortran`  `BSD-3-Clause`  `abandoned`  `Tier D`
+
+Task-based supernodal sparse Cholesky (Fortran) on OpenMP, StarPU or PaRSEC; papers report parity with HSL_MA87, not a speedup.
+
+**Beats:** HSL_MA87 (HSL parallel sparse Cholesky) — No numbers exist in the repo or on any reachable page. The authors' papers (Duff, Hogg and Lopez, NACO 2018, doi 10.3934/naco.2018014; a PaRSEC/PTG paper in IJHPCA, doi 10.1177/1094342019888567), seen only as search snippets because epubs.stfc.ac.uk and aimsciences.org are blocked, say the OpenMP, StarPU and PaRSEC versions perform comparably to HSL_MA87 on a multicore machine, which is parity; compiler, BLAS and hardware are unknown. The comparison drivers in the repo (drivers/run_ma87.f90 with metis_order, drivers/spllt_test.F90 via spllt_analyse, which forces ssids_opt%ordering = 1) both use METIS ordering, so open issue #2's ordering concern does not apply to them.
+
+**Known shortcoming:** No numbers anywhere in the repo; paper snippets say only 'comparable performance' to HSL_MA87, so parity rather than faster. Fortran, abandoned since 2019-08-23, 6 stars. Kept at D under the keep-and-document rule.
+
+**Known shortcoming:** Enricher: the default RelWithDebInfo build adds -fcheck=all; defaults are the sequential STF scheduler with ncpu 1 and nb 16; a clang OpenMP build silently gets no -fopenmp; drivers/spllt_omp_bench.F90 does not compile (issue #1) and after a fix reads fkeep%sbc out of bounds; gfortran 10+ needs -fallow-argument-mismatch (issue #4); the C binding passes num_flops and num_factor as 32-bit C int against 64-bit Fortran (overflow); no install target. spllt_analyse forces METIS like run_ma87.f90, so the issue #2 ordering concern is moot.
+
+**Independent measurement:** paper access (epubs.stfc.ac.uk blocked)
+
+**Independent measurement:** paper access (parity with MA87 only)
+
+**How:** Each supernode is cut into nb x nb tiles and the factorization becomes a DAG of tile tasks (factorize diagonal block, triangular solve, intra-node update, inter-node update_between), the same DAG-based scheme as HSL_MA87. A runtime system schedules the tasks as their dependencies resolve: OpenMP 4 tasks with depend clauses, StarPU in sequential-task-flow style, or PaRSEC with a parameterized task graph. Tree pruning (prune_tree, on by default) folds small subtrees into single coarse tasks to limit scheduling overhead, and the solve phase also runs as a DAG of forward and backward substitution tasks. The goal is to match MA87 performance while staying portable across runtimes, not to beat it.
+
+**Use it when:**
+- Research on runtime systems for sparse direct solvers: the same Cholesky algorithm implemented on OpenMP, StarPU and PaRSEC, which you can compare side by side.
+- Multicore SPD factorization where HSL_MA87's licence is a problem and a BSD-3-Clause code with roughly MA87-level speed (per the authors' papers, snippet only) is acceptable.
+- Fortran codes that already depend on SPRAL and want a Cholesky-only path whose tasks can be handed to StarPU or PaRSEC; CMake also has USE_GPU (MAGMA, CUDA) and USE_MPI options, status not documented.
+
+**Skip it when:**
+- Indefinite or unsymmetric matrices: Cholesky only, no pivoting.
+- When you need evidence of a speedup: the repo has no numbers, the papers claim parity with HSL_MA87, and no comparison with CHOLMOD, PARDISO or PaStiX was found.
+- Current toolchains without patching: gfortran 10+ stops on a rank mismatch in spllt_kernels_mod.F90 unless -fallow-argument-mismatch is added (issue #4); CI only ever ran gcc-6 on Travis, and the code has been unmaintained since 2019.
+- C or C++ projects wanting a small dependency: you need a Fortran compiler, SPRAL, METIS 5.1, hwloc, BLAS/LAPACK and a runtime, and the CMake build has no install target (install(TARGETS spllt) is commented out).
+
+**Integration:** static lib · SPRAL (SSIDS analyse), METIS 5.1, BLAS/LAPACK (MKL in the README examples), hwloc, and one of StarPU, PaRSEC or an OpenMP 4.0 compiler; optional CUDA and MAGMA for USE_GPU · Fortran 2003 compiler with iso_c_binding plus C compiler, CMake 2.6+; gfortran 6 in CI, gfortran 10+ needs -fallow-argument-mismatch; GNU or Intel compilers for the OpenMP build · Linux multicore x86-64 (KNL build option); other platforms not documented
+
+**Vs siblings:** Pick SpLLT only to study or reuse one Cholesky algorithm across OpenMP, StarPU and PaRSEC. For production SPD factorization, BaSpaCho (measured gains over CHOLMOD) or SPRAL SSIDS (maintained, also handles indefinite systems) are better-supported choices, and SyLVER, from the same NLAFET project, is a related DAG-based symmetric solver.
+
+**Gotchas:**
+- The default CMake build type is RelWithDebInfo, which appends -fcheck=all -Wall to the Fortran flags, so an unconfigured build runs with array-bounds and runtime checks on; use -DCMAKE_BUILD_TYPE=Release before timing. The default RUNTIME is STF (sequential), options ncpu defaults to 1 and nb to 16, so parallel speed needs -DRUNTIME=OMP|StarPU|Parsec plus explicit ncpu and a larger tile size.
+- The OpenMP build adds -fopenmp or -qopenmp only when the C++ compiler is GNU or Intel; with any other compiler (Clang) CMake just sets an ERROR variable and continues, producing a build without OpenMP.
+- The OpenMP benchmark driver drivers/spllt_omp_bench.F90 does not compile against the current API (wrong spllt_solve and spllt_compute_solve_dep signatures, issue #1), and after the reporter's fix the run hit an out-of-bounds access on fkeep%sbc; issues #1-#4 from 2022 have no maintainer reply.
+- The C binding's spllt_inform_t returns num_flops and num_factor as 32-bit C int while the Fortran fields are 64-bit, so they overflow on any sizeable factorization; it also expects 1-based CSC (nnz is read as ptr(n+1)-1 and the array_base option is commented out).
+
+**Status:** Abandoned since 2019-08-23 (710 commits, 6 stars, four 2022 issues unanswered, Travis CI on gcc-6 only); BSD-3-Clause and usable as a research reference, but expect to patch the build for gfortran 10+ and to supply SPRAL, METIS 5.1, hwloc and a runtime yourself.
+
+[repo](https://github.com/NLAFET/SpLLT)
 
 ##### SPRAL SSIDS  `Fortran (with C interface; GPU build via CUDA)`  `BSD-3-Clause`  `active`  `Tier D`
 
@@ -55678,7 +56578,11 @@ Concurrent C++ safetensors reader with a Python API that loads model weights to 
 
 **Known shortcoming:** The repo moved to dsx-ai-factory/model-streamer. Current code has io_uring_direct, io_uring_buffered, libaio_direct and sync_buffered strategies; the benchmarks predate them (v0.6.0). Issue 225: Qwen3-Next-80B MoE (75,944 tensors) loads in 125.7 s against vLLM's default 43.6 s (2.9x slower) on a B200, from forced clones and out-of-order delivery.
 
+**Known shortcoming:** Repository renamed and moved to dsx-ai-factory/model-streamer on 2026-09-13; the old URL redirects. Benchmark has no public script and no CPU model, numbers from the 0.6.0 and vLLM 0.5.5 era (w11-seed-a, 2026-10-07).
+
 **Independent measurement:** public benchmark code
+
+**Independent measurement:** public benchmark script with hardware
 
 **How:** Reads are split into chunks (2 MiB default on file systems, 8 MiB on object stores) and issued concurrently, overlapping storage reads with host-to-GPU copies instead of mmap page faults or a serial read. Current versions pick a file-system strategy per host from io_uring_direct, io_uring_buffered, libaio_direct and a sync_buffered thread pool (default queue depth 512 for the async engines, 16 threads for the pool), with O_DIRECT where the mount supports it. Object storage uses many parallel ranged GETs (AWS CRT client, about 10 Gbit/s per client), and distributed mode has each rank read a slice and broadcast it over NCCL.
 
@@ -55706,7 +56610,7 @@ Concurrent C++ safetensors reader with a Python API that loads model weights to 
 
 **Status:** Actively maintained (commits through 2026-10-05, 383 stars, Apache-2.0), installable from PyPI as runai-model-streamer; the repo moved to dsx-ai-factory/model-streamer in September 2026 with the old URL redirecting.
 
-[repo](https://github.com/run-ai/runai-model-streamer) · [benchmark](https://github.com/run-ai/runai-model-streamer/blob/master/docs/src/benchmarks.md)
+[repo](https://github.com/dsx-ai-factory/model-streamer) · [benchmark](https://github.com/run-ai/runai-model-streamer/blob/master/docs/src/benchmarks.md)
 
 ##### rust-linereader  `Rust`  `MIT`  `abandoned`  `Tier C`
 
@@ -72223,6 +73127,50 @@ Pure, safe-Rust audio demuxing and decoding library; beats single-threaded libav
 **Status:** Actively maintained (v0.6.1 on 2026-08-13, about 15.7 million crates.io downloads), MPL-2.0 and usable as a crate today. The benchmark table predates the v0.5.4 'major optimizations for AAC, FLAC, MP3, and Vorbis' and the 0.6.0 decoding speedups, so current ratios are unmeasured.
 
 [repo](https://github.com/pdeljanov/Symphonia) · [benchmark](https://raw.githubusercontent.com/pdeljanov/Symphonia/main/BENCHMARKS.md)
+
+##### vapoursynth-nssfactory (CUDA BM3D)  `C++`  `GPL-2.0-only`  `active`  `Tier C`
+
+CUDA VapourSynth BM3D (plus NLM, WNNM and other NSS denoisers); first-party 1.15-1.25x spatial, 2.7-3.3x rolling temporal over bm3dcuda.
+
+**Beats:** VapourSynth-BM3DCUDA (bm3dcuda) — First-party only: PR #23 timed the default shape (block 8, group 8, sigma 3) on 1080p Gray float at 3 streams on an RTX 5080, A/B alternated in one process with source frames from VapourSynth's cache, reporting 732 fps against bm3dcuda's 636 fps 'on the same harness' (about 1.15x, derived from page data); docs/api/bm3d.md (2026-10-06, one stream, 1080p GRAYS) adds about 1.25x spatial and 2.7x/3.3x rolling temporal at radius 1/2 with 32 VS threads. Host CPU, driver, bm3dcuda build (cuda or rtc, BM3D or BM3Dv2) and bm3dcuda parameters are not stated and no timing harness is in the repository.
+
+**Known shortcoming:** First-party only: PR #23 numbers (636 vs 732 fps on an RTX 5080, about 1.15x derived) with no timing harness in the repo (cuda_compare.py checks PSNR only, stress_cuda.py is a memory soak); CPU, driver and the bm3dcuda build are unstated; the spatial gain comes from transfers while the kernels take the same time; the default stream count changed from 3 to 1 after the measurement and the README now quotes about 790 fps with no bm3dcuda figure. Work in progress, days old, 1 star, GPL-2.0-only.
+
+**Known shortcoming:** Enricher: since 2026-08-31 bm3dcuda has its own rolling temporal BM3Dv2 (PR #35 by the same developer, shipped in R2.17 on 2026-09-26) with the same parameter names and defaults, and the docs' 2.7x/3.3x temporal claim never says whether bm3dcuda ran BM3Dv2 rolling or the legacy BM3D plus VAggregate path, so the 'bm3dcuda returns a fat intermediate' caveat holds only for the old interface. nssfactory's default bm_range is 7 against bm3dcuda's 9 (about 1.6x fewer candidates, derived), PR #23's 'same harness' line names no bm3dcuda parameters, nss_cuda is built with IEEE flags while the bm3dcuda doc build uses --use_fast_math, no timing script, no released CUDA binary (r0 pre-release is CPU-only), and defaults changed within days (PR #26 temporal output, PR #28 streams 3 to 1).
+
+**Independent measurement:** independent run with a published harness
+
+**Independent measurement:** same-parameter comparison against bm3dcuda BM3Dv2 rolling
+
+**How:** For the default 8x8 block, group-of-8 shape one warp filters four groups with each lane holding a column of a group's patches in 64 registers, the 8x8 reference block sits in registers instead of shared memory, and the matcher keeps a single 64-bit (distance, index) key per candidate (PR #23: group filter 0.399 to 0.066 ms, matching 0.378 to 0.309 ms per frame in Nsight Systems). Aggregation happens inside the filter kernel with integer atomics on fixed-point sums, and host-device copies run outside the device stream. The bigger temporal gains come from a rolling mode that keeps a ring of window frames and the per-frame temporal sums on the device across chunks, so only finished frames are downloaded instead of a (2R+1)x2-plane intermediate; final=1 keeps the basic estimate on the device between the two BM3D stages.
+
+**Use it when:**
+- Temporal BM3D (radius 1-2) on an NVIDIA Turing-or-newer GPU with frames rendered in order: first-party 2.7x (radius 1) and 3.3x (radius 2) over bm3dcuda at 1080p GRAYS with 32 VapourSynth threads.
+- Two-stage BM3D in one call (final=1): the basic estimate stays on the device, first-party 303 to 730 fps at 1080p GRAYS spatial against the plugin's own two-call form.
+- Colour BM3D (chroma=1) on YUV444 with a temporal radius: first-party 238 fps (radius 1) and 229 fps (radius 2) against bm3dcuda chroma=True at 94 and 65 fps.
+- Pipelines that need GPU output identical from run to run (bm3dcuda is non-deterministic unless extractor_exp is set).
+- Scripts that want NLM, WNNM, NCSR, NLH, TWSC or LSSC on the GPU from the same plugin and argument conventions as BM3D.
+
+**Skip it when:**
+- Spatial-only BM3D where bm3dcuda is already in place: the gain is about 1.15-1.25x and the docs say the kernels take the same time, the difference being frame-transfer pipelining.
+- AMD, Intel or pre-Turing NVIDIA GPUs: CUDA only, sm_75 and newer (other sm_75+ archs run PTX through the driver JIT, untested); bm3dcuda also ships HIP builds and supports older NVIDIA parts.
+- Anyone who needs a prebuilt CUDA binary or a stable API today: the only release (r0, a 2026-09-27 pre-release) has CPU builds only, and defaults changed within days (num_streams 3 to 1, temporal output from fat intermediate to finished frames).
+- Memory-tight 4K temporal work: one stream needs about 1.1-1.8 GB at radius 1 and up to 3.4 GB for rolling final=1 at radius 2, and there is no default memory_limit_mb.
+- Projects that cannot take GPL-2.0-only code (the FFTW-generated DCT codelets are GPL-2.0-or-later), or that need integer clip formats or bit-identical CPU/GPU output.
+
+**Integration:** shared lib · VapourSynth API4 headers and runtime, CUDA toolkit (nvcc) 12.4 or newer, CMake 3.24+; the CPU plugin also fetches Highway 1.4.0 at configure time (skip with -DNSS_BUILD_CPU=OFF) · C++20, CMake 3.24, nvcc 12.4+ (12.8+ for native sm_120 code); MSVC cl.exe as host compiler on Windows · NVIDIA GPUs sm_75+ (native sm_75/86/89/120 cubins plus compute_75 PTX); Linux x86-64 and Windows hosts; prebuilt driver must support the CUDA release used to build (12.9 for release packages)
+
+**Vs siblings:** Pick it over VapourSynth-BM3DCUDA on an NVIDIA RTX-class GPU when you run temporal or colour BM3D, want both stages in one call, or need deterministic output; keep bm3dcuda for AMD (HIP) or older NVIDIA GPUs, released binaries and a long track record. KNLMeansCL or av-denoise are the choice when NLMeans on any OpenCL/other GPU vendor is enough.
+
+**Gotchas:**
+- Baseline mode is ambiguous for the temporal claims: bm3dcuda gained its own rolling temporal BM3Dv2 (temporal_mode, rolling_chunk 4, rolling_cache_chunks 1, rolling_cache_limit 16, the same names and defaults) in PR #35 of 2026-08-31 by the same developer (MysteryDove) and shipped it in R2.17 on 2026-09-26; the 2026-10-06 docs' 2.7x/3.3x figures do not say whether bm3dcuda ran BM3Dv2 rolling or the legacy BM3D + VAggregate path, so the record's caveat that bm3dcuda returns a fat intermediate holds only for its BM3D interface.
+- Defaults are not equal work: nss_cuda.BM3D defaults to bm_range 7 (15x15 window) while bm3dcuda defaults to bm_range 9 (19x19, about 1.6x more candidates, derived); PR #23's 636 vs 732 fps line says only 'same harness', whereas the later docs say 'same search' and tests/cuda_compare.py passes bm_range explicitly for its PSNR column. No timing script for any bm3dcuda comparison is in the repo.
+- Breaking behaviour changes land daily: since PR #26 (2026-10-05) nss_cuda.X(clip, radius=r) followed by VAggregate fails unless temporal_mode="legacy" is given, and PR #28 changed num_streams from 3 to 1 after the PR #23 measurement.
+- Output agrees with the CPU plugin only to the 60 dB PSNR gate (not bit-identical) and rolling agrees with legacy + VAggregate to about 8 ulp for fused shapes; the worst reference case was at 73.5 dB before PR #23. nss_cuda is built with IEEE options (-O3 --fmad=true -prec-div=true -prec-sqrt=true -ftz=false), while bm3dcuda's documented build uses --use_fast_math.
+
+**Status:** Active single-author WIP (MysteryDove; 131 visible commits from 2026-10-04 to 2026-10-07, several merged PRs a day, 1 star, no issues filed) under GPL-2.0-only; copyable as source but there is no released CUDA build yet and defaults are still moving.
+
+[repo](https://github.com/AmusementClub/vapoursynth-nssfactory) · [benchmark](https://github.com/AmusementClub/vapoursynth-nssfactory/pull/23)
 
 ##### VapourSynth-BM3DCUDA  `C++ (CUDA, HIP, AVX2)`  `GPL-2.0`  `active`  `Tier D`
 

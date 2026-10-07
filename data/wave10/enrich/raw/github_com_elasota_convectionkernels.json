@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/elasota/convectionkernels",
+  "one_liner": "MIT texture-compression kernels (BC1-7, ETC1/2) whose scalar BC6H decoder narrowly beat bcdec in aras-p's 2022 single-thread test.",
+  "what_it_does": "Stand-alone kernels from Convection Texture Tools: encoders for BC1-BC7, ETC1, ETC2 (RGB, RGBA, punchthrough) and 11-bit EAC, plus decoders for BC6H (unsigned and signed) and BC7 only. The public API (cvtt::Kernels::EncodeBC7, DecodeBC6HU, DecodeBC6HS, DecodeBC7, ...) always takes exactly cvtt::NumParallelBlocks = 8 4x4 blocks per call through PixelBlockU8 or PixelBlockF16 structs (BC6H pixels are half-float bit patterns stored in int16_t), so callers pad partial batches. There is no image-level, DDS or KTX API and no float32 output; the benchmark called the internal per-block cvtt::Internal::BC6HComputer::UnpackOne, which the public Decode functions loop over.",
+  "how_it_is_fast": "The BC6H decoder loads the 128-bit block into four 32-bit words, shifts the 65- or 82-bit header out in one step, and runs a per-mode generated straight-line function (BC6H_IO g_readFuncs, one for each of the 14 modes) that gathers the scattered endpoint bits with constant masks and shifts, instead of walking a per-bit mode-descriptor table as the DirectXTex-derived layout does. Endpoints are then sign-extended, delta-decoded and unquantised in integer math, and the 16 pixels are interpolated with the BC6H weight tables; the decoder is plain scalar C++, so the gain comes from cheap bit extraction, not SIMD. The encoders (not part of the measured claim) use an SPMD design that processes 8 blocks per call with SSE2 16-bit math through ParallelMath, with a scalar fallback elsewhere.",
+  "when_to_use": [
+    "Bulk CPU decoding of BC6H (HDR) textures on x86-64 or Apple Silicon, single-threaded, where 1.0-1.2x over bcdec is worth an extra dependency (aras-p measured 101-149 Mpix/s).",
+    "You already vendor CVTT for BC6H, BC7 or ETC encoding (Godot ships it as thirdparty/cvtt) and want the matching decoder for round-trip error measurement.",
+    "You want BC6H output as half floats: UnpackOne writes FP16 bit patterns directly, so no float32 round trip is needed if the consumer takes FP16.",
+    "One MIT library covering both encode and decode of BC6H and BC7."
+  ],
+  "when_not_to_use": [
+    "BC1-BC5 decoding: there are no decoders for them; use bcdec (every BCn format in one header) or etcpak (fastest BC1/BC3 in the same test).",
+    "BC7 decoding: slower than bcdec (124 vs 142 Mpix/s with VS2022, 121 vs 169 with clang 14) and 4-5x slower than bc7enc_rdo's bc7decomp (621 and 656 Mpix/s).",
+    "Where the margin must hold up: with clang 14 it ties bcdec (105 vs 104 Mpix/s), and bcdec has moved on since the measured e3ca0 while this repo has not changed since 2022-06-23.",
+    "Small builds: aras-p counts 9 source files and 487 KB of source to get two decoders, mostly encoder code; bcdec is one 69 KB header.",
+    "Projects that need maintained code: the README still labels BC6H 'Experimental' and the project has had no commits since 2022."
+  ],
+  "integration": {
+    "form": "source-drop / static lib (10 .cpp and 23 .h files; ConvectionKernels_SingleFile.cpp with CVTT_SINGLE_FILE builds everything as one translation unit; a Visual Studio project is included, no CMake)",
+    "dependencies": "none beyond the C/C++ standard headers (emmintrin.h when SSE2 is enabled)",
+    "min_toolchain": "C++ without a documented standard; aras-p built it as C++17 with Visual Studio 2022, clang 14 (clang-cl) and Apple clang 13",
+    "platforms": "any; SSE2 SIMD on x86/x64 (CVTT_USE_SSE2 is defined automatically when SSE2 is available), scalar ParallelMath elsewhere including ARM64 (no NEON path); the decoders are scalar on every platform",
+    "thread_safety": "not documented for the decoders; from the code they keep all state on the stack and read const tables, so concurrent calls on different blocks look safe; the README says ETC encoder scratch data may move between threads but must not be used by two encode calls at once",
+    "drop_in_for_baseline": "false - not a bcdec or DirectXTex replacement: it decodes only BC6H and BC7, in fixed batches of 8 blocks into PixelBlockF16/PixelBlockU8 structs that the caller must scatter into the image"
+  },
+  "gotchas": [
+    "Public DecodeBC6HU/DecodeBC6HS/DecodeBC7 always read 8 blocks (128 bytes) and write 8 output blocks; decoding a single block or an image whose block count is not a multiple of 8 needs padded buffers, or the cvtt::Internal::...::UnpackOne functions from ConvectionKernels_BC67.h that the benchmark used (not in the public header).",
+    "The BC6H decoder was broken until the day of the measurement: aras-p's issue #6 (2022-06-22) reported that UnpackOne produced 'something entirely else', and commit 350416d 'Fix bit framing error in BC6H decoder' (2022-06-23) fixed it; that commit is the one benchmarked and the last in the repo. Any copy taken from an older commit decodes BC6H incorrectly.",
+    "Godot's thirdparty/cvtt (pinned at 350416d) still applies 0001-revert-bc6h-reorg.patch from PR #73715 (February 2023, a BC6H quality-regression fix), which swaps the generated per-mode BC6H read/write code, including inside UnpackOne, back to the older per-bit mode-descriptor tables. Copies taken from Godot therefore do not contain the decoder that was measured.",
+    "Reserved or invalid BC6H mode bits decode silently to black with alpha 1.0, with no error return; the harness's output-hash check only prints a warning on mismatch, so bit-exactness of the timed output rests on the post's statement that only Compressonator differed on BC6H."
+  ],
+  "pick_this_over_siblings_when": "Pick ConvectionKernels only for BC6H decode throughput, or when you already ship its BC6H/BC7/ETC encoders; otherwise bcdec covers every BCn format in one header and tied or nearly tied it on BC6H, and bc7enc_rdo's bc7decomp (bc7enc family) is 4-5x faster on BC7. For BC7 encoding, bc7e and bc7enc have independent quality and speed measurements; CVTT's encoders have none in this catalogue.",
+  "verified_claims_summary": "aras-p's public bcn_decoder_tester (20 runs per DDS file, one thread, every BC6H decoder producing float32 RGB, Windows builds RelWithDebInfo plus /Ob2) measured ConvectionKernels 350416d's BC6H unsigned decoder at 101 Mpix/s against bcdec e3ca0's 85 (1.19x) with VS2022 and 105 against 104 (a tie) with clang 14 on a Ryzen 5950X, and at 149 against SwiftShader's 143 and bcdec's 79 on an Apple M1 Max with Apple clang 13; DirectXTex was 3-4x slower, and on BC7 it trailed both bcdec and bc7enc_rdo.",
+  "status_note": "Abandoned since 2022-06-23 (the BC6H bit-framing fix that was benchmarked); MIT-licensed with a DirectXTex-derived notice, 53 stars, and vendored by Godot at that commit but with the BC6H reorganisation reverted. Copyable, but treat BC6H as the README does: experimental.",
+  "sources_read": [
+    "https://github.com/elasota/ConvectionKernels",
+    "https://github.com/elasota/ConvectionKernels/commits/master",
+    "https://github.com/elasota/ConvectionKernels/issues?q=is%3Aissue",
+    "https://github.com/elasota/ConvectionKernels/issues/6",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/README.md",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels.h",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_Config.h",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_API.cpp",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_BC67.cpp",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_BC67.h",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_BC6H_IO.cpp",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_ParallelMath.h",
+    "https://raw.githubusercontent.com/elasota/ConvectionKernels/HEAD/ConvectionKernels_SingleFile.cpp",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/readme.md",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/CMakePresets.json",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/aras-p/bcn_decoder_tester/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2022/06-bcn-decode-libraries.md",
+    "https://github.com/aras-p/aras-p.hugo/tree/master/content/blog/2020",
+    "https://raw.githubusercontent.com/aras-p/aras-p.hugo/master/content/blog/2020/12-texcompr.md",
+    "https://raw.githubusercontent.com/godotengine/godot/master/thirdparty/README.md",
+    "https://raw.githubusercontent.com/godotengine/godot/master/thirdparty/cvtt/patches/0001-revert-bc6h-reorg.patch",
+    "https://github.com/godotengine/godot/pull/73715"
+  ],
+  "confidence": 0.75
+}

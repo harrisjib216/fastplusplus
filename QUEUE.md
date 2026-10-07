@@ -1,85 +1,53 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-06)
+## Unfinished work (resume here first; updated 2026-10-07)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
-extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
-all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFERENCE 137).
+extension passes further down. Waves 1-12 are closed (see CLAUDE.md Status). The backlog seed sweep of
+2026-10-07 seeded every uncatalogued lead with a reachable repo from waves 8-12 (29 projects, 22 verified,
+4 duplicates), so what remains here is blocked on the environment or on the user:
 
-1. **Wave 8 backfill seed pass (seed-j/k/l): done 2026-10-03.** 14 projects seeded, 11 kept
-   (FlashTP B, CB-SpMV B, avxbls B, Sobek C, Ocean SpGEMM C, avx-ecm C, metal-flash-attention C,
-   fast_prng C, chusitoo/flatbush D, SyLVER D), ranluxpp-portable and wibraun/NICSLU folded as
-   duplicates, OGL folded into Ginkgo, MultiprecisionBenchmarks was already listed. New leads for a
-   later seed pass: bbuhrow/yafu, imperatormk/mps-flash-attention, pedrobtz/zurand, NLAFET/SpLLT,
-   gMAGNUS (no repo), ganqin-liu/avxbls-sig.
-2. **Paper-access retiers** (retier checks 12-14 on 2026-10-03 re-tried all of these from this
-   environment: only gpuNUFFT moved, D to C; auto-mpft confirmed B from its gh-pages PDF; the rest
-   stay blocked, so this needs an environment that reaches arXiv/ACM/IEEE/Springer): ttm (ICCS
-   2024, likely B), costa (ISC21), pargeo, nicslu (TCAD 2013), spral (TOMS 2016, arXiv
-   1909.08104), openequivariance (ACDA25), wrs (ESA 2019, to A), m4ri (TOMS Alg. 898), amgt and
-   tilespmv (SC '24, IPDPS 2021 numbers still snippet-only), auto-mpft (its KDD 2024 PDF is
-   reachable at raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/
-   resources/2024/KDD/ParkKK24.pdf), kokkos-kernels (spECK PPoPP '20 counter-benchmark),
-   gpunufft (cufinufft issue #126 vs the cuFINUFFT paper), plus the older list in
-   `data/wave8/leads.md` (fmm-gen, fastshuffleexperiments, HPTT, heFFTe, CoDiPack, ALP, SPRK,
-   polylidar, FBGEMM, PFT done, fbfft, SFFT, Edamatsu/Takahashi, stochastic-generation, SPRAL,
-   TileSpMV, FFTN on gitlab.sac-home.org).
-3. **Usage-limit lesson:** launching 15-20 Opus/Sonnet agents at once exhausted the account's
-   session limit twice on 2026-10-02. Eight at a time, recording each report before launching
-   more, ran a full day on 2026-10-03 without a kill.
-4. **Wave 9 closed 2026-10-03** (136 verified, all enriched; see CLAUDE.md Status). Open
-   wave 9 follow-ups in `data/wave9/leads.md`: paper-access retiers (h0_bv, spider, recoil,
-   ds2i, mutable_rank_select, pwm, wavelet_forest, faster-minuter, avxwindowfmindex, mans SC25
-   report, ZipNN, QPL ADMS 2025, CPEF TOIS17, simdcomp via the SPE paper, DietGPU arXiv
-   2606.18900) and a retier of Chromium zlib C to B via simonis/zlib-chromium; seed leads not yet
-   run: tsl::htrie_map, NeaTS, intel/zlib-accel, iaa-plugin-rocksdb, DeLZSA, Apple LZMESH,
-   richox/orz done, c-blosc2 done.
-5. **Wave 10 closed 2026-10-05** (254 verified, all enriched; see CLAUDE.md Status). Open
-   wave 10 follow-ups in `data/wave10/leads.md` (57 leads, none seeded yet): seed candidates
-   such as ConvectionKernels, honeydiff, zenquant, Vship, Simd (ermig1979), BoofCV, JPEGDEC,
-   Canvas-Txt v5, rusty_webp, nssfactory, scany, clownresampler, Getreuer's IPOL Gaussian survey;
-   paper-access retiers (FOSDEM 2024 vvdec handout, Hydrogenaudio Helix threads, IPOL, PCS2025
-   jpegli paper, groups.google.com libjpeg-turbo thread); retier candidates from the aras-p
-   2022 BCn charts (etcpak and bc7enc_rdo decoder evidence) and a re-run of bcn_decoder_tester on
-   current bcdec (would make it A). Harness re-runs that would settle disputes: HarfBuzz
-   benchmark-shape with -Dkbts=enabled on kb v2.28, pillow-lunasvg against a release-profile
-   resvg, libblur and kornia-rs against a pinned OpenCV build.
-6. **Wave 11 closed 2026-10-06** (144 verified, 143 enriched; see CLAUDE.md Status). Open wave 11 follow-ups
-   in `data/wave11/leads.md`: seed leads tidwall/bluebox (Neco Redis clone, about 2.4x over redis-server) and the
-   dsx-ai-factory/model-streamer repo move; the RetroWrite (hexhive) enrichment, whose enricher was stopped by
-   a safety classifier (ask the user before relaunching); no seed pass was run. Paper-access retiers (need an
-   environment that reaches usenix.org, arXiv, ACM, IEEE): Exgen-Malloc, SpeedMalloc, LWMalloc, LLFree,
-   Dr. Memory (commit.csail.mit.edu/papers/2011/bruening-cgo11-drmemory.pdf), Coz via the CACM copy, RFUSE,
-   TriCache, UMap, NOVA, WineFS, SplitFS, vmcache, xNVMe, DAXFS, libseff, Nowa, Heartbeat, RetroWrite, SPDK.
-   **Failed or partial wave 11 runs, queued for a re-run:**
-   - Enricher failed: `data/wave11/enrich/prompts/github_com_hexhive_retrowrite.txt` (RetroWrite). The agent's
-     safety classifier stopped its write mid-call, so `enrich/raw/github_com_hexhive_retrowrite.json` was never
-     written. Its findings were recorded as a decision shortcoming from the agent's report. Ask the user before
-     relaunching; when relaunched, run `render_lists.py` again so the "missing enrichment" note clears.
-   - Searches that ran on WebSearch snippets only, because blogs and HN were blocked (thin yield): the 12 b7/b8
-     assignments `w11-{alloc,fiber,pool,log,prof,fsio}-{blogs,hn}`. Re-run them from an environment that
-     reaches HN Algolia, news.ycombinator.com and personal blogs, then merge, verify and enrich the new records.
-   - Seed pass not run: add a `seed` assignment to `data/wave11/assignments.json` with the leads above
-     (tidwall/bluebox; check the dsx-ai-factory/model-streamer move), then `seed.py`, merge, verify, enrich.
-7. **Wave 12 closed 2026-10-06** (220 verified, all enriched; see CLAUDE.md Status). Open wave 12 follow-ups in
-   `data/wave12/leads.md`: seed leads not yet run (angelsea MIR JIT for AngelScript, goant pure-Go JS engine,
-   ptitSeb/box86, HaxeFoundation/hxcpp, LayerZero-Labs/fafo, 0xjojoex/evm.zig, RealNeGate/Cuik, bsaleil/lc,
-   Wastrel on codeberg, treVM, Biotite, atJIT's ClangJIT); repo_url overrides to consider (kostya/topaz is the
-   fork that was measured; OpenISA/riscv-sbt now redirects to lmcad-unicamp/riscv-sbt). Paper-access retiers
-   (need an environment that reaches arXiv, ACM, IEEE, usenix, openproceedings, TUM and Saarland hosts):
-   Instrew (VEE'21), TPDE (CGO 2026), Box64 (EuroSys 2026), aWsm (Sledge), WARP (Valent-Blocks), rv32emu
-   (VMIL'24), HHVM (OOPSLA 2014), Deegen/LuaJIT Remake (OOPSLA 2026), Pallene (SBLP/SCP), YJIT, Wizard (OOPSLA
-   2022 paper itself), mutable (EDBT 2023 and the ADC 2023 study arXiv 2311.04692), Higgs (arXiv 1507.02437),
-   weval (PLDI paper on cfallin.org), riscv-sbt (sol.sbc.org.br), Segue/ColorGuard ASPLOS 2025.
-   Harness re-runs that would settle disputes: ThePhD/lua-bindings-shootout for LuaBridge3 vs sol2, a
-   JIT_NO_SUSPEND run of the AngelScript JIT, kvmserver's Wasmtime and isolated-vm groups for TinyKVM.
-   **Thin-yield searches queued for a re-run** from an environment that reaches HN Algolia,
-   news.ycombinator.com and personal blogs: the 8 b7/b8 assignments `w12-{interp,jit,wasm,embed}-{blogs,hn}`
-   (36 records on WebSearch snippets plus github.com).
-   **Cross-wave leads from wave 12 enrichers** (seed candidates for the named waves): radfordneal/xsum and
+1. **RetroWrite (wave 11) enrichment**: `data/wave11/enrich/prompts/github_com_hexhive_retrowrite.txt` has no
+   `enrich/raw` file because its enricher was stopped by a safety classifier mid-write on 2026-10-06. Ask the
+   user before relaunching; when relaunched, run `render_lists.py` again so the "missing enrichment" note clears.
+2. **Paper-access retiers** (need an environment that reaches arXiv, ACM, IEEE, Springer, usenix, Dagstuhl,
+   IACR ePrint, openproceedings, TUM, Saarland, STFC and the other hosts named in each wave's leads.md): wave 8
+   (ttm, costa, pargeo, nicslu, spral, openequivariance, wrs, m4ri, amgt, tilespmv, kokkos-kernels, gpunufft,
+   avxbls-sig ePrint 2026/947, SpLLT STFC papers, plus the older list in `data/wave8/leads.md`); wave 9 (h0_bv,
+   spider, recoil, ds2i, mutable_rank_select, pwm, wavelet_forest, faster-minuter, avxwindowfmindex, mans, ZipNN,
+   QPL, CPEF, simdcomp, DietGPU, bzip2gpu ICPP 2024, Chromium zlib via simonis/zlib-chromium); wave 10 (vvdec
+   FOSDEM handout, Helix threads, IPOL, PCS2025 jpegli, libjpeg-turbo thread, aras-p bcdec charts, Kvazaar Jetson
+   paper, BoofCV Performance page and SURF paper); wave 11 (Exgen-Malloc, SpeedMalloc, LWMalloc, LLFree, Dr. Memory,
+   Coz, RFUSE, TriCache, UMap, NOVA, WineFS, SplitFS, vmcache, xNVMe, DAXFS, libseff, Nowa, Heartbeat, RetroWrite,
+   SPDK); wave 12 (Instrew VEE'21, TPDE, Box64 EuroSys, aWsm, WARP, rv32emu VMIL, HHVM, Deegen, Pallene, YJIT,
+   Wizard OOPSLA 2022 paper, mutable EDBT 2023 and ADC 2023 arXiv 2311.04692, Higgs arXiv 1507.02437, weval PLDI,
+   riscv-sbt, Segue/ColorGuard ASPLOS 2025, LC thesis cross-check).
+3. **Thin-yield searches queued for a re-run** from an environment that reaches HN Algolia, news.ycombinator.com
+   and personal blogs: the b7/b8 assignments of waves 8-12 (`w{8..12}-*-{blogs,hn}`), which ran on WebSearch
+   snippets plus github.com.
+4. **Seed leads still unseeded** (no reachable repo, or surfaced after the sweep): wave 8 gMAGNUS (no repo), AVXPoS
+   (ePrint 2026/1827, repo not found); wave 9 emmanuel-marty/em_inflate, smalLZ4, jibsen/blz4, LZ4X, Apple LZMESH
+   (no repo), Tessil/sparse-map and other hash-map leads (wave 1 backfill), aditya12agd5/cuda_bzip2; wave 10 Vship
+   (codeberg, blocked), Getreuer IPOL survey (ipol.im blocked), BlazeDiff (teimurjan/blazediff), ESP32_JPEG
+   (precompiled), rav1d (slower than dav1d), mycophonic/flac, catid/Zdepth; wave 12 Wastrel (codeberg), treVM and
+   Biotite (repos unknown), ClangJIT, Pycket (pycket/pycket), QMDB (LayerZero-Labs/qmdb, wave 5), asllvm (no
+   numbers), Hazelight StaticJIT (gated). Repo_url overrides to consider: kostya/topaz (the fork that was measured),
+   lmcad-unicamp/riscv-sbt (redirect), mpsops/mps-flash-attention (moved, folded into metal-flash-attention).
+5. **Harness re-runs that would settle disputes** (need a build machine): HarfBuzz benchmark-shape with
+   -Dkbts=enabled on kb v2.28, pillow-lunasvg against a release-profile resvg, libblur and kornia-rs against a
+   pinned OpenCV build, bcn_decoder_tester on current bcdec and ConvectionKernels, ThePhD/lua-bindings-shootout for
+   LuaBridge3 vs sol2, a JIT_NO_SUSPEND run of the AngelScript JIT, kvmserver's Wasmtime and isolated-vm groups for
+   TinyKVM, a randomised-key memtier run for bluebox, an AVX2 randompack build for zurand.
+6. **Cross-wave leads from wave 12 enrichers** (seed candidates for the named waves): radfordneal/xsum and
    radfordneal/matprod (wave 8 numerics), 6/qj (wave 4 json), eBay/tsv-utils (wave 3 csv-tabular), Turso Rust
-   SQLite rewrite (wave 5 databases), ml-rust/splintr (tokenizers), lmcad-unicamp/MOSFHET (crypto),
+   SQLite rewrite and QMDB (wave 5 databases), ml-rust/splintr (tokenizers), lmcad-unicamp/MOSFHET (crypto),
    klippa-app/go-pdfium wazero-vs-wazy benchmark (wasm cross-check).
+7. **Usage-limit lesson:** 15-20 Opus or Sonnet agents at once exhausted the session limit on 2026-10-02 and
+   again on 2026-10-06 (nine enrichers killed mid-run; their complete output files were kept). 8-12 at a time,
+   recording each report before launching more, runs a full day without a kill.
+
+Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
+wave 11 (144 then 145), wave 12 (220 then 227); details in CLAUDE.md Status.
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 
