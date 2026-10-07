@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/amusementclub/vapoursynth-nssfactory",
+  "one_liner": "CUDA VapourSynth BM3D (plus NLM, WNNM and other NSS denoisers); first-party 1.15-1.25x spatial, 2.7-3.3x rolling temporal over bm3dcuda.",
+  "what_it_does": "A VapourSynth plugin pair for classical non-local self-similarity denoisers: libnss (CPU, namespace nss) and libnss_cuda (namespace nss_cuda) with BM3D, CBM3D, NLM, WNNM, MCWNNM, NCSR, NLH, TWSC and LSSC on 32-bit float Gray/YUV/RGB clips. core.nss_cuda.BM3D takes the CPU filter's arguments (sigma, block_size, group_size, block_step, bm_range, radius, ps_num, ps_range, ref, chroma, final) plus device_id and num_streams, so it is close to bm3dcuda's call shape but not a drop-in. With radius > 0 it returns finished frames by default (temporal_mode=\"rolling\"); temporal_mode=\"legacy\" returns the fat intermediate for VAggregate as the CPU plugin and bm3dcuda's BM3D do.",
+  "how_it_is_fast": "For the default 8x8 block, group-of-8 shape one warp filters four groups with each lane holding a column of a group's patches in 64 registers, the 8x8 reference block sits in registers instead of shared memory, and the matcher keeps a single 64-bit (distance, index) key per candidate (PR #23: group filter 0.399 to 0.066 ms, matching 0.378 to 0.309 ms per frame in Nsight Systems). Aggregation happens inside the filter kernel with integer atomics on fixed-point sums, and host-device copies run outside the device stream. The bigger temporal gains come from a rolling mode that keeps a ring of window frames and the per-frame temporal sums on the device across chunks, so only finished frames are downloaded instead of a (2R+1)x2-plane intermediate; final=1 keeps the basic estimate on the device between the two BM3D stages.",
+  "when_to_use": [
+    "Temporal BM3D (radius 1-2) on an NVIDIA Turing-or-newer GPU with frames rendered in order: first-party 2.7x (radius 1) and 3.3x (radius 2) over bm3dcuda at 1080p GRAYS with 32 VapourSynth threads.",
+    "Two-stage BM3D in one call (final=1): the basic estimate stays on the device, first-party 303 to 730 fps at 1080p GRAYS spatial against the plugin's own two-call form.",
+    "Colour BM3D (chroma=1) on YUV444 with a temporal radius: first-party 238 fps (radius 1) and 229 fps (radius 2) against bm3dcuda chroma=True at 94 and 65 fps.",
+    "Pipelines that need GPU output identical from run to run (bm3dcuda is non-deterministic unless extractor_exp is set).",
+    "Scripts that want NLM, WNNM, NCSR, NLH, TWSC or LSSC on the GPU from the same plugin and argument conventions as BM3D."
+  ],
+  "when_not_to_use": [
+    "Spatial-only BM3D where bm3dcuda is already in place: the gain is about 1.15-1.25x and the docs say the kernels take the same time, the difference being frame-transfer pipelining.",
+    "AMD, Intel or pre-Turing NVIDIA GPUs: CUDA only, sm_75 and newer (other sm_75+ archs run PTX through the driver JIT, untested); bm3dcuda also ships HIP builds and supports older NVIDIA parts.",
+    "Anyone who needs a prebuilt CUDA binary or a stable API today: the only release (r0, a 2026-09-27 pre-release) has CPU builds only, and defaults changed within days (num_streams 3 to 1, temporal output from fat intermediate to finished frames).",
+    "Memory-tight 4K temporal work: one stream needs about 1.1-1.8 GB at radius 1 and up to 3.4 GB for rolling final=1 at radius 2, and there is no default memory_limit_mb.",
+    "Projects that cannot take GPL-2.0-only code (the FFTW-generated DCT codelets are GPL-2.0-or-later), or that need integer clip formats or bit-identical CPU/GPU output."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "VapourSynth API4 headers and runtime, CUDA toolkit (nvcc) 12.4 or newer, CMake 3.24+; the CPU plugin also fetches Highway 1.4.0 at configure time (skip with -DNSS_BUILD_CPU=OFF)",
+    "min_toolchain": "C++20, CMake 3.24, nvcc 12.4+ (12.8+ for native sm_120 code); MSVC cl.exe as host compiler on Windows",
+    "platforms": "NVIDIA GPUs sm_75+ (native sm_75/86/89/120 cubins plus compute_75 PTX); Linux x86-64 and Windows hosts; prebuilt driver must support the CUDA release used to build (12.9 for release packages)",
+    "thread_safety": "Runs as a VapourSynth filter under VS frame threading (the docs measure with 1 and 32 threads); each instance uses one device with num_streams (1-16) frames in flight and its own buffers; internal locking not documented",
+    "drop_in_for_baseline": "partial: same filter concept and mostly the same argument names as bm3dcuda.BM3D, but a different namespace (nss_cuda), default bm_range 7 versus bm3dcuda's 9, sigma remapped through a BM3D effective-noise profile, chroma is an int, no fast or extractor_exp arguments, and radius > 0 returns finished frames unless temporal_mode=\"legacy\""
+  },
+  "gotchas": [
+    "Baseline mode is ambiguous for the temporal claims: bm3dcuda gained its own rolling temporal BM3Dv2 (temporal_mode, rolling_chunk 4, rolling_cache_chunks 1, rolling_cache_limit 16, the same names and defaults) in PR #35 of 2026-08-31 by the same developer (MysteryDove) and shipped it in R2.17 on 2026-09-26; the 2026-10-06 docs' 2.7x/3.3x figures do not say whether bm3dcuda ran BM3Dv2 rolling or the legacy BM3D + VAggregate path, so the record's caveat that bm3dcuda returns a fat intermediate holds only for its BM3D interface.",
+    "Defaults are not equal work: nss_cuda.BM3D defaults to bm_range 7 (15x15 window) while bm3dcuda defaults to bm_range 9 (19x19, about 1.6x more candidates, derived); PR #23's 636 vs 732 fps line says only 'same harness', whereas the later docs say 'same search' and tests/cuda_compare.py passes bm_range explicitly for its PSNR column. No timing script for any bm3dcuda comparison is in the repo.",
+    "Breaking behaviour changes land daily: since PR #26 (2026-10-05) nss_cuda.X(clip, radius=r) followed by VAggregate fails unless temporal_mode=\"legacy\" is given, and PR #28 changed num_streams from 3 to 1 after the PR #23 measurement.",
+    "Output agrees with the CPU plugin only to the 60 dB PSNR gate (not bit-identical) and rolling agrees with legacy + VAggregate to about 8 ulp for fused shapes; the worst reference case was at 73.5 dB before PR #23. nss_cuda is built with IEEE options (-O3 --fmad=true -prec-div=true -prec-sqrt=true -ftz=false), while bm3dcuda's documented build uses --use_fast_math."
+  ],
+  "pick_this_over_siblings_when": "Pick it over VapourSynth-BM3DCUDA on an NVIDIA RTX-class GPU when you run temporal or colour BM3D, want both stages in one call, or need deterministic output; keep bm3dcuda for AMD (HIP) or older NVIDIA GPUs, released binaries and a long track record. KNLMeansCL or av-denoise are the choice when NLMeans on any OpenCL/other GPU vendor is enough.",
+  "verified_claims_summary": "First-party only: PR #23 timed the default shape (block 8, group 8, sigma 3) on 1080p Gray float at 3 streams on an RTX 5080, A/B alternated in one process with source frames from VapourSynth's cache, reporting 732 fps against bm3dcuda's 636 fps 'on the same harness' (about 1.15x, derived from page data); docs/api/bm3d.md (2026-10-06, one stream, 1080p GRAYS) adds about 1.25x spatial and 2.7x/3.3x rolling temporal at radius 1/2 with 32 VS threads. Host CPU, driver, bm3dcuda build (cuda or rtc, BM3D or BM3Dv2) and bm3dcuda parameters are not stated and no timing harness is in the repository.",
+  "status_note": "Active single-author WIP (MysteryDove; 131 visible commits from 2026-10-04 to 2026-10-07, several merged PRs a day, 1 star, no issues filed) under GPL-2.0-only; copyable as source but there is no released CUDA build yet and defaults are still moving.",
+  "sources_read": [
+    "https://github.com/AmusementClub/vapoursynth-nssfactory",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/README.md",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/docs/api/bm3d.md",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/src/cuda/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AmusementClub/vapoursynth-nssfactory/HEAD/tests/cuda_compare.py",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/23",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/26",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/31",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/32",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/34",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/pull/40",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/commits/master",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/tree/master/tests",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/tree/master/tests/cuda",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/issues?q=is%3Aissue",
+    "https://github.com/AmusementClub/vapoursynth-nssfactory/releases",
+    "https://raw.githubusercontent.com/WolframRhodium/VapourSynth-BM3DCUDA/HEAD/README.md",
+    "https://github.com/WolframRhodium/VapourSynth-BM3DCUDA/commits",
+    "https://github.com/WolframRhodium/VapourSynth-BM3DCUDA/releases"
+  ],
+  "confidence": 0.6
+}

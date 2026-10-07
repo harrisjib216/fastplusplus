@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/clownacy/clownresampler",
+  "one_liner": "Single-header C89 Lanczos-windowed-sinc resampler for 16-bit PCM, 0BSD; no speed claim or measurement against libsamplerate or anything else.",
+  "what_it_does": "Converts 16-bit integer PCM (up to 16 channels) between arbitrary sample-rate ratios with an optional extra low-pass cut-off. It offers a lowest-level per-frame call, a low-level API for whole buffers that the caller pads by the kernel radius at both ends, and a streaming high-level API driven by an input callback that pulls cc_s16l frames and an output callback that receives one unclamped 32-bit frame at a time; a thin C++ wrapper (ClownResampler::HighLevel) takes lambdas. It is not API-compatible with libsamplerate (no float input, no converter types, callback-per-frame output).",
+  "how_it_is_fast": "Nothing in the repository measures speed; the design simply keeps the per-sample work small and integer. Read positions advance in 16.16 fixed point, the Lanczos kernel is precomputed once into a 3-lobe table of 1024 entries per lobe (nearest-entry lookup, no interpolation), and each output frame is a scalar multiply-accumulate over 2 x 3 x stretch taps followed by one integer division to normalise by the summed kernel weights (a source TODO says 'divisions are slow'). There is no SIMD, no polyphase decomposition and no block processing: the output callback is invoked once per output frame.",
+  "when_to_use": [
+    "C89 or freestanding-ish targets (consoles, emulators, retro ports) that need a resampler with no dependencies and a public-domain-equivalent licence.",
+    "Streaming 16-bit integer PCM at ordinary ratios (for example 32 or 44.1 kHz to 48 kHz) where a short Lanczos-3 kernel is acceptable quality.",
+    "Code bases without an FPU in the audio path: after the one-time table build (which uses double sin()), resampling is integer-only.",
+    "Projects that want to vendor one header and read all of the resampler (about 1,400 lines, most of it comments, examples and integer typedefs)."
+  ],
+  "when_not_to_use": [
+    "When speed matters and must be shown: no benchmark, no comparison with libsamplerate, libsoxr, speexdsp or r8brain exists, and the scalar per-frame loop with a division and an indirect callback per output frame is not built for throughput.",
+    "Float or 24/32-bit input, or high-fidelity mastering: input is cc_s16l only and the default kernel is 3-lobe Lanczos with nearest-entry table lookup; no frequency-response or SNR figures are published.",
+    "Extreme downsampling or low-pass ratios with many channels in the high-level API (see gotchas: the fixed 0x1000-sample input buffer is not checked at init).",
+    "More than 16 channels (CLOWNRESAMPLER_MAXIMUM_CHANNELS) or callers that need variable-ratio downsampling wider than the ratio given at HighLevel_Init."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C standard library: assert, fabs, sin, memset, memmove; all overridable by macros)",
+    "min_toolchain": "C89 for the C API; the C++ wrapper is gated on C++11 but declares an inline variable, which is a C++17 feature",
+    "platforms": "any (portable scalar C, no SIMD)",
+    "thread_safety": "Not documented; each resampler keeps its own state struct and one const ClownResampler_Precomputed table may be shared by several resamplers, with no global mutable state in the C API",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "From the code: ClownResampler_HighLevel_Init never checks that twice the stretched kernel radius fits the fixed cc_s16l input_buffer[0x1000], while ClownResampler_HighLevel_Adjust does. When 2 x ceil(3 x input_rate / min(input, output, low-pass rate)) x channels exceeds 4096 samples (for example 8 channels at about 86:1, or 16 channels at about 43:1), the leading-padding read and the memmove in HighLevel_Resample run past the buffer and the refill size (0x1000 - 2R x channels) / channels wraps as size_t; at exactly 4096 the refill asks for 0 frames and resampling stops silently.",
+    "With the default C89 typedefs cc_s32l is 'signed long', so on LP64 Linux/macOS the 6,144-entry kernel table is 48 KB instead of 24 KB; define CC_USE_C99_INTEGERS to get 32-bit int_least32_t entries.",
+    "The 'C++11 interface' (added 2026-06-27) uses an inline variable for its shared Precomputed table, so strict C++11/14 builds warn or fail; its Init and Adjust wrappers also discard the cc_bool result, so an unsupported channel count or ratio goes unnoticed. The low-level API documents but does not check the 16-channel limit (its stack accumulator array is sized 16).",
+    "Output frames are unclamped 32-bit values; the caller must clamp to 16 bits, as the examples do. Hissing on long runs of a constant non-zero sample was fixed only in April 2025 (after one reverted attempt)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libsoxr, r8brain-free-src or SampleRateTap only when a single C89 0BSD header for 16-bit PCM matters more than measured speed and quality; those siblings carry third-party or first-party throughput tables against libsamplerate and this one carries none. LibFResample and the sst-basic-blocks LanczosResampler are the closer small-footprint alternatives, the former with published numbers.",
+  "verified_claims_summary": "Nothing was measured: the README (three sentences), the header comments and the two FLAC-to-raw functional tests contain no timing code, no speed claim and no named baseline; libsamplerate is only the nearest incumbent assumed by the catalogue.",
+  "status_note": "Lightly maintained by its single author (104 commits, last 2026-06-27 adding a C++ interface and a flush function; two closed issues), 0BSD and small enough to vendor, but treat it as a portable convenience resampler rather than a proven fast one.",
+  "sources_read": [
+    "https://github.com/Clownacy/clownresampler",
+    "https://github.com/Clownacy/clownresampler/commits",
+    "https://github.com/Clownacy/clownresampler/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/README.md",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/clownresampler.h",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/clownresampler.c",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/LICENCE.txt",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/tests/test-high-level.c",
+    "https://raw.githubusercontent.com/Clownacy/clownresampler/HEAD/tests/test-low-level.c",
+    "https://github.com/Clownacy/clownmdemu-frontend",
+    "https://raw.githubusercontent.com/Clownacy/clownmdemu-frontend/HEAD/.gitmodules",
+    "https://github.com/Clownacy/clownmdemu-frontend-common",
+    "https://raw.githubusercontent.com/Clownacy/clownmdemu-frontend-common/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/Clownacy/clownmdemu-frontend-common/HEAD/mixer.h"
+  ],
+  "confidence": 0.75
+}
