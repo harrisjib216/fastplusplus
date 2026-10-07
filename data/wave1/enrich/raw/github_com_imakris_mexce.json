@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/imakris/mexce",
+  "one_liner": "Header-only C++11 JIT that compiles run-time math formula strings to x86/x86-64 code, roughly matching statically compiled C++.",
+  "what_it_does": "mexce parses C-like scalar expressions (+ - * / ^ ** < >, about 35 built-ins such as sin, pow, logb, floor, bnd, bias) over variables bound by reference (double, float, int16/32/64) and JIT-compiles them into x86 or x86-64 machine code in executable memory. After set_expression(), evaluate() is a direct call returning a double. It is an expression-evaluator API (bind / set_expression / evaluate), not a drop-in for anything, aimed at formulas known only at run time; an opt-in mode loads libsodium-encrypted 'protected' expressions.",
+  "how_it_is_fast": "The parser builds an element list, folds constant subtrees (by JIT-compiling and running them), runs peephole optimizers (asmd_optimizer for add/sub/mul/div chains, pow_optimizer for integer exponents) and then emits machine code directly. The default x86-64 backend keeps a virtual operand stack in XMM0-7 (XMM0-5 on Windows) using scalar SSE2 instructions, sqrtsd and SSE4.1 roundsd inline, caches variable addresses in RAX, folds variable loads into memory operands, and calls libm only for transcendentals; deeper expressions fall back to the x87 backend (80-bit stack, fsin/fcos/fptan, optional CSE). A fully constant expression is stored as a value and evaluate() returns it without calling code.",
+  "when_to_use": [
+    "A formula arrives at run time (user input, config file, plotting or simulation parameters) and is evaluated thousands to millions of times, so the 135-177 us average compile cost is amortized.",
+    "Scalar double arithmetic formulas on x86-64 Linux or Windows where you want code at about native speed without embedding LLVM or a C compiler.",
+    "Projects that want one dependency-free header and only C++11.",
+    "Long arithmetic chains where 80-bit intermediates help: the x87 backend had the most exact results in the README's ULP table (20,323 exact versus 16,636 for native code), at 0.94x native speed."
+  ],
+  "when_not_to_use": [
+    "Any non-x86 target (ARM64, Apple Silicon, Graviton, RISC-V); the README lists only Windows and Linux on x86 and x86-64.",
+    "Pre-SSE4.1 x86-64 CPUs: the SSE2 backend emits roundsd for floor/ceil/round/trunc/int with no CPUID check, so those expressions hit an illegal instruction.",
+    "Formulas known at build time: plain C++ is as fast (1.20x on totals is the whole measured margin and the x87 backend is slower than native).",
+    "Evaluating one formula over large arrays: there is no batch or SIMD API, and the project's own analysis measures 1.0-1.3 ns of fixed overhead per evaluate() call; a vectorising JIT fits better.",
+    "Sandboxes or hardened processes that forbid making memory executable (mexce needs mmap plus mprotect(PROT_EXEC) or VirtualAlloc); also a single-author, 6-star project."
+  ],
+  "integration": {
+    "form": "header-only (mexce.h); the optional protected-expression mode is a CMake package target mexce::protected",
+    "dependencies": "none for the core; libsodium 1.0.22 only for protected expressions",
+    "min_toolchain": "C++11 (CMAKE_CXX_STANDARD 11); CI builds with GCC, Clang and MSVC (analysis/performance_acceptance.md names GCC 13.3.0, Clang 18.1.3, MSVC 19.44)",
+    "platforms": "x86-64 (SSE2 backend; SSE4.1 required when rounding functions are used) and 32-bit x86 (x87 backend); Windows and Linux",
+    "thread_safety": "Not documented for evaluator objects. The built-in function and constant maps are static-local initialized so concurrent first use is safe (August 2026 fix); generated code reads bound variables by address, so treat an evaluator and its bound variables as single-threaded (inference from the code).",
+    "drop_in_for_baseline": "no: it replaces ahead-of-time compiled C++ only when the formula is a run-time string, through its own bind / set_expression / evaluate API"
+  },
+  "gotchas": [
+    "round(x) and int(x) round half to even in both backends (roundsd mode 0x08; frndint with control word 0x27F), so round(2.5) returns 2.0 where std::round returns 3.0, and int(x) is not truncation; the unit test only checks 3.75, so this is untested.",
+    "SSE4.1 roundsd is emitted without a CPUID gate (B4 in analysis/improvement_report.md); current mexce.h still has no CPUID check, and the README requirements do not mention SSE4.1.",
+    "Harness asymmetries behind the README's 1.20x: evaluate() returns a stored value for fully constant expressions without calling any code (1,270 of the 44,229 corpus expressions are constant) and the timed loop discards the result, while the native side still makes an indirect call each iteration; and at the table's commit (cb358747, 2026-01-11) default mode still applied x-x to 0, x/x to 1 and merged cancellations such as 3x-2x (B5, fixed 2026-06-10), work that strict -O3 native code must do. By the analysis's own 1.0-1.3 ns per-call overhead the constant shortcut is worth roughly 0.13-0.17 ms of the 5.5 ms gap (estimate), so these skew rather than create the result.",
+    "Bound variables are captured by address and must outlive the evaluator; unbinding a variable the current expression uses silently resets it to the constant 0, and code from before 2026-06-10 also has the B1 miscompile (a binary libm call at stack depth 3 got (arg2, arg2): logb(a, b + logb(2,x)) returned 2.321928 instead of 2.807355)."
+  ],
+  "pick_this_over_siblings_when": "Pick mexce over RapidUDF when you need a dependency-free single header that JIT-compiles one scalar formula at a time on x86; RapidUDF's catalogued win comes from vectorised evaluation over arrays, which mexce does not offer. Use AsmJit or sljit when you are generating your own machine code rather than evaluating math strings, and dstogov/ir or TPDE when you need a compiler IR and back-end rather than a formula evaluator.",
+  "verified_claims_summary": "On a GitHub Actions ubuntu-latest runner (CPU not stated; at the table's commit the job ran CMake's default C++ compiler with no GCC/Clang split, and the harness took the median of 11 back-to-back trials of 100 evaluations), 44,229 expressions evaluated by mexce's SSE2 backend totalled 27.2 ms versus 32.7 ms for the same expressions compiled as static -O3 C++ functions called through a function-pointer table (1.20x, derived from page data); the x87 backend was 0.94x. The native corpus calls only sin, cos, tan, pow, abs, sqrt, exp and log, with no floor/ceil/round/trunc, so the verifier's roundsd-versus-libm concern cannot explain the gap.",
+  "status_note": "Active (last commit 2026-09-24, 253 commits, 0 issues filed), BSD-2-Clause single header that is easy to vendor, but single-author with 6 stars; the README table is from January 2026 code and an older harness, measured before the June 2026 fixes for B1 (miscompile), B2 (rejected '>'), B3 (page leak) and B5 (strict-mode algebra), with harness asymmetries (constant-expression shortcut, strict-mode simplifications) favouring mexce and B4 (no CPUID gate for roundsd) still open.",
+  "sources_read": [
+    "https://github.com/imakris/mexce",
+    "https://github.com/imakris/mexce/commits",
+    "https://github.com/imakris/mexce/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/README.md",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/mexce.h",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/test/benchmark.cpp",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/test/benchmark_native_expressions.h",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/test/benchmark_native_expressions.inc",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/test/unit_tests.cpp",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/analysis/improvement_report.md",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/analysis/performance_acceptance.md",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/.github/workflows/main.yml",
+    "https://raw.githubusercontent.com/imakris/mexce/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/imakris/mexce/cb358747119cdaa32b54add7cdb5b81269252026/test/benchmark.cpp",
+    "https://raw.githubusercontent.com/imakris/mexce/cb358747119cdaa32b54add7cdb5b81269252026/CMakeLists.txt",
+    "https://raw.githubusercontent.com/imakris/mexce/cb358747119cdaa32b54add7cdb5b81269252026/.github/workflows/main.yml",
+    "https://raw.githubusercontent.com/imakris/mexce/cb358747119cdaa32b54add7cdb5b81269252026/mexce.h"
+  ],
+  "confidence": 0.6
+}

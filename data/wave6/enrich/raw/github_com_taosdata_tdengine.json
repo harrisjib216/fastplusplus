@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/taosdata/tdengine",
+  "one_liner": "Clustered C time-series database for IoT; about 8.5x InfluxDB 2.0 and 5.6x TimescaleDB ingest in one rival-run shootout.",
+  "what_it_does": "TDengine is a server (taosd) for time-stamped sensor data, with a client library (libtaos, C API) and JDBC, Python, Go, Rust and other connectors. Data is modelled as one subtable per device, created from a supertable that fixes the metric columns and tag columns, and queried with TDengine SQL extended with time-series clauses (INTERVAL windows, LAST/LAST_ROW, downsampling), plus built-in stream processing, data subscription and the TDgpt forecasting agent. It is not a drop-in for InfluxDB or TimescaleDB: the schema model, SQL dialect and client protocol differ, so ingestion code and queries have to be rewritten.",
+  "how_it_is_fast": "Each device's rows go to its own subtable, and subtables are hashed onto vnodes; each vnode has its own worker thread, WAL, memory pool and storage, so writes for different devices do not contend. Ingest goes WAL then an in-memory MemTable (red-black tree across tables, skip list per table) that is flushed in time-partitioned file groups (an LSM layout), so a block holds one table's data for one time range and the head file acts as a block-range (BRIN) index. Blocks are stored column by column with type-specific primary encoding (delta timestamps, bit-packed booleans, zigzag integers, delta-of-delta floats, dictionary strings) followed by LZ4, zlib, zstd or xz, and an sma file keeps per-block sum/min/max so some aggregates skip the data. An optional last/last_row cache answers current-value queries from memory.",
+  "when_to_use": [
+    "IoT or industrial telemetry: many devices (high cardinality) each emitting a fixed set of metrics at regular intervals, which maps directly onto supertables and per-device subtables.",
+    "High ingest on small machines: in the rival-run shootout TDengine 2.0 took about 630K points/s inside a 2-vCPU, 4 GB container with about 500 MB RSS, the lowest memory of the six databases tested.",
+    "Dashboards that mostly read the current value of each device (LAST/LAST_ROW cache via CACHEMODEL) or downsample with INTERVAL windows.",
+    "You want clustering with Raft-replicated vgroups, stream processing and subscriptions in the open-source edition instead of adding Kafka, Redis or a stream processor.",
+    "Storage cost matters for slowly changing sensor values, where delta, zigzag and delta-of-delta encoding plus a second general-purpose codec compress well."
+  ],
+  "when_not_to_use": [
+    "Low-latency point and range queries matter more than ingest: in the same shootout TimescaleDB answered precise-point queries in 5.71 ms on average (median 1.45 ms) against TDengine's 13.35 ms (median 7.94 ms), and agg-range in 7.05 ms against 12.34 ms.",
+    "You need the highest write rate among TSDBs: Apache IoTDB (1.50M points/s) and TickTock (3.20M points/s) both beat TDengine (0.63M) in that run.",
+    "AGPL-3.0 is not acceptable, for example a closed-source product that exposes the database to users over a network.",
+    "Relational or ad hoc analytical workloads (wide joins, arbitrary schemas, PostgreSQL extensions and tooling); TDengine SQL is shaped around per-device tables with a fixed schema.",
+    "Windows production deployments or embedding as an in-process library: the README calls Windows support in the open-source tree limited, and building as a library (BUILD_AS_LIB) is off by default."
+  ],
+  "integration": {
+    "form": "server (taosd) plus client shared library libtaos.so (C API) and language connectors; Docker images and installer packages",
+    "dependencies": "bundled external libraries built with -DBUILD_CONTRIB=ON (xxhash, zstd, lz4 and others into .externals/), libuv, RocksDB (prebuilt from deps/ on Linux), GEOS, PCRE2, LZMA2, lemon parser; Go 1.23+ for taosAdapter/taosKeeper; Rust bindings on by default",
+    "min_toolchain": "CMake >= 3.21 with a GCC/Clang build-essential toolchain; C language standard not documented in the README; note CMAKE_BUILD_TYPE defaults to Debug, so pass -DCMAKE_BUILD_TYPE=Release",
+    "platforms": "Linux (Ubuntu 18.04+, CentOS 7+) on x86-64 and ARM64 as the primary platform; macOS 10.15+ for local development; Windows limited in the open-source tree",
+    "thread_safety": "Server is multi-threaded with one worker thread per vnode; client-library thread-safety rules are not documented in the pages read here.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the shootout's per-query read 'throughput' is not an independent measure of query speed. Clients run a closed loop with a fixed 9:1 write:read mix split over five query types, so each query type gets about 1/50 of all operations and its throughput follows the write rate: InfluxDB shows 17 for four query types, and TDengine's latest-point 140 equals its write rate (629,904 points/s over 100 points per batch, times 10/9, over 50; the 100-point batch is consistent with 300 clients at the 45.4 ms average write latency; derived from page data). The 3.5x to 140x read ratios over InfluxDB and TimescaleDB therefore restate the write gap (and TimescaleDB's 10-client setup), while the wiki's own latency tables show TimescaleDB faster than TDengine on precise-point and agg-range queries.",
+    "TDengine's precise-point and agg-range throughput (59 and 60) is well below its latest-point 140, while every other database shows equal values for those three types (InfluxDB 17/17/17, IoTDB 332/332/332, TickTock 712/712/712), which suggests roughly 58% of TDengine's precise-point and agg-range queries returned no rows (derived from page data). A plausible cause is in the fork's TDengine adaptor: inserts format timestamps as second-resolution 'yyyy-MM-dd HH:mm:ss' strings in the JVM's default time zone while the JDBC URL sets timezone=UTC and queries use epoch-millisecond literals; the wiki does not report empty results.",
+    "Second-resolution insert strings also collide when the step between rows is under one second, and TDengine 2.x's default UPDATE 0 discards later rows with an existing timestamp without error while still counting them as affected (2.0 FAQ, search snippet only). The wiki does not publish POINT_STEP (the fork's default config uses 5000 ms, which is safe), but TDengine's reported write I/O of 100-300 KB/s at 630K points/s works out to under 0.5 bytes per point, against about 6.7 for InfluxDB (derived from page data), which is unexplained.",
+    "The adaptor sends an extra 'use <db>' statement before every insert and every query (an extra round trip that penalizes TDengine), runs through taos-jdbcdriver 2.0.32 with HikariCP, and the wiki notes TDengine still had 10-20% CPU headroom; all figures are for the 2.0.22.0 image, while the current line is 3.4.x with a different storage engine and cluster design."
+  ],
+  "pick_this_over_siblings_when": "QuestDB is the other time-series database in this category (Apache-2.0, catalogued for scan throughput against ClickHouse); pick TDengine when the data is per-device IoT telemetry with tags and you want open-source clustering, stream processing and last-value caching, and pick QuestDB when licence or SQL analytics over a few large tables matter more. The other siblings (DuckDB-class engines, Doris, StarRocks, ClickHouse challengers) suit ad hoc analytical SQL rather than continuous device ingest.",
+  "verified_claims_summary": "In a one-off wiki shootout by the author of the rival TickTock (its fork of THULAB's IoTDB-benchmark, 9:1 write:read mix, each database in a 2-vCPU / 4 GB Docker container on a Ryzen 5 5600H laptop with a 5400 RPM HDD and the client on the same machine), TDengine 2.0.22.0 ingested 629,904 points/s against InfluxDB 2.0's 74,534 (about 8.5x) and TimescaleDB 2.6.0-pg12's 112,494 (about 5.6x, though TimescaleDB ran 10 clients with 100-sensor batches), using about 500 MB RSS; its average write latency per 100-point batch was 45.4 ms against InfluxDB's 380.95 ms. On query latency TDengine beat InfluxDB clearly (precise-point average 13.35 ms vs 165.15 ms) but trailed TimescaleDB (5.71 ms), and the read-throughput rows mostly mirror the write rate under the fixed operation mix.",
+  "status_note": "Actively developed (25.2k stars, about 87k commits on main, last commit 2026-09-02, releases in the 3.4.x line) by TDengine's vendor under AGPL-3.0; the only numbers here are from a 2.x-era rival shootout, so re-benchmark the 3.x engine on your own workload, or use the vendor's public TSBS fork (taosdata/tsbs), before relying on the ratios.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/taosdata/TDengine/HEAD/README.md",
+    "https://github.com/taosdata/TDengine",
+    "https://github.com/taosdata/TDengine/releases",
+    "https://github.com/taosdata/TDengine/tree/main/docs/en",
+    "https://github.com/taosdata/TDengine/tree/main/docs/en/15-internals",
+    "https://raw.githubusercontent.com/taosdata/TDengine/main/docs/en/15-internals/01-arch.md",
+    "https://raw.githubusercontent.com/taosdata/TDengine/main/docs/en/15-internals/02-storage.md",
+    "https://raw.githubusercontent.com/taosdata/TDengine/main/docs/en/15-internals/07-cache.md",
+    "https://raw.githubusercontent.com/taosdata/TDengine/main/docs/en/15-internals/08-compress.md",
+    "https://github.com/taosdata/TDengine/issues?q=is%3Aissue+is%3Aopen+memory+leak",
+    "https://raw.githubusercontent.com/wiki/ytyou/ticktock/Performance-comparison:-InfluxDB,-TimescaleDB,-IoTDB,-TDEngine,-OpenTSDB-v.s.-TickTock.md",
+    "https://raw.githubusercontent.com/ylin30/ticktock-wiki/master/perf/x86-iotdb/rw1_9/througput_tbl.jpg",
+    "https://raw.githubusercontent.com/ylin30/ticktock-wiki/master/perf/x86-iotdb/rw1_9/resptime_precise_point_tbl.jpg",
+    "https://raw.githubusercontent.com/ylin30/ticktock-wiki/master/perf/x86-iotdb/rw1_9/resptime_agg_range_tbl.jpg",
+    "https://raw.githubusercontent.com/ylin30/ticktock-wiki/master/perf/x86-iotdb/rw1_9/resptime_w_tbl.jpg",
+    "https://github.com/ytyou/iotdb-benchmark",
+    "https://github.com/ytyou/iotdb-benchmark/tree/master/tdengine",
+    "https://raw.githubusercontent.com/ytyou/iotdb-benchmark/master/tdengine/pom.xml",
+    "https://github.com/ytyou/iotdb-benchmark/tree/master/tdengine/src/main/java/cn/edu/tsinghua/iotdb/benchmark/tdengine",
+    "https://raw.githubusercontent.com/ytyou/iotdb-benchmark/master/tdengine/src/main/java/cn/edu/tsinghua/iotdb/benchmark/tdengine/TDengine.java",
+    "https://github.com/ytyou/iotdb-benchmark/tree/master/configuration/conf",
+    "https://raw.githubusercontent.com/ytyou/iotdb-benchmark/master/configuration/conf/config.properties",
+    "https://github.com/ytyou/ticktock",
+    "WebSearch snippet: TDengine 2.0 FAQ (docs.tdengine.com/2.0/faq, not opened) says with UPDATE 0 later rows with the same timestamp are discarded without error and still counted in affected rows"
+  ],
+  "confidence": 0.7
+}

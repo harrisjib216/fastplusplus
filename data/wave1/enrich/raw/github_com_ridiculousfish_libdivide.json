@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/ridiculousfish/libdivide",
+  "one_liner": "Header-only C/C++ library replacing division by a runtime-invariant integer with multiply-shift sequences; about 6.7x over hardware DIV.",
+  "what_it_does": "libdivide precomputes a magic multiplier and shift for a divisor known only at run time and then divides by it without a DIV instruction. In C++ you construct libdivide::divider<T> (or branchfree_divider<T>) once and write n / fast_d or n /= fast_d for 16-, 32- and 64-bit signed and unsigned integers, and also for SSE2/AVX2/AVX512, NEON and SVE vectors when the matching LIBDIVIDE_* macro is defined; the C API is libdivide_<type>_gen plus libdivide_<type>_do. constant_fast_div.h and .hpp add macros and templates for 16-bit constant divisors on 8-bit AVR parts, where avr-gcc does not optimize constant division.",
+  "how_it_is_fast": "It applies division by invariant integers using multiplication (the Granlund-Montgomery / Hacker's Delight 'magic number' method): the quotient is the high half of n times a precomputed magic number, optionally with an add-and-shift fix-up step, and powers of two (and 1) reduce to a shift. The default 'branchfull' divider picks one of three paths (algo 0 shift, 1 multiply, 2 multiply plus add marker) with a branch the compiler can hoist out of a loop, while the branchfree divider uses a single straight-line sequence for arrays of different divisors. Vector versions use SIMD high-multiplies, which hardware lacks an integer-divide counterpart for.",
+  "when_to_use": [
+    "Hot loops that divide many integers by the same divisor known only at run time (table sizes, strides, user-configured periods, bucketing).",
+    "64-bit unsigned division on x86 cores with slow 64-bit dividers: the README sample shows 9.07 ns for hardware versus 1.35 ns for ordinary divisors (6.7x) and the author's Xeon 8275CL run (snippet only) 7.9x for d = 7.",
+    "SIMD code that must divide packed 16- or 32-bit lanes (SSE2, AVX2, AVX512, NEON, SVE), since there is no hardware vector integer divide.",
+    "Microcontrollers without a hardware divider, such as AVR (the CI builds an ATmega2560 target).",
+    "Iterating over an array of different divisors: precompute branchfree_divider objects so the division has no data-dependent branches."
+  ],
+  "when_not_to_use": [
+    "The divisor is a compile-time constant: compilers already emit the multiply-shift sequence.",
+    "The divisor changes nearly every time: building a divider cost 1.3 ns for shift divisors and 29 ns for u64 multiply-path divisors in the README sample, about three hardware divides.",
+    "CPUs with fast dividers (Apple M1, recent Intel and AMD) and 32-bit types, where the margin is small: the author's 2021 Xeon run gives 2.6x for u32 (snippet only), and the README's 90-cycle latency premise is dated.",
+    "You need remainders (there is no operator% or modulo API), or 64-bit vector division on x86, which the README says is much slower than 32-bit because x86 lacks a 64x64-to-128-bit vector multiply."
+  ],
+  "integration": {
+    "form": "header-only (libdivide.h; optional constant_fast_div.h and constant_fast_div.hpp)",
+    "dependencies": "none (stdint.h, plus stdio.h/stdlib.h on hosted targets and the intrinsic headers of the enabled vector ISA)",
+    "min_toolchain": "C99 for the C API (the CI builds a test_c99 program); C++11 for the C++ divider classes and the branchfree_divider alias; constexpr null-construction needs C++14 constexpr or C++20 on MSVC; GCC, Clang and MSVC are tested in CI",
+    "platforms": "any, with a portable scalar path down to 8-bit AVR; vector paths for x86 SSE2/AVX2/AVX512 and Arm NEON/SVE/SVE2; uses __int128 or MSVC __umulh intrinsics where available",
+    "thread_safety": "Not documented; a divider is a small struct that is not modified after construction and divide() is const, so a shared const divider can be read concurrently (inference from the API).",
+    "drop_in_for_baseline": "partial: n / d becomes n / fast_d after constructing libdivide::divider<T> fast_d(d), with quotients checked against hardware division, but there is no modulo, a zero divisor aborts at construction on hosted builds, and an unsigned branchfree divider cannot be 1"
+  },
+  "gotchas": [
+    "Benchmark timer bug (harness flaw): test/timer.hpp, added in June 2021 by PR #73, converts gettimeofday's tv_usec with '* MICROS_PER_SEC' (1,000,000) instead of 1,000, so on Linux and macOS the benchmark prints per-divide times about 1000x too large. Ratios between columns are unaffected because every column shares the error, and runs that cross a second boundary underflow to huge values that the min-of-30 discards. The README's sub-10 ns sample therefore came from Windows (QueryPerformanceCounter path) or from the pre-2021 harness, whose nanoseconds() helper was correct.",
+    "The benchmark's auto-vectorization guard only matches compiler IDs 'Clang' and 'GNU' (and the C++ benchmark target takes the C compiler's flag, test_c99 the C++ one), so AppleClang and MSVC builds get no -fno-vectorize and their 'scalar' columns may be compiler-vectorized; this could overstate scalar speedups on macOS, but it was not measured here.",
+    "Error handling is abort(): a zero divisor, or 1 for an unsigned branchfree divider, prints a message and aborts on hosted builds. On AVR and freestanding builds LIBDIVIDE_ERROR is empty, so the bad divider goes through silently (issue #112 reported division by 0 hanging non-AVR microcontrollers).",
+    "Speedups depend heavily on the divisor and the CPU: the README's 12.2x and 22.7x headline ratios are for divisor 1, where libdivide is just a shift. Issue #68 (i7-4770HQ, macOS) reported hardware 3.241 ns against libdivide scalar 14.439 ns and was closed with no visible explanation. Issue #125 (Arrow Lake, clang 19) timed hardware divq at 1.91 against 5.74 for libdivide's portable 128/64 routine used when generating u64 dividers."
+  ],
+  "pick_this_over_siblings_when": "Pick libdivide over fastmod when you need 64-bit or signed division, SIMD vector division, a C API or AVR support; fastmod targets 32-bit x % d and x / d and gives you the remainder, which libdivide does not provide. The other catalogued siblings (xsimd, SLEEF, fmath) are floating-point or general SIMD libraries and do not replace integer division.",
+  "verified_claims_summary": "In the README sample from test/benchmark (integer type, CPU and compiler not stated; the default type is u64; each run sums quotients of about 524k uniformly random full-width numerators, and the best of 30 runs is kept and checked against the hardware result), hardware division took 9.07-9.68 ns per divide. libdivide scalar took 0.78-0.79 ns for divisor 1 and powers of two (11.5-12.2x, shift only) and 1.35 ns for divisors 3, 5 and 6 (6.7x); vector took 0.426 and 1.334 ns. The author's 2021 blog (snippet only) measured d = 7 on a Xeon 8275CL: u64 hardware 6.998 ns against scalar 0.891 ns (7.9x) and AVX512 0.492 ns, and 2.6x for u32.",
+  "status_note": "Active (v5.4.0 tagged 2026-09-06, last commit 2026-10-04, 1.4k stars, 1 open issue), dual-licensed Zlib or BSL-1.0, header-only and easy to vendor; it appears in search results as a Fedora/EPEL package and a Fuchsia third_party mirror. Its own benchmark has a POSIX timer bug since 2021 that scales absolute times by 1000x (ratios intact), and an auto-vectorization guard that misses AppleClang and MSVC.",
+  "sources_read": [
+    "https://github.com/ridiculousfish/libdivide",
+    "https://github.com/ridiculousfish/libdivide/commits",
+    "https://github.com/ridiculousfish/libdivide/commits/master/README.md",
+    "https://github.com/ridiculousfish/libdivide/commits/master/test/timer.hpp",
+    "https://github.com/ridiculousfish/libdivide/commit/6b6089d07074fb7289afc812cb4e3be495af6611",
+    "https://github.com/ridiculousfish/libdivide/issues?q=is%3Aissue",
+    "https://github.com/ridiculousfish/libdivide/issues?q=benchmark",
+    "https://github.com/ridiculousfish/libdivide/issues/68",
+    "https://github.com/ridiculousfish/libdivide/issues/125",
+    "https://github.com/ridiculousfish/libdivide/pull/174",
+    "https://github.com/ridiculousfish/libdivide/pull/176",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/README.md",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/libdivide.h",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/doc/CPP-API.md",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/test/benchmark.cpp",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/test/benchmark.h",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/test/random_numerators.hpp",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/HEAD/test/timer.hpp",
+    "https://raw.githubusercontent.com/ridiculousfish/libdivide/badc03f/test/benchmark.cpp",
+    "WebSearch: libdivide benchmark modern CPU hardware division Ice Lake Zen 4 speedup u64 (snippets: ridiculousfish.com blog, lists.puremagic.com D forum, src.fedoraproject.org, fuchsia.googlesource.com)",
+    "WebSearch: Benchmarking division and libdivide on Apple M1 (snippets only; ridiculousfish.com blocked)"
+  ],
+  "confidence": 0.7
+}

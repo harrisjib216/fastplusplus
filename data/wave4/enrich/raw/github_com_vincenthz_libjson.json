@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/vincenthz/libjson",
+  "one_liner": "Tiny interruptible SAX-style (callback) JSON parser and printer in C; its suite wins over nlohmann/json come from harness code.",
+  "what_it_does": "Two files (json.c, json.h) give a streaming parser that you feed bytes or chunks of any size (json_parser_string/json_parser_char) and that calls one callback per event (object/array begin and end, key, string, int, float, true, false, null), plus a printer that turns the same events into compact or indented text through an output callback. There is no object model and no number conversion: numbers reach the callback as validated strings. An optional json_parser_dom helper builds a tree through three user callbacks. It is not a drop-in for nlohmann/json: you write the tree, the number conversion and the serialiser walk yourself.",
+  "how_it_is_fast": "A hand-written table-driven state machine (derived from json.org's JSON_parser.c): each input byte goes through a 128-entry character-class table, a 37-state by 34-class transition table, a parallel buffer-policy table and a UTF-8 header/continuation table, with no backtracking and no number conversion. Parser state is a small struct (256-byte nesting stack, 4 KB value buffer by default; the suite's SAX statistics run peaked at 4,352 bytes). There is no SIMD or bulk scanning: string bytes are copied into the value buffer one at a time, and the printer calls the output callback once per string byte, so throughput lags RapidJSON-class parsers.",
+  "when_to_use": [
+    "Input arrives in arbitrary chunks from a socket, pipe or serial line and you want to parse it incrementally with bounded state (no full-document buffer, about 4.3 KB of parser memory in the suite's SAX run).",
+    "Pass-through or reformatting tools (lint, pretty-print, filters) that must keep numbers verbatim: big integers and long decimals are handed over as strings, never rounded.",
+    "Number-heavy SAX workloads where YAJL is the incumbent: in the 2016 suite the SAX round-trip of canada.json took 14.7 ms vs YAJL 112.8 ms, and SAX statistics 11.5 vs 40.9 ms.",
+    "Small embedded or plain-C programs that want a dependency-free parser with optional nesting and size limits, custom allocators and optional C or # comments (jsonstat code-size binary 26,036 bytes vs 42,132 for nlohmann).",
+    "You already have your own tree type (GLib hash tables, an arena) and want the parser to fill it directly through callbacks."
+  ],
+  "when_not_to_use": [
+    "You want a DOM or typed access like nlohmann/json: the suite's tree built through json_parser_dom parsed 1.48x slower than nlohmann v2.0.3 (107.2 vs 72.5 ms over three files) and far slower than cJSON (24.7 ms), udp/json-parser (47.3 ms) or RapidJSON (7.9 ms).",
+    "Raw parse throughput matters: the byte-at-a-time state machine has no SIMD; SAX statistics totalled 22.5 ms vs RapidJSON 6.3 ms, and on string-heavy files it lost to YAJL (citm_catalog 7.95 vs 4.74 ms, twitter 3.06 vs 1.71 ms).",
+    "Untrusted input where strict UTF-8 matters: the validator accepts overlong C0/C1 leaders, 5- and 6-byte forms (F8-FD) and code points above U+10FFFF, and \\u0000 yields NUL bytes inside values (open issue #31).",
+    "Documents whose root is a scalar (allowed by RFC 7159/8259): the start state only accepts '{' or '[' (RFC 4627 behaviour).",
+    "Static linking into proprietary code: LGPL 2.1 or 3.0 only, and the repo carries no LICENSE file."
+  ],
+  "integration": {
+    "form": "source-drop (json.c + json.h; the Makefile also builds a static/shared lib and jsonlint on Linux/BSD)",
+    "dependencies": "none (libc only)",
+    "min_toolchain": "not documented; plain C using stdint.h, inline and // comments (C99 or C89 with extensions), with shims for MSVC before 2010; header has extern \"C\" guards for C++",
+    "platforms": "any (portable byte-wise C, no SIMD); the author recommends embedding the two files rather than using the build system on Windows or macOS",
+    "thread_safety": "not documented; by code reading all mutable state lives in caller-owned json_parser, json_printer and json_parser_dom structs and the lookup tables are only read, so one context per thread is independent",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the numbers (nativejson-benchmark src/tests/vincenthzlibjsontest.cpp, unchanged since 2016): tree_print ignores its print_func argument and always calls json_print_raw, so the Prettify row is compact output and void; it emits false and null as JSON strings, so citm_catalog and twitter Stringify output is wrong; numbers are formatted by harness sprintf and parsed by harness strtoll/atof; and the Parse row (the one libjson loses) includes the harness's grow-by-one realloc per appended element (334,389 allocations on canada.json vs 170,254 for nlohmann).",
+    "Conformance correction: sample/conformance.csv is stale. Harness fixes 274281a and 95936a1 (2016-09-10, a day after the sample run) give 34 of 34 parse validation and 9 of 9 strings; the remaining 8 of 66 double failures are harness strtoll saturating big integers at 9.2233720368547758e18, and all 10 of 27 round-trip failures are harness artifacts (false/null printed as strings, %.17g formatting). None is attributable to libjson's parser.",
+    "Security history: json_parser_dom's dom_push grew its stack by newsize bytes instead of elements (heap overflow past 1,024 nesting levels). The fix e03b4a9 was authored 2018-10-06 but only merged to master on 2024-04-27 (PR #27), so copies vendored before 2024 are vulnerable. Issues #31-#33 (2026-06-15: lax UTF-8, uint32 overflow in dom_push, stack[-1] write on direct API misuse) are open with no maintainer reply; json_parser_dom_callback also ignores dom_push's out-of-memory return.",
+    "API quirks: the README names json_printer_init/_pretty/_raw but the header exports json_print_init, json_print_pretty and json_print_raw; printer functions always return 0 and ignore the output callback's return value; json_parser_dom_init zeroes the struct before allocating, so custom allocators never apply to the initial 1,024-entry stack; nesting and size limits default to 0 (unlimited). Unrelated projects named libjson (SourceForge, xnacly) sit in the same category."
+  ],
+  "pick_this_over_siblings_when": "Pick it over cJSON, json.h or udp/json-parser only when you need a resumable, chunk-fed callback parser with constant memory and verbatim number strings; those siblings parse to a DOM 2-6x faster in the same suite. Compared with jsmn (also no number conversion), libjson keeps its own state across arbitrary chunk boundaries instead of needing the whole buffer and a token array; for raw speed use yyjson or simdjson.",
+  "verified_claims_summary": "In nativejson-benchmark's 2016-09-09 sample run (Core i7-4980HQ, Apple clang 7.0, -O3 -march=native, libjson at bd0cad8 vs nlohmann/json v2.0.3), a harness tree printer calling libjson's json_print_raw stringified the three files in 68.8 ms vs 87.7 ms (about 1.28x, derived from page data) while writing false/null as strings, the Prettify win is void (no pretty-printing happened), and the Parse row that uses libjson's parser was 1.48x slower than nlohmann. libjson's own SAX rows have no nlohmann baseline; they beat YAJL on number-heavy canada.json and lose to it on the string-heavy files.",
+  "status_note": "Low-activity but alive (PR merges in 2024-04 and 2026-05, last commit 2026-05-12) with three security issues from 2026-06 unanswered; LGPL-2.1-only OR LGPL-3.0-only per the file headers (no LICENSE file), small enough to vendor and audit, and kept with tier C because every row that beats nlohmann times buggy benchmark code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/README.md",
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/json.c",
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/json.h",
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/Makefile",
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/jsonlint.c",
+    "https://raw.githubusercontent.com/vincenthz/libjson/HEAD/documentation.md",
+    "https://github.com/vincenthz/libjson",
+    "https://github.com/vincenthz/libjson/commits/master",
+    "https://github.com/vincenthz/libjson/issues?q=is%3Aissue",
+    "https://github.com/vincenthz/libjson/issues/24",
+    "https://github.com/vincenthz/libjson/issues/31",
+    "https://github.com/vincenthz/libjson/issues/32",
+    "https://github.com/vincenthz/libjson/issues/33",
+    "https://github.com/vincenthz/libjson/pull/27",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/src/tests/vincenthzlibjsontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/sample/conformance_Vinenthz_libjson%20(C).md",
+    "https://github.com/miloyip/nativejson-benchmark/commits/master/src/tests/vincenthzlibjsontest.cpp",
+    "https://github.com/miloyip/nativejson-benchmark/commit/274281a",
+    "https://github.com/miloyip/nativejson-benchmark/commit/95936a1",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail02.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/jsonchecker/fail32.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip01.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip03.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip10.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip20.json",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/HEAD/data/roundtrip/roundtrip27.json"
+  ],
+  "confidence": 0.8
+}
