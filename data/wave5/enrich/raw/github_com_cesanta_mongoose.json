@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/cesanta/mongoose",
+  "one_liner": "Two-file C networking library with its own bare-metal TCP/IP stack; vendor reports about 3.8x lwIP raw's HTTP requests/s on an STM32F746.",
+  "what_it_does": "Mongoose is an amalgamated C library (mongoose.c plus mongoose.h) that provides an event-driven HTTP/HTTPS server and client, WebSocket, MQTT client, SNTP, DNS, Modbus-TCP, a built-in TLS 1.3 stack and firmware OTA. On microcontrollers it can run its own TCP/IP stack (MG_ENABLE_TCPIP=1) on top of a small driver interface (init, tx, rx, poll) with drivers for STM32, NXP i.MX RT, SAME54, Renesas RA, TI, Infineon, W5500 and others, or sit on lwIP, Zephyr, FreeRTOS-TCP or BSD sockets. The API is one event manager (mg_mgr) polled from a single task, with per-connection callbacks (MG_EV_HTTP_MSG and so on), so it replaces lwIP plus an HTTP server rather than dropping into lwIP's raw or socket API.",
+  "how_it_is_fast": "The built-in stack has no sockets layer and no per-socket buffering: received frames are parsed in the polling loop and the TCP payload is copied once into the connection's receive buffer, then the HTTP parser hands the callback mg_str views into that buffer instead of copying headers. Everything runs in one cooperative event loop, with interrupt-driven drivers feeding a lock-free single-producer, single-consumer frame queue, so there are no task switches or mailbox handoffs between driver, stack and application. Part of the gap is also the stack doing less TCP work: it keeps no congestion-control state, drops out-of-order segments rather than queueing them, uses a fixed 6000-byte receive window and, by default, keeps no retransmission queue (see gotchas).",
+  "when_to_use": [
+    "Bare-metal or small-RTOS MCU with on-chip Ethernet (STM32F7/H5/H7, i.MX RT, SAME54, RA) or a W5500 that needs a device web UI, REST API, WebSocket or MQTT with little flash and RAM.",
+    "Replacing a CubeMX lwIP plus httpd integration when integration effort and footprint matter: the vendor's integration article reports 3 files vs 279 and about 50 KB vs 67 KB flash (snippet only).",
+    "Local-network device dashboards where request latency and requests/s on a lossless LAN link matter more than WAN robustness.",
+    "Projects wanting one networking API that also builds on Linux, macOS and Windows (epoll on Linux, poll elsewhere) for host-side testing."
+  ],
+  "when_not_to_use": [
+    "Lossy, slow or high-latency links (cellular, Wi-Fi at range, WAN) with the default build: the built-in stack does not resend lost data unless the retransmission queue is enabled, and issue #3507 reports silent WebSocket data loss over GSM/LTE.",
+    "Closed-source products that cannot buy Cesanta's commercial licence: the open licence is GPL-2.0 only.",
+    "High-throughput Linux servers: it is a single-threaded event loop aimed at embedded devices; the catalogued Linux servers (Lwan, H2O, libuhttpd, Drogon) have published multi-core results and Mongoose has none.",
+    "Bulk transfers where TCP window size and congestion control matter: the receive window is a fixed 6000 bytes (MG_TCPIP_WIN) and there is no cwnd or slow start.",
+    "Code that must call the network API from several threads: all mg_* calls must come from the task that runs mg_mgr_poll, with mg_wakeup() as the only cross-thread entry."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (optional: lwIP, Zephyr, FreeRTOS-TCP or Keil RL-TCPnet instead of the built-in stack; mbedTLS, OpenSSL or wolfSSL instead of the built-in TLS)",
+    "min_toolchain": "C99 or newer (mongoose.h errors on older C), or C++; test/ has GCC, Keil, TI CGT, MCUXpresso, CubeIDE, ESP-IDF, Zephyr, pico-sdk and Arduino builds",
+    "platforms": "Built-in stack: MCUs with listed Ethernet drivers (STM32F/H, NXP i.MX RT and RW612/MCXN, Microchip SAME54, Renesas RA, Infineon XMC, TI TM4C/TMS570), W5500/W5100, CYW43 Wi-Fi, cellular via PPP/AT; otherwise any OS with BSD sockets (Linux, macOS, Windows, ESP-IDF, Zephyr)",
+    "thread_safety": "Not thread-safe: call every mg_* function from the task that runs mg_mgr_poll; mg_wakeup() is the documented thread- and ISR-safe way in, and drivers push frames from ISRs through mg_tcpip_qwrite()'s lock-free queue.",
+    "drop_in_for_baseline": "partial: replaces lwIP and its HTTP server as a whole stack with Mongoose's own event API; it can also run on top of lwIP (MG_ENABLE_LWIP=1), but then lwIP's performance applies and the claimed gain does not."
+  },
+  "gotchas": [
+    "No TCP data retransmission by default: mg_io_send advances the sequence number and write_conn deletes the bytes from c->send, so a lost outbound segment is never resent unless MG_ENABLE_TCPIP_TCPRTX=1 or ifp->enable_tcp_retransmit is set. The optional queue only arrived in PR #3682 (merged 2026-09-08); PR #2297 (2023) titled 'implemented tcp retransmission' only resent ACKs. The 1080 req/s figure therefore compares a stack without a retransmit queue, congestion control or out-of-order reassembly against lwIP raw, whose tcp_pcb keeps unacked, ooseq, cwnd and ssthresh state: a harness flaw in the comparison, not just a tuning difference.",
+    "Out-of-order TCP segments are dropped and re-ACKed rather than queued, and the receive window is a fixed 6000 bytes (MG_TCPIP_WIN), so throughput collapses with reordering or high bandwidth-delay paths.",
+    "Security history is heavy: GitHub lists ten advisories (two critical HTTP request-smuggling bugs, TLS CA-bundle chains accepted without signature checks, TCP-options and PPP out-of-bounds reads), plus CVE-2026-5246 (built-in TLS mTLS signature bypass, 7.0 to 7.20) and CVE-2026-73251 (forged-certificate acceptance, fixed in 7.23); stay on the latest release and prefer mbedTLS or wolfSSL if the built-in TLS worries you.",
+    "Every throughput number is first-party and seen only through search snippets that disagree with each other (lwIP raw 286 req/s in one, 16 req/s with a 160k image in another, plus a 3 req/s Zephyr sockets row); no lwIP configuration, compiler, flags or benchmark code is published, and the repo has no benchmark directory."
+  ],
+  "pick_this_over_siblings_when": "Pick Mongoose when the target is a microcontroller without an OS-level sockets stack; none of the catalogued siblings (Lwan, H2O, libuhttpd, Kore, Drogon) run bare metal. On Linux, pick libuhttpd for a small embedded-Linux server or Lwan or H2O for throughput, since those have published multi-core results and Mongoose has none.",
+  "verified_claims_summary": "Snippet only (mongoose.ws and eevblog.com are EGRESS_BLOCKED): an EEVblog forum post reports siege fetching a 'hello world' page from a Nucleo-F746ZG (Cortex-M7) over an Ethernet dongle at 1080 req/s with Mongoose's built-in stack (about 28 KB firmware) against 286 req/s for lwIP raw API (about 114 KB) and much lower rates for socket-based lwIP or Zephyr, with the snippets disagreeing on the lower rows. The benchmark_url article measures footprint and integration effort on a NUCLEO-F756ZG (about 50 KB vs 67 KB flash, 22.5 KB vs 31.5 KB RAM), not speed; compiler, flags, lwIP options and keep-alive settings are not published.",
+  "status_note": "Very active (commits into October 2026, header at 7.23, release 7.22 in June 2026) and easy to vendor as two files, but GPL-2.0-only or paid commercial, and the speed claim rests on unreproducible vendor numbers against a stack that does more TCP work (retransmission, congestion control, reordering), which the default Mongoose build still omits.",
+  "sources_read": [
+    "https://github.com/cesanta/mongoose",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/README.md",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/mongoose.h",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/src/net_builtin.c",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/src/net_builtin.h",
+    "https://raw.githubusercontent.com/cesanta/mongoose/HEAD/src/config.h",
+    "https://github.com/cesanta/mongoose/tree/master/test",
+    "https://github.com/cesanta/mongoose/tree/master/tutorials/stm32",
+    "https://github.com/cesanta/mongoose/tree/master/tutorials/stm32/nucleo-f746zg",
+    "https://github.com/cesanta/mongoose/releases",
+    "https://github.com/cesanta/mongoose/commits/master/src/config.h",
+    "https://github.com/cesanta/mongoose/security/advisories",
+    "https://github.com/cesanta/mongoose/issues?q=is%3Aissue+retransmission",
+    "https://github.com/cesanta/mongoose/pulls?q=is%3Apr+retransmission",
+    "https://github.com/cesanta/mongoose/issues/3507",
+    "https://github.com/cesanta/mongoose/pull/3682",
+    "https://github.com/cesanta/mongoose/pull/2297",
+    "https://raw.githubusercontent.com/lwip-tcpip/lwip/master/src/include/lwip/tcp.h",
+    "https://mongoose.ws/articles/lwip-vs-mongoose-tcpip-stack-integration/ (EGRESS_BLOCKED; WebSearch snippet only)",
+    "https://mongoose.ws/articles/lwip-vs-mongoose (not opened; WebSearch snippet only)",
+    "https://eevblog.com/forum/microcontrollers/ch32v307-risc-v-minicore-with-ethernet/msg5177385 (not opened; WebSearch snippet only)",
+    "https://mend.io/vulnerability-database/CVE-2026-73251/ (WebSearch snippet only)",
+    "https://www.wiz.io/vulnerability-database/cve/cve-2026-5246 (WebSearch snippet only)"
+  ],
+  "confidence": 0.55
+}
