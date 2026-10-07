@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/srdja/collections-c",
+  "one_liner": "LGPL C library of void*-based containers (hash table, tree map, list, deque); the hash-table wins over std::unordered_map come from a broken benchmark.",
+  "what_it_does": "Collections-C gives C programs generic containers that store void* (CC_Array, CC_List, CC_SList, CC_Deque, CC_HashTable, CC_TreeTable, CC_HashSet, CC_TreeSet, CC_Queue, CC_Stack, CC_PQueue, CC_RingBuffer, CC_TSTTable), plus a sized array and static or dynamic memory pools. Every call returns an enum cc_stat and passes results through out-parameters (cc_hashtable_get(table, key, &out)). Containers are built as a static or shared library with CMake. Since December 2020 every name carries a cc_/CC_ prefix, so code written against the older unprefixed API no longer compiles.",
+  "how_it_is_fast": "Nothing in it is tuned for speed. CC_HashTable is a separately chained table with power-of-two bucket counts, a 0.75 load factor and one malloc'd entry per key; it stores each entry's hash but never compares it before calling key_compare. CC_Deque is a power-of-two ring buffer of pointers that memmoves the shorter side on a middle insert, which explains why it beat std::deque on random-position inserts. CC_List allocates one node per element, and CC_TreeTable is a red-black tree; their reported wins over libstdc++ most likely come from a C++ benchmark built without optimisation.",
+  "when_to_use": [
+    "C code (not C++) that wants a broad set of ready-made containers behind a single prefixed API, and where speed only needs to be adequate.",
+    "Embedded or arena-style code that needs per-container allocator hooks (mem_alloc, mem_calloc, mem_free in each *Conf) or the bundled CC_StaticPool, which can put a container inside a stack buffer.",
+    "Workloads that insert into the middle of a pointer deque, where a contiguous ring buffer with memmove beats std::deque's segmented layout (measured 7.6x at 122,880 elements, though the C++ side was probably built at -O0).",
+    "Projects that can accept LGPL-3.0 terms (dynamic linking, or providing relinkable objects when linking statically)."
+  ],
+  "when_not_to_use": [
+    "Hash-heavy hot paths: CC_HashTable is a plain node-per-entry chained table with no measured advantage once the benchmark bug is removed; the catalogued C tables (khash, Verstable, uthash) are better choices.",
+    "Value-type storage: everything is void*, so ints must be cast into pointers and structs must be allocated separately and outlive the container; the table stores the caller's key pointer and does not copy it.",
+    "Non-string keys without extra code: the defaults are C-string keys (a djb2-style hash plus a strcmp comparator), and integer or struct keys need a hand-built conf with hash, key_length and a comparator (issue #130, open since 2020).",
+    "Projects that cannot meet LGPL-3.0 obligations, or that need thread-safe containers (nothing is documented as thread-safe).",
+    "Builds that use plain `cmake ..`: CMakeLists.txt sets only -Wall and no default build type, so the library compiles at -O0 unless you pass -DCMAKE_BUILD_TYPE=Release."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (libc); CMake 3.15+ per CMakeLists.txt (README says 3.5) and optionally pkg-config",
+    "min_toolchain": "a C compiler (gcc, clang, MSVC or MinGW); a fix for GCC 15+ builds (removed ATOMIC_VAR_INIT) landed on 2026-05-09",
+    "platforms": "any (Linux, macOS and Windows build instructions)",
+    "thread_safety": "not documented; no locking in the containers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "key_compare must be a strcmp-style comparator that returns 0 for equal keys (add, get and remove test `key_cmp(a, b) == 0`). If you pass an equality predicate that returns 1 for equal, it is silently inverted: add overwrites the value of a different key in the same bucket, and get and remove skip the matching key. The cdcontainers benchmark makes exactly this mistake (see status_note).",
+    "On 64-bit builds POINTER_HASH (cc_hashtable_hash_ptr) calls rotl32(k2, 33), which shifts a 32-bit value right by -1: undefined behaviour in C. It also stores fmix64 results in uint32_t variables, so the hash mixes only 32 bits per half.",
+    "Keys and values are borrowed pointers: destroying the table frees neither, and changing a key in place after insertion corrupts the table.",
+    "The README's own snippets have errors (the first CC_Array example calls cc_array_add(&array, ...), passing a CC_Array**, and the git clone URL has no owner), so follow the headers rather than the README."
+  ],
+  "pick_this_over_siblings_when": "Pick it only for its breadth: one LGPL library with pointer-based lists, deques, trees, a hash table and memory pools behind allocator hooks. For hashing speed, the catalogued C siblings klib khash (about 4x faster than std::unordered_map with a third of the memory at 50M keys) and Verstable or uthash are the better choices, and the C++ siblings (absl, Boost unordered_flat_map, ankerl) are far ahead.",
+  "verified_claims_summary": "A 2019 Google Benchmark by the author of the rival cdcontainers library (i7-7820HQ, Linux 4.15, compiler not stated, probably built at -O0) plots CcHashTable against std::unordered_map<int, void*> at up to 122,880 random ints. The hash-table rows are invalid: the harness passes IsEquil (returns 1 on equal) as key_compare, which Collections-C reads as 0 means equal, so per the published code the table keeps only about 42% of the inserted keys, every timed search returns not-found and every timed remove frees nothing (modelled from the code). The CcTreeTable (a proper 3-way CcCmp), CcList and CcDeque rows are not affected by this bug but carry the unoptimised-build caveat.",
+  "status_note": "Maintained at a low pace (last commit 2026-05-12, a GCC 15 build fix; 664 commits, 3.0k stars; LGPL-3.0) and usable as a general C container library, but the only catalogued speed evidence for its hash table is broken: the cdcontainers.benchmarks harness hands Collections-C an equality predicate where it expects a comparator, so the timed CcHashTable insert, remove and search do not perform real inserts, removes or lookups (a no-op class harness flaw like the MQF precedent).",
+  "sources_read": [
+    "https://github.com/srdja/Collections-C",
+    "https://github.com/srdja/Collections-C/commits/master",
+    "https://github.com/srdja/Collections-C/commits/master/src/hashtable.c",
+    "https://github.com/srdja/Collections-C/issues?q=is%3Aissue+hashtable",
+    "https://github.com/srdja/Collections-C/issues/130",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/README.md",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/cc_hashtable.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/include/cc_hashtable.h",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/cc_deque.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/cc_list.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/cc_treetable.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/include/cc_common.h",
+    "https://raw.githubusercontent.com/srdja/Collections-C/master/src/cc_common.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/5355d2f/src/hashtable.c",
+    "https://raw.githubusercontent.com/srdja/Collections-C/5355d2f/src/include/hashtable.h",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/run.sh",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/benchmarks/bench_map.cpp",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/benchmarks/bench_list.cpp",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/benchmarks/bench_deque.cpp",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/benchmarks/utils.cpp",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers.benchmarks/master/benchmarks/utils.hpp",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers/master/include/cdcontainers/hash.h",
+    "https://raw.githubusercontent.com/maksimandrianov/cdcontainers/master/include/cdcontainers/common.h"
+  ],
+  "confidence": 0.8
+}
