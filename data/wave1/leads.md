@@ -4,3 +4,4 @@
 - METL (TillHeinzel/METL): best double rival to ExprTk in the 2018 logs. Not catalogued.
 - MathPresso (kobalicek/mathpresso): JIT expression evaluator, unverified lead (not opened).
 - FastNoise2 (Auburn/FastNoise2): successor of FastNoiseSIMD; public harness Auburn/NoiseBenchmarking; README table clang-cl 10 /O2 on i7-7820X: AVX2 Perlin 261 vs libnoise 27 Mpts/s, cellular 52 vs 0.65. Possible tier A. Not catalogued.
+- CspChan (glepnir/CspChan): Go-like CSP channels in C, lead from the libcsp enrichment, not opened (2026-10-07).

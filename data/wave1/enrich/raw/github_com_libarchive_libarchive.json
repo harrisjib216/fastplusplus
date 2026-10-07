@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/libarchive/libarchive",
+  "one_liner": "Multi-format streaming archive library behind bsdtar; matches or trails GNU tar on tar speed, wins only seek-based listing.",
+  "what_it_does": "A C library that reads and writes archives (tar variants, cpio, zip/zipx, 7-Zip, ISO9660, RAR/RAR5 read, CAB, LHA, XAR, WARC, ar, mtree) through one callback-driven streaming API, with format and compression (gzip, bzip2, xz/lzma, lz4, zstd, lzop and more) auto-detected on read. It ships the bsdtar, bsdcpio, bsdcat and bsdunzip tools. bsdtar is a command-line replacement for GNU tar; the library itself has no GNU tar counterpart, so a program embedding it gains in-process archive handling rather than spawning tar.",
+  "how_it_is_fast": "The one measured edge is listing: for regular files and disk-like block devices, archive_read_open_filename switches to an lseek()-based skip callback and power-of-two blocks of at least 64 KiB, so `bsdtar tf` on an uncompressed tar seeks past entry bodies and reads only headers. Otherwise the design is a single-pass stream through read/write callbacks, chosen for generality (tape, sockets, pipes) rather than speed; no parallel compression or decompression is built in.",
+  "when_to_use": [
+    "A C or C++ program must read or write many archive and compression formats in-process through one API, with format detection on read.",
+    "Listing or selectively extracting from large uncompressed tar files on seekable storage, where the lseek skip avoids reading entry bodies.",
+    "Streaming archives to or from a socket, pipe or memory buffer through custom read/write callbacks, without temporary files.",
+    "Cross-platform tooling (FreeBSD, macOS, Windows, Linux) that needs the same tar/zip behaviour everywhere; bsdtar is already the system tar on FreeBSD, macOS and Windows."
+  ],
+  "when_not_to_use": [
+    "Choosing bsdtar over GNU tar for speed: in the only archived comparison GNU tar was faster or tied at create and extract on all four data sets.",
+    "Random access into archives or in-place modification: the README says these are not directly supported and points such applications elsewhere.",
+    "Multi-core decompression or compression of large archives: libarchive works serially (open issue #2848 asks for parallel processing; #2987 asks about parallel archive_read_data).",
+    "Fast ZIP listing: open issue #889 reports bsdtar taking 1.843 s versus unzip 0.034 s to list a 250 MB CBZ, with a third of about 3k system calls stat'ing /etc/localtime.",
+    "Untrusted input in a latency-sensitive service without sandboxing: parsers for many legacy formats keep producing memory-safety advisories, and open issue #1267 shows a crafted cpio file taking over 1,500 s on tmpfs."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (plus the bsdtar/bsdcpio/bsdcat/bsdunzip executables)",
+    "dependencies": "none required; optional zlib, bzip2, liblzma, lz4, zstd, libb2, OpenSSL or mbed TLS or Nettle (Windows CNG), libxml2 or expat (Windows XmlLite), iconv, ACL and xattr libraries, PCRE2POSIX; unused compressors are not linked into static binaries",
+    "min_toolchain": "C compiler; CMake 3.17+ or autotools (configure); MSVC and MinGW on Windows",
+    "platforms": "Linux, FreeBSD, NetBSD, OpenBSD, DragonFly, macOS, Windows, other POSIX systems",
+    "thread_safety": "No global state, but not thread-aware: an archive object needs caller locking; archive_write_disk_header() is not thread safe on POSIX (umask(0) window can create world-writable directories) and must be mutexed; the read_disk/write_disk modules use chdir().",
+    "drop_in_for_baseline": "partial: bsdtar accepts the common tar command line, but GNU-specific options differ (the 2007 run shows bsdtar 2.3.4 lacked --diff/compare), and the library is a new API rather than a replacement for GNU tar"
+  },
+  "gotchas": [
+    "Harness flaw: tcp.sh runs only `sync` between repetitions and never drops the page cache, so best-of-n disk runs report warm-cache times; bsdtar's 0.053 s listing of a 3.2 GB archive (7,447 entries, about 7 microseconds per header on a 60 MB/s disk) can only come from seeking over header blocks already cached, while GNU tar's 56.5 s equals 58 MB/s, a full sequential read of an archive larger than the machine's 2,012 MB of RAM. The 1000x list gap measures caching plus whether the tool seeked, not parser speed (derived from page data).",
+    "Harness flaw: use_times picks the 'best' repetition with plain `sort | head -1`, a string sort, so a 100.x s run beats a 9x.x s run whenever repetitions straddle 10 s or 100 s. The reported bsdtar and GNU tar rows are consistent with their minima, but star's 100.814 s extract on the 32-bit disk may not be its best run.",
+    "Options were asymmetric: the script passes --seek to GNU tar and -no-fsync to star on every operation and nothing to bsdtar, and the 'compare' rows for bsdtar time an unsupported-option error (0.001 s) because the script does not stop on that failure.",
+    "A FreeBSD 2006 note (WebSearch snippet only, list archive blocked) found gtar about 13% faster than bsdtar extracting /usr/ports and attributed it to bsdtar calling lchmod() on every extracted file while gtar skips no-op chmods; no newer measurement was found."
+  ],
+  "pick_this_over_siblings_when": "Pick libarchive when the need is format coverage and an embeddable streaming API, not speed; for raw tar throughput on parallel file systems ptar's multi-worker creation is the measured win, and hop is the choice when fast reads of individual files from an archive matter more than tar compatibility.",
+  "verified_claims_summary": "Jan Psota's 2007 Bug-tar post timed bsdtar 2.3.4 (libarchive 2.3.4) against GNU tar 1.19 and star 1.5a85 on pax archives (gcc 4.2.2, Athlon 64 X2 4200+ and a 1.5 GHz Athlon): GNU tar was faster or tied at create and extract on all four data sets, and bsdtar listed faster only on the two 64-bit sets (1.33x on tmpfs; the disk-set 1000x is a page-cache and seek artifact). It shows libarchive is not faster than GNU tar overall.",
+  "status_note": "Actively maintained (3.8.x release line, 3.9.0dev on master, last commit 2026-10-06, 3.6k stars) and BSD-2-Clause, so it is safe to adopt for format coverage, but its only speed evidence is an archived 2007 third-party run on versions nearly twenty years old.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/contrib/psota-benchmark/results.txt",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/contrib/psota-benchmark/tcp.sh",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/README.md",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/COPYING",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/NEWS",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/libarchive/archive_read_open_filename.c",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/libarchive/archive.h",
+    "https://raw.githubusercontent.com/libarchive/libarchive/HEAD/CMakeLists.txt",
+    "https://github.com/libarchive/libarchive",
+    "https://github.com/libarchive/libarchive/issues?q=is%3Aissue+performance+slow",
+    "https://github.com/libarchive/libarchive/issues/2848",
+    "https://github.com/libarchive/libarchive/issues/889",
+    "https://github.com/libarchive/libarchive/issues/1267",
+    "https://github.com/libarchive/libarchive/releases",
+    "https://github.com/libarchive/libarchive/releases/latest",
+    "https://github.com/libarchive/libarchive/security",
+    "WebSearch: bsdtar vs GNU tar extraction speed benchmark libarchive slower (snippet of https://lists.freebsd.org/pipermail/cvs-all/2006-September/189494.html; page itself EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.75
+}
