@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/math-atlas/math-atlas",
+  "one_liner": "Self-tuning C BLAS with part of LAPACK that times its own kernels on the build machine; about 6-8x faster than Netlib reference BLAS.",
+  "what_it_does": "ATLAS (Automatically Tuned Linear Algebra Software) produces a complete BLAS with C (CBLAS) and Fortran 77 interfaces, plus natively tuned LAPACK routines for the LU, QR and Cholesky factorizations, which it can merge with netlib's LAPACK to give a full LAPACK. It links in place of the reference libblas/liblapack: the benchmark simply LD_PRELOADed it under R. You build it from source with ATLAS's own configure and make, and the install-time timing search tunes the library to that machine. It always produces static libraries, and with --shared also libsatlas (serial) and libtatlas (threaded).",
+  "how_it_is_fast": "Automated Empirical Optimization of Software (AEOS): at install time ATLAS times candidate GEMM kernels and searches blocking factor, register blocking, unrolling and compiler flags with a relaxed 1-D line search. Where 'architectural defaults' from earlier searches exist for the detected CPU and compiler, it uses those instead. Contributed hand-written SIMD kernels (SSE, AltiVec, 3DNow! and others) are kept when they win, Level 3 BLAS is built on the tuned GEMM, and the LAPACK subset uses recursive LU and Cholesky and a hybrid recursive-panel QR. The threaded library uses pthreads with processor affinity.",
+  "when_to_use": [
+    "Replacing the unoptimised Netlib reference BLAS through the standard F77 or CBLAS ABI on a machine where you can run the tuned build yourself: the benchmark shows 6-8x on 2800x2800 SYRK-type work even with an untuned generic Debian build.",
+    "A new or unusual architecture with no vendor-tuned or hand-tuned BLAS: the FAQ says the fully automatic search is there to give 'an adequate library on a truely new architecture'.",
+    "You want a BSD-3-Clause BLAS with a row-major C LAPACK interface (clapack.h) for LU, Cholesky and QR solves.",
+    "Studying or reusing empirical autotuning: the search framework and the per-architecture defaults are the reusable part."
+  ],
+  "when_not_to_use": [
+    "Mainstream x86-64 or AArch64 where OpenBLAS, BLIS or MKL are available. In the same suite, single-threaded Debian ATLAS 3.10.2 took 1.50 s for the cross-product test against 0.49 s for OpenBLAS 0.2.12 and 0.14 s for MKL (both multi-threaded) on a Xeon E3-1275 v5. Multi-threaded ATLAS 3.11.38 only ties OpenBLAS, BLIS and MKL, within about 10%, on the older i7-4790K and i5-3570 hosts.",
+    "Prebuilt distribution binaries. Debian's libatlas3-base is built without processor extensions and Debian recommends a local rebuild (README.Debian, search snippet only). The ATLAS errata adds that stable 3.10's block-factor and storage constraints 'can cut performance by around half' on modern machines compared with the developer release.",
+    "Builds you cannot babysit. Configure aborts if it detects CPU throttling, parallel make (-j) ruins the tuning, tuning can fail with 'unable to get timings in tolerance', and open issues report a 3.10.3 tuning segfault with glibc 2.27 (#44), a failed RISC-V build (#78) and Cortex-A53 build problems (#79).",
+    "Applications that need a runtime-adjustable thread count or use OpenMP: the maximum thread count is fixed at compile time, and the errata calls an OpenMP build of ATLAS 'a bad idea' for speed.",
+    "Anything that needs active maintenance: no commits since 2019-06-11, and release requests #77 and #89 have no maintainer reply."
+  ],
+  "integration": {
+    "form": "static lib (always built) plus optional shared libs libsatlas and libtatlas (--shared); built from source with ATLAS configure/make, or as distribution packages",
+    "dependencies": "none for the C BLAS; a Fortran 77 compiler (gfortran) for the F77 interface and for full LAPACK from netlib's LAPACK tarball (--with-netlib-lapack-tarfile); pthreads for the threaded library",
+    "min_toolchain": "ANSI/ISO C 1990 compiler (gcc by default; clang on OS X from 3.10.3 with --force-clang); gfortran optional",
+    "platforms": "x86 32/64-bit, ARM (NEON on 32-bit), IBM POWER, SPARC; Linux, OS X, AIX, SunOS, Windows through Cygwin or MinGW; RISC-V does not build (open issue #78)",
+    "thread_safety": "FAQ: 'completely safe to call any ATLAS routine from a threaded code'; there are no global variables. Link the serial interface if you do your own threading. The threaded library's maximum thread count is fixed at compile time.",
+    "drop_in_for_baseline": "partial: link-level drop-in for the full reference BLAS (F77 and CBLAS ABI) and, when built with netlib's LAPACK, for LAPACK; ATLAS alone provides only the LU, QR and Cholesky-related LAPACK routines"
+  },
+  "gotchas": [
+    "Harness note: the 'cross-product' row times R's crossprod(a), which R evaluates with BLAS DSYRK (symcrossprod in R's array.c), not DGEMM. The 'linear regression' row is solve(crossprod(a), crossprod(a, b)) on a 2000x2000 Matrix-package dgeMatrix, a SYRK plus a symmetric solve, although the script's printed label says 3000x3000. Each figure is the mean elapsed time of 10 runs.",
+    "Harness note: 'ATLAS (st)' is the generic Debian 3.10.2 binary, so ATLAS's install-time tuning never ran on the test hosts and the number understates a locally tuned ATLAS. 'ATLAS (mt)' 3.11.38 was built after slave-cmds.sh inserted 'thrchk=0;' into config.c, which disables ATLAS's CPU-throttling abort, and 'case 0x5E:' into archinfo_x86.c, which forces Skylake detection into an existing case. Its tuning therefore ran under whatever frequency scaling the performance governor left, and it is compared against a 2014 OpenBLAS 0.2.12 package.",
+    "Errata performance traps: serial performance can fall off a cliff for N > 1500 when the install leaves CacheEdge unset, so tune CacheEdge. Small-problem speed suffers because glibc's mmap-backed malloc makes ATLAS's per-call GEMM workspace expensive; the errata suggests MALLOC_TRIM_THRESHOLD_=-1 and MALLOC_MMAP_MAX_=0 and then re-tuning. Hyperthreads thrash the caches, so disable SMT or pass --force-tids.",
+    "Threaded builds pin threads with processor affinity and are tuned for the configured core count, so a generic threaded library must be built (-t X) for the smallest core count of any target machine."
+  ],
+  "pick_this_over_siblings_when": "Siblings such as BLASFEO (small matrices), FT-BLAS, the GEMMFIP BLIS fork and Eigen are measured against OpenBLAS or MKL, while ATLAS clearly beats only the Netlib reference. Pick ATLAS only when you need a self-tuning, BSD-licensed full BLAS on hardware those libraries do not target, or when an existing build already expects libsatlas/libtatlas.",
+  "verified_claims_summary": "The independent andre-wojtowicz/blas-benchmarks suite ran R-benchmark-25 under Microsoft R Open 3.2.4 on Debian Jessie, swapping BLAS libraries with LD_PRELOAD and reporting the mean elapsed time of 10 runs. On a Xeon E3-1275 v5, Debian's single-threaded ATLAS 3.10.2 computed a 2800x2800 crossprod in 1.50 s against 11.41 s for the Debian Netlib reference BLAS/LAPACK (7.6x) and the 2000x2000 regression in 0.747 s against 5.466 s (7.3x); on a Xeon E5-1620 v4 the crossprod took 1.58 s against 9.45 s (6.0x). Compiler and flags are not stated because both are binary packages.",
+  "status_note": "Abandoned: the last commit is 2019-06-11, the last stable release 3.10.3 (2016-07-28) and the last developer release 3.11.41 (2018-10-05), and 15 open issues, including build crashes, have no maintainer replies. It stays BSD-3-Clause, still ships in distributions, and is worth building only where no better-tuned BLAS exists.",
+  "sources_read": [
+    "https://github.com/math-atlas/math-atlas",
+    "https://raw.githubusercontent.com/math-atlas/math-atlas/master/README.rst",
+    "https://raw.githubusercontent.com/math-atlas/math-atlas/HEAD/LICENSE.txt",
+    "https://github.com/math-atlas/math-atlas/issues",
+    "https://github.com/math-atlas/math-atlas/issues/44",
+    "https://github.com/math-atlas/math-atlas/issues/66",
+    "https://github.com/math-atlas/math-atlas/issues/89",
+    "https://math-atlas.sourceforge.net/atlas_install/",
+    "https://math-atlas.sourceforge.net/atlas_install/node2.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node4.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node5.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node21.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node24.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node36.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node42.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node46.html",
+    "https://math-atlas.sourceforge.net/atlas_install/node66.html",
+    "https://math-atlas.sourceforge.net/errata.html",
+    "https://math-atlas.sourceforge.net/faq.html",
+    "https://raw.githubusercontent.com/andre-wojtowicz/blas-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/andre-wojtowicz/blas-benchmarks/HEAD/slave-cmds.sh",
+    "https://raw.githubusercontent.com/andre-wojtowicz/blas-benchmarks/HEAD/benchmark-urbanek.R",
+    "https://raw.githubusercontent.com/andre-wojtowicz/blas-benchmarks/HEAD/results.Rmd",
+    "https://raw.githubusercontent.com/wch/r-source/trunk/src/main/array.c",
+    "WebSearch: Debian atlas README.Debian libatlas3-base generic build (snippet of metadata-backend.ftp-master.debian.org stable_README.Debian; host blocked)"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/facebookresearch/faiss",
+  "one_liner": "Meta's C++ library for approximate nearest-neighbour search over dense vectors on CPU and GPU; beat the 2016 billion-scale ANN papers 4-5x.",
+  "what_it_does": "Faiss builds and queries indexes of dense float (or binary) vectors under L2 or inner-product distance, from exact brute force up to compressed billion-vector indexes that fit in one server's RAM. Every index shares one Index interface (train, add, search, range_search, remove/reconstruct where supported) and is usually built from an index_factory string such as \"OPQ20_80,IMI2x14,PQ20\"; runtime knobs (nprobe, efSearch, polysemous threshold) are set through ParameterSpace. Python/numpy and C wrappers are provided, and GPU indexes are drop-in replacements for the CPU ones (IndexFlatL2 to GpuIndexFlatL2). It is not a drop-in for the baselines, which were research codes from two CVPR'16 papers.",
+  "how_it_is_fast": "Compressed-domain search: an inverted file (k-means coarse quantizer, or an inverted multi-index) restricts the scan to a few lists, and product quantization codes are scored with asymmetric distance computation through per-query lookup tables, optionally after an OPQ rotation. Polysemous codes order PQ centroids so a cheap Hamming-distance filter rejects most codes before the table lookup, and 4-bit PQ 'fast scan' (inspired by ScaNN) keeps the lookup tables in SIMD registers; exact search is cast as BLAS GEMM, and all search work is OpenMP-parallel over queries. The GPU side uses a k-selection design that the paper abstract says runs at up to 55% of peak and gives 8.5x over the prior GPU state of the art (abstract via search snippet only).",
+  "when_to_use": [
+    "Hundreds of millions to billions of 64-1000-dimensional embeddings that must live compressed in one machine's RAM (8-64 bytes per vector) with recall you can tune against speed.",
+    "Batched query workloads (thousands of queries per call) where queries per second matters more than single-query latency; the wiki states batching and threading give the best QPS.",
+    "GPU brute-force or IVF k-NN, k-means clustering and k-NN graph construction on NVIDIA GPUs, with the same index types available on CPU.",
+    "You need many index families (Flat, IVF-Flat/PQ/SQ, HNSW, NSG, RaBitQ, 4-bit fast scan, binary) behind one API, with Python tooling for training, autotuning and serialization."
+  ],
+  "when_not_to_use": [
+    "Low-latency single-query serving on CPU: the 1M wiki page says one thread is about 10x slower than 20 threads and query-at-a-time another 2-3x slower, and open issue #5700 shows IndexBinaryFlat single-query search getting slower with more threads (20.36 ms at 1 thread vs 27.36 ms at 4).",
+    "Small (about 1M vector) high-recall in-memory search where memory is not the constraint: Faiss's own wiki says nmslib HNSW is faster on SIFT1M (0.081 s vs 0.538 s for IVF16384,Flat, different machines) at the cost of more memory.",
+    "Low-dimensional (2-3D) geometric k-NN on point clouds: a kd-tree library is simpler and exact.",
+    "Projects that cannot take a C++20 compiler, OpenMP and a BLAS dependency, or need a header-only drop-in.",
+    "Concurrent multi-threaded use of GPU indexes from many CPU threads without a resource object per thread."
+  ],
+  "integration": {
+    "form": "static lib (libfaiss.a) or shared lib built with CMake; prebuilt conda packages faiss-cpu, faiss-gpu, faiss-gpu-cuvs; Python via SWIG; optional C API",
+    "dependencies": "BLAS (Intel MKL recommended on x86, OpenBLAS on ARM) and OpenMP; optional CUDA toolkit or AMD ROCm for GPU indexes, NVIDIA cuVS 26.06, Intel SVS, and SWIG + numpy + Python 3 for the bindings",
+    "min_toolchain": "C++20 compiler with OpenMP 2 or later (CMAKE_CXX_STANDARD 20 in CMakeLists.txt), CMake; nvcc for GPU builds",
+    "platforms": "x86-64 Linux, macOS and Windows officially (SIMD levels generic, avx2, avx512, avx512_spr selected with FAISS_OPT_LEVEL; default is generic); aarch64 generic and SVE; conda faiss-cpu for Linux x86-64/aarch64, macOS arm64 and Windows x86-64; GPU packages Linux x86-64 only",
+    "thread_safety": "CPU indexes are safe for concurrent searches and other read-only calls; anything that modifies an index needs caller-side mutual exclusion. GPU indexes are not thread-safe even for reads: each CPU thread needs its own StandardGpuResources. Calling batched search from several threads oversubscribes OpenMP.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness note on the catalogued numbers: bench_polysemous_1bn.py and ParameterSpace::explore time one batched index.search over all 10k queries (k=100, batchsize 1<<30, a single run because min_test_duration is 0) and divide by the query count, so 'ms per vector' is amortised batch throughput, not per-query latency; in autotune mode the operating points are picked against the same 10k queries and ground truth they are reported on, and the wiki's command line (OPQ8_64,IMI2x14,PQ8) does not match the table row it explains (IMI2x13).",
+    "Open bug #2120: polysemous_ht resets to 0 when an index is loaded from disk, silently disabling the Hamming pre-filter that gives polysemous indexes their speed unless the parameter is set again after read_index.",
+    "Build and BLAS choices change speed by large factors: a plain source build defaults to FAISS_OPT_LEVEL=generic (no AVX2 fast-scan kernels), issue #3306 reports a local build 4x slower than the release, and issue #4582 reports the MKL-linked conda package about 300x slower than the OpenBLAS pip wheel for clustering on an AMD Zen 4 under Windows (closed without a fix). With OpenBLAS the wiki recommends OMP_WAIT_POLICY=PASSIVE.",
+    "Compressed indexes need a training set and tuned parameters (nprobe, quantizer efSearch, code size); results are deterministic for a fixed thread count except PCA/OPQ training (LAPACK eigen solver) and HNSW add order."
+  ],
+  "pick_this_over_siblings_when": "None of the autodiff-and-ml-kernels siblings does vector search (the category fit is loose); in the wider catalogue the k-NN entries are low-dimensional kd-trees (nanoflann, libnabo, SPRK-tree), so pick Faiss for high-dimensional embeddings, compressed billion-scale indexes or GPU k-NN, and a kd-tree library for exact 2-3D point-cloud queries.",
+  "verified_claims_summary": "In the archived 'Older results' tables of Faiss's own wiki, a one-thread CPU index (OPQ20_80,IMI2x14,PQ20) answered Deep1B queries at R@1 0.456 in 3.66 ms each versus the 20 ms at R@1 0.45 that Babenko et al. (CVPR'16) published for one thread (about 5.5x), and on Bigann at R@10 about 0.35 Faiss took 0.035 ms per query on 20 CPU threads or 0.034 ms on one Titan X versus 0.15 ms published by Wieschollek et al. (CVPR'16) on a Titan X (about 4.3x and 4.4x). The baselines are figures copied from the papers' own hardware, the times are amortised over a 10k-query batch, and no compiler, flags or CPU model are given for the compared rows.",
+  "status_note": "Actively maintained by Meta FAIR (v1.15.1 released 2026-09-15, MIT, about 41k stars, conda packages for CPU and GPU), but the catalogued comparison is a 2017-era archived table and the wiki's current benchmarks compare only Faiss configurations with each other.",
+  "sources_read": [
+    "https://github.com/facebookresearch/faiss",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/README.md",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/INSTALL.md",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/faiss/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/benchs/bench_polysemous_1bn.py",
+    "https://raw.githubusercontent.com/facebookresearch/faiss/main/faiss/AutoTune.cpp",
+    "https://raw.githubusercontent.com/wiki/facebookresearch/faiss/Indexing-1G-vectors.md",
+    "https://raw.githubusercontent.com/wiki/facebookresearch/faiss/Indexing-1M-vectors.md",
+    "https://raw.githubusercontent.com/wiki/facebookresearch/faiss/Threads-and-asynchronous-calls.md",
+    "https://github.com/facebookresearch/faiss/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/facebookresearch/faiss/issues?q=is%3Aissue+slower+in%3Atitle",
+    "https://github.com/facebookresearch/faiss/issues/4582",
+    "https://github.com/facebookresearch/faiss/issues/5700",
+    "WebSearch: \"Billion-scale similarity search with GPUs\" pdf site:github.com (abstract snippet only; arXiv blocked)"
+  ],
+  "confidence": 0.8
+}
