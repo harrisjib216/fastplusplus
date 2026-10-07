@@ -1,0 +1,1 @@
+- jemalloc (wave0-seed, tier C): w1-mine-c found independent numbers in 7a6163/ruby-alloc-bench (vs glibc); candidate retier C to B after a verifier check.

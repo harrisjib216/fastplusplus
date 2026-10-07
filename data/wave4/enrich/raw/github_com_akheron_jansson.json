@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/akheron/jansson",
+  "one_liner": "Dependency-free C library for a mutable, reference-counted JSON tree; stringified 1.35x faster than JsonCpp 1.0.0 in a 2016 independent run.",
+  "what_it_does": "Jansson parses JSON text (json_loads, json_loadb, json_loadf, json_loadfd, json_load_file or a read callback) into a tree of individually allocated, reference-counted json_t values that can be read, edited and dumped back (json_dumps, json_dumpf, json_dump_callback). It adds json_pack/json_unpack format-string helpers, detailed error records (line, column, byte position, error code) and decoding flags such as JSON_REJECT_DUPLICATES, JSON_DECODE_ANY and JSON_ALLOW_NUL. It is a different API from JsonCpp's C++ Json::Value, not a drop-in.",
+  "how_it_is_fast": "It is not built for speed: the parser is a recursive-descent lexer that pulls one byte at a time through a function-pointer stream (stream_get in src/load.c), tracks line and column per byte, copies each token into a growable strbuffer and converts numbers with strtod. Objects are chained hash tables with a seeded lookup3 hashlittle hash plus a second linked list for insertion order, and every value, string and pair is a separate malloc. Its stringify edge over JsonCpp 1.0.0 comes from writing compact output through a single growing strbuffer: the benchmark CSV shows 18-21 allocations per stringify for Jansson against 12,197 (citm_catalog) and 7,727 (twitter) for JsonCpp.",
+  "when_to_use": [
+    "C code that needs to build, edit and re-emit JSON documents (configs, RPC payloads in the KB to low-MB range) with a small, stable, well-documented C API and no dependencies.",
+    "Replacing JsonCpp 1.0.x-era serialization of small and medium documents, where the 2016 run showed the largest stringify gaps (citm_catalog 3.76 vs 5.68 ms, twitter 1.93 vs 4.14 ms).",
+    "Untrusted input where hash flooding and stack exhaustion matter: object hashing is seeded at runtime (CVE-2013-6401 fix in 2.6) and parse, dump, equal and deep copy are depth-limited (JSON_PARSER_MAX_DEPTH, default 2048).",
+    "Programs that want precise parse-error reporting (line, column, byte offset, enum json_error_code) or json_pack/json_unpack for building and validating small structures."
+  ],
+  "when_not_to_use": [
+    "Throughput-critical parsing: in the same 2016 CSV, RapidJSON parsed the three files in 7.9 ms total, cJSON in 24.7 ms and nlohmann/json 2.0.3 in 72.5 ms, against Jansson's 112.1 ms.",
+    "Object- and string-heavy documents where JsonCpp is the incumbent: Jansson 2.7 parsed citm_catalog (22.7 vs 14.6 ms) and twitter (10.9 vs 8.5 ms) slower than JsonCpp 1.0.0; its parse-total win comes only from canada.json.",
+    "Large files (100 MB and up): issue #280 measured json_load_file at about 13 s on a 181 MB file against about 8 s for Python's json module, and issue #332 reported 413.3 MB of memory and 19,975,350 allocations for a 76.3 MB file (5.4x the input).",
+    "Number-heavy output: json-c stringified canada.json in 16.3 ms against Jansson's 64.2 ms in the same run.",
+    "Data needing unsigned 64-bit integers, bignums or exact decimals: only json_int_t (long long) and double are supported, and bignum support (issue #69) is still open."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools or CMake); small enough to vendor as source",
+    "dependencies": "none",
+    "min_toolchain": "Plain C compiler (headers adjusted for C89 in 2.13); CMake 3.10+ for the CMake build, or autotools (autoreconf -i for git checkouts)",
+    "platforms": "any; changelog covers Linux, macOS, BSDs, Solaris, MSVC and MinGW builds",
+    "thread_safety": "Library has no mutable global state except the hash seed and allocator hooks. Read-only sharing of values across threads is safe and reference counting uses compiler atomics when JANSSON_THREAD_SAFE_REFCOUNT is defined (2.11+); mutating a shared value needs external locking. Call json_object_seed(0) and json_set_alloc_funcs before spawning threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured version is v2.7 (2014). Since 2.8 object keys always keep insertion order (an extra ordered list per pair) and a crash on deeply nested input was fixed; since 2.14.1 reals are printed with David Gay's dtoa (USE_DTOA defaults ON); 2.15.0 merged serialization optimizations (#658, #719) with no published numbers. Current speed relative to any baseline is unmeasured.",
+    "Before 2.15.1, dump, json_equal and deep copy recursed without a depth limit, so a deeply nested value built in code (not parsed) could overflow the stack; upgrade to 2.15.1 or later.",
+    "Strings containing NUL are rejected unless JSON_ALLOW_NUL is passed; integers that overflow json_int_t are a parse error unless JSON_DECODE_INT_AS_REAL is set.",
+    "No harness flaw found: nativejson-benchmark's janssontest.cpp times json_loads(json, 0) and json_dumps(root, JSON_COMPACT), the normal API calls, and JsonCpp is timed through its standard reader and writer builders. The weakness is the baseline (JsonCpp 1.0.0, 2016), not the harness."
+  ],
+  "pick_this_over_siblings_when": "Pick Jansson over cJSON when you want its documented thread-safety rules, seeded hash-table objects, depth limits on every recursive operation, json_pack/json_unpack and detailed error positions; pick cJSON (4.5x faster parse in the same 2016 run) or yyjson when parse speed is what you are optimizing.",
+  "verified_claims_summary": "In nativejson-benchmark's committed 2016 sample (clang 7.0, full optimization with -march=native, Core i7-4980HQ, macOS), Jansson 2.7 stringified canada, citm_catalog and twitter in 69.9 ms total against JsonCpp 1.0.0's 94.3 ms (1.35x) and nlohmann/json 2.0.3's 87.7 ms, winning on each file; its 112.1 vs 165.5 ms parse total rests on canada.json alone. The project itself makes no speed claim.",
+  "status_note": "Actively maintained (2.15.1 released 2026-06-30, commits into July 2026), MIT, mature and widely packaged; usable and copyable, but the speed entry rests on a 2016 run of a 2014 release against a 2015 JsonCpp.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/README.rst",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/CHANGES",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/jansson.h",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/load.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/dump.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/value.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/hashtable.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/hashtable.h",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/strbuffer.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/memory.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/jansson_private.h",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/utf.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/src/hashtable_seed.c",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/doc/apiref.rst",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/doc/conformance.rst",
+    "https://raw.githubusercontent.com/akheron/jansson/HEAD/doc/threadsafety.rst",
+    "https://github.com/akheron/jansson/pull/658",
+    "https://github.com/akheron/jansson/pull/719",
+    "https://github.com/akheron/jansson/issues?q=is%3Aissue+slow+OR+performance+OR+speed",
+    "https://github.com/akheron/jansson/issues/280",
+    "https://github.com/akheron/jansson/issues/332",
+    "https://github.com/akheron/jansson/issues/751",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/src/tests/janssontest.cpp",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv",
+    "https://raw.githubusercontent.com/miloyip/nativejson-benchmark/master/README.md",
+    "https://github.com/ibireme/yyjson_benchmark",
+    "https://raw.githubusercontent.com/ibireme/yyjson_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ibireme/yyjson_benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ibireme/yyjson_benchmark/HEAD/docs/reports/Intel_NUC_8i5_gcc_9.html"
+  ],
+  "confidence": 0.75
+}
