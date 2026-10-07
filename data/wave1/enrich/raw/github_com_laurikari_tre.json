@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/laurikari/tre",
+  "one_liner": "POSIX regex library in C with a linear-time tagged-NFA matcher and fuzzy matching; beats interpreted PCRE2 only on backtracking-hostile patterns.",
+  "what_it_does": "TRE implements the POSIX regcomp/regexec interface (tre_regcomp, tre_regexec, tre_regfree; <tre/regex.h> maps the plain POSIX names onto them) with leftmost-longest matching and correct subexpression positions, plus length-taking (tre_regnexec), raw-byte (*b), wide-character (tre_regwexec) and approximate (tre_regaexec, edit-distance) variants and an agrep tool. It also accepts some Perl-style extensions such as (?i) and \\w, \\s, \\b. It is a drop-in for a platform's POSIX <regex.h>, not for the PCRE2 API: no lookaround, and alternation follows POSIX longest-match rather than Perl first-match semantics.",
+  "how_it_is_fast": "Patterns compile to a tagged NFA (Laurikari's tagged transitions) that is simulated in parallel over the input, one pass per character, carrying tag values for submatch positions; this gives O(M^2 N) worst case with no backtracking, so patterns such as [a-zA-Z]+ing or .{0,2}(Tom|Sawyer|...) that make a backtracker retry many start positions stay linear. The backtracking matcher is used only for back-references, and approximate matching has its own parallel matcher. The only prefilter is a one-shot memchr when exactly one byte can start a match in 8-bit locales (the general first-character skip loop is compiled out with #if 0), which is why literal-heavy patterns are far slower than in PCRE2, RE2 or Oniguruma.",
+  "when_to_use": [
+    "You need POSIX regcomp/regexec semantics with correct leftmost-longest submatch offsets, for example to replace a libc regex that reports subexpressions wrongly, and can include <tre/regex.h> as a drop-in.",
+    "Approximate (fuzzy) regex search with insertion, deletion and substitution costs, which none of the catalogued siblings offer.",
+    "Untrusted or user-supplied patterns where matching time must stay linear in the input length (no back-references) and regexec should not allocate from the heap (true in the default alloca build); a compiled regex can be shared by many threads.",
+    "Patterns with a leading unanchored repetition or a repeated class before a literal suffix ([a-zA-Z]+ing, .{0,2}(alternation)) when no JIT or RE2 is available: TRE was 1.25x to 1.95x faster than interpreted PCRE2 on those rows in the 2015 comparison (derived from page data).",
+    "Searching binary data containing NUL bytes (length-taking and *b byte APIs) or wchar_t strings."
+  ],
+  "when_not_to_use": [
+    "General regex throughput: in the 2015 table TRE lost to interpreted PCRE2 on 12 of 15 patterns (Twain 486 ms vs 5 ms, Tom|Sawyer|Huckleberry|Finn 1242 ms vs 40 ms on x86-64 Linux) and was slower than RE2 on every pattern whose newline semantics matched; even on .{0,2}(Tom|Sawyer|Huckleberry|Finn), its best row against PCRE2, RE2 took 66 ms and PCRE2-JIT 443 ms against TRE's 3425 ms.",
+    "Literal or literal-prefix searches: there is no Boyer-Moore or SIMD literal prefilter, so every byte goes through the NFA simulation after the first candidate.",
+    "Perl/PCRE syntax and semantics: no lookahead or lookbehind (still on the README roadmap), POSIX longest-match alternation, and back-references fall back to an exponential backtracking matcher.",
+    "UTF-8 locales where speed matters: with MB_CUR_MAX above 1 the input is decoded through mbrtowc and the single-character memchr shortcut is disabled; the measured runs used the default C locale.",
+    "Untrusted input to the approximate matcher: issue #143 (open, June 2026) reports a heap out-of-bounds read in byte-mode tre_regaexecb; issue #101 (open) reports ^|$ mishandled under REG_NOTBOL, which find-all loops rely on."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools build; win32 Visual Studio 2022 files per NEWS), small enough to vendor as source",
+    "dependencies": "none required; libutf8 on platforms lacking wide-character support; autoconf, automake, gettext and libtool to build from the git tree",
+    "min_toolchain": "hosted C compiler, minimum standard not documented; README lists GCC 11, Clang 14 and 18 and Visual Studio 2022 as tested; autoconf 2.69 to regenerate the build",
+    "platforms": "any hosted C platform; tested on FreeBSD 14.1, Ubuntu 22.04, macOS 14.6 and Windows 11 (README); no architecture-specific code",
+    "thread_safety": "Thread safe: all exported functions are re-entrant and one compiled regex_t can be used concurrently from several threads (README).",
+    "drop_in_for_baseline": "partial — drop-in for the POSIX <regex.h> API via <tre/regex.h>, not for the PCRE2 API or Perl matching semantics"
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: the published driver (regex-test.tgz) compiles TRE with REG_EXTENDED|REG_NEWLINE, under which negated bracket lists such as [^u-z] and [^\"'] stop at newlines, while PCRE2 (PCRE2_MULTILINE only), RE2 (Latin1 defaults) and Oniguruma let them match newlines; and the HTML build of printResult discards the per-engine match count. So rows with negated classes (including [a-q][^u-z]{13}x, where TRE appears to beat RE2 1928 ms vs 3512 ms) compare different work. TRE's three wins over interpreted PCRE2 use only '.' and positive classes, which behave the same in both engines here, so those wins are not affected.",
+    "Both the TRE and PCRE2 drivers restart each search on a new subject pointer after the previous match without REG_NOTBOL or an offset, so ^ and \\b treat each restart point as a start of subject; the effect is equal across engines on these 15 patterns but means the loop is not a correct general find-all.",
+    "Upstream now clamps the searched length to TRE_MAX_STRING (INT_MAX) in the parallel matcher, so a single call silently searches at most about 2 GiB; split larger inputs.",
+    "Per-call working memory is num_states x num_tags integers and comes from alloca() in the default build (TRE_USE_ALLOCA), so very large patterns with many groups or counted repetitions can need large stack frames; older releases computed these sizes in int (CVE-2016-8859, an integer overflow leading to out-of-bounds heap writes in tre_tnfa_run_parallel), and the current tree uses size_t but no explicit multiplication overflow check is visible in that function."
+  ],
+  "pick_this_over_siblings_when": "Pick TRE over RE2, PCRE2, Boost.Regex, CTRE, RE/flex, REAL and Unformat only when you need its specific features (fuzzy edit-distance matching, a plain C POSIX regcomp/regexec drop-in with leftmost-longest submatches, a wide-char API) rather than speed; RE2 also guarantees linear time and was faster on every semantically comparable pattern, and PCRE2 with JIT was faster still on most.",
+  "verified_claims_summary": "Zoltan Herczeg's 2015 comparison timed 15 find-all patterns over the 20 MB Mark Twain text (best of 5, GCC 4.8.2 -O3 on an unnamed Intel Xeon 2.67GHz Linux box, GCC 4.4.7 on a Core i5 3.2GHz Windows box): TRE 0.8.0 beat interpreted PCRE2 (no JIT) on [a-zA-Z]+ing (954 vs 1373 ms) and .{0,2}(Tom|Sawyer|Huckleberry|Finn) (3425 vs 5164 ms), tied on .{2,4}(...), and lost the other 12 patterns, by up to 97x. The harness does not print match counts and gives TRE stricter newline semantics on negated classes, which affects only rows TRE lost to PCRE2.",
+  "status_note": "Active again (release 0.9.0 per NEWS; commits through 2026-05-23 are mostly hardening and build fixes merged by dag-erling), BSD-2-Clause and small, so copyable; treat it as a correctness- and feature-driven POSIX regex, not a fast one, and keep untrusted input away from the approximate matcher until issue #143 is fixed.",
+  "sources_read": [
+    "https://github.com/laurikari/tre",
+    "https://github.com/laurikari/tre/commits/master",
+    "https://github.com/laurikari/tre/issues?q=is%3Aissue",
+    "https://github.com/laurikari/tre/issues/143",
+    "https://github.com/laurikari/tre/issues/101",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/README.md",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/NEWS",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/include/tre/tre.h",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/include/tre/regex.h",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/tre-match-parallel.c",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/tre-compile.c",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/tre-parse.c",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/tre-match-utils.h",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/regexec.c",
+    "https://raw.githubusercontent.com/laurikari/tre/HEAD/lib/tre-internal.h",
+    "https://raw.githubusercontent.com/zherczeg/sljit/gh-pages/regex_perf.html",
+    "https://raw.githubusercontent.com/zherczeg/sljit/gh-pages/regex-test.tgz",
+    "WebSearch: TRE regex library laurikari CVE tre_tnfa_run_parallel overflow (snippets from bugzilla.redhat.com/show_bug.cgi?id=1387112 and openwall.com/lists/oss-security/2016/10/19/1 on CVE-2016-8859)"
+  ],
+  "confidence": 0.78
+}
