@@ -1,0 +1,69 @@
+{
+  "id": "https://sourceforge.net/projects/libjson",
+  "one_liner": "Configurable C/C++ JSON DOM library with lazy parsing; about 1.09x faster than JsonCpp in one 2013 MSVC run.",
+  "what_it_does": "libjson 7.x parses JSON into a reference-counted JSONNode tree and writes it back out. It offers a C interface (json_parse, json_as_int and so on) for static or shared builds, and an STL-style C++ interface (libjson::parse, JSONNode iterators) that only appears when JSON_LIBRARY is commented out in JSONOptions.h. Features are switched at compile time in that header: lazy versus eager (JSON_PREPARSE) parsing, comments, base64 binary nodes, streaming callbacks, validation, mutex and memory callbacks. It is not a drop-in for JsonCpp: the types (JSONNode vs Json::Value) and call names differ.",
+  "how_it_is_fast": "Every parse first copies the input while stripping whitespace and comments and rewriting escaped quotes to a sentinel byte, so later bracket- and quote-matching scans need no escape handling. In the default lazy mode (JSON_PREPARSE off) parse() only checks the outer brackets and wraps the compact copy in a root node; an object or array is split into child substrings (one bracket-matching scan plus one string copy per child) only when first accessed, and numbers go through std::atof only when read. With JSON_PREPARSE on, a recursive-descent validator (JSONPreparse) builds the whole tree up front. There is no SIMD scanning or in-situ parsing; an optional mempool++ pool (JSON_MEMORY_POOL) is the only allocator trick.",
+  "when_to_use": [
+    "Keeping legacy code that already uses libjson (or R's RJSONIO, which vendors it) building, rather than choosing a parser for new work.",
+    "Small ASCII-only messages where you read a few fields and ignore the rest: in lazy mode untouched subtrees cost only the whitespace-stripping copy.",
+    "You want comment-preserving JSON (C and bash style), base64 binary nodes and a push-style stream callback in one BSD-2-Clause library with a plain C ABI.",
+    "Builds that need compile-time feature stripping (read-only or write-only, no iterators, no exceptions) more than raw parse speed."
+  ],
+  "when_not_to_use": [
+    "Throughput matters: on the same 2013 page RapidJSON parsed the small set 5.5x faster and canada.json 30x faster (240.289 s vs 7.97 s per 1000 parses, about 9.4 vs 282 MB/s, derived from page data); yyjson, simdjson or RapidJSON are the current choices.",
+    "Non-ASCII text: with JSON_UNICODE off (the default) a \\uXXXX escape keeps only its low byte, so \\u4e2d silently becomes '-' and \\u00e9 becomes a lone 0xE9 byte that is not UTF-8; turning JSON_UNICODE on switches the whole API to wide strings.",
+    "64-bit integers: every number is stored as a double via std::atof and as_int returns long, so values above 2^53 lose precision and on Windows (32-bit long) as_int truncates above 2^31 (open bug #67).",
+    "Untrusted input or modern toolchains: the last release is from 2012, tickets for crashes on malformed input (#55, #61) and for overload ambiguity under -std=c++11 (#63) are still open, a 2022 forum post reports a GCC 9 std::map allocator static_assert failure, and there is no fuzzing or public VCS.",
+    "Deeply nested or large documents: in lazy mode each level re-scans and copies its children's text on first access, and the eager build was the slowest library tested on canada.json."
+  ],
+  "integration": {
+    "form": "source-drop (compile _internal/Source/*.cpp into your project and comment out JSON_LIBRARY to get the C++ API) or static/shared lib via the bundled makefile (C interface only)",
+    "dependencies": "none (C++ standard library; bundled mempool++ and libbase64++ headers are used only with optional switches)",
+    "min_toolchain": "Written for pre-C++11 compilers; the makefile defaults to g++ -O3 -ffast-math -fexpensive-optimizations (-fast on macOS, which clang rejects per a 2015 user review); -std=c++11 breaks overload resolution in 7.6.1 (bug #63)",
+    "platforms": "Any hosted C++ platform; docs list gcc and llvm on OS X and gcc on Linux as fully tested, MinGW and Visual C++ as partially tested",
+    "thread_safety": "Not thread-safe by default: JSON_REF_COUNT nodes are copy-on-write and the docs advise turning it off or using JSON_MUTEX_CALLBACKS for multi-threaded use; lazy Fetch mutates mutable members inside const accessors, so concurrent reads of one shared node race, and parsing writes a global used_ascii_one flag.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: the published mloskot/json_benchmark benchmark_libjson.cpp cannot produce the README's libjson small-set row. It loads only canada.json (the small-set line is commented out), calls jb::get_json(), which no longer exists at HEAD, and uses libjson::parse, which the shipped JSONOptions.h hides by defining JSON_LIBRARY. The measured build therefore had at least that header edit, probably JSON_PREPARSE turned on as well (240 ms per canada.json parse fits only an eager build), and neither edit is published.",
+    "The 12x 'lazy mode' line (0.478 s) is not a parse: the harness only checks the root node's type, which lazy mode sets from the first character, so it timed a whitespace-stripping copy plus one node allocation per string against JsonCpp's full DOM build.",
+    "The 2013 rows predate commit dff5b86 (2013-06-04), which fixed set_mark: before it the reported lowest time was just the second of the two marks, so rows printed as 'X to X' (libjson.large 240.289 to 240.289) may hide a faster first mark; the libjson and JsonCpp small rows show both marks, so the 1.09x figure is unaffected.",
+    "In lazy mode parse() only checks that the compacted text starts with { or [ and ends with the matching bracket; malformed content inside is not reported at parse time and later surfaces as silently nulled children (JSON_SAFE). Call libjson::is_valid first on untrusted input. Numbers use std::atof, which follows the C locale if the program calls setlocale."
+  ],
+  "pick_this_over_siblings_when": "Only when you maintain code that already uses libjson or need its comment-preserving round trips behind a C ABI; for new code yyjson or RapidJSON parse far faster with correct UTF-8 handling, simdjson On-Demand gives validated lazy access, and Parson or json.h cover the small permissive C library niche.",
+  "verified_claims_summary": "On the mloskot/json_benchmark README (2013, Visual C++ 11.0 32-bit, Xeon E5-2687W, Windows 7), 1000 passes over 500 small objects (87,428 bytes per pass) took 5.2787 s for libjson against 5.762 s for JsonCpp (about 1.09x, roughly 16.6 vs 15.2 MB/s, derived from page data) and 0.962 s for RapidJSON, with libjson's build options unpublished. libjson was not run under GCC 4.7, and on canada.json it took 240.289 s per 1000 parses against RapidJSON's 7.97 s, with no JsonCpp row for that compiler.",
+  "status_note": "Abandoned: last release libjson_7.6.1.zip dates from 2012-06-25, there is no public VCS and about 34 bug tickets are still open (many of them spam); BSD-2-Clause and small enough to vendor (RJSONIO on CRAN still ships a copy), but treat it as legacy code, not as a fast parser.",
+  "sources_read": [
+    "https://sourceforge.net/projects/libjson/",
+    "https://downloads.sourceforge.net/project/libjson/libjson_7.6.1.zip",
+    "libjson_7.6.1.zip: libjson/JSONOptions.h, libjson/libjson.h, libjson/License.txt, libjson/Documentation.pdf, libjson/makefile, _internal/Source/JSONWorker.cpp, _internal/Source/internalJSONNode.cpp, _internal/Source/internalJSONNode.h, _internal/Source/JSONNode.h, _internal/Source/NumberToString.h, _internal/Source/JSONPreparse.cpp, _internal/Source/JSONDebug.h, _internal/Source/JSONDefs.h, _internal/Source/JSONGlobals.h, _internal/TestSuite/Benchmark/main.cpp, _internal/TestSuite/Benchmark/makefile",
+    "https://sourceforge.net/p/libjson/bugs/",
+    "https://sourceforge.net/p/libjson/bugs/55/",
+    "https://sourceforge.net/p/libjson/bugs/61/",
+    "https://sourceforge.net/p/libjson/bugs/63/",
+    "https://sourceforge.net/p/libjson/bugs/65/",
+    "https://sourceforge.net/p/libjson/bugs/67/",
+    "https://sourceforge.net/p/libjson/discussion/",
+    "https://sourceforge.net/p/libjson/discussion/1119662/thread/da2a14760a/",
+    "https://sourceforge.net/p/libjson/files/",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/4d3d04b/README.md",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/c684c4a/README.md",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/benchmark_libjson.cpp",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/json_benchmark.hpp",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/6593fd4/json_benchmark.hpp",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/Jamroot",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/benchmark_jsoncpp.cpp",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/benchmark_rapidjson.cpp",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/run_benchmark.bat",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/data/one-json-per-line.jsons",
+    "https://raw.githubusercontent.com/mloskot/json_benchmark/HEAD/data/canada.json",
+    "https://github.com/mloskot/json_benchmark/commits/master",
+    "https://github.com/mloskot/json_benchmark/commit/dff5b86",
+    "https://github.com/cran/RJSONIO/tree/master/src",
+    "https://raw.githubusercontent.com/cran/RJSONIO/master/DESCRIPTION",
+    "https://raw.githubusercontent.com/cran/RJSONIO/master/src/libjson/JSONOptions.h",
+    "https://github.com/YaoxiangLi/RJSONIO"
+  ],
+  "confidence": 0.8
+}
