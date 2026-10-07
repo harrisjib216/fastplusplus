@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/tessil/array-hash",
+  "one_liner": "Header-only cache-conscious string hash map/set (Askitis array hash); about half the memory of std::unordered_map<std::string,T>, 1.3-2.3x faster lookups.",
+  "what_it_does": "tsl::array_map<CharT, T> and tsl::array_set<CharT> are hash containers specialised for string keys (char, char16_t, char32_t, binary keys with embedded nulls). The interface resembles std::unordered_map but is not a drop-in: insert/emplace take key and value as separate arguments, keys are passed as const CharT*, std::basic_string or std::basic_string_view (C++17), iterator dereference yields the value and the key comes from it.key() / it.key_sv(), and there is no std::pair value_type or bucket API. Prime-growth variants (array_pg_map/set), precalculated-hash lookups and built-in serialize/deserialize are included.",
+  "how_it_is_fast": "It implements the array hash table of Askitis and Zobel ('Cache-conscious collision resolution in string hash tables', 2005): each bucket is one malloc'd buffer holding [16-bit key length][key chars][32-bit index] records back to back, ended by a sentinel, so a lookup is one hash, one pointer chase into a contiguous buffer and a length-then-memcmp scan, with no per-key node and no std::string heap indirection. Mapped values live in a separate std::vector<T>, which keeps the bucket buffers small; the default max load factor is 2.0 (about two keys per bucket) with power-of-two masking. The memory saving comes from dropping the 32-byte std::string plus node and pointer overhead per key.",
+  "when_to_use": [
+    "Millions of string keys where RSS matters: 678.73 vs 1246.60 MiB for 13.1M Wikipedia titles and 1031.67 vs 2110.19 MiB for 28.8M short Askitis keys against std::unordered_map<std::string,int>.",
+    "Build-once, read-many dictionaries where the key count is known so reserve() avoids rehash (insert with reserve 249.52 vs 350.33 ns/key on Wikipedia titles).",
+    "Lookup-heavy workloads on medium or long keys that do not fit in SSO: 50-char random keys at 3M entries read 0.616 s vs 1.049 s for std::unordered_map in the author's 2017 shootout (1.70x, derived from page data).",
+    "String dictionaries that must be saved and reloaded quickly: serialize/deserialize with the hash_compatible fast path skips rehashing every key.",
+    "C++11 code that wants an MIT, header-only, dependency-free container and can live with a string-only, non-node API."
+  ],
+  "when_not_to_use": [
+    "Insert- or erase-heavy use without reserve: inserts are not faster (603.94 vs 590.88 ns/key on Wikipedia titles) and were 20% slower in the 2017 shootout (2.02 vs 1.68 s for 3M 50-char keys); erase was also slower (1.92 vs 1.66 s), because every append reallocs the bucket buffer and rehash re-hashes and copies every key.",
+    "Short keys where raw lookup speed matters most: open-addressing maps beat it (15-char keys at 3M: array_map 0.358 s vs tsl::robin_map 0.234, ska::flat_hash_map 0.249, tsl::hopscotch_map 0.260), and hopscotch_map also read Wikipedia titles faster (119.49 vs 138.24 ns/key).",
+    "Code that needs stable references, std::pair access, node extract/merge, bucket inspection or a custom allocator: any modification invalidates iterators, references and pointers, and memory comes from std::malloc/std::realloc and std::vector with no Allocator parameter (requested in issue #9).",
+    "Non-string keys (the shootout harness exits on its integer tests) or bool values: array_map<char, bool> fails to compile because the values vector is std::vector<bool> (issue #12, open since 2023-04).",
+    "Keys longer than 65,535 characters or more than 2^32 entries unless KeySizeT / IndexSizeT are widened; the insert throws std::length_error otherwise."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (Boost.Test only for the test suite)",
+    "min_toolchain": "C++11 (README: tested with GCC 4.8.4, Clang 3.5.0, Visual Studio 2015); string_view overloads and std::hash<string_view> default with C++17; CMake 3.10 for the optional exported target tsl::array_hash",
+    "platforms": "any; CI runs GCC and Clang on Linux x64 (including an ASan/UBSan job) and macOS, and MSVC on Windows x64 and x86",
+    "thread_safety": "Same as STL containers per the README: concurrent const access is fine, any writer needs external synchronisation.",
+    "drop_in_for_baseline": "partial — the member set mirrors std::unordered_map, but insert takes (key, value) instead of a std::pair, iterators yield the value and expose key()/key_sv(), keys must be character strings, and iterator/reference invalidation rules are much stricter"
+  },
+  "gotchas": [
+    "Any insert, erase or rehash invalidates all iterators, references and pointers to keys and values; erase removes the key at once but may delay the mapped value's destructor until the erased fraction passes a threshold (0.6) or shrink_to_fit() is called.",
+    "Hash choice is on you: the default is std::hash<std::string_view> under C++17 and a plain FNV-1a otherwise (README: CityHash64 gave about 40% faster reads than FNV-1a), and the default power-of-two policy masks low bits, so use array_pg_map/set with weak or identity-like hashes.",
+    "Rehash needs spare memory because keys are copied, not moved: on Wikipedia titles peak RSS was 823.54 MiB against a final 678.73 MiB without reserve; call reserve() when the count is known.",
+    "Harness notes for the headline numbers: lookups only test find() != end(), and in array_map find() never touches the separate values vector, so reading the value (one more random access into std::vector<T>) is not timed while std::unordered_map's value sits in the node it already loaded; the benchmark also ran array_map with the non-default StoreNullTerminator=false, CityHash64 for every map, a baseline insert that copies the key twice, and a best-of-20 driver that is not in the public gist."
+  ],
+  "pick_this_over_siblings_when": "Pick it over tsl::robin_map, tsl::hopscotch_map, absl::flat_hash_map or boost::unordered_flat_map keyed by std::string when memory per string key is the constraint and the map is mostly read (678.73 MiB vs 1077.99 for hopscotch_map and 1677.11 for google::dense_hash_map on Wikipedia titles, at 16% slower reads than hopscotch_map); if you also need prefix search or an even smaller footprint, tsl::htrie_map (402.25 MiB, built on this library) is the better fit.",
+  "verified_claims_summary": "Tessil's hat-trie benchmark (GCC 6.3, libstdc++, -std=c++11 -O3 -march=native, Intel i5-5200u, CityHash64 for all maps, 2017) inserted then looked up 13.1M shuffled Wikipedia titles: array_map read 138.24 vs 173.58 ns/key for std::unordered_map<std::string,int> (1.26x) at 678.73 vs 1246.60 MiB, inserted 249.52 vs 350.33 ns/key with reserve but 603.94 vs 590.88 without; on the Askitis short-key set it read 46.41 vs 105.05 ns/key (2.26x) at 1031.67 vs 2110.19 MiB. The author's 2017 hash-table-shootout CSV (Clang 5.0, same CPU, std::hash for all) agrees on direction: 3M 50-char keys read 1.70x faster but insert without reserve 1.20x slower (derived from page data).",
+  "status_note": "Maintenance mode rather than active: the last code change was in 2022 (std::max build fix, clang-format) and the 2023-2025 commits only update CI and CMake for v0.7.2 (2025-11-02); MIT, header-only and covered by an ASan/UBSan CI job, so it is easy to vendor, with the vector<bool> compile error (issue #12) still open.",
+  "sources_read": [
+    "https://github.com/Tessil/array-hash",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/README.md",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/include/tsl/array_hash.h",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/include/tsl/array_map.h",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/include/tsl/array_set.h",
+    "https://raw.githubusercontent.com/Tessil/array-hash/HEAD/include/tsl/array_growth_policy.h",
+    "https://github.com/Tessil/array-hash/commits/master",
+    "https://github.com/Tessil/array-hash/issues?q=is%3Aissue",
+    "https://github.com/Tessil/array-hash/issues/12",
+    "https://github.com/Tessil/array-hash/issues/9",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/README.md",
+    "https://gist.github.com/Tessil/72e11891fc155f5b2eb53de22cbc4053",
+    "https://github.com/Tessil/tessil.github.io/tree/master/_posts",
+    "https://raw.githubusercontent.com/Tessil/tessil.github.io/master/_posts/2016-08-29-benchmark-hopscotch-map.md",
+    "https://raw.githubusercontent.com/Tessil/tessil.github.io/master/_posts/2017-06-22-hat-trie.md",
+    "https://raw.githubusercontent.com/Tessil/tessil.github.io/master/other/hopscotch_map_benchmark_raw_results.csv",
+    "https://raw.githubusercontent.com/Tessil/tessil.github.io/master/other/hash_table_benchmark.html",
+    "https://raw.githubusercontent.com/Tessil/hash-table-shootout/master/src/tsl_array_map.cc",
+    "https://raw.githubusercontent.com/Tessil/hash-table-shootout/master/src/tsl_array_map_mlf_1_0.cc"
+  ],
+  "confidence": 0.85
+}
