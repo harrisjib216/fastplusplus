@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/ericlagergren/rocca",
+  "one_liner": "Unofficial ~350-line C intrinsics port of the original Rocca AEAD (AES-round based); designers report 4.5x over OpenSSL AES-256-GCM.",
+  "what_it_does": "Implements the original ToSC 2021 Rocca authenticated cipher (256-bit key, 128-bit nonce, 128-bit tag) as two one-shot C functions, rocca_seal and rocca_open, that write ciphertext||tag and verify it. There is no streaming or incremental API, no runtime CPU dispatch and no algorithm negotiation; it is a different cipher from AES-GCM or ChaCha20-Poly1305, so it is not wire-compatible with either.",
+  "how_it_is_fast": "Rocca keeps an eight-block (1024-bit) state and absorbs 32 bytes per step: the state update runs four AES rounds (AESENC on x86-64, AESE+AESMC on AArch64) plus XORs, and the keystream for each 32-byte block costs two more AES rounds, so about 6 AES rounds per 32 bytes, versus AES-256-GCM's 14 rounds per 16 bytes plus GHASH. The independent AES rounds in one update pipeline well on AES-NI or ARMv8 Crypto hardware; this port uses plain 128-bit intrinsics without wider VAES lanes.",
+  "when_to_use": [
+    "Research or teaching: a short, readable transcription of the original (pre-revision) Rocca round function and tag computation to compare against the ToSC 2021 paper.",
+    "Reproducing or porting original-Rocca test vectors: the repo ships a zero-length vector and four vectors (64-byte plaintext, 18- or 32-byte AD) that a transcription of rocca.c reproduces.",
+    "Throughput experiments on x86-64 with AES-NI or Apple Silicon, using messages whose plaintext and AD lengths are at most 32 bytes or exact multiples of 32 (the only lengths this code handles correctly)."
+  ],
+  "when_not_to_use": [
+    "Any production use: plaintexts longer than 32 bytes that are not a multiple of 32 do not round-trip, and trailing AD bytes are not authenticated (see gotchas).",
+    "On ARM64 where tag forgery resistance matters: the NEON tag comparison accepts a forged tag with probability about 2^-24.",
+    "Interoperating with revised Rocca (ePrint 2022/116, key feedforward added after cryptanalysis) or Rocca-S: this code implements the original attacked design and its outputs differ.",
+    "Linux/glibc builds or CPUs without AES instructions: rocca.c calls memset_s (C11 Annex K, absent from glibc), and without __AES__ (or ARMv8 Crypto) it stops at #error \"TODO\"; there is no portable fallback, contrary to the record's 'falls back slow otherwise'.",
+    "Nonce-reuse-prone settings: like AES-GCM, a repeated (key, nonce) pair is catastrophic per the header; there is no misuse resistance."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc with memset_s (C11 Annex K, e.g. macOS libc); <immintrin.h> or <arm_neon.h>",
+    "min_toolchain": "C11 compiler with AES intrinsics (-maes on x86-64); the test Makefile uses Apple clang's -arch x86_64 flag; the ARM64 path relies on implicit NEON vector-type conversion that GCC rejects without -flax-vector-conversions",
+    "platforms": "x86-64 with SSE2 and AES-NI; AArch64 with NEON and the Crypto extension (vminvq is AArch64-only); nothing else compiles",
+    "thread_safety": "reentrant: state lives on the stack and there is no global mutable state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness bug, reproduced in a Python transcription of src/rocca.c that matches the repo's own test vectors: the partial-block paths copy from the start of the buffer instead of offset nblocks*32 (memcpy(tmp, plaintext, remain) and memcpy(dst, tmp, remain) in rocca_seal, memcpy(tmp, ciphertext, remain) in rocca_open). For plaintexts of 33-63, 65-95 ... bytes, seal overwrites the first ciphertext bytes, leaves the trailing ciphertext bytes unwritten (left as the caller's buffer contents, i.e. plaintext in clear when encrypting in place) and rocca_open then rejects the message (lengths 33, 40, 63 and 100 all fail; 31, 32 and 64 pass).",
+    "Authentication bug, same cause: for associated data longer than 32 bytes and not a multiple of 32 (the README example uses 42 bytes), the last len%32 AD bytes are never absorbed, so an attacker can change them and rocca_open still accepts. Seal and open share the bug, and the tests and benchmark only use 18-, 32- and 64-byte or multiple-of-32 inputs, so it never shows.",
+    "ARM64 tag check is weak: constant_time_compare_u128 passes the byte-equality mask to vminvq_u32, which only requires each 32-bit word to contain at least one matching byte; a random tag is accepted with probability about 5.8e-8 (2^-24) instead of 2^-128 (from code analysis; the tests never feed a wrong tag). The x86-64 compare (all 16 bytes) is correct.",
+    "rocca_init lacks the key XOR of the revised design (open issue #1 since 2024-10-28, no reply), rocca_seal and rocca_open never check dst_len against plaintext_len+16 or ciphertext_len-16 despite documenting it, so a short output buffer overflows. test/test.c does contain a one-second seal throughput loop (MB/s, all-zero inputs, no baseline, no published numbers), contrary to the record's 'no benchmark code'."
+  ],
+  "pick_this_over_siblings_when": "Essentially never for real data: the README itself recommends AEGIS, and libaegis (AEGIS-128L/256) or HiAE offer comparable or higher measured AEAD throughput with maintained, tested code; the zig-rocca-s port tracks the newer Rocca-S design. Pick this only as a reference for the original ToSC 2021 Rocca.",
+  "verified_claims_summary": "The only comparative numbers are the designers' measurements of their own unreleased OpenSSL-integrated Rocca: 138.22 Gbps AEAD vs 30.59 Gbps OpenSSL AES-256-GCM and 7.57 Gbps ChaCha20-Poly1305 at 16 KiB on an Intel Core i7-1068NG7 (ToSC 2021 Table 7; compiler and flags unstated), with the margin shrinking to about 1.5x against VAES AES-GCM on an i9-11900 in the 2023 revision. None of these numbers measure this repository's code, which has never been benchmarked against a baseline.",
+  "status_note": "Abandoned since 2022-01-28 (four commits, one unanswered issue); BSD-3-Clause and small, but its partial-block and ARM64 tag-compare bugs make it unsafe to vendor as is.",
+  "sources_read": [
+    "https://github.com/ericlagergren/rocca",
+    "https://github.com/ericlagergren/rocca/commits/main",
+    "https://github.com/ericlagergren/rocca/issues?q=is%3Aissue",
+    "https://github.com/ericlagergren/rocca/issues/1",
+    "https://github.com/ericlagergren/rocca/tree/main/src",
+    "https://github.com/ericlagergren/rocca/tree/main/test",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/README.md",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/include/rocca.h",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/src/rocca.c",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/src/rocca_amd64.h",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/src/rocca_arm64.h",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/src/compile_flags.txt",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/test/test.c",
+    "https://raw.githubusercontent.com/ericlagergren/rocca/HEAD/test/Makefile",
+    "https://tosc.iacr.org/index.php/ToSC/article/download/8904/8480 (EGRESS_BLOCKED; paper figures taken from the verifier's record)",
+    "https://tosc.iacr.org/index.php/ToSC/article/view/8904 (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.85
+}
