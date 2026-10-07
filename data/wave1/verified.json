@@ -2434,8 +2434,8 @@
     "baseline_in_list": true,
     "metric": "throughput",
     "workload": "Deflate compression and inflate decompression of a roughly 100,000,000-byte text corpus (ratio column implies 100 MB, probably enwik8; the header does not name it), compared at several compression levels.",
-    "claimed_speedup": "Table in sdefl.h and sinfl.h. Compression: sdefl -0 127 MB/s vs zlib -1 72 MB/s; sdefl -5 45 MB/s vs zlib -6 24 MB/s; sdefl -7 38 MB/s vs zlib -9 20 MB/s. Decompression: sdefl 355 to 436 MB/s vs zlib 307 to 314 MB/s. Compressed ratio about equal (sdefl -5 36.46 vs zlib -6 36.55). Derived from page data: compression 1.8x, 1.9x and 1.9x over zlib at comparable levels; decompression 1.2x to 1.4x. vs miniz 1.0 -1: 127 vs 122 MB/s compress, 355 vs 208 MB/s decompress.",
-    "evidence_tier": "C",
+    "claimed_speedup": "Header table vs zlib 1.2.11 (no CPU, compiler, flags or corpus; comparison harness not public): sdefl -5 compresses faster than zlib -6 in the first-commit run, sinfl decompression 355-436 MB/s after the Oct 2021 re-measurement (201-230 MB/s in Dec 2020, slower than zlib); libdeflate 1.3 faster both ways in the same table. Ratio column says 36.46 vs 36.55 but the byte counts show sdefl -5 at 36,577,183 vs zlib -6 at 36,548,921 (sdefl larger).",
+    "evidence_tier": "D",
     "benchmark_url": "https://raw.githubusercontent.com/vurtun/lib/HEAD/sdefl.h",
     "baseline_stdlib": [],
     "compiler_and_flags": null,
@@ -2449,7 +2449,7 @@
     "stars_or_usage": "1.4k stars (vurtun/lib)",
     "has_code": true,
     "tradeoffs": "Small ANSI C (C89) single-header deflate (525 lines) and inflate (320 to 500 lines), about 3.7 KB each as WebAssembly; API is one-shot buffers (sdeflate/zsdeflate, sinflate/zsinflate) for raw deflate and zlib framing, with no gzip container or streaming interface found; the repo's other headers (json.h, sched.h, web.h) carry no performance claims.",
-    "caveats": "First-party table in the sdefl.h/sinfl.h header comments with no CPU, compiler, flags or corpus name; the ratio column implies a 100,000,000-byte input (probably enwik8). The table is laid out like lzbench output, but the comparison harness is not public: the repo's tests/defl_test.c only times sdeflate/sinflate on a file given on the command line (CLOCK_REALTIME, one pass per level) and never calls zlib, miniz or libdeflate. Library versions (sdefl 1.0, zlib 1.2.11, libdeflate 1.3, miniz 1.0) place the run around 2020. The numbers predate correctness fixes merged in March 2025 (PR #56 by lelegard): sinflate()/zsinflate() could overflow the caller's output buffer when it was too small, sdefl_bound() under-reported the worst-case size by 3 bytes (zsdeflate wrote past the reported bound under fuzzing), and decompress-size handling was wrong; the fixes add bounds checks in the decoder, so post-fix speed is unmeasured. The same table shows libdeflate 1.3 clearly ahead of sdefl (147 MB/s compress at -1, 667 to 689 MB/s decompress), so sdefl is faster than zlib but not the fastest deflate. Listed repo vurtun/mmx has been renamed vurtun/lib (the Readme title still says mmx); the comparison picks the sdefl and sinfl components out of a five-header collection (json.h, sched.h, web.h carry zlib/BSD licences). No independent measurements were found (one WebSearch returned nothing on sdefl). Ratios are derived from the page table. Unlicense option carries no patent grant.",
+    "caveats": "First-party table in the sdefl.h/sinfl.h header comments with no CPU, compiler, flags or corpus name; the ratio column implies a 100,000,000-byte input (probably enwik8). The table is laid out like lzbench output, but the comparison harness is not public: the repo's tests/defl_test.c only times sdeflate/sinflate on a file given on the command line (CLOCK_REALTIME, one pass per level) and never calls zlib, miniz or libdeflate. Library versions (sdefl 1.0, zlib 1.2.11, libdeflate 1.3, miniz 1.0) place the run around 2020. The numbers predate correctness fixes merged in March 2025 (PR #56 by lelegard): sinflate()/zsinflate() could overflow the caller's output buffer when it was too small, sdefl_bound() under-reported the worst-case size by 3 bytes (zsdeflate wrote past the reported bound under fuzzing), and decompress-size handling was wrong; the fixes add bounds checks in the decoder, so post-fix speed is unmeasured. The same table shows libdeflate 1.3 clearly ahead of sdefl (147 MB/s compress at -1, 667 to 689 MB/s decompress), so sdefl is faster than zlib but not the fastest deflate. Listed repo vurtun/mmx has been renamed vurtun/lib (the Readme title still says mmx); the comparison picks the sdefl and sinfl components out of a five-header collection (json.h, sched.h, web.h carry zlib/BSD licences). No independent measurements were found (one WebSearch returned nothing on sdefl). Ratios are derived from the page table. Unlicense option carries no patent grant. [retier] Baseline rows and sdefl compression columns measured on the first commit with a malformed dynamic-block header (#34) and before the invalid-length-code fix (#40); only decompression re-measured. sdefl_bound() under-sizes incompressible input above 1-1.5 MiB (heap overflow for callers such as raylib CompressData); seq[] overflow guarded only by assert(); sinfl mis-decodes incomplete Huffman codes and can over-read; open #66, #69, #58 with no maintainer reply. Repo renamed from vurtun/mmx; stale since 2025-03-19.",
     "found_via": [
       "seed-list mining backfill: awesome-c Source Code Collections entry for vurtun/mmx; github.com/vurtun/mmx redirects to vurtun/lib; benchmark table in sdefl.h"
     ],
@@ -2477,10 +2477,24 @@
         "https://github.com/vurtun/lib/pull/56"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "The header table mixes runs: its baseline rows and sdefl compression columns come from the first commit, whose encoder emitted a malformed dynamic-block header (288 literal codes, fixed in issue #34) and predate the length-code-286 fix (#40), only the decompression column was re-measured, and the ratio column contradicts the listed byte counts; no harness, CPU, compiler or flags are public. Directional only (numbers-before-correctness-fix precedent).",
+        "urls_opened": [
+          "https://github.com/vurtun/lib/blob/master/sdefl.h",
+          "https://github.com/vurtun/lib/blob/master/sinfl.h",
+          "https://github.com/vurtun/lib/issues/34",
+          "https://github.com/vurtun/lib/issues/40",
+          "https://github.com/vurtun/lib/issues/66",
+          "https://github.com/vurtun/lib/issues/69"
+        ]
+      }
     },
     "corrected_fields": {
-      "caveats": "First-party table in the header comment with no CPU, compiler, flags or corpus name, and no benchmark code in the repo; library versions (zlib 1.2.11, libdeflate 1.3, miniz 1.0) place it around 2020 to 2021. The same table shows libdeflate 1.3 clearly ahead of sdefl (147 MB/s compress at -1, 667 to 689 MB/s decompress), so sdefl is 'faster than zlib' but not the fastest deflate. Listed repo vurtun/mmx has been renamed vurtun/lib (the Readme title still says mmx). The comparison picks the sdefl and sinfl components out of a five-header collection. No independent measurements were found. Ratios are derived from the page table."
+      "caveats": "First-party table in the header comment with no CPU, compiler, flags or corpus name, and no benchmark code in the repo; library versions (zlib 1.2.11, libdeflate 1.3, miniz 1.0) place it around 2020 to 2021. The same table shows libdeflate 1.3 clearly ahead of sdefl (147 MB/s compress at -1, 667 to 689 MB/s decompress), so sdefl is 'faster than zlib' but not the fastest deflate. Listed repo vurtun/mmx has been renamed vurtun/lib (the Readme title still says mmx). The comparison picks the sdefl and sinfl components out of a five-header collection. No independent measurements were found. Ratios are derived from the page table.",
+      "claimed_speedup": "Table in sdefl.h and sinfl.h. Compression: sdefl -0 127 MB/s vs zlib -1 72 MB/s; sdefl -5 45 MB/s vs zlib -6 24 MB/s; sdefl -7 38 MB/s vs zlib -9 20 MB/s. Decompression: sdefl 355 to 436 MB/s vs zlib 307 to 314 MB/s. Compressed ratio about equal (sdefl -5 36.46 vs zlib -6 36.55). Derived from page data: compression 1.8x, 1.9x and 1.9x over zlib at comparable levels; decompression 1.2x to 1.4x. vs miniz 1.0 -1: 127 vs 122 MB/s compress, 355 vs 208 MB/s decompress."
     }
   },
   {

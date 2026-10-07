@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/vurtun/lib",
+  "one_liner": "Two tiny single-header C files for raw deflate and zlib: compressor about 1.8x zlib 1.2.11, decoder 1.2-1.4x (first-party).",
+  "what_it_does": "sdefl.h compresses a whole in-memory buffer to raw deflate (sdeflate) or zlib framing (zsdeflate) at levels 0-8; sinfl.h decodes raw deflate (sinflate) or zlib (zsinflate) into a caller buffer of fixed capacity. The API is one-shot with int sizes: no streaming, no gzip container, no preset dictionary, and the caller supplies the roughly 0.94 MB struct sdefl state. Output is standard deflate that other decoders read, but the API is not zlib's z_stream interface.",
+  "how_it_is_fast": "The compressor uses hash chains over a 32 KB window (15-bit multiplicative hash of 4 bytes) with chain length 2^(level+1) (2 at level 0, 256 at level 7, 8192 at level 8), greedy parsing below level 5 and one-step lazy matching from level 5, skips hash insertion inside long matches at levels 0-1, and emits per-256 KB-block dynamic Huffman (14-bit literal code limit) or stored blocks, never fixed ones. The decoder keeps a 64-bit bit buffer with a branchless refill (8-byte unaligned load, bitcnt |= 56), two-level lookup tables (10-bit literal/length root, 8-bit distance root), decodes two literals per refill, and copies matches 16 bytes at a time (SSE2/NEON) or 8 bytes at a time, with a broadcast for distance 1, whenever 48 bytes of output headroom remain. It also omits the input-end and back-reference distance checks a validating decoder performs (open issue #66), so its decode speed is not like-for-like with zlib's.",
+  "when_to_use": [
+    "Small C or C++ programs, games and WebAssembly modules where about 3.7 KB per side matters and vendoring zlib or libdeflate is too heavy (raylib vendors both headers for CompressData/DecompressData).",
+    "Compressing your own in-memory buffers (assets, save files, PNG IDAT) at levels 0-7, where the header table shows about 1.8x zlib 1.2.11's compression speed at similar ratio.",
+    "Round-tripping data your own program produced and stored with its decompressed size, so the one-shot sinflate output buffer can be sized exactly.",
+    "x86-64 or ARM/AArch64 hosts, where sinfl's 16-byte SIMD match copies apply."
+  ],
+  "when_not_to_use": [
+    "Any untrusted or third-party compressed input: sinfl has no input-end check in Huffman blocks, no back-reference distance check and an unbounded code-length repeat loop that overflows a 320-byte stack array (open issues #66 and #69, no maintainer reply).",
+    "When speed is the goal: libdeflate 1.3 in the same table compresses faster at level 1 (147 vs 127 MB/s at a smaller output) and decodes about 1.6x faster (667-689 vs 355-436 MB/s).",
+    "Streaming, gzip files, preset dictionaries, inputs of 2 GB or more (int sizes) or unknown decompressed size: only one-shot buffer calls exist.",
+    "Incompressible inputs above about 1 MiB when the output buffer is sized with sdefl_bound() (see gotchas).",
+    "Level 8: an 8192-entry chain (32x level 7) that the table does not cover; a raylib/rpng user reported 14 s versus 4 s for stb_image_write on a 4096x4096 RGBA PNG (issue #35, level not stated)."
+  ],
+  "integration": {
+    "form": "header-only (two single-header files; define SDEFL_IMPLEMENTATION / SINFL_IMPLEMENTATION in one translation unit)",
+    "dependencies": "none beyond the C standard library (string.h, assert.h, limits.h); emmintrin.h or arm_neon.h when SIMD is enabled",
+    "min_toolchain": "sdefl targets C89 with a portable ilog2 fallback; sinfl needs C99-level features in practice (unsigned long long, a // comment, a declaration after a statement in zsinflate) plus __builtin_clz (GCC/Clang/TCC) or _BitScanReverse (MSVC), with no portable fallback; usable from C++ via extern \"C\"",
+    "platforms": "any for sdefl; sinfl uses SSE2 on x86-64/Windows and NEON on ARM/AArch64, a scalar 64-bit path elsewhere (SINFL_NO_SIMD forces it), and assumes a little-endian host because native 64-bit loads feed its LSB-first bit buffer (not documented)",
+    "thread_safety": "Not documented; by code reading reentrant (only static const tables), with one struct sdefl per concurrent compression and about 8 KB of decoder state on the stack",
+    "drop_in_for_baseline": "partial: output is standard raw deflate or zlib that zlib reads, but the API is one-shot buffers with no z_stream, and sinfl mis-decodes some valid third-party streams (see gotchas)"
+  },
+  "gotchas": [
+    "sdefl_bound() still under-reports for incompressible input after the 2025 fix (by code reading and arithmetic, not executed): every 256 KB block falls back to five stored chunks (25 bytes overhead) while the bound budgets about 20 bytes per 256 KB, so random data passes the bound from about 1 MiB (zsdeflate) or 1.5 MiB (sdeflate); zsdeflate overruns it by 60 bytes at 4 MiB and 1,260 bytes at 64 MiB. Callers that allocate sdefl_bound() bytes overflow the heap; raylib's CompressData does, with the older, smaller formula.",
+    "The per-block sequence array (87,382 entries per 256 KB) assumes at most one sequence per 3 bytes, but alternating 1-byte literals and 4-byte matches give 2 per 5 bytes (104,858). Only assert() guards it, so NDEBUG builds can write past seq[] into the rest of struct sdefl and beyond on crafted input. Real image data already hit the earlier one-per-4-bytes cap (issue #39, which led to the current size). sdeflate also never resets seq_cnt (open issue #58), so zero the struct before first use.",
+    "sinfl's refill reads 8 bytes past the current position even on valid streams (issue #69): pad input buffers by 8 bytes. Malformed input can read before the output buffer (unchecked distances) and overflow the stack through code-length repeats (issue #66). Raw sinflate returns the bytes decoded so far, not an error, on corrupt input. The fast path can also consume a literal plus a full match (up to 63 bits) after a refill that guarantees only 56, a gap guarded only by assert(), so rare valid streams with near-15-bit codes may mis-decode (code reading only).",
+    "sinfl_build replaces any incomplete Huffman code with symbol 0. A valid block whose only distance code is not code 0 (miniz's tdefl emits a single 1-bit code; RFC 1951 allows it) therefore decodes with distance 1, silently wrong under sinflate and caught only by the Adler-32 check in zsinflate (code reading, not executed)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over miniz when you want the smallest encoder and decoder pair and more speed (127 vs 122 MB/s compression at a much better ratio, 355-436 vs 208-261 MB/s decompression in the same table). Pick libdeflate when speed matters, since it wins both ways in the same table, and Wuffs, zlib-ng or libdeflate for any input you did not produce yourself.",
+  "verified_claims_summary": "The first-party table in both headers gives, for an unnamed input of about 100 MB (probably enwik8) with no CPU, compiler, flags or harness: sdefl compresses at 127/45/38 MB/s (levels 0/5/7) against zlib 1.2.11's 72/24/20 MB/s (levels 1/6/9), and sinfl decodes sdefl output at 355-436 MB/s against zlib's 307-314 MB/s. Git history shows only the sdefl decompression column was re-measured (201-230 MB/s in Dec 2020, slower than zlib, then 233-276, 371-423 and 355-436 by Oct 2021), while the zlib, miniz and libdeflate rows and sdefl's compression columns are unchanged since the first commit; the sdefl ratio column also disagrees with its own byte counts (sdefl -5 writes 36,577,183 bytes, more than zlib -6's 36,548,921, though the column shows 36.46 vs 36.55).",
+  "status_note": "Stale since 2025-03-19, with security issues #66 and #69 open and unanswered as of 2026-10, but MIT or Unlicense and short enough to vendor; patch the bounds yourself or start from raylib's partly hardened copy (it adds input-end and distance checks, not the repeat bound), and use it only on data you produced.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/vurtun/lib/HEAD/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/HEAD/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/vurtun/lib/HEAD/tests/defl_test.c",
+    "https://github.com/vurtun/lib/pull/56",
+    "https://github.com/vurtun/lib/issues?q=is%3Aissue",
+    "https://github.com/vurtun/lib/issues/66",
+    "https://github.com/vurtun/lib/issues/69",
+    "https://github.com/vurtun/lib/issues/58",
+    "https://github.com/vurtun/lib/issues/39",
+    "https://github.com/vurtun/lib/issues/35",
+    "https://github.com/vurtun/lib/issues/40",
+    "https://github.com/vurtun/lib/issues/52",
+    "https://github.com/vurtun/lib/commits/master",
+    "https://github.com/vurtun/lib/commits/master/sdefl.h",
+    "https://github.com/vurtun/lib/commits/master/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/956ac0477aa99be2082768c816c365a514e716c1/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/ba74d5d65ad17749f7c32e6f9f8e896085f3cdc4/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/85d2cd7d85a83f82c61995c63fdd1bef10eef326/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/c26fcf8f4ed4670aea0f989b9c66ba73484329a6/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/177d6bc7b59b5d579e8292ecfb4943726e086218/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/4f93c8255a031af643d24d60ec4a2237b8ef7ba7/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/8252ab92429f3b14ce792f052ad821c84357bf92/sinfl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/71382a1d14dad58219e7f6634d2381fa30dab175/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/d41cf94679443efc14174cac103c9c15bb115860/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/7f77450007297c8e7312795c31db6299c0f66d3f/sdefl.h",
+    "https://raw.githubusercontent.com/vurtun/lib/5a3f3aba052e63ffae8eb0214c6bb8ffffedea3c/sdefl.h",
+    "https://raw.githubusercontent.com/raysan5/raylib/HEAD/src/external/sdefl.h",
+    "https://raw.githubusercontent.com/raysan5/raylib/HEAD/src/external/sinfl.h",
+    "https://raw.githubusercontent.com/raysan5/raylib/HEAD/src/rcore.c",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_tdef.c"
+  ],
+  "confidence": 0.8
+}
