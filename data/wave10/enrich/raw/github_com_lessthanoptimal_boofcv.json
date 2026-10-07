@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/lessthanoptimal/boofcv",
+  "one_liner": "Pure-Java computer vision library; the author's 2019 run beat OpenCV-Python on corners, histogram and Sobel but lost on blur and Canny.",
+  "what_it_does": "BoofCV is an Apache-2.0 computer vision library written entirely in Java: low-level image processing (blur, derivatives, thresholding, histograms, binary contours), feature detection and description (Shi-Tomasi, SIFT, SURF), Hough lines, camera calibration, fiducials and QR codes, tracking and structure from motion. Its API uses typed image classes (GrayU8, GrayS16, GrayF32, Planar) and factories (FactoryBlurFilter, FactoryDerivative, FactoryDetectPoint, FactoryDetectLine) that return reusable processor objects writing into caller-supplied output images. It is not a drop-in for OpenCV's API; an optional boofcv-javacv module wraps JavaCV for OpenCV interop.",
+  "how_it_is_fast": "Image operations come as type-specialised variants produced by a code generator (the build has an explicit autogenerate step), and hot operations have multithreaded implementations (for example ImplThresholdImageOps_MT) selected through the global BoofConcurrency.USE_CONCURRENT switch. Processor objects reuse preallocated output images instead of allocating per call. Some of the measured wins come from doing less work rather than faster kernels: its Hough polar detector votes only with gradient edges above a threshold, and its contour finder is an external-only linear-time tracer.",
+  "when_to_use": [
+    "JVM or Android applications that need computer vision without JNI or native OpenCV binaries (pure Java; a boofcv-android module exists).",
+    "Fiducial markers, QR codes, camera calibration or structure from motion inside a Java stack, where BoofCV offers ready-made pipelines.",
+    "Long-running, many-frame pipelines on the JVM that reuse output buffers, so JIT warm-up and allocation are amortised as in the JMH numbers.",
+    "Shi-Tomasi corners, histograms or gradient images on large grayscale frames, where the 2019 run had BoofCV ahead of opencv-python (with the caveats below)."
+  ],
+  "when_not_to_use": [
+    "Gaussian blur, Canny edges or local mean thresholding: OpenCV was 3.0x, 2.3x and 1.3x faster in the same author run.",
+    "Colour conversion or resampling: no row of the benchmark measures either, so nothing supports placing it in this category; the native siblings (fast_image_resize, kornia-rs, libvips, Pillow-SIMD) have like-for-like numbers.",
+    "C, C++ or Python projects: using it means embedding a JVM; there is no native build.",
+    "Short-lived or cold-start workloads: the JMH figures exclude JIT warm-up, which a one-shot command-line call pays.",
+    "When outputs must match OpenCV bit for bit: RGB-to-gray is a plain average by default and Gaussian blur rounds where OpenCV truncates, per the SpeedTestCV notes."
+  ],
+  "integration": {
+    "form": "Java library jars on Maven Central (org.boofcv:boofcv-core plus optional modules such as boofcv-swing, boofcv-ffmpeg, boofcv-javacv, boofcv-android, boofcv-kotlin)",
+    "dependencies": "EJML, GeoRegression, DDogleg, DeepBoof and args4j for the core; optional bytedeco FFmpeg and JavaCV native binaries (platform-specific, no longer bundled by default since 1.5.0) for the integration modules",
+    "min_toolchain": "Java 11 or newer to run (README); building from source uses the bundled Gradle wrapper with an autogenerate step",
+    "platforms": "any JVM platform (desktop, server, Android); native code only in the optional FFmpeg and JavaCV modules",
+    "thread_safety": "not documented in what was read; multithreading is a global switch (BoofConcurrency.USE_CONCURRENT) that the benchmark notes must be set before filters are constructed, and processor objects hold their own output and work buffers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the Sobel row (read this session in opencv/benchmark.py, unchanged since 2019): OpenCV is called with ksize=1, which OpenCV defines as a 3x1/1x3 derivative kernel with no smoothing, while BoofCV computes the 3x3 Sobel; OpenCV also allocates two new CV_16S outputs per call while BoofCV writes into preallocated images, so the 1.7x compares different operators and memory handling.",
+    "Harness flaw in the contour row: BoofCV thresholds binary.png with down=true, so dark pixels (38.9% of the 3648x2736 image) are foreground, while OpenCV traces the non-zero white pixels (61.1%) and is asked for RETR_CCOMP (outer and hole contours) against BoofCV's external-only finder; the two sides trace complementary regions, so the 1.8x is not like-for-like.",
+    "The 4.2x Hough row is an artefact: essentially every pixel of the grayscale chessboard photo is non-zero (checked this session), so OpenCV's HoughLines votes with all ~10 million pixels at 180 angles, whereas BoofCV votes only with gradient edges above 50. The OpenCV histogram row is a single cold call against a JMH average, and BoofCV's threshMean error (plus or minus 9.822 ms on 20.495 ms, about 48%) makes that row noise.",
+    "BoofConcurrency.USE_CONCURRENT is global state read at construction time: filters created before it is set keep the old threading mode."
+  ],
+  "pick_this_over_siblings_when": "Pick BoofCV only when you are on the JVM and want a whole pure-Java vision stack; for colour conversion or resizing speed, fast_image_resize and kornia-rs carry like-for-like measurements, and OpenCV (also catalogued) won blur, Canny and thresholding in BoofCV's own comparison.",
+  "verified_claims_summary": "The author's SpeedTestCV example outputs, both written on 2019-03-21 and never re-run, time BoofCV 0.33.1 under JMH (3 warm-up and 5 measured iterations, concurrency on) against opencv-python 4.0.0.21 timed by a Python loop (mean of 10 calls, multithreaded as shipped) on a 3648x2736 chessboard photo and a binary PNG, on unstated hardware. BoofCV led on Shi-Tomasi corners (7.2x), Hough (4.2x), histogram (3.1x), external contours (1.8x) and Sobel (1.7x), and trailed on Gaussian blur (OpenCV 3.0x), Canny (2.3x) and mean threshold (1.3x); the Hough, contour and Sobel wins compare different work.",
+  "status_note": "Actively maintained (last commit 2026-10-06, 5,605 commits, 1.5.0 on Maven Central, 54 open issues) and Apache-2.0, so easy to adopt on the JVM, but the only OpenCV comparison is a seven-year-old first-party run with no hardware stated, and most of its wins rest on rows that are not like-for-like.",
+  "sources_read": [
+    "https://github.com/lessthanoptimal/BoofCV",
+    "https://github.com/lessthanoptimal/BoofCV/issues?q=is%3Aissue+performance",
+    "https://raw.githubusercontent.com/lessthanoptimal/BoofCV/HEAD/README.md",
+    "https://raw.githubusercontent.com/lessthanoptimal/BoofCV/HEAD/main/boofcv-ip/src/main/java/boofcv/alg/filter/binary/ThresholdImageOps.java",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/boofcv/readme.md",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/opencv/readme.md",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/opencv/benchmark.py",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/boofcv/src/jmh/java/speed/BenchmarkImageProcessing.java",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/boofcv/build.gradle",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/0bd58bd/boofcv/src/main/java/speed/BenchmarkImageProcessing.java",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/0bd58bd/opencv/benchmark.py",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/data/chessboard_large.jpg",
+    "https://raw.githubusercontent.com/lessthanoptimal/SpeedTestCV/HEAD/data/binary.png"
+  ],
+  "confidence": 0.8
+}

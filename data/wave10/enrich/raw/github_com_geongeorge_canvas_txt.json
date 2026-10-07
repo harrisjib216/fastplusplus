@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/geongeorge/canvas-txt",
+  "one_liner": "Canvas 2D text-box layout for JavaScript that wraps text about 9-11x faster than canvas-hypertxt's measuring mode by caching word widths.",
+  "what_it_does": "Lays out and draws multi-line text inside a box on any Canvas 2D context (browser, OffscreenCanvas, node-canvas, skia-canvas): wrapping, horizontal and vertical alignment, justification, overflow hidden or ellipsis, maxLines, letterSpacing and RTL. The API is drawText(ctx, text, config) for one-shot use, or layoutText() once plus drawTextLayout() per frame; splitText({ctx, text, width}) returns just the wrapped lines and is the call the benchmark times. It is not a drop-in for canvas-hypertxt's split(ctx, text, font, width, hyper) signature, though it returns the same string[] shape.",
+  "how_it_is_fast": "Text is cut into segments with Intl.Segmenter (word granularity), each segment's width is measured once per font and kept in a module-level Map (FIFO cap 10,000 segments per font key), and line fitting then sums cached numbers instead of calling measureText on growing substrings, which is what canvas-hypertxt's standard mode does character by character. Whole results are also memoised (500 split results and 500 layouts, FIFO) and returned frozen, so repeated identical calls are a Map lookup. The speedup therefore comes from avoiding measureText calls, which are especially slow in node-canvas (Pango/Cairo), the backend the benchmark used.",
+  "when_to_use": [
+    "Canvas apps that re-wrap the same vocabulary repeatedly (data grids, canvas editors, chart labels, games), where the per-font width cache stays warm.",
+    "Render loops that redraw unchanged text: layoutText once and paint with drawTextLayout every frame with no re-measuring.",
+    "Server-side image generation with node-canvas or skia-canvas, where measureText is costly and the cache saves the most.",
+    "Text with CJK, Thai or emoji where splitting inside a grapheme or surrogate pair is unacceptable and a whitespace-only splitter breaks badly.",
+    "You want a complete text-box renderer (alignment, ellipsis, justification, debug guides) in about 4 kB gzipped with zero dependencies."
+  ],
+  "when_not_to_use": [
+    "Typeset-quality line breaking: breaks come from UAX-29 word boundaries, not UAX-14 line-break rules, so a trailing comma, period, closing parenthesis or the second half of a hyphenated word can start a new line (reproduced this session with the repo's wrap.ts).",
+    "One-off wrapping of unique text with an unfamiliar vocabulary: on a cold cache every segment still costs a measureText call, and the shipped benchmark never measures a cold-cache case.",
+    "You need kerning-exact line widths by default: the cached default sums per-segment widths; the exact whole-line mode (cache: false) exists but was not benchmarked.",
+    "Older runtimes: v5 needs Intl.Segmenter and ES2022 in browsers and Node 18 or newer (a whitespace-split fallback runs where Intl.Segmenter is absent, losing the Unicode handling).",
+    "Pure row-height prediction for virtualised lists of Latin text, where uWrap reports roughly 10x over canvas-hypertxt in browsers with a smaller footprint."
+  ],
+  "integration": {
+    "form": "module (npm package canvas-txt; ESM, CJS and an IIFE global window.canvasTxt)",
+    "dependencies": "none at runtime (node-canvas, canvas-hypertxt and canvas-txt@4.1.1 are devDependencies for tests and the benchmark)",
+    "min_toolchain": "Node >= 18 (engines field); modern evergreen browsers with Intl.Segmenter and ES2022; TypeScript types included",
+    "platforms": "any JavaScript runtime with a Canvas 2D-like context (browsers, workers via OffscreenCanvas, node-canvas, skia-canvas)",
+    "thread_safety": "not documented; JavaScript is single-threaded, and the width caches and result memos are module-level state shared by every caller in one realm (each worker keeps its own copy)",
+    "drop_in_for_baseline": "partial — returns string[] lines like canvas-hypertxt's split, but the call takes ({ctx, text, width}) and uses the context's current font instead of a font argument, and has no estimation (hyper) mode"
+  },
+  "gotchas": [
+    "Harness flaw: the benchmark times canvas-txt's default cached mode, which sums per-segment widths and ignores kerning across segment boundaries, against canvas-hypertxt's standard mode, which measures every candidate substring with measureText; the README calls this 'exact measuring', but canvas-txt's own exact mode is cache: false (whole-line measuring), which compare.mjs never runs. The repo's tests check that cached and exact modes give identical breaks on 5 texts at 3 widths in node-canvas Arial, and that summed widths are within 0.5 px.",
+    "Benchmark cache handling is one-sided: only canvas-hypertxt's cache is cleared before each contender, so canvas-txt's never-repeating 600-character row starts with all 5,000 numeric prefixes and the lorem-ipsum vocabulary already measured by the earlier 100-character pass; the text has no punctuation, so the punctuation line-break behaviour above is never exercised, and the printed line-count sanity check is not reported.",
+    "Memoised layouts and split results are frozen and shared; mutating them throws in strict mode. Pass cache: false for mutable, unshared results.",
+    "Width caches are keyed by the font string and never notice a web font finishing loading: call clearMeasurementCache() after document.fonts.ready, or widths measured on the fallback font persist."
+  ],
+  "pick_this_over_siblings_when": "Pick canvas-txt over canvas-hypertxt when you want a full text-box renderer with Unicode-aware segmentation and your text reuses a vocabulary, since its cached mode was about 9-11x faster on cycled and never-repeating strings; pick uWrap when you only need line counts or splits for Latin text in browser virtualised lists, and Pretext when you need DOM-free measurement for HTML layout rather than canvas drawing.",
+  "verified_claims_summary": "First-party run of packages/canvas-txt/bench/compare.mjs on an unnamed Apple Silicon machine (Node version not stated, node-canvas ^3.2.3, canvas-hypertxt ^1.0.3): 5,000 splitText calls on 600-character lorem-ipsum strings at 400 px in 16px Arial, one timed pass per contender, took 51.3 vs 566.2 µs/op on never-repeating strings (about 11x) and 5.6 vs 48.3 µs/op on 500 cycled strings (about 8.6x, both derived from page data), while canvas-hypertxt was slightly faster when one string repeats (0.9 vs 1.1 µs/op, both answering from a result memo). canvas-txt ran its approximate cached mode, not its exact whole-line mode.",
+  "status_note": "Active (v5.0.2 rewrite and all recent commits on 2026-08-10, co-authored with an AI assistant, every listed issue closed), MIT-licensed and dependency-free, so easy to adopt; the speed numbers are first-party, single-run and favour canvas-txt's warm cache, and its UAX-29-based wrapping can push punctuation onto a new line.",
+  "sources_read": [
+    "https://github.com/geongeorge/Canvas-Txt/tree/master/packages/canvas-txt/src",
+    "https://github.com/geongeorge/Canvas-Txt/issues?q=is%3Aissue",
+    "https://github.com/geongeorge/Canvas-Txt/commits/master",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/README.md",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/MIGRATION.md",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/bench/compare.mjs",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/package.json",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/cache.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/wrap.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/measure.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/layout.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/index.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/font.ts",
+    "https://raw.githubusercontent.com/geongeorge/Canvas-Txt/HEAD/packages/canvas-txt/src/canvas-txt.test.ts",
+    "https://github.com/glideapps/canvas-hypertxt/tree/main/src",
+    "https://raw.githubusercontent.com/glideapps/canvas-hypertxt/main/src/multi-line.ts",
+    "https://raw.githubusercontent.com/leeoniya/uWrap/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
