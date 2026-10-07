@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/cpgf/cpgf",
+  "one_liner": "Discontinued C++ callback and callback-list (signal) headers; 2011 numbers beat Boost.Signals2 and tie libsigc++ on single calls.",
+  "what_it_does": "GCallback<void (int)> is a type-erased callable (free function, member function plus object pointer, or functor), close to std::function in shape, built with makeCallback(&obj, &T::method). GCallbackList<void (int)> is a minimal signal: add() appends a callback, remove() and clear() blank entries, operator() calls every live callback in order. It returns nothing per slot, has no connection handles, combiners, blocking or slot tracking, so it is not a drop-in for Boost.Signals2 or libsigc++.",
+  "how_it_is_fast": "GCallback stores the target in a small inline buffer and dispatches through a static per-type table of function pointers (a hand-rolled vtable: destroy, clone, invoker, isSame), so a call is two dependent loads and one indirect call with no locking. GCallbackList is a plain std::deque of GCallback walked by index, with no mutex, no copied slot-list snapshot, no combiner and no tracked-object locking; that missing machinery is where the 4x to 14x gap to the default thread-safe Boost.Signals2 signal comes from, and lower per-emission setup is why it leads libsigc++ at 5 to 10 slots.",
+  "when_to_use": [
+    "Maintaining code that already uses cpgf (for example the author's gincu engine) and needs its callback lists.",
+    "Single-threaded event dispatch with a handful of listeners per event, where an unsynchronized vector-of-callbacks is all you need.",
+    "Reading a compact example of std::function-style type erasure with a function-pointer table instead of virtual functions.",
+    "New code only if you cannot take the author's successor, eventpp, which the README recommends for the callback list feature."
+  ],
+  "when_not_to_use": [
+    "Any new project: the README says cpgf is not continued and points callback-list users to eventpp (already catalogued).",
+    "Multi-threaded emit or connect: GCallbackList has no locking and its const operator() erases cleared entries from a mutable deque during dispatch.",
+    "When you need connection objects, scoped disconnection, slot return values or combiners, or lifetime tracking (Boost.Signals2 and libsigc++ features absent here).",
+    "When the target is plain std::function speed: no benchmark against std::function exists, and the invoke path (base pointer, table pointer, indirect call) is not obviously cheaper.",
+    "Signals with dozens of slots: the lead over libsigc++ falls to 1.17x (VC 9) and 1.31x (GCC) at 50 slots, within the noise of this harness."
+  ],
+  "integration": {
+    "form": "header-only (include/cpgf/gcallback.h and gcallbacklist.h plus a few cpgf utility headers: gfunctiontraits.h, gtypetraits.h, gcompiler.h, gpp.h, gtypelist.h, gassert.h, genableif.h); the rest of cpgf is a CMake-built static library",
+    "dependencies": "none beyond the C++ standard library for the callback headers",
+    "min_toolchain": "C++11 since cpgf 1.6 (README: VC 2015 and GCC 4.9.1 tested, later GCC 7.3.0 and Clang 5.0.2 on Ubuntu 18.04); the library requires exceptions and RTTI, and an empty GCallback throws std::bad_function_call",
+    "platforms": "any (README lists Windows, Linux and macOS builds)",
+    "thread_safety": "none documented; GCallbackList has no mutex and mutates its deque inside the const call operator",
+    "drop_in_for_baseline": "no: different API from Boost.Signals2 and libsigc++ (no connections, combiners, slot tracking or return collection); GCallback alone is close to std::function but not a drop-in"
+  },
+  "gotchas": [
+    "The published numbers measured the 2011 C++03 implementation (GCallbackList with GCallbackConnection over std::list, per the harness's commented typedef). Callback and callback list were rewritten in C++11 in March 2017 (commit history of gcallbacklist.h), while the harness (committed 2011-10-04, never updated) calls callbackList.add(&obj, &member) with two arguments, which the current one-argument add() does not accept; the harness also includes cpgf/testcase/benchmark/benchmarkcallback.h, a path that does not exist, and uses GWiseMap, which the callback headers no longer provide. The table therefore cannot be reproduced against today's code.",
+    "Harness timing is coarse: all 64 cells are exact multiples of 15.625 ms, the Windows XP clock() tick (checked arithmetically), each cell is one run (Iterates_Generations = 1), so the single-slot cpgf vs libsigc++ differences (781 vs 766, 719 vs 672, 468 vs 438 ms) are one to three ticks and not meaningful. The 46-47 ms 'native call' rows are about one cycle per iteration at 2 GHz, so the compiler collapsed those loops rather than timing a call. Boost.Signals2 ran with its default mutex (a thread-safe signal against two unsynchronized ones; a dummy_mutex signal was not tried), and the Boost single-slot rows invoke a signals2::slot directly.",
+    "Current GCallbackList::operator() forwards the same argument pack to every callback with std::forward inside the loop: for a by-value parameter such as void (std::string) called with an rvalue, the first slot moves the string out and later slots receive a moved-from value (read in the code; a self-written mimic of the same forwarding loop printed 'payload' then two empty strings). Its operator= overloads also lack return statements and call swap(std::move(other)) on a non-const lvalue-reference swap.",
+    "The inline buffer is sized as one pointer plus one member-function pointer (24 bytes on x86-64 GCC/Clang), but a member-function callback stores the table pointer, object pointer and member pointer (32 bytes in a self-written layout mimic), so every member-function callback is heap-allocated on construction and on every copy (add() copies). Removing or clearing a callback from inside its own invocation destroys it mid-call."
+  ],
+  "pick_this_over_siblings_when": "SimpleSignal is the closer sibling (also beats Boost.Signals2 and libsigc++, measured against a single-thread Boost build) and the author's own eventpp supersedes cpgf's callback list, so prefer either for new code; pick cpgf only when you already depend on it. For a single type-erased callable, the std::function replacements (inplace_function, bdiamand Delegate, SmallFunction, woid) have current benchmarks against std::function, which cpgf lacks.",
+  "verified_claims_summary": "doc/callback-benchmark.md (migrated in 2019 from cpgf.org, harness committed 2011) times 100M single-callback calls and 10M emissions of signals with 0 to 50 slots on a Pentium Dual E2180 under Windows XP with VC 9 -O2 and MinGW GCC 4.5.2 -O3: cpgf ties libsigc++ 2.2.8 on single calls and is 1.8x to 6.7x faster than invoking a Boost.Signals2 1.46 slot; on emission it is 4.3x faster than libsigc++ at 5 slots (VC 9, 641 vs 2734 ms), 1.17x at 50 slots, and 9.6x to 13.7x faster than the default mutex-protected Boost.Signals2 signal. Those numbers belong to the pre-2017 C++03 implementation.",
+  "status_note": "Abandoned: the README says cpgf is not continued and sends callback users to eventpp and reflection users to metapp; last commit 2022-05-22, last change to the callback headers 2017-03-05; Apache-2.0 and the two callback headers are small enough to vendor, but the current GCallbackList has the forwarding and assignment bugs noted above.",
+  "sources_read": [
+    "https://github.com/cpgf/cpgf",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/readme.md",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/doc/callback-benchmark.md",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/test/benchmark/callback/benchmarkcallback.cpp",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/test/benchmark/callback/benchmarkcallback.h",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/include/cpgf/gcallback.h",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/include/cpgf/gcallbacklist.h",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/include/cpgf/gfunctiontraits.h",
+    "https://raw.githubusercontent.com/cpgf/cpgf/HEAD/include/cpgf/gtypetraits.h",
+    "https://github.com/cpgf/cpgf/commits/master/include/cpgf/gcallbacklist.h",
+    "https://github.com/cpgf/cpgf/commits/master/test/benchmark/callback/benchmarkcallback.cpp",
+    "https://github.com/cpgf/cpgf/commits/master/doc/callback-benchmark.md",
+    "https://github.com/cpgf/cpgf/issues?q=is%3Aissue",
+    "https://github.com/cpgf/cpgf/issues/75",
+    "https://github.com/cpgf/cpgf/issues/83",
+    "https://github.com/cpgf/cpgf/tree/master/benchmark",
+    "https://github.com/cpgf/cpgf/tree/master/benchmark/tests"
+  ],
+  "confidence": 0.75
+}
