@@ -1,0 +1,57 @@
+{
+  "id": "https://locklessinc.com",
+  "one_liner": "Abandoned GPL x86 malloc replacement (per-thread slabs, lock-free remote frees); 1.15-1.48x faster than glibc malloc in Ruby tests.",
+  "what_it_does": "Lockless Inc.'s general-purpose malloc replacement (Steven Von Fuerst, 2009-2012), shipped as one C file (ll_alloc.c) plus a few headers. It exports the full glibc-style API (malloc, free, calloc, realloc, memalign, posix_memalign, aligned_alloc, valloc, pvalloc, malloc_usable_size, mallinfo, malloc_stats, malloc_trim, mallopt). You load it with LD_PRELOAD (libllalloc.so), link libllalloc.a, or compile ll_alloc.c into the program. On Windows you cross-compile with mingw-w64 and link an MSVC stub; the DLL variant hot-patches the CRT's allocation functions.",
+  "how_it_is_fast": "Each thread owns a heap (an initial-exec TLS 'atls' block), so the common path takes no lock. Requests up to 512 B come from per-thread 128 KiB slabs in 33 size classes of 16 bytes, served by a bump pointer and then an intrusive free list. Requests up to 128 MiB come from 64 bitmask-indexed fast lists (bins found with bsf) backed by a per-thread B-tree of free extents. A free from a non-owning thread is pushed with xchg onto the owner's lock-free queue (hazard-pointer protected) instead of taking a lock, and anything larger goes straight to mmap, with mremap for realloc.",
+  "when_to_use": [
+    "A quick LD_PRELOAD experiment on x86-64 Linux for a malloc-bound program that allocates mostly small objects (512 B or less), where extra RSS is acceptable.",
+    "Older Ruby interpreters: in SamSaffron/allocator_bench it was the fastest of every allocator tested on Ruby 2.3.3 (lockless 1.3, 1.48x over glibc) and Ruby 2.5.1 (lockless 1.4, 1.38x).",
+    "Reproducing 2010-2013 allocator studies that name it as a contender, such as Percona's 2012 MySQL tests (best throughput group with jemalloc 3.0 and tcmalloc, search snippet only) or the vendor's t-test1 page.",
+    "GPL-compatible projects that want one readable C file showing per-thread slabs, a B-tree free-space index and lock-free remote-free queues."
+  ],
+  "when_not_to_use": [
+    "Memory-constrained services. In the 8-thread allocator_bench run its end-of-run RSS was 249,540 KB, against 186,336 KB for glibc (+34%) and 135,780 KB for glibc with MALLOC_ARENA_MAX=2 (+84%); only rpmalloc (291,428 KB) used more of the 37 configurations, so the record's 'highest RSS of every allocator' is wrong. Percona's 2012 MySQL test reports mysqld RSS growing by more than 5 GB (search snippet only).",
+    "Anything other than x86/x86-64 on Linux or Windows. It uses x86 inline asm (bsf/bsr, xchg, rdtsc, rep;nop, mfence), Linux futexes and the real sbrk, and compiler.h has no macOS or ARM path.",
+    "Closed-source distribution without buying the vendor's commercial licence: the code is GPL-3.0-or-later.",
+    "Security-sensitive or hostile-input processes. Free-list pointers sit unprotected inside freed slab blocks, double-free detection exists only in a DEBUG_ALLOC build, and the vendor's own install page (search snippet) says it is designed for speed, not security.",
+    "New code generally: unmaintained since about 2012. In the same 8-thread run it ranked 10th of 37 by time: tcmalloc 2.5, 2.6.2, 2.0, 2.6.1, 2.7, 2.4 and 2.6, rpmalloc and jemalloc 5.2.0 were all faster, and tcmalloc 2.5 used about 55% of its RSS. In the 1-thread run it ranked 13th, behind 12 tcmalloc and jemalloc versions."
+  ],
+  "integration": {
+    "form": "shared lib (LD_PRELOAD libllalloc.so), static lib (libllalloc.a) or source-drop (ll_alloc.c plus headers)",
+    "dependencies": "pthreads and Linux kernel headers (linux/futex.h); on Windows, mingw-w64 to compile ll_alloc.c plus MSVC for win_stub.cc",
+    "min_toolchain": "GNU C99 compiler with GNU inline asm and asm goto (makefile: gcc -std=gnu99 -O3)",
+    "platforms": "x86 and x86-64 only; Linux and Windows (no macOS build path, no ARM)",
+    "thread_safety": "Thread-safe. Heaps are per thread, cross-thread frees go through lock-free queues with hazard pointers, global slab lists use futex mutexes, and pthread_atfork handlers stabilise locks across fork(). A dead thread's heap is reused by the next new thread or merged into another heap.",
+    "drop_in_for_baseline": "partial: a symbol-level drop-in for glibc malloc via LD_PRELOAD on x86 Linux, but mallopt() ignores every parameter, malloc_trim() ignores its pad, and glibc tunables such as MALLOC_ARENA_MAX have no effect"
+  },
+  "gotchas": [
+    "Harness flaws in the evidence (SamSaffron/allocator_bench stress_mem.rb and test_all.rb). The 'mem' column is the RSS read with ps after the threads join, an end-of-run value, not peak RSS. Retained-string sizes use the unseeded global Random.rand, while the other sizes use a seeded RAND shared by all threads, so the workload is not identical from run to run. Every allocator ran once in a fixed order. In the 1-thread table, near-identical tcmalloc versions differ by up to 14.5% (2.1 at 3.199 s, 2.2 at 2.793 s), the same size as lockless's 15% margin over glibc. The 8 'threads' are Ruby threads serialised by the GVL, so the run never exercises concurrent allocation.",
+    "Cross-thread frees are queued to the owning thread and reclaimed only when that thread drains its queue. A slab goes back to the OS (madvise MADV_DONTNEED) only when all 128 KiB of it are free, and the fork child handler deliberately leaks the other threads' heaps (source comment). Producer/consumer patterns, and GC sweeps that free other threads' objects, are plausible causes of its high RSS; neither source measured the cause.",
+    "Small objects come from slabs grown with the real process break (sbrk), and free() recognises them by address range alone, with no header check. Once sbrk fails, a permanent sbrk_oom flag routes everything through the slower B-tree path.",
+    "The GitHub mirror read here (jl2922/lockless_allocator, a 2017 'pull from lockless website') has a makefile that builds libllalloc.so.1.3, while the benchmark preloaded libllalloc.so.1.4 from the vendor download, so the mirror may not be byte-identical to the measured build. The Windows DLL variant overwrites CRT malloc/free entry points with 5-byte JMP patches, locating call sites by scanning bytes for a CALL opcode, which is fragile on newer CRTs."
+  ],
+  "pick_this_over_siblings_when": "Rarely. gperftools TCMalloc and jemalloc matched or beat it on the same Ruby benchmark at 8 threads with 55-65% of its RSS, and are maintained, permissively licensed and portable; rpmalloc was slightly faster but used even more RSS. Pick lockless only on old x86 Linux stacks where it already measured fastest (Ruby 2.3/2.5-era runs) and where GPL and higher memory use are acceptable.",
+  "verified_claims_summary": "SamSaffron/allocator_bench preloads each allocator into a Ruby 2.6.5 process on an unnamed x86-64 Arch Linux machine (no CPU, compiler or flags stated) that makes 12 million small string allocations, retains 600,000 and makes periodic large allocations up to 100 KB. Single runs: lockless 1.4 took 2.86 s against 3.42 s for glibc malloc with 8 GVL-serialised threads (1.20x) and 2.87 s against 3.30 s with 1 thread (1.15x), ranking 10th and 13th of 37 configurations. Earlier Ruby 2.5.1 and 2.3.3 runs on another machine had it fastest of all (1.38x and 1.48x over glibc, derived from page data).",
+  "status_note": "Abandoned: the source copyright is 2009-2011, the last vendor update was in July 2012 (snippet), and the only GitHub copy is a 2017 two-commit mirror with 0 stars. It is GPL-3.0-or-later (commercial licence from the vendor) and small enough to vendor, but x86-only and not advisable for new production use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SamSaffron/allocator_bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/SamSaffron/allocator_bench/HEAD/test_all.rb",
+    "https://raw.githubusercontent.com/SamSaffron/allocator_bench/HEAD/stress_mem.rb",
+    "https://raw.githubusercontent.com/SamSaffron/allocator_bench/HEAD/make_jemallocs.rb",
+    "https://github.com/SamSaffron/allocator_bench",
+    "https://github.com/SamSaffron/allocator_bench/commits",
+    "https://github.com/jl2922/lockless_allocator",
+    "https://github.com/jl2922/lockless_allocator/commits",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/README.txt",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/ll_alloc.c",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/makefile",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/ll_asm.h",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/gcc.h",
+    "https://raw.githubusercontent.com/jl2922/lockless_allocator/HEAD/compiler.h",
+    "https://raw.githubusercontent.com/mjansson/rpmalloc/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/mjansson/rpmalloc/HEAD/README.md",
+    "https://locklessinc.com/benchmarks_allocator.shtml (EGRESS_BLOCKED; search snippet only)",
+    "https://www.percona.com/blog/2012/07/05/impact-of-memory-allocators-on-mysql-performance/ (EGRESS_BLOCKED; search snippet only)"
+  ],
+  "confidence": 0.7
+}
