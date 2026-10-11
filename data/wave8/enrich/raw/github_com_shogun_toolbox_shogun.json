@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/shogun-toolbox/shogun",
+  "one_liner": "Large C++ machine-learning toolbox whose 2011 k-means beat scikit-learn 0.8 about 2x; that edge did not survive.",
+  "what_it_does": "Shogun is a C++ library of classical machine-learning algorithms (SVMs and kernel machines, k-means and hierarchical clustering, kNN, dimensionality reduction, Gaussian processes) with SWIG-generated interfaces for Python, Octave, Java/Scala, Ruby, C#, R and Lua. Clustering is used as KMeans(k, EuclideanDistance(features, features)) followed by train() and get_cluster_centers(); it is an object API with its own feature and distance classes, not a drop-in for scikit-learn's estimator interface.",
+  "how_it_is_fast": "The k-means that was timed in 2011 (Shogun 0.10.0 CKMeans::clustknb) was single-threaded C++ with a random-partition start and a cheap, stochastic iteration: each pass reassigns XSize points drawn at random with replacement and stops as soon as none of the sampled points changes cluster, so it does less work per run than scikit-learn's full Lloyd passes with k-means++ seeding. The current develop-branch KMeans was rewritten (2016) into a standard Lloyd loop with precomputed squared norms in EuclideanDistance, an OpenMP-parallel assignment step, optional k-means++ seeding and a mini-batch variant.",
+  "when_to_use": [
+    "You already depend on Shogun for its kernel machines or multi-language bindings and want k-means in the same toolbox without adding another library.",
+    "You need one ML library callable from C++, Octave, Java or R with the same object model in each.",
+    "Small dense datasets clustered from C++ where an OpenMP Lloyd loop with optional k-means++ is enough and you can build from source."
+  ],
+  "when_not_to_use": [
+    "As a faster scikit-learn: the only k-means win is from 2011 (Shogun 0.10.0 vs scikit-learn 0.8); in a 2016 issue thread Shogun 3.2.0 took 428.86 s vs scikit-learn 32.53 s at k=100 on about 20,000 points, and after the rewrite the two were at parity (27.01 s vs 27.45 s).",
+    "SVM or nearest-neighbour work expecting a speedup: in the same 2011 suite Shogun was slower than scikit-learn on SVM (Madelon 5.63 s vs 5.20 s) and kNN (Madelon 1.36 s vs 0.57 s).",
+    "Projects that need a maintained dependency: develop has had a single commit since December 2020 (2023-12-19) and 413 open issues.",
+    "Easy installation: the documented `pip install shogun-ml` package is not on PyPI (Not Found), the vcpkg port path returns 404, and a source build needs CMake, Eigen 3.3+, SWIG for interfaces and about 4 GB RAM.",
+    "Large k or very large n: src/shogun/clustering holds only GMM, Hierarchical, KMeans, KMeansBase and KMeansMiniBatch, with no Elkan or Hamerly bound-based k-means (issue #3428 'Add elkan kmeans' was closed); use mlpack or oneDAL instead."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "Eigen 3.3+ (required); optional BLAS/LAPACK, OpenMP, SWIG plus language dev packages for interfaces; GPL3 components are optional and must be excluded for a BSD-only build",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17 on develop), CMake 3.8+",
+    "platforms": "GNU/Linux, macOS, FreeBSD, Windows (MSVC) per README; an AArch64 Fedora 33 build failure was reported (#5169, closed)",
+    "thread_safety": "not documented (KMeans uses OpenMP internally in the assignment step and k-means++ seeding)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the measured numbers: Shogun 0.10.0's clustknb samples XSize points with replacement per iteration (about a third of points are never visited in a pass, as issue #2987 also notes) and stops when no sampled point changed, starting from a random partition; scikit-learn ran full Lloyd passes with k-means++ seeding and tol. The 2x and 2.7x timings therefore compare different amounts of work, the benchmark page itself says 'The shogun is failling' and leaves Shogun's Arcene inertia blank, and the code was later rewritten.",
+    "Dead code with a sign error in 0.10.0: the online centre update for the gaining cluster uses `-=` where its own comment says `mu_old + (x - mu_old)/(n+1)`; it is masked because MUSRECALC recomputes all means at the start of each iteration and distances read a copy of the centres.",
+    "Current Lloyd_KMeans logs with `if (iter%(max_iter/10) == 0)`: setting max_iter to 1-9 makes this an integer modulo by zero on the first non-converged iteration (a SIGFPE crash on x86), read from source and not tested.",
+    "Default seeding is k random points (use_kmeanspp false); pass use_kmpp=true to match scikit-learn's k-means++ default. The 2011 harness timed only the training split loaded by misc.load_data (madelon_train / arcene_train), not all 4400 Madelon instances, and the Shogun timer also includes building RealFeatures and the distance object."
+  ],
+  "pick_this_over_siblings_when": "Pick mlpack over Shogun for fast C++ k-means or kNN (its paper beats both scikit-learn and Shogun, and it is maintained) and oneDAL/sklearnex when you want scikit-learn's API accelerated; choose Shogun only when you already use its kernel methods or need its Octave/Java/R bindings.",
+  "verified_claims_summary": "In the scikit-learn project's ml-benchmarks (July 2011, Intel Core2 1.86 GHz, compiler and BLAS not stated, timed through the Python bindings, 10 runs with min and max dropped), Shogun 0.10.0 k-means with 9 clusters took 0.68 s vs scikit-learn 0.8's 1.34 s on the Madelon training split and 0.19 s vs 0.51 s on Arcene, with matching Madelon inertia (7.3x10^8 vs 7.4x10^8) and no Shogun inertia reported for Arcene; Shogun's 0.10 algorithm skipped points per pass and stopped stochastically, so the work was not equal.",
+  "status_note": "Effectively dormant (last burst of commits December 2020, one commit on 2023-12-19, 413 open issues) and hard to install from binaries now; the BSD-3-Clause core is usable from source, but nothing here shows it is faster than current scikit-learn.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/scikit-learn/ml-benchmarks/HEAD/doc/index.rst",
+    "https://raw.githubusercontent.com/scikit-learn/ml-benchmarks/HEAD/README.rst",
+    "https://raw.githubusercontent.com/scikit-learn/ml-benchmarks/HEAD/benchmarks/bench_kmeans.py",
+    "https://raw.githubusercontent.com/scikit-learn/ml-benchmarks/HEAD/benchmarks/misc.py",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/HEAD/README.md",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/src/shogun/clustering/KMeans.cpp",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/src/shogun/clustering/KMeans.h",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/src/shogun/clustering/KMeansBase.cpp",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/src/shogun/clustering/KMeansBase.h",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/src/shogun/clustering/KMeansMiniBatch.cpp",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/doc/readme/INSTALL.md",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/develop/CMakeLists.txt",
+    "https://raw.githubusercontent.com/shogun-toolbox/shogun/shogun_0.10.0/src/libshogun/clustering/KMeans.cpp",
+    "https://github.com/shogun-toolbox/shogun",
+    "https://github.com/shogun-toolbox/shogun/commits/develop",
+    "https://github.com/shogun-toolbox/shogun/issues?q=is%3Aissue+kmeans",
+    "https://github.com/shogun-toolbox/shogun/issues/2987",
+    "https://github.com/shogun-toolbox/shogun/issues/2951",
+    "https://pypi.org/pypi/shogun-ml/json",
+    "https://pypi.org/pypi/shogun/json",
+    "https://raw.githubusercontent.com/microsoft/vcpkg/master/ports/shogun/vcpkg.json",
+    "https://github.com/shogun-toolbox/shogun/tree/develop/src/shogun/clustering"
+  ],
+  "confidence": 0.6
+}

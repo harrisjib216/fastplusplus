@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/softwareqinc/qpp",
+  "one_liner": "Header-only C++17 quantum-computing library on Eigen; its 2018 paper says single-core runs beat Qiskit (QFT) and QuTiP (partial trace).",
+  "what_it_does": "Quantum++ simulates arbitrary quantum processes (qubits or qudits, pure states as dense kets and mixed states as dense density matrices) with free functions such as apply(), applyCTRL(), ptrace(), ptranspose(), syspermute() and measure(), plus a QCircuit/QEngine circuit layer, OpenQASM import through qasmtools, and the pyqpp Python wrapper. Types are Eigen matrices, so it slots into Eigen code; it is a different API from Qiskit or QuTiP, not a drop-in.",
+  "how_it_is_fast": "It is compiled C++ over dense Eigen vectors and matrices, so there is no Python dispatch and no per-gate construction of full-space operators. Since v7.0.0 (March 2026) all-qubit systems take dedicated kernels (internal/kernels/qubit): bit-shift index arithmetic applies a 1-, 2-, 3- or k-qubit gate pairwise over amplitudes, and ptrace sums precomputed stride offsets, with OpenMP parallel loops; the changelog claims 10x to 1000x over the earlier generic multi-index code. The 2018 paper's numbers were measured on that older generic code.",
+  "when_to_use": [
+    "C++ research code that needs exact dense state-vector or density-matrix simulation up to the mid-20s of qubits (memory-bound) with quantum-information primitives (partial trace, partial transpose, entanglement measures, Kraus channels) in one header-only library.",
+    "Qudit systems (d > 2), which many qubit-only simulators do not support.",
+    "Projects already on Eigen that want quantum operations on Eigen types without a Python runtime.",
+    "Teaching or prototyping circuits from C++ or Python (pyqpp) with OpenQASM 2.0 input."
+  ],
+  "when_not_to_use": [
+    "Maximum-throughput state-vector simulation: nothing seen here compares current Quantum++ with Qulacs, QuEST, qsim or Qiskit Aer; a 2024 independent comparison (arXiv 2401.09076, search summary only) lists it at 22 qubits, below Qiskit, Qulacs and QuEST.",
+    "Sparse or structured states and operators: all fundamental types are dense, and the maintainer said in issue #58 (2019) that QuTiP can be faster because it uses sparse matrices (the paper reports QuTiP faster on QFT).",
+    "Memory-limited runs near the RAM ceiling: apply()/applyCTRL() are out of place (each call deep-copies the state and returns a new vector), so peak memory is a multiple of the 2^n state.",
+    "GPU or distributed simulation: CPU only with optional OpenMP; no MPI or CUDA backend.",
+    "Mixed states beyond about 13-14 qubits: a dense 2^n x 2^n complex density matrix needs 4 GB at n=14."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Eigen (fetched by CMake if missing); optional OpenMP 3.0+, MATLAB headers, Python 3 plus pybind11 for pyqpp",
+    "min_toolchain": "C++17 (GCC, Clang, MSVC); CMake 3.20 for install; AppleClang needs Homebrew libomp or clang for OpenMP",
+    "platforms": "any (UNIX, macOS, Linux, Windows); CPU only",
+    "thread_safety": "not documented per function; uses thread_local singletons (RNG, gates) unless QPP_NO_THREAD_LOCAL is set, and parallelises internally with OpenMP",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws in the 2018 comparison (stress_tests at tag v1.1): the Qiskit timer spans circuit building plus execute() on the first local Aer backend with shots=1, and the QuTiP QFT timer spans qft_gate_sequence() and propagators(), which expand every gate to a full 2^n x 2^n operator, while the C++ timer covers only gate application; the Qiskit script uses crz rotations where the C++ and QuTiP versions use controlled-phase gates, so it is not the same unitary; and the Python scripts set OPENBLAS_NUM_THREADS/MKL_NUM_THREADS after numpy, qiskit or qutip are already imported and never set OMP_NUM_THREADS, so the 'single-core' Qiskit/QuTiP framing is assumed (the paper says they 'do not seem to be using parallelization'), not enforced.",
+    "The partial-trace race is not like for like either: QuTiP traces a qutip.rand_herm matrix (a sparse Qobj) while Quantum++ traces a dense cmat::Random matrix and discards the result, and no Qiskit partial-trace script exists.",
+    "The measured code is gone: v7.0.0 (2026-03-15) rewrote apply/applyCTRL/ptrace/syspermute with claimed 10x-1000x gains, stress_tests/ was removed, and the current benchmarks/ (Catch2, e.g. qft_bench) time only Quantum++ with no published numbers, so the 2018 ratios describe neither current Quantum++ nor current Qiskit Aer or QuTiP.",
+    "In the v7 qubit kernels the OpenMP loop runs over the outer block loop, which has 2^i iterations for big-endian target qubit i, so a gate on qubit 0 runs on one thread and on qubit 1 on two; ptrace opens one parallel region per output column (read from source, not measured)."
+  ],
+  "pick_this_over_siblings_when": "No quantum-simulation sibling is catalogued in blas-lapack; Quantum++ sits on top of Eigen rather than competing with it, so pick it over hand-written Eigen code when you need gates, partial traces and measurements on qubit or qudit states, and keep Eigen, Armadillo or xtensor for general linear algebra.",
+  "verified_claims_summary": "The only performance evidence is the author's 2018 PLoS ONE paper (i7-7700K, 4 cores/8 threads, 16 GB, Debian 9.5, g++ 6.3, Python 3.5), whose figures could not be opened here; search snippets say single-core Quantum++ beat Qiskit on a QFT and QuTiP on a one-qubit partial trace, QuTiP was faster on QFT, and Quantum++ fit more qubits in 16 GB (28 vs 21, unconfirmed). No timing number was seen, and the public harness times different scopes on each side.",
+  "status_note": "Actively maintained (v7.0.3 on 2026-03-25, last commit 2026-04-17, 2 open issues) and MIT-licensed header-only code that is easy to vendor, but its speed claim rests on unseen 2018 figures from code since rewritten.",
+  "sources_read": [
+    "https://github.com/softwareQinc/qpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/README.md",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/INSTALL.md",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/CHANGES.md",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/cmake/qpp_openmp.cmake",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/include/qpp/operations.hpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/include/qpp/internal/kernels/qubit/apply.hpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/include/qpp/internal/kernels/qubit/ptrace.hpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/main/benchmarks/src/qft_bench.cpp",
+    "https://github.com/softwareQinc/qpp/tree/main/benchmarks",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/README.md",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/run.sh",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/src/qft.cpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/src/ptrace.cpp",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/python/qft_qiskit.py",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/python/qft_qutip.py",
+    "https://raw.githubusercontent.com/softwareQinc/qpp/v1.1/stress_tests/python/ptrace_qutip.py",
+    "https://github.com/softwareQinc/qpp/issues?q=is%3Aissue+performance+OR+slow+OR+benchmark",
+    "https://github.com/softwareQinc/qpp/issues/58",
+    "https://arxiv.org/pdf/1412.4704 (EGRESS_BLOCKED; WebSearch snippets only)",
+    "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC6287823/fullTextXML (EGRESS_BLOCKED)",
+    "https://ar5iv.labs.arxiv.org/html/1412.4704 (DNS failure)"
+  ],
+  "confidence": 0.55
+}
