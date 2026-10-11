@@ -1,0 +1,81 @@
+[
+  {
+    "id": "paper:wojciechmula-toys-avx512-string",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README.rst table compares std (libc via <cstring>) against AVX512F with the exact times claimed; benchmark code is public (avx512-string/speed_strlen.cpp, speed_strchr.cpp, speed_strrchr.cpp, speed_strcmp.cpp), the compiler (GCC 5.4.3) and CPU (Knights Landing 7210) are stated in the README and the flags (-std=c++14 -mavx512f -O3) are in avx512-string/Makefile.",
+    "corrections": {
+      "compared_against_cpp_std_directly": true,
+      "caveats": "Author says the tests 'aren't very good' and do not cover a range of string lengths: one 10 KiB buffer filled with '?', the terminator (or target char) moved through every position, 5 iterations, gettimeofday timing, no repetitions or variance. Measured once in October 2016 on one old CPU with GCC 5.4.3 (not an official GCC release number; 5.4.0 and 5.5.0 exist); the glibc version and which of its ifunc variants ran on KNL are not stated, so the baseline may be a weak SSE2 path (the 16x strrchr gain points that way). The AVX512F kernels use unaligned 64-byte loads with no page-boundary handling (avx512f_strlen does _mm512_loadu_si512(s + len) in a loop), so they can read up to 63 bytes past the terminator and fault at the end of a mapped page; the benchmark pads every buffer by 64 bytes, so they are not drop-in libc replacements without aligned or masked loads. speed_strlen discards the strlen result (the other three harnesses accumulate into a volatile counter); the measured times look like real work. avx512f-strcmp.cpp was simplified by KWillets on 2020-04-06 (commit 8759381, removes a redundant zero2 mask, not a correctness fix), after the README numbers were taken. The README lists custom scalar versions too but reports only std vs AVX512F. Date shown is the last commit touching avx512-string; the toys repo itself was last pushed 2026-04-08. An SSE2 version of the same four functions lives in WojciechMula/sse2string, whose README gives no numbers."
+    },
+    "notes": "Numbers match README.rst exactly and the harness, Makefile flags, compiler and CPU are all public, so A holds on the letter of the rule; record shortcomings: single 10 KiB size, unstated glibc version (possibly weak baseline path on KNL), no page-crossing safety in the AVX512F kernels (bench pads buffers by 64 bytes), 2016-era one-off measurement. Not a duplicate: other WojciechMula entries (sse4-strstr, toys strstr-swar) are different code.",
+    "urls_opened": [
+      "https://github.com/WojciechMula/toys/blob/master/avx512-string/README.rst",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/README.rst",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/Makefile",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strlen.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strchr.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strrchr.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strcmp.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strlen.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strchr.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/gettime.cpp",
+      "https://github.com/WojciechMula/toys",
+      "https://github.com/WojciechMula/toys/commits/master",
+      "https://github.com/WojciechMula/toys/commits/master/avx512-string",
+      "https://github.com/WojciechMula/toys/commit/8759381"
+    ]
+  },
+  {
+    "id": "https://github.com/adanil-code/kmstrsearch",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README tables against the kernel CRT strstr/wcsstr with public harness code (Shared/KmStrSearchShared.h) and stated CPUs, but the MSVC version (only 'Visual Studio 2026') and the build configuration that produced the numbers are not stated, and the README's description of the harness (multi-threaded, bus-saturating) does not match the code, which starts one worker thread.",
+    "corrections": {
+      "compiler_and_flags": "Visual Studio 2026 with WDK (WindowsKernelModeDriver10.0 toolset), MSVC version not stated. TestKm/KmStrSearchDrv.vcxproj Release|x64 sets /std:c++20 (stdcpp20), InlineFunctionExpansion AnySuitable, IntrinsicFunctions true, FavorSizeOrSpeed Speed on top of toolset defaults; the README does not say whether the numbers came from the Release or Debug configuration.",
+      "workload": "Kernel driver harness (Shared/KmStrSearchShared.h): one worker thread per engine runs Find or CRT strstr/wcsstr in a loop for about 2 s, GB/s = whole-buffer bytes per call times calls over elapsed time (GB = 2^30 bytes). Three inputs at 40 B / 256 B / 10 KB / 1 MB (8-bit, double for 16-bit): 'Needle In The Haystack' placed near the end of a buffer of all 'A' (no text character occurs in the pattern, the best case for Boyer-Moore-Horspool skipping); 'aaaaaaaaab' near the end of all-'a' text; and a repeated log line with a 33-character pattern near the end. Hybrid BMH with SWAR, AVX2 and AVX-512BW engines and a size-based 'Smart Auto' router versus the kernel CRT.",
+      "caveats": "Very new, single-author exploration with 0 stars and 4 commits ('not strictly benchmark-driven during its design'); no repetition counts or variance; MSVC version and build configuration unstated. The README calls the harness multi-threaded and memory-bus saturating, but RunPerformanceSuiteT calls StartThreads(pMgr, 1, ...), so each figure is single-thread throughput. Throughput counts the whole buffer per call even though BMH skips most bytes, so the 80-105 GB/s figures at 1 MB are not memory bandwidth; the 'standard' input is the best case for BMH (text all 'A', pattern contains no 'A'). The 'up to 385x' dense-text figure comes from a pattern whose last character never occurs in the text, so the hybrid reduces to a vectorized memchr while the CRT's naive strstr does O(N*M) work; glibc's two-way strstr would not collapse this way. The baseline is the Windows kernel CRT strstr/wcsstr, not glibc or musl; on the VMware guest it measures only 1.35-1.67 GB/s on 256 B to 1 MB inputs (about 15x below the same CRT on bare metal). Loses to CRT on tiny and small buffers on bare metal (40 B 3.61 vs 1.95 GB/s, 256 B 15.03 vs 4.88 GB/s for 8-bit Smart Auto). User-mode build is declared untrustworthy for timing. Kernel driver telemetry only; no independent reproduction."
+    },
+    "notes": "Numbers in claimed_speedup match the README tables (i7-1165G7 8-bit and 16-bit rows; 385x is the README's own figure, about 389x derived from page data 81.67/0.21). Record shortcomings: weak naive kernel-CRT baseline, best-case and pathological inputs chosen for BMH, single-thread harness despite README's multi-thread claim, loses below about 6 KB, unstated build configuration. No invalid evidence found: the CRT and hybrid run the same buffers and the hybrid has correctness tests.",
+    "urls_opened": [
+      "https://github.com/adanil-code/KmStrSearch/blob/main/Readme.md",
+      "https://raw.githubusercontent.com/adanil-code/KmStrSearch/main/Readme.md",
+      "https://github.com/adanil-code/KmStrSearch",
+      "https://github.com/adanil-code/KmStrSearch/commits/main",
+      "https://github.com/adanil-code/KmStrSearch/tree/main/TestKm",
+      "https://raw.githubusercontent.com/adanil-code/KmStrSearch/main/Shared/KmStrSearchShared.h",
+      "https://raw.githubusercontent.com/adanil-code/KmStrSearch/main/TestKm/KmStrSearchDrv.vcxproj"
+    ]
+  },
+  {
+    "id": "https://github.com/macmade/libc-string-optimisations",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README timings against the OS X 10.9 libc with public test harnesses (source/*-test.c) and a Makefile, but no CPU model, no compiler version, and the harness is built without any -O flag; not A or B.",
+    "corrections": {
+      "license": "XEOS Software License 1.0 (custom BSD-style licence with an advertising clause and a clause forbidding combination or linking with GPL/LGPL software; not OSI-approved)",
+      "compiler_and_flags": "Makefile: kernels are hand-written assembly assembled with yasm (-f macho64 / -f macho); test harnesses built with clang -Weverything -fpic -target x86_64-apple-darwin or i386-apple-darwin and no optimisation flag (harness loops at -O0). Compiler versions not stated.",
+      "claimed_speedup": "64-bit: strlen 0.527532 s vs 0.531318 s OS X; memset 0.778556 s vs 0.906685 s; memchr 0.476380 s vs 0.516240 s; memcpy 0.858043 s vs 0.928405 s; strcat 1.269549 s vs 1.314561 s, misaligned 1.423539 s vs 3.920867 s. 32-bit: memchr 0.532130 s vs 6.374186 s; strcat misaligned 1.515425 s vs 4.644904 s. Loses: misaligned memcpy 1.408296 s vs OS X 1.218205 s (64-bit) and 1.457572 s vs 1.446217 s (32-bit).",
+      "caveats": "First-party numbers from the README only; the CPU, compiler versions and run count are not stated, and the baseline is the 2013-era OS X 10.9 libc rather than glibc. Each test harness runs the loop twice (SSE2 path, then the non-SSE2 path with _SSE2Status = 0) and the README does not say which pass it quotes. Harness C files are built without an -O flag, so loop overhead is unoptimised (it applies equally to both sides). Wins on most rows are 1-15%; the 12x memchr gain is against OS X's 32-bit memchr and the 2.8-3x strcat gains only on misaligned input. XEOS loses on misaligned memcpy in both 32-bit and 64-bit builds. The strlen margin is under 1% (0.527532 s vs 0.531318 s). README badge says status 'prototype'; macOS/Mach-O build only (yasm macho targets). Custom XEOS licence forbids linking with GPL/LGPL code, so it is reference only."
+    },
+    "notes": "Numbers match the README; added the 32-bit misaligned memcpy loss and strcat rows. Record shortcomings: OS X 10.9 libc baseline, no hardware or compiler versions, mostly 1-15% gains, prototype status, non-OSI XEOS licence with an anti-GPL clause.",
+    "urls_opened": [
+      "https://github.com/macmade/LibC-String-Optimisations/blob/master/README.md",
+      "https://raw.githubusercontent.com/macmade/LibC-String-Optimisations/master/README.md",
+      "https://raw.githubusercontent.com/macmade/LibC-String-Optimisations/master/Makefile",
+      "https://raw.githubusercontent.com/macmade/LibC-String-Optimisations/master/source/memchr-test.c",
+      "https://raw.githubusercontent.com/macmade/LibC-String-Optimisations/master/source/strcat-test.c",
+      "https://github.com/macmade/LibC-String-Optimisations",
+      "https://github.com/macmade/LibC-String-Optimisations/commits"
+    ]
+  }
+]
