@@ -400,6 +400,31 @@ Paste the relevant row's baselines into `{BASELINES}`. Categories are deliberate
 | bytecode-vms-and-wasm | wasmtime, wasmer, WAMR, V8 |
 | embedded-scripting | Lua, Duktape, QuickJS |
 
+### Wave 13 — assembly-simd-kernels-and-wasm
+| Category | Baselines |
+|---|---|
+| hand-written-asm-kernels | the compiler's -O3 output for the same C/C++ function; the libc/stdlib version (memcpy, memcmp, strlen, memset) |
+| simd-intrinsics-libraries | scalar C/C++ reference, Highway, xsimd, Eigen, std::simd |
+| asm-level-string-and-memory | glibc/musl string.h, std::string ops |
+| assemblers-and-asm-tooling | GNU as, NASM, MASM (assemble time, output quality) |
+| wasm-runtimes-and-compilers | wasmtime, wasmer, V8, WAMR, wasm-opt |
+| wasm-libraries-and-apps | the same library compiled natively; the JS equivalent in-browser |
+| assemblyscript-and-wasm-langs | TypeScript/JS in V8, C++ via Emscripten |
+
+Hand-written assembly rarely ships a benchmark against -O3 compiler output; tier such claims C unless the repo includes the C reference and a harness. Anything targeting one microarchitecture records it in `hardware` with a portability note in `tradeoffs`.
+
+### Wave 14 — other-languages-faster-than-c-cpp-asm
+The baseline for every category is the same task in C or C++ at -O3 (or hand-written asm where the source compares to that). Two kinds of entry: a library in language L that beats the C/C++ equivalent, and a language-level claim that L's compiler emits faster code for a class of programs; `language_level_claim` distinguishes them. Every record also carries `same_algorithm`, `same_opt_level` and `why_faster` (QUEUE.md sections B and C); "the language is just faster" with no mechanism caps the tier at C. Language-level claims that share one suite repo use the id `lang:<language>/<suite owner/repo>#<benchmark>` so they do not collapse in merge.
+
+| Category | Languages to sweep | Where they tend to win |
+|---|---|---|
+| numerics-and-arrays | Fortran, Julia, Chapel, Futhark, Halide, ISPC, APL/BQN/K, Mojo | aliasing guarantees, array semantics, auto-vectorization, GPU codegen |
+| systems-and-safety | Ada/SPARK, Rust, Zig, D, Nim, Odin, C3, Carbon | bounds-check elision with proofs, noalias, comptime specialization, no-exception codegen |
+| runtime-jit-beats-aot | Java/HotSpot, .NET, LuaJIT, SBCL (Common Lisp), OCaml (flambda), Julia | profile-guided inlining, escape analysis, specialization on runtime types |
+| concurrency-runtimes | Go, Erlang/BEAM, Pony, Rust (tokio), Kotlin coroutines | scheduler design, message passing, cheap green threads |
+| web-and-serving | Rust, Go, Zig, Java, .NET, Crystal (vs C/C++ servers) | TechEmpower-style throughput/latency |
+| string-and-text | Rust, Go, Zig, Nim, Odin | UTF-8-native strings, SIMD stdlib |
+
 ---
 
 ## Part 5 — Cleanup / enrichment agent prompt

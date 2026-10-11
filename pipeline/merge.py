@@ -50,7 +50,7 @@ def short_name(name):
 
 def entry_key(e):
     # an explicit paper: id keeps separate algorithms that share one repo (e.g. SIEVE and S3-FIFO in libCacheSim)
-    if str(e.get("id", "")).startswith("paper:"):
+    if str(e.get("id", "")).startswith(("paper:", "lang:")):
         return e["id"]
     return canonical(e.get("repo_url")) or "paper:" + re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-")
 
@@ -61,11 +61,14 @@ def read_url_list(path):
     return [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
 
 
+OPTIONAL_KEYS = {"language_level_claim", "same_algorithm", "same_opt_level", "why_faster"}  # wave 14 cross-language keys (QUEUE.md section C)
+
+
 def validate(e):
     problems = []
     keys = set(e)
-    if keys - EXPECTED_KEYS:
-        problems.append(f"extra keys {sorted(keys - EXPECTED_KEYS)}")
+    if keys - EXPECTED_KEYS - OPTIONAL_KEYS:
+        problems.append(f"extra keys {sorted(keys - EXPECTED_KEYS - OPTIONAL_KEYS)}")
     if EXPECTED_KEYS - keys:
         problems.append(f"missing keys {sorted(EXPECTED_KEYS - keys)}")
     for field, allowed in ENUMS.items():
@@ -79,7 +82,7 @@ def known_urls(exclude_wave_dir=None):
     for f in list(DATA.glob("wave*/merged.json")) + list(DATA.glob("wave*/rejected.json")):
         if exclude_wave_dir and f.parent.resolve() == exclude_wave_dir.resolve():
             continue
-        urls |= {e["id"].split("#")[0] for e in json.loads(f.read_text()) if not e["id"].startswith("paper:")}
+        urls |= {e["id"].split("#")[0] for e in json.loads(f.read_text()) if not e["id"].startswith(("paper:", "lang:"))}
     return urls
 
 
