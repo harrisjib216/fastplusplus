@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/lvandeve/lodepng",
+  "one_liner": "Two-file, dependency-free PNG encoder/decoder; decodes small PNGs about 1.1x faster than libpng+zlib 1.2.11, larger ones slower.",
+  "what_it_does": "LodePNG is a complete PNG codec (all color types, bit depths, Adam7 interlace, ancillary chunks including the third-edition cICP/eXIf/mDCV/cLLI) with its own inflate/deflate, shipped as lodepng.cpp plus lodepng.h that compile as C90 (rename to .c) or C++03. The API is one-shot and buffer-based: lodepng_decode_memory/lodepng_decode32 return a freshly malloc'd raw image in the requested color type (RGBA8, RGB8, gray, 16-bit big-endian, ...), with a LodePNGState for custom settings and a std::vector wrapper in C++. It is not a libpng drop-in: there is no row-by-row or streaming interface and no libpng-compatible API.",
+  "how_it_is_fast": "It is not built for speed; its small-image edge over libpng comes from low per-call overhead: one pass collects all IDAT data, a two-level Huffman lookup table (9-bit first table, added in 2019 for about 25% faster decoding) drives a simple inflate that decodes two literals per bit refill, and unfiltering runs over the whole scanline buffer at once. Since April 2023 it also uses a slicing-by-8 CRC-32 (eight 256-entry tables). There is no SIMD (the maintainer says so in issue #179) and no streaming, so on large images the extra full-image passes (inflate buffer, unfilter, separate color-conversion buffer) make it fall behind libpng.",
+  "when_to_use": [
+    "You want PNG load/save with zero dependencies (no zlib, no libpng) by dropping two files into a C or C++ project, including C90 or old-compiler targets.",
+    "Decoding many small images (icons, sprites, UI assets, tens of KB decoded), where Wuffs' benchmark shows it 1.09-1.13x faster than system libpng.",
+    "Embedded or tooling code that needs both encoder and decoder, full color-type conversion and metadata chunks in one permissively licensed (Zlib) source drop.",
+    "Encoding where smallest file size matters more than speed: its encoder is slow but compresses harder than fpng or stb_image_write (issue #179)."
+  ],
+  "when_not_to_use": [
+    "Large images or throughput-critical decode: 0.77x of libpng on the 4002k-byte image and 0.89x on the 552k image in Wuffs' table, and slower than stb_image and Wuffs in the issue #179 timings (26 MP/s vs 45 and 59 MP/s on a Ryzen 5 3600).",
+    "Fast encoding: issue #179 measured about 3 MP/s release-build encode vs 137-155 MP/s for fpng; use fpng, fpnge or Zpng when encode time matters.",
+    "Memory-constrained or streaming decode: it holds the whole compressed stream, the whole filtered scanline buffer and the output (plus a second output buffer when color conversion is needed); partial/stream decoding is still an open TODO.",
+    "Untrusted input on versions older than 20261006: an integer overflow in ucvector_reserve and a size_t-to-unsigned Adler-32 length truncation (issue #232) were fixed only on 2026-10-01 and 2026-10-06.",
+    "APNG or libpng-API compatibility: animation chunks are not supported and the API is different."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard C library; standard C++ library for the optional C++ wrapper)",
+    "min_toolchain": "C90 (ANSI C) or C++03 per lodepng.h; README build line g++ -ansi -pedantic -O3",
+    "platforms": "any (portable scalar code, no SIMD, CHAR_BIT >= 8)",
+    "thread_safety": "not documented; lodepng.cpp has no mutable globals (lookup tables are const and each call uses its own state), so concurrent calls with separate LodePNGState objects appear safe",
+    "drop_in_for_baseline": "partial — replaces libpng's job in a program but not its API: one-shot whole-image functions, no row callbacks, progressive reading or png_struct-style transforms"
+  },
+  "gotchas": [
+    "Harness detail in the Wuffs numbers: the lodepng mimic path decodes into lodepng's own malloc'd buffer, then memcpy's it into Wuffs' dst and, on the four rows decoded to BGRA (40k_24bpp, 77k_8bpp, 552k_32bpp, 4002k_24bpp, not only the 32bpp one), runs a byte-wise RGBA-to-BGRA swap, while the libpng simplified API decodes straight into BGRA; the measured ratios therefore slightly understate lodepng.",
+    "The benchmarked version is 20220717; the April 2023 slicing-by-8 CRC-32 rewrite and the 2026 overflow-check additions came later and were not re-measured.",
+    "Default decoding converts to the requested color type (8-bit RGBA for lodepng_decode32); set state.decoder.color_convert = 0 to skip that extra full-image pass when you can consume the PNG's native format. 16-bit samples are returned big-endian.",
+    "Open reports: crash with some 16-bit/channel images (issue #227, March 2026, no maintainer reply), stack corruption with lodepng::State (#191); double-frees when clearing and re-setting iTXt/iCCP chunks were fixed in January 2026. The project publishes no release tags (issues #199, #205), so pin a commit."
+  ],
+  "pick_this_over_siblings_when": "Pick LodePNG when a no-dependency, two-file encoder plus decoder with full color conversion and metadata support matters more than speed; for decode throughput libspng (1.02-1.60x libpng on the same Wuffs page), image-png or Wuffs are faster, and for fast encoding fpng/fpnge win by one to two orders of magnitude.",
+  "verified_claims_summary": "Third-party Wuffs mimic benchmark (September 2022, Intel Core i5-10210U, Debian Bullseye, -O3, clang 11.0.1 or gcc 10.2.1 unspecified for mimic rows) decoding five test images to gray or BGRA: lodepng 20220717 reached 138/166/404 MB/s against libpng 1.6.37 with zlib 1.2.11 at 122/147/370 MB/s on the 19k, 40k and 77k images (1.09-1.13x) but 258 vs 289 MB/s on the 552k image and 165 vs 214 MB/s on the 4002k image (0.89x, 0.77x); about parity overall (geomean about 0.99x, derived from page data).",
+  "status_note": "Actively maintained by its single author (version 20261006, commits in October 2026 hardening allocation-size overflow checks after security report #232), Zlib-licensed and trivially vendored, but with 67 open issues, 32 open PRs and no release tags.",
+  "sources_read": [
+    "https://github.com/lvandeve/lodepng",
+    "https://github.com/lvandeve/lodepng/commits",
+    "https://github.com/lvandeve/lodepng/issues",
+    "https://github.com/lvandeve/lodepng/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/lvandeve/lodepng/issues/232",
+    "https://github.com/lvandeve/lodepng/issues/179",
+    "https://github.com/lvandeve/lodepng/issues/227",
+    "https://github.com/lvandeve/lodepng/commit/e584a84",
+    "https://raw.githubusercontent.com/lvandeve/lodepng/HEAD/README.md",
+    "https://raw.githubusercontent.com/lvandeve/lodepng/HEAD/lodepng.h",
+    "https://raw.githubusercontent.com/lvandeve/lodepng/HEAD/lodepng.cpp",
+    "https://raw.githubusercontent.com/lvandeve/lodepng/HEAD/lodepng_benchmark.cpp",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/doc/benchmarks.md",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/test/c/mimiclib/png.c",
+    "https://raw.githubusercontent.com/google/wuffs/HEAD/test/c/std/png.c"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,72 @@
+{
+  "id": "https://pdfium.googlesource.com/pdfium",
+  "one_liner": "Google's C++ PDF engine behind Chromium's viewer; about 2.5x faster text extraction than Poppler's pdftotext.",
+  "what_it_does": "PDFium is Chromium's PDF library: it parses, renders (AGG rasterizer by default, an experimental Skia backend), extracts text with per-character boxes, fills forms (optional XFA and JavaScript through V8) and edits and saves PDFs. The public interface is a C API (fpdfview.h, fpdf_text.h, fpdf_edit.h and others) over C++20 internals: FPDF_InitLibrary, FPDF_LoadMemDocument, FPDF_LoadPage, FPDFText_LoadPage, then FPDFText_GetText or FPDFText_GetBoundedText. It is not a drop-in for pdftotext: no text CLI ships (pdfium_test only rasterises pages), so you write the per-page extraction loop yourself or use a binding such as pypdfium2, the one the benchmark used.",
+  "how_it_is_fast": "Text extraction (CPDF_TextPage) is a single pass over the page's text objects in content-stream order: each object is compared with the previous one and spaces or line breaks are generated from geometry thresholds (ProcessInsertObject), with no word, line or block clustering and no reading-order sort. Poppler's default pdftotext mode (TextOutputDev::coalesce) builds words, lines, blocks and flows and topologically sorts blocks into reading order, so part of the measured gap is less layout work rather than a faster parser. The benchmarked binary is a Clang release build from bblanchon/pdfium-binaries (is_debug=false, Chromium toolchain, PartitionAlloc off, no V8/XFA) running in-process, while Poppler runs as a separate process; no SIMD-specific text code was found. Upstream checks changes for speed regressions with SafetyNet (testing/tools/safetynet_compare.py), which compares two PDFium versions by time or instruction counts on a set of PDFs, Linux only.",
+  "when_to_use": [
+    "Bulk text extraction from born-digital PDFs (LaTeX papers, generated reports) whose content-stream order is already reading order: 1.59 s against 4.01 s for pdftotext over 14 documents, with the suite's top quality score (95%).",
+    "Products that must embed a PDF engine under a permissive licence: BSD-3-Clause (LICENSE also carries the Apache-2.0 text), where Poppler is GPL and MuPDF is AGPL-3.0 or commercial.",
+    "Applications needing rendering, text with character boxes (FPDFText_GetCharBox), forms and page editing from one library, from C/C++, Python (pypdfium2), .NET (NuGet) or WASM.",
+    "Cross-platform shipping without building it yourself: pdfium-binaries publishes weekly prebuilt libraries for Linux glibc and musl, macOS, Windows (x86, x64, arm64), Android, iOS and WASM."
+  ],
+  "when_not_to_use": [
+    "Multi-column or complex layouts where reading order matters: PDFium emits content-stream order with no column analysis, while pdftotext's default mode reconstructs reading order and -layout preserves physical layout.",
+    "Parallel extraction inside one process: fpdfview.h states that none of the PDFium APIs are thread-safe, so every call must be serialised; use a process pool instead.",
+    "Teams that must build from source with their own toolchain: GN, Ninja and depot_tools with Chromium's Clang; GCC support is community patches only and MSVC patches are not accepted.",
+    "Opening untrusted PDFs in a privileged process: Chrome keeps shipping PDFium use-after-free fixes (CVE-2026-11303 to CVE-2026-11307, fixed in Chrome 149.0.7827.53, per search-result summaries); sandbox it the way Chrome does.",
+    "Tools that need raw PDF object access (dictionaries, streams, name trees): the public API does not expose it (crbug.com/pdfium/1694, per the pypdfium2 README)."
+  ],
+  "integration": {
+    "form": "shared lib (static with pdf_is_complete_lib); usually consumed as prebuilt pdfium-binaries archives or pypdfium2 wheels",
+    "dependencies": "DEPS-pinned and vendored: FreeType, libjpeg-turbo, libpng, zlib, ICU, abseil, fast_float, simdutf, Highway, dragonbox, fp16, cpu_features, PartitionAlloc; OpenJPEG bundled unless use_system_libopenjpeg2; optional V8 (JavaScript and XFA) and Skia",
+    "min_toolchain": "C++20 (default build), Clang under Chromium's toolchain policy, GN plus Ninja from depot_tools; GCC community patches only, no MSVC",
+    "platforms": "x64 default on Windows, Linux and macOS, x86 on Windows, arm for Android per README; pdfium-binaries adds Linux arm/arm64/x86/ppc64 and musl, Windows arm64, iOS and WASM; big-endian is not a priority",
+    "thread_safety": "None of the PDFium APIs are thread-safe (fpdfview.h): embedders must ensure only one PDFium call runs at a time; pypdfium2 repeats this as a known limitation.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness noise (read this session): each cell is one time.time() run, and the four committed cache.json snapshots give pypdfium2 totals of 1.537 s, 3.970 s, 1.715 s and 1.591 s against pdftotext 4.039 s, 4.690 s, 4.539 s and 4.008 s; in the 2026-10-02 run (commit c323a47) 2201.00214 took 2.816 s instead of about 0.5 s, cutting the total advantage to 1.18x, while the per-document geometric mean stayed 2.3x to 2.5x in all four runs (derived from page data).",
+    "Not the same work: pypdfium2 runs in-process and returns content-stream-order text, while pdftotext is launched with subprocess after a temp-file write and does reading-order analysis; even charging the smallest pdftotext time (0.037 s) as fixed start-up cost on all 14 documents leaves about 3.49 s against 1.59 s (about 2.2x, derived from page data).",
+    "FPDFText_GetText, which pypdfium2's get_text_range calls, 'ignores characters without UCS-2 representations' and also returns characters outside the crop box; pypdfium2 points to get_text_bounded for full Unicode.",
+    "The quality comparison is asymmetric: pypdfium2 and pypdf output pass through the suite's own postprocess (ligature replacement, de-hyphenation, page-label removal) before scoring, while pdftotext and PyMuPDF are scored raw, so the 95% against 90% gap is partly the harness's cleanup (that Python work does count against PDFium's time)."
+  ],
+  "pick_this_over_siblings_when": "Against MuPDF, which ties it on text speed (1.604 s against 1.591 s) and is about 2x faster at image extraction, pick PDFium when the licence must be permissive rather than AGPL; against Poppler, pick PDFium for speed and licence unless you need reading-order reconstruction or a ready-made CLI. The path rasterizers in this category (Blend2D, ThorVG, Skia-class engines) do not parse PDF.",
+  "verified_claims_summary": "In the independent py-pdf/benchmarks suite on an Intel Core i7-6700HQ, one timed run per document over 14 born-digital PDFs (7 to 134 pages), pypdfium2 5.13.0 with a prebuilt pdfium-binaries Clang release build extracted text in 1.591 s in total against 4.008 s for the distro Poppler 24.02.0 pdftotext binary run as a subprocess, about 2.5x (geometric mean 2.4x, derived from page data); only text extraction was measured, not rendering.",
+  "status_note": "Actively developed as Chromium's PDF engine (the GitHub mirror chromium/pdfium, flagged archived since 2023-08-04, still lists commits to 2025-11-19; pdfium-binaries builds weekly and pypdfium2 5.14.0 shipped 2026-10-04); copyable under BSD-3-Clause, the numbers stand as tier B with harness caveats (one-shot timings, unequal text work) rather than flaws that invalidate them.",
+  "sources_read": [
+    "https://pdfium.googlesource.com/pdfium/ (ENOTFOUND, not reachable)",
+    "https://github.com/chromium/pdfium/commits/main",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/README.md",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/public/fpdfview.h",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/public/fpdf_text.h",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/docs/getting-started.md",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/BUILD.gn",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/DEPS",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/core/fpdftext/cpdf_textpage.cpp",
+    "https://raw.githubusercontent.com/chromium/pdfium/HEAD/docs/safetynet.md",
+    "https://raw.githubusercontent.com/pypdfium2-team/pypdfium2/HEAD/README.md",
+    "https://raw.githubusercontent.com/pypdfium2-team/pypdfium2/HEAD/src/pypdfium2/_helpers/textpage.py",
+    "https://pypi.org/pypi/pypdfium2/json",
+    "https://raw.githubusercontent.com/bblanchon/pdfium-binaries/HEAD/README.md",
+    "https://github.com/bblanchon/pdfium-binaries/tree/master/steps",
+    "https://raw.githubusercontent.com/bblanchon/pdfium-binaries/HEAD/steps/05-configure.sh",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/benchmark.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/library_code.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/data_structures.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/text_extraction_post_processing.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/score.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/HISTORY.md",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/cache.json",
+    "https://github.com/py-pdf/benchmarks/commits/main/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/1c3fe78/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/c323a47/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/612bad6/cache.json",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/poppler/TextOutputDev.cc",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/utils/pdftotext.1",
+    "WebSearch: PDFium CVE 2026 use after free Chrome security fix (sentinelone, feedly, radar.offseq summaries)"
+  ],
+  "confidence": 0.75
+}

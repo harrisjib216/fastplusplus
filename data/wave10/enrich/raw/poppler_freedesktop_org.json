@@ -1,0 +1,71 @@
+{
+  "id": "https://poppler.freedesktop.org",
+  "one_liner": "xpdf-derived C++ PDF library and pdftotext tool; about 19x faster text extraction than pure-Python pdfminer.six.",
+  "what_it_does": "Poppler is a PDF rendering and inspection library forked from xpdf 3.03, with stable front-ends in C++ (cpp), C/GObject (glib, rendering to Cairo) and Qt5/Qt6, an explicitly unstable internal C++ API (poppler/), and the poppler-utils command-line tools (pdftotext, pdftoppm, pdftocairo, pdfimages, pdftohtml, pdfinfo). For text, pdftotext writes reading-order text by default, physical layout with -layout, content-stream order with -raw, and word boxes with -bbox, -bbox-layout or -tsv; the C++ API exposes the same modes through page::text(rect, layout_mode) and page::text_list(). It is not a drop-in for pdfminer.six: Python users either shell out to the pdftotext binary (what the benchmark does) or bind libpoppler-cpp.",
+  "how_it_is_fast": "Against the pure-Python extractors the gain is mostly compiled C++ versus interpreted content-stream parsing and layout analysis in Python. TextOutputDev collects glyphs into words, lines, blocks and flows (TextPage::coalesce) and orders blocks with a depth-first topological sort following Breuel's 'High Performance Document Layout Analysis' (2003), all in native code. Rendering uses the xpdf-derived Splash rasterizer (with optional Boost 'for Splash backend performance') or Cairo, but no rendering was measured.",
+  "when_to_use": [
+    "Shell and batch pipelines on Linux where poppler-utils is already a distro package and pdfminer.six, pypdf or pdfplumber is the current tool: about 19x, 12x and 30x less total time on the py-pdf suite.",
+    "Multi-column documents where you want reading-order reconstruction (default mode) or a physical-layout dump (-layout), which PDFium's content-stream-order text API does not provide.",
+    "Jobs that need word or line bounding boxes as plain files (-tsv, -bbox-layout) without writing code.",
+    "GPL-compatible desktop or server software that wants a maintained PDF engine with GLib/Cairo or Qt integration."
+  ],
+  "when_not_to_use": [
+    "Speed-first text extraction: on the same suite pypdfium2 (PDFium, 1.591 s) and PyMuPDF (MuPDF, 1.604 s) are both about 2.5x faster, and even Tika (Java, over HTTP to a local server) totals 2.912 s against 4.008 s.",
+    "Closed-source or permissively licensed products: the README says programs calling Poppler must be GPL, and the xpdf commercial licence does not extend to Poppler.",
+    "Code built on the internal poppler/ C++ headers: the README marks that API unstable, liable to change even between minor versions.",
+    "Untrusted PDFs in an unsandboxed process: CVE-2026-10118 (integer overflow in Splash tilingPatternFill leading to a heap out-of-bounds write, per search-result summaries of the Debian tracker), and NEWS lists 'Fix crashes in malformed documents' in most monthly releases.",
+    "Old toolchains: current master (26.09.90) sets CMAKE_CXX_STANDARD 23 and requires CMake 3.28."
+  ],
+  "integration": {
+    "form": "shared lib (libpoppler plus libpoppler-cpp, -glib, -qt5, -qt6 front-ends) and command-line tools (poppler-utils)",
+    "dependencies": "FreeType and Fontconfig required (Android uses the system font lookup instead); optional or soft-mandatory: libjpeg, OpenJPEG, LCMS2, libpng, libtiff, zlib, brotli, libcurl, NSS3, GPGME, HarfBuzz (required for font subsetting since 26.09), Boost, Cairo and GLib, Qt5/Qt6",
+    "min_toolchain": "C++23 compiler and CMake 3.28 (master at 26.09.90); the benchmarked 24.02.0 is an older distribution build",
+    "platforms": "not documented in the README; build files handle Fontconfig-based Unix systems, Android and Windows (relocatable build option)",
+    "thread_safety": "not documented in the stable C++ or Qt6 headers read; poppler-glib serialises per-page calls with a per-page std::mutex (26.07.0 fixed a macOS crash caused by that mutex not being constructed)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness detail (read this session): the timed path is /usr/bin/pdftotext launched with subprocess.run after each PDF is written to a temp file, so process start, GlobalParams set-up and file I/O are inside every timing; charging the smallest pdftotext time (0.037 s) as fixed cost on all 14 documents would cut the total to about 3.49 s, which makes the pdfminer.six ratio about 22x rather than 19x (derived from page data). The README's '0.86.1' version and libpoppler-cpp dependency describe the Python pdftotext package, which library_code.py never imports.",
+    "The measured Poppler is 24.02.0, about 30 releases behind the current 26.09.0 in NEWS, so newer pdftotext changes (for example -remove-hyphens in 26.x) are not reflected; timings are single time.time() runs, and the four committed cache.json snapshots give pdftotext totals of 4.039, 4.690, 4.539 and 4.008 s (the ratio to pdfminer.six stays between 17.6x and 20.1x, derived from page data).",
+    "The suite's quality score is asymmetric: pypdf and pypdfium2 output pass through the harness's own post-processing (ligature replacement, de-hyphenation, page-label removal) before scoring, while pdftotext is scored raw, so its 90% understates it relative to those two.",
+    "Licence nuance: xpdf-derived code is 'GPL v2 or v3' and explicitly NOT 'any later version' (README-XPDF), while Poppler's own changes are GPL version 2 or later, so the combined library is effectively GPL-2.0-only or GPL-3.0-only rather than GPL-2.0-or-later."
+  ],
+  "pick_this_over_siblings_when": "Pick Poppler over PDFium and MuPDF only when GPL is acceptable and you want its ready-made pdftotext modes (reading order, -layout, -tsv word boxes) or GLib/Qt integration; on raw extraction speed both siblings are about 2.5x faster in the same suite, and PDFium is permissively licensed.",
+  "verified_claims_summary": "In the independent py-pdf/benchmarks suite on an Intel Core i7-6700HQ, one timed run per document over 14 born-digital PDFs, the distribution Poppler 24.02.0 pdftotext binary (compiler and flags unstated, run as a subprocess) extracted text in 4.008 s in total against 76.527 s for pdfminer.six 20260107, 46.83 s for pypdf 6.19.0 and 121.0 s for pdfplumber 0.11.10, about 19x, 12x and 30x (derived from page data); rendering was not measured.",
+  "status_note": "Actively maintained with monthly releases (26.09.0 is the newest in NEWS; the GitHub mirror tsdgeos/poppler_mirror shows commits on 2026-10-03, while gitlab.freedesktop.org and poppler.freedesktop.org were unreachable here); copyable only under the GPL, and the claim is valid but rests on a weak pure-Python baseline, with Poppler slower than PDFium and MuPDF in the same table.",
+  "sources_read": [
+    "https://poppler.freedesktop.org/ (not reachable from this environment)",
+    "https://gitlab.freedesktop.org/poppler/poppler/-/raw/master/README.md (connection failed)",
+    "https://raw.githubusercontent.com/freedesktop/poppler/HEAD/README.md (404)",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/README.md",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/README-XPDF",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/COPYING",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/COPYING3",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/NEWS",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/utils/pdftotext.cc",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/utils/pdftotext.1",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/poppler/TextOutputDev.cc",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/poppler/TextOutputDev.h",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/cpp/poppler-page.h",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/cpp/poppler-document.h",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/qt6/src/poppler-qt6.h",
+    "https://raw.githubusercontent.com/tsdgeos/poppler_mirror/HEAD/glib/poppler-page.cc",
+    "https://github.com/tsdgeos/poppler_mirror/commits/master",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/benchmark.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/library_code.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/data_structures.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/text_extraction_post_processing.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pdf_benchmark/score.py",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/HISTORY.md",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/HEAD/cache.json",
+    "https://github.com/py-pdf/benchmarks/commits/main/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/1c3fe78/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/c323a47/cache.json",
+    "https://raw.githubusercontent.com/py-pdf/benchmarks/612bad6/cache.json",
+    "WebSearch: poppler CVE 2026 pdftotext heap overflow fixed version (Debian security tracker CVE-2026-10118, osv.dev, vulert summaries)"
+  ],
+  "confidence": 0.7
+}
