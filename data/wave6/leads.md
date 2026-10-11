@@ -16,3 +16,4 @@ For a later wave (not storage-and-data):
 - sqlpp11 (https://github.com/rbock/sqlpp11): PR #520 hand date parser vs its own std::regex parser (GCC -O3 0.00733141 s vs 0.923286 s); self-comparison, no record (w6-mine-g, 2026-10-11).
 - PostgreSQL vs MySQL leads (w6-mine-e, 2026-10-11): Vonng/pgtpc sysbench page, TPC-Council/HammerDB discussion 259 (PG 14000 vs MySQL 3800 NOPM), DoltHub 2024 sysbench latency post (search summary only; dolthub.com blocked).
 - From w6-mine-d (2026-10-11): memgraph/memgraph (Benchgraph 2-5x over Neo4j, snippet only), lance-graph (q20 139.05x over Neo4j in prrao87/graph-benchmark-ldbc), ProxySQL/ParserSQL (3-4x over libpg_query, public harness), arXiv 2609.23315 (Ladybug 3.97 ms vs Neo4j 6.92 ms, blocked).
+- Enricher w6 pair-018 leads (uncatalogued): Vedis (https://github.com/symisc/vedis, VedisKV 1.04/1.22 s in the UnQLite gist), Tkrzw (https://github.com/estraier/tkrzw, Kyoto Cabinet successor; Kyoto fastest in that gist).

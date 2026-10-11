@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/silverqx/tinyorm",
+  "one_liner": "Qt-based C++20 ORM whose own MySQL driver layer replaces QtSql/QMYSQL; measured gain is marginal (~40 ms per 620 queries).",
+  "what_it_does": "TinyORM is a Laravel-Eloquent-style ORM and query builder for Qt 6 applications (MySQL, MariaDB, PostgreSQL, SQLite). TinyDrivers is its optional SQL layer, with TinyMySql as the only finished driver: it mirrors the QtSql API 1:1 (SqlDatabase, SqlQuery, Orm::Drivers namespace) and is swapped for QtSql at build time via the CMake BUILD_DRIVERS / BUILD_MYSQL_DRIVER / DRIVERS_TYPE options or the qmake build_*_drivers options, so TinyORM code needs no changes. It links directly against the MySQL C connector (libmysql/mysqlclient) or MariaDB Connector/C and drops the QtSql dependency, but still needs QtCore.",
+  "how_it_is_fast": "There is no new algorithm: TinyMySql is a thin, KCacheGrind-tuned wrapper over the MySQL C API (mysql_real_query plus mysql_store_result for normal queries, mysql_stmt_* with bound buffers for prepared ones). Its small savings come from avoiding some per-value conversions, e.g. integer columns from prepared statements are built straight into a QVariant from the bound buffer without a QString::fromUtf8 round trip, and binding buffers are pre-reserved. The author states that about 90% of the time is spent inside the MySQL C API waiting on the server, so the driver layer has little left to speed up.",
+  "when_to_use": [
+    "You already use TinyORM with MySQL or MariaDB and want to drop the QtSql module (smaller Qt footprint, fewer Qt plugins to deploy).",
+    "You want MySQL connection options QMYSQL handles awkwardly, such as valueless non-flag options or MYSQL_OPT_SSL_MODE verify_ca / verify_identity.",
+    "You prefer exceptions over QtSql's bool-plus-lastError() error reporting in a Qt 6, C++20 code base built on MSVC, GCC 11.2-14.2 or Clang 15+ (libstdc++).",
+    "You need a static, shared or runtime-loadable (dlopen / LoadLibrary) driver build that you control instead of Qt's plugin loader."
+  ],
+  "when_not_to_use": [
+    "You want measurable query-latency gains: the author's own conclusion is that performance is 'very similar to QtSql'; database round trips dominate.",
+    "You use PostgreSQL or SQLite through TinyORM: TinyDrivers implements MySQL only, so those databases still need QtSql.",
+    "You need multiple result sets: SqlQuery::nextResult() is not implemented (only the first result set of a multi-statement query can be fetched).",
+    "You target macOS or Clang with libc++: unsupported per the supported-compilers page; Qt 5 support was dropped in v0.38.0.",
+    "You need an actively developed driver: the last commit is 2024-08-26 and TinyDrivers is v0.2.0; the official vcpkg port does not include it."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (also a runtime-loadable TinyMySql module), built with CMake >=3.22 or qmake",
+    "dependencies": "QtCore (Qt >=6.2), range-v3 >=0.11.0, tabulate, MySQL Connector/C (libmysql/mysqlclient) or MariaDB Connector/C; QtSql is not needed when TinyDrivers is enabled",
+    "min_toolchain": "C++20; MSVC 2019 16.9+ / 2022, GCC 11.2-14.2, Clang 15+ with libstdc++, clang-cl 15+",
+    "platforms": "Windows 10+ and Linux; macOS and libc++ not supported",
+    "thread_safety": "A connection may be used only from the thread that created it; multi-threading is disabled on Clang <14.0.3 (MSYS2), Clang <14.0.4 (Linux) and GCC on MSYS2 because of thread_local TLS-wrapper bugs; the schema builder and migrations are not thread-safe. TinyMySql calls mysql_thread_end() when a thread's connection is torn down.",
+    "drop_in_for_baseline": "partial: 1:1 QtSql API swapped at compile time for TinyORM users, but MySQL only, errors are thrown as exceptions (bool-returning methods always return true), exec(QString) no longer simulates prepared statements, and nextResult() is missing"
+  },
+  "gotchas": [
+    "Error semantics differ from QtSql: code that checks a false return and then lastError() will never see the error, because TinyDrivers throws instead.",
+    "Normal and prepared queries always buffer the whole result set on the client (mysql_store_result / mysql_stmt_store_result); there is no streaming mode, so very large SELECTs cost client memory.",
+    "Harness flaw behind the 40 ms figure: TinyOrmPlayground's only timer (QElapsedTimer in src/main.cpp) wraps the whole run, including connectToDatabase(), connection creation and per-query console logging with title headers, against a live MySQL server, in a Debug build, one run; the total time is never published, so the gap cannot be separated from server and logging noise.",
+    "The playground has since grown to ~1600 queries (TinyORM README), so the 620-query configuration behind the claim is no longer the default and cannot be re-run from published material."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet in database-client-drivers; within the catalogue the closest neighbour is ODB (a compiled C++ ORM), and TinyDrivers is only worth picking if you are already on TinyORM and Qt and want to shed QtSql, not for speed.",
+  "verified_claims_summary": "The author reports that TinyOrmPlayground (620 MySQL queries) finished about 40 ms sooner with TinyDrivers/TinyMySql than with QtSql/QMYSQL, built with GCC 13.2.1 in Debug mode on Linux, one run, no CPU model, no total runtime and no variance; the same page calls the two 'very similar' because 90% of the time is spent in the MySQL C API. Roughly 65 microseconds per query of driver overhead at most, with the timer also covering connection setup and console logging.",
+  "status_note": "Stale: no commits since 2024-08-26 (5,739 commits; maintainer still closing issues in 2025, e.g. #69 in Sep 2025), MIT-licensed and copyable, but tied to Qt 6 and TinyORM's own build system, with open Windows build/dllexport issues (#55, #61, #63, #65).",
+  "sources_read": [
+    "https://github.com/silverqx/TinyORM",
+    "https://github.com/silverqx/TinyORM/commits/main",
+    "https://github.com/silverqx/TinyORM/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/README.md",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/docs/tinydrivers/getting-started.mdx",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/docs/dependencies.mdx",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/docs/supported-compilers.mdx",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/docs/stability.mdx",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/docs/database/getting-started.mdx",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/LICENSE",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/vcpkg.json",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/drivers/mysql/src/orm/drivers/mysql/mysqldriver_p.cpp",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/drivers/mysql/src/orm/drivers/mysql/mysqlresult.cpp",
+    "https://raw.githubusercontent.com/silverqx/TinyORM/main/drivers/mysql/src/orm/drivers/mysql/mysqlresult_p.cpp",
+    "https://github.com/silverqx/TinyOrmPlayground",
+    "https://raw.githubusercontent.com/silverqx/TinyOrmPlayground/main/src/main.cpp",
+    "https://raw.githubusercontent.com/silverqx/TinyOrmPlayground/main/src/configuration.hpp",
+    "https://raw.githubusercontent.com/silverqx/TinyOrmPlayground/main/src/configuration.cpp"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/symisc/unqlite",
+  "one_liner": "Single-file embedded C key/value and JSON document store (linear hashing); faster than SQLite only for point lookups in one informal Python test.",
+  "what_it_does": "UnQLite is an in-process, serverless, transactional database that keeps a database in one cross-platform file (or in memory with ':mem:'). It exposes a raw binary-safe key/value API (unqlite_kv_store / unqlite_kv_fetch / cursors) and a document store driven by the embedded Jx9 scripting language. It ships as an SQLite-style amalgamation (unqlite.c plus unqlite.h) and has its own API, so it is not a drop-in for SQLite: there is no SQL, no schema and no secondary indexes.",
+  "how_it_is_fast": "The default on-disk engine is Litwin's linear hashing (lhash_kv.c, extended with what the authors call a Virtual Bucket Table), giving O(1) average point lookups with no SQL parse/plan step. Pages go through a SQLite-derived pager with a rollback journal ('_unqlite_journal' file); by default the page cache is unlimited (nCacheMax = SXU32_HIGH), so a write transaction accumulates dirty pages in memory until commit, and with the default auto-commit that commit happens only at unqlite_close(). In-memory databases use a separate in-memory hash engine ('mem').",
+  "when_to_use": [
+    "Embedded C or C++ application that needs single-key get/put on an ACID single-file store and does not need SQL or range scans.",
+    "You want a JSON-ish document store inside the process (Jx9 collections) without running a server.",
+    "Bulk loads that can sit in one transaction and fit in RAM, committed once at the end (the default auto-commit-on-close pattern).",
+    "Builds where one portable C99 amalgamation compiled with your app (no external dependency) beats linking a larger engine."
+  ],
+  "when_not_to_use": [
+    "Raw key/value speed matters: in the same informal Python test LevelDB (0.38 s / 0.31 s), Kyoto Cabinet (0.25-0.28 s) and GDBM (0.29 s / 0.17 s) were about 2.8-8x faster than UnQLite (1.05 s / 1.35 s) for 100,000 writes and reads.",
+    "You need ordered iteration or range queries: the default engine is a hash table; the b+tree engine named in the code as a fallback is not registered in the amalgamation.",
+    "Several processes share one database file: open issue #168 (Apr 2024, no maintainer reply) reports a segfault and an endless UNQLITE_BUSY loop when two processes use the same file on macOS/iOS; #137 was an earlier multiprocess corruption bug.",
+    "You run untrusted Jx9 scripts or document-store input: 2025-2026 issues #172, #173 and #176 were memory-safety bugs (global-buffer-overflow and heap overflow) in the Jx9 engine; one fix was merged, reverted and redone in Apr-Sep 2026.",
+    "Large write transactions on memory-constrained systems: the default unlimited page cache keeps every dirty page in RAM until commit unless UNQLITE_CONFIG_MAX_PAGE_CACHE is set."
+  ],
+  "integration": {
+    "form": "source-drop (amalgamation unqlite.c + unqlite.h); optional CMake >=3.10 static lib",
+    "dependencies": "none (pthreads on UNIX when built with UNQLITE_ENABLE_THREADS)",
+    "min_toolchain": "C99 (README builds with cc -O2 -std=c99 or MSVC /TC)",
+    "platforms": "Windows and UNIX VFS built in; other platforms must register their own VFS and mutex subsystem",
+    "thread_safety": "Not thread-safe by default: all mutex code is compiled out unless UNQLITE_ENABLE_THREADS is defined; with it, handles may be shared across threads (UNQLITE_LIB_CONFIG_THREAD_LEVEL_MULTI). Multiprocess sharing relies on file locks and has open crash reports.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Writes are only durable at commit; with the default settings that is unqlite_close(). Crash before close and the whole session's writes roll back; call unqlite_commit() explicitly for durability points, and note UNQLITE_CONFIG_DISABLE_AUTO_COMMIT turns off the close-time commit.",
+    "Harness flaw behind the benchmark: the gist never commits UnQLite inside either timed loop, the pager cache is unlimited, and auto-commit happens at close after both timers stop, so UnQLite's 100,000 writes are in-memory linear-hash inserts and its 100,000 reads are served from the same uncommitted dirty pages, while SQLite journals and fsyncs one transaction per INSERT and answers each read with a SQL SELECT against the committed file. Neither the 6.6x write ratio nor the 1.4x read ratio is like-for-like.",
+    "UNQLITE_OPEN_MMAP is silently dropped unless the database is opened read-only (unqlite.c clears it for CREATE and READWRITE opens).",
+    "The current unqlite-python binding's fetch() calls unqlite_kv_fetch twice per key (size probe, then copy), so Python-level read timings carry extra lookup and binding cost that a C caller would not pay."
+  ],
+  "pick_this_over_siblings_when": "Choose UnQLite over LMDB or LevelDB only when you want a single C amalgamation that also gives you a schemaless JSON document store and SQLite-like single-file deployment; for pure key/value throughput or ordered scans, LMDB (mmap B+tree) and LevelDB (LSM, 3-4x faster than UnQLite in the same Python test) are the better picks, and CalicoDB is the closer 'beats SQLite' sibling with C-level numbers.",
+  "verified_claims_summary": "A single-run Python 2 script by the unqlite-python author stored and then read 100,000 small string pairs: UnQLite 1.05 s writes / 1.35 s reads vs Python sqlite3 6.98 s / 1.89 s, with no hardware, OS, library versions or compiler stated. SQLite committed every row inside the timer while UnQLite's writes and reads ran in one uncommitted in-memory transaction committed at close, so the numbers compare an in-memory hash table against per-row durable SQL transactions, not two equally durable stores.",
+  "status_note": "Active (last commit 2026-09-05, release 1.2.1 on 2026-04-30, 168 commits, 2.3k stars), BSD-2-Clause and trivially vendored as two files, but maintenance is mostly security fixes in Jx9 and the multiprocess crash #168 is unanswered.",
+  "sources_read": [
+    "https://github.com/symisc/unqlite",
+    "https://github.com/symisc/unqlite/commits",
+    "https://github.com/symisc/unqlite/issues?q=is%3Aissue",
+    "https://github.com/symisc/unqlite/issues/168",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/README.md",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/unqlite.h",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/unqlite.c",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/symisc/unqlite/HEAD/CHANGELOG.md",
+    "https://gist.github.com/coleifer/3057f97a7628d44c2e59",
+    "https://raw.githubusercontent.com/coleifer/unqlite-python/HEAD/unqlite.pyx",
+    "https://raw.githubusercontent.com/coleifer/unqlite-python/HEAD/README.md"
+  ],
+  "confidence": 0.7
+}
