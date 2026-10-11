@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/nvidia/matx",
+  "one_liner": "NumPy-style C++20 GPU array library whose JIT fusion of a cuFFT pipeline ran 1.61x faster than handwritten CUDA + cuFFT.",
+  "what_it_does": "MatX is a header-only C++20 library for NVIDIA GPUs (and host CPUs) with NumPy/MATLAB-like arbitrary-rank tensors, views, broadcasting, reductions, FFTs, BLAS/LAPACK, solvers and random numbers. You compose lazy expressions and run them by assigning to an output tensor with an executor: cudaExecutor, the experimental CUDAJITExecutor, or AllThreadsHostExecutor (OpenMP with NVPL, FFTW, OpenBLAS or BLIS). It does not replace the cuFFT or FFTW API; it replaces whole hand-written pipelines of CUDA kernels and library calls.",
+  "how_it_is_fast": "Expression templates: each operator returns a lazy type, so a chain of element-wise operations compiles into one kernel with no intermediate arrays, and transforms such as fft and matmul can sit inside expressions. With -DMATX_EN_MATHDX=ON, CUDAJITExecutor uses NVRTC and libmathdx-generated LTOIR to compile the whole expression, including a block-level cuFFTDx FFT, into one runtime-generated kernel. In the benchmark, normalization then runs on load and calibration, magnitude and dB on store, which removes two 8.4 MB temporaries and two extra launches. The plain cudaExecutor path still calls cuFFT between generated pre- and post-kernels and is no faster than handwritten code.",
+  "when_to_use": [
+    "Memory-bound GPU signal-processing chains: element-wise pre- and post-processing around batched 1-D power-of-two FFTs that cuFFTDx can run in one block (the benchmark used 256 x 4096 complex FP32).",
+    "C++ code that wants NumPy-like array expressions on NVIDIA GPUs without writing kernels; cudaExecutor came within 3% of a handwritten CUDA + cuFFT pipeline.",
+    "Long-running processes that reuse the same expression shapes, so the per-operator JIT compile is paid once and then cached.",
+    "Large element-wise formulas (Black-Scholes style) that an eager array library such as CuPy would split into many kernels with materialized temporaries.",
+    "Grace or DGX Spark systems where the same expression should also run on the Arm host through NVPL."
+  ],
+  "when_not_to_use": [
+    "You need a faster FFT by itself: MatX's non-JIT FFT path is cuFFT and measured 3% slower than handwritten CUDA + cuFFT; all of the gain comes from fusing surrounding work.",
+    "FFT sizes or expressions the JIT path cannot lower: non-power-of-two sizes, transforms too large for one cuFFTDx block, or operators with incompatible elements-per-thread needs (the fusion guide's fftshift1D(fft(b)) example). CUDAJITExecutor throws on these instead of falling back.",
+    "Short-lived processes or many distinct shapes: the fusion guide puts first-run JIT compilation at milliseconds to seconds, and the README does not publish the compile time the benchmark prints.",
+    "Non-NVIDIA GPUs, or Windows deployments that need JIT or multi-GPU (Windows support is alpha, with no JIT and no multi-GPU).",
+    "Pipelines already fused with cuFFT load/store callbacks, the incumbent's own fusion route, which the benchmark does not compare against."
+  ],
+  "integration": {
+    "form": "header-only (CMake interface target matx::matx via add_subdirectory, or the Conan Center package)",
+    "dependencies": "CUDA Toolkit (cuFFT, cuBLAS and other CUDA libraries); optional MathDx/libmathdx (downloaded by CMake with MATX_EN_MATHDX=ON) for JIT fusion; optional NVPL, FFTW, OpenBLAS or BLIS for host executors; cuTENSOR/cuTensorNet for einsum and cuDSS for sparse solve",
+    "min_toolchain": "C++20; Linux: CUDA 12.2.1+ with g++ 9.3+, clang 17+ or nvc++ 24.5 as host compiler (Conan matx/1.0.0 requires CUDA 13.x); CMake 3.30.4+ for examples, tests and benchmarks; Windows: Visual Studio 2026 and CUDA 13.3+",
+    "platforms": "Linux on NVIDIA GPUs (full support); Windows alpha without JIT or multi-GPU; host executors on x86 (FFTW, OpenBLAS, BLIS) and NVIDIA Arm CPUs (NVPL)",
+    "thread_safety": "Not documented in general; issue #1039 showed the FFT plan cache was shared across host threads, so the same FFT on a second thread failed in cuFFT; fixed by PR #1040 (August 2025)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 1.61x is a memory-traffic result on a low-bandwidth GPU (derived from page data and the harness's buffer sizes). The handwritten path moves about 50 MB per call (8.4 MB signal read, two 8.4 MB temporaries each written and read, 4.2 MB calibration read, 4.2 MB output write), which is about 281 GB/s at 0.1792 ms, at or above the 273 GB/s LPDDR5x figure on NVIDIA's DGX Spark hardware page (WebSearch snippet). The fused kernel moves about 16.8 MB, about 151 GB/s at 0.1114 ms. The ratio on HBM GPUs is unmeasured.",
+    "The validation check is loose: outputs are compared in dB with a 2e-3 relative tolerance and a max(1, |ref|) denominator, which allows about 0.14 dB (about 1.7% in magnitude) near the 72 dB peak. The README does not publish the achieved error or the JIT compile time that the harness prints.",
+    "make_tensor defaults to managed memory (MATX_MANAGED_MEMORY). That is harmless on DGX Spark's unified memory, but on discrete GPUs, touching results from the host causes page migration unless you choose another memory space.",
+    "JIT fusion is labelled experimental ('may contain bugs that don't occur with JIT disabled'). Black-Scholes caveat: the four MatX variants are checked only against each other (1e-6), never against the CuPy/NumPy outputs, whose inputs are generated differently (cuRAND uniform vs NumPy default_rng clamped to 1e-6)."
+  ],
+  "pick_this_over_siblings_when": "Pick MatX when the FFT is one stage of a larger GPU pipeline and the cost is in pre- and post-processing traffic; VkFFT (cross-vendor, roughly cuFFT parity on radix 2-13), TurboFFT and tcFFT target the standalone FFT kernel, FlashFFTConv is the choice for FFT convolutions inside PyTorch models, and the CPU siblings (FFTW-class libraries, PocketFFT, KFR) do not compete on GPU.",
+  "verified_claims_summary": "On one NVIDIA DGX Spark (GB10, CUDA 13.0, MathDx 26.03), the public examples/fft_benchmark.cu (10 warmups, seven interleaved trials of 2,000 iterations timed with CUDA events, median of five executions) ran 256 batched 4096-point complex FP32 FFTs with normalization before and calibration, magnitude and dB after: handwritten CUDA kernels + cuFFT took 0.1792 ms, MatX cudaExecutor 0.1848 ms, and MatX CUDAJITExecutor 0.1114 ms (1.61x). A separate 100M-option FP32 Black-Scholes run took 16.07 ms in MatX vs 90.32 ms for eager CuPy 14.1.1 on the same GPU and 2965.66 ms for single-threaded NumPy 2.5.1 + SciPy 1.18.0.",
+  "status_note": "Actively developed NVIDIA project (1,139 commits, last commit 2026-10-10, 1.4k stars, 11 open issues), BSD-3-Clause and header-only, so it is easy to vendor; the JIT fusion behind the headline number is new (cuFFTDx support issue #976 closed April 2026, README benchmark added July 2026) and still marked experimental.",
+  "sources_read": [
+    "https://github.com/NVIDIA/MatX",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/fft_benchmark.cu",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/black_scholes.cu",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/black_scholes_benchmark.py",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/docs_input/build.rst",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/docs_input/basics/fusion.rst",
+    "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/include/matx/core/make_tensor.h",
+    "https://github.com/NVIDIA/MatX/issues?q=is%3Aissue+fft",
+    "https://github.com/NVIDIA/MatX/issues/1039",
+    "https://github.com/NVIDIA/MatX/issues/1107",
+    "https://docs.nvidia.com/dgx/dgx-spark/hardware.html (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

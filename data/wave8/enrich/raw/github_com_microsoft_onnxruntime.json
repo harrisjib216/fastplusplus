@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/microsoft/onnxruntime",
+  "one_liner": "Microsoft's ONNX inference runtime; its fused transformer graphs ran BERT/GPT-2 1.2-5.7x faster than TorchScript 1.5.1 on V100.",
+  "what_it_does": "Runs models exported to ONNX through one C API (with C++, Python, C#, Java and JS bindings) on pluggable execution providers such as CPU, CUDA, TensorRT, DirectML, OpenVINO and QNN. For transformers, a Python optimizer (onnxruntime.transformers) rewrites an exported Hugging Face graph into fused contrib ops and can convert it to fp16; the session then runs it, optionally with IO binding to keep inputs and outputs in GPU memory. It is not a drop-in for PyTorch: you export the model, optimize it and call a different inference API.",
+  "how_it_is_fast": "Subgraph pattern-matching fusion: the optimizer replaces embedding + LayerNorm, the whole multi-head attention block, Add + LayerNorm and bias + GELU with single fused kernels (EmbedLayerNormalization, Attention, SkipLayerNormalization, BiasGelu/FastGelu), which cuts kernel count and per-op dispatch cost. The C++ executor dispatches the graph without Python or TorchScript interpreter overhead, IO binding removes host-device copies, and an optional fp16 conversion uses Tensor Cores. The flat TorchScript row (7.92 ms at s=8 to 9.56 ms at s=128) suggests most of the small-shape gain is dispatch overhead removed, not faster GPU math.",
+  "when_to_use": [
+    "Serving exported BERT-family encoders (BERT, DistilBERT, RoBERTa, ALBERT) or GPT-2-style decoders on NVIDIA GPUs at small batch and short sequences, where framework dispatch dominates latency.",
+    "Deploying one model to several back ends (CPU, CUDA, TensorRT, DirectML, OpenVINO, QNN) from a C or C++ application without a Python runtime.",
+    "fp16 inference on Tensor Core GPUs (V100, T4) via the optimizer's float16 option, after checking accuracy on your data.",
+    "Teams already exporting to ONNX who want graph fusion without writing custom CUDA kernels."
+  ],
+  "when_not_to_use": [
+    "Long sequences or large batches that are GPU-compute bound: the published gap falls to 1.2x at s=512, batch 1, and no batch-4 TorchScript row exists.",
+    "Architectures outside the tested list (BERT, DistilBERT, DistilGPT2, RoBERTa, ALBERT, GPT-2, TF BERT): fusions need an exact subgraph match, and the README warns such models may be only partly optimized or not at all.",
+    "If you can use a modern PyTorch stack (torch.compile, CUDA graphs, SDPA attention): the table predates all of them, so the current gap is unmeasured.",
+    "Environments that must not send usage data: docs/Privacy.md says telemetry is ON by default in official builds (1DS on Linux, macOS, Android, iOS; ETW on Windows).",
+    "Workloads needing one session shared by many threads on the CUDA EP with 1.14.x: issue #15154 (memory pattern with multiple streams) broke this until PR #15426 (April 2023)."
+  ],
+  "integration": {
+    "form": "shared lib (prebuilt onnxruntime / onnxruntime-gpu packages, or a CMake build from source)",
+    "dependencies": "CUDA toolkit and cuDNN for the CUDA EP (versions not documented in the files read); the transformer optimizer and benchmarks need Python with onnx, transformers and PyTorch for export",
+    "min_toolchain": "Building from source: C++20, GCC 11.1+, CMake 3.28+ (cmake/onnxruntime_language_standard_versions.cmake and CMakeLists.txt); applications can link through the C API",
+    "platforms": "Windows, Linux, macOS, Android, iOS and WebAssembly per docs/Privacy.md; the measured path here is x86-64 Linux with an NVIDIA GPU",
+    "thread_safety": "Not stated in the files read; issue #15154 reports a CUDA EP data race when threads share one session in 1.14.x, fixed by PR #15426 (workaround: enable_mem_pattern=False)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: neither engine's timing loop synchronizes the GPU. benchmark.py times TorchScript with timeit around inference(input_ids) and no torch.cuda.synchronize, and in ORT 1.4.0 run_with_iobinding with GPU-bound outputs returns without a stream sync (InferenceSession::Run(IOBinding) leaves SynchronizeInputs commented out; the CUDA EP's OnRunEnd only records an event). The 'average latency' columns are back-to-back pipelined time per call over 1000 calls, not single-request latency.",
+    "GPT-2 baseline label: the README's printed benchmark_gpt2 commands do not pass --torchscript (default False; the v1.4.0 script had no TorchScript option and loaded the model with torchscript=False), so they time eager PyTorch, not the 'torchscript 1.5.1' the table names. The script never runs PyTorch in fp16 ('This script does not support float16 for PyTorch'), so the GPT-2 fp16 rows are ORT fp16 against PyTorch fp32.",
+    "Selective rows: run_benchmark.sh (both at v1.4.0 and today) runs TorchScript in the GPU fp16 loop and at batch sizes 1 and 4, yet the README publishes only TorchScript fp32 batch 1, so the 6.6x fp16 figure is against fp32 while an fp16 TorchScript result would have been produced. The v1.4.0 script's model list (bert-base-cased, roberta-base, gpt2) also does not match the table's bert-base-uncased.",
+    "fp16 conversion is lossy: the v1.4.0 validation accepted rtol 5e-2 and atol 1e-1 for fp16 against 1e-4 for fp32; fusions silently fall back to unfused ops when the exported graph layout differs."
+  ],
+  "pick_this_over_siblings_when": "Pick ONNX Runtime when you need a vendor-neutral runtime for exported ONNX graphs with C/C++/C#/Java/JS bindings and several execution providers; FasterTransformer and ByteTransformer claim larger BERT gains from hand-fused NVIDIA kernels but cover fewer models and platforms, CTranslate2 fits Transformer translation and generation models better, and OpenVINO is the Intel-CPU choice.",
+  "verified_claims_summary": "Microsoft's 2020 README table: on a Tesla V100-PCIE-16GB with a Xeon E5-2690 v4, prebuilt ORT 1.4.0 with the transformer optimizer and IO binding averaged 1.38, 3.11 and 10.74 ms for BERT-base (input_ids only, batch 1) at s=8, 128 and 512 against TorchScript 1.5.1 fp32 at 7.92, 9.56 and 12.83 ms (5.7x, 3.1x, 1.2x), and 1.42 vs 5.80 ms for one GPT-2 decoding step with past length 4. No CUDA, cuDNN or driver versions or script commit are given, and both columns come from unsynchronized back-to-back loops.",
+  "status_note": "Actively maintained (VERSION_NUMBER 1.32.0, last commit 2026-10-10, 22.1k stars) and MIT-licensed, but the benchmark table is six years old (ORT 1.4.0 against PyTorch 1.5.1) and its harness flaws make the speedups historical and directional rather than a current measurement.",
+  "sources_read": [
+    "https://github.com/microsoft/onnxruntime",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/README.md",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/README.md",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/run_benchmark.sh",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/benchmark.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/benchmark_helper.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/models/gpt2/benchmark_gpt2.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/models/gpt2/gpt2_helper.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/onnx_exporter.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/onnxruntime/python/tools/transformers/onnx_model_bert.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/python/tools/transformers/README.md",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/python/tools/transformers/run_benchmark.sh",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/python/tools/transformers/benchmark.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/python/tools/transformers/benchmark_gpt2.py",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/core/providers/cuda/cuda_execution_provider.cc",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/core/session/inference_session.cc",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/core/session/IOBinding.cc",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.4.0/onnxruntime/python/onnxruntime_pybind_state.cc",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/cmake/CMakeLists.txt",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/cmake/onnxruntime_language_standard_versions.cmake",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/include/onnxruntime/core/session/onnxruntime_c_api.h",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/docs/Privacy.md",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/VERSION_NUMBER",
+    "https://raw.githubusercontent.com/microsoft/onnxruntime/HEAD/LICENSE",
+    "https://github.com/microsoft/onnxruntime/issues/15154"
+  ],
+  "confidence": 0.75
+}
