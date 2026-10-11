@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/vcflib/vcflib",
+  "one_liner": "Plain C VCF tool merging overlapping records into multi-allelic records; claimed ~200x faster than vcflib's own zig vcfcreatemulti.",
+  "what_it_does": "vcfputtogetheragain is a command-line filter in vcflib (src/vcfputtogetheragain.c plus src/vcf-std.c) that reads a sorted, uncompressed VCF from a file or stdin, groups records whose REF spans overlap into windows, and writes one merged record per window: expanded REF, ALTs spliced into that REF, concatenated AN/AT/AC/AF/INV/TYPE INFO values, renumbered GT, and INFO combined=POS-POS. Single-record windows are written as the raw input line. It is the 'put back together' companion to vcfwave and has the same CLI shape as vcfcreatemulti (file or stdin), plus --validate and --norm-multiallelic; it is not a library.",
+  "how_it_is_fast": "There is no new algorithm: the windowing (grow the window while POS is below the furthest REF end seen) is a line-by-line port of vcfcreatemulti's main loop and the zig merge code. The gain comes from skipping vcflib's C++ Variant object model: each line is split in place on tabs, only GT is parsed per sample and only for merged windows, non-overlapping lines are echoed instead of parsed and re-serialized, and there is no per-record deep copy (the baseline's C++ driver copies a full Variant with `auto first = vars.front()` for every incoming record and pushes Variant copies into the window). Every data line still passes a linear-scan VCFv4.5 validator (vcf-std) before merging.",
+  "when_to_use": [
+    "Rebuilding multi-allelic records with genotypes after vcfwave on a default vcflib build: zig is now off by default (NO_ZIG=ON), and the fallback vcfcreatemulti C++ path is documented in its own help text as 'old C++ implementation does not do genotypes'.",
+    "Pipelines that must avoid a zig compiler and C++/htslib linkage: the tool is two plain C files with no dependency beyond libc.",
+    "Inputs already split to one ALT per record (for example by bcftools norm -m-), where the default mode reproduces the zig tool's ALTs and genotypes on the repo's shared regression inputs.",
+    "Large multi-sample VCFs where most records do not overlap, since those lines pass through untouched without per-sample parsing.",
+    "When strict VCFv4.5 checking of every data line is wanted as a side effect (add --validate for per-sample GT range checks)."
+  ],
+  "when_not_to_use": [
+    "Inputs that contain multi-allelic records, with or without --norm-multiallelic: default mode drops their ALT alleles (spec-violating output flagged MULTI=ALTPROBLEM), and --norm-multiallelic renumbers genotypes wrongly (see gotchas).",
+    "When merged records must keep FORMAT fields other than GT (DS, GP, GQ, AD): the tool drops them from every merged record.",
+    "Compressed input: it reads plain text only (fopen plus getline, no zlib or htslib), so bgzipped VCFs must be piped through bgzip -dc first.",
+    "Older or loosely formatted VCFs: any data line failing the strict VCFv4.5 checks aborts the run with exit 1, and there is no lenient mode.",
+    "Complex regions or production normalization: bcftools norm -m+ is the widely used incumbent and was never compared; the merge rule lets a later record's allele overwrite an earlier call on the same haplotype, and the vcfcreatemulti doc itself says such results can be incorrect."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc (src/vcf-std.c ships alongside); building it through vcflib's CMake pulls in the whole project's requirements (htslib, tabixpp via pkg-config)",
+    "min_toolchain": "any C compiler with POSIX getline (_GNU_SOURCE); CMakeLists.txt pins no C standard; Release builds add -march=native",
+    "platforms": "POSIX systems (Linux, macOS); no SIMD or architecture-specific code",
+    "thread_safety": "single-threaded command-line tool with static warning flags; no library API",
+    "drop_in_for_baseline": "partial — same input and invocation as vcfcreatemulti, and the same ALTs and genotypes on the repo's shared regression inputs, but merged records lose non-GT FORMAT fields, pass-through lines keep QUAL '.', the INFO header description names vcfputtogetheragain, and the --quiet/--legacy options are absent"
+  },
+  "gotchas": [
+    "--norm-multiallelic genotype renumbering bug: expand_alt() runs split_inplace() on each record's ALT field (commas become NUL bytes) before print_merged() counts commas in that same field to build the genotype offsets, so the count is always zero and offsets equal the window index, as in zig mode. Alleles from any record that follows a multi-allelic record in the same window point at the wrong merged ALT. The repo's own expected output shows it: in test/data/regression/vcfputtogetheragain-norm_3.vcf at scaffold612:11809 (CTT>CTTT,C,CT followed by C>A), sample I269_FCB068JABXX_L8_COLcalRBBDIAAPE's 0|1 call for the A SNP is written as 0|2 (the C deletion) instead of 0|4 (ATT). vcfvalidate still passes because index 2 is in range, so the release note's '256 previously invalid records' fix can yield valid-looking but wrong genotypes.",
+    "FORMAT truncation: sample_gt() splits the record's FORMAT column in place at ':', so on every merged record FORMAT collapses to GT and DS/GP and other keys disappear. The source comment says other FORMAT fields keep the first record's values ('Same behaviour here'), and the test doc says outputs compare one-to-one with vcfcreatemulti, but the expected vcfputtogetheragain_7.vcf has FORMAT=GT on all 8 merged records while the zig output vcfcreatemulti_8.vcf for the same scaffold612 input keeps GT:DS:GP.",
+    "Default mode follows the zig semantics: ALTs of multi-allelic input records are skipped while their renumbered genotypes and INFO values are kept, so records can carry GT indices beyond the ALT count and AF lists longer than ALT (scaffold612:15108 has ALT=C with AF=0.166,0.949,0.034), flagged MULTI=ALTPROBLEM; a warning is printed only once per run.",
+    "The window's furthest REF end is recomputed over all window records for each incoming line (quadratic in window size), and the strict validator stops the whole run at the first invalid data line."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued csv-tabular siblings understands VCF semantics; zsv, xan or frawk are the tools for selecting, filtering or counting columns of a VCF body as TSV. Pick vcfputtogetheragain only for the VCF-specific job of merging overlapping records with REF expansion and genotype renumbering, which no sibling does.",
+  "verified_claims_summary": "The only number is one first-party sentence added to the unreleased 'ChangeLog ongoing' section of RELEASE_NOTES.md (commit 779cf28, 2026-09-18): '~200x faster on large VCFs' than the zig implementation of vcfcreatemulti, with no input file, timings, compiler, flags or hardware in the release notes, commit messages, source or tests. The baseline is vcflib's own zig path (now off by default) driven by a C++ loop that parses and deep-copies every record, not bcftools norm or another incumbent, and the two tools do not produce identical output (merged records lose non-GT FORMAT fields in the C tool).",
+  "status_note": "Added 2026-09-18 to actively maintained, MIT-licensed vcflib (last commit 2026-10-02) but not yet in a tagged release or the README tool list, with no outside users found; it is two copyable C files, but the --norm-multiallelic renumbering bug and the FORMAT truncation are baked into its regression expected outputs, so check merged records before relying on them.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/RELEASE_NOTES.md",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/README.md",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/src/vcfputtogetheragain.c",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/src/vcf-std.h",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/src/vcfcreatemulti.cpp",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/doc/vcfcreatemulti.md",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/pytest/vcfputtogetheragain.md",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/pytest/vcfputtogetheragain-norm.md",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_2.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_7.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_8.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain-norm_2.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain-norm_3.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain-norm_4.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_8.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/inputs/issue-scaffold612-mini.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/inputs/scaffold612-uaf-region.vcf",
+    "https://github.com/vcflib/vcflib/commits/master",
+    "https://github.com/vcflib/vcflib/commit/70bb247",
+    "https://github.com/vcflib/vcflib/commit/779cf28",
+    "https://github.com/vcflib/vcflib/issues?q=is%3Aissue+vcfcreatemulti",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_3.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_4.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_5.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfputtogetheragain_6.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_2.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_3.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_4.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_5.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_6.vcf",
+    "https://raw.githubusercontent.com/vcflib/vcflib/HEAD/test/data/regression/vcfcreatemulti_7.vcf",
+    "WebSearch: vcfputtogetheragain vcflib (no outside mention found)"
+  ],
+  "confidence": 0.6
+}
