@@ -61,3 +61,6 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - asumagic/asllvm (LLVM AngelScript JIT, no numbers in README; weak) and Hazelight UnrealEngine-Angelscript StaticJIT (gated fork, unreachable): angelsea enricher leads (2026-10-07).
 - Pycket (pycket/pycket, Racket tracing JIT on RPython): not catalogued (hxcpp/LC enricher, 2026-10-07); seed candidate.
 - QMDB (LayerZero-Labs/qmdb, Merkleized state database under FAFO; upstream README is a stub): not catalogued (FAFO enricher, 2026-10-07); wave 5 databases lead.
+
+## Backfill round 2, 2026-10-11 (seeds w12-mine-d to g)
+- CNTK vs TensorFlow: HKBU dlbench paper blocked; szilard keras_backend.md used instead. ChaiScript: every number slower than Lua (maintainer says so). V7: javascript-zoo-data Richards 4.944 vs QuickJS 746, far slower. MuJS canonical repo is https://codeberg.org/ccxvii/mujs (blocked); GitHub stub used as repo_url.
