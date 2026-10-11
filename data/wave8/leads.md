@@ -141,3 +141,8 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - nmslib/hnswlib (https://github.com/nmslib/hnswlib): usearch issue #439 says hnswlib is faster on SIFT1M; not catalogued (USearch enricher, 2026-10-07).
 - Paper-access leads from w8-mine-l (2026-10-11, all blocked): STFC DL-TR-2022-001 (preCICE vs MUI, OpenPALM, MOOSE, PLE); Pazouki, Mazhar, Negrut 2012 (Chrono GPU ellipsoids 14x vs Bullet); arXiv 2009.01194 (Reaktoro); pyscf issue #1956 (Psi4 about 45-50 s vs PySCF about 110 s, DF, one thread); Quantum++ PLoS ONE paper doi 10.1371/journal.pone.0208073.
 - Paper-access leads from w8-mine-k (2026-10-11): mpfr.org/mpfr-2.3.0/timings.html and arXiv 2002.04717 (PARI/GP), arXiv 1607.00351 (PETSc comparisons); all blocked.
+
+## Backfill round 2, 2026-10-11 (batches 172-177, seed w8-mine-m)
+- Paper-access retiers: MeTA ACL 2016 demo P16-4016 (C to B if Gov2/20news/Webspam tables confirm); Quantum++ PLoS ONE 10.1371/journal.pone.0208073 with the v1.1 stress_tests harness (D to A/B); GLPK on Mittelmann's plato.asu.edu or Sandia SAND2013-8847 (C to B); htslib GigaScience 2021 full text; Torch7 Bahrampour arXiv 1511.06435 (snippet only, confidence 0.35).
+- Uncatalogued faster projects: HiGHS and COIN-OR Clp (both beat GLPK by 5x and 20x on Mittelmann tables); SDPA (faster than SCS on SDPs); CLBlast already listed.
+- SeqAn: Rahn 2018 Bioinformatics, AnySeq arXiv 2002.04561, BMC s12859-018-2014-8 Table 1 (SeqAn ED 7.97 vs Parasail 0.69 GCUPS, snippet only) all blocked.

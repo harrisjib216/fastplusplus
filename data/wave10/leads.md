@@ -63,3 +63,10 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - VRSFML (vittorioromeo/VRSFML): SFML fork with modern GL plus DrawableBatch/instanced headers, 105 stars, no numbers found (enricher lead, 2026-10-07).
 - Wav2Letter++ (facebookresearch/wav2letter, now flashlight/wav2letter): first-party paper arXiv 1812.07625 (over 2x vs ESPnet, Kaldi, OpenSeq2Seq) blocked; C to B once the PDF is readable (2026-10-07).
 - libvips retier lead (https://github.com/libvips/libvips, color-and-resampling, tier C): the wave 1 backfill found the Electronic Imaging 2025 paper (eprints.soton.ac.uk, blocked) behind the wiki numbers (ImageMagick 7.1.1 4.44 s / 1499 MB vs vips-c 0.57 s / 94 MB); an independent or peer-reviewed read could lift the record to B (w1-mine-w, 2026-10-07).
+
+## Backfill round 2, 2026-10-11 (seeds w10-mine-g to l, batch 112)
+- FFmpeg ffvp9 vs libvpx 25-50% faster (Bultje 2014 post, snippet only; blog, Phoronix, Wikipedia blocked): retier lead for the FFmpeg entry once the post is reachable.
+- Fontconfig MR 112 (FcFontSort 80-100 ms to 6-8 ms) and the Srb thesis (up to 98%): self-comparisons against Fontconfig's own older code; gitlab.freedesktop.org returns 403.
+- libde265 vs OpenHEVC: KICS-IEEE paper (pure.skku.edu blocked), mixed result.
+- libigl PR 1895 (7x mesh_boolean, 14x remesh_self_intersections vs previous libigl) and a secondhand 6.8x over CGAL claim, paper unreachable.
+- libfacedetection fits autodiff-and-ml-kernels better than image-codecs (verifier to decide via category override).
