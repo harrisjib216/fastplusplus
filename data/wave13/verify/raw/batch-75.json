@@ -1,0 +1,104 @@
+[
+  {
+    "id": "https://github.com/basedinc/libhat",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README Benchmarks table lists libhat+AVX2 55.1129 GiB/s (4 MiB) and 23.3351 GiB/s (256 MiB) against std::search 2.89578 and 2.89598 GiB/s; the code is public (test/benchmark/Compare.cpp plus test/benchmark/scanner/*.cpp, Google Benchmark, real time, 2 s warm-up, 4 s min time, result checked against the expected null match), and compiler (clang-cl 22.1.1, MSVC 14.51.36231 toolchain), flags (/GR /EHsc /MD /O2 /Ob2) and CPU (i7-14700K) are stated.",
+    "corrections": {
+      "baseline": "std::search (MSVC STL) called by libhat's own scan_mode::Search path: std::search(begin, end, sig.begin(), sig.end()) over a std::byte haystack with a std::span<const hat::signature_element> needle, each comparison doing (byte & mask) == value; a wildcard-capable scalar baseline, not a plain-byte std::search",
+      "caveats": "First-party benchmark on one CPU and one compiler. The std::search row is libhat's scan_mode::Search fallback (include/libhat/scanner.hpp, find_pattern_search<X1>): std::search with a heterogeneous needle type (hat::signature_element with a bitmask, compared to std::byte via a masked operator==), so no memcmp-style or vectorised STL search path can apply; its flat 2.9 GiB/s is a scalar search, and a plain-byte search (memmem, a vectorised std::search or std::boyer_moore_horspool_searcher on bytes) without wildcard support would narrow the 8x to 19x gap. The README row labels (libhat+AVX2, std::search) differ from the names the current Compare.cpp prints (libhat+AVX2+X1, libhat+Search+X1), so the table was relabelled by hand; both files were last changed in the same commit (Adaptive anchors, #46, 2026-10-10). 4 MiB to 16 MiB buffers fit in the i7-14700K's L3 and run at 50-55 GiB/s; 32 MiB and above drop to 23-31 GiB/s. The needle has no wildcards and never matches (full-buffer scan). On real machine code (chrome.dll, test/benchmark/Chromium.cpp) unhinted, unaligned libhat falls to 6.09 GiB/s, and that table has no std::search row. AVX2 is selected at runtime; the build uses default release flags without /arch:AVX2."
+    },
+    "notes": "Numbers, ratios (about 19x at 4 MiB and 8.1x at 256 MiB, derived from page data), MIT license, 148 stars, last commit 2026-10-10 and vcpkg port all check out. Shortcoming to record: the std::search baseline is libhat's own wildcard-aware std::search fallback with a masked element compare, a scalar path, not the fastest plain-byte search the STL or memmem could do.",
+    "urls_opened": [
+      "https://github.com/BasedInc/libhat",
+      "https://github.com/BasedInc/libhat/commits/master",
+      "https://github.com/BasedInc/libhat/commits/master/test/benchmark/Compare.cpp",
+      "https://github.com/BasedInc/libhat/commits/master/README.md",
+      "https://github.com/BasedInc/libhat/pull/46",
+      "https://github.com/BasedInc/libhat/tree/master/test/benchmark",
+      "https://github.com/BasedInc/libhat/tree/master/test/benchmark/scanner",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/README.md",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/Compare.cpp",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/scanner/scanner.hpp",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/scanner/libhat.cpp",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/include/libhat/scanner.hpp",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/include/libhat/signature.hpp",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/wunkolo/qaveragecolor",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README table gives SSE4.2/AVX2/AVX-512 speedups over the serial routine on six named Intel CPUs (GCC 8.2.1, synthetic 10-megapixel image); the benchmark code is public (tests/BigBench.cpp with tests/Bench.hpp; tests/AverageColor.cpp for the 3840x2160 write-up) and the flags are in CMakeLists.txt (CMAKE_BUILD_TYPE Release, -march=native, C++17), with serial and SIMD paths built by the same flags.",
+    "corrections": {
+      "compiler_and_flags": "GCC 8.2.1 (README footnote, one footnote for rows added 2019-2021); CMakeLists.txt: CMAKE_BUILD_TYPE Release (CMake default -O3 -DNDEBUG) with -march=native -Wall -Wextra, C++17 with GNU extensions; the serial baseline and SIMD paths are compiled with the same flags",
+      "workload": "Average colour of RGBA8 pixels: tests/BigBench.cpp times one call each of the serial AverageColorRGBA8 and qAverageColorRGBA8 over 10,000,000 pixels all set to 0xBEEFFEEB (table); tests/AverageColor.cpp does the same on a loaded 3840x2160 image (write-up). Paths: psadbw byte sums (SSE4.2, AVX2, AVX-512F) and vpdpbusd (AVX-512 VNNI).",
+      "caveats": "The baseline is the author's own plain serial loop (shifts and uint8 casts into 64-bit sums; _bextr_u64 appears only in the SIMD routine's scalar tail, not in the baseline), not a library such as OpenCV. Each function is timed once with std::chrono::high_resolution_clock, serial first, with no warm-up or repetition, so run-order and frequency effects are not controlled. The 10-megapixel test image is one repeated pixel value (the work is data-independent, so this matters little). Write-up numbers on the i7-7500U (2.63x SSE, 4.13x AVX2 on 3840x2160) differ from the table (2.85x and 4.41x on 10 megapixels). The README credits all rows to GCC 8.2.1 although rows were added from 2019 to 2021 (i9-11900K row 2021-04-17). Code-reading finding: the AVX-512 VNNI path's outer loop increments i by 16 after the inner loop exits, so it drops the last Count%16 pixels (and skips a 16-pixel block each time the 4,210,752-iteration 32-bit span fills, about 67 megapixels) while still dividing by Count; both benchmark sizes (10,000,000 and 8,294,400 pixels) are multiples of 16 and below the span, so the measured numbers are unaffected. Speedup depends heavily on the CPU (AVX2 2.61x on i9-7900X to 5.35x on i9-11900K). Results 2019-2021."
+    },
+    "notes": "Table numbers match the record; MIT, 50 stars, default branch main, last commit 2021-04-17 (Add i9-11900k benchmarks), abandoned. Shortcomings to record: single-shot serial-first timing, self-written scalar baseline, and an unfixed VNNI-path bug that drops trailing pixels when the count is not a multiple of 16 (does not affect the measured sizes).",
+    "urls_opened": [
+      "https://github.com/Wunkolo/qAverageColor",
+      "https://github.com/Wunkolo/qAverageColor/commits/main",
+      "https://github.com/Wunkolo/qAverageColor/commits/master",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/README.md",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/source/qAverageColor.cpp",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/tests/BigBench.cpp",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/tests/AverageColor.cpp",
+      "https://raw.githubusercontent.com/Wunkolo/qAverageColor/HEAD/tests/Bench.hpp"
+    ]
+  },
+  {
+    "id": "https://github.com/wojciechmula/simd-sort",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The results/ files print the claimed ratios, but speed.cpp (both at the results commit 099ef75 of 2016-09-25 and at HEAD) memcpy's the input into tmp and then sorts the shared input buffer in place, so every repeat and every algorithm after std::sort's first iteration sorted already-sorted data: the 'random' rows match the 'ascending' rows within 1% on all three machines, and the bug is reported in open issues #7 and #8. The only valid random-input numbers are a third party's fixed-harness run in issue #8 (Tiger Lake, compiler and flags not stated, fix not published), which is tier C at most.",
+    "corrections": {
+      "benchmark_url": "https://github.com/WojciechMula/simd-sort/issues/8",
+      "claimed_speedup": "The repo's results/ files (GCC 5.3.0, 2016) print AVX2 quicksort 1.91x vs std::sort at 1M 'random' uint32 on i7-6700, but those runs sorted already-sorted data (harness bug, issues #7 and #8). With the harness fixed, a third party (issue #8 comment by bbqz007, 2022-01-22, Tiger Lake, CentOS 8, RDTSC cycles) measured on random input: the repo's qs::avx2::quicksort 0.84x of std::sort at 1M, 0.91x at 10M and 0.92x at 20M (slower); Daniel Lemire's 'AVX2 alt quicksort' in the same repo (avx2-altquicksort.h, wrapped_avx2_pivotonlast_sort) 1.61x at 1M, 1.82x at 10M and 1.85x at 20M; 'AVX2 nate nodutch' 1.23x at 1M and 1.36x at 10M; the repo's scalar quicksort about 0.68x to 0.71x. Ratios as printed in the comment. No valid AVX-512 random-input numbers exist.",
+      "baseline": "std::sort (GCC toolchain; version not stated for the valid issue #8 run)",
+      "workload": "Sorting uint32_t arrays of 10k to 20M elements (random() keys, ascending, descending); speed.cpp reports the minimum of N iterations. Valid random-input numbers come only from the issue #8 run with the in-place sorting bug fixed.",
+      "compiler_and_flags": "Repo results files: GCC 5.3.0, Makefile -std=c++11 -mbmi2 -mavx2 (or -mavx512f) -O3 -DNDEBUG, but those runs are invalid (presorted data). Issue #8 fixed-harness run: compiler and flags not stated.",
+      "hardware": "Issue #8 valid run: Intel Tiger Lake (model not stated), CentOS 8. Invalid repo results: i7-6700, i7-4770, Xeon Phi 7210.",
+      "caveats": "Harness bug: PerformanceTest::run copies the input to tmp and then sorts input.pointer() in place, and all algorithms share one InputData, so after std::sort's first iteration every timed run sorted presorted data; the results/ 'random' and 'ascending' rows are the same within 1% for every algorithm on Skylake, Haswell and Knights Landing (std::sort 12.3 ms for 1M 'random' keys on an i7-6700 is a presorted-data time). Reported in issue #7 (2021) and issue #8 (2022), both still open; the 2017 fix for issue #5 only corrected a t1/t2 typo in the gettimeofday branch. Once fixed, the headline AVX2 quicksort is slower than std::sort on random data; only Lemire's alternative AVX2 quicksort (a file in this repo that its own comment calls 'not meant to be fast as such') and the nodutch variant win. The AVX-512 implementation was fixed on 2017-01-28, after the September 2016 Knights Landing results. Open issue #10 (2025) reports a never-ending loop and access violation in avx2-nate-quicksort.cpp; open issue #2 reports the AVX512+BMI2 variant failing on large inputs. Research code (README: 'still unfinished'), last commit 2017-11-22; superseded by x86-simd-sort and Highway vqsort, which are already catalogued."
+    },
+    "notes": "Downgrade A to C: the repo's own results are invalid evidence for random-input sorting (presorted data via the in-place harness bug, issues #7 and #8), and the claimed AVX2 quicksort is 0.84x to 0.92x of std::sort once fixed; keep the entry on the strength of the issue #8 third-party run where the in-repo Lemire AVX2 alt quicksort is 1.61x to 1.85x faster. If the orchestrator prefers, this fits the 'no valid measurement from the project' pattern; the issue #8 numbers are the only valid ones. BSD-2-Clause, 105 stars, abandoned (last commit 2017-11-22) confirmed.",
+    "urls_opened": [
+      "https://github.com/WojciechMula/simd-sort",
+      "https://github.com/WojciechMula/simd-sort/commits/master",
+      "https://github.com/WojciechMula/simd-sort/commits/master/speed.cpp",
+      "https://github.com/WojciechMula/simd-sort/commits/master/results",
+      "https://github.com/WojciechMula/simd-sort/commit/8067f42",
+      "https://github.com/WojciechMula/simd-sort/tree/master/results",
+      "https://github.com/WojciechMula/simd-sort/issues?q=is%3Aissue",
+      "https://github.com/WojciechMula/simd-sort/issues/5",
+      "https://github.com/WojciechMula/simd-sort/issues/7",
+      "https://github.com/WojciechMula/simd-sort/issues/8",
+      "https://github.com/WojciechMula/simd-sort/issues/10",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/README.rst",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/Makefile",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/speed.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/input_data.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/avx2-altquicksort.h",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/results/skylake-i7-6700-gcc5.3.0-avx2.txt",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/results/haswell-i7-4770-gcc5.3.0-avx2.txt",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/HEAD/results/knights-landing-7210-gcc5.3.0-avx512f.txt",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/099ef75/speed.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/099ef75/gettime.cpp",
+      "https://raw.githubusercontent.com/WojciechMula/simd-sort/099ef75/input_data.cpp"
+    ]
+  }
+]
