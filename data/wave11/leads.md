@@ -8,3 +8,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - whippet (wingo/whippet): embeddable GC in C (MIT) with a bdw backend and mt-gcbench derived from GCBench; README has no numbers (enricher lead, 2026-10-07).
 - sse-popcount (WojciechMula/sse-popcount): BSD-2-Clause, 357 stars, results/ directory with per-CPU popcount numbers; positional popcount (Clausecker/Lemire, arXiv 2412.16370). Leads from the libpopcnt enrichment (2026-10-07).
 - tbox retier lead (https://github.com/tboox/tbox, coroutines-fibers): benchbox wiki channel page gives buffered channel 293 ms vs Go 782 ms vs libmill 1135 ms (first-party, tier C either way); fold into the existing tbox record's claim when next retiering (w1-mine-ae backfill, 2026-10-07).
+
+## Backfill round 2, 2026-10-11 (seeds w11-mine-e to o)
+- RaftLib: PMAM 2015 / IJHPCA 2016 paper (vs GNU Parallel+grep, Spark) likely tier B; ccrc.wustl.edu, arxiv, raftlib.io, aminer all blocked. Paper-access retry.
+- HiGHS-style uncatalogued leads from wave 8 verifiers apply here too: none for wave 11 this round.
