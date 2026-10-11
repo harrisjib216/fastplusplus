@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/swig/swig",
+  "one_liner": "Interface-file-driven C/C++ binding generator; its -builtin and -fastproxy Python modes roughly halve SWIG's own default per-call overhead.",
+  "what_it_does": "SWIG reads C/C++ headers or a .i interface file and generates C/C++ glue plus target-language proxy code for Python, Java, C#, Go, Lua, Ruby, PHP, Perl, Tcl, R, Octave, Scilab, OCaml, Guile, D and others from one description. For Python the default output is a low-level extension module (_example) plus a pure-Python proxy class per C++ class whose methods forward to the C wrappers. The catalogued claim is about two opt-in code-generation switches, -fastproxy (also turned on by -O) and -builtin, which change the shape of the generated Python layer, not the C++ API being wrapped.",
+  "how_it_is_fast": "-fastproxy drops the Python-level def wrapper and installs the C wrapper directly as a method via PyInstanceMethod_New (_swig_new_instance_method), removing one Python frame per call. -builtin removes the pure-Python proxy class entirely: each C++ class becomes a CPython heap type derived from SwigPyObject, methods live in the type's method table, and C++ operators map to CPython type slots (nb_add, tp_richcompare and so on), which the manual says is much faster than named method dispatch. Argument unpacking uses SWIG's own SWIG_Python_UnpackTuple (fastunpack, on by default) instead of PyArg_UnpackTuple; methods are registered as METH_NOARGS, METH_O or METH_VARARGS, with no METH_FASTCALL or vectorcall path in Source/Modules/python.cxx.",
+  "when_to_use": [
+    "You already ship SWIG bindings for Python and want lower call overhead without rewriting them: add -builtin (largest gain, about 2x on trivial calls per the manual) or -O/-fastproxy (about 1.6x) and rebuild.",
+    "One interface file must feed several target languages (Python plus Java, C#, Go, Lua, Ruby and so on) and a per-language hand-written binder is not affordable.",
+    "Wrapping large existing C or C++ APIs mostly from headers, where call overhead of 0.1-0.3 us is small next to the work done per call.",
+    "Generated code must compile on old toolchains: the project aims for wrappers that build as C90 or C++98."
+  ],
+  "when_not_to_use": [
+    "Python-only projects chasing the lowest per-call overhead: SWIG registers methods as METH_VARARGS and packs a tuple per call, while vectorcall-based binders (nanobind) are designed around PEP 590; no head-to-head numbers exist, so measure before choosing SWIG for speed.",
+    "Builds that need the Python Stable ABI (Py_LIMITED_API, abi3 wheels): -builtin and -fastproxy (hence -O) do not use the limited API and fail with missing symbols; only the default, slower mode is limited-API clean.",
+    "Code that raises wrapped C++ types as Python exceptions, relies on reverse binary operators (__radd__ and friends), Python annotations on the classes, or subclassing tricks: -builtin does not support these.",
+    "Fine-grained GIL release everywhere: the -threads option adds per-call GIL handling that the manual measured at about 60% slower (9.6 s vs 15.5 s on profiletest.i), though that table dates from SWIG 1.3.28 in 2005."
+  ],
+  "integration": {
+    "form": "code generator (swig executable, built from source or packaged); output is a C/C++ source file plus a .py module compiled into a shared library",
+    "dependencies": "PCRE2 to build the swig tool; generated Python wrappers need only CPython headers and the SWIG runtime emitted into the wrapper",
+    "min_toolchain": "Generated code targets C90 or C++98 (CHANGES 2023-04-27); Python >= 3.5 (Python 2 dropped after SWIG 4.4); building SWIG itself needs GNU make",
+    "platforms": "any platform with a C/C++ compiler and the target language's headers (Linux, macOS, Windows including MinGW)",
+    "thread_safety": "Wrappers do not release the GIL unless -threads or per-function thread features are used; -nogil (SWIG 4.4+) enables free-threaded CPython builds but thread safety of the wrapped C++ code is the user's responsibility",
+    "drop_in_for_baseline": "partial — -fastproxy and -builtin are command-line switches on the same interface files, but -builtin changes the Python-visible API (no new_Foo functional interface, static members no longer under cvar, no exceptions or reverse operators), so callers may need edits"
+  },
+  "gotchas": [
+    "-fastproxy is silently ignored for any method that carries extra proxy code such as %pythonprepend, so the speed-up is per method, not per module; it also hides docstrings, annotations and default argument values unless -olddefs is added, which makes module import slower.",
+    "Harness flaw: the speed table (callme0/4/8 microseconds) has no harness, hardware, Python version, compiler or repeat count, and its benchmark is not in the repository. The only performance suite ever shipped (Examples/python/performance, added with -builtin in 2011) was Python-2-only (print statement, imp, time.clock), timed a 10M-iteration for-loop including loop overhead, and was deleted on 2025-10-22 as 'out of date and non-functional' (issue #3242, commit 1db0c66).",
+    "-builtin with several SWIG modules that share types needs an unambiguous dependency graph declared with %import, or base classes may not be initialised before derived ones.",
+    "-dirvtable (faster director dispatch) leaks memory: the manual says the pseudo vtable is per-object and never freed."
+  ],
+  "pick_this_over_siblings_when": "Pick SWIG over nanobind when one interface must generate bindings for several languages or the wrapped API is C, and over LuaBridge, LuaBridge3 or sol2 when Lua is one target among many; for Python-only or Lua-only bindings where call overhead matters, nanobind (vectorcall) and sol2 (which ranks SWIG among slower Lua binders) are the speed picks.",
+  "verified_claims_summary": "SWIG's Python manual (section 35.6.5.1) lists per-call times for a trivial C++ class method with 0, 4 ints or 8 doubles: default proxy classes 0.15/0.26/0.32 us, -fastproxy 0.09/0.16/0.20 us, -builtin 0.07/0.14/0.17 us, i.e. about 1.6-1.7x and 1.9-2.1x lower (derived from page data). The baseline is SWIG's own default mode, with no CPU, Python version, compiler or harness stated and no comparison against another binding tool.",
+  "status_note": "Actively maintained (4.5.1 released 2026-09-04, 4.6.0 in progress with commits on 2026-10-07); the swig tool is GPL-3.0-or-later, but Lib and Examples are under a permissive grant and the Preface states generated code can be distributed under terms of the user's choice, so it is safe to use in proprietary builds.",
+  "sources_read": [
+    "https://github.com/swig/swig",
+    "https://raw.githubusercontent.com/swig/swig/master/Doc/Manual/Python.html",
+    "https://raw.githubusercontent.com/swig/swig/master/Doc/Manual/Preface.html",
+    "https://raw.githubusercontent.com/swig/swig/master/README",
+    "https://raw.githubusercontent.com/swig/swig/master/LICENSE",
+    "https://raw.githubusercontent.com/swig/swig/master/CHANGES",
+    "https://raw.githubusercontent.com/swig/swig/master/CHANGES.current",
+    "https://raw.githubusercontent.com/swig/swig/master/Lib/python/pyrun.swg",
+    "https://raw.githubusercontent.com/swig/swig/master/Lib/python/builtin.swg",
+    "https://raw.githubusercontent.com/swig/swig/master/Lib/python/pyinit.swg",
+    "https://raw.githubusercontent.com/swig/swig/master/Source/Modules/python.cxx",
+    "https://raw.githubusercontent.com/swig/swig/v4.3.1/Examples/python/performance/harness.py",
+    "https://raw.githubusercontent.com/swig/swig/v4.3.1/Examples/python/performance/Makefile",
+    "https://raw.githubusercontent.com/swig/swig/v4.3.1/Examples/python/performance/func/runme.py",
+    "https://raw.githubusercontent.com/swig/swig/v4.3.1/Examples/python/performance/func/Makefile",
+    "https://raw.githubusercontent.com/swig/swig/v4.3.1/Examples/python/performance/func/Simple.i",
+    "https://github.com/swig/swig/issues?q=is%3Aissue+performance+python",
+    "https://github.com/swig/swig/issues/3242"
+  ],
+  "confidence": 0.65
+}

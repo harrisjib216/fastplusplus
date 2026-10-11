@@ -64,3 +64,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 
 ## Backfill round 2, 2026-10-11 (seeds w12-mine-d to g)
 - CNTK vs TensorFlow: HKBU dlbench paper blocked; szilard keras_backend.md used instead. ChaiScript: every number slower than Lua (maintainer says so). V7: javascript-zoo-data Richards 4.944 vs QuickJS 746, far slower. MuJS canonical repo is https://codeberg.org/ccxvii/mujs (blocked); GitHub stub used as repo_url.
+- Enricher w12 pair-010 lead: NVIDIA DALI (https://github.com/NVIDIA/DALI), GPU JPEG decode and augmentation vs CPU loaders; uncatalogued.
