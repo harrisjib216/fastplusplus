@@ -16,3 +16,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - oneTBB second claim (ParallelReductionsBenchmark: libstdc++ std::reduce par on oneTBB vs spawn-per-call std::thread, 1.7x Graviton4, 3.3x Zen4): folded into the wave 1 oneTBB entry; retier lead if a direct TBB-vs-thread-pool benchmark appears. junction (preshing.com, arXiv 1601.04017) blocked.
 - HPX: arXiv 2606.11937 Cholesky-Bench snippet (HPX 15-30% faster than OpenMP) unreachable; issue 3137 shows OpenMP faster. Paper-access retry.
 - Enricher w11 pair-018: the reckless doc/performance.md spdlog adapter passes true as truncate (spdlog 1.3.1 basic_logger_mt), not force-flush as the page claims; spdlog and reckless entries citing that page should carry the same caveat (retier lead).
+- Enricher w11 pair-020 leads (uncatalogued): andreasbuhr/cppcoro (tzcnt suite mean 3.67x, beats HPX, concurrencpp and libcoro), jbaldwin/libcoro, STEllAR-GROUP/hpx.

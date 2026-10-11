@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/davisking/dlib",
+  "one_liner": "dlib's dnn module: C++ type-defined CNN training and inference on cuDNN; 2016 author claim of about 1.6x Caffe's speed.",
+  "what_it_does": "The dnn module of the dlib toolkit defines a network as a nested C++ template type (for example loss_multiclass_log<fc<10, relu<fc<84, ...>>>>), trains it with dnn_trainer (automatic learning-rate reduction, periodic sync file to disk, multi-GPU) and serializes it with dlib's serialize(). The same source builds for CPU (optionally using BLAS/MKL) or for NVIDIA GPUs through CUDA, cuBLAS and cuDNN. It is not a drop-in for Caffe: models are written in C++ rather than prototxt, although tools/convert_dlib_nets_to_caffe exports trained dlib nets to Caffe.",
+  "how_it_is_fast": "It is a thin layer over cuDNN and cuBLAS with the whole network graph fixed at compile time, so there is no runtime graph interpreter. Convolution algorithms are benchmarked with cudnnFindConvolution*Algorithm and cached; set_dnn_prefer_fastest_algorithms() (the default) takes the fastest algorithm regardless of workspace, while set_dnn_prefer_smallest_algorithms() takes the one with the least workspace, which is the fast mode versus low-VRAM mode trade-off in the 2016 post. Tensors keep their GPU allocation when shrunk (std::vector-like), workspaces are shared per device, and fuse_layers can fold affine and ReLU layers into the preceding convolution.",
+  "when_to_use": [
+    "C++-only deployments that must train or run CNNs without a Python runtime and want one BSL-1.0 library that also covers image processing and classic ML.",
+    "Using dlib's own pretrained models (ResNet face recognition, CNN+MMOD face and vehicle detectors) where dlib is already the inference engine.",
+    "Small to medium convolutional networks (LeNet to ResNet-34 scale) where a compile-time network definition is acceptable.",
+    "Projects that need one code base to run on CPU-only machines and on NVIDIA GPUs."
+  ],
+  "when_not_to_use": [
+    "Throughput-sensitive training on current GPUs: every tensor is FP32 NCHW (CUDNN_DATA_FLOAT), there is no FP16/BF16 mixed precision, and since PR #3127 (December 2025) convolutions force CUDNN_FMA_MATH, which turns off TF32 Tensor Cores on Ampere and newer GPUs.",
+    "Choosing a framework on speed today: the only cross-framework number is the 2016 Caffe claim; no benchmark against PyTorch, TensorFlow or ONNX Runtime exists in the repo.",
+    "Dynamic graphs, transformer-scale models or research that needs autograd over arbitrary code: networks are static C++ types and a new layer needs hand-written forward and backward passes.",
+    "Very deep networks where build time matters: compile time of DNN definitions is a known pain point (issue #2638), and nets are recompiled whenever the type changes.",
+    "Embedded GPUs: issue #2766 (slow performance with CUDA on Jetson Nano) is still open."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none required; optional CUDA toolkit with cuDNN, cuBLAS, cuRAND and cuSOLVER for GPU; optional BLAS/LAPACK (OpenBLAS or Intel MKL) for CPU speed",
+    "min_toolchain": "C++17 and CMake 3.10+ on master (release 20.0 needs C++14); GPU builds need a CUDA toolkit with cuDNN (code paths for cuDNN 5 through 9)",
+    "platforms": "any platform for CPU; NVIDIA GPUs through CUDA (CMake 3.24+ defaults to the native GPU architecture)",
+    "thread_safety": "tensor objects are documented as not thread-safe; cuDNN handles, descriptors and the convolution-algorithm cache are thread_local, so use one network instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "If CMake finds CUDA but not cuDNN, it prints 'DID NOT FIND CUDNN' and 'DLIB WILL NOT USE CUDA' and builds a CPU-only dlib without failing, so a GPU build can silently run on the CPU.",
+    "PR #3127 (merged 2025-12-28, to make GPU and CPU test results agree) sets CUDNN_FMA_MATH on every convolution; a reviewer pointed out the lost Tensor Core performance and suggested CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION, but that is not merged and no speed impact was measured.",
+    "By default, the cuDNN algorithm chosen for the first input of a given stride, padding and filter size is reused for later input shapes, even when it needs much more memory for larger inputs; set_dnn_choose_algorithms_per_input_shape(true) (PR #3161, October 2026) benchmarks each shape instead. The 19.5 release notes say better workspace management means set_dnn_prefer_smallest_algorithms() should no longer be needed, so the 2016 VRAM trade-off no longer describes current code.",
+    "Speed depends on cuDNN behaviour: moving the convolution bias into one cuDNN call made vehicle-detector inference slower (issue #2655, 36.2 ms on 19.22 vs about 39.8 ms on master, GTX 1650), and PR #2656 reverted it to a separate bias call."
+  ],
+  "pick_this_over_siblings_when": "Caffe (the baseline, also catalogued) is unmaintained, and KANN is a small CPU-only C library; pick dlib's dnn for a maintained, self-contained C++ library with CPU and cuDNN back ends and pretrained vision models. Pick PyTorch, Flashlight or ONNX Runtime when GPU training or inference throughput is the goal.",
+  "verified_claims_summary": "The only external comparison is the author's June 2016 blog post for dlib 19.0 on cuDNN v5, seen through search snippets because blog.dlib.net does not resolve here. It says fast mode was about 1.6x Caffe's speed at about 1.5x the VRAM, and low-VRAM mode about 0.85x the speed at half the VRAM. The snippets name no network, GPU, Caffe version, batch size or whether training or inference was timed, and the repo has no benchmark code for it.",
+  "status_note": "Actively maintained (cuDNN binding commits through October 2026) and BSL-1.0, so it is easy to adopt, but the Caffe speed claim is ten years old, measured against a dead baseline, and predates current FP32-only, TF32-disabled code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/README.md",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/docs/docs/ml.xml",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/docs/docs/release_notes.xml",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/dnn.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/dnn/core.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/dnn/core_abstract.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/cuda/cudnn_dlibapi.cpp",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/cuda/cuda_utils.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/cuda/tensor_tools.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/dlib/cuda/tensor_abstract.h",
+    "https://raw.githubusercontent.com/davisking/dlib/HEAD/examples/dnn_introduction_ex.cpp",
+    "https://github.com/davisking/dlib/commits/master/dlib/cuda/cudnn_dlibapi.cpp",
+    "https://github.com/davisking/dlib/pull/3127",
+    "https://github.com/davisking/dlib/issues?q=is%3Aissue+dnn+slow",
+    "https://github.com/davisking/dlib/issues/2655",
+    "https://blog.dlib.net/2016/06/a-clean-c11-deep-learning-api.html (fetch failed: getaddrinfo ENOTFOUND; WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}

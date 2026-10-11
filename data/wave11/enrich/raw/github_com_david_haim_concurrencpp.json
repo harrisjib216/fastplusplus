@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/david-haim/concurrencpp",
+  "one_liner": "C++20 coroutine task/executor framework whose thread pool beats libcoro on fork-join, but trails TBB by about 90x.",
+  "what_it_does": "A full concurrency toolkit built on C++20 coroutines: a runtime object owns executors (thread pool, background pool, thread-per-task, worker thread, manual, inline), tasks return move-only result/lazy_result objects that are co_awaited, and it adds when_all/when_any, timers, generators, async_lock and async_condition_variable. Fork-join code is written as 'parallel coroutines' (a function taking executor_tag plus an executor as its first two arguments starts suspended and is rescheduled onto that executor). It is not a drop-in for any other pool; code is written against its result/executor API.",
+  "how_it_is_fast": "The thread pool is a work-sharing (donation) design, not work stealing: each worker has an unsynchronized private std::deque it pops LIFO and a mutex-protected public deque; before running each task a busy worker scans per-worker padded idle flags and pushes a share of its oldest private tasks to idle workers. Idle workers block on a binary semaphore and exit after max_worker_idle_time, with threads re-created lazily on the next enqueue. Its advantage over libcoro in the suite is mainly memory and per-task scheduling cost (skynet peak RSS 11.38 MB vs libcoro 14.66 GB), not raw scheduler speed; every task still allocates a coroutine frame and result state, and iterator when_all returns a heap std::vector.",
+  "when_to_use": [
+    "Applications that want one coroutine-based toolkit for CPU pools, blocking-I/O pools, timers, async locks and condition variables rather than a pure fork-join scheduler.",
+    "Coarse-grained tasks (milliseconds each) where per-task overhead of tens of microseconds is irrelevant; matmul(2048) with a 32x32 serial base case ran in 57 ms, about 1.3x the fastest runtime (libfork 44 ms).",
+    "Replacing a libcoro thread_pool in fine-grained recursive code where libcoro's memory blow-up (5-16 GB peak RSS on skynet, nqueens, fib(39)) is the problem.",
+    "Code bases already on C++20 with MSVC 16.8.2+, GCC 13+ or Clang 14+ that can consume a CMake/vcpkg/Conan static library."
+  ],
+  "when_not_to_use": [
+    "Fine-grained fork-join (fib, skynet, nqueens style): in the same suite it is about 88x slower than TBB on skynet and about 96x on fib(39), with a mean ratio to best of 258x; citor, libfork, TooManyCooks, TBB, taskflow or cppcoro are the right tools.",
+    "Machines with 48+ cores: the maintainer acknowledged in issue #174 (April 2025) that the work-sharing algorithm does not scale well there.",
+    "Projects needing an actively maintained dependency: master has had no commit since 'Version 0.1.7' on 2023-07-15, and open issues report build failures on Clang 17/18 (#169), libc++ (#177) and MSVC 19.50 (#178) without maintainer replies.",
+    "Workloads that need FIFO ordering: local (worker-thread) submissions go to a private LIFO queue ahead of foreign submissions (issue #151 shows a later local task running before an earlier foreign one)."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none beyond the platform threads library (and librt on Linux when present); CMake 3.16+",
+    "min_toolchain": "C++20; MSVC 16.8.2+, GCC 13+, Clang 14+ (Clang 11-13 only with libc++)",
+    "platforms": "Linux, macOS, Windows 10+",
+    "thread_safety": "Executors' submit/post/enqueue are thread-safe; result and lazy_result are move-only single-consumer objects; shared_result allows thread-safe multi-consumer access but not to the value itself.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The suite's wins come from v.0.1.7 run in the documented parallel-coroutine style; in issue #174 the maintainer reports an unreleased fork-join rework cutting fib to 1/5-1/6 and skynet to about 1/3 of that time, but it is not on master (the branches page lists only master) or in any release.",
+    "when_all and when_any take the resume executor only as std::shared_ptr, so recursive fork-join code copies a shared_ptr per spawned task (atomic refcount traffic on one control block at 64 threads); parallel coroutines themselves also accept type* or type&.",
+    "Harness notes for the cited numbers: each result is one run with iter_count = 1 (no repetitions), so the 1.03x matmul edge over HPX is within noise; the fib benchmark removes the README's serial cutoff and spawns every node including leaves, while the suite's libcoro fib returns leaves inline, so concurrencpp schedules about twice as many tasks there (this handicaps concurrencpp and does not inflate its win).",
+    "Waiting with result::get or wait inside pool tasks blocks the worker thread; the README restricts blocking waits to root-level code or blocking/thread executors."
+  ],
+  "pick_this_over_siblings_when": "Pick it over citor, Fork Union, dpuyda/scheduling or nexus only when you need its broader coroutine ecosystem (timers, async locks and condition variables, generators, separate background pool) and your tasks are coarse; for fork-join throughput citor and the other suite leaders are about 100-500x faster on fine-grained benchmarks.",
+  "verified_claims_summary": "In tzcnt/runtime-benchmarks (third-party suite by the TooManyCooks author), concurrencpp v.0.1.7 built with Clang 21.1.7 -O3 -march=native and tcmalloc on a 64-core EPYC 7742 with 64 threads finished skynet in 12.5 s, nqueens 8.0 s, fib(39) 20.7 s and matmul(2048) 57 ms, beating libcoro on all four (about 4-12x) and using about 11 MB peak RSS where libcoro used 5-16 GB. It beat HPX only on matmul (57.4 vs 59.1 ms) and was about 116-502x slower than the fastest runtime on the three fine-grained benchmarks (derived from page data).",
+  "status_note": "Effectively abandoned since v.0.1.7 (2023-07-15) with open build-breakage issues on current Clang and MSVC; MIT-licensed, packaged in vcpkg and Conan, and usable for coarse-grained async work, but not a fast fork-join scheduler.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/David-Haim/concurrencpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/David-Haim/concurrencpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/David-Haim/concurrencpp/HEAD/source/executors/thread_pool_executor.cpp",
+    "https://raw.githubusercontent.com/David-Haim/concurrencpp/HEAD/include/concurrencpp/executors/thread_pool_executor.h",
+    "https://github.com/David-Haim/concurrencpp/commits",
+    "https://github.com/David-Haim/concurrencpp/branches",
+    "https://github.com/David-Haim/concurrencpp/issues",
+    "https://github.com/David-Haim/concurrencpp/issues/174",
+    "https://github.com/David-Haim/concurrencpp/issues/169",
+    "https://github.com/David-Haim/concurrencpp/issues/177",
+    "https://github.com/David-Haim/concurrencpp/issues/151",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/build_and_bench_all.py",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/build_all.sh",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/CMakePresets.json",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/fib.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/skynet.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/nqueens.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/matmul.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/fib.cpp",
+    "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/tbb/fib.cpp"
+  ],
+  "confidence": 0.8
+}
