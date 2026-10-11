@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/gpg/gnupg",
+  "one_liner": "The reference OpenPGP command-line tool; in 2021 runs it streamed public-key encryption 1.3-2.7x faster than Sequoia's sq.",
+  "what_it_does": "gpg encrypts, signs, verifies and decrypts OpenPGP messages and manages keys, with gpg-agent holding secret keys and gpgsm doing S/MIME. It is a set of executables, not a library: applications drive it through the LGPL GPGME library or the --status-fd machine interface, and all bulk cryptography is delegated to libgcrypt. The benchmarked operation is streaming encryption to one recipient (gpg -e -r KEY), compared with sq encrypt --recipient-cert.",
+  "how_it_is_fast": "Data moves through a chain of iobuf filters (compression, cipher, armor) with 64 KiB default buffers, so a 10 MB encryption takes 2906 write and 2471 read syscalls where 2021 sq made 436918 writes in armor mode. Bulk crypto runs in libgcrypt's assembly (AES-NI, VAES AVX2/AVX-512 and ARMv8-CE AES, SHA-NI SHA-1, PCLMUL CRC24 for the armor checksum). Recent releases add a memcpy-free AEAD path (AES256.OCB encryption 2.2 to 4.2 GB/s on a Ryzen 5800X, commit 99e2c178c7) and skip redundant hash contexts during MDC decryption (about 3.4x faster, commit ab177eed51). Without AEAD, gpg uses CFB plus a SHA-1 MDC, and CFB encryption is inherently serial: libgcrypt has bulk VAES paths only for CFB decryption, CTR, CBC decryption, OCB, XTS and ECB.",
+  "when_to_use": [
+    "Encrypting or decrypting large files or streams in shell pipelines and backups where OpenPGP is the required format and the other side runs GnuPG.",
+    "Recipients whose keys advertise the AEAD feature, so gpg 2.3+ picks OCB; GnuPG's own commit message reports 4.2 GB/s AES256.OCB encryption against 783 MB/s for AES256.CFB on the same Ryzen 5800X.",
+    "Large keyrings where key listing and lookup speed matter: with keyboxd (SQLite) gpg 2.4.5 listed 9010 keys 4.9-8.1x faster than the Sequoia gpg-sq chameleon 0.9.0 in a 2024 hyperfine report (sequoia-chameleon-gnupg issue 83), though Sequoia attributes most of the gap to uncached trust evaluation.",
+    "Smartcard, gpg-agent, ssh-agent or S/MIME workflows that need one mature, widely packaged toolchain."
+  ],
+  "when_not_to_use": [
+    "Embedding OpenPGP inside a program: gpg is a process to spawn and parse (via GPGME), not an in-process library, and it is GPL-3.0-or-later, so its code cannot be copied into permissive projects.",
+    "Decryption throughput: the same 2021 thread shows sq 9.264 s vs gpg 10.944 s on a 3 GB binary message once Sequoia fixed its buffering and switched to XXH3 body hashing, so GnuPG is not faster there.",
+    "Interoperability with RFC 9580 implementations: gpg's AEAD output uses its LibrePGP OCB packet (PKT_ENCRYPTED_OCB); SEIPDv2 is emitted only with RFC-9980 keys in the --allow-9980 mode added in 2.5.23, so OCB messages may not be readable by RFC 9580 tools.",
+    "When you need fast bulk encryption to recipients without the AEAD feature flag: CFB+MDC encryption cannot be parallelized and is several times slower than OCB."
+  ],
+  "integration": {
+    "form": "module (command-line executables gpg, gpg-agent, gpgsm and others; programmatic use through the separate LGPL GPGME library or --status-fd)",
+    "dependencies": "libgpg-error 1.56+, libgcrypt 1.12.0+, libassuan 3.0.0+, libksba 1.6.3+, npth 1.2+; optional ntbtls 0.2.0+ or GnuTLS 3.2+, SQLite 3.27+ (keyboxd), zlib/bzip2; Pinentry at runtime for passphrases",
+    "min_toolchain": "Autotools build (configure; make) with a C99 compiler; not further documented in the README",
+    "platforms": "Unix-like systems and Windows (installer build documented in doc/HACKING); bulk-crypto acceleration comes from libgcrypt on x86-64 (AES-NI, VAES, SHA-NI, PCLMUL) and AArch64 (ARMv8 crypto extensions)",
+    "thread_safety": "not applicable to the gpg process itself; concurrent gpg invocations share gpg-agent and the keyring, and GPGME documents its own threading rules (not read this session)",
+    "drop_in_for_baseline": "partial — reads and writes standard OpenPGP that sq also handles (CFB+MDC, SEIPDv1), but the command-line syntax differs, and gpg's default OCB output for AEAD-capable keys uses a packet RFC 9580 tools may not accept."
+  },
+  "gotchas": [
+    "The armored comparison (2.70x) mostly measures Sequoia's 2021 armor writer, not the cipher: issue 772 (closed by commit aeacd64d on 2021-11-05) shows 'sq armor' alone at 60.3 MB/s vs 'gpg --enarmor' at 126.1 MB/s through the same dd|bar pipeline, the maintainer blamed Sequoia's slow CRC24, and sq made 43 write syscalls per KB in armor mode. gpg's armor-only rate is even below its 138.7 MB/s armored-encryption rate, so the armored rows are bounded by armoring and the pipe; bar also sat after the encryptor, so armored MB/s count base64 output bytes (about 1.4 GB for 1 GiB of input).",
+    "Harness flaws in the opening post: single run per configuration, no gpg or sq version, key type, cipher or CPU, and no control run of 'dd if=/dev/urandom | bar' alone, so the pipeline's own ceiling is unknown. GnuPG's own commit ab177eed51 measured AES256.CFB encryption at 783 MB/s on a Ryzen 5800X, so the 170.7 MB/s binary figure is not a cipher-throughput ceiling for either tool.",
+    "The cleaner data point is jgoerzen's CPU-bound file run (gpg 2.2.27 with --cipher-algo AES256 vs sq 0.25.0, i5-5200U, output to /dev/null, user time 15.5 s vs 35.4 s): both used CFB+MDC, since gpg 2.2 has no OCB, but it is still one machine and 2021 versions.",
+    "Recent releases fixed memory-safety bugs (double free in import_revoke_cert in 2.5.22; an exploitable printf bug in gpgsm's --debug x509 and OOB reads in dirmngr and scd in 2.5.23); keep to current releases."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (libaegis, HiAE, Botan, Mbed TLS, intel-ipsec-mb, Crypto++) are cipher or AEAD libraries you call in-process; pick GnuPG only when you need OpenPGP-format file encryption with key management, not raw AEAD speed. Note that the Crypto++ entry itself benchmarks faster CAST5 than libgcrypt, GnuPG's crypto backend.",
+  "verified_claims_summary": "In sequoia-pgp/sequoia issue 771 (2021-11-01, filed by Sequoia developer Justus Winter), piping 1 GiB from /dev/urandom through each tool to one recipient with compression off gave gpg 170.7 MB/s vs sq 128.0 MB/s binary (1.33x) and 138.7 vs 51.4 MB/s armored (2.70x), on unstated versions and hardware; a commenter's run on an Intel Core i5-5200U with AES256 forced (gpg 2.2.27 vs sq 0.25.0, 3.3 GB file) took 16.97 s vs 36.60 s (2.16x, derived from page data). Sequoia then sped up its armor encoder and, in the same thread, overtook gpg on decryption; no newer encryption comparison was found.",
+  "status_note": "Actively developed by g10 Code (2.5.24 released 2026-09-23; GitHub repo is an untracked mirror of git.gnupg.org), GPL-3.0-or-later so usable as a tool but not copyable into permissive code; the speed evidence is a 2021 single-run comparison against an early Sequoia release that has since been sped up.",
+  "sources_read": [
+    "https://github.com/gpg/gnupg",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/README",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/NEWS",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/configure.ac",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/common/iobuf.c",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/common/iobuf.h",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/g10/cipher-cfb.c",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/g10/cipher-aead.c",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/g10/encrypt.c",
+    "https://raw.githubusercontent.com/gpg/gnupg/master/g10/armor.c",
+    "https://github.com/gpg/gnupg/commit/ab177eed51",
+    "https://github.com/gpg/gnupg/commit/99e2c178c7",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/master/cipher/rijndael-vaes-avx512-amd64.S",
+    "https://gitlab.com/api/v4/projects/sequoia-pgp%2Fsequoia/issues/771",
+    "https://gitlab.com/sequoia-pgp/sequoia/-/issues/771/discussions.json",
+    "https://gitlab.com/sequoia-pgp/sequoia/-/issues/772/discussions.json",
+    "https://gitlab.com/api/v4/projects/sequoia-pgp%2Fsequoia/issues/772",
+    "https://gitlab.com/api/v4/projects/sequoia-pgp%2Fsequoia/issues?search=slow&in=title",
+    "https://gitlab.com/api/v4/projects/sequoia-pgp%2Fsequoia-chameleon-gnupg/issues/72",
+    "https://gitlab.com/sequoia-pgp/sequoia-chameleon-gnupg/-/issues/72/discussions.json",
+    "https://gitlab.com/api/v4/projects/sequoia-pgp%2Fsequoia-chameleon-gnupg/issues/83",
+    "https://gitlab.com/sequoia-pgp/sequoia-chameleon-gnupg/-/issues/83/discussions.json"
+  ],
+  "confidence": 0.6
+}

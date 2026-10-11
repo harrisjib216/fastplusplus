@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/louis-langholtz/playrho",
+  "one_liner": "C++17 2-D rigid-body physics engine derived from Box2D 2.3.2; first-party microbenchmarks show 1.2-4.9x faster steps than Box2D 2.4.1, with losses.",
+  "what_it_does": "A real-time 2-D physics engine (rigid bodies, shapes, joints, contacts, continuous collision) that began as a modern-C++ port of Box2D 2.3.2 and has since diverged. The API is not drop-in: there are no pointers or b2 prefixes; bodies, shapes, joints and contacts are values referenced by IDs (BodyID, ShapeID) through free functions such as CreateBody(world, ...) and Step(world, stepConf), and World is a type-erased polymorphic value type. Real is a CMake-chosen alias (float by default, or double, long double or a custom fixed-point type), and Boost-based strongly typed units are optional.",
+  "how_it_is_fast": "From reading the source: the world implementation (AabbTreeWorld) keeps bodies, shapes, contacts and manifolds in contiguous ObjectPool arrays indexed by ID, tracks island membership in std::vector<bool> bitsets, and serves per-step allocations (islands, constraints, proxy keys) from pmr pool memory resources. Box2D 2.4.1, by contrast, walks its intrusive linked list of heap bodies at least four times per Step (island-flag reset, island seeding, fixture synchronization, TOI reset) and always runs five b2Timer profiling scopes (10 gettimeofday calls) per Step. That explains most of the static-world and contact-free wins; on contact-heavy scenes the solvers are near parity (PlayRho keeps Box2D's 8 velocity and 3 position iteration Gauss-Seidel solver).",
+  "when_to_use": [
+    "2-D games or simulations that want a Box2D-v2-style engine with a value-semantic, pointer-free C++17 API and IDs instead of b2Body*.",
+    "Worlds with many static or sleeping bodies, or many contact-free movers, where per-step bookkeeping dominates (4.9x on 10,000 static bodies, 1.6-2.3x on 1,000-10,000 non-touching falling disks).",
+    "Projects that need a configurable Real type (double, long double or a fixed-point type from the author's realnumb project) or compile-time unit checking, which Box2D v2 does not offer.",
+    "Codebases that must avoid mutable global state (PlayRho removed Box2D's globals and preprocessor settings)."
+  ],
+  "when_not_to_use": [
+    "Contact-heavy stacking or piles: the project's own TilesRestComboGround rows have PlayRho slower than Box2D 2.4.1 (22.9 ms vs 18.9 ms at 12, 1.42 s vs 1.33 s at 36).",
+    "New projects that can use Box2D v3: it is the actively developed successor (the catalogue entry reports one- and eight-thread runs), and no PlayRho comparison against v3 exists.",
+    "If you need a stable API: master (the 2.0 line that the benchmark ran on) is documented as unstable and not for use, and the latest tag v1.1.2 still has the older Fixture-based API.",
+    "If you want maintenance or multithreading: last commit 2024-04-30, threaded island solving is compiled out (DO_THREADED is commented out), and issue #477 about an unexplained 11-38x AddPairStressTest slowdown has been open since 2023-03-19.",
+    "3-D physics: PlayRho is 2-D only."
+  ],
+  "integration": {
+    "form": "static lib (or shared lib with PLAYRHO_BUILD_SHARED), built with CMake",
+    "dependencies": "none for the library (C++17 standard library only); optional Boost for experimental units; the benchmark uses the googlebench git submodule; Box2D only if you edit the BENCHMARK_BOX2D define",
+    "min_toolchain": "C++17 compiler, CMake 3.16.3+",
+    "platforms": "any; CI builds and tests on Linux, macOS and Windows",
+    "thread_safety": "not documented; one World is stepped single-threaded, and calling Step or mutators while the world is locked (for example from a contact listener during Step) throws WrongState",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Small-N rows are dominated by a fixed Box2D overhead: Box2D 2.4.1's World::Step runs five b2Timer profiling scopes on every non-zero step (10 gettimeofday calls on Linux/macOS), which PlayRho does not have. An empty world steps in 74 ns (PlayRho) vs 404 ns (Box2D), so ratios like DropDisks/1 (2.7x) or WorldStepWithStatsStatic/0 (5x) say little; only the N=1000 and N=10000 rows measure engine work.",
+    "AddPairStressTest numbers swing by an order of magnitude across commits. Issue #477 (open) reports that commit 8082f1c (the Fixture-to-pair<BodyID,ShapeID> transition, which also enabled the Box2D benchmarks) made steps 16-20 of AddPairStressTestPlayRho400 11-38x slower. The author cannot tell whether this is a regression or the fix of an earlier bug that did less TOI work. The wiki's 100x row (00991d1ec) predates that commit; the cited 2.2x row (ef285b19a) follows it. Step 0 of the same test has PlayRho 1.6x slower (2.36 ms vs 1.46 ms).",
+    "The TilesRest benchmarks time world construction plus however many steps it takes for every body to fall asleep. They mix per-step cost with each engine's settling and sleep behaviour, so they are not a per-step throughput comparison.",
+    "The Box2D build is unstated, and Box2D 2.4.1's CMakeLists sets no default build type, so a plain single-config build is unoptimized, whereas PlayRho's CMake defaults to Release with -O3. Box2D winning the contact-heavy TilesRestComboGround rows suggests it was optimized in the wiki run, but this is not documented."
+  ],
+  "pick_this_over_siblings_when": "Pick PlayRho over Box2D v3.2 only if you specifically want a Box2D-v2-style engine with a pointer-free C++17 value-semantic API, a pluggable Real type or typed units; Box2D v3 is maintained and multithreaded. Jolt Physics, Bullet, ODE and PhysX are 3-D engines and not substitutes for a 2-D game engine.",
+  "verified_claims_summary": "These are the author's own Google Benchmark runs on the project wiki (commit ef285b19a, 2021-05-25, '8 X 2600 MHz' Core i7, compiler, flags and Box2D build unstated) of PlayRho vs Box2D 2.4.1 built into the same binary. PlayRho was 4.9x faster stepping 10,000 shapeless static bodies, 1.6-2.3x faster on 1,000-10,000 non-colliding falling disks, 2.2x faster on step 18 of a 400-disk pair stress test and 1.2x faster on TilesRestOneGround/36, but 1.07-1.2x slower on TilesRestComboGround.",
+  "status_note": "Stale since 2024-04-30 with an unreleased, API-breaking 2.0 master line (latest tag v1.1.2); Zlib-licensed and self-contained, so vendoring a tagged release is easy, but no published benchmark covers a tagged release or Box2D v3.",
+  "sources_read": [
+    "https://github.com/louis-langholtz/PlayRho",
+    "https://github.com/louis-langholtz/PlayRho/wiki/Benchmark-Data:-2.6-GHz-Intel-Core-i7",
+    "https://github.com/louis-langholtz/PlayRho/commits/master",
+    "https://github.com/louis-langholtz/PlayRho/releases",
+    "https://github.com/louis-langholtz/PlayRho/issues",
+    "https://github.com/louis-langholtz/PlayRho/issues/477",
+    "https://github.com/louis-langholtz/PlayRho/commit/8082f1c",
+    "https://github.com/louis-langholtz/PlayRho/commit/ef285b19a",
+    "https://github.com/louis-langholtz/PlayRho/tree/master/Library/include/playrho",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/README.md",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Benchmark/README.md",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Benchmark/BenchmarkMain.cpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/CMakeLists.txt",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/StepConf.hpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/Real.hpp.in",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/Settings.hpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/ObjectPool.hpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/d2/AabbTreeWorld.hpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/source/playrho/d2/AabbTreeWorld.cpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Library/include/playrho/d2/World.hpp",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/louis-langholtz/PlayRho/HEAD/Changes.md",
+    "https://raw.githubusercontent.com/erincatto/box2d/v2.4.1/src/dynamics/b2_world.cpp",
+    "https://raw.githubusercontent.com/erincatto/box2d/v2.4.1/src/common/b2_timer.cpp",
+    "https://raw.githubusercontent.com/erincatto/box2d/v2.4.1/CMakeLists.txt",
+    "https://raw.githubusercontent.com/erincatto/box2d/v2.4.1/src/CMakeLists.txt"
+  ],
+  "confidence": 0.7
+}

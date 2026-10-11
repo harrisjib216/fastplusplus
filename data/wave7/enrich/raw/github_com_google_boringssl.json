@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/google/boringssl",
+  "one_liner": "Google's OpenSSL fork, the TLS and crypto library of Chrome and Android; only weak, mixed evidence that it beats OpenSSL on RSA/ECDSA.",
+  "what_it_does": "A libcrypto plus libssl pair (TLS 1.2/1.3, QUIC hooks, X.509, RSA, ECDSA/ECDH on P-224 to P-521, X25519/Ed25519, ML-KEM, ML-DSA, SLH-DSA, AES-GCM, ChaCha20-Poly1305) that keeps OpenSSL's C API shape for the subset it retains. PORTING.md describes it as mostly source-compatible with OpenSSL 1.1.0 (and largely 1.0.2), with removed APIs and BoringSSL-specific additions; code that uses the retained EVP_*, RSA_*, EC_KEY_* and SSL_* calls usually ports with little change. It is consumed live-at-head: projects pin a git revision, link it statically and update it regularly; there are no supported release branches.",
+  "how_it_is_fast": "Most hot paths share lineage with OpenSSL's perlasm (CRYPTOGAMS) assembly: Montgomery-multiplication bignum code for RSA, and the Gueron-Krasnov nistz256 P-256 code (x86-64 and AArch64, with MULX/ADCX/ADOX variants and a 148 KiB precomputed base-point table, dropped under OPENSSL_SMALL). Elsewhere it uses Fiat Cryptography generated field arithmetic (P-256 on other targets, Curve25519), some CryptOpt-optimized assembly, and VAES/VPCLMULQDQ AES-GCM in AVX2 and AVX-512 versions (aes-gcm-avx2-x86_64.pl, aes-gcm-avx512-x86_64.pl). RSA keys cache their BN_MONT_CTX after first use, so repeated operations on a long-lived key skip that setup. No documented algorithmic advantage over OpenSSL for RSA or ECDSA was found; any edge comes from removed code and different tuning.",
+  "when_to_use": [
+    "You embed TLS in an application or service that already pins and statically links its dependencies, and can update BoringSSL from git head on a regular schedule (the Chromium/Android model).",
+    "You need P-256 ECDHE/ECDSA, X25519 and AES-GCM handshake and record throughput from a mature, heavily fuzzed and audited stack rather than from a single-primitive research library.",
+    "You want post-quantum TLS key exchange (ML-KEM) and ML-DSA/SLH-DSA in the same library that already ships in Chrome.",
+    "You need a smaller API surface than OpenSSL 3.x (no providers, no OCSP client library, fewer legacy ciphers), which also shrinks the attack surface.",
+    "AES-128-GCM bulk throughput on recent x86-64: one third-party run (aws-lc issue 2283, Zen 3) measured BoringSSL at about 1.8x AWS-LC at 16 KB records."
+  ],
+  "when_not_to_use": [
+    "As a system or distribution library, or behind a stable ABI: the README says it is not intended for general use and gives no API or ABI stability guarantee; HAProxy dropped BoringSSL support for that reason (no LTS cycle, no stable API).",
+    "ChaCha20-Poly1305 bulk encryption on AVX-512 CPUs: BoringSSL has no AVX-512 ChaCha20, and one cycle-count run (soda4fries/ChaChaCha, EPYC 9655 Zen 5) shows its AVX2 code at 1.52 cycles/byte vs OpenSSL's 0.84 for 16 KiB records (about 1.8x slower).",
+    "Code that needs OpenSSL APIs BoringSSL removed: there is no include/openssl/ocsp.h (OCSP request/response parsing, so nginx's ssl_stapling cannot fetch responses; stapling a caller-supplied response via SSL_CTX_set_ocsp_response does work), EVP_PKEY_HMAC is gone, DSA EVP_PKEYs cannot sign or verify, and server-side or DTLS renegotiation is unsupported.",
+    "If you need a documented RSA or ECDSA speedup over a current OpenSSL 3.x release: the only numbers comparing the two are a 2018 forum post against an OpenSSL 1.1.1 pre-release, and they are within about 10% either way."
+  ],
+  "integration": {
+    "form": "static lib (CMake or the Bazel Central Registry module; projects often vendor the source under third_party/boringssl/src with generated source lists from gen/; -DBUILD_SHARED_LIBS=1 gives a shared lib but without ABI stability)",
+    "dependencies": "none at runtime; CMake 3.22+ to build (Ninja recommended), NASM on Windows; Go (latest stable) and optionally libunwind only for the test suites",
+    "min_toolchain": "C11 and C++17 compilers; build tools no older than five years (Abseil policy); GCC 6.1+ or recent Clang on non-Windows; MSVC from Visual Studio 2022 with Windows 10 SDK 2104+",
+    "platforms": "x86-64, x86, AArch64 and ARMv7 with assembly fast paths (runtime CPU-feature dispatch on x86 and via getauxval on ARM Linux); Linux, macOS, Windows, iOS and Android documented; other targets fall back to C",
+    "thread_safety": "Initializes itself and uses pthreads or Windows primitives internally (OpenSSL locking callbacks are no-ops); per API-CONVENTIONS.md, key objects such as RSA or EVP_PKEY may be used from several threads at once provided no thread mutates them; consult each header for other types.",
+    "drop_in_for_baseline": "partial — mostly source-compatible with the OpenSSL 1.1.0 API subset it keeps (OPENSSL_VERSION_NUMBER matches, OPENSSL_IS_BORINGSSL marks it), but removed APIs, changed *_ctrl handling and integer types, and no ABI compatibility mean you rebuild and sometimes patch the consumer; it cannot replace a system libssl.so."
+  },
+  "gotchas": [
+    "Harness mismatch behind the 2018 numbers: bssl speed printed two RSA verify rows, 'verify (same key)' and 'verify (fresh key)'; the fresh-key row (tool/speed.cc at b579ecb, now bench/rsa.cc BM_SpeedRSAImportKeyAndVerify) rebuilds the public key and its Montgomery context on every call, while OpenSSL 1.1.1 'openssl speed' reuses one key. Comparing the fresh-key row with openssl speed understates BoringSSL, which likely explains why one summary has BoringSSL 8% faster at RSA-2048 verify and another 4.55% slower. The tools also differ in run length (bssl speed 1 s wall clock per row by default vs RSA_SECONDS/ECDSA_SECONDS 10 s) and RSA input (SHA-256 DigestInfo vs a raw 36-byte NID_md5_sha1 buffer); the ECDSA rows match (20-byte digest, same key, ECDSA_sign/ECDSA_verify).",
+    "The 'bssl speed' command used for the evidence no longer exists at HEAD: tool/tool.cc lists no speed subcommand and tool/speed.cc is gone from main; benchmarks moved to bench/*.cc and the bssl_bench binary on google/benchmark 1.9.4 (commit 23dec3c, Dec 2025), which by default runs every benchmark at 1 thread and at one thread per CPU.",
+    "Debug is the default CMake build (no optimization, assertions on); pass -DCMAKE_BUILD_TYPE=Release before measuring anything.",
+    "Building for ARM with OPENSSL_STATIC_ARMCAP_* or -march features assumes those instructions exist at runtime; per BUILDING.md the binary will likely crash on CPUs that lack them."
+  ],
+  "pick_this_over_siblings_when": "Pick BoringSSL when you need a complete TLS stack with fast P-256, X25519, AES-GCM and ML-KEM in one maintained library; libsecp256k1 (secp256k1 only) and ENG25519 or the SUPERCOP Ed25519 code (single curves, research or reference code) beat OpenSSL by much larger, better-documented margins on their one primitive but provide no TLS.",
+  "verified_claims_summary": "One centminmod forum user ran 'bssl speed' against 'openssl speed' from OpenSSL 1.1.1-pre9-dev on one unnamed machine in 2018 (no CPU, compiler or flags given; page unreachable here, read only through search snippets): RSA-2048 sign about 938.6 vs 923.6 ops/s (about 1.6% faster) and RSA-2048 verify 33663.8 vs 31108.1 ops/s with the same key (about 8% faster), both derived from snippet data; the ECDSA P-256 percentages could not be reproduced. A 2014 gist (Core i7 3630QM) shows BoringSSL about 1.14x faster per process at RSA-2048 sign and about 0.88x at verify against OpenSSL 1.0.1h, once OpenSSL's '-multi 2' totals are halved (derived from page data).",
+  "status_note": "Very actively maintained by Google (security advisories through 2026-09-29, last commit 2026-10-11) and Apache-2.0, so copyable, but released only as git-head snapshots with no API/ABI stability; the evidence for beating OpenSSL is a snippet-only, single-machine 2018 comparison against an end-of-life development build.",
+  "sources_read": [
+    "https://github.com/google/boringssl",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/README.md",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/BUILDING.md",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/PORTING.md",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/INCORPORATING.md",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/API-CONVENTIONS.md",
+    "https://github.com/google/boringssl/tree/main/tool",
+    "https://raw.githubusercontent.com/google/boringssl/main/tool/tool.cc",
+    "https://github.com/google/boringssl/commits/main/tool/speed.cc",
+    "https://github.com/google/boringssl/commit/23dec3c",
+    "https://raw.githubusercontent.com/google/boringssl/b579ecb/tool/speed.cc",
+    "https://raw.githubusercontent.com/google/boringssl/main/bench/rsa.cc",
+    "https://raw.githubusercontent.com/google/boringssl/main/bench/ecdsa.cc",
+    "https://raw.githubusercontent.com/google/boringssl/main/bench/main.cc",
+    "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1-stable/apps/speed.c",
+    "https://github.com/google/boringssl/tree/main/third_party",
+    "https://raw.githubusercontent.com/google/boringssl/main/third_party/fiat/README.md",
+    "https://github.com/google/boringssl/tree/main/crypto/fipsmodule/aes/asm",
+    "https://github.com/google/boringssl/tree/main/crypto/fipsmodule/ec",
+    "https://raw.githubusercontent.com/google/boringssl/main/crypto/fipsmodule/ec/p256.cc.inc",
+    "https://raw.githubusercontent.com/google/boringssl/main/crypto/fipsmodule/ec/p256-nistz.cc.inc",
+    "https://raw.githubusercontent.com/google/boringssl/main/include/openssl/ssl.h",
+    "https://raw.githubusercontent.com/google/boringssl/main/include/openssl/engine.h",
+    "https://github.com/google/boringssl/tree/main/docs/advisories",
+    "https://raw.githubusercontent.com/google/boringssl/main/docs/advisories/2026-09-29.md",
+    "https://raw.githubusercontent.com/google/boringssl/main/docs/advisories/2026-08-25.md",
+    "https://raw.githubusercontent.com/google/boringssl/main/docs/advisories/2026-08-13.md",
+    "https://github.com/haproxy/wiki/wiki/SSL-Libraries-Support-Status"
+  ],
+  "confidence": 0.6
+}

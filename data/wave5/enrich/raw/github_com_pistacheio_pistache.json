@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/pistacheio/pistache",
+  "one_liner": "C++17 HTTP/1.1 REST server library; in a 2020 shootout it beat C++ REST SDK by 3.2x and Restbed by 1.26x on small POSTs.",
+  "what_it_does": "Pistache is an HTTP/1.0 and 1.1 server and REST framework (plus a client the README calls buggy) built as a shared or static library. You either subclass Http::Handler and override onRequest(const Request&, ResponseWriter), or register routes on a Rest::Router (Routes::Get/Post with :param, optional and splat segments) and pass router.handler() to an Http::Endpoint configured through Endpoint::options() (threads, flags, size limits, timeouts, TLS). It replaces cpprestsdk's listener or Restbed's service with its own API, so handlers must be rewritten.",
+  "how_it_is_fast": "One listener thread accepts sockets and hands each one to one of N worker reactors, picked by fd modulo N on POSIX (an atomic counter on Windows). Each worker runs its own epoll loop on Linux (libevent on macOS, BSD and Windows) in edge-triggered mode, reads in 4 KiB chunks and calls the handler inline on that thread, so a request takes no cross-thread hand-off. Requests are parsed by an incremental step parser (request line, headers, body including chunked encoding) over a per-connection buffer, and routes are matched in a segment tree of string_view-keyed hash maps. Responses go through a per-worker write queue polled by the same reactor, files are sent with sendfile, and header, body and keep-alive timeouts use timerfd.",
+  "when_to_use": [
+    "A small or medium REST service on Linux where you want a simple handler and router API without Boost.Asio, and you can install a library (Debian 12 and Ubuntu 23.10 ship libpistache-dev, and Launchpad PPAs carry daily and stable builds).",
+    "Short, CPU-light handlers with modest per-request work, which is where it beat cpprestsdk (3.2x) and Restbed (1.26x to 1.86x) in the guteksan shootout.",
+    "Replacing cpprestsdk's http_listener, which deadlocked at 4 server threads with 10 clients in the same shootout and is itself in maintenance mode.",
+    "You need an Apache-2.0 library (Restbed, the other baseline, is AGPL or commercial).",
+    "Plain-HTTP services behind a TLS-terminating proxy, which sidesteps Pistache's single-threaded TLS handshake."
+  ],
+  "when_not_to_use": [
+    "Maximum throughput: RESTinio was faster than Pistache in both no-delay cells of the same shootout, and in issue #994 Go net/http served 96,422 req/s vs Pistache's 16,578 with hey at 100 connections (55,138 vs 58,194 with ab -k), with Pistache's thread count making no difference.",
+    "TLS-terminating servers under load: SSL_accept runs on the single listener thread, and issue #1312 (open, PR #1313 unmerged) measured about 24,792 ops/s plaintext vs about 1,004 with TLS at 20 worker threads.",
+    "Handlers that block (database calls, sleeps): they run on the reactor thread, and connections are pinned to a worker by fd number with no work stealing, so other connections on that worker stall. In the shootout Pistache was the slowest or second slowest at C=4 with 200 ms handlers (Local N=1000 8:34.710 vs Restbed 8:21.744; VPN 10:19.625 vs about 8:23).",
+    "Clients that pipeline HTTP/1.1 requests, large uploads, HTTP/2, or a stable ABI: pipelining is not supported, the default maxRequestSize is 4 KiB, there is no HTTP/2, and the project is pre-1.0 with the soname following feature releases.",
+    "You need a reliable HTTP client: the README says the client 'has a few issues in it that make it buggy'."
+  ],
+  "integration": {
+    "form": "shared lib (static archive also built; Meson subproject fallback supported)",
+    "dependencies": "pthreads; Howard Hinnant date (system or Meson fallback); RapidJSON (option PISTACHE_USE_RAPIDJSON, default on); optional OpenSSL (TLS), brotli, zstd, zlib (content encoding); libevent and libevent_pthreads on macOS, BSD and Windows (or with PISTACHE_FORCE_LIBEVENT); libatomic where 64-bit atomics need it; googletest for tests",
+    "min_toolchain": "C++17; Meson >= 0.57 (primary build) or CMake >= 3.11; GCC before 9.1 and Clang link stdc++fs or c++fs (issue #1068 workaround)",
+    "platforms": "Linux with native epoll (Debian builds for amd64, arm64, armhf, i386, ppc64el, riscv64, s390x); macOS, FreeBSD, OpenBSD, NetBSD and Windows through libevent",
+    "thread_safety": "Each worker reactor is single-threaded and owns its connections. Http::Handler subclasses are cloned per worker through HTTP_PROTOTYPE's clone(), so handler member state is per thread, not shared; state shared by Router callbacks must be synchronized by the user. Sending on a ResponseStream from another thread raced until issue #1290 was closed in March 2025.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Defaults are small: Endpoint::options() starts with threads(1), and maxRequestSize defaults to 4,096 bytes for the whole buffered request (headers plus body), so larger POSTs get 413 until you raise it. With limits in the MiB range, issue #1190 (open, labelled security) reports oversized uploads taking 4.7 s to 145 s to be rejected at 100% CPU.",
+    "No HTTP pipelining: after the first request in a read buffer is handled, parser->reset() discards the rest of the buffer, so pipelined requests are silently lost (issue #1034, open since 2022). Responses to HTTP/1.1 requests that carry no Connection header are sent with 'Connection: close' (Handler::onInput in src/common/http.cc), so clients that rely on implicit keep-alive, such as Go's net/http client behind hey, reconnect for every request. Our inference, not stated in the thread: this, plus the single accept thread, probably explains issue #994's 16.6k req/s under hey vs 55.1k under ab -k, where ab sends Connection: Keep-Alive.",
+    "The benchmark behind the record is client-bound. guteksan's driver is 10 Python processes using http.client with a new TCP connection per request, each printing every request and reply under one shared multiprocessing lock. The service logs every request through log4cplus, and each cell is a single run. The top no-delay results (Restinio 1.025 s, Pistache 1.059 s for 10,000 requests) are therefore near the client's limit, and the run used Pistache v0.0.002 from 2020, not the current 0.5.x code with its libevent abstraction.",
+    "Security: GHSA-q474-pqcp-gqm5 (moderate, published 2026-06-25) is a stack-exhaustion DoS from regex_replace on long slash runs in the REST router's path normalization, fixed on master on 2026-06-24 (version.txt now 0.5.16). Older distro packages may still carry it."
+  ],
+  "pick_this_over_siblings_when": "Pick Pistache over RESTinio (faster in the same shootout, header-only on Asio) or cpp-httplib (header-only, thread per connection, 3.0 s vs Pistache's 1.06 s in that shootout) when you want an Apache-2.0, distro-packaged library with a simple handler and router API and no Boost dependency. For raw throughput, TLS or pipelining clients, Drogon and Crow have stronger evidence (both beat Go net/http on the-benchmarker or TechEmpower code).",
+  "verified_claims_summary": "guteksan/REST-CPP-benchmark (2020, linked from Pistache's README) ran equivalent POST-echo services on a 28-thread Xeon E5-2660 v4 with Ubuntu 16.04 (CMake Release, compiler not stated), driven by 10 Python clients with 1000 requests each and a new connection per request. Pistache v0.0.002 took 1.059 s vs C++ REST SDK 2.10.15's 3.401 s and Restbed 4.6's 1.333 s at 28 server threads, and 0.964 s vs Restbed's 1.789 s at 4 threads (cpprestsdk deadlocked); RESTinio was faster in both cells, and with 200 ms handlers Pistache tied or trailed. A 2017 ab test (one connection, 608 KB JSON) also favours Pistache, but it handicaps both baselines.",
+  "status_note": "Actively maintained (last commit 2026-07-11, version 0.5.16, 3.5k stars, 202 open issues) and Apache-2.0. It is still pre-1.0: the soname follows feature releases, the API is only partly documented, and the TLS-handshake, pipelining and oversized-body issues above remain open.",
+  "sources_read": [
+    "https://github.com/pistacheio/pistache",
+    "https://github.com/pistacheio/pistache/commits/master",
+    "https://github.com/pistacheio/pistache/tree/master/src/common",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/README.md",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/meson.build",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/version.txt",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/common/reactor.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/common/transport.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/common/http.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/common/stream.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/server/listener.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/server/endpoint.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/src/server/router.cc",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/include/pistache/endpoint.h",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/include/pistache/stream.h",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/include/pistache/config.h",
+    "https://raw.githubusercontent.com/pistacheio/pistache/HEAD/include/pistache/http_defs.h",
+    "https://github.com/pistacheio/pistache/issues?q=is%3Aissue+performance",
+    "https://github.com/pistacheio/pistache/issues?q=is%3Aissue+pipelining",
+    "https://github.com/pistacheio/pistache/issues/1034",
+    "https://github.com/pistacheio/pistache/issues/1190",
+    "https://github.com/pistacheio/pistache/issues/1312",
+    "https://github.com/pistacheio/pistache/issues/994",
+    "https://github.com/pistacheio/pistache/security/advisories",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-pistache/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-restbed/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-restinio/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/postInLoop.py",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/images/rest_all.PNG"
+  ],
+  "confidence": 0.75
+}
