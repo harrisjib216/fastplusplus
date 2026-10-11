@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/chenshuo/muduo",
+  "one_liner": "Linux one-loop-per-thread C++ TCP reactor library; author's ping-pong test puts it about 18% above libevent2's bufferevents.",
+  "what_it_does": "Muduo is an event-driven TCP networking library for multi-threaded Linux servers: an EventLoop (one epoll/poll reactor per thread), TcpServer/TcpClient with callback-style connection and message handlers, a growable Buffer, timers, and an EventLoopThreadPool that assigns connections round-robin to I/O threads. It is not a drop-in for libevent; you write C++ callbacks (std::function) against muduo's own classes. A minimal HttpServer in muduo/net/http and many protocol examples (pingpong, ttcp, memcached, protorpc, socks4a) ship with it.",
+  "how_it_is_fast": "Reads go through Buffer::readFd, a single readv into the buffer's free space plus a 64 KiB stack buffer, so one syscall drains up to about 128 KiB without an ioctl(FIONREAD); libevent 2.0.21 and 2.1.12 evbuffer_read issue FIONREAD and cap every read at EVBUFFER_MAX_READ = 4096 bytes. Sends try a direct write() when the output buffer is empty and only queue the remainder; each connection is pinned to one I/O thread, so the hot path takes no locks. Built with -O2 -march=native by default.",
+  "when_to_use": [
+    "Custom binary or line-based TCP protocol servers on Linux (RPC, gateways, game or chat servers) where you want a small, readable reactor rather than a full web framework.",
+    "Throughput-bound echo/relay/proxy workloads with message sizes of a few KiB and up, where the larger reads beat libevent bufferevents' 4 KiB-per-read path.",
+    "Multi-core servers that fit the one-loop-per-thread model: set TcpServer::setThreadNum(N) and keep per-connection state in the owning loop.",
+    "Teaching or vendoring: BSD-3-Clause, small C++11 codebase, documented in the author's book on Linux multithreaded server programming."
+  ],
+  "when_not_to_use": [
+    "HTTP services: the bundled HttpServer parses request line and headers only; the kExpectBody branch in HttpContext.cc is an empty FIXME, so request bodies (POST) and chunked encoding are not handled. Use Drogon or Sogou Workflow for HTTP.",
+    "Windows, macOS or BSD targets: Linux-only (epoll, timerfd, eventfd; kernel >= 2.6.28).",
+    "Projects that need TLS, HTTP/2, coroutines or async DNS out of the box: none are in the core library (c-ares, curl, hiredis and protobuf appear only in examples/contrib).",
+    "Long-term-supported dependencies: last code change 2022-11-01, 41 open issues and 45 open PRs, no tagged GitHub releases; open bugs include timer callbacks still running after cancel (#668) and a stack overflow in TimeZone::loadZoneFile on a crafted zone file (#728)."
+  ],
+  "integration": {
+    "form": "static lib (CMake or Bazel; libmuduo_base and libmuduo_net, optional muduo_http)",
+    "dependencies": "Boost headers (boost::any only); pthreads; examples optionally use protobuf, zlib, c-ares, curl, hiredis, thrift, gd, tcmalloc",
+    "min_toolchain": "C++11, GCC >= 4.7 or Clang >= 3.5, CMake >= 2.6",
+    "platforms": "Linux only (kernel >= 2.6.28), any architecture GCC targets; default flags include -march=native",
+    "thread_safety": "One EventLoop per thread; EventLoop::runInLoop/queueInLoop/quit and TcpConnection::send are safe from other threads (cross-thread send copies the data); TcpConnection::shutdown, TcpServer setters and HttpServer::setHttpCallback are documented as not thread safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness note on the 18% claim: each side is measured with its own client and server (chenshuo/recipes pingpong/libevent vs muduo examples/pingpong, the scripts default to 16 KiB blocks, server and client pinned to separate cores with taskset). The libevent side runs on bufferevents, whose evbuffer_read caps each read at 4096 bytes after an ioctl(FIONREAD) (libevent 2.0.21 buffer.c, unchanged in 2.1.12), so a 16 KiB message costs libevent at least four read callbacks per hop versus one readv for muduo. The gap measures that default buffer path, not the epoll loop; evpp's docs say evpp beats libevent2 for the same reason (it uses libevent's event loop but its own muduo-style Buffer instead of evbuffer).",
+    "CMakeLists.txt compiles with -Werror plus -Wconversion, -Wold-style-cast and -Wshadow, and with -march=native; new compilers can stop the build on fresh warnings, and binaries are not portable across CPUs unless you remove -march=native. build.sh defaults to an out-of-tree ../build directory.",
+    "TcpConnection::send(Buffer*) is commented 'this one will swap data' but copies: in-loop it writes or appends from the buffer and then retrieveAll(); from another thread it copies into a std::string first.",
+    "Buffer::readFd uses a 64 KiB stack array on every read callback, so I/O threads need a normal-size stack; Buffer is backed by std::vector<char> and never shrinks unless you call shrink()."
+  ],
+  "pick_this_over_siblings_when": "Pick muduo over Drogon, Sogou Workflow or cinatra when you are writing a raw TCP protocol server, not an HTTP API, and want a small Linux reactor you can read end to end; for HTTP serving those siblings are complete frameworks with published HTTP benchmarks, while muduo's HttpServer has no request-body support.",
+  "verified_claims_summary": "The muduo author's 2010 CSDN post (not reachable here; quoted by Qihoo360's evpp docs) reports muduo ping-pong echo throughput on loopback averaging more than 18% above libevent 2.0.x across message sizes and connection counts; hardware, compiler and per-row numbers are not verifiable. The public harness builds the libevent test programs with -g -Wall -O2 against an installed libevent, while muduo's current CMake release build uses -O2 -march=native. Evpp's separate run (Xeon E5-2630 v2, gcc 4.8.2) shows muduo-v1.0.9 roughly equal to evpp-v0.2.4, which is itself 17% to 130% faster than libevent-2.0.21's samples, so the 18% is indirectly plausible but never measured by a third party.",
+  "status_note": "Stale: the last code commit is 2022-11-01 (the 2025-02-28 commit is an issue-template update) and there are no tagged GitHub releases, but it is BSD-3-Clause, widely forked (16.3k stars, 5.3k forks) and small enough to vendor; the issue #720 reporter built it with gcc 13.3 once the distro Boost replaced a self-built one.",
+  "sources_read": [
+    "https://github.com/chenshuo/muduo",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/README",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/build.sh",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/Buffer.h",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/Buffer.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/EventLoop.h",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/TcpServer.h",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/TcpConnection.h",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/TcpConnection.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/EventLoopThreadPool.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/poller/EPollPoller.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/http/HttpServer.h",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/muduo/net/http/HttpContext.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/examples/pingpong/server.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/examples/pingpong/client.cc",
+    "https://raw.githubusercontent.com/chenshuo/muduo/HEAD/examples/pingpong/CMakeLists.txt",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/libevent/Makefile",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/libevent/server.c",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/libevent/client.c",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/libevent/single_thread.sh",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/muduo/single_thread.sh",
+    "https://raw.githubusercontent.com/chenshuo/recipes/HEAD/pingpong/asio/single_thread.sh",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.0.21-stable/buffer.c",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.0.21-stable/bufferevent_sock.c",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.1.12-stable/buffer.c",
+    "https://raw.githubusercontent.com/libevent/libevent/release-2.1.12-stable/bufferevent_sock.c",
+    "https://raw.githubusercontent.com/Qihoo360/evpp/HEAD/docs/benchmark_throughput_vs_muduo_cn.md",
+    "https://github.com/chenshuo/muduo/issues?q=is%3Aissue+bug",
+    "https://github.com/chenshuo/muduo/issues/720",
+    "https://github.com/chenshuo/muduo/issues/668"
+  ],
+  "confidence": 0.6
+}

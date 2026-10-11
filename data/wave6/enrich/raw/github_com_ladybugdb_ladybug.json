@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ladybugdb/ladybug",
+  "one_liner": "Embedded columnar Cypher graph database (the continuation of Kuzu), about 2x lower geomean read-query latency than a server Neo4j.",
+  "what_it_does": "Ladybug is an in-process property-graph database queried with Cypher, with declared node and relationship tables, ACID transactions, full-text and vector indexes, and bindings for Python, Node.js, Rust, Go, Swift, Java, C/C++ and Wasm. It is the same codebase as the archived Kuzu (its LICENSE carries both the Kuzu Inc. and Ladybug Memory Inc. copyrights), so Kuzu databases and code carry over. It is not a drop-in for Neo4j: there is no Bolt server, schema must be declared up front, and you open a Database file and issue queries through a Connection.",
+  "how_it_is_fast": "Data lives in columnar disk storage grouped into node groups of 2^17 rows, and relationships are stored as CSR (compressed sparse row) adjacency lists, so a hop is a sequential scan of a neighbour range instead of pointer chasing through record stores. The query processor is vectorized (2048-value vectors) and factorized, keeps intermediate many-to-many results unflattened, and runs pipelines on all cores by default (maxNumThreads = 0). Floating-point columns are compressed with the vendored ALP library, and query kernels have runtime-dispatched SIMD paths (LBUG_ENABLE_SIMD, on by default).",
+  "when_to_use": [
+    "Analytical multi-hop Cypher over a few million nodes and tens of millions of edges inside one process (LDBC SNB SF1 scale: 3.2M nodes, 17M relationships)",
+    "Scan-heavy aggregate pattern queries (counts over all comments or all reply chains) on a multi-core machine, where intra-query parallelism pays off",
+    "Applications, notebooks or agent-memory stores that want a graph store as a library file rather than a server to run and connect to",
+    "Projects already on Kuzu that need a maintained successor after Kuzu's archival",
+    "Mixed graph plus vector or full-text retrieval in one embedded engine"
+  ],
+  "when_not_to_use": [
+    "Highly selective point traversals from a single node ID: Neo4j won q7 (1.5 ms vs 23.6 ms) and q22 (2.6 ms vs 7.1 ms) in the cited suite",
+    "Many concurrent writers or a shared multi-client server: one read-write Database object per file per process, and concurrent write transactions are off by default (enableMultiWrites = false)",
+    "Workloads that need a stable on-disk format and release cadence: 0.19 to 0.21.2 shipped within about two months, with storage-version fixes and a 0.21 two-hop regression",
+    "Schema-free graphs where labels and properties are not known in advance",
+    "Tiny point lookups on a many-core box with default threading: a user report shows 26 of 30 suite queries got faster when limited to 1 thread"
+  ],
+  "integration": {
+    "form": "shared lib or static lib (liblbug, plus a single-file amalgamated header); prebuilt Python, Node.js, Rust, Go, Java and Swift packages",
+    "dependencies": "none external at runtime beyond threads; vendored third_party sources include ANTLR4 runtime, RE2, zstd, LZ4, Snappy, Brotli, miniz, Parquet/Thrift, mbedTLS, yyjson, utf8proc, Roaring bitmaps, SimSIMD, ALP, fast_float, spdlog and cpp-httplib",
+    "min_toolchain": "C++20, CMake 3.15+",
+    "platforms": "Linux and macOS on x86-64 and aarch64 (prebuilt liblbug), Windows CLI builds for x86-64 and arm64, WebAssembly",
+    "thread_safety": "Connection is documented as thread-safe and many Connections can share one Database; only one read-write Database object may open a given path (multiple read-only ones are allowed); a single writer by default",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the headline: the two biggest wins over Neo4j (q20 27.86x, q30 11.89x) come from intra-query parallelism. A user's re-run of the same suite in issue #1117 shows q20 at 14.31 ms with 16 threads but 103.68 ms with 1 thread, and q30 at 119.17 ms vs 750.87 ms, while Neo4j was confined to a 4-vCPU Colima VM and Ladybug used all 10 native cores. The harness also builds six ART secondary indexes for Ladybug (including Comment.length, which q4 and q20 filter on, and Person first/last name) while Neo4j gets only ID uniqueness constraints, and Neo4j's ingest loads CSV through polars without date parsing so its q8 converts birthday strings with date() per row.",
+    "Ladybug's timings are in-process Python calls with polars conversion; Neo4j's go over Bolt to a VM, so the per-query floor differs (Neo4j's fastest query is 1.22 ms), which inflates the many 1.4x-4x wins on 1-3 ms queries.",
+    "Open bug #1117 (since 0.21.0, still on 0.21.2 and main): a two-hop traversal whose middle nodes change node group decodes a whole CSR header per change, 67x slower than expected (189 ms vs 2.8 ms) in the reporter's test; the benchmarked 0.21.1 is affected. Other open bugs: a segfault on periodic read-only reconnection (#1007) and an ALP DOUBLE crash during checkpoint (#998).",
+    "throwOnWalReplayFailure defaults to false since 0.19.0: after a crash with a torn WAL tail the database opens silently without the unreplayable tail. SECURITY.md still lists 0.14.x and 0.15.x as the supported versions."
+  ],
+  "pick_this_over_siblings_when": "Pick Ladybug when the queries are Cypher path patterns over a graph; the relational engines in this category (DataFusion, Umbra, Velox) answer SQL joins and have no CSR adjacency storage. No separate Kuzu entry is catalogued, so this record also stands in for Kuzu 0.11.3, which the same suite puts 1.59x behind Ladybug 0.21.1 by geomean.",
+  "verified_claims_summary": "In prrao87's custom 30-query suite on LDBC SNB SF1, run on an Apple M5 (10 CPUs, macOS) through pytest-benchmark, Ladybug 0.21.1 (prebuilt Python wheel, in-process, all cores, six extra ART indexes) had lower mean latency than Neo4j 2025.12.1 (Bolt, 4-vCPU VM, ID constraints only) on 26 of 30 queries, a 2.02x geometric mean of Neo4j/Ladybug ratios, and lost on q7, q12, q22 and q27. The Ladybug side was set up by Ladybug's maintainer and re-run on 2026-09-30 against Neo4j numbers from 2026-09-03, so this is a configuration comparison, not an equal-resource one.",
+  "status_note": "Very actively maintained (the 20 newest commits are all dated 2026-10-11, many of them catalog, WAL-replay and storage correctness fixes) and MIT-licensed, but the engine is a fast-moving 0.x with an open 0.21 traversal regression, so pin a release and re-check your own queries on upgrade.",
+  "sources_read": [
+    "https://github.com/LadybugDB/ladybug",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/README.md",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/security/threat_model.md",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/src/include/main/lbug.h",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/src/include/main/database.h",
+    "https://raw.githubusercontent.com/LadybugDB/ladybug/HEAD/src/include/main/connection.h",
+    "https://github.com/LadybugDB/ladybug/issues/1117",
+    "https://github.com/LadybugDB/ladybug/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/LadybugDB/ladybug/commits/main",
+    "https://github.com/LadybugDB/ladybug/releases",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/README.md",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/ladybugdb/README.md",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/ladybugdb/benchmark_query.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/ladybugdb/build_graph.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/ladybugdb/query.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/neo4j/benchmark_query.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/neo4j/build_graph.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/neo4j/query.py",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/results/ladybug-0.21.1.txt",
+    "https://raw.githubusercontent.com/prrao87/graph-benchmark-ldbc/HEAD/results/neo4j-2025.12.1.txt"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/piscisaureus/wepoll",
+  "one_liner": "Linux epoll API for Windows sockets on the AFD driver; flat 1.4 us select cost where select() grows linearly.",
+  "what_it_does": "wepoll implements epoll_create/epoll_create1, epoll_ctl, epoll_wait and epoll_close for Windows sockets, so readiness-based event loops written for Linux can be ported without restructuring around IOCP completions. It is shipped as one wepoll.c and one wepoll.h (dist branch) that you compile into your project. The API is close to Linux but not identical: the epoll port is a HANDLE closed with epoll_close(), sockets are SOCKETs, and only level-triggered and EPOLLONESHOT modes exist.",
+  "how_it_is_fast": "Instead of passing the whole socket set to select() or WSAPoll() on every call, wepoll keeps one overlapped IOCTL_AFD_POLL request pending per socket on a \\Device\\Afd handle (opened with NtCreateFile; up to 32 sockets share one AFD handle as a poll group) and routes completions to an I/O completion port, which epoll_wait drains with GetQueuedCompletionStatusEx (up to 256 entries on the stack). Idle sockets cost nothing per wait, so wait cost scales with ready sockets, not registered ones; level-triggered behaviour comes from re-submitting a socket's AFD poll after each completion. Interest changes from epoll_ctl are queued and applied at the next wait, sockets are found through a red-black tree keyed by SOCKET, and the ntdll entry points are resolved at runtime with GetProcAddress.",
+  "when_to_use": [
+    "Porting a Linux epoll event loop (servers, proxies, message brokers) to Windows while keeping readiness semantics instead of rewriting for IOCP.",
+    "Windows processes that register thousands to 100,000s of mostly idle sockets: the OpenJDK JMH run stays at about 1.43-1.45 us per select from 1 to 10,000 channels while the select()-based selector reaches 932 us.",
+    "Replacing select() in code that hits the 1024-socket FD_SETSIZE ceiling or uses helper threads to get past it, as the JDK's old WindowsSelectorImpl did.",
+    "Several threads waiting on the same epoll port, or one socket in several epoll sets, which the README lists as supported."
+  ],
+  "when_not_to_use": [
+    "Low socket counts: at 1 channel the JDK gain is only about 1.1x, and libevent's maintainers saw 'no significant change' versus the win32 select backend in an Apache Bench HTTP-server test (libevent PR #1006).",
+    "Edge-triggered designs: EPOLLET, EPOLLEXCLUSIVE and EPOLLWAKEUP are not supported, and only sockets can be polled (no pipes, files, events or eventfd; issues #17 and #8 are open since 2020 and 2018).",
+    "Code that wants completion-based I/O with AcceptEx/ConnectEx or zero-byte-receive close detection: a libevent reviewer argued for keeping libevent's IOCP backend for exactly those reasons (PR #1006).",
+    "Multi-threaded programs that delete and re-add a socket while another thread is in epoll_wait: issue #35 (open since December 2023, no fix) reports lost events on Windows Server 2016 through Windows 11; using EPOLL_CTL_MOD avoided it.",
+    "Projects that need an actively maintained dependency: no master commits since 2020-11-30 and the dist release is 1.5.8, although OpenJDK still vendors it."
+  ],
+  "integration": {
+    "form": "source-drop (wepoll.c + wepoll.h from the dist branch); master also has a CMake build",
+    "dependencies": "Windows SDK only: Winsock (ws2_32) plus undocumented ntdll functions (NtCreateFile, NtDeviceIoControlFile, NtCancelIoFileEx, keyed events) resolved at runtime",
+    "min_toolchain": "C; recent MSVC, Clang or GCC per README (open issues: VS2010 does not compile, #45; VS2022 ALL_BUILD fails on cast warnings, #38)",
+    "platforms": "Windows Vista or later (_WIN32_WINNT 0x0600); CPU architectures not documented; sockets only",
+    "thread_safety": "Fully thread-safe per README: multiple threads may call epoll_wait on one port and epoll_ctl concurrently, with a critical section per port and an SRW-locked handle tree; but see issue #35 for lost events under concurrent DEL+ADD.",
+    "drop_in_for_baseline": "partial: epoll-style replacement for select()/WSAPoll loops, but the caller must switch to the epoll API, use HANDLE ports and epoll_close(), and give up edge-triggered mode"
+  },
+  "gotchas": [
+    "Relies on the undocumented AFD poll IOCTL (0x00012024) and ntdll calls, so a Windows change could break it; OpenJDK kept the select-based selector as a fallback behind -Djava.nio.channels.spi.SelectorProvider=sun.nio.ch.WindowsSelectorProvider.",
+    "Always EPOLL_CTL_DEL a socket before closesocket(): when Windows reuses the SOCKET value, the old socket's AFD_POLL_LOCAL_CLOSE can delete the new socket's registration (issue #34, closed with that README advice, no code change).",
+    "The dist 1.5.8 header defines EPOLLONESHOT as 1<<31 (Linux's EPOLLET bit); master fixed it to 1<<30 on 2020-11-30 but never cut a new dist release, so code that defines Linux numeric flags itself can get one-shot behaviour silently. OpenJDK's copy also uses 1<<31.",
+    "epoll_ctl changes are queued and applied on the next epoll_wait (or immediately only if a thread is currently polling), and epoll_wait mallocs a completion array on every call when maxevents exceeds 256."
+  ],
+  "pick_this_over_siblings_when": "Pick wepoll when you need epoll-style readiness on Windows specifically: none of the catalogued siblings documents a scalable Windows readiness path (libevent's default Windows backend is select-based and it now offers wepoll as an opt-in backend), and Condy, uring_exec, Asio's io_uring backend and the other io_uring siblings are Linux-only.",
+  "verified_claims_summary": "Alan Bateman's JMH SelectOne.testSelectOne run in OpenJDK PR 3816 (Windows Server 2019, CPU and JDK build not stated) timed Selector.select() with one of N loopback channels readable: the wepoll-based Selector stayed at 1428.914-1445.201 ns/op for N = 1 to 10,000, while the JDK's select()-based Selector rose from 1587.429 to 932032.385 ns/op (about 1.1x to 645x, derived from page data). The harness checks that each select returns exactly one key and never drains the ready byte, so it measures steady-state re-reporting of one ready socket, not registration churn, many ready sockets or WSAPoll/IOCP; libevent PR #1006 independently found wepoll faster than libevent's win32 backend above about 100 connections in libevent's bench (charts only, no readable numbers) and no difference in an HTTP-server test.",
+  "status_note": "Abandoned upstream (last master commit 2020-11-30, dist 1.5.8 of 2020-06-29) with open lost-event and build issues, but BSD-2-Clause, two files, and still vendored in OpenJDK's default Windows Selector and offered as a libevent backend, so it is practical to vendor and patch.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/piscisaureus/wepoll/HEAD/README.md",
+    "https://raw.githubusercontent.com/piscisaureus/wepoll/dist/wepoll.c",
+    "https://raw.githubusercontent.com/piscisaureus/wepoll/dist/wepoll.h",
+    "https://raw.githubusercontent.com/piscisaureus/wepoll/master/include/wepoll.h",
+    "https://github.com/piscisaureus/wepoll/issues",
+    "https://github.com/piscisaureus/wepoll/issues/35",
+    "https://github.com/piscisaureus/wepoll/issues/41",
+    "https://github.com/piscisaureus/wepoll/issues/34",
+    "https://github.com/piscisaureus/wepoll/commits/master",
+    "https://github.com/openjdk/jdk/pull/3816",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/test/micro/org/openjdk/bench/java/nio/channels/SelectOne.java",
+    "https://raw.githubusercontent.com/openjdk/jdk/master/src/java.base/windows/native/libnio/ch/wepoll.h",
+    "https://github.com/libevent/libevent/pull/1006"
+  ],
+  "confidence": 0.75
+}

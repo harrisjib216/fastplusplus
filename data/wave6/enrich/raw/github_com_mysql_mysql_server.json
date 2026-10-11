@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/mysql/mysql-server",
+  "one_liner": "Oracle's client-server SQL database (InnoDB). It edges PostgreSQL only on sysbench oltp_read_write in one cross-machine, durability-off comparison.",
+  "what_it_does": "MySQL is a networked relational database server (mysqld) that clients reach over the MySQL protocol through libmysqlclient or connectors; its default transactional engine is InnoDB. The current trunk tree has no embedded-server library (no libmysqld directory, only the libmysql client library), so despite its embedded-kv filing it cannot be linked in-process like LMDB or LevelDB. Against PostgreSQL it is an alternative server with a different SQL dialect, replication and tooling, not a drop-in.",
+  "how_it_is_fast": "InnoDB keeps rows in a B+tree clustered on the primary key and caches pages in a buffer pool. An adaptive hash index (btr0sea.cc) builds hash shortcuts over hot B-tree search paths for repeated point lookups. Redo logging is split across dedicated background threads (log writer, log flusher, write and flush notifiers, checkpointer) that user threads wait on by LSN, which lets many concurrent transactions share log writes and fsyncs. The quoted rates come from an 'extreme' configuration with checksums, doublewrite, binlog, performance schema and fsync turned off.",
+  "when_to_use": [
+    "A multi-client, networked OLTP SQL server with mostly point selects and short read-write transactions at high client concurrency (the cited runs drove 48 to 512 sysbench threads)",
+    "Teams already on the MySQL protocol, tooling and replication who want the upstream Oracle server",
+    "Mixed read-write sysbench-style transactions, the one row where the cited table puts MySQL ahead of PostgreSQL",
+    "When an LTS line (8.0, 8.4, 9.7) is needed, since fixes are merged forward from those branches into trunk"
+  ],
+  "when_not_to_use": [
+    "As an embedded key-value store: there is no in-process engine in trunk, so every operation pays a client-server round trip",
+    "If you are choosing it over PostgreSQL for read throughput: the cited table has PostgreSQL ahead or level on point selects, read-only and non-index updates",
+    "With the settings behind the headline numbers in production: checksums, doublewrite, binlog and fsync off trade crash safety for speed",
+    "Analytical scans and large aggregations: nothing in the cited evidence covers them",
+    "Products that cannot accept GPL-2.0 terms (the extra permissions cover linking with separately licensed parts such as OpenSSL, and the Universal FOSS Exception covers libmysqlclient)"
+  ],
+  "integration": {
+    "form": "standalone server (mysqld); applications link the libmysqlclient client library (static or shared) or a connector",
+    "dependencies": "OpenSSL, plus bundled-or-system curl, protobuf, editline and other libraries selected with WITH_* CMake options",
+    "min_toolchain": "C++23 (CMAKE_CXX_STANDARD 23), CMake 3.17.5+, GCC 11+ or Clang 14+ on Linux, Visual Studio 2019 16.11+ on Windows, recent Xcode on macOS",
+    "platforms": "Linux, Windows (64-bit only for the server), macOS; build scripts also cover SUSE and Solaris",
+    "thread_safety": "Multi-client server with concurrent sessions handled server-side; the client library's own thread rules were not reviewed here",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the cited comparison: pgtpc's MySQL point-select figure (1,050,000 QPS) comes from Oracle engineer Dimitri Kravtchuk's '1M IO-bound QPS with 8.0 GA on Intel Optane SSD' run. Per a search snippet of his February 2019 slides, that run was IO-bound on 50M x 8 tables with storage saturated. The PostgreSQL side holds the same 95 GB data set fully in memory (128 GB shared_buffers plus pg_prewarm on every table and index). So MySQL's 1.4x-1.7x point-select loss, and the mirrored 1.73x claim in the wave-6 PostgreSQL entry, compare an IO-bound run with a cached one.",
+    "pgtpc is inconsistent about the only MySQL-favourable row: the Compare table gives MySQL oltp_read_write 900,000 QPS, while the PostgreSQL log page annotates the same test 'mysql: 39k/78W' (39k TPS, about 780,000 QPS). With 780,000 the 48-thread MySQL lead shrinks from 1.25x to about 1.08x, and PostgreSQL's 128-thread 910,554 would beat it. The CPU labels are also uneven: '48C' on the MySQL box is 48 cores with hyper-threading per the slides snippet, against '96C' vCPUs on c5d.metal.",
+    "The 'extreme config' is unsafe by design: Percona's Vadim Tkachenko reran Dimitri's tests with innodb_checksum, innodb_doublewrite, sync_binlog=1 and performance schema on (search snippet only; percona.com, dimitrik.free.fr, lefred.be and bugs.mysql.com were unreachable here). MySQL bug #92360 reports only about 500k point-select QPS against the expected 1M (title only seen).",
+    "Versioning changed: trunk is 26.10.0 'INNOVATION' (previous LTS 9.7.0), and open GitHub issues from 2026-10-11 report 26.7.1 missing from the repos and an upgrade path that aborts only after an irreversible data-dictionary upgrade (#837)."
+  ],
+  "pick_this_over_siblings_when": "Among the embedded-kv siblings the only like-for-like peer is the PostgreSQL entry, which cites the same pgtpc page with the opposite conclusion; pick MySQL over it for ecosystem reasons, not on this evidence. LMDB, LevelDB, RocksDB-family engines and SQLite are in-process libraries, so pick MySQL over them only when you need a shared networked SQL server.",
+  "verified_claims_summary": "The comparison sets Oracle-published MySQL 8.0 sysbench figures (48-core 2.7 GHz box, two Optane P4800X, durability off, latin1) against Vonng's PostgreSQL 14 runs on AWS c5d.metal (fsync, synchronous_commit and full_page_writes off, prewarmed). MySQL leads only on oltp_read_write at 48 threads (900,000 vs 722,907 QPS, 1.25x derived from page data) and trails or ties on point select, read-only and non-index update. No compiler or flags are given for either side, and the point-select row pits an IO-bound MySQL run against an in-memory PostgreSQL run.",
+  "status_note": "Actively developed by Oracle (trunk commit 2026-09-28, with 8.0, 8.4 and 9.7 fixes merged forward) under GPL-2.0 with linking exceptions; usable as a server, not as an embeddable library, and the performance evidence in this entry is weak and mixed.",
+  "sources_read": [
+    "https://github.com/mysql/mysql-server",
+    "https://github.com/mysql/mysql-server/commits/trunk",
+    "https://github.com/mysql/mysql-server/issues",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/README",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/LICENSE",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/MYSQL_VERSION",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/cmake/os/Linux.cmake",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/cmake/os/Darwin.cmake",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/cmake/os/Windows.cmake",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/storage/innobase/log/log0write.cc",
+    "https://raw.githubusercontent.com/mysql/mysql-server/trunk/storage/innobase/btr/btr0sea.cc",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/master/README.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/master/sysbench/README.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/master/sysbench/ref-mysql.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/master/sysbench/aws.c5d.metal.extreme.md",
+    "WebSearch: dimitrik \"1M IO-bound QPS\" MySQL 8.0 GA Intel Optane sysbench point select buffer pool (snippets of lefred.be/wp-content/uploads/2019/02/MySQL_Tuning-Feb2019-dim.pdf, percona.com/?p=19007, bugs.mysql.com/92360)",
+    "https://lefred.be/wp-content/uploads/2019/02/MySQL_Tuning-Feb2019-dim.pdf (ENOTFOUND)",
+    "https://bugs.mysql.com/bug.php?id=92360 (ENOTFOUND)"
+  ],
+  "confidence": 0.6
+}

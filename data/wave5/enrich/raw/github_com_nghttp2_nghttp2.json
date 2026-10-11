@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/nghttp2/nghttp2",
+  "one_liner": "C HTTP/2 framing library (curl's HTTP/2 backend) plus nghttpx, an HTTP/3/2/1.1 TLS-terminating reverse proxy; weak evidence against ATS.",
+  "what_it_does": "libnghttp2 is a sans-I/O HTTP/2 protocol engine: you feed received bytes to nghttp2_session_mem_recv2(), pull bytes to send from nghttp2_session_mem_send2(), and get frames, headers and data through callbacks, so it plugs into any existing event loop; HPACK encoder/decoder are public APIs too. The same repository ships applications built on it: nghttpx (a multi-threaded reverse or forward proxy that terminates HTTP/3, HTTP/2 and HTTP/1.1 and talks HTTP/1.1 or HTTP/2 to backends), nghttpd (static server), nghttp (client) and the h2load load generator. The catalogued comparison is for nghttpx as an HTTP/2 terminating proxy versus Apache Traffic Server, not for the library.",
+  "how_it_is_fast": "The library does no I/O and no thread synchronisation, so the caller batches reads and writes on its own loop. HPACK Huffman decoding walks a precomputed finite-state table four bits at a time (the Hirschberg-Lelewer prefix-code method cited in lib/nghttp2_hd_huffman.c), the encoder packs codes into a 64-bit accumulator and stores four bytes at once, static-table header names are resolved by a generated switch on name length (lookup_token), and the encoder's dynamic table is indexed by a 128-bucket hash map. nghttpx runs one libev event loop per worker thread with pooled fixed-size memory chunks (src/memchunk.h) and a block allocator for per-stream strings (src/allocator.h), plus TLS session tickets, dynamic record sizing and an eBPF program that steers QUIC datagrams to the right SO_REUSEPORT socket.",
+  "when_to_use": [
+    "You need a mature, widely deployed HTTP/2 framing engine to embed in a C or C++ server or client that already owns its event loop (it is the HTTP/2 layer behind curl).",
+    "You want a standalone TLS terminator in front of HTTP/1.1 backends that adds HTTP/2 and experimental HTTP/3 on the frontend, with backend HTTP/2 per host/path pattern.",
+    "You need a secure (TLS) HTTP/2 forward proxy in front of Squid or ATS, which nghttpx supports with --http2-proxy.",
+    "You benchmark HTTP/1.1, HTTP/2 or HTTP/3 servers: h2load from the same repo is the usual tool and now reports median, p95 and p99 latency and JSON output (v1.69.0)."
+  ],
+  "when_not_to_use": [
+    "You want a measured throughput or latency win over nginx, H2O or ATS: no current like-for-like number exists; the ATS comparison is CPU utilisation only (15% vs 18% peak system CPU, unverified) from 2015.",
+    "You need caching, ESI or full CDN features: nghttpx is a proxy without a cache, unlike ATS.",
+    "You want a complete server from the library alone: libnghttp2 has no HTTP/1, no TLS and no sockets, so you write the I/O and HTTP/1 glue yourself.",
+    "macOS deployments of the apps: the README says nghttpd, nghttpx and h2load may crash with threads on Mac OS X and suggests --disable-threads; Windows gets the library via CMake/MSVC but the apps only under Cygwin.",
+    "Toolchains older than g++ 14 or clang++ 19 when you need the applications: since v1.70.0 the C++ parts require C++23 (the C library still builds with C99)."
+  ],
+  "integration": {
+    "form": "shared lib or static lib (libnghttp2, autotools or CMake; --enable-lib-only) plus standalone binaries (nghttpx, nghttpd, nghttp, h2load)",
+    "dependencies": "libnghttp2: none at runtime (pkg-config to build). nghttpx and tools: OpenSSL >= 1.1.1 or wolfSSL >= 5.7.0, LibreSSL >= 3.8.1, aws-lc >= 1.19.0 or BoringSSL; libev >= 4.11; zlib >= 1.2.3; c-ares >= 1.7.5; optional jemalloc (recommended), ngtcp2 >= 1.23.0 and nghttp3 >= 1.17.0 for HTTP/3, libbpf, libsystemd, mruby, libbrotli, neverbleed",
+    "min_toolchain": "Library: C99 (gcc 4.8 adequate). Applications: C++23 (g++ >= 14, clang++ >= 19 per README, v1.70.0)",
+    "platforms": "Library: any C99 platform including Windows (CMake/MSVC). Applications: Linux and other Unix; Windows via Cygwin only; macOS may need --disable-threads; eBPF QUIC steering needs libbpf",
+    "thread_safety": "Library: any number of nghttp2_session objects, but one session must be used by a single thread at a time; never call send/recv functions from inside callbacks. nghttpx: N worker threads (-n, default 1) each with its own libev loop, plus a separate main process.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "nghttpx defaults to one worker thread (-n 1); set --workers explicitly before comparing it with ATS or nginx, which the Yahoo test did by matching thread counts.",
+    "Since 1.57.0 the HTTP/2 Rapid Reset mitigation rate-limits incoming RST_STREAM: a client that resets every stream after its response was throttled to about 33 requests/s (issue #1984); servers can raise it with nghttp2_option_set_stream_reset_rate_limit(). v1.69.0 also raised the default glitch rate limit 10x.",
+    "Flow-control stalls are the application's job: with the default 65535-byte window and 16384-byte frames, an uploader that does not coalesce buffers degenerates into 1-byte DATA frames (issue #1722, 100 MB upload 38 s over HTTP/2 vs 0.33 s over HTTP/1.1); the maintainer declined a library change and the fix went into curl (#8965).",
+    "Security advisories: HTTP/2 Rapid Reset and a memory leak (2023), unbounded CONTINUATION frames (2024), and CVE-2026-27135 (assertion-failure DoS in <= 1.68.0 when PRIORITY_UPDATE, ALTSVC or extension frames are enabled; fixed in 1.68.1). Stay on current releases."
+  ],
+  "pick_this_over_siblings_when": "Pick nghttpx over H2O or Pingora when you want an off-the-shelf HTTP/3 + HTTP/2 TLS terminator or secure forward proxy that needs configuration rather than code, or pick libnghttp2 when you need an embeddable HTTP/2 engine for your own loop; H2O has the stronger published numbers (against nginx) and Pingora documents large CPU savings over nginx at Cloudflare, while nghttp2 has no current speed comparison of its own.",
+  "verified_claims_summary": "Nothing was verified: the only comparison, Yahoo's 2015 'Benchmarking for HTTP/2' deck (h2load, 3 images of 60-200 KB per connection, same thread count, ATS cache off), reportedly shows 15% vs 18% peak system CPU at equal load for nghttpx vs ATS, but cwiki.apache.org failed DNS resolution here and search excerpts stop before the results; hardware, versions and flags are unknown. The project's own wiki (ServerBenchmarkRoundH210, March 2014) measured nghttpd, not nghttpx, at 76,338 req/s vs nginx (listed as '1.15.11', likely 1.5.11) speaking SPDY/3.1 at 49,566 req/s (1.54x, derived from page data) on one core of an i7-4600U with h2load -n100000 -c100 -m100 and a 612-byte file, a cross-protocol first-party run whose author says it does 'not justify anything'.",
+  "status_note": "Actively maintained (last commit 2026-10-03, v1.70.0 on 2026-07-29), MIT-licensed with regular releases and a documented security process, so safe to depend on; the speed claim is directional only (tier D), and the only other numbers found are a 2014 first-party nghttpd vs nginx-SPDY run whose nginx config listens on 18443 while h2load targets 8443.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/README.rst",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/doc/programmers-guide.rst",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/doc/sources/nghttpx-howto.rst",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/doc/nghttpx.1.rst",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/lib/nghttp2_hd.c",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/lib/nghttp2_hd.h",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/lib/nghttp2_hd_huffman.c",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/lib/includes/nghttp2/nghttp2.h",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/src/memchunk.h",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/src/shrpx_worker.h",
+    "https://raw.githubusercontent.com/nghttp2/nghttp2/HEAD/src/allocator.h",
+    "https://github.com/nghttp2/nghttp2/security",
+    "https://github.com/nghttp2/nghttp2/security/advisories/GHSA-6933-cjhr-5qg6",
+    "https://github.com/nghttp2/nghttp2/releases",
+    "https://github.com/nghttp2/nghttp2/commits",
+    "https://github.com/nghttp2/nghttp2/issues?q=is%3Aissue+performance",
+    "https://github.com/nghttp2/nghttp2/issues/1984",
+    "https://github.com/nghttp2/nghttp2/issues/1722",
+    "https://github.com/nghttp2/nghttp2/wiki",
+    "https://github.com/nghttp2/nghttp2/wiki/ServerBenchmarkRoundH210",
+    "https://github.com/nshoemaker/nghttp2/wiki/ServerBenchmarkRoundH210",
+    "https://cwiki.apache.org/confluence/download/attachments/56066455/Benchmarking%20for%20HTTP-2.pdf?version=1&modificationDate=1447792756000&api=v2 (failed: getaddrinfo ENOTFOUND)"
+  ],
+  "confidence": 0.45
+}
