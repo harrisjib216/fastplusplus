@@ -1,5 +1,59 @@
 [
   {
+    "name": "Memset by memcpy doubling (riteme gist: 'Memcpy is faster than memset on Intel i7 12700 with glibc 2.36')",
+    "repo_url": "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+    "language": "C++",
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "asm-level-string-and-memory",
+    "baseline": "glibc 2.36 memset()",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Fill a 1 GiB char buffer (1 * 1024 * 1024 * 1024) 100 times with either glibc memset or my_memset. Above a threshold constant written as 2 * 2048 * 2048 (8 MiB, although the code comment says 2 MiB), my_memset memsets the first chunk once. It then copies that same chunk with memcpy(s + i, s, threshold) to each later chunk-sized slot (the ranges do not overlap) and memsets any tail. The test prints a[0] so the fills are not optimised away.",
+    "claimed_speedup": "glibc memset 6.23 s user / 6.34 s elapsed versus my_memset 2.47 s user / 2.57 s elapsed for 100 fills of 1 GiB on an i7-12700 with glibc 2.36 (single /usr/bin/time run each). The author calls this about 60 percent faster. That means about 60 percent less time, a 2.47x speedup (derived from page data).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "g++ memset_test.cpp -O3 -march=native (g++ version not stated); -DUSE_MY_MEMSET selects the custom version",
+    "hardware": "Intel Core i7-12700 (12 cores, 20 threads), 15 GiB RAM, Manjaro Linux kernel 6.1.0-1, glibc 2.36-6",
+    "compared_against_cpp_std_directly": false,
+    "license": null,
+    "usability": "reference",
+    "last_commit": null,
+    "maintenance_status": "unknown",
+    "is_fork_of": null,
+    "stars_or_usage": "Gist with 1 star, 12 revisions and 3 comments (January 1-5, 2023); last active 2025-12-27.",
+    "has_code": true,
+    "tradeoffs": "A technique snippet, not a library. It only makes sense for very large fills (the first block is memset, the rest is doubled with memcpy), and it needs a correct handling of the final partial block. No licence on the gist.",
+    "caveats": "This is a single wall-clock run per variant with no repetitions or variance, and the g++ version is not stated. The chunk is 8 MiB (2 * 2048 * 2048), not the 2 MiB the comment says. The source chunk is always the first chunk, so it likely stays in the i7-12700's 25 MB L3 while the destination streams to DRAM. The 'contradiction' in the comments is a different regime: perf bench mem (author's i7-12700: memset default 72.70 GB/s vs memcpy default 31.20 GB/s; Ristovski's Ryzen 5700G: memcpy default 51.79 vs memset default 37.38 GB/s) ran on 1 MB cache-resident buffers, not on 1 GiB fills. Neither commenter ran memset_test.cpp, and sada-amd only guessed rep stosb vs vector moves without a disassembly. The baseline is probably outdated (WebSearch snippet only, patchwork and Phoronix not opened): glibc before May 2024 used rep stosb for all large memsets. Noah Goldstein's 'x86: Improve large memset perf with non-temporal stores' (glibc 2.40, Intel only, disabled on Skylake Server) added the non-temporal path that memcpy already had, so the gap this gist exploits is likely closed on glibc 2.40+. The gist has no licence.",
+    "found_via": [
+      "Blogs / talks: WebSearch '\"faster than glibc\" memcpy OR memset OR strlen OR memcmp own implementation blog post github' (gist.github.com/riteme result); then opened the gist."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.3,
+    "assignment_ids": [
+      "w13-strmem-blogs"
+    ],
+    "id": "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "A",
+      "tier_reason": "The gist has the full benchmark (memset_test.cpp, with my_memset selected by -DUSE_MY_MEMSET), the compile command (g++ -O3 -march=native; the g++ version is not stated), the CPU (Intel Core i7-12700) and glibc 2.36-6. Its /usr/bin/time output gives 6.23 s user / 6.34 s elapsed for glibc memset and 2.47 s user / 2.57 s elapsed for my_memset. That is enough for tier A, but it is a single run with no repetitions.",
+      "notes": "The measurement is valid and crude: both variants produce the same fill, and the memcpy ranges do not overlap. Tier A stands on code + flags + CPU + glibc version, but the result is one run on glibc 2.36. glibc 2.40's non-temporal large memset probably removes the advantage (snippet only). Record shortcomings: single run, unstated g++ version, the code comment says 2 MiB but the chunk is 8 MiB, the baseline is superseded, and there is no licence.",
+      "urls_opened": [
+        "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "Fill a 1 GiB char buffer 100 times with either glibc memset or my_memset, which memsets the first 2 MiB once and then fills the rest by repeatedly memcpy-ing the already-filled block forward.",
+      "claimed_speedup": "glibc memset 6.34 s elapsed (6.23 s user) versus my_memset 2.57 s elapsed (2.47 s user); the author calls it about 60 percent faster (2.5x, derived from page data).",
+      "stars_or_usage": "gist with a few comments dated January 2023; last activity 2025-12-27",
+      "caveats": "Tier A reflects only that code, flags and CPU are stated; the result itself is doubtful. In the gist comments the author's own 'perf bench mem' run on the same i7-12700 shows glibc memset at about 72.7 GB/s versus memcpy at about 31.2 GB/s, which the author calls contrary to the wall-clock test; a commenter on a Ryzen 5700G saw memset and memcpy variants performing similarly; another commenter guesses glibc uses rep stosb for memset and vector moves for memcpy (no disassembly posted). Single wall-clock run, no repetitions, 1 GiB buffer so page-fault and non-temporal-store thresholds may dominate."
+    }
+  },
+  {
     "name": "memx-cdy (C ABI of the Rust memx crate: memchr, memmem, memcmp, memcpy, memset)",
     "repo_url": "https://github.com/aki-akaguma/memx-cdy",
     "language": "Rust (C ABI shared and static library, LD_PRELOAD capable)",
@@ -548,6 +602,68 @@
     }
   },
   {
+    "name": "asmlib (Agner Fog): assembly memcpy, memmove, memset, strlen, strcpy and related replacements",
+    "repo_url": "https://www.agner.org/optimize/",
+    "language": "Assembly",
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "asm-level-string-and-memory",
+    "baseline": "glibc 2.7/2.8 memcpy and strlen (32-bit and 64-bit builds), plus MSVC 2008, CodeGear, Intel C++ 10.1 and Mac Darwin8 libraries",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Fog's comparison table in the asmlib manual: memcpy of 16 kB with aligned and unaligned operands, and strlen of 128-byte strings, measured in core clock cycles per byte. The libraries compared are MSVC 2008 (9.0), CodeGear bcc 5.5, Intel C++ 10.1.020 (_intel_fast_memcpy, __intel_new_strlen), Mac Darwin8 g++ 4.0.1, glibc 2.7/2.8 (32-bit with and without -fno-builtin, 64-bit with -fno-builtin) and asmlib 2.10.",
+    "claimed_speedup": "asmlib-instructions.pdf section 1.5 (core clock cycles per byte, lower is better; asmlib v2.10 vs glibc 2.7/2.8):\n- memcpy 16 kB unaligned, Core 2: asmlib 0.12 vs Gnu 64-bit -fno-builtin 0.44 (3.7x), Gnu 32-bit -fno-builtin 0.57 (4.75x) and Gnu 32-bit builtin 1.21 (10x).\n- memcpy 16 kB aligned, Core 2: 0.11 vs 0.18 (1.6x).\n- strlen of 128 bytes, Core 2: 0.27 vs Gnu 64-bit 0.59 (2.2x).\n- Opteron K8: memcpy aligned 0.22 vs 0.28 (1.27x), unaligned 0.28 vs 0.29 (a tie), and strlen 1.19 vs Gnu 64-bit 0.6 (asmlib about 2x slower).\nAll ratios are derived from page data. Fog's 2008 gcc and libc-help posts (search snippets only) state the matching 'factor 4-5 for unaligned data on a Core 2' and '3-4 times slower' for 64-bit libc.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/tpn/agner/blob/master/asmlib/asmlib-instructions.pdf",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "Intel Core 2 and AMD Opteron K8 (exact models not stated)",
+    "compared_against_cpp_std_directly": false,
+    "license": "GPL-3.0-or-later (commercial licences available on request from the author)",
+    "usability": "copyable",
+    "last_commit": null,
+    "maintenance_status": "unknown",
+    "is_fork_of": null,
+    "stars_or_usage": "classic reference library for CPU-dispatched x86 string routines, cited in mailing-list threads and forums",
+    "has_code": true,
+    "tradeoffs": "x86 and x86-64 only; functions carry an A_ prefix (for example A_memcpy, A_memmove per a PureBasic forum snippet) and the library dispatches on instruction-set level (SSE2 and later), so it is linked or wrapped rather than a transparent libc replacement. Search snippets describe the licence as GPL; the licence file in the zip was not read, so usability is left as reference.",
+    "caveats": "First-party numbers from 2008-era libraries; the manual itself calls them 'not up to date'. No benchmark code was published for the table, and the CPUs are named only by family (Core 2, Opteron K8). The tests are memcpy at one size (16 kB) and strlen at one size (128 bytes). On Opteron K8, asmlib's strlen (1.19 c/B) is about 2x slower than 64-bit glibc (0.6 c/B), and unaligned memcpy is a tie (0.28 vs 0.29). The largest Core 2 gaps are against 32-bit glibc with GCC's builtin inline string code; against 64-bit glibc the unaligned memcpy gain is 3.7x and the aligned one 1.6x. The numbers predate glibc's SSE2/SSSE3/AVX2/EVEX ifunc string routines, and no current asmlib-vs-glibc benchmark was found. A glibc-side reply in the 2008 gcc thread said glibc 2.6.1 x86-64 routines were already much faster (search snippet only). www.agner.org, gcc.gnu.org and sourceware.org all fail with getaddrinfo ENOTFOUND here. The manual was read from the third-party mirror github.com/tpn/agner (asmlib v2.51, 2016-11-16, mirrored 2018-04-11), so the latest release on agner.org could not be checked. The licence is GPL-3.0-or-later per the manual's section 9 and license.txt (copyleft).",
+    "found_via": [
+      "Blogs / talks: WebSearch 'Agner Fog asmlib optimized memcpy strlen replacement library faster than glibc' (gcc-list and libc-help 2008 threads, masm32 forum) and 'github asmlib Agner Fog libaes64 libacof64 A_memcpy A_strlen mirror' (PureBasic forum snippet; no GitHub mirror found)."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.25,
+    "assignment_ids": [
+      "w13-strmem-blogs"
+    ],
+    "id": "https://agner.org/optimize",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "Fog's own asmlib manual (asmlib-instructions.pdf v2.51, section 1.5, read from the tpn/agner GitHub mirror) has a cycles-per-byte table comparing asmlib 2.10 with glibc 2.7/2.8 and other libraries on Intel Core 2 and AMD Opteron K8. These are first-party numbers: no benchmark code is published, CPUs are named only by family and the gcc version is not given, so the entry stays at C. The 2008 mailing-list claims could only be read as search snippets.",
+      "notes": "This is a real, widely cited reference library. The manual's own table gives glibc comparisons (3.7x on unaligned 16 kB memcpy and 2.2x on strlen on Core 2 versus 64-bit glibc 2.7/2.8), but asmlib loses on K8 strlen. Tier C, with all shortcomings tied to age: 2008 glibc, no published harness and no modern measurement. Maintenance stays 'unknown' because agner.org is unreachable; the mirror's newest asmlib is 2.51 from 2016.",
+      "urls_opened": [
+        "https://github.com/tpn/agner",
+        "https://github.com/tpn/agner/tree/master/asmlib",
+        "https://github.com/tpn/agner/commits/master",
+        "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlib-instructions.pdf",
+        "https://raw.githubusercontent.com/tpn/agner/master/asmlib/license.txt"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "benchmark_url": null,
+      "claimed_speedup": "Search-result snippets only (the posts could not be opened): libc 'up to 5 times slower than the best function libraries for important memory and string functions'; libc memcpy 'can be improved by a factor 4-5 for unaligned data on a Core 2'; 64-bit libc still 'better than 32-bit libc but 3-4 times slower' for unaligned operands on an Intel CPU.",
+      "workload": "Fog's own comparisons, posted to the gcc and libc-help mailing lists in July-August 2008, of libc memory and string functions against his asmlib and other 'best function libraries', including memcpy on unaligned data.",
+      "hardware": "Intel Core 2 for the memcpy claim; other CPUs not stated",
+      "license": null,
+      "usability": "reference",
+      "baseline": "glibc 2.x memcpy, memmove, strlen and other libc string/memory functions (2008-era 32-bit and 64-bit builds)",
+      "caveats": "The repo_url was not opened: www.agner.org, gcc.gnu.org and sourceware.org all failed with getaddrinfo ENOTFOUND in this environment, so every number comes from WebSearch snippets of 2008 posts. A glibc developer disputed the comparison in the same thread (glibc 2.6.1 x86-64 routines were already much faster than older glibc). The numbers predate glibc's AVX2 and EVEX ifunc string routines; a masm32 forum snippet shows an asmlib strlen behind other variants on a short-string test, and a forum post says AVX2 assembly gave another 2x over the SSE2 asmlib. No current benchmark of asmlib against modern glibc was found."
+    }
+  },
+  {
     "name": "copies-and-fills (libcofi_rpi.so)",
     "repo_url": "https://github.com/simonjhall/copies-and-fills",
     "language": "Assembly",
@@ -719,6 +835,73 @@
       "compiler_and_flags": "Go toolchain version not stated; go test ./simd/ -benchmem -run=^$ -bench=Benchmark_ -count=1",
       "workload": "go test ./simd/ -bench=Benchmark_ -count=1 on linux/amd64 for haystacks of 8 B to 4096 B: Memchr2, Memchr3, MemchrPair, MemchrDigit, MemchrWord, Memmem and ASCII scans, each reported as simd, scalar and default rows in ns/op.",
       "caveats": "Baseline is the Go standard library, not glibc or musl. Numbers are one run (-count=1) on an unspecified EPYC model and unstated Go version; benchmark charts tracked per commit live on gofiber.github.io, which is blocked here. The kernels are adapted from the coregx/coregex simd package (MIT) with the listed changes, so the novelty is partly upstream. Small inputs (under 32 bytes, and Memmem up to 64 bytes) are at parity or slightly slower."
+    }
+  },
+  {
+    "name": "hglm ARM memcpy, memset, memzero and copy_page kernel patches (test-arm-kernel-memcpy)",
+    "repo_url": "https://github.com/hglm/test-arm-kernel-memcpy",
+    "language": "C",
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "asm-level-string-and-memory",
+    "baseline": "original Linux kernel ARM memcpy, memset, memzero and copy_page (the benchmark harness also runs libc memcpy/memset alongside)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "bench.script drives benchmark.c over a set of tests (mixed power-of-2 sizes, unaligned mixed sizes, copy_page) for the original kernel routines, libc and the optimized routines on ARMv6 and ARMv7.",
+    "claimed_speedup": "The hglm/patches README says copy_page and larger memcpy gain 'on the order of 70%' on the armv6 Raspberry Pi, with a smaller benefit on armv7. The commit message of arm-mem-funcs/0002-Optimize-copy_page-for-modern-ARM-platforms.patch (2013-07-12) gives copy_page speed-ups from 10% (Cortex A8) to 80% (armv6 in the Raspberry Pi) over the existing kernel copy_page. No results table is checked in.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/hglm/patches",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Makefile: $(CC) with -std=gnu99 -Ofast -Wall -DARMV7 by default (-DARMV6 for armv6, optional Thumb2 flags); compiler version and the flags used for the quoted speedups not stated",
+    "hardware": "ARMv6 Raspberry Pi (32-byte cache line) and ARMv7 including a Cortex-A8 (64-byte cache line); exact SoCs and clocks not stated",
+    "compared_against_cpp_std_directly": false,
+    "license": "Per-file headers: MIT/X11 (benchmark.c, memcpy_armv6v7.S, new_arm.S, Copyright 2013 Harm Hanemaaijer) and GPL-2.0-only (kernel-derived memset.S, memzero.S, copy_page.S, copy templates, user-copy variants and the *_orig.S baselines); asm.h, new_arm.h and kernel_defines*.h have no header; no repo-level LICENSE file",
+    "usability": "mixed",
+    "last_commit": "2013-08-28",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "14 stars (test repo); 5 stars (hglm/patches)",
+    "has_code": true,
+    "tradeoffs": "32-bit ARM only (ARMv6/ARMv7); the optimized memcpy, copy_from_user and copy_to_user use PLD unconditionally so they do not work on ARMv4; NEON paths were experimental and later removed from copy_page, memset and memzero; patches no longer applied cleanly to upstream kernels by February 2015.",
+    "caveats": "First-party, loosely worded speedups ('order of 70%', '10% to 80%') with no published run output, no compiler version, and no exact SoC or clock. The baseline is the 2013 in-kernel ARM routines rather than glibc, although the harness also runs libc memcpy/memset and no libc numbers are quoted. The work is unfinished per the patches README: copy_page, memset and memzero are done, while memcpy and the user-copy variants are still in progress. As of February 2015 the patches no longer applied cleanly to upstream kernels. Licensing is per-file (MIT for the new memcpy, GPL-2.0-only for kernel-derived files), and a few small headers have no licence. NEON paths were removed from copy_page, memset and memzero; the last commit was 2013-08-28.",
+    "found_via": [
+      "Blogs / talks: WebSearch 'Raspberry Pi optimised memcpy memset ARM assembly copies-and-fills faster than glibc' returned github.com/hglm/patches; then opened hglm/patches, its arm-mem-funcs directory, hglm/test-arm-kernel-memcpy and raw README."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w13-strmem-blogs"
+    ],
+    "id": "https://github.com/hglm/test-arm-kernel-memcpy",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "The harness is public: benchmark.c and bench.script compare libc memcpy/memset and the original kernel routines with the optimized ones, and the Makefile sets -std=gnu99 -Ofast. However, no results are published, and the only numbers are loose first-party statements: the hglm/patches README says 'on the order of 70%', and the copy_page patch commit message says 10% (Cortex A8) to 80% (armv6 Raspberry Pi). No compiler version and no run output are given, so the entry stays at C.",
+      "notes": "This is a genuine 2013 ARM kernel memcpy/memset optimisation set with a public validation and benchmark harness, but there are no published results. Tier C, abandoned since 2013-08-28. The patch commit message adds a per-CPU range (10% Cortex A8 to 80% Raspberry Pi) for copy_page. Its baseline is not in the list (old kernel routines).",
+      "urls_opened": [
+        "https://github.com/hglm/test-arm-kernel-memcpy",
+        "https://github.com/hglm/test-arm-kernel-memcpy/commits/master",
+        "https://github.com/hglm/patches",
+        "https://github.com/hglm/patches/tree/master/arm-mem-funcs",
+        "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README",
+        "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README.md",
+        "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/bench.script",
+        "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/benchmark.c",
+        "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/Makefile",
+        "https://raw.githubusercontent.com/hglm/patches/HEAD/README.md",
+        "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0002-Optimize-copy_page-for-modern-ARM-platforms.patch",
+        "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0003-Optimize-ARM-memset-and-memzero-functions.patch"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "From the hglm/patches README (page summary): a speedup 'on the order of 70%' for copy_page and larger memcpy on the ARMv6 Raspberry Pi, with a smaller benefit on ARMv7. No results table is checked in for either repo.",
+      "hardware": "ARMv6 (32-byte cache line, Raspberry Pi) and ARMv7 (64-byte cache line); the README does not name exact SoCs",
+      "compiler_and_flags": null,
+      "license": null,
+      "usability": "reference",
+      "caveats": "First-party claim with a loosely worded 'order of 70%' figure and no stated baseline kernel version, hardware model, compiler or flags. The baseline is the old in-kernel routines rather than glibc, although the harness can compare libc. No licence stated in the pages opened (kernel-derived code is presumably GPL-2.0 but this was not confirmed). Work-in-progress status per the patches README: copy_page, memset and memzero done; memcpy and user-copy variants still in progress."
     }
   },
   {
@@ -13501,6 +13684,82 @@
   {
     "domain": "assembly-simd-kernels-and-wasm",
     "category": "wasm-libraries-and-apps",
+    "is_fork_of": null,
+    "is_evidence_for_known": false,
+    "has_code": true,
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": null,
+    "name": "wasm-fast-compress (@addmaple/gzip, lz4, brotli)",
+    "repo_url": "https://github.com/addmaple/wasm-fast-compress",
+    "language": "Rust (WebAssembly with simd128; flate2 with zlib-rs, lz4_flex fork, rust-brotli fork)",
+    "baseline": "pako 2.1 (gzip, pure JS), lz4js 0.2 (pure JS LZ4 frame) and the brotli npm package 1.3.x (foliojs brotli.js, whose compressor is Google's C encoder compiled to JavaScript with Emscripten; not a native addon, although the README's Performance section calls it 'the native C implementation')",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Compressing one ~1.28 MB synthetic JSON file (likely test-data/silesia/large.json from benchmarks/gen_json.py, random records) in Node on an M4 Mac at several levels. The README does not name the script; benchmarks/benchmark-silesia.mjs (the npm run benchmark target) reports the mean of 3 timed runs after 2 warmups, while PERFORMANCE_NOTES labels its brotli table 'Median Time'.",
+    "claimed_speedup": "README/PERFORMANCE_NOTES on a 1.28 MB JSON file, M4 Mac: gzip vs pako level 1 ~3.8 vs ~14 ms (3.7x), level 6 ~7.0 vs ~22 ms (3.1x), level 9 ~11.7 vs ~58 ms (5.0x); lz4 vs lz4js ~1.4 vs ~4.0 ms (2.9x) and ~1.5 vs ~4.4 ms (2.9x) (the 'levels' are lz4js acceleration 1 and 9; the WASM lz4 has no levels); brotli quality 9 ~36 vs ~48.6 ms (1.35x) against the brotli npm package. The README's brotli 'level 11' row (~30 ms vs ~2.7 s, '90x') is invalid: bindings/brotli-wasm/wrapper.js maps every level above 6 to compress_level_9, so @addmaple/brotli ran quality 9 while the brotli npm package ran quality 11.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/addmaple/wasm-fast-compress",
+    "compiler_and_flags": "Rust release profile opt-level = \"z\", lto = true (Cargo.toml); SIMD variant built with -C target-feature=+simd128, brotli SIMD variant on nightly with the portable_simd feature (scripts/build-all.sh); rustc, Node and wasm-bindgen-lite versions unstated (wasm-bindgen-lite devDependency is a local path, file:../wasm-bindgen-lite)",
+    "hardware": "Apple M4 Mac (README; Node version unstated)",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-01-19",
+    "maintenance_status": "active",
+    "stars_or_usage": "3 stars",
+    "tradeoffs": "docs/PERFORMANCE_NOTES.md says that for inputs under 50 KB JS libraries are often faster (2-28x) because of copying at the JS-wasm boundary, mixed at 50-500 KB; the non-SIMD wasm brotli build is about 4x slower than native.",
+    "caveats": "The brotli level-11 '90x' row compares quality 9 (wrapper.js clamps levels above 6 to compress_level_9) against brotli.js at quality 11, so it is invalid; level 11 is not actually supported. The brotli baseline is an Emscripten-compiled C encoder running as JS, not native C. PERFORMANCE_NOTES says gzip used a patched local flate2 1.1.7, but the public Cargo.toml pins crates.io flate2 1.0 with zlib-rs, so the measured build may differ from the published code. The gzip path is a WASM build of zlib-rs (folded as a duplicate of zlib-ng) and the lz4 path a fork of lz4_flex (listed), so the entry is mostly packaging of listed codecs plus SIMD128 patches. Compressed sizes are not reported next to the times (zlib-rs level 1 uses a different strategy from pako level 1); the benchmark's compressionRatio helper is broken. One synthetic input, one machine, 3 runs; WASM is slower than the JS libraries below ~50 KB per the project's own notes.",
+    "found_via": [
+      "WebSearch 'WebAssembly gzip OR zlib ... faster than pako' and then npm registry search (query 'simd128') found @addmaple/lz4 and @addmaple/gzip; opened github.com/addmaple/wasm-fast-compress README and docs/PERFORMANCE_NOTES.md"
+    ],
+    "confidence": 0.45,
+    "assignment_ids": [
+      "w13-wasmlib-gh-any"
+    ],
+    "id": "https://github.com/addmaple/wasm-fast-compress",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "downgrade",
+      "tier_before": "C",
+      "tier_reason": "First-party README and docs/PERFORMANCE_NOTES.md numbers (M4 Mac, one synthetic 1.28 MB JSON file) with public benchmark scripts (benchmarks/benchmark-silesia.mjs, benchmark-brotli-minimal.mjs), but no rustc, Node or wasm-bindgen-lite version, the README does not say which script produced its rows, and the notes say gzip was built from a patched local flate2 1.1.7 that is not in the public Cargo.toml. The brotli level-11 row is invalid (mismatched work), so the claim is overstated.",
+      "notes": "Real 3-5x gzip and ~2.9x lz4 wins over pure-JS pako and lz4js, first-party only; brotli wins only 1.35x at quality 9 against an Emscripten build. Record the level-11 90x row as invalid (level clamp in bindings/brotli-wasm/wrapper.js) and the possible wrapper relationship to zlib-rs/zlib-ng and lz4_flex. 3 stars, MIT, last commit 2026-01-19.",
+      "urls_opened": [
+        "https://github.com/addmaple/wasm-fast-compress",
+        "https://github.com/addmaple/wasm-fast-compress/commits",
+        "https://github.com/addmaple/wasm-fast-compress/tree/main/benchmarks",
+        "https://github.com/addmaple/wasm-fast-compress/tree/main/crates/codec-brotli/src",
+        "https://github.com/addmaple/wasm-fast-compress/tree/main/bindings/brotli-wasm",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/README.md",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/docs/PERFORMANCE_NOTES.md",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/package.json",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/Cargo.toml",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/scripts/build-all.sh",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/benchmarks/benchmark-silesia.mjs",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/benchmarks/benchmark-brotli-minimal.mjs",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/benchmarks/benchmark-all-compare.mjs",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/benchmarks/gen_json.py",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/bindings/brotli-wasm/wrapper.js",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/bindings/brotli-wasm/src/lib.rs",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/bindings/brotli-wasm/wasm-bindgen-lite.config.json",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/crates/codec-brotli/src/lib.rs",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/crates/codec-gzip/Cargo.toml",
+        "https://raw.githubusercontent.com/addmaple/wasm-fast-compress/HEAD/crates/codec-lz4/Cargo.toml",
+        "https://github.com/foliojs/brotli.js"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "gzip vs pako: level 1 about 3.8 ms vs 14 ms (3.7x), level 6 7.0 vs 22 ms (3.1x), level 9 11.7 vs 58 ms (5.0x); lz4 vs lz4js about 1.4 vs 4.0 ms (2.9x); brotli level 9 36 vs 48.6 ms (1.35x) and level 11 about 30 ms vs 2.7 s (about 90x)",
+      "baseline": "pako (gzip), lz4js (lz4) and the brotli npm package (README calls it both a JS port and Google's C implementation)",
+      "compiler_and_flags": "SIMD build with -C target-feature=+simd128 (README); base build without simd128",
+      "hardware": "Apple M4 Mac (README)",
+      "workload": "Compressing a 1.28 MB JSON file in Node on an M4 Mac, median time per call at several levels.",
+      "caveats": "The brotli level 11 result (about 90x) is implausible and is probably a level or window mismatch between libraries, so treat it as unverified (cap at C). The README names the brotli baseline as a JS port in one table and as Google's native C in the performance text. One input file, one machine. The benchmarks/ folder exists in the repo but I did not read it. Output is not claimed to be byte-identical to pako or zlib."
+    }
+  },
+  {
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "wasm-libraries-and-apps",
     "baseline_stdlib": [],
     "compared_against_cpp_std_directly": null,
     "is_fork_of": null,
@@ -13556,6 +13815,130 @@
       "claimed_speedup": "README: wasmoon 15.267 ms vs fengari 389.923 ms (about 25x, derived from page data); README text says wasmoon runs Lua much faster than Fengari unless there is a lot of JS to Lua interop.",
       "compiler_and_flags": null,
       "caveats": "One micro-benchmark with no hardware, browser or Node version, and the '10x (less is better)' wording does not say whether times are per run or for the ten runs. First-party. Lua itself (lua/lua) is already catalogued and no comparison against native Lua is given."
+    }
+  },
+  {
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "wasm-libraries-and-apps",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "has_code": true,
+    "is_fork_of": "https://github.com/musescore/MuseScore",
+    "is_evidence_for_known": false,
+    "usability": "copyable",
+    "name": "webmscore",
+    "repo_url": "https://github.com/LibreScore/webmscore",
+    "language": "C++",
+    "baseline": "The MuseScore 3 desktop binary's batch converter (spawn('musescore3', ['-j', batch.json]) exporting 200 .metajson files; installed version unstated), which is not told to skip layout",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "200 rounds of loading a score (Aequale_No_1.mscz) and calling saveMetadata in Boost Mode (no layout) versus converting 200 copies with MuseScore's built-in batch converter.",
+    "claimed_speedup": "Boost Mode is about 3x faster than the batch converter feature (-j) of MuseScore (README, measured by web-example/benchmark.js; no per-run numbers on the page).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/LibreScore/webmscore#boost-mode",
+    "compiler_and_flags": "Emscripten v2.0.6 with Qt5 for WebAssembly 5.15.2 and patches (README Compiling section); optimisation flags not checked",
+    "hardware": null,
+    "license": "GPL-3.0-only",
+    "last_commit": "2023-01-24",
+    "maintenance_status": "stale",
+    "stars_or_usage": "182 stars",
+    "tradeoffs": "Boost Mode (doLayout=false) cannot produce PDF and some outputs (saveXml, saveMxl) do not work properly in it. GPL-3.0 because it is a fork of MuseScore. Built against Qt5 for WebAssembly.",
+    "caveats": "First-party; the README gives only 'about 3x' with no per-run numbers, hardware or MuseScore version. web-example/benchmark.js loads with doLayout=false (Boost Mode) and calls saveMetadata, while the native side runs a full musescore3 -j batch conversion, so the gap mostly measures skipped layout rather than WebAssembly beating native code. The native time is wall-clock around a spawned process with the first file's time subtracted via fs.watch as 'initialization'; the webmscore side excludes its own initialization. GPL-3.0-only with a font exception. Last commit 2023-01-24 on the webmscore branch.",
+    "found_via": [
+      "npm registry search API (queries such as 'wasm simd fast', 'wasm faster than javascript', 'keywords:wasm'), README triage for 'Nx faster' claims; npm package webmscore ('wasm simd fast'/'emscripten' queries); opened repo page, README Boost Mode section and web-example/benchmark.js"
+    ],
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w13-wasmlib-registry"
+    ],
+    "id": "https://github.com/librescore/webmscore",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party README states only 'about 3x faster' than musescore -j, backed by the public script web-example/benchmark.js, with no published timings, hardware, MuseScore version or build flags; Boost Mode skips layout, so the two sides do unequal work.",
+      "notes": "Claim matches the README ('about 3x faster than the batch converter feature (-j)'); numbers exist only as that ratio. The comparison is unequal work (layout skipped on the wasm side only); maintenance corrected from abandoned to stale (last commit 2023-01-24, under 3 years). License confirmed GPL-3.0-only from LICENSE.GPL; 182 stars, fork of musescore/MuseScore.",
+      "urls_opened": [
+        "https://github.com/LibreScore/webmscore",
+        "https://github.com/LibreScore/webmscore/commits",
+        "https://raw.githubusercontent.com/LibreScore/webmscore/HEAD/README.md",
+        "https://raw.githubusercontent.com/LibreScore/webmscore/HEAD/web-example/benchmark.js",
+        "https://raw.githubusercontent.com/LibreScore/webmscore/HEAD/LICENSE.GPL"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "maintenance_status": "abandoned",
+      "baseline": "MuseScore native batch converter (musescore -j), the same libmscore compiled natively",
+      "caveats": "First-party and numbers are not shown on the page (benchmark script only). The comparison skips layout in the wasm path and exports metadata only, so the work is not equivalent to the native converter's full load. Initialisation is timed separately in the script. Last commit January 2023."
+    }
+  },
+  {
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "wasm-libraries-and-apps",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "compiler_and_flags": "Emscripten 1.38.45 (per README build note)",
+    "hardware": "The developer's local machine (not specified)",
+    "name": "WXInlinePlayer",
+    "repo_url": "https://github.com/ErosZy/WXInlinePlayer",
+    "language": "JavaScript with C/C++ FLV demuxer and H.264/H.265 decoders compiled by Emscripten to WebAssembly and asm.js",
+    "baseline": "FFmpeg-based wasm/asm.js H.264/H.265 web players: WASMVideoPlayer and the Taobao (Shoutao) and Huajiao implementations",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Playing the same FLV video (H.265 for the table) in a browser on the developer's machine and recording mean CPU and memory use; clip, resolution, browser and hardware unstated.",
+    "claimed_speedup": "README (Chinese): on the developer's machine, for the same video, memory and CPU use differ little from the FFmpeg-based players of Taobao (Shoutao) and Huajiao, overall performance is about 5-10% better, and H.265 about 30% better because deblocking is reduced. The H.265 table image (images/benchmark.png) gives mean CPU / memory: WXInlinePlayer 64% / 162 MB, WASMVideoPlayer 102% / 197 MB, Taobao H265 91% / 174 MB, Huajiao H265 98% / 202 MB, i.e. about 30-37% less CPU (derived from page data).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/ErosZy/WXInlinePlayer",
+    "license": "Anti-996 License 1.0 (draft; non-OSI); package.json says ISC",
+    "usability": "reference",
+    "last_commit": "2022-03-26",
+    "maintenance_status": "abandoned",
+    "stars_or_usage": "1.5k stars",
+    "tradeoffs": "License is 'Anti 996' Version 1.0 (Draft), a non-OSI licence; H.265 support extends the FLV format (Kingsoft spec); UC browser unsupported because it disables WebAssembly/asm.js; reduced deblocking trades some picture quality for speed.",
+    "caveats": "First-party prose and one screenshot table; no hardware, browser, clip or benchmark code. The H.265 gain is attributed to reduced deblocking, so the decoder likely does less filtering than a conforming FFmpeg HEVC decoder (output not shown to be equivalent). Two of the three baselines are closed commercial players. Anti-996 License (non-OSI, conflicting ISC in package.json), so reference only; bundles OpenH264, TinyH264 and libde265 decoders. Last commit 2022-03-26.",
+    "found_via": [
+      "Independent benchmark suites and blogs (shootouts; harvest their winners): github.com/topics/wasm?q=fast listing -> README section 'performance comparison'"
+    ],
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w13-wasmlib-shootouts"
+    ],
+    "id": "https://github.com/eroszy/wxinlineplayer",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party README prose plus a table image (images/benchmark.png) of mean CPU and memory use during H.265 playback against three FFmpeg-based wasm players; no hardware, clip, browser, flags or benchmark code.",
+      "notes": "The benchmark image is readable via raw.githubusercontent.com and contains the numbers the record lacked (CPU 64% vs 91-102%, memory 162 vs 174-202 MB); the record's 'memory and CPU about the same' paraphrase applies to the general comparison, not the H.265 table. Metric is CPU and memory, not throughput; the orchestrator may want to change the metric field. 1.5k stars, abandoned (last commit 2022-03-26).",
+      "urls_opened": [
+        "https://github.com/ErosZy/WXInlinePlayer",
+        "https://github.com/ErosZy/WXInlinePlayer/commits",
+        "https://github.com/ErosZy/WXInlinePlayer/tree/master/lib/codec/src",
+        "https://github.com/ErosZy/WXInlinePlayer/tree/master/lib/codec/src/codec",
+        "https://github.com/ErosZy/WXInlinePlayer/tree/master/lib/codec/src/factor",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/README.md",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/images/benchmark.png",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/package.json",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/build.sh",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/lib/codec/build.sh",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/lib/codec/src/codec/codec.cpp",
+        "https://raw.githubusercontent.com/ErosZy/WXInlinePlayer/HEAD/lib/codec/src/factor/h265_codec_factor.cpp"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "README (Chinese): overall performance about 5-10% better than the FFmpeg-based approach; H.265 about 30% better because deblocking is reduced; memory and CPU use are about the same.",
+      "baseline": "FFmpeg-based H.264/H.265 asm.js/wasm players (the README names the Taobao and Huajiao implementations)",
+      "license": null,
+      "workload": "Inline FLV H.264/H.265 playback of the same video on the developer's machine, compared on performance, memory and CPU use.",
+      "caveats": "Numbers are prose only plus an image (images/benchmark.png) that could not be read; baselines are unnamed third-party players; no hardware or clip description. Not OSI-approved, so reference only."
     }
   },
   {
@@ -13631,6 +14014,148 @@
       "hardware": "Not stated for the xxhashjs table; the Node crypto comparison table says an x64 MacBook Pro running Node 17.3",
       "workload": "ops/sec hashing random strings from 1 byte to 100,000,000 bytes with Benchmark.js, instance creation excluded.",
       "caveats": "First-party README numbers with the hardware missing for the main table; it compares only against a slow pure-JS library that emulates 64-bit integers, not against a native xxHash binding or the C reference (the xxHash C library is already catalogued). Node crypto rows compare a non-cryptographic hash against md5/sha1, which is not like for like. A WebSearch snippet of an older npm page quoted 11x and 74x, so the README numbers have changed between versions. A SIMD port attempt in issue #29 was reported as not promising."
+    }
+  },
+  {
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "wasm-libraries-and-apps",
+    "is_fork_of": null,
+    "is_evidence_for_known": false,
+    "has_code": true,
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": null,
+    "name": "zaw (Zero-Allocation WASM)",
+    "repo_url": "https://github.com/stylearcade/zaw",
+    "language": "Zig and Rust (WebAssembly) with TypeScript host",
+    "baseline": "Plain JavaScript loop and Rust wasm-bindgen",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "XOR of a scalar into an Int32Array passed in and out of WebAssembly, for 10 to 100,000 elements, measured with vitest bench.",
+    "claimed_speedup": "XOR Int32Array (copy in, XOR, read out), zaw Rust build vs plain JavaScript loop: 6.03x at 100 elements, 11.39x at 1,000, 12.80x at 10,000, 13.75x at 100,000; vs Rust wasm-bindgen: 6.20x, 6.88x, 3.32x, 4.32x. zaw Zig build vs JavaScript: 6.0x, 9.7x, 9.9x, 10.0x; vs wasm-bindgen 6.2x, 5.9x, 2.6x, 3.1x (derived from page data). At 10 elements plain JS is 1.66x faster than zaw Rust and 1.67x faster than zaw Zig. Transfer Out Float64Array: zaw 4.3x to 10.65x faster than wasm-bindgen; Transfer In Float64Array: wasm-bindgen 1.03x to 1.22x faster than zaw up to 10,000 elements. 4x4 Float32 matrix multiply: zaw 1.23x (batch 1) to 24.35x (batch 1000) faster than JS.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/stylearcade/zaw/blob/main/docs/benchmarks.md",
+    "compiler_and_flags": "Zig: zig build -Doptimize=ReleaseFast, wasm32-freestanding with +simd128, then wasm-opt -O4 --enable-simd --enable-bulk-memory (scripts/build-zig.sh, examples/wasm-zig/build.zig). Rust (zaw): cargo build --release with opt-level 3, LTO, codegen-units 1, panic=abort, RUSTFLAGS +simd128, then wasm-opt -O4 --enable-simd (scripts/build-rust.sh, examples/wasm-rust/Cargo.toml). wasm-bindgen baseline: wasm-pack build --target web with +simd128. Toolchain versions of the benchmark run not stated: docs/benchmarks.md was last updated 2026-02-17, before the 2026-05-24 'Upgrade to zig 16' commit, so the Zig 0.16.0 badge does not describe the measured build; Rust is unpinned 'stable'; Node/V8 version not stated.",
+    "hardware": "AMD Ryzen 9 9950X3D 16-Core Processor (docs/benchmarks.md); Node/browser version not stated",
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-05-24",
+    "maintenance_status": "active",
+    "stars_or_usage": "74 stars",
+    "tradeoffs": "It is an interop protocol, not an algorithm library; wins only when data is large enough to amortise the call (not at 10 elements) and the author picks the cheapest possible kernel to expose interop cost.",
+    "caveats": "Micro-benchmarks of interop overhead, first-party. Harness asymmetries: the JS XOR baseline allocates a fresh Int32Array per call, while zaw returns a subarray view into the WASM output buffer (implementations/host-typescript/src/conduit.ts readInt32Elements) that the next call overwrites, so a caller that keeps the result must copy it and the 'zero-allocation' gain partly comes from not materializing output; the JS 4x4 matmul baseline does two slice() copies plus a new Float32Array per matrix, which inflates the 20-24x matmul ratios. The wasm-bindgen comparison is fair on kernel (both call the same shared::xor_array_i32), the difference being Vec allocation and copy-out. In 'Transfer In Float64Array' wasm-bindgen is faster than zaw up to 10,000 elements. Toolchain and Node versions of the run are not stated, and the published numbers predate the Zig 0.16 upgrade.",
+    "found_via": [
+      "npm registry search (queries 'webassembly faster than javascript', 'wasm faster than js', 'wasm times faster', 'webassembly simd fast') found the npm package zaw; opened github.com/stylearcade/zaw README and docs/benchmarks.md"
+    ],
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w13-wasmlib-gh-any"
+    ],
+    "id": "https://github.com/stylearcade/zaw",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "First-party vitest bench output (examples/host-typescript/__tests__/example.bench.ts, results in docs/benchmarks.md) with CPU model (AMD Ryzen 9 9950X3D) and public build flags (scripts/build-zig.sh, scripts/build-rust.sh), but the Node/V8 version that runs the JS baseline and the wasm, and the Zig/Rust toolchain versions of the run, are not stated, so it falls short of A.",
+      "notes": "Numbers match docs/benchmarks.md; the record's figures are the zaw Rust build's row (the Zig build is 6-10x vs JS). Kernels really compute the XOR in both zaw builds and the wasm-bindgen baseline; no invalid evidence, but the JS baselines pay per-call typed-array allocation that zaw avoids by returning a reused view. Metadata confirmed: Apache-2.0, 74 stars, last commit 2026-05-24, not a fork.",
+      "urls_opened": [
+        "https://github.com/stylearcade/zaw",
+        "https://github.com/stylearcade/zaw/commits/main",
+        "https://github.com/stylearcade/zaw/commits/main/docs/benchmarks.md",
+        "https://github.com/stylearcade/zaw/tree/main/examples",
+        "https://github.com/stylearcade/zaw/tree/main/examples/wasm-rust/api_zaw",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/docs/benchmarks.md",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/README.md",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/host-typescript/__tests__/example.bench.ts",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/host-typescript/host.ts",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/implementations/host-typescript/src/conduit.ts",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/wasm-zig/main.zig",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/wasm-zig/build.zig",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/wasm-rust/Cargo.toml",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/wasm-rust/api_zaw/lib.rs",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/wasm-rust/api_bindgen/lib.rs",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/examples/utils/index.ts",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/scripts/build-zig.sh",
+        "https://raw.githubusercontent.com/stylearcade/zaw/HEAD/scripts/build-rust.sh"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "compiler_and_flags": "Zig 0.16.0 and Rust (per CI badges); flags not checked",
+      "claimed_speedup": "vs JavaScript: 6.0x at 100 elements, 11.4x at 1,000, 12.8x at 10,000, 13.8x at 100,000; vs wasm-bindgen 6.2x, 6.9x, 3.3x, 4.3x; at 10 elements plain JS is 1.6x faster than zaw",
+      "caveats": "The benchmark is a deliberate micro-benchmark (XOR of Int32Array) chosen to show interop overhead; the author argues it is representative. First-party numbers, but the raw vitest output with CPU model is in the repo. I did not check build flags or the host runtime, so the tier is C rather than A. The 'Transfer In Float64Array' benchmark in the same file shows wasm-bindgen faster than zaw."
+    }
+  },
+  {
+    "domain": "assembly-simd-kernels-and-wasm",
+    "category": "wasm-libraries-and-apps",
+    "baseline_stdlib": [],
+    "compared_against_cpp_std_directly": false,
+    "is_fork_of": null,
+    "has_code": true,
+    "is_evidence_for_known": false,
+    "compiler_and_flags": "JavaScript baselines and host code on Node.js v26.10.0 (also Bun 1.4.2, Deno 2.9.7; Firefox 156 and Chrome 153 for the browser AES table). The WebAssembly codec is the committed binary lib/core/streams/zlib-wasm/zlib-streams.wasm, built with Emscripten from gildas-lormeau/zlib-streams (madler/zlib submodule plus chunked-inflate, 64-bit compare256 and braided-CRC options): emcc with WASM_CFLAGS -O2 -flto -DDYNAMIC_CRC_TABLE -DBUILDFIXED -DZ_SOLO -DDEFLATE_COMPARE256_64LE -DUSE_ZLIB_RABIN_KARP_ROLLING_HASH -DINFLATE_CHUNK_GENERIC -DINFLATE_CHUNK_READ_64LE, then -Oz -flto -s STANDALONE_WASM=1, then wasm-opt -Oz --enable-bulk-memory-opt (zlib-streams Makefile, target dist/zip-module.wasm). Emscripten version not stated; Makefile read at HEAD, not at the commit that produced the vendored binary.",
+    "hardware": "Apple M2, 8 cores (4 performance + 4 efficiency), 16 GB RAM, macOS 27.0 arm64",
+    "name": "zip.js (@zip.js/zip.js WebAssembly zlib codec)",
+    "repo_url": "https://github.com/gildas-lormeau/zip.js",
+    "language": "JavaScript with bundled WebAssembly zlib and AES codecs",
+    "baseline": "zip.js's own pure-JavaScript zlib port, jszip (pako) and fflate; also native CompressionStream and node:zlib shown for reference",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Compress/decompress 20 MB of compressible text, 20 MB incompressible data and 5,000 x ~2 KB text files in Node, each (library, operation, workload) in a fresh process, median of 3 runs.",
+    "claimed_speedup": "Head-to-head (benchmarks/bench.js, fresh Node v26.10.0 process per row, median of 3, level 6): decompress 20 MB text WASM zlib 71 ms vs zip.js pure-JS zlib 155 ms, jszip/pako 140 ms, fflate 116 ms; compress 20 MB incompressible WASM 460 ms vs pure-JS 787 ms, jszip 854 ms (fflate 298 ms is faster); compress 20 MB text WASM 1098 ms vs pure-JS 1229 ms, jszip 1753 ms (fflate 908 ms is faster at 2% larger output); 5,000 x ~2 KB files compress WASM 551 ms vs pure-JS 962 ms, jszip 846 ms (fflate 278 ms is faster). Codec alone (benchmarks/bench-codecs.js, in-process, warm): WASM inflate 41 ms (483.7 MB/s) vs Node DecompressionStream 56 ms, pure-JS 108 ms, fflate 122 ms, i.e. 27% faster than Node's native zlib stream; WASM deflate level 5 493 ms for 6,562,182 bytes vs fflate level 5 534 ms for 6,648,574 bytes; at level 6 WASM 1025 ms is slower than CompressionStream 695 ms. AES-256 WinZip entry, 20 MB stored, write/read (benchmarks/bench-aes.js): WebAssembly 134/135 MB/s vs JavaScript engine 119/108 on Node, 119/121 vs 115/117 on Bun, 124/124 vs 144/133 on Deno (JS faster there); browsers WASM 125/125 vs JS 79/79 (Firefox 156) and 136/138 vs 104/104 (Chrome 153).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/BENCHMARKS.md",
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-10-03",
+    "maintenance_status": "active",
+    "stars_or_usage": "3.9k stars",
+    "tradeoffs": "WASM module instantiation costs about 20 ms per fresh process; peak memory is higher than fflate (139 MB vs 68 MB delta on the 20 MB text compress); the codec is used only when native CompressionStream is unavailable or the wasm backend is configured.",
+    "caveats": "The wasm backend is not the fastest option overall: native CompressionStream and node:zlib beat it on compression (text 678-730 ms vs 1098 ms) and fflate beats it on incompressible data (298 ms) and on small files (278 ms compress, 101 ms decompress); on Node zip.js uses CompressionStream by default at level 6, so the WASM codec runs only for other levels, with useCompressionStream: false, or where no native stream exists. The win is WASM versus the JS port of the same codec and versus pako/fflate, plus a warm inflate 27% faster than Node's DecompressionStream. No decompression row verifies CRC-32 (page says enabling it costs about 7 ms per 20 MB on WASM). Fresh-process rows include about 20 ms of wasm instantiation. Author-run on one Apple M2 machine; levels are not equal work across libraries, which the page handles by printing output sizes. The AES figures in the original record (131 vs 114 MB/s, release 2.15.0 page on jsr.io) are not on BENCHMARKS.md and were replaced with the page's numbers.",
+    "found_via": [
+      "Independent benchmark suites and blogs (shootouts; harvest their winners): WebSearch 'brotli OR zstd OR lz4 wasm npm package benchmark faster than pure JavaScript' -> jsr.io @zip-js/zip-js BENCHMARKS.md; repo numbers re-read from raw BENCHMARKS.md at HEAD"
+    ],
+    "confidence": 0.65,
+    "assignment_ids": [
+      "w13-wasmlib-shootouts"
+    ],
+    "id": "https://github.com/gildas-lormeau/zip.js",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "Upgraded from C: harness is public (benchmarks/bench.js, run-one.js, bench-codecs.js, bench-aes.js, run logs in benchmarks/results), runtime (Node.js v26.10.0, Bun 1.4.2, Deno 2.9.7) and CPU (Apple M2) are stated, the measured wasm is the committed binary lib/core/streams/zlib-wasm/zlib-streams.wasm, and its Emscripten build flags are public in the gildas-lormeau/zlib-streams Makefile (-Oz -flto, wasm-opt -Oz). Only the Emscripten version is unstated, which the committed binary makes moot for reproduction; demote to C if a pinned compiler version is required.",
+      "notes": "Every compression and decompression number in the record appears in BENCHMARKS.md; the AES numbers came from another page and were replaced. Harness (run-one.js, bench-codecs.js) times the operation fairly per library in isolated processes; the wasm codec is zlib-streams (same author, madler zlib compiled by Emscripten). Metadata confirmed: BSD-3-Clause, 3.9k stars, last commit 2026-10-03, not a fork; tier upgraded C to A on public build flags plus committed binary (Emscripten version unstated).",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/BENCHMARKS.md",
+        "https://github.com/gildas-lormeau/zip.js",
+        "https://github.com/gildas-lormeau/zip.js/commits/master",
+        "https://github.com/gildas-lormeau/zip.js/tree/master/lib",
+        "https://github.com/gildas-lormeau/zip.js/tree/master/lib/core/streams/codecs",
+        "https://github.com/gildas-lormeau/zip.js/tree/master/lib/core/streams/zlib-wasm",
+        "https://github.com/gildas-lormeau/zip.js/tree/master/benchmarks",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/bench.js",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/bench-codecs.js",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/run-one.js",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/package.json",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/lib/zip-module-wasm-base.js",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/rollup.config.js",
+        "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/package.json",
+        "https://github.com/gildas-lormeau/zlib-streams",
+        "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/Makefile",
+        "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/.gitmodules",
+        "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/README.md",
+        "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/LICENSE"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Decompress 20 MB text: WASM zlib 71 ms vs pure-JS zlib 155 ms, jszip/pako 140 ms, fflate 116 ms. Compress 20 MB incompressible: WASM 460 ms vs pure-JS 787 ms, jszip 854 ms. Compress 20 MB text: WASM 1098 ms vs pure-JS 1229 ms, jszip 1753 ms. 5,000 small files compress: WASM 551 ms vs pure-JS 962 ms, jszip 846 ms. AES-256 (Node): WebAssembly 131 MB/s vs JavaScript 114 MB/s (page of release 2.15.0 via jsr.io).",
+      "compiler_and_flags": "Node.js v26.10.0, Bun 1.4.2, Deno 2.9.7; versions zip.js 2.19.0, jszip 3.10.2, fflate 0.8.3, archiver 8.0.0; build flags of the wasm modules not stated on the page",
+      "caveats": "The wasm backend is not the fastest option overall: native CompressionStream and node:zlib beat it (compress text 678-730 ms vs 1098 ms) and fflate beats it on incompressible data (298 ms) and on small files (278 ms compress, 101 ms decompress). The win is wasm versus the JS port of the same codec and versus pako. Author-run, machine-specific by the page's own warning; wasm build flags are not stated, which keeps this at C although the harness (benchmarks/), CPU and runtime versions are public."
     }
   },
   {

@@ -1,0 +1,80 @@
+[
+  {
+    "id": "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The gist has the full benchmark (memset_test.cpp, with my_memset selected by -DUSE_MY_MEMSET), the compile command (g++ -O3 -march=native; the g++ version is not stated), the CPU (Intel Core i7-12700) and glibc 2.36-6. Its /usr/bin/time output gives 6.23 s user / 6.34 s elapsed for glibc memset and 2.47 s user / 2.57 s elapsed for my_memset. That is enough for tier A, but it is a single run with no repetitions.",
+    "corrections": {
+      "workload": "Fill a 1 GiB char buffer (1 * 1024 * 1024 * 1024) 100 times with either glibc memset or my_memset. Above a threshold constant written as 2 * 2048 * 2048 (8 MiB, although the code comment says 2 MiB), my_memset memsets the first chunk once. It then copies that same chunk with memcpy(s + i, s, threshold) to each later chunk-sized slot (the ranges do not overlap) and memsets any tail. The test prints a[0] so the fills are not optimised away.",
+      "claimed_speedup": "glibc memset 6.23 s user / 6.34 s elapsed versus my_memset 2.47 s user / 2.57 s elapsed for 100 fills of 1 GiB on an i7-12700 with glibc 2.36 (single /usr/bin/time run each). The author calls this about 60 percent faster. That means about 60 percent less time, a 2.47x speedup (derived from page data).",
+      "stars_or_usage": "Gist with 1 star, 12 revisions and 3 comments (January 1-5, 2023); last active 2025-12-27.",
+      "caveats": "This is a single wall-clock run per variant with no repetitions or variance, and the g++ version is not stated. The chunk is 8 MiB (2 * 2048 * 2048), not the 2 MiB the comment says. The source chunk is always the first chunk, so it likely stays in the i7-12700's 25 MB L3 while the destination streams to DRAM. The 'contradiction' in the comments is a different regime: perf bench mem (author's i7-12700: memset default 72.70 GB/s vs memcpy default 31.20 GB/s; Ristovski's Ryzen 5700G: memcpy default 51.79 vs memset default 37.38 GB/s) ran on 1 MB cache-resident buffers, not on 1 GiB fills. Neither commenter ran memset_test.cpp, and sada-amd only guessed rep stosb vs vector moves without a disassembly. The baseline is probably outdated (WebSearch snippet only, patchwork and Phoronix not opened): glibc before May 2024 used rep stosb for all large memsets. Noah Goldstein's 'x86: Improve large memset perf with non-temporal stores' (glibc 2.40, Intel only, disabled on Skylake Server) added the non-temporal path that memcpy already had, so the gap this gist exploits is likely closed on glibc 2.40+. The gist has no licence."
+    },
+    "notes": "The measurement is valid and crude: both variants produce the same fill, and the memcpy ranges do not overlap. Tier A stands on code + flags + CPU + glibc version, but the result is one run on glibc 2.36. glibc 2.40's non-temporal large memset probably removes the advantage (snippet only). Record shortcomings: single run, unstated g++ version, the code comment says 2 MiB but the chunk is 8 MiB, the baseline is superseded, and there is no licence.",
+    "urls_opened": [
+      "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75"
+    ]
+  },
+  {
+    "id": "https://agner.org/optimize",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Fog's own asmlib manual (asmlib-instructions.pdf v2.51, section 1.5, read from the tpn/agner GitHub mirror) has a cycles-per-byte table comparing asmlib 2.10 with glibc 2.7/2.8 and other libraries on Intel Core 2 and AMD Opteron K8. These are first-party numbers: no benchmark code is published, CPUs are named only by family and the gcc version is not given, so the entry stays at C. The 2008 mailing-list claims could only be read as search snippets.",
+    "corrections": {
+      "benchmark_url": "https://github.com/tpn/agner/blob/master/asmlib/asmlib-instructions.pdf",
+      "claimed_speedup": "asmlib-instructions.pdf section 1.5 (core clock cycles per byte, lower is better; asmlib v2.10 vs glibc 2.7/2.8):\n- memcpy 16 kB unaligned, Core 2: asmlib 0.12 vs Gnu 64-bit -fno-builtin 0.44 (3.7x), Gnu 32-bit -fno-builtin 0.57 (4.75x) and Gnu 32-bit builtin 1.21 (10x).\n- memcpy 16 kB aligned, Core 2: 0.11 vs 0.18 (1.6x).\n- strlen of 128 bytes, Core 2: 0.27 vs Gnu 64-bit 0.59 (2.2x).\n- Opteron K8: memcpy aligned 0.22 vs 0.28 (1.27x), unaligned 0.28 vs 0.29 (a tie), and strlen 1.19 vs Gnu 64-bit 0.6 (asmlib about 2x slower).\nAll ratios are derived from page data. Fog's 2008 gcc and libc-help posts (search snippets only) state the matching 'factor 4-5 for unaligned data on a Core 2' and '3-4 times slower' for 64-bit libc.",
+      "workload": "Fog's comparison table in the asmlib manual: memcpy of 16 kB with aligned and unaligned operands, and strlen of 128-byte strings, measured in core clock cycles per byte. The libraries compared are MSVC 2008 (9.0), CodeGear bcc 5.5, Intel C++ 10.1.020 (_intel_fast_memcpy, __intel_new_strlen), Mac Darwin8 g++ 4.0.1, glibc 2.7/2.8 (32-bit with and without -fno-builtin, 64-bit with -fno-builtin) and asmlib 2.10.",
+      "hardware": "Intel Core 2 and AMD Opteron K8 (exact models not stated)",
+      "license": "GPL-3.0-or-later (commercial licences available on request from the author)",
+      "usability": "copyable",
+      "baseline": "glibc 2.7/2.8 memcpy and strlen (32-bit and 64-bit builds), plus MSVC 2008, CodeGear, Intel C++ 10.1 and Mac Darwin8 libraries",
+      "caveats": "First-party numbers from 2008-era libraries; the manual itself calls them 'not up to date'. No benchmark code was published for the table, and the CPUs are named only by family (Core 2, Opteron K8). The tests are memcpy at one size (16 kB) and strlen at one size (128 bytes). On Opteron K8, asmlib's strlen (1.19 c/B) is about 2x slower than 64-bit glibc (0.6 c/B), and unaligned memcpy is a tie (0.28 vs 0.29). The largest Core 2 gaps are against 32-bit glibc with GCC's builtin inline string code; against 64-bit glibc the unaligned memcpy gain is 3.7x and the aligned one 1.6x. The numbers predate glibc's SSE2/SSSE3/AVX2/EVEX ifunc string routines, and no current asmlib-vs-glibc benchmark was found. A glibc-side reply in the 2008 gcc thread said glibc 2.6.1 x86-64 routines were already much faster (search snippet only). www.agner.org, gcc.gnu.org and sourceware.org all fail with getaddrinfo ENOTFOUND here. The manual was read from the third-party mirror github.com/tpn/agner (asmlib v2.51, 2016-11-16, mirrored 2018-04-11), so the latest release on agner.org could not be checked. The licence is GPL-3.0-or-later per the manual's section 9 and license.txt (copyleft)."
+    },
+    "notes": "This is a real, widely cited reference library. The manual's own table gives glibc comparisons (3.7x on unaligned 16 kB memcpy and 2.2x on strlen on Core 2 versus 64-bit glibc 2.7/2.8), but asmlib loses on K8 strlen. Tier C, with all shortcomings tied to age: 2008 glibc, no published harness and no modern measurement. Maintenance stays 'unknown' because agner.org is unreachable; the mirror's newest asmlib is 2.51 from 2016.",
+    "urls_opened": [
+      "https://github.com/tpn/agner",
+      "https://github.com/tpn/agner/tree/master/asmlib",
+      "https://github.com/tpn/agner/commits/master",
+      "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlib-instructions.pdf",
+      "https://raw.githubusercontent.com/tpn/agner/master/asmlib/license.txt"
+    ]
+  },
+  {
+    "id": "https://github.com/hglm/test-arm-kernel-memcpy",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The harness is public: benchmark.c and bench.script compare libc memcpy/memset and the original kernel routines with the optimized ones, and the Makefile sets -std=gnu99 -Ofast. However, no results are published, and the only numbers are loose first-party statements: the hglm/patches README says 'on the order of 70%', and the copy_page patch commit message says 10% (Cortex A8) to 80% (armv6 Raspberry Pi). No compiler version and no run output are given, so the entry stays at C.",
+    "corrections": {
+      "claimed_speedup": "The hglm/patches README says copy_page and larger memcpy gain 'on the order of 70%' on the armv6 Raspberry Pi, with a smaller benefit on armv7. The commit message of arm-mem-funcs/0002-Optimize-copy_page-for-modern-ARM-platforms.patch (2013-07-12) gives copy_page speed-ups from 10% (Cortex A8) to 80% (armv6 in the Raspberry Pi) over the existing kernel copy_page. No results table is checked in.",
+      "hardware": "ARMv6 Raspberry Pi (32-byte cache line) and ARMv7 including a Cortex-A8 (64-byte cache line); exact SoCs and clocks not stated",
+      "compiler_and_flags": "Makefile: $(CC) with -std=gnu99 -Ofast -Wall -DARMV7 by default (-DARMV6 for armv6, optional Thumb2 flags); compiler version and the flags used for the quoted speedups not stated",
+      "license": "Per-file headers: MIT/X11 (benchmark.c, memcpy_armv6v7.S, new_arm.S, Copyright 2013 Harm Hanemaaijer) and GPL-2.0-only (kernel-derived memset.S, memzero.S, copy_page.S, copy templates, user-copy variants and the *_orig.S baselines); asm.h, new_arm.h and kernel_defines*.h have no header; no repo-level LICENSE file",
+      "usability": "mixed",
+      "caveats": "First-party, loosely worded speedups ('order of 70%', '10% to 80%') with no published run output, no compiler version, and no exact SoC or clock. The baseline is the 2013 in-kernel ARM routines rather than glibc, although the harness also runs libc memcpy/memset and no libc numbers are quoted. The work is unfinished per the patches README: copy_page, memset and memzero are done, while memcpy and the user-copy variants are still in progress. As of February 2015 the patches no longer applied cleanly to upstream kernels. Licensing is per-file (MIT for the new memcpy, GPL-2.0-only for kernel-derived files), and a few small headers have no licence. NEON paths were removed from copy_page, memset and memzero; the last commit was 2013-08-28."
+    },
+    "notes": "This is a genuine 2013 ARM kernel memcpy/memset optimisation set with a public validation and benchmark harness, but there are no published results. Tier C, abandoned since 2013-08-28. The patch commit message adds a per-CPU range (10% Cortex A8 to 80% Raspberry Pi) for copy_page. Its baseline is not in the list (old kernel routines).",
+    "urls_opened": [
+      "https://github.com/hglm/test-arm-kernel-memcpy",
+      "https://github.com/hglm/test-arm-kernel-memcpy/commits/master",
+      "https://github.com/hglm/patches",
+      "https://github.com/hglm/patches/tree/master/arm-mem-funcs",
+      "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README",
+      "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README.md",
+      "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/bench.script",
+      "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/benchmark.c",
+      "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/Makefile",
+      "https://raw.githubusercontent.com/hglm/patches/HEAD/README.md",
+      "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0002-Optimize-copy_page-for-modern-ARM-platforms.patch",
+      "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0003-Optimize-ARM-memset-and-memzero-functions.patch"
+    ]
+  }
+]
