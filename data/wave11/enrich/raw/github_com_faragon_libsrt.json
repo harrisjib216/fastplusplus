@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/faragon/libsrt",
+  "one_liner": "C container/string library whose srt_vector sort uses counting sort for 8-bit elements, about 5x faster than libstdc++ std::sort.",
+  "what_it_does": "libsrt is a general C library (strings, vectors, bit sets, red-black-tree maps/sets, open-addressing hash maps/sets) built around single-block, index-linked storage. Sorting is one call, sv_sort(v), on an srt_vector created with sv_alloc_t(SV_I8 ... SV_U64); it is not a drop-in for std::sort or qsort over your own arrays, although the underlying ssort_i8 ... ssort_u64 functions in src/saux/ssort.h take a plain pointer and length.",
+  "how_it_is_fast": "8-bit vectors use an in-place counting sort (256 counters, then memset runs), which is O(n) and beats any comparison sort on byte data. 16/32/64-bit vectors use an in-place MSD binary radix sort: it ORs the XOR of neighbouring keys to find which bits vary, partitions on one bit at a time with a two-pointer swap, and hands partitions of 2-4 elements to small sorting networks. Floats, doubles and generic elements fall through to the C library qsort().",
+  "when_to_use": [
+    "C code that already uses srt_vector and needs to sort int8/uint8 data (histogram-like byte arrays, small enums): counting sort, O(n), correct.",
+    "Embedded or hard real-time C where one allocation per container and predictable O(n) byte sorting matter more than peak speed.",
+    "Code bases that need C89/C99 portability back to GCC 2.95 and big-endian targets, where pulling in a C++ sorter is not an option."
+  ],
+  "when_not_to_use": [
+    "Any 16/32/64-bit sort of non-trivially ordered data: the HEAD radix sort returns unsorted output on random input (see gotchas).",
+    "General C++ sorting: the author's own 2017 table had libsrt 10-18% slower than libstdc++ std::sort on 1M int32/int64, and 17-35% slower on 100-element vectors.",
+    "Floats, doubles or structs: these go to qsort(), so there is no speedup over plain C.",
+    "MINIMAL=1 builds (-Os -DS_MINIMAL): every type, including 8-bit, falls back to qsort().",
+    "Concurrent writers: the README says read/write concurrency must be locked by the caller."
+  ],
+  "integration": {
+    "form": "static lib (Makefile.posix, autotools, or the new CMake build, which can also build a shared lib)",
+    "dependencies": "none beyond the C library; requires alloca()",
+    "min_toolchain": "C99 or C++11 (C89 with __VA_ARGS__ and alloca extensions); README says GCC 2.95.2+ and any Clang",
+    "platforms": "any; README lists tests on x86/x86-64 Linux, Windows (VS), FreeBSD, macOS, ARMv5-v8, MIPS, PowerPC, big and little endian",
+    "thread_safety": "concurrent reads are safe; concurrent read/write must be locked by the caller (README)",
+    "drop_in_for_baseline": "partial: sv_sort works only on libsrt srt_vector objects; ssort_i8/ssort_u8 in src/saux/ssort.h take a raw array and are safe to call directly, the 16/32/64-bit ssort_* functions are not (correctness bug)"
+  },
+  "gotchas": [
+    "Correctness bug 1 (HEAD src/saux/ssort.c): BUILD_SORT3 never compares b[1] with b[2] and BUILD_SORT4 is not a valid network, so [1,3,2] stays unsorted and [3,4,1,2] becomes [1,3,2,4]. A hand-written C reproduction of the HEAD macros (compiled with gcc -O2 this session, not the project build) left 114,986 of 1,000,000 random uint32 positions wrong (57,493 descents), about 11.5% for int32 and uint64 too, every one of 1,000 random 100-element uint32 arrays unsorted, and 106 of 1,000 random uint16.",
+    "Correctness bug 2 (HEAD src/saux/scommon.h BUILD_S_MSB): the bit-smear loop stops one shift short (i < bits/2), so s_msb32(0x80000001) returns 0x80000001 and s_msb64((1<<40)|2) returns two bits. The radix sort then partitions on two bits at once: uint32 [0,0x20000,1,0x20001] comes back unchanged, and 1M uint64 keys drawn from {0..7} and {2^40+0..7} came out 67% misplaced in the reproduction. Clustered keys (for example IDs plus a large offset) trigger it even when the sorting networks are not reached. The same loop (i < NBITS / 2) was already in scommon.h at the 2017 benchmark commit e678325.",
+    "Both bugs hide from the project's own checks: test/bench.cc only times ascending or reversed input (then re-sorts sorted data 9 times), and stest.c sorts a 9-element three-value vector and evens-then-odds 0..999, all of which come out sorted. Random 16-bit input of 1M elements also happens to sort correctly because duplicates keep partitions large.",
+    "The timed rows include vector insertion and cleanup, and for 8-bit the bench pushes (int32_t)i, so it sorts a 256-value sawtooth; no random input is ever timed for either side."
+  ],
+  "pick_this_over_siblings_when": "Only for byte-sized keys inside a C program already built on libsrt; for 16-64-bit integers pdqsort, ska_sort or Boost spreadsort (C++) and crumsort or swenson/sort (C) are faster or at least correct, and vqsort is far ahead on SIMD hardware.",
+  "verified_claims_summary": "The author's 2017 first-party table (g++ 5.2.1 x86-64, Intel Core i5-3330, Makefile -O2, examples/bench.cpp) times insert 1M ascending values, sort 10 times, free: int8 0.028 s vs libstdc++ std::sort 0.138 s (about 5x) and uint8 about 5.6x, but int16 1.0x, uint16 1.29x and int32/uint32/int64/uint64 0.82-0.90x (libsrt slower); the tables were removed from doc/benchmarks.md in 2018 and never re-run.",
+  "status_note": "BSD-3-Clause, 558 stars, self-described beta; sporadic maintenance (three commits on 2026-08-02 after a gap since September 2021, ssort.c untouched since January 2019) and no issue filed about the sort bugs, so treat only the 8-bit counting sort as usable.",
+  "sources_read": [
+    "https://github.com/faragon/libsrt",
+    "https://github.com/faragon/libsrt/commits",
+    "https://github.com/faragon/libsrt/commits/master/src/saux/ssort.c",
+    "https://github.com/faragon/libsrt/issues",
+    "https://github.com/faragon/libsrt/issues?q=is%3Aissue+sort",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/README.md",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/saux/ssort.c",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/saux/ssort.h",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/saux/scommon.h",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/svector.c",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/svector.h",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/src/libsrt.h",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/test/bench.cc",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/test/stest.c",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/Makefile.posix",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/doc/benchmarks.md",
+    "https://raw.githubusercontent.com/faragon/libsrt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/faragon/libsrt/e678325/doc/benchmarks.md",
+    "https://raw.githubusercontent.com/faragon/libsrt/e678325/src/saux/ssort.c",
+    "https://raw.githubusercontent.com/faragon/libsrt/e678325/src/saux/scommon.h",
+    "https://raw.githubusercontent.com/faragon/libsrt/e678325/examples/bench.cpp"
+  ],
+  "confidence": 0.8
+}

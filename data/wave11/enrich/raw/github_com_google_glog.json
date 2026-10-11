@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/google/glog",
+  "one_liner": "Google's synchronous C++ stream logger (LOG, CHECK, VLOG); about 4x faster than Boost.Log 1.56 file logging in 2014 tests.",
+  "what_it_does": "glog provides LOG(severity) << ... stream macros, CHECK/DCHECK assertions, VLOG with per-module verbosity (--vmodule), per-severity log files, a failure signal handler that prints a stack trace, and pluggable LogSink objects. Behaviour is controlled by global FLAGS_* variables, gflags command-line flags or GLOG_* environment variables. It is not a drop-in for Boost.Log: there are no attribute sets, filters or sink frontends, just macros and global flags.",
+  "how_it_is_fast": "Each message is formatted into a preallocated per-thread buffer (thread_local LogMessageData holding a fixed 30,000-byte array), then written under one global std::mutex with fwrite to a stdio FILE*. INFO lines are buffered by default (logbuflevel=0) and flushed only every 1,000,000 bytes or every logbufsecs=30 seconds, and on Linux written log pages are dropped from the page cache with posix_fadvise. The Boost.Log side of the benchmark did more work per record: it added common attributes (line id, timestamp, process and thread id), ran a severity filter and a timestamp formatter.",
+  "when_to_use": [
+    "Existing glog code bases, or code that relies on CHECK/DCHECK, VLOG with --vmodule and InstallFailureSignalHandler stack traces as one package.",
+    "Moderate-rate application logging to local files where a synchronous call of a microsecond or so is acceptable and Boost.Log's setup and per-record cost are not.",
+    "Low-level code that needs a lock-free, allocation-free path: RAW_LOG in <glog/raw_logging.h>.",
+    "Migration work: keep the glog API and move to ng-log, which describes itself as API-compatible."
+  ],
+  "when_not_to_use": [
+    "New projects: the repository was archived on 2025-06-30; its README points to ng-log or Abseil Logging.",
+    "Latency-critical hot paths: every LOG call formats and writes synchronously under a global mutex, while async loggers in this category report single-digit to low hundreds of nanoseconds per call.",
+    "Many threads logging heavily: in the spdlog runs, 10 threads were slower than 1 (1.68-3.55 s vs about 1.1 s wall) and the 10-thread run spent 6.2 s of system time.",
+    "Crash-sensitive audit logs: buffered INFO lines (up to 30 s or 1 MB) are lost on a hard crash unless FLAGS_logbuflevel is set to -1, which flushes every line and gives up most of the measured speed.",
+    "Format-string or structured logging: the API is ostream-only, and messages longer than 30,000 bytes are truncated."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake or Bazel)",
+    "dependencies": "Threads; optional gflags 2.2.2, libunwind or unwind for stack traces, dbghelp on Windows; GTest only for tests",
+    "min_toolchain": "C++14 (CMake target_compile_features cxx_std_14 at HEAD; the measured 0.3.3 release predates that)",
+    "platforms": "Linux and other Unix-likes, macOS, Windows and Cygwin (platform branches in CMakeLists.txt); stack traces need libunwind, unwind or dbghelp",
+    "thread_safety": "LOG/CHECK are thread-safe and serialised by a global std::mutex; AddLogSink/RemoveLogSink are thread-safe; LogSink::send must not call LOG or CHECK (deadlock); EnableLogCleaner thread safety is questioned in open issue #753",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark harness flaw (spdlog bench at dc198a5): the two sides were not set up alike. glog wrote its full prefix (date, microseconds, thread id, file:line) and used default buffering. Boost.Log wrote '[timestamp]: message' through a filter, a formatter and a 10 MiB rotating sink with auto_flush=false. Wall time came from `time ./binary`, so process start-up is included, and Boost 1.56 was linked dynamically from a personal build with unstated flags.",
+    "Default INFO buffering (logbuflevel=0, logbufsecs=30, flush every 1,000,000 bytes) is part of why the numbers look good; the tail of the log is lost on SIGKILL or power loss.",
+    "Flags are process-global: FLAGS_log_dir must be set before InitGoogleLogging, and if the log file cannot be created glog prints 'COULD NOT CREATE LOGFILE' to stderr.",
+    "Messages logged before InitGoogleLogging() go to stderr with a one-time warning."
+  ],
+  "pick_this_over_siblings_when": "Pick glog (or its successor ng-log) for the CHECK/VLOG/failure-handler bundle or an existing code base, not for speed: loguru's own benchmark has it about 1.8x faster than glog 0.6.0, BqLog and Coost report glog far behind, and Quill, NanoLog or fmtlog cut call-site latency to nanoseconds. Over Boost.Log, glog is the simpler and, in these old tests, about 4x faster synchronous file logger.",
+  "verified_claims_summary": "In spdlog's 2014 benchmark (Ubuntu 64-bit, Intel i7-4770, bench programs built with g++ -O3 -flto -march=native, system libglog 0.3.3, Boost.Log 1.56), writing 1M lines to files took glog 1.077 s vs Boost.Log 4.207 s on one thread and 1.678 vs 6.592 s on 10 threads (3.9x). Later runs on the same machine gave 1.115 vs 4.430 s and 2.027 vs 13.985 s (bench/results.txt at def6fc6) and best-of-3 1.109 vs 4.779 s and 3.546 vs 15.151 s, so 4.0-4.3x on one thread and 3.9-6.9x on 10 threads (ratios derived from page data); spdlog's synchronous logger beat glog on one thread in every run.",
+  "status_note": "Abandoned: archived read-only on 2025-06-30 (last release 0.7.1, June 2024; HEAD CMake says 0.8.0). It is still BSD-3-Clause, widely packaged and copyable, but new work should go to ng-log (community, API-compatible) or Abseil Logging.",
+  "sources_read": [
+    "https://github.com/google/glog",
+    "https://github.com/google/glog/issues?q=is%3Aissue+performance",
+    "https://raw.githubusercontent.com/google/glog/HEAD/README.rst",
+    "https://raw.githubusercontent.com/google/glog/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/google/glog/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/google/glog/HEAD/src/logging.cc",
+    "https://raw.githubusercontent.com/google/glog/HEAD/src/flags.cc",
+    "https://raw.githubusercontent.com/google/glog/HEAD/src/glog/flags.h",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/flags.md",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/build.md",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/logging.md",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/sinks.md",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/failures.md",
+    "https://raw.githubusercontent.com/google/glog/HEAD/docs/index.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/Makefile",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/glog-bench.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/glog-bench-mt.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/boost-bench.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/boost-bench-mt.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/run_all.sh",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/spdlog-bench.cpp",
+    "https://raw.githubusercontent.com/gabime/spdlog/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench/spdlog-bench-mt.cpp",
+    "https://github.com/gabime/spdlog/tree/dc198a5e64a1c66f53774c6ecf7f482dbd09758e/bench",
+    "https://github.com/gabime/spdlog/commit/def6fc62f4817985cde269c53805d426d4b2b2ae",
+    "https://raw.githubusercontent.com/gabime/spdlog/def6fc62f4817985cde269c53805d426d4b2b2ae/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/def6fc62f4817985cde269c53805d426d4b2b2ae/bench/results.txt",
+    "https://github.com/gabime/spdlog/commit/e166fadeb9a35e671ec43913b0b2423b28635dbb",
+    "https://raw.githubusercontent.com/gabime/spdlog/e166fadeb9a35e671ec43913b0b2423b28635dbb/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/a46e967dafe02a837fffaa4f07638e614988fe71/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/2a6596c2c04c6106ce683898a9cbad5d49d7ecda/README.md",
+    "https://raw.githubusercontent.com/gabime/spdlog/7900b83d1a79a7976166b2d92fc5074ecf3b0dcc/README.md",
+    "https://github.com/ng-log/ng-log"
+  ],
+  "confidence": 0.75
+}

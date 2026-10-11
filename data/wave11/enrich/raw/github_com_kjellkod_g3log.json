@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/kjellkod/g3log",
+  "one_liner": "Public-domain asynchronous C++ logger with crash-safe flush; ~3x lower call-site latency than Boost.Log, 3-4x slower than spdlog.",
+  "what_it_does": "g3log moves file I/O off the calling thread: LOG(level) << ... (stream) and LOGF(level, fmt, ...) (printf-style) build the message at the call site and hand it to a background LogWorker that forwards it to one or more sinks. It also provides CHECK/CHECK_F design-by-contract macros and installs handlers for SIGABRT, SIGFPE, SIGILL, SIGSEGV and SIGTERM that flush every queued message, plus a stack dump, before the process dies. Setup is explicit (createLogWorker, addDefaultLogger or addSink, initializeLogging); it is not an API drop-in for Boost.Log, glog or iostreams.",
+  "how_it_is_fast": "Nothing is written to disk on the caller's thread: LogCapture formats into a std::ostringstream, copies the text into a heap-allocated LogMessage (timestamp, thread id, file, function) and pushes a std::function onto an Active object, a mutex-protected unbounded std::queue with a condition variable (shared_queue.hpp). The LogWorker thread then posts the message to each sink's own Active thread, and the default FileSink appends to a string buffer and flushes the std::ofstream every 100 messages. This beats loggers that format and write synchronously or take heavier locks, but every call still pays iostream formatting, two or more allocations, a mutex and a notify, about 1 us on a modern core.",
+  "when_to_use": [
+    "Applications that need the last log lines before a crash: queued messages and a stack dump reach the sink on SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGTERM, LOG(FATAL) or a failed CHECK.",
+    "Moderate log rates (thousands to low hundreds of thousands of messages per second) where roughly 1 us per call is acceptable and disk stalls must not block the caller.",
+    "Replacing Boost.Log, glog-style synchronous logging or std::fstream with a flush per line in code that already uses stream-style LOG(INFO) << syntax.",
+    "Projects that want public-domain (Unlicense) source with no third-party dependency for the default file sink, plus custom sinks (log rotation, syslog, colour terminal in g3sinks) added or removed at run time."
+  ],
+  "when_not_to_use": [
+    "Latency-critical hot paths: in the Quill benchmark g3log's median call is 1066 ns (1 thread) and 1188 ns (4 threads), versus 271/557 ns for spdlog and 6-29 ns for fmtlog, Quill, XTR, PlatformLab NanoLog and binlog.",
+    "Bursty high-volume logging: the queue is an unbounded mutex-protected std::queue with no back-pressure or drop policy, so memory grows while the sink falls behind, and all messages pass through one LogWorker thread.",
+    "Processes that own their signal handling (PID 1, JVM or Python hosts, crash reporters, sanitizers): g3log installs its own fatal handlers by default, treats SIGTERM as fatal, and re-raises the signal after restoring the previous handler; disable it with ENABLE_FATAL_SIGNALHANDLING=OFF or overrideSetupSignals.",
+    "Programs that leave through exit() or need structured or binary logs: the docs state queued entries are not flushed on exit(), and output is plain text only."
+  ],
+  "integration": {
+    "form": "static or shared lib (CMake; G3_SHARED_LIB defaults ON)",
+    "dependencies": "none for the default file sink (C++ standard library and pthreads); extra sinks live in KjellKod/g3sinks",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17 in CMakeLists.txt), CMake",
+    "platforms": "Linux, macOS and Windows (MSVC and MinGW) per docs/building.md; iOS build option; fatal-signal handling is POSIX-signal based on Unix and vectored exceptions on Windows",
+    "thread_safety": "Thread-safe LOG calls from any thread (docs/API.md); initialize the logger before other threads log and destroy it after they stop",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The fatal-signal handler is not async-signal-safe: it builds std::ostringstream text, calls backtrace_symbols and pushes the message through the same mutex queue, so a crash inside malloc or while a thread holds the queue lock can hang instead of flushing.",
+    "Messages logged before initializeLogging are dropped; only the first one is printed to stderr as 'LOGGER NOT INITIALIZED'. Run-time level filtering needs USE_DYNAMIC_LOGGING_LEVELS=ON (default OFF), and the DEBUG level name can clash with other macros unless CHANGE_G3LOG_DEBUG_TO_DBUG=ON.",
+    "Each sink runs its own background thread in addition to the LogWorker thread, so the default setup creates two threads, and messages hop two mutex queues before reaching the file.",
+    "Benchmark harness flaw in the baseline: logger_benchmarks' Boost.Log harness shares one non-thread-safe src::severity_logger across all caller threads (Boost.Log documents the _mt variants as the thread-safe ones), so the 4-thread Boost.Log rows measure a data race; the 1-thread comparison (g3log about 2.9-3.2x lower latency) is unaffected."
+  ],
+  "pick_this_over_siblings_when": "Pick g3log over glog or loguru when you want logging off the caller's thread plus crash-time flushing and CHECK macros in a public-domain, dependency-free package; if call-site latency matters, Quill (which also lists a built-in crash signal handler), fmtlog or binlog run at 6-29 ns in the same harness and Iyengar NanoLog at 106 ns, 10-170x below g3log's 1066 ns median.",
+  "verified_claims_summary": "In odygrd/logger_benchmarks (Quill v13.0.0 README tables; GCC 14.2, -m64 -march=x86-64-v3, C++20, Intel Core i5-12600 with isolated cores), g3log's LOG(INFO) to its default file sink took 1066/1095/1143 ns at the 50th/90th/99.9th percentile versus 3093/3259/3621 ns for Boost.Log's asynchronous text sink with one caller thread (about 2.9-3.2x lower, derived from page data), and 838 versus 2844 ns at the median for large strings; g3log was slower than spdlog and every other logger in those tables. The reckless benchmark (gcc 7.3.0, Ryzen 7 2700X, g3log 1.3.2) shows g3log far below std::fstream with a flush per line under heavy disk I/O but slower than stdio fprintf+fflush.",
+  "status_note": "Active (last commit 2026-09-04, 965 stars, no open issues listed), Unlicense public domain with no patent grant, and a small dependency-free codebase that is easy to vendor; its queue design dates from 2010 and has not been modernised for low latency.",
+  "sources_read": [
+    "https://github.com/KjellKod/g3log",
+    "https://github.com/KjellKod/g3log/issues",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/README.md",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/active.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/shared_queue.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/sink.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/filesink.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/filesink.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/logcapture.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/logworker.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/logworker.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/logmessage.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/g3log/g3log.hpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/src/crashhandler_unix.cpp",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/Options.cmake",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/docs/building.md",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/docs/API.md",
+    "https://raw.githubusercontent.com/KjellKod/g3log/master/docs/g3log_usage.md",
+    "https://raw.githubusercontent.com/odygrd/quill/master/README.md",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_g3log_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_boost_log_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/call_site_latency_bench.h",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/vendor_manifest.json",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/sources.qbk"
+  ],
+  "confidence": 0.6
+}

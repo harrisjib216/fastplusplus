@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/emilk/loguru",
+  "one_liner": "Two-file synchronous C++ logger with printf-style LOG_F; 1.8x lower per-line cost than glog 0.6.0 single-threaded, mixed under contention.",
+  "what_it_does": "Loguru is a synchronous logging library shipped as loguru.hpp (no #includes) plus loguru.cpp, which you compile or #include in one translation unit. LOG_F(INFO, fmt, ...) is printf-style with compile-time format checks; LOG_S streams (LOGURU_WITH_STREAMS), fmtlib formatting (LOGURU_USE_FMTLIB) and glog-style LOG/CHECK macros (LOGURU_REPLACE_GLOG) are opt-in. It adds CHECK_F assertions, indented scopes, error context printed on crash, stack traces on fatal signals, multiple file sinks, user callbacks and (in 2.2.0) syslog. Setup code differs from glog, so it is a partial replacement rather than a drop-in.",
+  "how_it_is_fast": "There is no special fast path: each call formats the message with vasprintf, builds a preamble (date, time, uptime, thread name from pthread TLS, file:line, level) with snprintf, takes one global std::recursive_mutex and writes every sink with fprintf. With the default g_flush_interval_ms = 0 each line is fflush'ed, i.e. one write() per line; setting it above 0 moves flushing to a background thread. Against glog it wins by doing less per line (no iostream formatting, one fflush per sink, header-light build), not by batching or async queues.",
+  "when_to_use": [
+    "Applications logging up to tens of thousands of lines per second that want every line on disk before the next statement (flush per line) without an async queue.",
+    "Replacing glog in a C++11 codebase to cut build times (README: about 10% faster compilation in a medium project) while keeping CHECK-style assertions and glog-like macros via LOGURU_REPLACE_GLOG.",
+    "Single-threaded or lightly threaded tools: in the independent shootout one INFO line cost 2.4 us vs glog 0.6.0's 4.3 us at one thread.",
+    "Games and developer tools that need log callbacks (on-screen messages), indented scopes and error context dumped on a crash.",
+    "Projects that want a no-dependency, public-domain logger they can vendor as two files."
+  ],
+  "when_not_to_use": [
+    "Latency-sensitive hot paths: every call formats on the caller thread, allocates (vasprintf), locks a global mutex and issues a write(); async loggers cost single- to low double-digit nanoseconds per call on the producer.",
+    "Many threads logging heavily: the global mutex serializes all lines; in the shootout loguru's wall time per line rose from 2.4 us (1 thread) to 4-5.4 us at 3-24 threads, glog 0.6.0 was faster at 3 threads (3734 vs 4383 ns) and the lead was 1.04x at 4 threads.",
+    "Programs with their own handlers for SIGINT, SIGTERM, SIGSEGV and similar: loguru::init installs handlers for seven signals by default and runs a non-async-signal-safe logging path inside them unless SignalOptions turn it off.",
+    "Needs for size- or time-based log rotation, structured/JSON output or binary logging: none is documented in the README.",
+    "Organisations that require an OSI licence with an explicit patent grant: Loguru is a public-domain dedication with an Unlicense fallback."
+  ],
+  "integration": {
+    "form": "source-drop (loguru.hpp + loguru.cpp; CMake add_subdirectory/FetchContent/find_package and vcpkg also supported)",
+    "dependencies": "none; link -lpthread and -ldl on Linux (dladdr/backtrace for stack traces); fmtlib only if LOGURU_USE_FMTLIB",
+    "min_toolchain": "C++11 (README: compile with -std=c++11 -lpthread -ldl); CMake 3.12 for the CMake build",
+    "platforms": "Linux, macOS, Windows (including MinGW), FreeBSD, OpenBSD; stack traces only with glibc",
+    "thread_safety": "README: thread-safe. Every log line is written under one global std::recursive_mutex, so concurrent loggers serialize.",
+    "drop_in_for_baseline": "partial — LOGURU_REPLACE_GLOG maps LOG(INFO) <<, VLOG and CHECK_* macros, but initialisation, flags (FLAGS_*) and per-severity log files differ from glog"
+  },
+  "gotchas": [
+    "The author's own README comparison is uneven: glog_bench logs LOG(WARNING) with FLAGS_alsologtostderr, and glog 0.6.0 writes each WARNING line to both its WARNING and INFO files (LogToAllLogfiles loops from the message severity down to 0) and force-flushes the WARNING file on every line even in the 'buffered' rows, while loguru_bench writes one file plus stderr; the 'about twice as fast as GLOG' buffered claim therefore compares unequal work. The independent shootout (INFO lines, one file each, flush per line) does not have this flaw.",
+    "In the shootout's 6-thread iterations run, loguru's mean (4134 ns) is pulled down by one outlier repetition (3315 ns, cv 12.76%); medians are 4481 vs glog 4827 ns, 1.08x rather than 1.21x (derived from page data).",
+    "Default unsafe_signal_handler = true: on a fatal signal loguru flushes and logs through the mutex-taking, allocating path; the source comments warn this can deadlock if the signal came from inside the allocator.",
+    "With g_flush_interval_ms > 0 a background flush thread is created lazily on the first log call, and lines written in the last interval are lost on SIGKILL or power loss; unnamed threads show as a hex pthread_self id."
+  ],
+  "pick_this_over_siblings_when": "Pick loguru over Quill, fmtlog, NanoLog or XTR when you want synchronous, flushed-per-line logs and a two-file public-domain drop-in with CHECK macros and crash context, and per-line microsecond cost is acceptable; pick it over glog (archived) when migrating off glog with minimal macro churn and you log mostly from one or a few threads.",
+  "verified_claims_summary": "In MuggleWei/cc_log_benchmark (report 2025-02-21; GCC 14.2.1, CMake Release, Google Benchmark 1.8.3, i7-10710U pinned at 3.2 GHz, Arch Linux), one synchronous INFO line with four integers and a 128-byte string written to a file and flushed per line took 2392 ns with loguru v2.1.0 vs 4324 ns with glog v0.6.0 at one thread (1.81x) and 2357 vs 4378 ns in the 3-second run (1.86x). With 2-24 threads the wall-time-per-line column ranges from glog 1.17x faster (3 threads) to loguru 1.56x faster (8 threads), while loguru used less CPU per line at every thread count.",
+  "status_note": "Revived rather than steadily active: no commits from April 2023 to July 2026, then 17 commits ending in v2.2.0 on 2026-09-10; the benchmarked v2.1.0 dates from 2019-09-23; Unlicense/public domain, 1.9k stars, two files, copyable.",
+  "sources_read": [
+    "https://github.com/emilk/loguru",
+    "https://github.com/emilk/loguru/commits",
+    "https://github.com/emilk/loguru/commits/master",
+    "https://github.com/emilk/loguru/pull/278",
+    "https://github.com/emilk/loguru/pull/278/files",
+    "https://github.com/emilk/loguru/issues?q=is%3Aissue+deadlock+OR+slow+OR+performance+OR+crash",
+    "https://github.com/emilk/loguru/issues/182",
+    "https://github.com/emilk/loguru/issues/224",
+    "https://raw.githubusercontent.com/emilk/loguru/HEAD/README.md",
+    "https://raw.githubusercontent.com/emilk/loguru/HEAD/loguru.hpp",
+    "https://raw.githubusercontent.com/emilk/loguru/HEAD/loguru.cpp",
+    "https://raw.githubusercontent.com/emilk/loguru/HEAD/loguru_bench/loguru_bench.cpp",
+    "https://raw.githubusercontent.com/emilk/loguru/HEAD/glog_bench/glog_bench.cpp",
+    "https://raw.githubusercontent.com/google/glog/v0.6.0/src/logging.cc",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/build.sh",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/run_benchmark.sh",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/gbenchmark/log_gbenchmark.h",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/gbenchmark/cpp/loguru/gbenchmark_loguru.cpp",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/gbenchmark/cpp/glog/gbenchmark_glog.cpp",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/report/benchmark_20250221/benchmark/benchmark_loguru.txt",
+    "https://raw.githubusercontent.com/MuggleWei/cc_log_benchmark/HEAD/report/benchmark_20250221/benchmark/benchmark_glog.txt"
+  ],
+  "confidence": 0.85
+}

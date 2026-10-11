@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/intel/parallelstl",
+  "one_liner": "Intel's C++17 parallel algorithms (now oneDPL; libstdc++'s <execution>): std::reduce(par) on oneTBB beats serial std::accumulate ~98x.",
+  "what_it_does": "Implements the C++17 execution-policy overloads (std::reduce, std::transform_reduce, std::sort, std::for_each and the rest with par, par_unseq, unseq) on a pluggable parallel backend. Intel contributed it to GCC 9's libstdc++, which ships it as the body of <execution>, so plain std::reduce(std::execution::par, ...) runs this code when oneTBB headers are present. The standalone github.com/intel/parallelstl URL now serves uxlfoundation/oneDPL, which exposes the same algorithms under oneapi::dpl::execution policies (TBB, OpenMP or serial host backends) plus SYCL device policies.",
+  "how_it_is_fast": "In libstdc++ 12, std::reduce(par) becomes __parallel_transform_reduce, a tbb::parallel_reduce over a blocked_range with grain size 3 inside tbb::this_task_arena::isolate; each oneTBB worker reduces its chunk and partial sums are joined pairwise, so a 1 GiB sum spreads across all cores and reaches memory bandwidth. With par_unseq the per-chunk brick is __simd_transform_reduce, a loop under '#pragma omp simd reduction(+)'; with par the brick is a serial std::transform_reduce. Most of the measured gain is core count, not a cleverer kernel: a single-thread 8-accumulator loop is already 5x faster than std::accumulate on the same machine.",
+  "when_to_use": [
+    "Large contiguous arrays (millions of elements and up) of arithmetic types where a single std::accumulate or std::transform is memory- or latency-bound and many cores sit idle.",
+    "Existing standard C++17 code on GCC 11+ or Clang with libstdc++ that can gain parallelism by adding std::execution::par and linking oneTBB, with no new dependency in the source.",
+    "Codebases already shipping oneTBB or the oneAPI toolchain, where oneDPL's oneapi::dpl::execution policies also give an OpenMP backend and SYCL device offload behind one API.",
+    "Floating-point sums where a strict left fold is not required and reassociated, chunked reduction is acceptable (it is also more accurate than a single float accumulator for long arrays)."
+  ],
+  "when_not_to_use": [
+    "Small or frequent calls where task-dispatch cost dominates: the benchmark never timed std::reduce(par) on tiny inputs, and on the 1 GiB sum on 96-core Graviton4 hand-written OpenMP (1.90 ms) and Fork Union (1.89 ms) already matched or beat it (1.95 ms), so a lighter fork-join pool loses nothing on large inputs.",
+    "Builds without oneTBB: libstdc++ selects the TBB backend only if <tbb/tbb.h> is found by __has_include and otherwise silently uses its serial backend, so the same code compiles and runs single-threaded.",
+    "GCC 9 or 10 with oneTBB 2021 or newer: libstdc++'s bundled backend still uses the removed tbb::task API and fails to compile (Intel community and Slicer forum reports, snippet only); GCC 11+ is needed.",
+    "Code that needs bit-for-bit reproducible float results: libstdc++ uses tbb::parallel_reduce, not tbb::parallel_deterministic_reduce, so rounding of float sums can depend on how the range was split.",
+    "MSVC STL or libc++ users: the measured code is libstdc++'s copy; those standard libraries ship their own parallel algorithms, which were not compared."
+  ],
+  "integration": {
+    "form": "header-only (libstdc++ <execution>, or oneDPL's include/oneapi/dpl) plus the oneTBB shared library for the parallel backend",
+    "dependencies": "oneTBB (libtbb) for the TBB backend; oneDPL alternatively accepts an OpenMP 4.5 compiler as backend; SYCL 2020 compiler only for device policies",
+    "min_toolchain": "C++17; GCC 11+ for libstdc++'s backend with oneTBB 2021+ (GCC 9-10 need TBB 2018-2020); oneDPL documents C++17, OpenMP 4.0 SIMD support and CMake 3.11 (Linux) / 3.20 (Windows)",
+    "platforms": "any platform oneTBB supports (measured on x86-64 Zen4 and aarch64 Graviton4); device policies need a SYCL backend",
+    "thread_safety": "Standard parallel-algorithm rules: element access functions run concurrently and must be data-race free under par; oneTBB's global scheduler is shared across concurrent calls",
+    "drop_in_for_baseline": "partial: std::reduce(std::execution::par, ...) replaces std::accumulate with one argument added, but it may reassociate the operation (results change for non-associative ops and float rounding) and needs -ltbb; oneDPL uses its own oneapi::dpl::execution namespace"
+  },
+  "gotchas": [
+    "Silent serial fallback: libstdc++ 12 c++config defines _GLIBCXX_USE_TBB_PAR_BACKEND as __has_include(<tbb/tbb.h>), so a missing include path gives _PSTL_PAR_BACKEND_SERIAL with no warning; check that the binary links libtbb.",
+    "The headline 98x compares against a serial std::accumulate whose float accumulator is wrong (error 93.75 percent: it stops growing at 2^24) and whose strict left fold is latency-bound; the unrolled single-thread loop is already 5.05x faster on Graviton4 (derived from page data), so parallelism contributes about 19.5x.",
+    "Benchmark harness quirks: Graviton4 rows report 548-568 GB/s, above one socket's 537.6 GB/s DRAM peak, so part of the 1 GiB buffer is served from the 192 MB of L2 plus 36 MB L3 across repeated iterations; the all-1.0f input can detect dropped elements but not reassociation error; CMakeLists defines USE_INTEL_TBB=0 when the option is off while reduce_cpu.hpp tests '#if defined(USE_INTEL_TBB)', so the TBB headers are included even in builds that disable TBB.",
+    "oneDPL execution policies parallelize only with random-access iterators; other iterator categories run serially (oneDPL guide)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you want parallelism through the standard algorithm API with no scheduler code of your own and can link oneTBB; poolSTL gives the same std-style calls header-only without TBB and beat std::execution::par on some algorithms, and Fork Union matched its 1 GiB reduction time on Graviton4 in the same benchmark while needing explicit fork-join code.",
+  "verified_claims_summary": "In ashvardanian/ParallelReductionsBenchmark (Google Benchmark, MinTime 10 s, real time, GCC 12, effective -O2 -march=native -fopenmp, oneTBB master), std::reduce(std::execution::par) from libstdc++'s bundled Parallel STL summed a 1 GiB float array in 1.95 ms versus 192 ms for serial std::accumulate on a 96-core AWS Graviton4 c8g.metal-24xl (about 98x, derived from page data), and 2.91 ms versus 220 ms on a Zen4 m7a.metal-48xl (about 75x); intel/parallelstl and oneDPL themselves were not built or measured.",
+  "status_note": "Actively maintained as oneDPL under the UXL Foundation (last commit 2026-10-06; release notes top out at 2022.14.0; Apache-2.0 WITH LLVM-exception) and shipped inside every libstdc++ since GCC 9, so it is copyable; libstdc++'s vendored copy lags oneDPL and is tied to the GCC release.",
+  "sources_read": [
+    "https://github.com/intel/parallelstl",
+    "https://raw.githubusercontent.com/intel/parallelstl/HEAD/README.md",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/HEAD/README.md",
+    "https://github.com/uxlfoundation/oneDPL/tree/main/documentation/library_guide",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/library_guide/introduction.rst",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/library_guide/macros.rst",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/library_guide/parallel_api_main.rst",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/library_guide/overview.rst",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/library_guide/cmake_support.rst",
+    "https://raw.githubusercontent.com/uxlfoundation/oneDPL/main/documentation/release_notes.rst",
+    "https://github.com/uxlfoundation/oneDPL/commits/main",
+    "https://github.com/uxlfoundation/oneDPL/issues?q=is%3Aissue+reduce+performance+tbb",
+    "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/reduce_bench.cpp",
+    "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/reduce_cpu.hpp",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/bits/c++config",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/pstl/pstl_config.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/pstl/parallel_backend.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/pstl/parallel_backend_tbb.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/pstl/numeric_impl.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-12/libstdc++-v3/include/pstl/unseq_backend_simd.h",
+    "https://discourse.slicer.org/t/current-tbb-2021-is-not-supported-by-gcc-9-or-10-with-std-execution/24282 (WebSearch snippet only)",
+    "https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Include-MKL-header-file-with-oneapi-DPL-TBB-error/m-p/1347309 (WebSearch snippet only)"
+  ],
+  "confidence": 0.5
+}
