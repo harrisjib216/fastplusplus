@@ -13,3 +13,4 @@ For a later wave (not storage-and-data):
 - fjall (fjall-rs/fjall): Rust LSM engine; in the redb table batch writes 353 vs RocksDB 451 ms and removals 6004 vs 6900 ms; README has no own benchmarks. Not catalogued (enricher lead, 2026-10-07).
 - TickTock (ytyou/ticktock): C++ time-series DB, GPL, 89 stars; 3.2M points/s in its own IoTDB-benchmark shootout (first-party). Not catalogued (enricher lead, 2026-10-07).
 - IOWOW (https://github.com/Softmotions/iowow): EJDB2's storage engine, claims to beat LMDB, LevelDB and Kyoto Cabinet; not catalogued (w6-mine-c backfill, 2026-10-07).
+- sqlpp11 (https://github.com/rbock/sqlpp11): PR #520 hand date parser vs its own std::regex parser (GCC -O3 0.00733141 s vs 0.923286 s); self-comparison, no record (w6-mine-g, 2026-10-11).
