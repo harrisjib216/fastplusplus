@@ -1,0 +1,83 @@
+[
+  {
+    "id": "https://github.com/epoyraz/minisearch-wasm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Upgraded C to A: the README table and differential/results/2026-09-27-0.12.0-vs-original.md come from the public harness differential/bench_public.mjs (corpus from differential/gen_corpus.mjs, npm run bench:public) against pinned MiniSearch 7.2.0, with the CPU (AMD Ryzen 9 3900X), Node v24.21.0, the pinned toolchain (rust-toolchain.toml Rust 1.96.0, wasm-pack 0.15.0) and release flags (Cargo.toml opt-level 3, lto, codegen-units 1; .cargo/config.toml +simd128) all public. The harness checks result parity (934,016 rows, max relative score difference 0) before timing and uses paired alternating rounds with GC outside timed regions.",
+    "corrections": {
+      "compiler_and_flags": "Rust 1.96.0 pinned in rust-toolchain.toml; wasm-pack 0.15.0 build --target web --release; Cargo [profile.release] opt-level = 3, lto = true, codegen-units = 1; .cargo/config.toml rustflags -C target-feature=+simd128 for wasm32-unknown-unknown; benchmark run with node --expose-gc",
+      "hardware": "AMD Ryzen 9 3900X 12-Core Processor, 64 GiB RAM, Windows (win32 x64), Node v24.21.0",
+      "workload": "differential/bench_public.mjs: 20,000 synthetic documents from differential/gen_corpus.mjs, 38 queries with {prefix: true, fuzzy: 0.2, combineWith: 'AND'}, two warm-ups then 9 paired rounds in alternating order, medians; pinned MiniSearch 7.2.0 and the public package in the same Node process; search(), autoSuggest, addAll, loadJSON, save/load and vacuum rows, plus dirty-index (25% discarded) and callback rows.",
+      "caveats": "First-party benchmark on one machine with a synthetic corpus. The report says the run used git HEAD 4a89964 plus uncommitted changes; the 0.12.0 code was committed later the same day (4aac30c), and the async loader was changed after the run (re-measured 0.98x vs MiniSearch, the run itself shows loadJSONAsync at 0.60x). Several headline rows are not like-for-like calls: searchJoined/searchRaw are compared with MiniSearch search(), loadBytes/toBytes with loadJSON/JSON.stringify (binary format vs JSON). Cold module import is slower (13.8 ms vs 3.7 ms), the package is 1.4 MB unpacked, and in browsers MiniSearch.init() must be awaited or indexes run on the bundled JavaScript engine at no gain. Older README sections (11x/23x search) come from an external jobboard script that is not in the repo and predate the compatibility facade. Very small project (4 stars, about 3 weeks of public history)."
+    },
+    "notes": "All claimed_speedup figures match the README table and the 2026-09-27 report (search 2.20x, stored fields 3.0x, autoSuggest 7.48x, addAll 3.25x, loadJSON 1.83x, loadBytes 10.46x, toBytes 65.38x, searchRaw 9.92x vs search()). License MIT (LICENSE.txt, keeps MiniSearch's copyright), last commit 2026-09-26, not a fork. Shortcomings for the record: uncommitted-tree run, compact-API rows compare different calls, synthetic corpus, tiny project.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/README.md",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/differential/results/2026-09-27-0.12.0-vs-original.md",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/differential/bench_public.mjs",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/rust-toolchain.toml",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/.cargo/config.toml",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/package.json",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/LICENSE.txt",
+      "https://raw.githubusercontent.com/epoyraz/minisearch-wasm/HEAD/CHANGELOG.md",
+      "https://github.com/epoyraz/minisearch-wasm",
+      "https://github.com/epoyraz/minisearch-wasm/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/justinwilaby/sax-wasm",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The README numbers match, but src/js/__test__/benchmark.mjs builds sax-wasm with new SAXParser() and the constructor default is events = 0, so src/sax/parser.rs hydrates nothing, emits no event and never crosses into JavaScript (a tokenizer-only pass), while saxes still accumulates text, builds attribute lists and tags and checks well-formedness, and node-expat emits every event to JS. No like-for-like comparison is recorded anywhere (scripts/benchmark-performance.mjs, which subscribes events, only compares sax-wasm builds with each other), so there is no valid comparative measurement (degenerate-workload precedent).",
+    "corrections": {
+      "workload": "src/js/__test__/benchmark.mjs: one full parse of the bundled src/js/__test__/xml.xml (about 3 MB) written from memory in 64 KiB chunks, repeated 10 times per parser with no warm-up, mean reported. sax-wasm is constructed with new SAXParser() (events = 0, nothing subscribed); no parser has handlers attached.",
+      "claimed_speedup": "README table (benchmarks last updated 2026-02-12, v3.1.4, Node v25.6.1, macOS arm64): sax-wasm 6.80 ms vs saxes 11.00 ms (~1.6x), ltx 11.56 ms, sax-js 26.99 ms (~4.0x), node-xml 31.73 ms, node-expat 41.51 ms (ratios derived from page data). sax-wasm ran with no events subscribed, so its figure times tokenization only, with no event objects built or delivered.",
+      "compiler_and_flags": "Rust stable (version not pinned); cargo build --target wasm32-unknown-unknown --release with [profile.release] opt-level = 3, lto = \"fat\", codegen-units = 1, panic = \"abort\"; then wasm-opt -O4 --enable-bulk-memory --enable-simd --enable-sign-ext (package.json build:wasm)",
+      "caveats": "Harness flaw: benchmark.mjs runs sax-wasm with zero subscribed events (constructor default), so the Rust parser skips hydration, event emission and every JS boundary crossing, while saxes and sax-js still build text, attribute and tag values and enforce well-formedness, and node-expat (a native libexpat binding) delivers each event to JavaScript; the comparison does not reflect any real use of sax-wasm. scripts/benchmark-performance.mjs measures callbacks and field reads but only between sax-wasm builds, with no recorded results. The README says 10 batches of 100 internal runs, but the script does 10 single parses with no warm-up (mean includes the cold first run). Numbers predate the October 2026 parser rewrites (#160, #164). CPU model not stated (macOS Apple Silicon only); Rust version not pinned. First-party."
+    },
+    "notes": "Numbers on page are accurate but measure sax-wasm with events = 0 (confirmed in src/js/saxWasm.ts constructor and src/sax/parser.rs, where every hydrate/emit is gated on self.events), so the comparison is degenerate; downgraded C to D rather than rejected because the parser does tokenize the full input. MIT, 199 stars, last commit 2026-10-10, not a fork. A like-for-like run (events OpenTag|CloseTag|Text|Attribute with handlers on all parsers) would be needed to restore C.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/README.md",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/js/__test__/benchmark.mjs",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/scripts/benchmark-performance.mjs",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/js/saxWasm.ts",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/sax/parser.rs",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/package.json",
+      "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/lddubeau/saxes/HEAD/src/saxes.ts",
+      "https://github.com/justinwilaby/sax-wasm",
+      "https://github.com/justinwilaby/sax-wasm/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/mozilla/source-map",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party numbers from the library authors' Mozilla Hacks post (5.89x, later 10.9x), seen only through web-search snippets because hacks.mozilla.org did not resolve here; the repo's bench/bench.html harness is public but runs in a browser with no recorded hardware, browser versions or flags, and the CHANGELOG 0.7.0 entry only says 'much faster' with a link to the post.",
+    "corrections": {
+      "caveats": "Snippet only: hacks.mozilla.org failed to resolve (ENOTFOUND) in this environment, so the 5.89x figure and the editor's-note 10.9x total come from web-search snippets; the repo itself carries no numbers (CHANGELOG 0.7.0 says SourceMapConsumer 'now uses WebAssembly, and is much faster' and links the post). bench/ is a browser page (bench/bench.html against dist/source-map.js) with no recorded hardware or browser versions. Vyacheslav Egorov (mraleph) showed a tuned pure-JavaScript parser could come close to the Rust/wasm version; Nick Fitzgerald's follow-up 'Speed Without Wizardry' ported those algorithmic ideas to the Rust code, which is where the 10.9x total comes from (snippet: 5.3x Chrome, 10.8x Firefox, 9.4x Safari over the original JavaScript). The win is against the 0.6.x JS parser in 2018 browsers. 0.7.0 made SourceMapConsumer construction asynchronous (returns a Promise) and browsers must call SourceMapConsumer.initialize() with the lib/mappings.wasm URL. The wasm-mappings Rust crate (source-map-mappings 0.5.0) is in the repo with [profile.release] debug = true."
+    },
+    "notes": "Figures match the snippet the search agent used and a second snippet search; page itself unopenable (ENOTFOUND). Metadata verified: BSD-3-Clause LICENSE, 3.7k stars, last commit 2026-07-21 (0.8.0 release), not archived or forked, wasm-mappings and bench folders present. Shortcomings: snippet-only 2018 numbers, no hardware or browser versions, baseline is the library's own untuned older JS parser.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/README.md",
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/CHANGELOG.md",
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/package.json",
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/README.md",
+      "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/Cargo.toml",
+      "https://github.com/mozilla/source-map",
+      "https://github.com/mozilla/source-map/commits"
+    ]
+  }
+]
