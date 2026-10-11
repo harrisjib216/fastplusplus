@@ -6876,12 +6876,14 @@
     "caveats": "Decode gains over libpng are modest and image-dependent (1.02x to 1.07x on four of five Wuffs test images). Wuffs' mimiclib notes that libspng 0.6.2 did not verify Adler-32 (an inverted SPNG_CTX_IGNORE_ADLER32 check, fixed in commit 9c35dc3, Dec 2020) and never verifies the final IDAT chunk's CRC-32; the blog does not pin the libspng commit, so the small gains may partly reflect skipped verification. In mango's png_benchmark.cpp the spng decoder is set to SPNG_CRC_USE (CRC errors ignored) while libpng uses defaults, and the spng encoder uses compression level 3 with the Up filter only while libpng uses default settings, so spng's 3.8x to 5.8x encode lead comes with 14% to 21% larger files (3232 vs 2843 KB; 34083 vs 28180 KB). The same blog shows libpng with zlib-ng is 1.01x to 1.21x faster than stock libpng, which narrows the gap. Code activity: the only 2026 commits are a copyright-year update; the previous commit is from 2023-12-20. [retier] libspng skips the final IDAT CRC-32 (decode_image stops at SPNG_STATE_EOI) while paying a scalar RGBA-to-BGRA swap in the harness. The mango rows are first-party single cold runs where SPNG_CRC_USE also disables Adler-32, libpng runs its defaults in native layout, and milliseconds are printed as us%10 (decimal error). Encode is slower than libpng in the project's own issues: #224 (confirmed bug) spng 740 ms vs libpng 510 ms at level 6 with zlib-ng; #274 64-bit encode 3x slower. #285 eXIf wild read fixed in 0.7.4 without a CVE.",
     "found_via": [
       "Google Scholar / arXiv / ACM DL / IEEE: web search 'fast lossless image codec faster than libpng ...' surfaced the PNG library field; libspng README and the Wuffs doc/benchmarks.md page carry the numbers",
-      "WebSearch 'lossless image codec faster than libwebp lossless PNG encoder decoder C++ github benchmark' surfaced the Wuffs blog; its appendix lists libspng; confirmed with the libspng README"
+      "WebSearch 'lossless image codec faster than libwebp lossless PNG encoder decoder C++ github benchmark' surfaced the Wuffs blog; its appendix lists libspng; confirmed with the libspng README",
+      "seed-list mining backfill: awesome-c Graphics list entry https://github.com/oz123/awesome-c#Graphics, then github.com/randy408/libspng README and google/wuffs doc/benchmarks.md (libspng mimic rows)"
     ],
     "confidence": 0.8,
     "assignment_ids": [
       "w10-image-gh-cpp",
-      "w10-image-papers"
+      "w10-image-papers",
+      "w10-mine-l"
     ],
     "id": "https://github.com/randy408/libspng",
     "verification": {
@@ -14450,6 +14452,70 @@
       "baseline": "audioread FFmpegAudioFile (decodes through an ffmpeg subprocess)",
       "claimed_speedup": "Numbers derived from the benchmark's results/*.pickle files in the repo (mean over the 16 durations, seconds for three consecutive loads; ratios derived from page data). Load to numpy, aubio vs audioread+ffmpeg: wav 0.064 vs 0.657 (about 10x), mp4 0.044 vs 0.101 (about 2.3x), mp3 0.068 vs 0.103 (about 1.5x), flac 0.067 vs 0.071 (about 1.06x, a tie). Versus librosa: mp3 0.068 vs 0.131 (about 1.9x), mp4 0.044 vs 0.111 (about 2.5x), wav 0.064 vs 0.289 (about 4.5x). Metadata-only queries, aubio vs audioread: mp3 0.0015 vs 0.098 (about 66x), flac 0.0015 vs 0.098 (about 66x), mp4 0.0030 vs 0.106 (about 35x), ogg 0.0046 vs 0.200 (about 44x), wav 0.040 vs 0.099 (about 2.5x). aubio is slower than other loaders in some rows: flac load 0.067 vs soundfile 0.045 and librosa 0.039; wav load 0.064 vs scipy 0.014; wav metadata 0.040 vs soundfile 0.0008.",
       "caveats": "Independent community benchmark (faroit/python_audio_loading_benchmark, 152 stars, last commit 2023-12-19), not run by the aubio project. The README only shows bar charts on a log time axis; the exact numbers above come from the results/benchmark_np_<ext>.pickle and benchmark_metadata_<ext>.pickle files in the repo, read with a restricted unpickler (no code executed). Hardware, CPU model, compiler and build flags are not stated ('our server'), and the aubio package's build configuration (which decoder backend) is not stated, so this falls short of tier A. Harness quirks: the stored time is the minimum over 3 repeats of timeit with number=3 (so seconds for 3 loads, not 1), and only the last file of each duration folder is recorded (one file per duration). The audioread baseline spawns an ffmpeg process per file, so aubio's win over it is largely process-spawn overhead rather than faster codecs; aubio itself decodes mp3/mp4 through libav when built with it. Versus libsndfile (soundfile) and scipy aubio is slower for wav and flac, so aubio is a competitive loader rather than the fastest one. aubio's own repo has only python/demos/demo_reading_speed.py with no published numbers, and its README makes no speed claim. The 'ffmpeg or standard codec' baseline is a Haiku guess; the row compared here is audioread's FFmpeg wrapper, not the ffmpeg library called from C."
+    }
+  },
+  {
+    "name": "GStreamer (gst-vaapi VA-API pipelines)",
+    "repo_url": "https://github.com/GStreamer/gstreamer",
+    "language": "C",
+    "domain": "media-and-graphics",
+    "category": "video-audio",
+    "baseline": "FFmpeg (libavcodec through OpenCV's VideoCapture/VideoWriter FFmpeg backend, CPU software codecs)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "OpenCV benchmark sample (samples/cpp/gstreamer_pipeline.cpp, now samples/cpp/videocapture_gstreamer_pipeline.cpp). Decode: frames per second of grab+retrieve to BGR over a full-HD 1920x1080 clip encoded with ffmpeg default settings, in mkv, mp4 and avi containers (mpeg2, h264, h265, vp8). Encode: 1000 frames from a synthetic GStreamer videotestsrc SMPTE colour-bar source (resolution set by -r, default 720p; the page does not say which was used), timing only the VideoWriter write call. GStreamer pipelines (gst-vaapi on the Intel iGPU, gst-libav on the CPU) versus OpenCV's FFmpeg backend (CPU software codecs).",
+    "claimed_speedup": "Encode with GStreamer + VA-API (gst-vaapi) vs FFmpeg backend: mkv/h264 193 vs 51 fps (x3.8), mp4/h264 194 vs 51 fps (x3.8), avi/h264 185 vs 50 fps (x3.7), mkv/vp8 124 vs 12 fps (x10.3), mkv/mpeg2 124 vs 106 fps (x1.2). Decode: mp4/h264 376 vs 169 fps (x2.2), avi/h264 373 vs 159 fps (x2.4), mp4/h265 391 vs 256 fps (x1.5), mp4/mpeg2 364 vs 258 fps. GStreamer with the libav plugin (CPU) also beat the FFmpeg backend on mp4/mpeg2 decode (343 vs 258 fps) and avi/mpeg2 (306 vs 243 fps), but lost on h264/h265/vp8 decode (e.g. mkv/h264 126 vs 158 fps).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://github.com/opencv/opencv/wiki/Video-capture-and-write-benchmark",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "OpenCV built with cmake -DBUILD_EXAMPLES=ON -DWITH_GSTREAMER=ON -DWITH_FFMPEG=ON, make -j8 (build type not given); GStreamer, gstreamer1.0-vaapi, gstreamer1.0-libav and libavcodec are unversioned Ubuntu 17.10 apt packages per the page's install commands; compiler, optimisation flags, encoder settings and OpenCV/GStreamer/FFmpeg versions not stated",
+    "hardware": "Intel Core i5-6600 @ 3.30GHz, Intel HD Graphics 530 (Skylake GT2), Ubuntu 17.10",
+    "compared_against_cpp_std_directly": false,
+    "license": "LGPL-2.1-or-later",
+    "usability": "copyable",
+    "last_commit": "2026-10-11",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "3.3k stars on the GitHub mirror; used in many Linux media stacks",
+    "has_code": true,
+    "tradeoffs": "Framework with plugin pipelines; speed here comes from the VA-API plugin offloading to the Intel iGPU, which needs Intel graphics, a VA-API driver and the gst-vaapi plugin. Hardware encoders trade compression efficiency and quality for speed; the page does not compare quality or bitrate. GStreamer's CPU path (gst-libav) wraps the same libavcodec as FFmpeg.",
+    "caveats": "The win is hardware versus software: gst-vaapi drives the Skylake iGPU's fixed-function codecs, while OpenCV's FFmpeg wrapper had no hardware acceleration at the time (the page says so), so FFmpeg itself, which also supports VA-API, was not measured with hardware decode or encode; this is not GStreamer's own code being faster. Encoders differ (VA-API defaults versus libx264/libvpx defaults through OpenCV's FFmpeg writer), so output quality and bitrate are not equal. Encode input is a synthetic SMPTE colour-bar pattern (default 720p in the sample), not the 1080p clip, and the page does not state the encode resolution. The encode timer covers only the write call: GStreamer's appsrc (block=1) encodes in its own streaming thread, so encoding that overlaps the untimed synthetic-frame grab is hidden, a modest bias in GStreamer's favour; frames still queued at end of stream are not timed. The page's x multipliers are relative to the faster CPU column (gst-libav or FFmpeg), e.g. mp4/mpeg2 decode x1.06 is versus gst-libav 343 fps; versus FFmpeg 258 fps it is x1.41 (derived from page data). gst-vaapi decode was slower than FFmpeg for every mkv input (h264 59 vs 158, h265 65 vs 255, vp8 68 vs 309 fps) and CPU gst-libav lost to FFmpeg on h264, h265 and vp8 decode and on mpeg2 encode (81 vs 106 fps). Single undated-run results from 2018 on Ubuntu 17.10; no run counts or variance. The measured component, gstreamer-vaapi, is no longer in the GStreamer monorepo's main branch (subprojects/ has no gstreamer-vaapi; upstream replaced it with the va plugin in gst-plugins-bad according to forum and distro-packaging search snippets, and this page did not measure that plugin). The benchmark sample linked from the page 404s at master because it was renamed; it is reachable at OpenCV tag 3.4.3 (samples/cpp/gstreamer_pipeline.cpp) and as samples/cpp/videocapture_gstreamer_pipeline.cpp on 4.x. The GitHub repo is a read-only mirror of gitlab.freedesktop.org/gstreamer/gstreamer and carries no benchmarks itself. LICENSE file is LGPL v2.1 text; SPDX LGPL-2.1-or-later per GStreamer's source headers convention, not checked file by file.",
+    "found_via": [
+      "seed-list mining backfill: awesome-cpp#Multimedia and awesome-c#Multimedia (GStreamer); WebSearch 'GStreamer vs FFmpeg transcoding benchmark speed fps faster results' led to https://github.com/opencv/opencv/wiki/Video-capture-and-write-benchmark"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w10-mine-h"
+    ],
+    "id": "https://github.com/gstreamer/gstreamer",
+    "verification": {
+      "date": "2026-10-01",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Independent measurement by the OpenCV project (wiki page last edited 2018-06-22) comparing GStreamer gst-vaapi and gst-libav pipelines against OpenCV's FFmpeg backend; the benchmark code is public (samples/cpp/gstreamer_pipeline.cpp at OpenCV tag 3.4.3, renamed samples/cpp/videocapture_gstreamer_pipeline.cpp in November 2018) and the CPU is stated (Core i5-6600, HD Graphics 530), but no compiler, flags, encoder settings, library versions or run counts are given, so it is not A.",
+      "notes": "Every number in claimed_speedup matches the OpenCV wiki tables (encode h264 193/194/185 vs 51/51/50, vp8 124 vs 12, mpeg2 124 vs 106; decode mp4/h264 376 vs 169, avi/h264 373 vs 159, mp4/h265 391 vs 256, mp4/mpeg2 364 vs 258). Shortcomings to record: hardware iGPU versus CPU software codecs (FFmpeg's own VA-API path not used), unequal encoder settings, synthetic 720p-default encode input not the 1080p clip, write-only encode timer favouring GStreamer's async pipeline, mkv decode much slower with gst-vaapi, 2018 Ubuntu 17.10 run with no versions or flags, and gstreamer-vaapi since removed from GStreamer main in favour of the va plugin. Metadata checked: 3.3k stars, 774 forks, mirror (not a fork), last commit 2026-10-11, LGPL-2.1 LICENSE.",
+      "urls_opened": [
+        "https://github.com/opencv/opencv/wiki/Video-capture-and-write-benchmark",
+        "https://raw.githubusercontent.com/opencv/opencv/master/samples/cpp/gstreamer_pipeline.cpp",
+        "https://raw.githubusercontent.com/opencv/opencv/3.4.3/samples/cpp/gstreamer_pipeline.cpp",
+        "https://raw.githubusercontent.com/opencv/opencv/4.x/samples/cpp/videocapture_gstreamer_pipeline.cpp",
+        "https://github.com/opencv/opencv/commits/4.x/samples/cpp/videocapture_gstreamer_pipeline.cpp",
+        "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/videoio/src/cap_gstreamer.cpp",
+        "https://raw.githubusercontent.com/opencv/opencv/3.4/modules/videoio/src/cap_gstreamer.cpp",
+        "https://github.com/GStreamer/gstreamer",
+        "https://github.com/GStreamer/gstreamer/tree/main/subprojects",
+        "https://github.com/GStreamer/gstreamer/commits/main",
+        "https://raw.githubusercontent.com/GStreamer/gstreamer/main/LICENSE",
+        "https://raw.githubusercontent.com/GStreamer/gstreamer/main/README.md"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "OpenCV VideoCapture/VideoWriter benchmark on a 1920x1080 clip: frames per second decoding and encoding mpeg2, h264, h265 (decode only) and vp8 in mkv, mp4 and avi containers, GStreamer pipelines versus OpenCV's FFmpeg backend.",
+      "compiler_and_flags": "OpenCV built with cmake -DBUILD_EXAMPLES=ON -DWITH_GSTREAMER=ON -DWITH_FFMPEG=ON, make -j8; compiler, optimisation flags and GStreamer/FFmpeg/OpenCV versions not stated",
+      "caveats": "The win is a hardware-versus-software comparison (iGPU VA-API against CPU codecs in OpenCV's FFmpeg backend), not GStreamer's own code being faster. The measuring project is OpenCV, not GStreamer, so this is independent but narrow. The page is from the Ubuntu 17.10 era (Skylake iGPU) and states no OpenCV, GStreamer or FFmpeg versions, compiler flags, encoder settings, frame counts or run counts. The sample it links (samples/cpp/gstreamer_pipeline.cpp) returned 404 at the OpenCV repository HEAD, so the benchmark code was not reproducible from the page alone. gst-vaapi decode was slower than the FFmpeg backend for mkv input (e.g. h264 59 vs 158 fps) and CPU gst-libav was slower than FFmpeg on h264, h265 and vp8 decode. The upstream repository itself (GStreamer README, LICENSE) carries no benchmarks. The GStreamer repo license file is LGPL v2.1 text; SPDX taken as LGPL-2.1-or-later from the list entry."
     }
   },
   {
