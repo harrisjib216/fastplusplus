@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/aubio/aubio",
+  "one_liner": "GPL C audio-analysis library whose Python aubio.source loads compressed audio 1.5-2.3x faster than audioread's ffmpeg subprocess.",
+  "what_it_does": "aubio is a C library with Python bindings for music and sound analysis: onset detection, pitch tracking, tempo and beat tracking, MFCC, FFT/phase vocoder, filters, and audio file read/write. The measured part is its I/O layer. aubio.source(path, samplerate=0, hop_size=512, channels=0) is a callable that returns the next hop_size float32 samples (mono downmix; do_multi gives all channels) plus a count of samples read, and it can seek and open URLs. It is not a drop-in for audioread or librosa.load: you loop over blocks and assemble the array yourself.",
+  "how_it_is_fast": "Decoding runs in-process. When built with libav, the source opens the file with libavformat/libavcodec and converts to float with libswresample in C; other builds use CoreAudio, libsndfile or a built-in WAV reader. audioread's FFmpegAudioFile spawns an ffmpeg process per file and pipes raw int16 bytes back. The Python wrapper reuses one output vector per source object rather than allocating a new array for each block. Most of the measured advantage is avoided process spawn and pipe overhead, not a faster codec.",
+  "when_to_use": [
+    "Python pipelines that load many short MP3 or AAC/MP4 files and currently use audioread's ffmpeg backend: mean load 0.068 vs 0.103 s (mp3) and 0.044 vs 0.101 s (mp4) over files of 1-151 s.",
+    "Metadata scans (sample rate, channels, length) over compressed files where the alternative spawns ffmpeg: 0.0015 vs 0.098 s per info call on mp3 and flac.",
+    "Block-wise streaming reads (hop-sized blocks, seek, URL sources) that feed aubio's own onset, pitch, tempo or MFCC analysis without a separate decoder dependency.",
+    "C or C++ programs that want one source API over libav, libsndfile, CoreAudio or a dependency-free WAV reader, and can accept GPL-3.0-or-later."
+  ],
+  "when_not_to_use": [
+    "WAV or FLAC loading: scipy loaded wav in 0.014 vs 0.064 s, and soundfile (0.045 s) and librosa (0.039 s) beat aubio's 0.067 s on flac.",
+    "Metadata-only workloads where torchaudio or soundfile are available: torchaudio answered in 0.000062 s vs 0.0015 s on flac, and soundfile in 0.0008 s vs 0.040 s on wav.",
+    "Closed-source or permissively licensed products: GPL-3.0-or-later applies to anything that links it.",
+    "Projects that need a maintained wheel: PyPI has only the 0.4.9 sdist (2019-02-08), and fixes for Python 3.12 (issue #394, commit 885e316), NumPy 2 and GCC 14 exist only on unreleased master.",
+    "Files longer than about 71.6 minutes read through the libav backend, if you rely on source.duration (see gotchas)."
+  ],
+  "integration": {
+    "form": "static/shared C library (waf, plus a Meson build merged on master) and a Python extension module (PyPI aubio 0.4.9, sdist only)",
+    "dependencies": "none required (built-in wavread/wavwrite and Ooura FFT); optional libavcodec/libavformat/libavutil/libswresample, libsndfile, libsamplerate, fftw3 or fftw3f, rubberband, libvorbis, libFLAC, JACK, Intel IPP, Apple Accelerate/CoreAudio; the Python module needs NumPy",
+    "min_toolchain": "C compiler (the Python build assumes C99 variadic macros); Python 3 with NumPy, with Python 3.12 and NumPy 2 support only on unreleased master",
+    "platforms": "Linux, macOS, Windows, Cygwin and iOS per the README; no SIMD requirement",
+    "thread_safety": "not documented; each source object owns its own libav context and a reused output buffer, so use one object per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness bug in the measured code path: aubio_source_avcodec_get_duration() casts libavformat's int64 microsecond duration to the 32-bit uint_t before dividing ((uint_t)duration / 1e6), so source.duration wraps for files longer than 4294.97 s (about 71.6 min). The value is also only a container estimate. The benchmark's load_aubio allocates np.zeros(f.duration) and slices blocks into it, so that loader is only safe for short files; the measured files were at most 151 s, so the published numbers are unaffected.",
+    "source() returns the same reused vector on every call (Py_source_do hands back self->read_to), zero-padded beyond `read`. Copy the samples before the next call, or every block will alias one buffer.",
+    "The harness is lopsided in small ways. load_ar_ffmpeg overwrites sig on each buffer and returns only the last one, so the audioread baseline never assembles the full array. Only the last file in each duration folder is timed. Every info call reopens the file four times, which charges audioread four ffmpeg spawns. aubio's libav source multiplies max_analyze_duration by 100 before avformat_find_stream_info, and its wav info call (0.040 s) was about 27x slower than its mp3 call (0.0015 s). All test audio is synthetic white noise.",
+    "Which backend you get depends on the build: the PyPI sdist uses pkg-config to look for libav and sndfile and otherwise falls back to the built-in WAV reader (WAV only). Heap out-of-bounds reads (#409, #410) were fixed on master in 2025 but are not in 0.4.9; #435 (global OOB read in pitchyinfft) and #439 (source_avcodec leak) are open."
+  ],
+  "pick_this_over_siblings_when": "Pick aubio over pedalboard or Symphonia when you need onset, pitch or beat analysis in the same C library as an in-process libav reader. For pure file-reading speed, pedalboard (Python) or Symphonia (Rust decoders) are the catalogued options; for librosa-style feature extraction, compare libsonare and audioFlux.",
+  "verified_claims_summary": "In the third-party faroit/python_audio_loading_benchmark, aubio 0.4.9's aubio.source (hop 1024) was timed against audioread 2.1.9's FFmpegAudioFile on mono 44.1 kHz white-noise files of 1-151 s, taking the minimum of 3 timeit repeats of 3 loads. Hardware and the aubio build are unstated. aubio loaded mp4 about 2.3x and mp3 about 1.5x faster and tied on flac; the 10x wav ratio comes from a separate 2023 rerun on a machine with slow ffmpeg startup. Metadata queries were 35-66x faster on compressed formats, mostly avoided process spawns. soundfile, librosa, scipy and torchaudio beat aubio on several rows.",
+  "status_note": "Master is active again (0.5.0-alpha, last commit 2026-04-10; fixes for Python 3.12, NumPy 2, GCC 14 and FFmpeg 7 issues), but the only PyPI release is the 2019 0.4.9 sdist, and maintainer replies in issue #422 give no release date. LedFx publishes a GPL fork with wheels (aubio-ledfx 0.4.12 on PyPI, cp311 and later), whose README lists libsndfile, libsamplerate and fftw3 as dependencies but not FFmpeg.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/README.md",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/io/source.c",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/io/source_avcodec.c",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/io/source_wavread.c",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/io/source_sndfile.c",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/types.h",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/src/aubio_priv.h",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/python/ext/py-source.c",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/python/lib/moresetuptools.py",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/python/lib/gen_external.py",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/python/demos/demo_reading_speed.py",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/setup.py",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/wscript",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/VERSION",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/aubio/aubio/HEAD/scripts/get_waf.sh",
+    "https://github.com/aubio/aubio/issues?q=is%3Aissue+ffmpeg+OR+numpy+OR+python+3.12+OR+build",
+    "https://github.com/aubio/aubio/issues/422",
+    "https://github.com/aubio/aubio/issues/394",
+    "https://pypi.org/pypi/aubio/json",
+    "https://pypi.org/pypi/aubio-ledfx/json",
+    "https://github.com/LedFx/aubio-ledfx",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/loaders.py",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/benchmark_np.py",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/benchmark_metadata.py",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/generate_audio.sh",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/faroit/python_audio_loading_benchmark/HEAD/Dockerfile"
+  ],
+  "confidence": 0.75
+}

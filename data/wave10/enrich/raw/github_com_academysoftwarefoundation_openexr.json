@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/academysoftwarefoundation/openexr",
+  "one_liner": "Reference C/C++ EXR library; faster than TinyEXR's dependency-free build on ZIPS, PXR24 and HTJ2K, not its libdeflate build.",
+  "what_it_does": "OpenEXR is the specification and reference implementation of the EXR HDR image format: multi-part, multi-channel, scanline or tiled (with mip/ripmaps) and deep images in HALF, FLOAT or UINT channels, with codecs NONE, RLE, ZIPS, ZIP, PIZ, PXR24, B44/B44A, DWAA/DWAB, HTJ2K256/HTJ2K32 (3.4) and ZSTD plus lossy LJ2K (3.5). It has two APIs: the C++ Imf layer (InputFile/OutputFile or RgbaInputFile with FrameBuffer slices) and, underneath it since 3.3, the C OpenEXRCore library (contexts, chunk-level decode/encode pipelines, custom I/O, allocator and error handlers). It is not an API drop-in for TinyEXR, but files written by either library read in the other.",
+  "how_it_is_fast": "ZIP, ZIPS and PXR24 go through libdeflate (adopted in 3.2 in place of zlib; vendored 1.26 in 3.5). HTJ2K uses OpenJPH's High-Throughput (ITU-T T.814) block coder, which selects its AVX2 codeblock decoder on x86. PIZ is a wavelet plus Huffman codec. Scanline blocks and tiles are processed in parallel on the IlmThread worker pool (or TBB) sized by setGlobalThreadCount(). DWA has AVX and NEON SIMD paths, per the release notes.",
+  "when_to_use": [
+    "Production rendering, compositing and texture pipelines that need the full EXR feature set (multi-part, deep, tiled, DWA, HTJ2K, ZSTD) and reference-grade interoperability.",
+    "HTJ2K-compressed EXR, especially writing: in TinyEXR's harness OpenEXR encoded htj2k256 at 33.2 vs 11 MP/s (about 3x) and decoded it at 29.8 vs 23.2 MP/s against TinyEXR's in-tree codec (Ryzen 9 3950X, one thread).",
+    "When the alternative is TinyEXR's dependency-free in-tree build (freestanding or WASM path): OpenEXR decodes ZIPS and PXR24 about 1.45x faster and encodes ZIP/ZIPS/PXR24 1.4-1.7x faster.",
+    "Multithreaded PIZ decode: at 16 threads OpenEXR decoded PIZ at 207.7 vs 110.5 MP/s against in-tree TinyEXR.",
+    "Python users: PyPI OpenEXR 3.5.2 ships wheels for manylinux and musllinux (x86-64, aarch64), macOS (x86-64, arm64, universal2) and Windows (amd64, arm64)."
+  ],
+  "when_not_to_use": [
+    "Single-thread uncompressed or RLE decode: TinyEXR measured 1380 vs 389 MP/s and 114 vs 45.5 MP/s (part of that gap is harness overhead on the OpenEXR side; see gotchas).",
+    "When TinyEXR's default hosted build (DEFLATE=auto, vendored libdeflate) is an option: it ties or beats OpenEXR on ZIP/ZIPS/PXR24 single-thread (ZIP decode 42.4 vs 30.7 MP/s) and leads the deflate family at 16 threads (ZIPS 358.5 vs 151.1, ZIP 339.6 vs 226.6 MP/s).",
+    "Small-footprint, WASM or freestanding builds: OpenEXR needs CMake 3.14+, a C++17 compiler, Imath, libdeflate, OpenJPH 0.32.0+ and zstd 1.5.0+ (vendored or auto-fetched fallbacks) plus a thread library.",
+    "DWAA/DWAB write-heavy workloads on 3.3 or later: open issues #1915 and #2201 report DWA encode regressions against 3.2.1 (writePixels about 20 ms in 3.4.0 vs about 10 ms in 3.2.1; up to 58% slower HD half writes in a real application).",
+    "Parsing untrusted files on an old release: SECURITY.md lists 38 distinct CVE-2026 IDs and 10 CVE-2025 IDs, mostly decoder memory-safety bugs, patched only in recent 3.2.x-3.5.x releases."
+  ],
+  "integration": {
+    "form": "shared lib (BUILD_SHARED_LIBS defaults ON) or static lib; Python module via PyPI wheels",
+    "dependencies": "Imath 3.1+ (auto-fetched if absent), libdeflate (vendored 1.26 fallback), OpenJPH >= 0.32.0 (vendored fallback), zstd >= 1.5.0 (vendored 1.5.7 fallback), Threads (optional oneTBB)",
+    "min_toolchain": "C++17 compiler, CMake 3.14+",
+    "platforms": "Linux, macOS, Windows (including ARM64/ARM64EC fixes); FreeBSD in CI; x86-64 and arm64",
+    "thread_safety": "Documented thread-safe: threads may use distinct file objects concurrently, and accesses to one shared file object are serialized by a mutex. setGlobalThreadCount(n) adds an internal worker pool that parallelizes chunks within a file (0 means work runs in the calling thread). In OpenEXRCore, calls after exr_start_read() are thread-safe.",
+    "drop_in_for_baseline": "partial — the file format is interoperable with TinyEXR, but the API is different (C++ FrameBuffer/Slice or OpenEXRCore contexts versus TinyEXR's exr_load/exr_save functions)"
+  },
+  "gotchas": [
+    "Harness flaw in the evidence, biased against OpenEXR: on every timed decode, TinyEXR's benchmark/bench_compare.cpp copies the whole compressed file into a std::istringstream (iss.str(buf)), builds a new InputFile, and zero-fills a new 2.3 MB framebuffer (make_fb assigns 0). Each timed encode also copies its output out through oss.str(). The TinyEXR side decodes from a raw pointer. OpenEXR's own docs say these copies matter for uncompressed reads and offer a memory-mapped IStream instead. TinyEXR's 3.5x NONE and 2.5x RLE decode wins are therefore partly harness overhead, and OpenEXR's leads on compressed codecs are, if anything, understated. TinyEXR's loop also counts failed decodes as timed iterations and only warns on stderr.",
+    "The source doc's numbers drift about 2x between runs, although it claims 'a few % run-to-run'. OpenEXR ZIP decode is 30.7 MP/s in the 2026-08-08 table and headline chart, 58.8 in the LIBDEFLATE=1 line and 62.1 in the older perf-decode chart. HTJ2K encode flips between the table (TinyEXR 18.7 vs 16.4) and the encode chart (OpenEXR 33.2 vs 11). OpenEXR's HTJ2K values are carried over from an older run. OpenEXR was built out of tree at $(HOME)/work/openexr/_build with no commit stated (OpenEXR's CMake defaults to a Release build when no type is given).",
+    "Chunk granularity drives multithreaded speed: htj2k256 uses 256-scanline chunks, so small images get almost no parallelism; the 3.4.0 notes say htj2k32 is 4-6x faster in some multithreaded cases at slightly larger size. By default each open file tries to use the whole global worker pool.",
+    "Recent release hazards: 3.5.1 fixed a heap buffer overflow in ZSTD deep scanline decoding. Lossy LJ2K files written by 3.5.0 and 3.5.1 lack the transfer-function LUT and should be regenerated (3.5.2 adds a read fallback). Before 3.5.2 the auto-fetched Imath tracked the main branch rather than a pinned tag."
+  ],
+  "pick_this_over_siblings_when": "Pick OpenEXR over OpenJPH when you need EXR containers (it uses OpenJPH internally for HTJ2K and adds every other EXR codec and feature), and over meshoptimizer's vertex codec, which beat OpenEXR ZIP in its own float-image harness, whenever files must stay readable by standard EXR tools.",
+  "verified_claims_summary": "TinyEXR's author benchmarked TinyEXR v3 against OpenEXR 4.0-dev in benchmark/bench_compare.cpp: one thread, gcc -O3, Ryzen 9 3950X, the 660x440 four-channel HALF asakusa.exr in memory. Against TinyEXR's in-tree codec, OpenEXR decoded ZIPS at 24.4 vs 17.0 MP/s, PXR24 at 43.8 vs 29.9 and htj2k256 at 29.8 vs 23.2, and encoded htj2k256 about 3x faster (33.2 vs 11). It tied or lost against TinyEXR's default libdeflate build on ZIP/ZIPS/PXR24 and lost uncompressed and RLE decode outright, partly because the harness adds stream copies on the OpenEXR side.",
+  "status_note": "Actively maintained ASWF project (3.5.2 released 2026-10-02, commits through 2026-10-10), BSD-3-Clause and packaged by Linux distros, Homebrew, MacPorts and PyPI; frequent security patch releases across the 3.2-3.5 branches mean you should track the latest patch.",
+  "sources_read": [
+    "https://github.com/AcademySoftwareFoundation/openexr/commits/main",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/README.md",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/CHANGES.md",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/cmake/OpenEXRSetup.cmake",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/src/lib/OpenEXRCore/openexr.h",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/src/lib/OpenEXRCore/openexr_context.h",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/src/lib/OpenEXRCore/openexr_decode.h",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/website/ReadingAndWritingImageFiles.rst",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/website/OpenEXRCoreAPI.rst",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/website/install.rst",
+    "https://raw.githubusercontent.com/AcademySoftwareFoundation/openexr/HEAD/website/concepts.rst",
+    "https://github.com/AcademySoftwareFoundation/openexr/issues?q=is%3Aissue+performance",
+    "https://github.com/AcademySoftwareFoundation/openexr/issues/2201",
+    "https://github.com/AcademySoftwareFoundation/openexr/issues/1915",
+    "https://pypi.org/pypi/OpenEXR/json",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/doc/performance-vs-openexr.md",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/benchmark/bench_compare.cpp",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/benchmark/bench_tx.c",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/benchmark/bench_tx.h",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/benchmark/README.md",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/Makefile",
+    "https://raw.githubusercontent.com/syoyo/tinyexr/release/doc/gen_perf_charts.py"
+  ],
+  "confidence": 0.75
+}
