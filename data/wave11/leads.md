@@ -12,3 +12,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 ## Backfill round 2, 2026-10-11 (seeds w11-mine-e to o)
 - RaftLib: PMAM 2015 / IJHPCA 2016 paper (vs GNU Parallel+grep, Spark) likely tier B; ccrc.wustl.edu, arxiv, raftlib.io, aminer all blocked. Paper-access retry.
 - HiGHS-style uncatalogued leads from wave 8 verifiers apply here too: none for wave 11 this round.
+- VexCL: arXiv 1601.03144 and 1212.6326 blocked; snippet says VexCL is the best OpenCL scan under about 2M elements and below 20% of CUB at large sizes. Paper-access retier lead, domain numerics-and-science.
