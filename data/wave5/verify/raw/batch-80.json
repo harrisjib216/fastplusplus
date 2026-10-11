@@ -1,0 +1,60 @@
+[
+  {
+    "id": "https://github.com/pocoproject/poco",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "PR 5081 (merged 2025-12-22 by the POCO maintainer who wrote it) shows the six Loggers_* rows exactly as claimed, produced by the public Benchmark/src/LoggerBench.cpp, but states no compiler, flags or CPU model (only 'Run on (16 X 2000 MHz CPU s)' and an aarch64 binary path), so first-party tier C.",
+    "corrections": {
+      "workload": "Google Benchmark of the calling-thread cost of one log call, Benchmark/src/LoggerBench.cpp from PR 5081: Loggers_AsyncChannel_File vs Loggers_FastLogger_File write a 43-byte message through FileChannel plus PatternFormatter to a temp file; the ShortMsg (9-byte) and LongMsg (256-byte) pairs use null sinks (AsyncChannel feeding NullChannel vs FastLogger's default null sink), so they measure queue and threading overhead only, not file output.",
+      "hardware": "Linux on aarch64 (binary path Benchmark/bin/Linux/aarch64/benchmark), 16 x 2000 MHz CPUs, CPU model not stated; load average 2.99, 1.19, 0.63 at start (machine not idle).",
+      "last_commit": "2026-10-09",
+      "caveats": "First-party claim by a POCO maintainer (aleks-f, PR author and merger). FastLogger is a wrapper of the Quill logging library (POCO 1.15.0 release notes: 'FastLogger (Quill wrapper, fully compatible with Poco Logging system)', bundling Quill 11.0.2, upgraded to 11.1.0 in 1.15.2), so the speed comes from Quill's SPSC queue and backend thread. The large multipliers are CPU time of the calling thread only. FastLogger is configured with Quill's UnboundedBlocking queue (64 MB max, 100 ns blocking retry interval), and under sustained load the caller sleeps on a full queue; CPU time leaves that sleep out as well as all backend formatting and I/O, so the 34.7x-55.9x CPU-time ratios are not per-call latency. Wall time per call, which is what the caller experiences at saturation, improves 4.6x for the file case and only about 1.1x for the short and long null-sink cases. The short and long pairs use null sinks, not files. Compiler, flags and CPU model are not stated (aarch64 Linux, 16 x 2000 MHz, load average 2.99 at start). The FastLogger.h comment '~9ns vs ~100ns' has no stated methodology. The baseline is POCO's own Logger plus AsyncChannel, not a third-party logger, and POCO's HTTP and networking components have no comparative numbers anywhere reached. macOS and Windows numbers in the PR were not extracted. FastLogger can be compiled out with ENABLE_FASTLOGGER=OFF and is auto-disabled on unsupported platforms (1.15.2)."
+    },
+    "notes": "Numbers match PR 5081 exactly and the benchmark code is unchanged in substance on main (only const to constexpr). POCO's own release notes call FastLogger a Quill wrapper, and odygrd/quill is already verified (wave 11, COPYABLE.md), so this record is a candidate for decision duplicate under the wrapper rule; if kept, note that its id is the whole POCO repo while the claim covers only FastLogger. Stars 9.5k, BSL-1.0 confirmed from LICENSE, not archived, last commit 2026-10-09.",
+    "urls_opened": [
+      "https://github.com/pocoproject/poco/pull/5081",
+      "https://github.com/pocoproject/poco",
+      "https://github.com/pocoproject/poco/commits/main",
+      "https://github.com/pocoproject/poco/releases",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/Benchmark/src/LoggerBench.cpp",
+      "https://raw.githubusercontent.com/pocoproject/poco/1850dc1/Benchmark/src/LoggerBench.cpp",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/Benchmark/README.md",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/Benchmark/CMakeLists.txt",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/Foundation/include/Poco/FastLogger.h",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/Foundation/src/FastLogger.cpp",
+      "https://raw.githubusercontent.com/pocoproject/poco/1850dc1/Foundation/src/FastLogger.cpp",
+      "https://raw.githubusercontent.com/pocoproject/poco/main/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/rpclib/rpclib",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "benchmark.json in rpclib/benchmarks (author's own suite, code in src/benchmark.cc and include/*/fixture.h) contains the claimed means exactly (rpclib get_answer 22,115 ns vs gRPC 54,841 ns; get_structs 8,305,870 vs 17,676,102 ns), but no CPU model, no exact compiler version and no confirmed build type, so first-party tier C.",
+    "corrections": {
+      "compiler_and_flags": "Not stated for the published run. README requires g++ 5.4 or later or clang 3.8 or later and builds with plain 'cmake ..' (no CMAKE_BUILD_TYPE), while CMakeLists.txt only warns 'Not building in release mode!' outside Release (Release uses CMake's default -O3, -O2 via USE_O2); C++14. The JSON field library_build_type 'release' describes the Google Benchmark library, not the benchmark binary. Libraries from conan: rpclib 1.0.0, grpc 1.1.0 and thrift 0.9.3 (packaged by the rpclib author in sztomi/testing), capnproto 0.5.3, google-benchmark 1.1.0; rpclib logging disabled.",
+      "hardware": "4 CPUs at 2807 MHz with CPU frequency scaling enabled (benchmark.json context, run 2017-02-20); CPU model and the run's OS not stated (README says the suite was tested on Arch Linux and Ubuntu 16.04).",
+      "caveats": "First-party benchmark (rpclib/benchmarks, written by the rpclib author, whose README FAQ says 'I'm not an expert in the other libraries, so it's entirely possible that I used them wrong') with public code but no CPU model, no exact compiler version and no confirmed Release build of the benchmark binary, so tier C. Numbers date from 2017-02-20 and use gRPC 1.1.0, Thrift 0.9.3 and Cap'n Proto 0.5.3 from conan (gRPC and Thrift packaged by the rpclib author), so the gRPC gap may not hold for current gRPC. gRPC has no get_blob rows: the gRPC get_blob benchmark is commented out in src/benchmark.cc, citing grpc issue 9510 on message size. Against the other libraries rpclib mostly loses: on get_blob it is slower than Thrift at every size except 64 KB and 128 KB (1 KB: 23,608 ns vs 14,362 ns) and slower than both Thrift and Cap'n Proto at every size from 256 KB to 16 MB (16 MB: 16,482,465 ns vs Thrift 15,126,944 ns and Cap'n Proto 13,364,192 ns); on get_answer Thrift is faster (10,285 ns); on get_structs Cap'n Proto is faster (183,415 ns). The gRPC comparison is the only one rpclib wins across the board. Wall time includes the in-process server thread; rpclib's calling-thread CPU time is much lower than its wall time (get_answer 4,725 ns CPU vs 22,115 ns real). The accompanying blog post (szelei.me) is blocked here and was not read. The project README says 'rpclib is looking for maintainers'; last commit 2022-11-22."
+    },
+    "notes": "All claimed means match benchmark.json exactly and the gRPC fixture is a fair synchronous round trip over localhost with one persistent channel, so the 2.5x and 2.1x wins over gRPC 1.1.0 stand as first-party evidence. Repo: 1.8k stars, MIT (LICENSE.md, Copyright 2015-2017 Tamas Szelei), not archived, not a fork, last commit 2022-11-22 (abandoned by the 3-year rule), AirSim listed as a user. No duplicate found.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/benchmark.json",
+      "https://github.com/rpclib/benchmarks",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/conanfile.txt",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/run_benchmarks.sh",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/src/benchmark.cc",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/include/grpc/fixture.h",
+      "https://raw.githubusercontent.com/rpclib/benchmarks/HEAD/include/rpclib/fixture.h",
+      "https://github.com/rpclib/rpclib",
+      "https://github.com/rpclib/rpclib/commits/master",
+      "https://raw.githubusercontent.com/rpclib/rpclib/HEAD/LICENSE.md"
+    ]
+  }
+]
