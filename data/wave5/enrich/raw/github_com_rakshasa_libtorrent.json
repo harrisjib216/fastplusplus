@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/rakshasa/libtorrent",
+  "one_liner": "C++ BitTorrent engine behind rTorrent that writes mmap'ed file pages straight to sockets; old first-party claim of 3x the mainline client's seeding speed.",
+  "what_it_does": "A complete BitTorrent protocol library (peers, trackers, DHT, piece picking, hashing, throttling, protocol encryption) used as the engine of the rTorrent client. Clients call torrent::initialize(), add downloads from bencoded torrent Objects with download_add(), and drive everything through libtorrent's own threads (main, net, disk, tracker) and poll loop. It is not an event-loop library and not a drop-in for anything: the API is shaped around rTorrent and documented only by headers and a four-page wiki.",
+  "how_it_is_fast": "Torrent data is accessed through mmap'ed file chunks: on upload, PeerConnectionBase::up_chunk walks a ChunkIterator over the mapped pages and calls write() on the socket directly from them, so there is no user-space read buffer or pread copy (it is not sendfile; the kernel still copies into socket buffers). Before uploading a chunk it can prefetch it with madvise(MADV_WILLNEED) or by touching each 4 KiB page, but only when the peer's upload rate exceeds preload_required_rate per MB and the chunk was not preloaded in the last 60 s; mincore() feeds instrumentation of page-cache hits. Downloads recv() directly into writable mapped chunks, and dirty chunks are queued and synced later by the disk thread. Socket readiness comes from an epoll (Linux) or kqueue (BSD, macOS) backend.",
+  "when_to_use": [
+    "You are building or extending a Linux/BSD seedbox, headless client or rTorrent frontend and want the engine rTorrent already ships on.",
+    "Unencrypted seeding of many torrents from fast local disks where the page cache can hold the hot chunks; that is the case the mmap-to-socket path targets.",
+    "64-bit hosts with large address space, so many chunks can stay mapped (the default address-space budget is 32,768 MB on 64-bit builds).",
+    "GPL-2.0 (with the per-file OpenSSL linking exception) is acceptable for your client."
+  ],
+  "when_not_to_use": [
+    "You want a measured speed advantage: the only number is an old first-party 3x seeding sentence with no benchmark, no methodology and a baseline (the mainline BitTorrent client of the mid-2000s) nobody uses today.",
+    "You need Windows, uTP (issue #33 open since 2013) or full BitTorrent v2/BEP52 support (issue #213 open since 2020).",
+    "Storage that can fill up, be truncated or vanish under you (network mounts, full disks): writes and reads go through mmap, so these surface as SIGBUS rather than an I/O error (open issues #825 and #645).",
+    "Encrypted peer connections dominate: the encrypt path (up_chunk_encrypt) copies each piece into an EncryptBuffer with Chunk::to_buffer and encrypts it there, so the direct page-to-socket write no longer applies.",
+    "You need a documented, stable library API for a non-rTorrent client; arvidn's libtorrent-rasterbar (a different project with a similar name) is the usual choice there."
+  ],
+  "integration": {
+    "form": "shared lib (autotools; configure.ac sets disable-static by default)",
+    "dependencies": "libcurl, zlib, pthreads, OpenSSL (configure check TORRENT_CHECK_OPENSSL); cppunit only for the unit tests",
+    "min_toolchain": "C++20 (configure uses AX_CXX_COMPILE_STDCXX(20, noext, mandatory)); CI includes gcc 14 on BSD jobs; autoconf/automake/libtool to bootstrap",
+    "platforms": "Unix-like only: configure refuses to build without epoll or kqueue; CI runs Ubuntu 22.04/24.04, macOS, FreeBSD, NetBSD, OpenBSD, DragonFlyBSD and OmniOS; open alignment issue on ARM (#462); no Windows",
+    "thread_safety": "Not documented in detail; the library runs its own main, net, disk and tracker threads and expects client calls from the main thread after initialize_main_thread() (issue #954 asks which thread owns the HTTP setters)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "SIGBUS is part of the failure model: a kernel-invalidated mapping (disk full, file truncated or removed) kills the process unless the client handles SIGBUS; #645 is a SIGBUS abort in Chunk::to_buffer during an encrypted upload, and #825 tracks recv() into mapped memory on a full disk.",
+    "The address space reserved for mapped chunks defaults to 1,024 MB on 32-bit builds (32,768 MB on 64-bit), which caps how much torrent data can be mapped at once on small systems; change it with --with-address-space.",
+    "The catalog record's notes are partly stale: the current tree has epoll and kqueue backends (no select backend) and requires C++20; the sigc++-era API mentioned in the record belongs to old releases.",
+    "Name clash: 'libtorrent' also names arvidn/libtorrent (libtorrent-rasterbar, used by qBittorrent and Deluge); packages, headers and APIs are unrelated."
+  ],
+  "pick_this_over_siblings_when": "None of the event-loops-io siblings (libev, Asio's io_uring backend, PhotonLibOS, Seastar) is a BitTorrent engine, so pick libtorrent only when you need BitTorrent itself; if you only want a faster event loop or I/O backend, those siblings carry the measured evidence and this entry does not.",
+  "verified_claims_summary": "The only claim is the project's old description sentence that it 'is able to seed at 3 times the speed of the official client' on high-bandwidth connections, preserved in distro package descriptions (SlackBuilds 14.1 for 0.13.6, openSUSE, OpenWrt, Salix) but in neither the current nor the v0.13.0 README. No benchmark code, hardware, compiler, client versions, torrent size or peer count exists anywhere, and the code it described has since been reworked into the multi-threaded 0.16.x series.",
+  "status_note": "Very active (release 0.16.25 on 2026-10-05, commits through 2026-10-11) and copyable under GPL-2.0 with an OpenSSL exception, but the speed claim is decades-old marketing with no harness, and the category fit is a stretch since this is a BitTorrent engine rather than an event loop.",
+  "sources_read": [
+    "https://github.com/rakshasa/libtorrent",
+    "https://github.com/rakshasa/libtorrent/commits",
+    "https://github.com/rakshasa/libtorrent/issues",
+    "https://github.com/rakshasa/libtorrent/issues/825",
+    "https://github.com/rakshasa/libtorrent/issues/645",
+    "https://github.com/rakshasa/libtorrent/wiki",
+    "https://github.com/rakshasa/libtorrent/tree/master/src/data",
+    "https://github.com/rakshasa/libtorrent/tree/master/src/torrent",
+    "https://github.com/rakshasa/libtorrent/tree/master/src/torrent/net",
+    "https://github.com/rakshasa/libtorrent/tree/master/.github/workflows",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/README.md",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/COPYING",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/scripts/checks.m4",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/scripts/common.m4",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/.github/workflows/unit-tests.yml",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/data/memory_chunk.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/data/chunk.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/data/chunk_list.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/data/socket_file.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/data/thread_disk.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/protocol/peer_connection_base.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/protocol/peer_connection_leech.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/net/socket_stream.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/net/thread_net.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/torrent/torrent.h",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/torrent/torrent.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/torrent/system/poll.h",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/torrent/system/poll_epoll.cc",
+    "https://raw.githubusercontent.com/rakshasa/libtorrent/HEAD/src/torrent/system/poll_kqueue.cc",
+    "https://raw.githubusercontent.com/SlackBuildsOrg/slackbuilds/14.1/libraries/libtorrent/README",
+    "WebSearch: \"seed at 3 times the speed of the official client\" libtorrent rakshasa (result listings from mankier.com, git.openwrt.org, download.salixos.org, build.openbuildservice.org)"
+  ],
+  "confidence": 0.6
+}

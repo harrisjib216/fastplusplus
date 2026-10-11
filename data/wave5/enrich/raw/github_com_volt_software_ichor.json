@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/volt-software/ichor",
+  "one_liner": "C++20/23 dependency-injection and event-queue framework with HTTP services on Boost.Beast; its 'faster than Beast' numbers come from a broken baseline.",
+  "what_it_does": "Ichor is a microservice bootstrapping framework: services declare dependencies in their constructors or through a DependencyRegister, and a DependencyManager starts, stops and injects them on a per-thread event queue (Boost.Asio, io_uring, or sd-event backends) with coroutine Tasks. The HTTP server is an optional service: you register routes with hostService->addRoute(HttpMethod::post, \"/ping\", handler) and return an HttpResponse from a coroutine. It is a different programming model, not a drop-in replacement for a Beast server, and HTTP support is a partial HTTP/1.1 implementation (HTTPS only through the Beast backend).",
+  "how_it_is_fast": "There is no measured speed technique to credit: the HTTP path of the benchmarked build is Boost.Beast itself (Boost::v1::HttpHostService reads with http::async_read inside Asio stackful coroutines and writes through a per-connection outbox). What Ichor adds is structure: the read loop keeps reading the next request while the route handler runs as a queued event, and the framework runs on mimalloc, ankerl unordered_dense maps and glaze JSON. A non-Beast HTTP host on its own TCP services and an io_uring queue (liburing, Linux) also exist, but no HTTP numbers are published for them.",
+  "when_to_use": [
+    "You want an OSGi-style service lifecycle (dependencies appear and disappear at runtime, dependents are stopped and restarted) plus thread confinement in a C++20/23 codebase, and HTTP is one service among Redis, etcd, timers and TCP.",
+    "You prefer coroutine route handlers over hand-written Beast session code and can live with Beast-level or lower throughput.",
+    "Linux services that may later move to the io_uring queue without changing service code (the framework's stated goal of swapping submission/completion backends).",
+    "Projects that want hardened builds by default (_FORTIFY_SOURCE=3, stack protector, -fno-rtti) and can vendor several submodules."
+  ],
+  "when_not_to_use": [
+    "You need a faster HTTP server than Boost.Beast: no valid measurement shows one, and Drogon (about 132k req/s) and Go fasthttp (about 166k req/s) beat Ichor (about 67k-87k req/s) on Ichor's own benchmark page.",
+    "Full HTTP/1.1 compliance, HTTP/2 or HTTPS without Boost.Beast: the README calls HTTP support partial.",
+    "Large service graphs created at startup: the project's own conclusions say creating services with dependencies is likely O(N^2) and memory-heavy (the multi-threaded start benchmark peaks at about 300 MB).",
+    "You want a small dependency footprint or a stable, widely used API: it is a single-maintainer 'personal project' (237 stars, version 0.5.0) that pulls in Boost (context, coroutine, fiber), a forked fmt, a forked static mimalloc, glaze, spdlog, Catch2 and liburing.",
+    "macOS production use: support is described as partial (brew llvm, possible ASan false positives with Beast)."
+  ],
+  "integration": {
+    "form": "compiled library built with CMake (add_library without a type, so static unless BUILD_SHARED_LIBS is set; project ichor 0.5.0), with optional service sources selected by CMake flags",
+    "dependencies": "Boost 1.70+ (context, coroutine, fiber) for the Beast/Asio backend; git submodules fmt (fork), mimalloc (volt-software static fork), glaze, spdlog (optional), Catch2 (tests), liburing (Linux); OpenSSL for HTTPS; hiredis optional",
+    "min_toolchain": "GCC 12+, Clang 15+ or MSVC 17.4+; CMake 3.22; CMake sets CMAKE_CXX_STANDARD 23 on non-Windows although the project describes itself as C++20",
+    "platforms": "Linux (x86-64, aarch64, musl), Windows; partial macOS; io_uring backend Linux-only; arch tuning presets from X86_64 to AVX-512 and Raspberry Pi",
+    "thread_safety": "Thread confinement: each DependencyManager and its services live on one event-queue thread; cross-thread communication goes through queued events, and code on threads Ichor does not manage is 'on your own' (README)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the Beast comparison: benchmarks/beast_benchmark/boost_beast_benchmark.cpp sets keep_alive(true) on the response but then calls shutdown(shutdown_send) and accept(), which closes the socket, after every response, so wrk reconnects for every request (read errors equal the request count in all three runs), while Ichor keeps connections open; each Beast worker also serves one connection at a time, and the worker count used is not stated. At 2 connections Beast's mean latency (20.80 us) beat Ichor's (29.17 us).",
+    "The published Ichor runs are stale relative to the code: the top -H output shows separate 'HttpCon' and 'DepMan' threads (the README admits Ichor 'cheats' with an extra thread while Drogon, fasthttp and Beast ran on one), but the current BoostAsioQueue is a single-threaded io_context (BOOST_ASIO_CONCURRENCY_HINT_UNSAFE_IO) since the 'Refactor boost support to proper event loop, removing need for locks and threads' commit; the HTTP section dates from the Dec 2022 to Feb 2024 README revisions.",
+    "Run lengths differ (Ichor 60 s, every other server 10 s), and the benchmarks README itself says the numbers identify bottlenecks rather than showcase performance.",
+    "In the Beast-backed host, a request without keep-alive gets a keep_alive(false) response, but the server does not close the socket itself; the read loop only ends on end_of_stream, abort, timeout (30 s) or a bad descriptor."
+  ],
+  "pick_this_over_siblings_when": "Pick Ichor only for its dependency-injection, lifecycle and thread-confinement model; for raw HTTP throughput over Boost.Beast, aeronet (2.75x on headers, 1.10-1.20x on static and routing at 10 connections) and libevhtp (about 1.15x) have valid comparisons, and Drogon is roughly 1.5-2x faster than Ichor on Ichor's own page.",
+  "verified_claims_summary": "On an AMD 7950X with Ubuntu 22.04 (gcc 13.1.1 or clang 18, not stated which), wrk POSTed {\"sequence\": 2} to /ping: Ichor's Beast-backed pong example reached 67,195 / 87,049 / 72,972 req/s at 2 / 400 / 20,000 connections against 41,397 / 73,975 / 37,311 req/s for a 'pure Beast' server that closes the connection after every response. The 1.18x-1.96x gap therefore measures per-request TCP reconnects (and, in the old architecture, an extra handler thread), not a faster HTTP stack; there is no valid evidence that Ichor beats Beast.",
+  "status_note": "Active single-maintainer MIT project (last commits 2026-02-06, no open issues), copyable and well hardened by default, but its HTTP numbers come from a crippled baseline on a 2022-2024 architecture that has since been rewritten, so treat it as a DI and lifecycle framework rather than a fast HTTP server.",
+  "sources_read": [
+    "https://github.com/volt-software/ichor",
+    "https://github.com/volt-software/ichor/commits/main",
+    "https://github.com/volt-software/ichor/commits/main/benchmarks/README.md",
+    "https://github.com/volt-software/ichor/commits/main/src/ichor/event_queues/BoostAsioQueue.cpp",
+    "https://github.com/volt-software/ichor/issues",
+    "https://github.com/volt-software/ichor/tree/main/examples",
+    "https://github.com/volt-software/ichor/tree/main/examples/http_ping_pong",
+    "https://github.com/volt-software/ichor/tree/main/src/services/network",
+    "https://github.com/volt-software/ichor/tree/main/src/services/network/boost",
+    "https://github.com/volt-software/ichor/tree/main/src/services/network/http",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/README.md",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/benchmarks/beast_benchmark/boost_beast_benchmark.cpp",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/src/services/network/boost/HttpHostService.cpp",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/src/services/network/http/HttpHostService.cpp",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/src/ichor/event_queues/BoostAsioQueue.cpp",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/examples/http_ping_pong/pong.cpp",
+    "https://raw.githubusercontent.com/volt-software/ichor/HEAD/examples/http_ping_pong/PongService.h"
+  ],
+  "confidence": 0.7
+}
