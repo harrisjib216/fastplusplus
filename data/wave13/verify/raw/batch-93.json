@@ -1,0 +1,83 @@
+[
+  {
+    "id": "https://github.com/dpdk/dpdk",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "app/test/test_memcpy_perf.c does time rte_memcpy and libc memcpy side by side in TSC ticks, but no results, CPU, compiler or flags are published anywhere in the repo; the only rte_memcpy-versus-glibc number (22 percent more vhost bandwidth in OvS-DPDK) comes from an Intel article, seen as a search snippet only (intel.com unreachable here), which is first-party vendor evidence without methodology. The 2026 commit d0ab5a7 compares rte_memcpy only with its own previous version.",
+    "corrections": {
+      "workload": "DPDK's app/test/test_memcpy_perf.c (memcpy_perf_autotest) times rte_memcpy and then libc memcpy on the same random source/destination offsets, in TSC ticks per copy averaged over 1,000,000 iterations, printing both tick counts and the percent difference. Variable sizes run from 1 to 8192 bytes (63 sizes, including 1518/1522/1536 packet sizes) and compile-time-constant sizes are 6, 64, 128, 192, 256, 512, 768, 1024 and 1536 bytes, each aligned (16/32/64-byte unit depending on SSE/AVX2/AVX-512 build) and unaligned, cache-to-cache, cache-to-memory, memory-to-cache and memory-to-memory (100 MB buffer). For the constant-size rows the 'memcpy' baseline is normally expanded inline by the compiler, so it is a GCC/Clang builtin rather than glibc. The system-level claim (snippet only) is a vhost Rx/Tx copy path in OvS-DPDK.",
+      "last_commit": "2026-10-10",
+      "caveats": "The only glibc comparison number (22 percent) is a system-level bandwidth figure from a search snippet of Intel's article 'Performance Optimization of memcpy in DPDK' (intel.com fails with getaddrinfo ENOTFOUND here); Intel originated DPDK, so it is first-party vendor evidence with no stated CPU, glibc, compiler or OvS/DPDK versions, and not a memcpy microbenchmark. The in-repo harness compares against libc memcpy but no results are checked in. Commit d0ab5a7 (2026, 'eal/x86: optimize memcpy of small sizes') reports only rte_memcpy before/after cycles (8 bytes 4 vs 7, 16 bytes 2 vs 4, 64 bytes 4 vs 7, up to 15 bytes about 4.5 vs 6.5), with no CPU or compiler named. Counter-evidence from the DPDK list (search snippets only, mails.dpdk.org unreachable): Stephen Hemminger wrote in 2022 that rte_memcpy was added because gcc/glibc then used poor x86 instructions and that for small copies plain moves are as fast or faster; Mattias Ronnblom's 2024 series 'Optionally have rte_memcpy delegate to compiler memcpy' argued the benefit 'has been diminishing with every compiler release' (its use_cc_memcpy option is not in meson_options.txt on main, so it was not merged); a 61-patch series 'reduce use of rte_memcpy' was under review in August 2026, with reviewers asking for data-path performance tests and noting sanitizer/bounds tooling understands memcpy but not rte_memcpy. A DPDK mailing-list report (snippet only) found the AVX-512 path slower than AVX2 in an OvS-DPDK test. The 2015 RFC that motivated the AVX path said results depend on the glibc version. last_commit is the repository head; rte_memcpy.h (lib/eal/x86/include) was last touched 2026-09-23 (commit 4f795dd)."
+    },
+    "notes": "Real, widely used x86 memcpy (BSD-3-Clause header in lib/eal/x86/include/rte_memcpy.h), but the only win over glibc is a snippet-only vendor figure at system level; the harness exists yet nobody publishes its rte_memcpy-vs-memcpy output, and DPDK maintainers themselves are moving code back to plain memcpy. Shortcomings to record: no published microbenchmark results, vendor snippet-only evidence, constant-size baseline is compiler-inlined, upstream doubts about the benefit on current compilers. Record's workload said sizes up to about 1.5 KB; variable sizes actually go to 8192 bytes.",
+    "urls_opened": [
+      "https://github.com/DPDK/dpdk",
+      "https://github.com/DPDK/dpdk/commits/main",
+      "https://github.com/DPDK/dpdk/commits/main/lib/eal/x86/include/rte_memcpy.h",
+      "https://github.com/DPDK/dpdk/commit/d0ab5a7",
+      "https://raw.githubusercontent.com/DPDK/dpdk/main/app/test/test_memcpy_perf.c",
+      "https://raw.githubusercontent.com/DPDK/dpdk/main/meson_options.txt",
+      "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/x86/include/rte_memcpy.h",
+      "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/include/generic/rte_memcpy.h"
+    ]
+  },
+  {
+    "id": "https://github.com/microsoft/stl",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "PR #4745 and PR #5484 carry maintainer before/after tables (Google Benchmark, benchmarks/src/search.cpp, AMD Ryzen 9 5950X) against the previous scalar MSVC STL std::search; the code and the Release flags (/O2 /Ob2 in benchmarks/CMakeLists.txt) are public, but the compiler and version used (MSVC or clang-cl, both supported by that CMake file) are not stated, so first-party with partial methodology stays C.",
+    "corrections": {
+      "claimed_speedup": "PR #4745 (1- and 2-byte elements, SSE4.2 pcmpestri; Stephan T. Lavavej's run on an AMD Ryzen 9 5950X, merged 2024-09-09): classic_search<uint8_t>/0 1976 to 160 ns (12.35x) and /1 2153 to 175 ns (12.30x); classic_search<uint16_t>/0 and /1 4.62x and 4.53x; ranges_search<uint8_t>/0 9.76x; search_default_searcher<uint8_t> 10.38x and 10.32x. The unchanged C strstr control took 142-143 ns (/0) and 157-162 ns (/1), so strstr stayed faster than the vectorized 1-byte std::search (160 and 175 ns). In that PR 4- and 8-byte rows were unchanged (0.98x-1.04x) and search_default_searcher<uint64_t> moved to 0.74x though its code was not changed (loop alignment suspected). PR #5484 (32- and 64-bit elements plus reworked 8/16-bit paths; 5950X run posted 2025-05-16, merged 2025-05-17): classic_search<uint32_t> /0 to /3 6.95x, 6.23x, 7.61x, 4.23x (1967 to 283 ns for /0); classic_search<uint64_t> /0 to /3 2.91x, 2.88x, 3.03x, 2.37x; uint16_t 1.38x to 1.98x. Regressions in the same 5950X table: classic_search<uint8_t>/0 158 to 202 ns (0.78x), /1 173 to 229 ns (0.76x), /3 0.91x, the 'evil' uint8_t/4 case 1016 to 3058 ns (0.33x) and uint64_t/4 0.71x; uint8_t/5 improved 2.77x. In that table c_strstr took 138 and 155 ns on /0 and /1, against 202 and 229 ns for the vectorized 1-byte classic_search.",
+      "compiler_and_flags": "Not stated in the PRs. benchmarks/CMakeLists.txt builds the benchmarks as Release (/O2 /Ob2, plus /Zi /W4 /utf-8 and others) with MSVC or clang-cl; which compiler and version produced the posted tables is not said.",
+      "caveats": "The baseline is the previous scalar MSVC STL std::search, not glibc, libc++/libstdc++ or a third-party searcher, so this is a before/after of one standard library and users get it only by upgrading MSVC. Compiler and version are not stated (the benchmark CMake supports both MSVC and clang-cl); numbers sit in PR comments rather than a standing results file. Single-byte results are mixed: PR #5484 regressed 1-byte classic_search on the 5950X (0.76x-0.78x on /0 and /1) and the adversarial 'evil' 1-byte case (0.33x), and the maintainer said he was 'somewhat concerned about perf regressions for 1-byte search'; the posted numbers may be from an interim revision of the PR, since the author then proposed keeping the SSE4.2 path for 8/16-bit elements. The bundled C strstr control beats the vectorized 1-byte std::search in both PRs (142-143 vs 160 ns in #4745; 138 vs 202 ns in #5484). uint64_t evil case regressed to 0.71x. Filed here because it is SIMD byte-sequence search in a standard library; benchmarks/src/search.cpp now also has member_find (basic_string::find) and classic_find_end, but the PR tables quoted here cover std::search, ranges::search and default_searcher. Merged search-related PRs seen by the search agent: #4654, #4745 (2024-09-09), #5352, #5484 (2025-05-17), #5544."
+    },
+    "notes": "Numbers in the record match PR #4745 exactly; the PR #5484 uint64_t range was overstated (2.88x-3.03x omitted /3 at 2.37x and the 0.71x evil regression), now corrected. Shortcomings to record: self-baseline (old MSVC STL), compiler unstated, 1-byte regressions and strstr control faster than the vectorized 1-byte search. Metadata checked: Apache-2.0 WITH LLVM-exception, 11.2k stars, last commit 2026-10-06.",
+    "urls_opened": [
+      "https://github.com/microsoft/STL/pull/4745",
+      "https://github.com/microsoft/STL/pull/5484",
+      "https://github.com/microsoft/STL",
+      "https://github.com/microsoft/STL/commits/main",
+      "https://raw.githubusercontent.com/microsoft/STL/main/benchmarks/src/search.cpp",
+      "https://raw.githubusercontent.com/microsoft/STL/main/benchmarks/CMakeLists.txt"
+    ]
+  },
+  {
+    "id": "https://github.com/bavison/arm-mem",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "D",
+    "tier_reason": "No benchmark_url and no numbers against glibc anywhere: the README has none, test.c benchmarks one CANDIDATE routine against a no-op control rather than against libc, and the only percentages are self-relative commit titles ('Improve L1 and L2 results by around 5% and 2%', 'Extra 3-5% speed boost for Cortex-A7 memcpy'). An Arch Linux ARM forum thread (snippet only) says arm-mem is faster than libcofi but that no benchmarks could be found.",
+    "corrections": {
+      "license": "BSD-3-Clause (per-file headers: Copyright 2013 Raspberry Pi Foundation and RISC OS Open Ltd, later files 2015-2019 RISC OS Open Ltd; no LICENSE file; test.c and test-strlen.c carry no header)",
+      "usability": "copyable",
+      "compared_against_cpp_std_directly": false,
+      "claimed_speedup": "No numbers against glibc in the README, the test harness or the commit history. The only figures are self-relative commit titles from the memcpy tuning in 2013 and 2015 ('Improve L1 and L2 results by around 5% and 2% respectively', 'Extra 3-5% speed boost for Cortex-A7 memcpy'). The description claims only 'ARM-accelerated versions of selected functions from string.h'.",
+      "workload": "No benchmark numbers published. test.c (built by the 'test' make target, CFLAGS -std=gnu99 -O2 -fno-inline) runs correctness checks and then times a single CANDIDATE routine (memcpy, memset or memcmp chosen by #if) over L1-, L2- and memory-sized buffers, subtracting a no-op control function, so a glibc comparison needs two runs with and without LD_PRELOAD of libarmmem.",
+      "stars_or_usage": "57 stars, 13 forks (including RPi-Distro/arm-mem and kobolabs/arm-mem); built into Raspberry Pi OS / Raspbian's raspi-copies-and-fills package (RPi-Distro/arm-mem debian/changelog: 0.5-1 initial release June 2015 through 0.13 April 2019) and enabled through /etc/ld.so.preload; Arch Linux ARM replaced libcofi with it (forum snippet only)",
+      "caveats": "No evidence of speed against glibc: no published numbers, and the harness measures one routine at a time against a no-op control. Kept for deployment, not evidence: it is the libarmmem preloaded by default on 32-bit Raspberry Pi OS. Correctness history: the NEON strlen tuned for Cortex-A53 shipped in raspi-copies-and-fills 0.8 (January 2019) and needed 'ARMv7 strlen: fix stupid bug' (March 2019, package 0.12), memcmp return values were then limited and later forced to -1/0/+1 (package 0.13), and the April 2019 'Rewrite memcpy / memmove to tune for Cortex-A53' was reverted eleven days later; CNX Software reported (snippet only) that a March 2019 package update broke programs including SSH logins on some boards. The latest commit (2024-03-18, 'Add function type and sizes', by a contributor) is metadata only; the last code change is from 2019. 32-bit ARMv6/ARMv7 only (v7 symlinked to v8/aarch64 in the package only for qemu hosts). Licence is BSD-3-Clause in every library source file but there is no LICENSE file and the test programs have no header. Not a duplicate of simonjhall/copies-and-fills (libcofi, LGPL-2.1): it is a separate codebase by Ben Avison that replaced libcofi in Raspbian and Arch Linux ARM."
+    },
+    "notes": "Tier D stands (no numbers at all) but the entry is notable enough to keep: Raspberry Pi OS ships it as raspi-copies-and-fills via ld.so.preload, confirmed from the RPi-Distro/arm-mem debian changelog. Licence corrected from null to BSD-3-Clause (all .S files and arm-mem.h carry the 3-clause text), so usability becomes copyable. Shortcomings to record: no measurement against glibc, harness lacks a side-by-side baseline, 2019 correctness fixes and a reverted rewrite, stale since 2019 apart from a metadata commit.",
+    "urls_opened": [
+      "https://github.com/bavison/arm-mem",
+      "https://github.com/bavison/arm-mem/commits/master",
+      "https://github.com/bavison/arm-mem/network/members",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/README.md",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/test.c",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/Makefile",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/arm-mem.h",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcpymove-v7l.S",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcpymove-v6l.S",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcmp-v7l.S",
+      "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/strlen-v7l.S",
+      "https://raw.githubusercontent.com/RPi-Distro/arm-mem/debian/debian/changelog"
+    ]
+  }
+]
