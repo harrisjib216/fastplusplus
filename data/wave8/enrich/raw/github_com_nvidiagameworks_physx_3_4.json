@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/nvidiagameworks/physx-3.4",
+  "one_liner": "NVIDIA's frozen 2018 PhysX 3.4 rigid-body and scene-query SDK; one forum user timed PhysX capsule sweeps 6-19x faster than Bullet's.",
+  "what_it_does": "PhysX is a full game-physics SDK: rigid bodies, joints, articulations, vehicles, a character controller and scene queries (raycast, sweep, overlap) against convexes, triangle meshes and heightfields, plus an optional CUDA GPU rigid-body path. This repository is the frozen PhysX 3.4.2 snapshot together with the deprecated APEX 1.4 SDK and the Kapla demo. Its API (PxScene::sweep with PxSweepBuffer or a PxSweepCallback, cooked PxTriangleMesh shapes) is unrelated to Bullet's btCollisionWorld::convexSweepTest, so moving from Bullet is a rewrite of the collision layer, not a swap.",
+  "how_it_is_fast": "Scene queries go through two levels: a pruner over actor bounds (dynamic AABB trees by default for both static and dynamic objects) and a per-mesh midphase tree. PhysX 3.4 added the BVH34 midphase, a quantized bounding-volume tree (BV4) with precomputed node sorting and an SSE 'swizzled slabs' node layout (PEEL's release notes, by a PhysX engineer, say PhysX 3.4 includes an Opcode2-based mesh format); its capsule sweep code is compiled only for Intel-family SIMD builds. The default midphase is still the older BVH33 R-tree (4-wide transposed, quantized pages). Contact generation defaults to PCM (persistent contact manifold, GJK-based distance) and the broad phase offers SAP, MBP (multi box pruning) and a GPU variant.",
+  "when_to_use": [
+    "Maintaining an existing game or engine already built on PhysX 3.4 (for example older Unreal Engine 4 versions) where swapping the physics layer is not an option.",
+    "Sweep- and raycast-heavy gameplay code (character controllers, vehicle suspension sweeps, camera collision) against large static triangle meshes, if you opt in to the BVH34 midphase on an SSE2 platform.",
+    "Projects that want a BSD-3-licensed, battle-tested rigid-body SDK covering Windows, Linux, macOS, Android and iOS from one source tree and can live with a 2018 code base.",
+    "Experiments with GPU rigid bodies or the GPU broad phase on NVIDIA hardware (SM 3.0 or later) using the bundled prebuilt GPU libraries."
+  ],
+  "when_not_to_use": [
+    "New projects: the repository was last changed on 2018-12-05 and its pinned issue #100 sends users to PhysX 4 (NVIDIAGameWorks/PhysX), whose README in turn points all new projects to PhysX 5 at NVIDIA-Omniverse/PhysX.",
+    "If you need a measured speed advantage: the only evidence is one forum user's timings that are probably years older than this code, with versions, hardware and build settings unknown; nothing in this repo benchmarks PhysX against Bullet.",
+    "If you need the GPU path from source or on non-NVIDIA hardware: the GPU rigid-body code ships only as prebuilt binaries (for example libPhysX3Gpu_x64.so under Bin/linux64) and requires CUDA.",
+    "Builds on modern toolchains: the source ships hand-made Visual Studio 2013/2015/2017 solutions and per-platform makefiles (no CMake); release notes list GCC 4.8 on Ubuntu 16.04 as the tested Linux setup.",
+    "Workloads that need the batched-query API: PxBatchQuery is deprecated in 3.4 and an open issue (#142) asks how to batch many raycasts without it."
+  ],
+  "integration": {
+    "form": "static or shared libs built from the bundled Visual Studio solutions or makefiles (PhysX_3.4/Source/compiler); GPU module as prebuilt shared libraries",
+    "dependencies": "PxShared (in the repo); CUDA-capable NVIDIA driver only for the optional GPU features; APEX 1.4 is optional and deprecated",
+    "min_toolchain": "Visual Studio 2013, 2015 or 2017 (vc12, vc14, vc15 projects); GCC 4.8 tested on Ubuntu 16.04; Xcode 10.1 for macOS and iOS; Android NDK r13b",
+    "platforms": "Windows (32/64-bit), Linux (32/64-bit), macOS, iOS, Android ARM; console builds are under NDA and not on GitHub; BVH34 midphase needs SSE2; GPU features need an NVIDIA GPU and driver (SM 3.0+ for GPU rigid bodies and the GPU broad phase; Linux GPU support is 64-bit only)",
+    "thread_safety": "Concurrent scene queries are allowed; PxSceneFlag::eREQUIRE_RW_LOCK makes the scene enforce PxScene::lockRead/lockWrite, and a thread flushing query updates (flushQueryUpdates, or the first query after changes) holds a write lock on the query structure that stalls other querying threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness and provenance flaw: the only numbers come from the gamedev.net thread 'Efficiency : Bullet much slower than PhysX?' (topic 600114, blocked here; read through search snippets). Its topic number and a reply asking whether hardware acceleration was on in both engines suggest a PhysX 2.x or 3.0-era test (inference, not confirmed), so it likely did not measure the PhysX 3.4 code in this repo. The poster used a triangle-mesh terrain in Bullet, and a reply suggested btHeightfieldTerrainShape instead.",
+    "Bullet's shipped build settings are a known handicap in engine comparisons: PEEL's release notes (by a PhysX engineer) say Bullet 2.81's shipped optimization settings 'seem sub-optimal' and that his comparison rebuilt Bullet with PhysX's settings; the forum test's Bullet build flags are unknown.",
+    "The faster BVH34 midphase is not the default: PxCookingParams::midphaseDesc defaults to eINVALID, which falls back to BVH33, so meshes must be cooked with PxMeshMidPhase::eBVH34 to get it, and BVH34 is limited to SSE2 platforms. A November 2018 fix covers raycasts failing on binary-deserialized BVH34 meshes, so older 3.4 builds have that bug.",
+    "Open issue #126 (March 2020, no reply): non-blocking vehicle suspension sweeps return several hits with different normals at the seam between two heightfields or two static meshes, making wheels bump; the repo has 50 open issues, several of them crashes (#113, #134, #141, #143), and none are being answered."
+  ],
+  "pick_this_over_siblings_when": "Against the catalogued Bullet Physics, pick PhysX when your work is dominated by sweeps and raycasts against large static meshes and you can use its cooked BVH34 meshes, but take the newer PhysX 5 repository rather than this 3.4 snapshot. For a new multi-core game engine the catalogued Jolt Physics is the maintained choice, and for robotics distance and collision queries Coal (HPP-FCL) has its own measured GJK advantage.",
+  "verified_claims_summary": "One forum user swept capsules downward onto a triangle-mesh terrain through a common wrapper and reported 0.132 ms vs 0.757 ms for one capsule and 3.790 ms vs 73.388 ms for 100 capsules (PhysX vs Bullet, about 5.7x and 19.4x, derived from the snippet numbers); the engine versions, CPU, compiler, flags and date are unknown and the thread itself could not be opened. No measurement of this repository's PhysX 3.4 code against Bullet was found.",
+  "status_note": "Abandoned since 2018-12-05 (30 commits, superseded by PhysX 4 and then PhysX 5 at NVIDIA-Omniverse/PhysX), BSD-3-Clause only from the December 2018 3.4.2 release, and the speed evidence is a forum anecdote that probably predates this code, so it stays at tier D; consider pointing the entry at the maintained PhysX 5 repository if better evidence is found.",
+  "sources_read": [
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/commits/master",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/issues",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/issues/100",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/issues/126",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/tree/master/PhysX_3.4",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/tree/master/PhysX_3.4/Bin",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/tree/master/PhysX_3.4/Bin/linux64",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/tree/master/PhysX_3.4/Source/compiler",
+    "https://github.com/NVIDIAGameWorks/PhysX-3.4/tree/master/PhysX_3.4/Source/GeomUtils/src/mesh",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/release_notes.html",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/platform_readme.html",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/PxPhysicsAPI.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/PxScene.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/PxSceneDesc.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/PxQueryFiltering.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/geometry/PxTriangleMesh.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/cooking/PxCooking.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/cooking/PxMidphaseDesc.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Include/cooking/PxBVH34MidphaseDesc.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Source/GeomUtils/src/mesh/GuBV4_CapsuleSweep.cpp",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Source/GeomUtils/src/mesh/GuBV4Settings.h",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX-3.4/HEAD/PhysX_3.4/Source/GeomUtils/src/mesh/GuRTree.h",
+    "https://github.com/NVIDIAGameWorks/PhysX",
+    "https://github.com/Pierre-Terdiman/PEEL",
+    "https://github.com/Pierre-Terdiman/PEEL/tree/master/PEEL",
+    "https://github.com/Pierre-Terdiman/PEEL/tree/master/PEEL/Docs",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/PEEL/HEAD/PEEL/Release%20notes.txt",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/PEEL/HEAD/PEEL/Docs/PEEL%20User%20Manual%201.1.pdf",
+    "https://www.gamedev.net/forums/topic/600114-efficiency-bullet-much-slower-than-physx/ (fetch failed: ENOTFOUND, blocked)",
+    "WebSearch: \"Bullet much slower than PhysX\" gamedev.net capsule sweep triangle mesh (snippets)",
+    "WebSearch: PEEL Terdiman PhysX 3.4 vs Bullet scene query sweep benchmark results github (snippets)"
+  ],
+  "confidence": 0.6
+}
