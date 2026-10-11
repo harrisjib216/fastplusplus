@@ -8486,6 +8486,78 @@
     }
   },
   {
+    "name": "Intel Parallel STL",
+    "repo_url": "https://github.com/intel/parallelstl",
+    "language": "C++",
+    "domain": "runtime-and-systems",
+    "category": "thread-pools-work-stealing",
+    "baseline": "std::accumulate (serial, libstdc++ 12)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Sum of a 1 GiB array of 268435456 floats, all set to 1.0f, using std::reduce(std::execution::par, first, last, T(0), std::plus<T>) versus serial std::accumulate, both from GCC 12's libstdc++. libstdc++'s <execution> uses its bundled Parallel STL with the oneTBB backend. The f64 rows accumulate the same float array into a double. Google Benchmark with MinTime 10 s and UseRealTime; the error is checked against the expected sum.",
+    "claimed_speedup": "AWS Graviton4 c8g.metal-24xl: std::reduce<par>/f32 1950894 ns (550.384 GB/s) versus std::accumulate/f32 192162701 ns (5.58767 GB/s), about 98x (derived from page data); f64 1959062 ns versus 192266754 ns, about 98x (derived from page data). AWS Zen4 m7a.metal-48xl: std::reduce<par, f32> 2913596 ns versus std::accumulate<f32> 219734340 ns, about 75x (derived from page data).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://github.com/ashvardanian/ParallelReductionsBenchmark",
+    "baseline_stdlib": [
+      "libstdc++"
+    ],
+    "compiler_and_flags": "GCC 12 (stated in the README for the Graviton4 and Zen4 runs). CMake Release build: CMAKE_CXX_FLAGS_RELEASE becomes '-O3 -DNDEBUG -O2', and the last -O wins, so the build is -O2. For GNU compilers CMakeLists.txt sets CMAKE_CXX_FLAGS to CMAKE_GCC_FLAGS ('-march=native -fopenmp'), so those flags do apply; tags v0.1.0, v0.2.0, v0.3.0, v0.4.0, v0.5.3 and HEAD v0.7.2 all use the same logic. oneTBB is fetched from uxlfoundation/oneTBB branch master (unpinned), and USE_INTEL_TBB defaults to ON on Linux without CUDA. Google Benchmark v1.9.1.",
+    "hardware": "AWS Graviton4 c8g.metal-24xl (Google Benchmark reports 96 x 2000 MHz; single NUMA node) for the headline row. AWS Zen4 m7a.metal-48xl (192 x 3701.95 MHz reported; dual-socket per the README's observation; exact CPU SKU not stated) for the second row.",
+    "compared_against_cpp_std_directly": true,
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "usability": "copyable",
+    "last_commit": "2026-10-06",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "777 stars and 122 forks on uxlfoundation/oneDPL, which github.com/intel/parallelstl now serves. Intel contributed its Parallel STL to GCC 9's libstdc++ as the implementation of the C++17 parallel algorithms (Phoronix 'GCC 9 libstdc++ Lands The C++17 Parallel Algorithms Implementation From Intel' and the gcc.gnu.org libstdc++ RFC of November 2017; WebSearch snippets only).",
+    "has_code": true,
+    "tradeoffs": "Parallel backend needs oneTBB at link time. The standalone intel/parallelstl repository now serves the oneDPL repository (oneAPI DPC++ Library, Apache-2.0 with LLVM exceptions), which targets SYCL devices and needs the oneAPI toolchain for the device parts.",
+    "caveats": "Indirect evidence: the benchmark runs libstdc++'s bundled <execution> implementation (a vendored copy of Intel's Parallel STL as contributed to GCC 9, backed by oneTBB). It does not build intel/parallelstl or oneDPL, and oneDPL's oneapi::dpl::execution policies were not measured. The baseline is a serial std::accumulate, whose strict left fold makes it latency-bound on the floating-point add chain, not memory-bound. On Graviton4 the single-thread unrolled/f32 loop (38034000 ns) is already 5.05x faster than std::accumulate/f32 (derived from page data), so 96-core parallelism accounts for only about 19.5x of the 98x (derived from page data). A std::reduce(seq) or unrolled serial baseline would show a far smaller gain. On Graviton4, hand-written OpenMP (neon/f32/openmp 1901684 ns) and fork_union (neon/f32/av::fork_union 1890173 ns; serial/f32/av::fork_union 1889686 ns) match or beat std::reduce<par>/f32 at 1950894 ns. The Graviton4 rows report 550 to 568 GB/s, above the 537.6 GB/s theoretical DRAM peak of one Graviton4 socket (12 channels of DDR5-5600; WikiChip and The Next Platform, snippet only). Repeated iterations over the 1 GiB buffer are therefore partly served from the 96 x 2 MB L2 and 36 MB L3, and absolute bandwidth is slightly inflated. std::accumulate<f32> shows 93.75 percent error because a float accumulator stops growing at 2^24; the f64 row is accurate. The README tables are single hand-pasted runs with no variance reported. oneTBB master is not pinned, and fork_union is fetched from its main branch. The benchmark repository has no LICENSE file. The DGX-H100 rows were not used: CUDA machines default USE_INTEL_TBB to OFF, so the backend is unclear, and that table's std::reduce<par, f64> and <par_unseq, f64> rows show error,%=100 (wrong result). The Zen4 table dates from the May 2024 README refresh and uses older row labels. The Graviton4 table was added in May 2025 and its std::reduce labels match the current reduce_bench.cpp. No comparison against MSVC STL, libc++ parallel algorithms or GNU parallel mode.",
+    "found_via": [
+      "seed-record pass; seed-list mining backfill: awesome-cpp Concurrency entry 'Intel Parallel STL'; evidence from WebSearch query 'benchmark oneTBB parallel_for versus std::thread speedup README results CPU compiler flags' leading to github.com/ashvardanian/ParallelReductionsBenchmark README, CMakeLists.txt, reduce_bench.cpp and reduce_cpu.hpp"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.45,
+    "assignment_ids": [
+      "w11-mine-i"
+    ],
+    "id": "https://github.com/intel/parallelstl",
+    "verification": {
+      "date": "2026-10-01",
+      "verdict": "confirm",
+      "tier_before": "A",
+      "tier_reason": "The README of ashvardanian/ParallelReductionsBenchmark shows std::reduce<par> next to serial std::accumulate. The benchmark code is public (reduce_bench.cpp registering stl_par_reduce_gt and stl_accumulate_gt from reduce_cpu.hpp; Google Benchmark, MinTime 10 s, real time, result error checked). The README states GCC 12 and names the CPU (AWS Graviton4 c8g.metal-24xl), and CMakeLists.txt holds the flags. The runner is a third party, not Intel. The measured code is libstdc++'s bundled copy of Intel's Parallel STL on oneTBB, so the tie to this repository rests on lineage.",
+      "notes": "Every claimed number matches the README exactly; the ratios are correctly marked as derived. The record's flag caveat was wrong: for GCC, CMakeLists.txt copies CMAKE_GCC_FLAGS into CMAKE_CXX_FLAGS, so -march=native -fopenmp do apply. Shortcomings to record: the measured code is libstdc++'s vendored Parallel STL rather than intel/parallelstl or oneDPL; the latency-bound serial baseline yields 5x from unrolling alone; fork_union and OpenMP match or beat it; oneTBB master is unpinned; reported bandwidth exceeds the DRAM peak; single runs; the benchmark repo has no license.",
+      "urls_opened": [
+        "https://github.com/ashvardanian/ParallelReductionsBenchmark",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/README.md",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/reduce_bench.cpp",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/HEAD/reduce_cpu.hpp",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/v0.4.0/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/v0.5.3/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/v0.1.0/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/v0.2.0/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ashvardanian/ParallelReductionsBenchmark/v0.3.0/CMakeLists.txt",
+        "https://github.com/ashvardanian/ParallelReductionsBenchmark/commits/main",
+        "https://github.com/ashvardanian/ParallelReductionsBenchmark/commits/main/CMakeLists.txt",
+        "https://github.com/ashvardanian/ParallelReductionsBenchmark/commits/main/README.md",
+        "https://github.com/ashvardanian/ParallelReductionsBenchmark/tags",
+        "https://github.com/intel/parallelstl",
+        "https://github.com/uxlfoundation/oneDPL/commits"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "compiler_and_flags": "GCC 12 (stated in README for the AWS runs); CMake Release build, CMakeLists.txt appends -O2 to the Release flags; the -march=native -fopenmp line is stored in CMAKE_GCC_FLAGS, a variable CMake does not use, so it probably does not apply; oneTBB is fetched from uxlfoundation/oneTBB branch master (unpinned) and USE_INTEL_TBB defaults ON on Linux without CUDA",
+      "workload": "Sum of a 1 GB array (268435456 floats or doubles) with std::reduce(std::execution::par) versus serial std::accumulate, Google Benchmark, TBB-backed parallel algorithms in GCC.",
+      "hardware": "AWS Graviton4 c8g.metal-24xl (96 cores at 2000 MHz) for the headline row; AWS Zen4 m7a.metal-48xl (192 threads at 3701.95 MHz, exact CPU SKU not stated) for the second row",
+      "stars_or_usage": "777 stars on uxlfoundation/oneDPL, which github.com/intel/parallelstl now serves; Parallel STL is the basis of the C++17 parallel algorithms in GCC libstdc++ (background knowledge, not verified on a page opened this session)",
+      "caveats": "Indirect evidence: the benchmark runs libstdc++'s bundled <execution> implementation (a vendored copy of Parallel STL, backed by oneTBB), not a build of intel/parallelstl or oneDPL, so the link to this repository rests on lineage. Serial baseline versus a 96 to 192 thread run on a memory-bandwidth-bound sum, so the order of magnitude says little about library quality. std::accumulate<f32> shows 93.75 percent error because it sums floats serially; the f64 row is accurate. On Graviton4 the hand-written OpenMP (neon/f32/openmp 1901684 ns) and fork_union (neon/f32/av::fork_union 1890173 ns) rows match or beat std::reduce<par>/f32 at 1950894 ns. Single README pastes (no repetitions or variance reported), oneTBB master not pinned, and the benchmark repository has no LICENSE file. DGX-H100 rows in the same README (std::reduce<par, f32> 3749938 ns versus std::accumulate<f32> 194089563 ns) were not used because CUDA machines default USE_INTEL_TBB to OFF, so the backend there is unclear. No comparison against GNU parallel mode, MSVC STL or libc++ parallel algorithms. The README tables were hand-pasted and use older row labels than reduce_bench.cpp."
+    }
+  },
+  {
     "domain": "runtime-and-systems",
     "category": "thread-pools-work-stealing",
     "baseline_in_list": true,
