@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/uriparser/uriparser",
+  "one_liner": "Strict RFC 3986 URI parser in C99; only evidence is a Ruby binding beating Ruby's URI.parse 4.5-5.5x.",
+  "what_it_does": "uriparser parses URI references per RFC 3986 into a caller-supplied UriUriA struct of text ranges (scheme, userInfo, hostText, portText, a linked list of path segments, query, fragment) and also does reference resolution (uriAddBaseUriA, uriRemoveBaseUriA), syntax normalization, recomposition (uriToStringA), query dissection and composition, percent-escaping and file-name/URI conversion, with A (char) and W (wchar_t) variants of every function. It is a plain C API, not a drop-in for any baseline: call uriParseSingleUriA (or uriParseUriA with a UriParserStateA), read the ranges, then free with uriFreeUriMembersA. Since 0.9.9 it can also set individual components (uriSetHostAutoA and friends) and copy URIs, work partly commissioned by the PHP Foundation; PHP 8.5's RFC 3986 URI class is built on it (per WebSearch snippets of the PHP 8.5 release notes).",
+  "how_it_is_fast": "A hand-written LL(1) parser with one C function per grammar rule that dispatches on the current character with switch statements (GOALS.txt: 'not using a jump table but one function per rule'); since 1.0.0 the formerly recursive rules are goto-based loops. Parsing is zero-copy: components are pointer pairs into the caller's buffer, so the only allocations are one calloc per path segment and a small struct for IPv4/IPv6 hosts. There is no SIMD or table-driven scanning; the measured gap over Ruby comes from compiled C that creates no per-component strings, against Ruby 2.6 URI.parse, which runs one large Onigmo regex with named captures and then builds a URI::HTTPS object.",
+  "when_to_use": [
+    "You need strict RFC 3986 generic-URI semantics (any scheme, section 5 reference resolution, section 6.2.2 normalization) rather than browser WHATWG URL behavior.",
+    "C or C99-only code, or embedding in a language runtime (PHP 8.5 does), where a small BSD-3-Clause library with no dependencies is wanted.",
+    "Windows or wide-string code that wants wchar_t URIs parsed natively without converting to UTF-8.",
+    "You need a custom allocator: every allocating function has an *Mm variant taking a UriMemoryManager.",
+    "Replacing an interpreted-language URI parser through a C binding, where the gain comes from leaving the interpreter rather than from the parser design."
+  ],
+  "when_not_to_use": [
+    "When speed against other native parsers is the point: no published numbers exist for uriparser against Ada, Boost.URL, curl or any C/C++ parser.",
+    "When you need WHATWG URL behavior (browser compatibility, IDNA/punycode hosts, special-scheme rules); uriparser does none of it, and scheme-based normalization (RFC 3986 6.2.3) is left to the application.",
+    "Allocation-sensitive hot paths on URLs with many path segments: each segment is a separate heap node.",
+    "On old releases: before 1.0.0 (2025-12-15) long or crafted input could overflow the stack through recursion (CVE-2025-67899); 1.0.1 and 1.0.2 fixed three more CVEs in 2026 (integer overflow and ptrdiff_t truncation in range comparison, EqualsUri). Pin 1.0.2 or later.",
+    "If your code reuses a UriUriA after a failed parse (open issue #343, see gotchas)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; URIPARSER_SHARED_LIBS defaults to ON)",
+    "dependencies": "none for the library; GoogleTest >=1.8.0 for tests, Doxygen and Graphviz for docs, Clang for fuzzers",
+    "min_toolchain": "C99 compiler (required since 1.0.0), CMake >=3.15.0",
+    "platforms": "cross-platform; CI builds on Linux, Windows (Visual Studio up to 18 2026; MinGW historically) and macOS (added 2026-07)",
+    "thread_safety": "Design goal in GOALS.txt: no shared globals between parser instances, so one UriParserStateA/UriUriA per thread is safe; nothing further documented. The ruby-uriparser binding shares one static UriParserStateA, safe only under Ruby's global lock.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Parse results are non-owning: ranges point into the input buffer, so the input must outlive the UriUriA unless you call uriMakeOwnerA, and you must always call uriFreeUriMembersA (path segments are heap nodes). uriParseUriA needs a NUL-terminated string; use the Ex variants for ranges.",
+    "Open issue #343 (opened 2026-09-29 against master 35a9299): after a failed uriParseSingleUriExA a non-owner URI keeps stale, half-open ranges; reusing the struct (uriSetHostRegNameA, then uriFreeUriMembersA) frees caller-owned memory (ASan double free), and uriCopyUriA/uriEqualsUriA overread. Fix PR #344 is unmerged; the 1.0.3 security release (issue #333, ETA 2026-08-01) is still open.",
+    "Harness flaw in the only benchmark: ruby-uriparser's UriParser.parse (ext/uriparser_ext/uriparser.c) stores ranges into the caller's Ruby string without keeping a reference to that string (struct uri_data holds no source VALUE and the mark function marks none) and creates component strings lazily; benchmark.rb never reads a component, so the timed call skips the string work URI.parse does, and in normal use reading .host after the source string is freed or mutated reads dangling memory. Its GC mark function also resets the cached fields and the 'updated' flag, so setter changes made before a GC are silently dropped by to_s.",
+    "ada's competitor bench BasicBench_uriparser_just_parse (benchmarks/benchmark_template.cpp, behind ADA_COMPETITION, off by default) calls uriParseSingleUriA in a loop on one UriUriA; each call memsets the struct via ResetUri without freeing, and uriFreeUriMembersA runs once at the end, so every iteration leaks its path-segment nodes. ada itself warns that this bench does 'not use a normalized task', so any numbers from it are not like-for-like."
+  ],
+  "pick_this_over_siblings_when": "Pick uriparser over Ada, liburlparser or lucid-url when you need RFC 3986 generic-URI semantics, a C99 API with wchar_t support, built-in reference resolution and normalization, or the parser PHP 8.5 ships; pick Ada when you parse web URLs with WHATWG rules and want a published speed lead (188 ns/URL against curl's 1471 ns/URL on its top100 set).",
+  "verified_claims_summary": "The only numbers come from the third-party ruby-uriparser gem's README (updated September 2020; macOS 10.15.6, 2.7 GHz dual-core Core i5, Ruby 2.6, mkmf default C flags, uriparser version unstated, probably the 0.9.4 release current then): 100,000 parses of https://www.ruby-lang.org/en/?a=1#test took 0.207 s through UriParser.parse against 1.139 s through Ruby 2.6 URI.parse (about 5.5x), and 0.157 s against 0.710 s for the simple URL (about 4.5x), derived from page data; the 7.5x headline matches only the rehearsal pass. This measures a C call that builds no component strings against Ruby regex matching plus object construction, not uriparser against any native URI parser.",
+  "status_note": "Actively maintained (last commit 2026-07-27; 1.0.2 released 2026-05-09 with a 1.0.3 security release pending) and BSD-3-Clause, so copyable; its place in the catalogue rests on a weak tier-C Ruby-binding benchmark whose timed call skips component-string creation and whose lazy ranges can dangle once the source string is gone.",
+  "sources_read": [
+    "https://github.com/uriparser/uriparser",
+    "https://github.com/uriparser/uriparser/commits",
+    "https://github.com/uriparser/uriparser/issues",
+    "https://github.com/uriparser/uriparser/issues/343",
+    "https://github.com/uriparser/uriparser/issues/333",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/README.md",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/GOALS.txt",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/THANKS",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/include/uriparser/Uri.h",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/include/uriparser/UriBase.h",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/src/UriParse.c",
+    "https://raw.githubusercontent.com/uriparser/uriparser/HEAD/src/UriCommon.c",
+    "https://raw.githubusercontent.com/tlewin/ruby-uriparser/HEAD/README.md",
+    "https://raw.githubusercontent.com/tlewin/ruby-uriparser/HEAD/benchmark/benchmark.rb",
+    "https://raw.githubusercontent.com/tlewin/ruby-uriparser/HEAD/ext/uriparser_ext/uriparser.c",
+    "https://raw.githubusercontent.com/tlewin/ruby-uriparser/HEAD/ext/uriparser_ext/extconf.rb",
+    "https://raw.githubusercontent.com/tlewin/ruby-uriparser/HEAD/lib/uriparser.rb",
+    "https://github.com/tlewin/ruby-uriparser/commits/master/README.md",
+    "https://raw.githubusercontent.com/ruby/ruby/v2_6_0/lib/uri/rfc3986_parser.rb",
+    "https://raw.githubusercontent.com/ada-url/ada/main/benchmarks/bench.cpp",
+    "https://raw.githubusercontent.com/ada-url/ada/main/benchmarks/benchmark_template.cpp",
+    "https://www.php.net/releases/8.5/en.php (WebSearch snippet only; direct fetch failed)",
+    "https://thephp.foundation/blog/2025/10/10/php-85-uri-extension/ (WebSearch snippet only)"
+  ],
+  "confidence": 0.6
+}
