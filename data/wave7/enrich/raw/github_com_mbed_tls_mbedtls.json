@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/mbed-tls/mbedtls",
+  "one_liner": "Small-footprint C TLS library and PSA Crypto reference implementation; edges OpenSSL EVP only on 64-byte one-shot AEAD calls.",
+  "what_it_does": "Mbed TLS is a C99 TLS/DTLS and X.509 library aimed at embedded systems; since 4.0 its cryptography lives in the TF-PSA-Crypto submodule (libtfpsacrypto) and is exposed through the PSA Cryptography API. AEAD use means psa_crypto_init() once, psa_import_key() into a key slot, then one-shot psa_aead_encrypt()/psa_aead_decrypt() or the multipart psa_aead_* calls, with the ciphertext and tag written to one buffer. It is not a drop-in for OpenSSL EVP: keys are opaque handles, algorithms are enabled through PSA_WANT_* compile-time symbols (the 1.0 release removed MBEDTLS_GCM_C, MBEDTLS_CHACHAPOLY_C and similar options), and the low-level module headers moved under a private/ directory.",
+  "how_it_is_fast": "It is not built for peak throughput. GCM processes one 16-byte block at a time: one AES block encryption (AES-NI on x86, Armv8 Crypto Extensions via MBEDTLS_AESCE_C, otherwise table AES) followed by one GHASH multiply (PCLMULQDQ or PMULL with immediate reduction, or a 4-bit table), with no multi-block pipelining, stitched AES+GHASH or aggregated reduction. Its small-message edge in the benchmark comes from cheap key setup: on the accelerated paths gcm_gen_table() stores only H and builds no table of powers of H, so per-call setup costs less than OpenSSL's EVP context creation, cipher fetch and GHASH precomputation. ChaCha20 was scalar C in 4.0.0; a NEON 2-6-block implementation (default 3 blocks on AArch64, 2x to 2.7x faster per the ChangeLog) shipped in 4.1.0.",
+  "when_to_use": [
+    "Microcontroller and other embedded targets where code size, RAM use, C99 portability and a PSA Crypto API (TF-M, secure elements, PSA drivers) matter more than AEAD throughput.",
+    "Per-message AEAD with a fresh key on every call (import, encrypt one 64-byte record, destroy): the only measured case where it beat OpenSSL 3.6.0, by 1.22x to 1.29x.",
+    "Applications already built on the PSA Cryptography API that want a reference implementation with hardware drivers able to slot in under the same calls.",
+    "Products that need an LTS branch with API/ABI stability (mbedtls-3.6 until March 2027, mbedtls-4.1 until March 2029) and Apache-2.0 licensing."
+  ],
+  "when_not_to_use": [
+    "Bulk AEAD on desktop or server CPUs: in the same run OpenSSL was 1.7x to 4.7x faster for AES-GCM from 1 KiB up (7840 vs 1683 MB/s at 16 KiB) and 2.5x to 3.8x faster for ChaCha20-Poly1305; the maintainers traced the GCM gap to unpipelined AES-NI and per-block GHASH reduction in issue #1189.",
+    "Hashing and HMAC throughput in the default build: OpenSSL won every SHA-256, SHA-512, SHA3 and HMAC row in the cited run, by 5.9x to 7.5x for SHA-256 at 1 KiB and up, partly because the default config leaves MBEDTLS_SHA256_USE_ARMV8_A_CRYPTO_IF_PRESENT and MBEDTLS_SHA512_USE_A64_CRYPTO_IF_PRESENT off, so the Apple Silicon run hashed in portable C.",
+    "Multithreaded use of the default build: MBEDTLS_THREADING_C is off by default and the config says the PSA subsystem is then not thread-safe.",
+    "Hot paths that encrypt many small records under one key through PSA: psa_aead_encrypt re-runs AEAD setup (key schedule and GCM H) on every call, a known overhead (issue #10775 shows about 50% throughput loss on an embedded target at 1000-byte frames).",
+    "Targets without unaligned access (Xtensa, Cortex-M0/M0+/M23, PowerPC) if GCM speed matters: open issue #9476 reports the table GCM regressing to 258.7 cycles/byte from 75.88 on Xtensa."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; libtfpsacrypto, libmbedx509, libmbedtls)",
+    "dependencies": "none at run time (libc only); building from a git checkout needs the framework and tf-psa-crypto submodules, Python 3.8+ and Perl to generate source files (release tarballs include them)",
+    "min_toolchain": "C99, CMake 3.20.2+; tested with GCC 5.4, Clang 3.8, Arm Compiler 6 and Visual Studio 2017. AESCE needs Clang 4.0, GCC 6.0, armclang 6.6 or MSVC 2019 16.11.2 on aarch64.",
+    "platforms": "any C99 target; AES-NI and PCLMUL on x86 and x86-64, Armv8 Crypto Extensions on aarch64 and 32-bit Arm, NEON ChaCha20 from 4.1.0; portable C fallback elsewhere",
+    "thread_safety": "Not thread-safe by default: enable MBEDTLS_THREADING_C with MBEDTLS_THREADING_PTHREAD or MBEDTLS_THREADING_ALT before calling PSA functions from more than one thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured small-message win is a property of the harness, not of the cipher: both adapters in scc-tw/cryptobench-cpp redo all key setup per message (Mbed TLS psa_import_key plus a heap std::vector and two memcpy per call; OpenSSL EVP_CIPHER_CTX_new, an implicit EVP_aes_128_gcm() fetch, two init calls and free), and the loop never checks the output against a known answer.",
+    "The ChaCha20-Poly1305 rows measured Mbed TLS 4.0.0, which used scalar ChaCha20; 4.1.0 (2026-03-31) added NEON ChaCha20 (2x to 2.7x on AArch64), so those rows understate current Mbed TLS on the Apple Silicon host.",
+    "AESCE runtime detection works only on Linux; on macOS and other non-Linux systems a build with MBEDTLS_AESCE_C assumes the CPU has Armv8 Crypto Extensions. TF-PSA-Crypto 1.0 (shipped in Mbed TLS 4.0.0) produced wrong GCM tags with GCC 10 to 14.2 at -O3 when neither AES-NI nor AESCE was used (fixed in 1.1.0, issue #665).",
+    "SECURITY.md recommends -O2 or -Os; the benchmark built with -O3 -funroll-loops -flto -march=native, which the project calls less scrutinized for timing side channels. Release 4.2.0 fixed 11 CVEs in the TLS layer and its TF-PSA-Crypto 1.2.0 fixed 5 more (including CVE-2026-50584, a ChaCha20 32-bit counter wrap that reused keystream), so track the latest maintained branch."
+  ],
+  "pick_this_over_siblings_when": "Pick Mbed TLS over Botan, Crypto++ or chacha20poly1305-simd only when footprint, C99 portability, PSA API compatibility or an LTS branch matter more than throughput; for bulk AES-GCM or ChaCha20-Poly1305 speed, hardware-rust-crypto, chacha20poly1305-simd or OpenSSL itself are faster, and libaegis is faster still if you can change cipher.",
+  "verified_claims_summary": "A third-party Google Benchmark suite (scc-tw/cryptobench-cpp, one run on 2025-11-05 on an Apple Silicon MacBook Air, compiler version not recorded, -O3 -march=native -flto) timed one-shot AEAD with per-call key setup and 16-byte AAD: Mbed TLS 4.0.0 beat statically linked OpenSSL 3.6.0 only at 64-byte messages (AES-128-GCM 211.7 vs 163.9 MB/s, AES-256-GCM 197.0 vs 160.9, ChaCha20-Poly1305 168.5 vs 135.3; means of 5 repetitions). OpenSSL was ahead from 256 bytes up and 4.7x faster at 16 KiB.",
+  "status_note": "Actively maintained under Trusted Firmware (4.2.0 released 2026-07-07, 4.1 LTS supported until March 2029, 3.6 LTS until March 2027), Apache-2.0 OR GPL-2.0-or-later, 7.0k stars; copyable, but treat it as a portability and footprint choice, not a speed upgrade over OpenSSL.",
+  "sources_read": [
+    "https://github.com/Mbed-TLS/mbedtls",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/README.md",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/BRANCHES.md",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/SECURITY.md",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/ChangeLog",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/.gitmodules",
+    "https://raw.githubusercontent.com/Mbed-TLS/mbedtls/development/include/mbedtls/mbedtls_config.h",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/README.md",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/ChangeLog",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/include/psa/crypto_config.h",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/gcm.c",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/aesce.c",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/aesni.c",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/aes.c",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/chacha20.c",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/chacha20_neon.h",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/v1.0.0/drivers/builtin/src/chacha20_neon.h",
+    "https://raw.githubusercontent.com/Mbed-TLS/TF-PSA-Crypto/development/drivers/builtin/src/poly1305.c",
+    "https://github.com/Mbed-TLS/mbedtls/issues?q=is%3Aissue%20gcm%20performance",
+    "https://github.com/Mbed-TLS/mbedtls/issues/1189",
+    "https://github.com/Mbed-TLS/mbedtls/issues/9476",
+    "https://github.com/Mbed-TLS/mbedtls/issues/10775",
+    "https://github.com/h2o/picotls/pull/485",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/README.md",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/result.json",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/benchmarks/symmetric_benchmarks.cpp",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/adapters/mbedtls_adapter.cpp",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/adapters/openssl_adapter.cpp",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/cmake/FetchMbedTLS.cmake",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/cmake/FetchOpenSSL.cmake"
+  ],
+  "confidence": 0.75
+}
