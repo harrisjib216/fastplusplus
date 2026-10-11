@@ -130,6 +130,49 @@ IPDPS 2022 artifact: optimized CUDA self-synchronizing and gap-array Huffman dec
 
 [repo](https://github.com/codyjrivera/ipdps22-opthuffdec) · [benchmark](https://github.com/codyjrivera/ipdps22-opthuffdec/blob/main/runcusz.sh)
 
+#### general-lossless
+
+##### libbzip2 (bzip2)  `C`  `bzip2-1.0.6 (the 'bzip2 and libbzip2 License v1.0.6', a permissive BSD-style licence, as shown on the GitLab page and API); the SPDX licence list (3.29) marks bzip2-1.0.6 as not OSI-approved; no patent grant`  `abandoned`  `Tier A`
+
+Reference bzip2/libbz2: Burrows-Wheeler compressor whose decoder is 2.5-14x faster than PPMd at a similar ratio, but slow by modern standards.
+
+**Beats:** ppmd8 (7-Zip PPMd var.I, ppmd8 26.03 as built in lzbench), the PPM family the bzip2 manual compares itself with — lzbench 2.4 (gcc 15.2.0 -O3 release binary, one thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar) measured bzip2 1.0.8 -9 at 12.7 MB/s compress, 35.5 MB/s decompress and 54,572,811 bytes, versus 7-Zip ppmd8 26.03 -4 at 12.8/11.5 MB/s and 51,241,932 bytes and ppmd8 -1 at 15.7/14.0 MB/s and 55,803,295 bytes: about 3.1x and 2.5x faster decoding with equal or slower compression (derived from page data). lzbench's ppmd8 levels map to small models (level L uses order 3+L and 2^(L-1) MB, so -1 is an order-4, 1 MB model reset whenever memory fills), and every run is checked by memcmp against the input.
+
+**Known shortcoming:** lzbench 2.4 rows: compression is not faster than ppmd8 and the codec is slower or larger than lbzip2, lzma and zstd; the manual claims only that the ratio approaches the PPM family. The bzip2-1.0.6 licence is BSD-style but not OSI-approved, so usability is reference (BSD-3-Clause-Clear precedent). Repo archived, last commit 2023-05-31.
+
+**Known shortcoming:** Enricher: the lzbench ppmd8 baseline is small (level L is order 3+L with 2^(L-1) MB, so -1 is order 4 with a 1 MB model reset when memory fills); lzma -4 decodes 2.1x faster at 2.5% larger output and lbzip2 (same format) compresses 1.76x and decompresses 1.32x faster. Unmerged GitLab issue #40 (mainGtU patch) claims 10-20% faster compression. Lead: libbzip2-rs (trifectatechfoundation, c2rust port, about 14% faster level-1 compress and 4-8% faster decode per snippet) is a port, so the duplicate rule applies if found.
+
+**Independent measurement:** lzbench 2.4 (verifier)
+
+**Independent measurement:** enricher lzbench reading
+
+**How:** Against PPM the speed comes from the transform, not tuning: an initial run-length pass, a Burrows-Wheeler transform (radix pre-sort plus multikey quicksort in mainSort, with a fallbackSort when a work budget runs out on repetitive data), move-to-front, zero-run coding and up to 6 canonical Huffman tables switched every 50 symbols. Decoding is Huffman decoding plus an inverse BWT that walks one 4-bytes-per-symbol array (BZ_GET_FAST), which is far cheaper than PPMd's per-symbol context modelling and range decoding, so the decoder wins even though PPM is symmetric. The decoder still looks up Huffman code lengths bit by bit and chases cache-missing pointers, which is why it decodes at 35.5 MB/s while LZ decoders run at hundreds.
+
+**Use it when:**
+- You must read or write .bz2 (tarballs, archives, scientific and genomics files, legacy pipelines); libbz2 is the system library on essentially every Linux distribution.
+- Text-like data where you want a better ratio than zlib (25.75% vs 31.92% for zlib 1.3.2 -9 on silesia.tar) with small, bounded memory: about 7.6 MB to compress and 3.7 MB to decompress at -9, or 2.3 MB with the small decoder.
+- When you are choosing between bzip2 and a PPM codec and decode speed matters: bzip2 -9 decodes 3.1x faster than ppmd8 -4 and 2.5x faster than ppmd8 -1 at a 2% smaller output than the latter (lzbench 2.4, derived from page data).
+- Embedded or constrained builds: the low-level interface is plain C89 with no globals and can be built with -DBZ_NO_STDIO.
+
+**Skip it when:**
+- Any new format choice: in the same lzbench 2.4 table zstd 1.5.7 -18 is 2.4% smaller and decodes 33x faster (1175 vs 35.5 MB/s, though it compresses 3.1x slower), lzma 26.03 -4 is 2.5% larger but compresses 1.07x and decodes 2.1x faster, and lzma -9 is 10.8% smaller and decodes 2.2x faster (derived from page data).
+- When you need the best BWT ratio: bsc 3.3.12 -m0 -e1 is 9.7% smaller and compresses 1.5x faster, bzip3 1.5.4 -5 is 13.4% smaller (both decode slower than bzip2).
+- When you need bzip2-format speed: lbzip2 2.6.5 -9 writes the same format at the same size and is 1.76x faster to compress and 1.32x faster to decompress on one thread, and it parallelizes.
+- Multi-core or random access: libbz2 is single-threaded and the format does not record compressed block sizes, so parallel decoding means scanning for block magic (the manual names this as a format flaw; GitLab issues #11 parallel compression and #12 faster BWT stay open).
+- Small messages or latency-sensitive paths: blocks are 100-900 KB and the BWT needs the whole block before output.
+
+**Vs siblings:** Pick libbz2 only when the .bz2 format is required and you want the canonical, distro-shipped implementation; for bzip2-format speed lbzip2 is faster on one core and scales across cores, and for anything format-free zstd, xz/LZMA or bzip3/libbsc beat it on ratio, speed or both.
+
+**Gotchas:**
+- Use 1.0.8 or later: 1.0.7 fixed CVE-2019-12900 (nSelectors out of range in the decoder, found by fuzzing) and CVE-2016-3189 (use-after-free in bzip2recover); the 1.0.7 fix rejected some lbzip2-written files and 1.0.8 relaxed it (GitLab issue #24).
+- BZ2_bzBuffToBuffCompress/Decompress take unsigned int lengths, so one-shot calls are limited to under 4 GB; use the streaming API for larger data.
+- Highly repetitive input can make compression up to about 10x slower than average (manual); the fallback sort is about 3x slower than the main sort, and workFactor (default 30) controls when it kicks in. Decompression speed is unaffected.
+- The 1.1 master branch changes the Linux SONAME to libbz2.so.1 (1.0 used libbz2.so.1.0; CMake -DUSE_OLD_SONAME=ON builds both) and ships no Makefile (open issue #60); the archived GitLab fork will not get fixes, so take release code from sourceware.
+
+**Status:** The GitLab 1.1 fork is archived ('lack of interest, and because there are better options available through the Rust ecosystem', last commit 2023-05-31) while 1.0.8 (2019) lives on at sourceware; usability is reference because SPDX marks the permissive BSD-style bzip2-1.0.6 licence as not OSI-approved, though it is free to use, small C89 and universally packaged.
+
+[repo](https://gitlab.com/bzip2/bzip2) · [benchmark](https://github.com/inikep/lzbench)
+
 #### integer-bitpacking
 
 ##### LeCo (Learn-to-Compress)  `C++`  `no license`  `stale`  `Tier B`
@@ -224,7 +267,11 @@ AES-round-based 256-bit-key AEAD for 6G; ~5x OpenSSL AES-256-GCM at 16 KB on one
 
 **Known shortcoming:** The revised Rocca (source of the numbers) is also broken: ToSC 2024(2) (Takeuchi-Todo-Iwata) gives FROB collisions and nonce-misuse universal forgery; the Rocca-S IETF draft -06 expired. Loses at <= 256 B on the paper's i9-11900/M1/A15 and at 64 B on all 7 HiAE x86 CPUs; the OpenSSL GCM baseline varies 4x across the paper's CPUs (29.08 vs 117.60), inflating the 5.2x headline. No compiler or flags stated; reference code releases plaintext before the tag check. ericlagergren/rocca implements the original init without key feed-forward and has an untested tail-block bug.
 
+**Known shortcoming:** Enricher on the folded ericlagergren/rocca C port: partial blocks copy from the buffer start instead of offset nblocks*32, so plaintexts longer than 32 bytes and not a multiple of 32 never round-trip (lengths 33/40/63/100 fail in rocca_open), tail ciphertext bytes are never written (in-place encryption leaves plaintext), AD tail bytes are unauthenticated (the README's own 42-byte AD example is affected), the ARM64 constant_time_compare_u128 accepts a forged tag with probability about 2^-24 (code analysis), there is no dst_len check and no portable fallback (#error). Do not use that port as an implementation; its test/test.c has only a baseline-free MB/s loop.
+
 **Independent measurement:** ToSC 2021: 138.22 Gbps vs AES-256-GCM 30.59, ChaCha20-Poly1305 7.57 (Intel, AES-NI).
+
+**Independent measurement:** enricher code reading of the folded port
 
 **How:** The 1024-bit (128-byte) state holds eight 128-bit words, and each round spends 4 independent aesenc and 4 128-bit XORs, absorbing 32 bytes of message. Every aesenc sits on its own short critical path, so the round pipelines well on AES-NI or ARMv8 AES units. The designers found this layout by searching a wider space of round functions than Jean and Nikolic's (FSE 2016), including a cost-free word permutation. Each 32-byte ciphertext block adds only 2 more AES rounds for keystream, instead of the ~14 per 16 bytes that AES-256-CTR needs plus GHASH.
 
@@ -1961,6 +2008,48 @@ Rust research serialization library and kernel-bypass UDP stack that sends large
 [repo](https://github.com/deeptir18/cornflakes) · [benchmark](https://people.eecs.berkeley.edu/~matei/papers/2023/sosp_cornflakes.pdf)
 
 #### json
+
+##### json_struct  `C++`  `HPND-sell-variant`  `active`  `Tier B`
+
+Single-header C++11 JSON-to-struct binder; about 2.6x faster roundtrip than nlohmann/json on a third-party M1 benchmark.
+
+**Beats:** nlohmann/json v3.11.3 — In stephenberry/json_performance (results dated 8 June 2025; MacBook Pro M1, single core, Clang 17, 1,000,000 iterations of one ~0.6 KB object), json_struct from master took 5.87 s for parse-plus-serialize roundtrips against 15.44 s for nlohmann/json v3.11.3 (about 2.6x), with 178 vs 86 MB/s write (2.1x) and 316 vs 81 MB/s read (3.9x) (derived from page data). nlohmann's time includes building its DOM (json::parse then get<obj_t>; j = obj then dump) and a fresh obj_t each read, while json_struct reads into a reused object. An earlier run of the same harness (9 August 2024, Clang 15, preserved in the Loki-Astari fork) gave 5.50 s vs 15.71 s, 182 vs 84 MB/s and 326 vs 80 MB/s, consistent with the 2025 run.
+
+**Known shortcoming:** Glaze author's json_performance harness (June 2025): no optimization flags or build type stated (CMake sets the C++23 standard, no default build type); json_struct pulled from unpinned master; slower than Glaze, yyjson, reflect-cpp, daw_json_link and RapidJSON, and its roundtrip (5.87 s) is slower than Boost.JSON (5.38 s). No first-party performance numbers. Licence is HPND-sell-variant, which SPDX does not flag as OSI-approved (no patent grant), so usability is reference per the BSD-3-Clause-Clear precedent.
+
+**Known shortcoming:** Enricher: the measured json_struct is master 6e69e4a (2025-03-26), a scalar header predating the SIMD tokenizer (2025-09-30 to 2025-10-06) and later perf commits, so no published number covers the current code. Harness asymmetries: json_struct reads into a reused object (keeps capacity) while nlohmann builds a DOM plus a fresh object each read; is_valid_write only prints and does not suppress results; the read loop keeps track_member_assignement_state on. Corroborated by an Aug 2024 run (Clang 15, Loki-Astari fork: 5.50 vs 15.71 s). Lenient defaults (unknown keys skipped, missing members accepted, NoError returned); the double slow path loops once per exponent step with no bigint fallback; the Jul 2026 fix f5bf752 (UTF-8 lead byte, truncated malformed ints, bare nan/inf) is off the benchmark path.
+
+**Independent measurement:** json_performance README (verifier)
+
+**Independent measurement:** enricher code reading
+
+**How:** There is no intermediate tree. A pull tokenizer yields key/value tokens that point into the input buffer, and a compile-time member table generated by the JS_OBJ macros dispatches each key to its member through an unrolled length-plus-memcmp comparison. Values are decoded in place: integers and doubles use a bundled copy of the author's float_tools (Clinger fast path for short significands and exponents, otherwise iterative 128-bit scaling; a Ryu-derived shortest-digit printer for output). Serialization writes into chunked buffers. Since commits of 30 September to 6 October 2025 (after the measured run; the measured header has no SIMD intrinsics), SSE2/SSE4.2/AVX2/NEON scans locate string ends, number ends and whitespace, with a scalar fallback.
+
+**Use it when:**
+- You already map JSON to plain C++ structs with nlohmann's to_json/from_json and want 2-4x faster struct reads and writes without moving to a C++20/23 reflection library.
+- The toolchain is stuck at C++11/14 (old GCC, VS2015-era MSVC, embedded SDKs), which rules out Glaze (requires C++23) and reflect-cpp (C++20).
+- Human-edited config files where comments, unquoted keys and trailing commas should parse into typed structs.
+- Inputs that arrive in pieces or are very large, using the chunk-fed JS::Tokenizer instead of materializing a document.
+- A dependency-free single header with a permissive licence that you can vendor.
+
+**Skip it when:**
+- Top throughput is the goal: on the same harness Glaze (1.01 s roundtrip), yyjson (1.22 s), reflect-cpp (3.15 s), daw_json_link (3.29 s) and RapidJSON (3.76 s) all beat json_struct's 5.87 s, and Boost.JSON (5.38 s) is level with it or slightly faster.
+- You need a mutable dynamic JSON value with nlohmann-style operator[] editing; json_struct is built around fixed struct schemas (JS::Map is a read-and-dispatch helper, not a full document model).
+- Structs with many members: each incoming key is matched by a linear, compile-time-unrolled scan over member names (primary names first, then aliases), so cost per key grows with member count, unlike Glaze's hashed lookup.
+- Number-heavy data with large or very negative exponents: values outside the fast path are converted by multiplying or dividing a 128-bit integer by 10 once per exponent step, so 1e-300 costs hundreds of loop iterations, and the double path has no big-integer correctness fallback (only float gets one).
+- Strict schema validation by default: unknown keys are skipped and missing members accepted unless you change ParseContext's flags.
+
+**Vs siblings:** Pick json_struct over Glaze or reflect-cpp only when you cannot use C++23 (Glaze) or C++20 (reflect-cpp), or when you want relaxed config-file parsing into structs; on speed alone they are 1.9-5.8x faster on the same roundtrip harness. Against Boost.JSON (about the same speed) and RapidJSON (faster), json_struct binds straight to structs without hand-written DOM walking or SAX handlers.
+
+**Gotchas:**
+- Lenient by default: ParseContext::allow_missing_members and allow_unasigned_required_members both default to true, so unknown JSON keys are skipped and absent struct members leave old values in place, and parseTo still returns NoError. Set both to false for strict parsing. track_member_assignement_state (default true) also records each unknown key as a std::string; the benchmark harness turned it off in its roundtrip loop but not in its read loop.
+- Tokens and DataRef values point into the caller's input buffer, so the buffer must outlive the ParseContext; parsing into an existing object clears and refills vectors and strings and keeps their capacity.
+- Version measured versus version shipped: the June 2025 harness fetched master with GIT_SHALLOW. The master tip before 8 June 2025 was commit 6e69e4a (26 March 2025; the next commit is 10 June 2025), and that header (8,656 lines) contains no SSE/AVX/NEON code. The numbers therefore describe the pre-SIMD scalar parser. The SIMD tokenizer and 'More optimizations' landed 30 September to 6 October 2025, and more parse and serialize performance commits landed 4 July 2026 (the current header is 10,315 lines). Current builds are probably faster, but no published number backs that.
+- Correctness fixes after the measured run (commit f5bf752, July 2026): \u escapes for U+0800..U+FFFF were decoded with a wrong UTF-8 lead byte (0xd0 instead of 0xe0; the line is still present in 6e69e4a), surrogate pairs were not combined, malformed integers such as '12-3' were silently truncated, and NaN/Inf were written as bare nan/inf (invalid JSON). The benchmark input has no \u escapes, malformed integers or non-finite values, so the measured numbers are not affected, but older vendored copies of the header carry these bugs.
+
+**Status:** Actively maintained (630 commits, last commit 29 August 2026, ClusterFuzzLite fuzzing and ASan/MSan CI on PRs). The single header is easy to vendor under an HPND-style permissive licence with no patent grant. The project publishes no benchmark numbers of its own (performance/benchmark.cpp is a Catch2 suite with no results), and the only harness numbers predate its SIMD rewrite and the July 2026 correctness fixes.
+
+[repo](https://github.com/jorgen/json_struct) · [benchmark](https://github.com/stephenberry/json_performance)
 
 ##### Mison (speculative structural-index JSON parser)  `C++`  `no license`  `unknown`  `Tier B`
 
@@ -5147,6 +5236,47 @@ Deleted CUDA FP32 SGEMM repository; a Show HN title claimed up to 24% over cuBLA
 
 #### fft
 
+##### fCWT  `C++`  `Apache-2.0`  `stale`  `Tier C`
+
+Single-precision Morlet continuous wavelet transform on FFTW, OpenMP and AVX; README times it 10-120x faster than other CWT libraries.
+
+**Beats:** PyWavelets (pywt.cwt), MATLAB cwt, SciPy, ssqueezepy, CCWT, Rwave (C), Wavelib (C++) and Mathematica CWT implementations — On a 2019 MacBook Pro (Core i9 2.3 GHz, 8 threads, single-precision FFTW with OpenMP and AVX, exhaustive wisdom, -O2 -mavx, compiler not stated), fCWT computed a Morlet CWT of 100k samples x 3000 frequencies in 0.32 s against 3.40 s for CCWT, 12.69 s for PyWavelets 1.1.1, 23.22 s for Rwave and 45.04 s for Wavelib; the README's speedup column divides by 0.37 s, and at 10k samples x 300 frequencies the lead over CCWT is only about 3.8x (derived from page data). Rwave and Wavelib ran single-threaded in double precision, the Python, MATLAB and Mathematica rows ran through their interpreters, and no output equivalence was checked.
+
+**Known shortcoming:** Nature Computational Science abstract seen as a snippet only (122x and 34x). The '34-120x than all competitors' claim is contradicted by the repo's own CCWT row (10.63x; 3.8x at 10k-300); fCWT runs 8-thread float against single-thread double Rwave and Wavelib; factors use 0.37 s where the table shows 0.32 s and the benchmark folder README gives different times. Bundles GPL FFTW, so usability is mixed.
+
+**Known shortcoming:** Enricher found an unreported correctness bug in src/fcwt/fcwt.cpp: the O1 buffer is zeroed only once per cwt() call, so bins above each later scale's endpoint keep earlier scales' products (a pure 64 Hz tone shows up in the 32/16/8 Hz rows at 96% with 1 voice per octave; dense grids like benchmark.cpp's 300 log scales are unaffected, so timings stand). Also: odd signal lengths shift every other row by one sample via std::align (code reading), per-call leaks of the mother table and lastscalemem (#74 closed, HEAD still lacks the free), the Rwave row uses a Numerical Recipes four1 FFT in double on 1 thread, the Python notebook asks for 1-101 Hz at fs=100 (above Nyquist), the only PyPI wheel is cp310 macOS x86-64 and -mavx is hard-coded. Downgraded B to C (uniwidth precedent: bug in the measured hot path).
+
+**Independent measurement:** first-party table (verifier)
+
+**Independent measurement:** enricher code reading
+
+**How:** Scale-independent work is done once per call: one real-to-complex FFTW transform of the signal zero-padded to the next power of two, and one frequency-domain Morlet table of that padded length. Each scale then costs an AVX-vectorized multiply that samples the shared table by nearest index (no per-scale exp calls) over only the bins below twice the scale's centre frequency, followed by one inverse complex FFT. FFTW runs multithreaded through OpenMP with plans tuned ahead of time and saved as wisdom files (n<N>_t<threads>.wis), and the multiply is split across OpenMP threads.
+
+**Use it when:**
+- Dense time-frequency maps (hundreds to thousands of frequencies, tens of voices per octave) of long float signals, 10^4 to 10^6 samples: EEG/LFP, audio, vibration scalograms.
+- Repeated transforms at a fixed padded length and thread count, where FFTW wisdom computed once with -fcwtoptimize (MEASURE, PATIENT or EXHAUSTIVE) is reused on every call.
+- Replacing PyWavelets, SciPy or ssqueezepy Morlet CWTs in Python when single precision is acceptable (README: Python wrapper 0.66 s vs PyWavelets 12.69 s at 100k samples x 3000 frequencies, with different settings per row).
+- x86-64 desktops or servers with AVX and around 8 cores; 8 threads was the README setting and the best count reported in issue #83 on a 32-thread Ryzen 9 7945HX.
+
+**Skip it when:**
+- Coarse frequency grids (about 2 voices per octave or fewer): the work buffer is not cleared between scales, so higher-frequency content leaks into lower rows (see gotchas).
+- You need double precision, wavelets other than Morlet (issue #60 open), an inverse transform (issue #36 open) or a sample-by-sample streaming CWT (issue #61 open).
+- Non-x86 or non-AVX targets: CMakeLists.txt and setup.py hard-code -mavx (/arch:AVX on MSVC); Apple Silicon users report failures (#37 illegal hardware instruction, #69 missing _omp_get_max_threads), and PyPI's latest fcwt 0.1.18 (March 2023) ships only a cp310 macOS x86-64 wheel.
+- Long-running services calling cwt() in a loop: every call leaks the padded-length mother table and a padded-length scratch buffer (about 1.5 MB per call at 100k samples).
+- Products that cannot take GPL code: the default build links the prebuilt FFTW3f binaries bundled in libs/.
+
+**Vs siblings:** No other CWT library is catalogued; the fft siblings (KFR, PocketFFT, VkFFT and others) are transform engines a CWT is built on. Pick fCWT when you want a ready Morlet scalogram on x86 CPUs with dense grids; build your own filter bank on PocketFFT or KFR for double precision, other wavelets or non-AVX targets, or on VkFFT/cuFFT for GPU batches.
+
+**Gotchas:**
+- Stale spectrum between scales (found by reading src/fcwt/fcwt.cpp at HEAD; not reported upstream): the frequency-domain buffer O1 is zeroed once per cwt() call, but each scale writes only the bins below its own endpoint (min(N/2, 2N/scale)) and scales run from smallest to largest, so bins above the current endpoint still hold earlier scales' products when the inverse FFT runs. A numpy model of the loop written for this review shows the effect is negligible on dense grids (benchmark.cpp's 300 log scales with Morlet(1.0): below 5e-8 relative; the README Python example: 2e-4 on its lowest row), but at 1 voice per octave a pure 64 Hz tone appears in the 32, 16 and 8 Hz rows at 96% of its own row's magnitude (about 6e-5 with the buffer cleared), and at 2 voices per octave with Morlet(1.0) at 3.3%. Rows whose scale exceeds twice the padded length get no bins and repeat the previous row, and the per-thread split (endpoint/4 divided by threads, integer division) also skips up to threads-1 AVX vectors at each band's top.
+- Odd signal lengths (code reading, not reproduced): each row's inverse FFT is written straight into the n-strided output and fftbased() first passes the row pointer through std::align(16, ...); with odd n every other row starts 8 bytes off a 16-byte boundary, so that row is written one sample late and its first sample is the previous row's padding tail. Each inverse FFT also writes the whole padded length past its row into the next row, which is why rows must be computed in order and the last row goes through a temporary buffer.
+- Housekeeping bugs: Morlet::generate() mallocs a new mother table on every cwt() call without freeing the old one, and convolve() never frees lastscalemem (issue #74 was closed in January 2025 but HEAD still lacks the free). Wisdom files are read from and written to the current working directory; a missing file only prints a warning and falls back to FFTW_ESTIMATE plans (issue #30). Python fcwt.cwt() defaults to nthreads=1 and fast=False (no wisdom), and fcwt.plot() at HEAD calls _plot() with one positional argument missing.
+- Benchmark harness: the Rwave (C) and Wavelib (C++) rows run double precision on one thread, and src/rwave-bench.cpp uses a Numerical Recipes four1 radix-2 FFT with a malloc per transform, so much of the 62.75x is FFTW against a textbook FFT. benchmark.cpp hard-codes 300 log scales (the 3000-frequency columns need a source edit), uses Morlet(1.0), times wisdom-file reads and planning inside every call, and never compares outputs. The Python notebook (benchmark.ipynb) used FFTW_MEASURE wisdom, linear frequencies 1-101 Hz at fs=100 (above Nyquist; the Scales check is only an assert) and a 3000 x 100k output array for the 10k-sample case.
+
+**Status:** Stale: last commit 2025-01-06 (two merged cleanup and plotting PRs), last PyPI release 0.1.18 in March 2023, and recent issues (#66 out-of-band energy, #69, #83) have no maintainer reply; Apache-2.0 source but the default build links bundled GPL FFTW binaries (usability mixed), and the stale-spectrum and odd-length row bugs found here mean results on coarse grids or odd lengths should be checked against a reference CWT.
+
+[repo](https://github.com/fastlib/fCWT) · [benchmark](https://github.com/fastlib/fCWT)
+
 ##### SYLT-FFT (fixed-point FFT for Cortex-M4)  `C`  `MHG (Moral High Ground) license: the Unlicense text released 'under the single condition that good moral standards are maintained in its use', plus non-binding requests; custom, not an OSI/SPDX license (the README calls it GPL-compatible)`  `abandoned`  `Tier C`
 
 Header-only 32-bit fixed-point radix-2 (I)FFT for Cortex-M4; 15-26% faster than CMSIS-DSP arm_cfft_radix2_q31 on a 256-point inverse.
@@ -6944,6 +7074,47 @@ Single-header AVX2 JSON parser under a proprietary license; benchmarks nlohmann/
 
 #### small-buffer-and-strings
 
+##### Loki flex_string  `C++`  `MIT for the Loki library (SourceForge listing; headers such as SmallObj.h carry the MIT text); the flex_string headers carry Andrei Alexandrescu's 2001 HPND-style permission notice; the GitHub mirror has no LICENSE file. Boost.Wave ships a BSL-1.0 copy (boost/wave/util/flex_string.hpp)`  `abandoned`  `Tier C`
+
+Alexandrescu's 2001 policy-based std::basic_string clone; only evidence is an anecdotal 5-10% Boost.Wave speedup.
+
+**Beats:** std::string (std::basic_string) of an unstated standard library, inside Boost.Wave — The only number is second-hand: Hartmut Kaiser told the author that dropping flex_string (in Boost.Wave's default copy-on-write configuration) into the Boost.Wave preprocessor made it 5-10% faster depending on input, against an unstated 2001-2005 era std::string, with no compiler, hardware or benchmark code; the doc page itself says no performance comparison suite exists, and the repo's test/flex_string/main.cpp is a randomized correctness comparison against std::string with no timing.
+
+**Known shortcoming:** Only evidence is a second-hand 5-10% gain of flex_string in Boost.Wave against std::string with no methodology; pre-SSO era anecdote, abandoned 2013, mixed licence (Boost.Wave still ships a BSL-1.0 copy with later bug fixes).
+
+**Known shortcoming:** Enricher: the Boost.Wave 5-10% gain came from Wave's COW configuration (CowString<AllocatorStringStorage>); test/flex_string/main.cpp checks correctness only, no timing. No move semantics; the Loki copy fails C++20 with std::allocator (Wave patched this in PR #72); the COW refcount is a non-atomic unsigned char (deep copy after 255 sharers); Storage::append reserves the exact size so repeated += is quadratic; naive find without memchr; data() not null-terminated; const at(size()) does not throw.
+
+**Independent measurement:** verifier batch-61 (wave 11)
+
+**Independent measurement:** enricher w11 pair-030
+
+**How:** There is no single algorithmic trick: the speed argument is that you pick the storage layout per workload. SimpleStringStorage grows with realloc (can extend in place, which std::allocator cannot), SmallStringOpt avoids heap allocation for short strings, and CowStringOpt makes copies O(1) by sharing a buffer whose reference count is stored in the buffer's first character. Character moves use memcpy/memmove and fills use a Duff's-device loop (flex_string_details.h). Boost.Wave's reported gain came from its default CowString<AllocatorStringStorage<char>> configuration, i.e. cheap copies of token strings.
+
+**Use it when:**
+- Maintaining legacy C++03 code (or Boost.Wave-era code) that already uses flex_string and you need to understand or tune its storage policy.
+- Copy-heavy, single-threaded workloads such as token or symbol strings that are copied far more often than mutated, where a COW policy saves allocations.
+- Studying or teaching policy-based design: each storage policy is a few hundred lines and the interface contract is documented at the top of every policy header.
+- Experiments that need a custom string layout (arena-backed, fixed-size SSO threshold, malloc/realloc growth) without writing the full basic_string surface yourself.
+
+**Skip it when:**
+- Any new C++11-or-later code: flex_string has no move constructor or move assignment, so std::move, vector<flex_string> reallocation and swaps through generic code fall back to deep copies (or refcount traffic) where std::string moves in O(1).
+- C++20 builds with std::allocator: the Loki copy reads A::reference, A::pointer, A::const_pointer and calls A::allocate(n, hint), all removed in C++20; Boost.Wave had to patch exactly this (boostorg/wave PR #72, 2020) and the Loki mirror has not changed since 2013.
+- Strings shared across threads with CowStringOpt: the reference count is a plain unsigned char/short in the buffer, incremented and decremented without atomics, so concurrent copies of one string are a data race.
+- Workloads built from many small appends (s += "ab" in a loop): Storage::append reserves exactly size()+n, so with the default AllocatorStringStorage every append that overflows reallocates and copies the whole string (quadratic); only push_back doubles capacity.
+- Search-heavy code: find(const char*, pos, n) calls traits::compare at every position and find(char) is implemented as a 1-character compare per position, with no memchr first-character skip as in libstdc++.
+
+**Vs siblings:** Pick it only when you specifically want a C++03 policy-based string (COW, realloc growth or tunable SSO behind one interface); FastString and MengRao/str have measured wins over a modern std::string with numbers you can reproduce, and buffet or to_static_string cover the narrower append and number-formatting cases.
+
+**Gotchas:**
+- CowStringOpt keeps the reference count in the first element of the buffer, typed as the unsigned variant of the character type (unsigned char for char), so after 255 sharers a copy silently becomes a deep copy; the count is not atomic.
+- data() returns the buffer without writing a terminator; only c_str() writes E() at pEnd_, so passing data() to C APIs reads whatever byte follows the string.
+- AllocatorStringStorage computes its allocation in bytes and passes byte counts to A::allocate(1 + (sz-1)/sizeof(E)) but A::deallocate(p, bytes), which mismatches for wchar_t under sized deallocation; Boost.Wave also hit gcc 11 -Wfree-nonheap-object warnings on the shared emptyString_ sentinel (boostorg/wave issue #159).
+- The SmallStringOpt threshold is capped at 126 characters by a compile-time check, and its size/flag byte lives in the last buffer slot, so sizeof(flex_string) grows with the threshold.
+
+**Status:** Abandoned since 2013 (last mirror commit 2013-08-06, README last updated 2005, one open unrelated issue); permissively licensed (Alexandrescu notice, Loki MIT, BSL-1.0 copy in Boost.Wave) and small enough to vendor, but the maintained copy is Boost.Wave's boost/wave/util/flex_string.hpp, which carries C++20 and warning fixes the Loki mirror lacks.
+
+[repo](https://github.com/snaewe/loki-lib) · [benchmark](https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/doc/flex/flex_string.html)
+
 ##### zuu_string_view  `C++`  `no license`  `active`  `Tier C`
 
 Header-only C++11 SWAR-accelerated string_view alternative; faster find/rfind/find_first_of than std::string_view, slower on not_of scans.
@@ -7519,6 +7690,47 @@ Closed-source NVMe KV engine (UDisk) behind UStore's open C API; vendor numbers 
 
 [repo](https://github.com/unum-cloud/UStore) · [benchmark](https://github.com/unum-cloud/UStore/blob/main/benchmarks/README.md)
 
+##### ODB  `C++`  `GPL-2.0-only or commercial (libodb, libodb-sqlite, libodb-pgsql, libodb-mysql, libodb-qt, libodb-boost); GPL-3.0-only (odb compiler); NCUEL non-commercial or commercial (libodb-oracle, libodb-mssql); Unlicense (odb-example)`  `active`  `Tier D`
+
+Code-generating C++ ORM for MySQL, SQLite, PostgreSQL, Oracle and SQL Server; its 2x-over-Dapper claim compares different databases.
+
+**Beats:** Hand-coded ADO.NET SqlDataReader and Dapper (C#/.NET micro-ORM), using Dapper's published 500-object SELECT benchmark — The author ported Dapper's test to C++ (load 500 random Stack Overflow-style post objects one at a time). ODB 1.x on MySQL 5.1.49 under Linux (Xeon E5520 2.27 GHz per snippets) took 24 ms per 500 loads, against Dapper's own published 47 ms for hand-coded SqlDataReader and 49 ms for Dapper on SQL Server, on hardware Dapper did not state. The same author's January 2012 ODB 1.8.0 post ran ODB against SQL Server on Windows and got 222 ms (Windows 7) and 152 ms (Windows Server 2008 R2) per 500 objects; a February 2012 update gave 130 us per object locally, about 65 ms per 500 (derived). Those same-database figures are all slower than Dapper's 49 ms, so the 2x comes from comparing MySQL with SQL Server, not ODB with Dapper (search snippets only; codesynthesis.com was unreachable, and no benchmark source, compiler or flags were found).
+
+**Known shortcoming:** Tier C, snippet only (codesynthesis.com ENOTFOUND): 24 ms vs hand-coded C# 47 ms and Dapper 49 ms per 500 loads; the ODB side ran on a Xeon E5520 2.27 GHz while the Dapper side is its own published figure on SQL Server with hardware unstated. Usability mixed: libodb-oracle and libodb-mssql are under the NCUEL licence. ORM filed under embedded-kv, a poor fit.
+
+**Known shortcoming:** Enricher: the 2x over Dapper compares ODB on MySQL/Linux with Dapper's SQL Server numbers; the author's own ODB 1.8.0 SQL Server runs (222 ms on Win7, 152 ms on Win2008R2 per 500, later 130 us per object, about 65 ms derived) are all slower than Dapper's 49 ms (snippet only, codesynthesis.com blocked). SQLite pool turns on shared-cache by default; the compiler is a GCC plugin that picks gcc from PATH (#37), gcc 16 break open (#34); NCUEL licence for Oracle and MSSQL; an ORM is off-category in embedded-kv. 2.6.0 released 2026-07-27.
+
+**Independent measurement:** verifier batch-88 (wave 6)
+
+**Independent measurement:** enricher w6 pair-010
+
+**How:** The mapping is generated at build time, so there is no runtime reflection or string-keyed column lookup. Generated per-class bind buffers go straight into each database's native C API: the MySQL runtime uses the binary prepared-statement protocol (mysql_stmt_prepare, mysql_stmt_bind_param/bind_result, mysql_stmt_fetch), and SQLite uses sqlite3_bind/step. Prepared statements are built once per connection and kept in a statement_cache keyed by type_info, connections are pooled, and an optional session cache avoids reloading objects already in memory. Explicit prepared queries, bulk persist/update/erase (Oracle and SQL Server only) and, since 2.6.0, direct loading of containers of object pointers in one SELECT (to avoid the N+1 problem) reduce round trips further.
+
+**Use it when:**
+- C++ applications that store typed domain objects (with relationships, inheritance, containers) in MySQL, PostgreSQL or SQLite and want the mapping code generated instead of hand-written binding code
+- Code that must run against several databases from one model: ODB supports multi-database builds (static or dynamic) and generates per-database schema
+- Load-by-id and query-heavy workloads where statement preparation and binding overhead matter: statements are prepared once per connection and reused
+- Long-lived schemas: ODB has built-in schema versioning and migration, including SQLite version-aware DDL in 2.6.0
+
+**Skip it when:**
+- Closed-source products that cannot pay for a licence: the runtimes are GPL-2.0-only or commercial, and the Oracle and SQL Server runtimes are non-commercial-use only (NCUEL) unless you buy a licence
+- Toolchains without a GCC that has plugin support (gcc-N-plugin-dev): the ODB compiler is a GCC plugin, needs GCC 5 or later on the build host, and on Windows needs MinGW GCC even when the target uses MSVC
+- Projects that need key-value storage or an embedded engine: ODB is a mapping layer over an SQL database, not a storage engine, so it cannot compete with the key-value siblings on raw throughput
+- Teams that want a header-only or reflection-based library with no extra code-generation step in the build
+- Anyone choosing it on the Dapper comparison: on SQL Server (the database Dapper used) the author's own 2012 figures are slower than Dapper's published numbers
+
+**Vs siblings:** None of the embedded-kv siblings (LMDB, LevelDB, RocksDB derivatives, NuDB, UnQLite) is an ORM. Pick ODB when the data belongs in an SQL database (SQLite, PostgreSQL, MySQL) and you want generated, prepared-statement C++ mapping code. Pick a sibling such as LMDB or LevelDB when you need a fast byte-level key-value engine and can write your own serialisation.
+
+**Gotchas:**
+- The SQLite connection pool and new-connection factories turn on SQLite shared-cache mode (SQLITE_OPEN_SHAREDCACHE) unless the database is opened with SQLITE_OPEN_PRIVATECACHE (connection-factory.cxx). SQLite discourages shared cache, and it serialises access at table level, so pass the private-cache flag when using WAL mode.
+- The ODB compiler picks up the gcc found on PATH (open issue #37), and new GCC releases can break it (GCC 15 support issue #25, open gcc16 static-assertion issue #34), so pin the GCC used to run ODB.
+- Object pointers load lazily by default, one SELECT per pointed-to object (the N+1 problem). Direct loading of containers of pointers arrived only in 2.6.0, and the polymorphic case is still open (issue #27).
+- Each database::begin() heap-allocates a transaction implementation, and query parameters and pooled-connection shared_ptr control blocks are also heap-allocated. The author lists these as open ideas in issue #28 with no measurements.
+
+**Status:** Actively maintained by Code Synthesis: 2.6.0 was released on 2026-07-27, the issue tracker is active, and the package manifests name git.codesynthesis.com as the source repository. Usability is mixed because of the GPL-2.0/GPL-3.0/NCUEL-or-commercial licence split, and the only performance evidence is first-party 2011-2012 blog numbers that do not survive a same-database comparison.
+
+[repo](https://github.com/codesynthesis-com/odb) · [benchmark](https://codesynthesis.com/~boris/blog/2011/04/06/performance-odb-cxx-orm-vs-cs-orm/)
+
 #### indexes
 
 ##### MountDB (learned indexing integrated into RocksDB)  `C++ (no code released)`  `no license`  `unknown`  `Tier C`
@@ -7824,3 +8036,129 @@ REAPI remote build-cache and execution server for Bazel/Buck2/CMake; beats local
 **Status:** Actively maintained (last commit 2026-09-24; 1.6k stars, 244 forks; vendor claims 10B+ build requests/month in production including Samsung); usability is 'reference' because it's infrastructure to deploy and operate, not a library to link.
 
 [repo](https://github.com/TraceMachina/nativelink) · [benchmark](https://reidkleckner.dev/posts/llvm-recc-nativelink/)
+
+#### compilers-frontends
+
+##### AMD C++ Compiler (AOCC)  `C++`  `Proprietary AMD EULA, binary-only (the Spack recipe declares LicenseRef-AMD-Proprietary, redistribute(source=False, binary=False) and needs +license-agreed)`  `active`  `Tier C`
+
+AMD's closed-source LLVM/Clang-based C/C++/Fortran compiler for Zen whose binaries ran about 8% faster than GCC 11.2's.
+
+**Beats:** GCC 11.2 (also compared with LLVM Clang 14.0) — Phoronix built 56 C/C++ Phoronix Test Suite programs with AOCC 3.2 (LLVM 13 base), Ubuntu 22.04's GCC 11.2 and Clang 14.0, all at -O3 -march=native -flto, on a 2P EPYC 7773X Milan-X server; AOCC binaries were about 8% faster than GCC's by geometric mean and fastest in 66% of tests, Clang 14 about 2% (so AOCC roughly 6% over Clang 14, derived from page data). These figures come from search snippets because phoronix.com and the OpenBenchmarking result 2204117-NE-EPYC7773X86 are blocked here; later Phoronix runs report AOCC 4.0 about 17% over GCC 12.2 on 4th Gen EPYC (68 tests, GCC 12 lacked znver4 tuning) and about 4% on Zen 4 Ryzen, and AOCC 5.0 on Zen 5 often close to upstream Clang.
+
+**Known shortcoming:** Binary-only vendor compiler (AMD EULA, has_code false, reference entry like CKTSO, HYLU and UDisk): evidence is Phoronix search snippets only (phoronix.com, openbenchmarking.org and amd.com blocked), a small gain of about 8% geomean over GCC 11.2 across 56 tests on a 2P EPYC 7773X (-O3 -march=native -flto, 2022 compilers; a second article puts AOCC 4.0 about 4% over GCC 12.2 on a Ryzen 9 7950X). Retier to B or A possible once Phoronix is reachable.
+
+**Known shortcoming:** Phoronix and OpenBenchmarking pages, amd.com and docs.amd.com all blocked, so the 8% geomean rests on search snippets only (confidence 0.6). The AOCC 4.0 Genoa 17% geomean (68 tests) is against GCC 12.2 without znver4 tuning, a handicapped baseline; AOCC 5.0 often matches upstream Clang on Zen 5; AOCC 3.2 was roughly 6% over Clang 14 (derived from page data). Upstream Clang 19 gained -fveclib=AMDLIBM, so part of AOCC's math edge is upstream now. Binary-only EULA; each release pinned to one LLVM base (3.2 Clang 13.0, 4.0 14.0.6, 4.1/4.2 16.0.3, 5.0-5.2 17.0.6 per the EasyBuild easyblock); silent GCC/libstdc++ selection (needs clang.cfg); OpenBLAS Makefile.system still adds -fno-unroll-loops for AMD flang (PR #2665, lapack-test complex failures); best flags are AMD-only. Retier waits on Phoronix/OpenBenchmarking access.
+
+**Independent measurement:** Phoronix snippets (verifier)
+
+**Independent measurement:** enricher (wave 2)
+
+**How:** Upstream LLVM -O3 plus AMD passes tuned with Zen cost models: whole-program structure peeling and pointer/integer field compression under -flto (-fstruct-layout=1..7, per a search snippet of the AOCC user guide), extra loop transformations exposed as -mllvm switches (-enable-loop-reversal, -enable-gather, -vectorize-non-contiguous-memory-aggressively), aggressive inlining (-finline-aggressive), and, per Phoronix's AOCC 5.0 coverage, improved SLP/loop vectorization, LICM and control/data-flow optimizations plus Zen 5 tuning. Vectorized math calls can be routed to AMD's AOCL-LibM with -fveclib=AMDLIBM (5.2 bundles a Zen 5-tuned AOCL-LibM 5.3). Which of these passes run at plain -O3 -march=native -flto, the setting Phoronix measured, is not documented in anything readable here.
+
+**Use it when:**
+- Compute-bound C, C++ or Fortran (HPC kernels, codecs, simulation) deployed on AMD EPYC or Ryzen Zen machines that you can rebuild per target; SVT-AV1 showed the largest AOCC 5.0 gains on Zen 5
+- Codebases that already build cleanly with Clang, where a few percent more throughput without source changes is worth a per-workload benchmark (GCC or Clang still won about a third of the 56 Milan-X tests)
+- HPC sites with Spack or EasyBuild that can install the EULA tarball (spack install aocc +license-agreed, EasyBuild accept_eula) and expose it as a module
+- Fortran or mixed codes such as WRF that ship an AOCC configure stanza with AMD-tuned flags and AMDLIBM
+- A new Zen generation before upstream compilers carry its tuning: AOCC 4.0 beat GCC 12.2, which lacked znver4 tuning, by about 17% geomean on 4th Gen EPYC
+
+**Skip it when:**
+- You need the source, redistribution or distro packaging: binary-only AMD EULA, Spack declares redistribute(source=False, binary=False) and LicenseRef-AMD-Proprietary
+- Targets other than x86 Linux (Windows, macOS, aarch64, RISC-V): AOCC targets 32- and 64-bit Linux x86 only
+- Code that needs C++ language or library support newer than Clang 17: AOCC 5.0, 5.1 and 5.2 all stay on LLVM 17.0.6 (Nov 2023)
+- Intel CPUs or mixed fleets: tuning targets Zen and no published gains exist elsewhere (EasyBuild's AOCC 5.1 test only shows it installs on an Intel i7-1260P)
+- Workloads where upstream Clang already matches it (Phoronix's AOCC 5.0 run on 2P EPYC 9755 found minimal differences from upstream LLVM/Clang in many tests), or when the goal is faster compilation rather than faster binaries
+
+**Vs siblings:** The catalogued siblings (zapcc, TinyCC, MIR/c2m, cg_clif) make compilation faster; AOCC is the only one aimed at the run time of the generated code, so pick it when binary throughput on AMD Zen matters and build time does not (c2m's code runs at about 92% of gcc -O2, while AOCC's ran about 8% faster than GCC 11.2 at -O3 in Phoronix's Milan-X test).
+
+**Gotchas:**
+- GCC selection is silent: AOCC's clang picks whatever GCC install it finds for headers and libstdc++ unless told; Spack writes clang.cfg with --gcc-toolchain and EasyBuild writes --gcc-install-dir cfg files (5.0+) or wrapper scripts (before 5.0) and sanity-checks the 'Selected GCC installation' line. Its binaries are named clang, clang++, flang and lld like upstream LLVM, so PATH order decides which compiler a build gets; Spack issue #49543 reports 'spack compiler find' producing an unusable entry for AOCC 4.2/5.0 until cc was pointed at clang-16/clang-17.
+- Optimizer bug history: OpenBLAS PR #2665 (2020) traced complex and double-complex lapack-test failures to AOCC flang over-optimization; OpenBLAS's Makefile.system still adds -fno-unroll-loops whenever flang --version reports AMD on Linux x86-64, for every AOCC version.
+- The best results lean on AMD-only knobs: WRF's AOCC stanza uses -fveclib=AMDLIBM, -finline-aggressive and linker-passed -mllvm -enable-loop-reversal/-enable-gather/-vectorize-non-contiguous-memory-aggressively at -Ofast -ffast-math (which changes floating-point semantics), and says optimized flags must be requested from AMD toolchain support; -fstruct-layout acts only under -flto. Of these, only -fveclib=AMDLIBM reached upstream (Clang 19; absent in 18).
+- Version lag: each release pins one LLVM base (3.2 on 13.0, 4.0 on 14.0.6, 4.1/4.2 on 16.0.3, 5.0 to 5.2 on 17.0.6), so upstream LLVM fixes, diagnostics and C++ features after 17 are missing, and the Milan-X comparison pitted an LLVM 13-based AOCC against a newer Clang 14.
+
+**Status:** Actively released (Spack and EasyBuild carry 3.2.0 to 5.2.0, 5.2.0 added to Spack 2026-05-29, all 5.x on LLVM 17.0.6) but binary-only under an AMD EULA, so it is a reference entry that can be installed and used but not copied, patched or redistributed; the numbers are snippet-only and a retier waits on phoronix.com or openbenchmarking.org access.
+
+[repo](https://www.amd.com/en/developer/aocc.html) · [benchmark](https://www.phoronix.com/review/amd-aocc-milanx/6)
+
+##### Intel oneAPI DPC++/C++ Compiler (icpx)  `C++`  `Apache-2.0 WITH LLVM-exception (intel/llvm LICENSE.TXT, the open-source base); the benchmarked icpx 2025.3.3 binary and its SVML/libimf runtimes came from the proprietary intel/oneapi-basekit image`  `active`  `Tier C`
+
+Intel's LLVM-based C++ compiler (icpx); under relaxed FP it ran a math-heavy pipeline 1.5-1.8x faster than GCC/Clang.
+
+**Beats:** GCC 13.3.0 and Clang 18.1.8 — In one 2026 session on a 4-vCPU KVM guest of an Emerald Rapids Xeon, a single-threaded C++20 quant pipeline over 29.9M option quotes (Newton implied vol, LM SVI fits, greeks; median of 7 reps) took 13.7 s built with icpx 2025.3.3 -O3 -xHost -fp-model=fast -fimf-precision=high versus 24.5 s with GCC 13.3.0 -O3 -march=native -funroll-loops (1.79x), 21.6 s with GCC plus -ffast-math (1.57x) and 20.5 s with the best Clang 18.1.8 build (1.49x); with strict IEEE flags icpx led by only 1.23x. Most of the gap sits in the SVI least-squares stage rather than in the SVML-vectorized erf sweeps, and cross-build validation was run on a 299k-quote dev file, not the timed one.
+
+**Known shortcoming:** Tier A on the yzia2000/qr_cpp_compiler table, but it is a 0-star, AI co-authored repo with a single run on a cloud VM whose SKU is masked. The README's '1.44x vs best non-Intel' is an arithmetic slip (table gives 1.49x). The win comes from proprietary SVML/libimf; the README claim that libmvec has no vector erf is wrong (glibc math-vector.h declares it), so the gcc/clang fast-math baselines may be under-tuned. Validation ran on the 298,720-quote dev file, not the timed file. Licence Apache-2.0 WITH LLVM-exception.
+
+**Known shortcoming:** Enricher: the SVI stage accounts for 60% of the icpx-fast lead over gcc-strict and 90% over gcc-fast (derived from page data), yet its Levenberg-Marquardt hot loop has no transcendental calls, so the README credits SVML wrongly; the LM exit is data-dependent (1e-12 relative SSE, lambda above 1e8, 50 iterations) and validate.py checks 5 parameters only and never the iteration count, so equal work is not shown; the timed SVI region also includes bucketing 30M quotes with exp/log/push_back. glibc 2.39 math-vector.h declares SIMD erf for GCC, so the README's reason for gcc staying scalar is wrong and the gcc-fast vectorization failure is unexplained (the LLVM 18 libmvec table has no erf, so the Clang limit is real). Intel's default fp-model fast=1 with errno off against strict gcc/clang keeping -fmath-errno. The benchmark flags -xHost, -fp-model=, -fimf-precision and -qopt-zmm-usage are absent from the open intel/llvm Options.td, so the run is not reproducible from the linked repo. LAMMPS #5213's GCC baseline ran the Intel-tuned package.
+
+**Independent measurement:** verifier batch-08 (wave 2)
+
+**Independent measurement:** enricher (wave 2)
+
+**How:** The product ships SVML, a vector math library with 4- and 8-wide erf/exp/log (__svml_erf4 and friends) that its vectorizer calls in flat transcendental sweeps, and libimf, faster scalar libm replacements that the benchmark credits for icpx's edge over Clang in the scalar Newton loop; upstream LLVM 18 has no vector erf mapping for libmvec or SVML, so Clang leaves those loops scalar. The largest single saving in the measured pipeline, though, is the Levenberg-Marquardt normal-equations loop (sqrt, divide and FMA into 21 accumulators, no transcendental calls), which icpx ran 2.0x (precise) to 3.7x (fast) faster than gcc -O3; the benchmark does not explain why and did not check that every build ran the same number of LM iterations. -fp-model=fast allows the reassociation that reduction vectorization needs.
+
+**Use it when:**
+- Single-threaded double-precision kernels on Intel Xeon with AVX-512 where flat loops are dense in erf/exp/log (greeks-style sweeps: 770 ms vs 2571 ms for gcc -O3, 3.3x) and the numerics can be qualified under -fp-model=fast -fimf-precision=high
+- Small dense least-squares or normal-equation accumulation loops (5x5 LM fits): the SVI stage was 2.0x faster than gcc-strict even under -fp-model=precise, though equal iteration counts were not verified
+- HPC codes that already carry Intel-tuned paths: LAMMPS's INTEL package measured 1.17-3.48x vs GCC 14 on most inputs on a Cascade Lake Xeon Gold 6248 (icpx 2026.1, -xHost -fp-model fast=2), but that GCC baseline ran the same Intel-tuned package, which the issue says is slower under GCC than its OPENMP package for lj and rhodo
+- As an extra CI build target to A/B hot kernels against GCC and Clang before committing to one compiler
+- When the same toolchain must also compile SYCL device code for Intel GPUs (the open-source DPC++ part)
+
+**Skip it when:**
+- Code that must keep strict IEEE semantics: under strict FP the three compilers were within 1.00-1.23x, and most of icpx's lead needed -fp-model=fast
+- Branchy scalar iterative code: gcc -ffast-math beat icpx-fast on the Newton implied-vol stage (3.07 vs 2.83 Mquotes/s), and LAMMPS's lc and dpd inputs showed 0.91x and 1.02x
+- AMD or non-x86 hosts: -xHost, SVML and the measured gains are Intel-hardware oriented and nothing here was measured on AMD (see AOCC)
+- Projects that need the exact optimizer to be open source or reproducible from source: the measured binary, its SVML/libimf runtimes and its Intel-only flags come from the proprietary oneAPI product, not from intel/llvm
+- Expecting wider vectors to help: forcing 512-bit vectors (-qopt-zmm-usage=high) made the pipeline 14.8% slower than icpx's 256-bit default
+
+**Vs siblings:** Pick icpx over AOCC when the hosts are Intel Xeons and the hot loops are vectorizable transcendental or reduction math you can run under relaxed FP; AOCC's evidence is an 8% geomean over GCC 11.2 on AMD hardware. zapcc, TinyCC, MIR/c2m and cg_clif target compile time rather than generated-code speed, and MSVC's entry is about Windows build time, so they do not compete on this workload.
+
+**Gotchas:**
+- Intel's documentation (search snippet; intel.com blocked here) says icx/icpx default to -fp-model fast=1 with math errno disabled, unlike GCC and Clang; a plain compiler swap silently relaxes FP semantics, so pass -fp-model=precise for parity. The strict GCC/Clang builds in the benchmark kept the Linux -fmath-errno default, which by itself can stop sqrt loops from vectorizing, so the 'strict' rows may not be matched on errno semantics.
+- Harness flaw: the SVI stage, which supplies 60% of icpx-fast's lead over gcc-strict and 90% of its lead over gcc-fast (derived from page data), has no transcendental calls in its LM hot loop and stops on data-dependent tests (relative SSE gain below 1e-12, lambda above 1e8, or 50 iterations). validate.py compares only the five fitted parameters (max drift up to 1.7e-8) and never the per-slice iteration count the bindings export, so equal work across builds is not shown, and the README's attribution of the win to SVML misreads its own stage table. The timed SVI region also includes a 30M-quote bucketing pass with exp, log and push_back.
+- The README's reason that GCC stays scalar ('glibc's libmvec has no vector erf') is wrong for GCC: glibc 2.39's math-vector.h declares a SIMD erf for GCC 6+ under __FAST_MATH__, yet gcc-fast emitted no _ZGV calls, so the GCC fast-math baseline failed to vectorize for an unexplained reason. For Clang 18 the limit is real (LLVM 18's libmvec table has no erf). Only GCC got -funroll-loops.
+- The open-source intel/llvm driver (Options.td) has -ffp-model=, -ffp-accuracy=, -fveclib=SVML and -faltmathlib=SVMLAltMathLibrary but none of -xHost, -fp-model=, -fimf-precision= or -qopt-zmm-usage=, so the benchmarked build cannot be reproduced from the repo this entry links.
+
+**Status:** intel/llvm is active (1.5k stars, daily DPC++ nightly releases, latest 2026-10-06) and Apache-2.0 WITH LLVM-exception, but the measured icpx binary, its SVML/libimf runtimes and its Intel-only flags belong to the proprietary oneAPI product, so usability is mixed: usable as a free-standing compiler, not reproducible or forkable from this repo.
+
+[repo](https://github.com/intel/llvm) · [benchmark](https://github.com/yzia2000/qr_cpp_compiler)
+
+##### Microsoft Visual C++ (MSVC cl.exe)  `C++`  `proprietary (closed-source Microsoft toolchain)`  `active`  `Tier D`
+
+Microsoft's closed C++ compiler; one Node.js report had it compiling ~2.5x faster than clang-cl, but only versus no-PCH clang-cl.
+
+**Beats:** clang-cl (Clang's MSVC-compatible driver) — A Node.js Windows build contributor reported in October 2024 that building Node with vcbuild.bat clang-cl took about 2.5x as long as with MSVC, with no hardware, versions, flags or timings, and attributed the gap to clang-cl builds lacking precompiled headers; the PCH fix for clang-cl landed eleven days later without numbers. No measurement of cl.exe versus clang-cl at equal build settings was found.
+
+**Known shortcoming:** Downgraded C to D: the Node.js issue #55208 '~2.5x slower' comparison ran MSVC with precompiled headers against clang-cl without them; PR #55249 (merged 2024-10-11) fixed that and the gap is obsolete. simdjson #847 confirms MSVC-built code runs slower (1.3051 vs 2.2221 GB/s). Lemire's 2023 post was blocked (snippet only).
+
+**Known shortcoming:** Enricher: Node.js 24.0.0 (2025-05-06) removed MSVC support and requires ClangCL, so the evidence workload is gone; clang-cl lists /MP and /clr as unsupported and its /Yc now enables -fpch-instantiate-templates by default. Counter-evidence: llama.cpp PR #10668 found clang plus Ninja 15.68% faster than MSVC at runtime. No equal-settings compile-time comparison found; learn.microsoft.com blocked.
+
+**Independent measurement:** verifier batch-08 (wave 2)
+
+**Independent measurement:** enricher (wave 2)
+
+**How:** Nothing measured isolates compiler speed. The reported gap came from precompiled headers: Node's MSVC builds used PCH so shared headers were parsed once, while its gyp setup gave clang-cl no PCH until PR #55249. cl.exe can also compile several sources in parallel inside one invocation (/MP), which clang-cl's option table lists as unsupported, so MSBuild builds that rely on /MP rather than a parallel generator such as Ninja run serially under clang-cl.
+
+**Use it when:**
+- Windows-only MSBuild solutions that already depend on cl /MP and /Yc-/Yu precompiled headers, where moving to clang-cl without Ninja-style parallelism and PCH would lengthen builds
+- C++/CLI code (/clr), which clang-cl's option table lists as unsupported
+- Debug-build edit-compile loops on Windows, where Lemire's 2023 'Visual Studio versus ClangCL' post (search snippet only) says MSVC compiles faster than ClangCL
+
+**Skip it when:**
+- Throughput-bound SIMD or parsing code: simdjson parsed twitter.json at 1.31 GB/s built with MSVC 19.25 vs 2.22 GB/s with ClangCL 9.0 (ClangCL 1.70x, derived from page data), and llama.cpp PR #10668 measured clang with Ninja 15.68% faster prompt processing than MSVC on an AMD 7600X
+- Projects that track Node.js or V8: Node.js 24.0.0 (2025-05-06) removed MSVC support and requires ClangCL on Windows
+- CPU-heavy Windows on ARM builds: llama.cpp's build docs say MSVC's ARM NEON intrinsic support may be incomplete, and its release workflow builds the CPU backend with clang
+- Cross-platform or open toolchains: cl.exe is closed-source and runs only on Windows hosts
+- As evidence of a compile-time edge: no equal-settings (both with PCH, both parallel) comparison was found; the only ratio compares PCH with no PCH
+
+**Vs siblings:** The catalogued siblings (icpx, AOCC, zapcc, TinyCC, MIR/c2m, cg_clif) target generated-code speed or one-shot compile speed, mostly on Linux; pick MSVC only for Windows MSBuild solutions that need cl.exe-specific features such as /clr or /MP-driven builds, and prefer clang-cl or icpx (intel/llvm also builds on 64-bit Windows) when runtime speed matters.
+
+**Gotchas:**
+- The ~2.5x figure (no hardware, versions, flags or timings; 'less with x64, more with ARM64') compares MSVC with precompiled headers against clang-cl without them; Node PR #55249 enabled PCH for clang-cl through gyp-next (merged 2024-10-11, backported to v22.12.0) and published no before/after numbers, so the evidence measures a build-configuration difference that no longer exists.
+- clang-cl lists /MP under unsupported options, so reports that clang-cl builds are several times slower in MSBuild projects (a llama.cpp-related search snippet cites 3-4x) usually measure lost per-invocation parallelism; build with Ninja or another parallel generator before comparing.
+- Clang does not instantiate templates into a PCH by default (-fpch-instantiate-templates defaults off), but clang-cl /Yc turns it on by default in current LLVM's driver; a January 2020 cfe-dev thread (search snippet only) reported clang-cl PCH builds about 3x slower than MSVC for one codebase before that change, so older comparisons may not hold.
+- Lemire's Node issue #52809 (May 2024) calls a warm-ccache ClangCL build of 15-20 minutes an improvement over MSVC but gives no MSVC figure; cached versus uncached, so it is not an equal-settings counter-measurement either.
+
+**Status:** Actively shipped with Visual Studio but closed-source and Windows-only, so usability is reference; the evidence workload is gone, since Node.js 24 (May 2025) dropped MSVC builds and requires ClangCL.
+
+[repo](https://learn.microsoft.com/en-us/cpp/build/reference/compiler-options) · [benchmark](https://github.com/nodejs/node/issues/55208)

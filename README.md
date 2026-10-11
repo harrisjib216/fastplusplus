@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1905 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 202 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 34 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 2155 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 210 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 36 candidates that failed verification.
 
-Tiers across both lists: A 449, B 397, C 1162, D 99.
+Tiers across both lists: A 486, B 438, C 1309, D 132.
 
 ## Evidence tiers
 
@@ -29,89 +29,94 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | Domain | Category | Entries | A | B | C | D |
 |---|---|---|---|---|---|---|
 | compression-and-encoding | entropy-coders | 26 | 2 | 5 | 19 | 0 |
-| compression-and-encoding | general-lossless | 64 | 22 | 10 | 28 | 4 |
+| compression-and-encoding | erasure-codes | 1 | 0 | 0 | 1 | 0 |
+| compression-and-encoding | general-lossless | 72 | 26 | 10 | 30 | 6 |
 | compression-and-encoding | integer-bitpacking | 24 | 2 | 2 | 19 | 1 |
 | compression-and-encoding | succinct-structures | 30 | 8 | 7 | 11 | 4 |
-| crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
+| crypto-and-hashing | aead-and-ciphers | 21 | 7 | 4 | 8 | 2 |
 | crypto-and-hashing | crypto-hashes | 16 | 4 | 5 | 6 | 1 |
-| crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
-| crypto-and-hashing | non-crypto-hashes | 30 | 6 | 17 | 7 | 0 |
-| crypto-and-hashing | signatures-kem | 20 | 7 | 5 | 8 | 0 |
+| crypto-and-hashing | encoding | 26 | 8 | 1 | 17 | 0 |
+| crypto-and-hashing | non-crypto-hashes | 31 | 6 | 18 | 7 | 0 |
+| crypto-and-hashing | signatures-kem | 22 | 7 | 5 | 10 | 0 |
 | interpreters-and-vms | bytecode-vms-and-wasm | 56 | 9 | 16 | 28 | 3 |
-| interpreters-and-vms | embedded-scripting | 57 | 6 | 27 | 22 | 2 |
-| interpreters-and-vms | jits | 60 | 12 | 11 | 36 | 1 |
+| interpreters-and-vms | embedded-scripting | 62 | 6 | 29 | 25 | 2 |
+| interpreters-and-vms | jits | 61 | 12 | 11 | 37 | 1 |
 | interpreters-and-vms | language-interpreters | 50 | 11 | 10 | 27 | 2 |
-| media-and-graphics | color-and-resampling | 61 | 4 | 5 | 44 | 8 |
-| media-and-graphics | font-shaping-text-layout | 24 | 1 | 2 | 19 | 2 |
-| media-and-graphics | image-codecs | 75 | 18 | 7 | 41 | 9 |
-| media-and-graphics | rasterizers-2d | 34 | 2 | 6 | 20 | 6 |
-| media-and-graphics | unicode-utf8 | 3 | 0 | 0 | 2 | 1 |
-| media-and-graphics | video-audio | 60 | 3 | 3 | 46 | 8 |
-| networking-and-servers | dns-quic-http3 | 16 | 0 | 6 | 10 | 0 |
-| networking-and-servers | event-loops-io | 36 | 6 | 7 | 23 | 0 |
-| networking-and-servers | http-parsers | 23 | 5 | 1 | 17 | 0 |
-| networking-and-servers | http-servers-frameworks | 36 | 4 | 20 | 12 | 0 |
+| media-and-graphics | color-and-resampling | 62 | 4 | 5 | 45 | 8 |
+| media-and-graphics | computer-vision | 1 | 0 | 0 | 1 | 0 |
+| media-and-graphics | font-shaping-text-layout | 26 | 1 | 3 | 20 | 2 |
+| media-and-graphics | image-codecs | 78 | 19 | 8 | 42 | 9 |
+| media-and-graphics | rasterizers-2d | 39 | 2 | 9 | 22 | 6 |
+| media-and-graphics | video-audio | 63 | 3 | 4 | 48 | 8 |
+| networking-and-servers | dns-quic-http3 | 18 | 0 | 8 | 10 | 0 |
+| networking-and-servers | event-loops-io | 42 | 8 | 8 | 25 | 1 |
+| networking-and-servers | http-parsers | 25 | 5 | 1 | 18 | 1 |
+| networking-and-servers | http-servers-frameworks | 51 | 5 | 22 | 21 | 3 |
 | networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
-| networking-and-servers | websocket-grpc-rpc | 22 | 5 | 2 | 15 | 0 |
-| numerics-and-science | autodiff-and-ml-kernels | 81 | 12 | 16 | 52 | 1 |
-| numerics-and-science | big-integer-arbitrary-precision | 42 | 10 | 3 | 26 | 3 |
-| numerics-and-science | blas-lapack | 55 | 14 | 12 | 23 | 6 |
-| numerics-and-science | fft | 46 | 12 | 9 | 19 | 6 |
-| numerics-and-science | geometry-spatial | 62 | 5 | 9 | 45 | 3 |
-| numerics-and-science | random-and-quasi-random | 60 | 15 | 4 | 38 | 3 |
-| numerics-and-science | sparse-and-solvers | 56 | 7 | 25 | 20 | 4 |
-| parsing-and-text | csv-tabular | 12 | 2 | 0 | 10 | 0 |
-| parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
-| parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |
-| parsing-and-text | parser-generators-and-combinators | 8 | 3 | 0 | 5 | 0 |
-| parsing-and-text | regex-engines | 10 | 2 | 3 | 5 | 0 |
-| parsing-and-text | text-search-and-indexing | 10 | 3 | 0 | 7 | 0 |
-| parsing-and-text | unicode-utf8 | 16 | 6 | 0 | 10 | 0 |
-| runtime-and-systems | allocators-gcs | 28 | 4 | 4 | 18 | 2 |
-| runtime-and-systems | coroutines-fibers | 19 | 0 | 1 | 15 | 3 |
-| runtime-and-systems | filesystems-and-io | 46 | 1 | 9 | 33 | 3 |
-| runtime-and-systems | logging-tracing | 16 | 11 | 0 | 5 | 0 |
+| networking-and-servers | websocket-grpc-rpc | 25 | 5 | 2 | 18 | 0 |
+| numerics-and-science | autodiff-and-ml-kernels | 102 | 12 | 22 | 66 | 2 |
+| numerics-and-science | big-integer-arbitrary-precision | 43 | 10 | 4 | 26 | 3 |
+| numerics-and-science | blas-lapack | 61 | 14 | 13 | 26 | 8 |
+| numerics-and-science | fft | 49 | 13 | 9 | 21 | 6 |
+| numerics-and-science | geometry-spatial | 73 | 5 | 12 | 52 | 4 |
+| numerics-and-science | random-and-quasi-random | 61 | 15 | 4 | 39 | 3 |
+| numerics-and-science | sparse-and-solvers | 59 | 7 | 25 | 23 | 4 |
+| parsing-and-text | csv-tabular | 18 | 4 | 0 | 12 | 2 |
+| parsing-and-text | lexers-tokenizers | 10 | 1 | 1 | 7 | 1 |
+| parsing-and-text | markup-html-markdown | 11 | 1 | 2 | 8 | 0 |
+| parsing-and-text | parser-generators-and-combinators | 12 | 4 | 0 | 7 | 1 |
+| parsing-and-text | regex-engines | 12 | 2 | 3 | 7 | 0 |
+| parsing-and-text | text-search-and-indexing | 14 | 3 | 1 | 10 | 0 |
+| parsing-and-text | unicode-utf8 | 21 | 6 | 0 | 13 | 2 |
+| runtime-and-systems | allocators-gcs | 30 | 4 | 4 | 19 | 3 |
+| runtime-and-systems | coroutines-fibers | 20 | 0 | 1 | 16 | 3 |
+| runtime-and-systems | filesystems-and-io | 48 | 1 | 10 | 34 | 3 |
+| runtime-and-systems | logging-tracing | 23 | 14 | 0 | 8 | 1 |
 | runtime-and-systems | profilers-and-instrumentation | 20 | 0 | 5 | 10 | 5 |
-| runtime-and-systems | thread-pools-work-stealing | 16 | 3 | 1 | 11 | 1 |
-| serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |
-| serialization-and-formats | json | 52 | 22 | 3 | 26 | 1 |
-| serialization-and-formats | reflection-and-codegen | 8 | 3 | 1 | 4 | 0 |
-| serialization-and-formats | yaml-toml-xml | 28 | 9 | 0 | 19 | 0 |
-| stdlib-replacements | allocators | 17 | 4 | 4 | 8 | 1 |
+| runtime-and-systems | thread-pools-work-stealing | 21 | 5 | 2 | 12 | 2 |
+| serialization-and-formats | binary-schemas | 53 | 16 | 11 | 25 | 1 |
+| serialization-and-formats | json | 68 | 29 | 5 | 31 | 3 |
+| serialization-and-formats | reflection-and-codegen | 13 | 3 | 1 | 8 | 1 |
+| serialization-and-formats | yaml-toml-xml | 33 | 9 | 2 | 22 | 0 |
+| stdlib-replacements | allocators | 18 | 4 | 4 | 9 | 1 |
 | stdlib-replacements | async-tasks-threadpools | 8 | 5 | 1 | 1 | 1 |
-| stdlib-replacements | bitsets-and-succinct | 6 | 3 | 0 | 3 | 0 |
-| stdlib-replacements | concurrency-queues-locks | 8 | 6 | 0 | 2 | 0 |
-| stdlib-replacements | hash-maps-sets | 20 | 14 | 1 | 5 | 0 |
+| stdlib-replacements | bitsets-and-succinct | 7 | 3 | 0 | 4 | 0 |
+| stdlib-replacements | concurrency-queues-locks | 9 | 6 | 0 | 3 | 0 |
+| stdlib-replacements | graph-algorithms | 2 | 0 | 1 | 1 | 0 |
+| stdlib-replacements | hash-maps-sets | 25 | 17 | 1 | 7 | 0 |
 | stdlib-replacements | io-and-filesystem | 4 | 1 | 0 | 3 | 0 |
 | stdlib-replacements | k-mer-dictionaries | 3 | 1 | 2 | 0 | 0 |
-| stdlib-replacements | math-simd-linear-algebra | 10 | 2 | 2 | 5 | 1 |
+| stdlib-replacements | math-simd-linear-algebra | 22 | 5 | 3 | 12 | 2 |
 | stdlib-replacements | minimal-perfect-hash-functions | 20 | 14 | 2 | 4 | 0 |
-| stdlib-replacements | number-parsing-formatting | 16 | 6 | 2 | 8 | 0 |
+| stdlib-replacements | number-parsing-formatting | 20 | 7 | 2 | 11 | 0 |
 | stdlib-replacements | ordered-maps-trees | 9 | 4 | 0 | 5 | 0 |
-| stdlib-replacements | perfect-hash-static-tables | 20 | 8 | 0 | 12 | 0 |
+| stdlib-replacements | perfect-hash-static-tables | 21 | 9 | 0 | 12 | 0 |
 | stdlib-replacements | priority-queues-heaps | 5 | 4 | 0 | 1 | 0 |
 | stdlib-replacements | random | 9 | 4 | 2 | 3 | 0 |
-| stdlib-replacements | regex | 7 | 3 | 1 | 3 | 0 |
+| stdlib-replacements | ranges-and-views | 1 | 0 | 0 | 1 | 0 |
+| stdlib-replacements | regex | 9 | 3 | 3 | 3 | 0 |
 | stdlib-replacements | searching | 6 | 2 | 0 | 4 | 0 |
-| stdlib-replacements | sequence-containers | 5 | 2 | 0 | 3 | 0 |
-| stdlib-replacements | serialization-json | 10 | 5 | 0 | 5 | 0 |
-| stdlib-replacements | small-buffer-and-strings | 8 | 1 | 0 | 6 | 1 |
-| stdlib-replacements | smart-pointers-and-refcount | 7 | 3 | 1 | 3 | 0 |
-| stdlib-replacements | sorting | 18 | 6 | 0 | 12 | 0 |
-| stdlib-replacements | string-search-and-hashing | 9 | 5 | 1 | 3 | 0 |
+| stdlib-replacements | sequence-containers | 9 | 3 | 0 | 6 | 0 |
+| stdlib-replacements | serialization-json | 17 | 7 | 0 | 9 | 1 |
+| stdlib-replacements | small-buffer-and-strings | 12 | 1 | 0 | 10 | 1 |
+| stdlib-replacements | smart-pointers-and-refcount | 10 | 3 | 2 | 4 | 1 |
+| stdlib-replacements | sorting | 24 | 6 | 0 | 17 | 1 |
+| stdlib-replacements | string-search-and-hashing | 10 | 5 | 1 | 4 | 0 |
+| stdlib-replacements | utilities | 3 | 0 | 0 | 2 | 1 |
 | storage-and-data | caches | 38 | 1 | 17 | 20 | 0 |
-| storage-and-data | columnar-analytics | 33 | 4 | 12 | 17 | 0 |
-| storage-and-data | embedded-kv | 41 | 4 | 12 | 25 | 0 |
+| storage-and-data | columnar-analytics | 36 | 4 | 12 | 20 | 0 |
+| storage-and-data | database-client-drivers | 1 | 0 | 0 | 1 | 0 |
+| storage-and-data | embedded-kv | 51 | 4 | 13 | 31 | 3 |
 | storage-and-data | embedded-kv-lsm | 1 | 0 | 0 | 1 | 0 |
 | storage-and-data | filters-bloom-cuckoo-xor | 1 | 0 | 1 | 0 | 0 |
-| storage-and-data | indexes | 33 | 3 | 20 | 10 | 0 |
+| storage-and-data | indexes | 34 | 3 | 20 | 11 | 0 |
 | storage-and-data | message-queues-logs | 28 | 2 | 2 | 24 | 0 |
 | storage-and-data | probabilistic-filters | 42 | 10 | 12 | 19 | 1 |
 | toolchain-and-build | build-systems | 5 | 1 | 0 | 4 | 0 |
 | toolchain-and-build | compile-caching-and-distribution | 4 | 0 | 0 | 4 | 0 |
-| toolchain-and-build | compilers-frontends | 4 | 0 | 1 | 3 | 0 |
+| toolchain-and-build | compilers-frontends | 7 | 1 | 1 | 4 | 1 |
 | toolchain-and-build | formatters-linters-lsps | 6 | 3 | 0 | 3 | 0 |
-| toolchain-and-build | linkers | 3 | 2 | 0 | 1 | 0 |
+| toolchain-and-build | linkers | 4 | 2 | 1 | 1 | 0 |
 | toolchain-and-build | preprocessors-and-codegen | 5 | 0 | 1 | 4 | 0 |
 
 ## How entries are made
