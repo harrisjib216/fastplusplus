@@ -1,0 +1,195 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-09-26
+
+INPUT RECORD:
+{
+  "name": "MatX",
+  "repo_url": "https://github.com/NVIDIA/MatX",
+  "language": "C++ (CUDA)",
+  "domain": "numerics-and-science",
+  "category": "fft",
+  "baseline": "handwritten CUDA kernels + cuFFT (FFT pipeline); also CuPy 14.1.1 eager and NumPy 2.5.1 + SciPy 1.18.0 (Black-Scholes)",
+  "baseline_in_list": false,
+  "metric": "latency",
+  "workload": "256 batched 4096-point complex FP32 FFTs with fused input normalization and calibrated-magnitude/dB post-processing (median kernel time), plus 100M FP32 Black-Scholes option prices (median time, transfers excluded).",
+  "claimed_speedup": "FFT pipeline: MatX CUDAJITExecutor 0.1114 ms vs handwritten CUDA + cuFFT 0.1792 ms = 1.61x faster (MatX cudaExecutor 0.1848 ms = 0.97x, i.e. slightly slower than the handwritten version). Black-Scholes 100M FP32: MatX 16.07 ms vs CuPy 14.1.1 eager 90.32 ms = 5.62x faster, vs NumPy 2.5.1 + SciPy 1.18.0 on CPU 2965.66 ms = 184.5x faster.",
+  "evidence_tier": "A",
+  "benchmark_url": "https://github.com/NVIDIA/MatX",
+  "baseline_stdlib": [],
+  "compiler_and_flags": "CUDA 13.0 (nvcc) with MathDx 26.03 for the JIT case; FFT reproduce command: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMATX_BUILD_EXAMPLES=ON -DMATX_EN_MATHDX=ON, cmake --build build --target fft_benchmark, ./build/examples/fft_benchmark 256 4096 2000 (CMAKE_CUDA_ARCHITECTURES defaults to native; MATX_CUDA_FLAGS adds --threads 0 --extended-lambda). The Black-Scholes reproduce command omits CMAKE_BUILD_TYPE (MatX then adds -lineinfo). Host C++ compiler and version not stated.",
+  "hardware": "NVIDIA DGX Spark (GB10 GPU), 20-core Arm CPU (10 Cortex-X925 + 10 Cortex-A725), driver 580.159.03 (stated for the Black-Scholes run)",
+  "compared_against_cpp_std_directly": false,
+  "license": "BSD-3-Clause",
+  "usability": "copyable",
+  "last_commit": "2026-10-10",
+  "maintenance_status": "active",
+  "is_fork_of": null,
+  "stars_or_usage": "1.4k stars",
+  "has_code": true,
+  "tradeoffs": "GPU-first (NVIDIA) header-only C++20 library; the fused-kernel speedup needs the optional MathDx (cuFFTDx) backend, a supported FFT shape and the CUDAJITExecutor, and JIT compilation cost is excluded from the steady-state timing. Linux fully supported, Windows alpha. CPU executors (OpenMP, NVPL, FFTW) exist but the README gives no CPU numbers.",
+  "caveats": "First-party NVIDIA numbers on one machine (DGX Spark GB10); the README says performance depends on GPU, clocks, shape and software versions. The FFT baseline is a 59-line handwritten CUDA + cuFFT pipeline written by the MatX authors (separate normalize kernel, out-of-place cufftExecC2C, separate calibrate/magnitude/dB kernel, two cudaMalloc temporaries); the plain cudaExecutor path is 3% slower than it, so the 1.61x comes only from fusing pre- and post-processing into one cuFFTDx kernel via CUDAJITExecutor, not from a faster FFT. The baseline does not use cuFFT's own load/store (LTO) callbacks, the incumbent's native way to fuse such pre/post work, so the gap against a best-practice cuFFT pipeline is unmeasured. JIT compile time is reported separately and excluded from steady-state timing. No comparison against the fft category's baselines (FFTW, MKL FFT, KissFFT): the harness can print an optional MatX host result through NVPL or FFTW, but the README publishes none. Black-Scholes rows (off-category, tier C on their own): the reproduce command omits CMAKE_BUILD_TYPE, which in MatX's CMakeLists adds -lineinfo and leaves host flags unoptimized (device code still gets nvcc's default optimization); examples/black_scholes.cu prints four MatX variants (plain expression, custom operator, apply() lambda, apply_idx() lambda) with no warmup before the first, and the README does not say which row gives 16.07 ms (the Python companion's docstring says it matches the apply() case); MatX inputs are unclamped uniform [0,1) while the Python harness clamps to 1e-6; MatX is timed by CUDA events in C++ and CuPy/NumPy by a separate Python script; the CuPy baseline is an eager expression with materialized intermediates, not a fused cupy.fuse or ElementwiseKernel; NumPy/SciPy runs single-threaded on the CPU, so 184.5x compares a GPU with one CPU thread. The README FFT benchmark was added on 2026-07-22 (#1208).",
+  "is_evidence_for_known": false,
+  "confidence": 0.7,
+  "id": "https://github.com/nvidia/matx",
+  "verification": {
+    "date": "2026-09-26",
+    "verdict": "confirm",
+    "tier_before": "A",
+    "tier_reason": "README FFT table (CUDA + cuFFT 0.1792 ms, MatX cudaExecutor 0.1848 ms, MatX CUDAJITExecutor 0.1114 ms = 1.61x) comes from the public harness examples/fft_benchmark.cu (interleaved trials, 10 warmups, 2000 iterations x 7 trials, median, outputs validated against the cuFFT reference at 2e-3 relative tolerance), with CUDA 13.0 + MathDx 26.03, a stated Release CMake configure (flags in the public CMakeLists.txt) and the DGX Spark GB10 GPU plus its named 20-core Arm CPU. Host compiler version is not stated, but the timed work is device code built by the named nvcc.",
+    "notes": "Numbers match the README exactly and come from a public, validated, interleaved harness, so A stands for the FFT pipeline; the Black-Scholes rows are a weaker, off-category comparison (unfused CuPy, single-thread NumPy, ambiguous MatX row). Shortcomings: baseline written by the MatX authors and not using cuFFT callbacks, speedup comes from kernel fusion via cuFFTDx rather than a faster FFT, cudaExecutor alone is 3% slower than handwritten CUDA + cuFFT, single machine (GB10), no FFTW/MKL/KissFFT comparison; experimental JIT fusion rejects unsupported shapes.",
+    "urls_opened": [
+      "https://github.com/NVIDIA/MatX",
+      "https://github.com/NVIDIA/MatX/commits/main",
+      "https://github.com/NVIDIA/MatX/commits/main/examples/fft_benchmark.cu",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/README.md",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/fft_benchmark.cu",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/black_scholes.cu",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/black_scholes_benchmark.py",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/examples/CMakeLists.txt",
+      "https://raw.githubusercontent.com/NVIDIA/MatX/HEAD/LICENSE"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- Admiral (https://github.com/DiamonDinoia/admiral): beats FFTW 3 (FFTW_MEASURE, single thread; version and build flags of the system fftw3 not stated in the admiral repo, while the author's separate fft_bench uses FFTW 3.3.11); also ducc0 (commit c4dda23); At 1 thread beats FFTW_MEASURE by 1.34x (1-D) and 1.43x (N-D), both precisions pooled; vs ducc0 at 1 thread 2.18x (f64) / 2.70x (f32) on 1-D, 1.12x / 1.41x on 2
+- AppleSiliconFFT (https://github.com/aminems/AppleSiliconFFT): beats Apple vDSP/Accelerate FFT (CPU); Apple M1, N=4096 batch=256 (README): radix-8 Stockham 138.45 GFLOPS (1.78 us/FFT) vs vDSP 107.0 GFLOPS (2.29 us/FFT), +29%; in-place Cooley-Tukey with simdgroup
+- dft_simd (vertical-SIMD FFTW codelets) (https://github.com/sfegan/dft_simd): beats FFTW 3 (planner/execute API with its SSE/AVX codelets, single and 8-transform advanced interface); 2025, AMD EPYC 9474F single core: 60-sample AVX2 codelet with fixed strides 79 ms vs FFTW aligned single-DFT plan 858 ms (10.8x per the README); 1024-sample AVX
+- go-fft (https://github.com/go-fft/fft): beats FFTW 3.3.11 (native C, FFTW_MEASURE, threads=1); also numpy.fft, scipy.fft (pocketfft) and gonum/dsp/fourier; June snapshot tables (Apple M4 Max), go-fft vs FFTW: lags FFTW 1.17x to 3.28x on complex 1-D rows (e.g. N=1,024 3,395 ns vs 2,127 ns); faster only on the 2-D mu
+- muFFT (https://github.com/Themaister/muFFT): beats KissFFT; 1D C2C n=512: muFFT 719 ns (SIMD) / 4024 ns (no SIMD) vs KissFFT 6553 ns; 2D 256x256 muFFT NS 1092 us vs kissfft NS 1583 us. Versus FFTW3 (meas.) muFFT is compe
+- Notorious-FFT (https://github.com/NotoriousLOB/Notorious-FFT): beats minfft (aimukhin/minfft, small power-of-two FFT library; not one of the listed incumbents); README: v1.0.0 beats minfft by 1.08-1.13x on complex forward DFT for N>=256 (N=1024 13.86 us vs 15.23 us; N=4096 68.95 us vs 77.59 us); inverse up to 1.18x at N
+- PFFFT (marton78 fork) (https://github.com/marton78/pffft): beats KissFFT; 1D C2C n=512: pffft 1255 ns (SIMD) vs KissFFT 6553 ns (derived 5.2x); pffft NS 3792 ns vs 6553 ns; R2C n=512: pffft 597 ns vs kissfft NS 2985 ns. Roughly on par
+- PocketFFT (C++ branch) (https://github.com/mreineck/pocketfft): beats KissFFT; 3D R2C 256^3: PocketFFT AVX 97 ms vs KissFFT 436 ms (4.5x, derived from page data); 416x256x416: 311 ms vs 2078 ms; 3D C2C 256^3: 264 ms vs 785 ms; also 'as fas
+- Auto-MPFT (https://github.com/snudatalab/Auto-MPFT): beats FFTW 3.3.5 (planning excluded from run time), Intel MKL (version not stated), PFT (snudatalab/PFT, KDD 2021) and FFTW's pruned FFT (fftw.org/pruned.html); all single precision, with tolerances set so every method keeps relative l2 error below 1e-6.; Paper, real-world datasets (Figure 4): up to 7.6x on Cityscapes, with per-dataset maxima annotated as 7.6x (Cityscapes), 5.7x (ADE20K), 6.9x (DF2K), 2.8x (RiceL
+- fbcuda / fbfft (archived) (https://github.com/facebookarchive/fbcuda): beats cuFFT (NVIDIA GPU FFT library); Per the authors' paper (arXiv 1412.7580; text seen only as a search snippet, not on any opened page): fbfft gives over 1.5x speedup over cuFFT for the FFT sizes
+- fCWT (https://github.com/fastlib/fCWT): beats PyWavelets (pywt.cwt), MATLAB cwt, SciPy, ssqueezepy, CCWT, Rwave (C), Wavelib (C++) and Mathematica CWT implementations; README: 'Calculating CWT 34-120x faster than all competitors' (C++ performance). Table (seconds, 10k-300 / 10k-3000 / 100k-300 / 100k-3000): fCWT C++ 0.005 / 0.
+- FFTW++ (implicit dealiased convolutions on FFTW3) (https://github.com/dealias/fftwpp): beats FFTW 3 with explicit zero-padded convolutions (and FFTW's MPI transpose for the distributed code); README: 'in 2D and 3D implicit zero-padding substantially reduces memory usage and computation time' (no numbers on the repository). Per a WebSearch summary of 
+- FINUFFT (with cuFINUFFT) (https://github.com/flatironinstitute/finufft): beats NFFT3 (Chemnitz NUFFT library, built on FFTW); docs also name CMCL NUFFT; docs/related.rst: NFFT 'significantly slower and/or more memory-intensive than FINUFFT'; CMCL NUFFT 'much (up to 50x even for one thread) slower'; MIRT 'slower 
+- FlashFFTConv (https://github.com/HazyResearch/flash-fft-conv): beats PyTorch FFT convolution (torch.fft, backed by cuFFT); README table (gated convolution, one H100-SXM, all results scaled to batch 64, hidden 768; time units not stated in the table): 5.64x at 256, 7.93x at 1K, 6.64x
+- meow_fft (https://github.com/JodiTheTigger/meow_fft): beats KissFFT; gemmi C2C (GCC8 -O3, i7-5600U): n=256 2120 vs KissFFT 2536 ns, n=384 4718 vs 4929, n=480 5745 vs 6030, n=512 4342 vs 6553 ns (~1.04-1.5x, derived from page data
+- PFT (Partial Fourier Transform) (https://github.com/snudatalab/PFT): beats FFTW (real-to-complex 1D, FFTW_ESTIMATE), Intel MKL DFTI, FFTW pruned FFT, Goertzel algorithm; Per the authors' KDD 2021 paper (text seen only as a search snippet, not on any opened page): an order of magnitude speedup for sufficiently small output sizes 
+- PhastFT (https://github.com/smu160/PhastFT): beats FFTW 3.3.8 (via the Rust fftw crate); also RustFFT; astral4/fft-benchmark (M1 MacBook Pro, single thread, plan created inside each timed iteration for every library; forward times): f32 N=1024 4.749 us (PhastFT) 
+- RustFFT (https://github.com/ejmahler/RustFFT): beats FFTW 3.3.8 (via the Rust fftw crate v0.8.0, built from source by fftw-src without any SIMD configure flag, FFTW_ESTIMATE plan created inside each timed call); Table medians, forward / inverse, plan creation included in the timed region for both libraries. f32 N=8,388,608: RustFFT 103.9 / 103.6 ms vs FFTW 193.3 / 192.9
+- tcFFT (https://github.com/rox906/tcFFT): beats NVIDIA cuFFT (half precision); 1.29x-3.24x faster than cuFFT on V100, 1.10x-3.03x on A100 (arXiv abstract)
+- TRON (TRajectory Optimized NUFFT) (https://github.com/davidssmith/TRON): beats gpuNUFFT (GPU NUFFT gridding library), Fessler's Image Reconstruction Toolbox (IRT, MATLAB) and BART (the reproduction steps also build BART); README: 'TRON is 30x faster than gpuNUFFT (a fast GPU code) and 75x faster than the image reconstruction toolbox (IRT) of Fessler (a ubiquitous CPU-based Matlab
+- TurboFFT (https://github.com/shixun404/TurboFFT): beats NVIDIA cuFFT (also VkFFT); Up to 300% faster than cuFFT on certain sizes (especially small problems < 2 MB); 7-15% overhead with online fault tolerance (arXiv abstract/Figure 1)
+- VkFFT (https://github.com/DTolm/VkFFT): beats NVIDIA cuFFT (CUDA 11.7) and AMD rocFFT (ROCm 5.2); README plot (FP64 batched 1D C2C, A100): radix 2-13 lengths are at parity (~1250-1280 GB/s for both VkFFT and cuFFT); for Rader primes VkFFT reaches ~400-1250 G
+- cuSpFFT (https://github.com/Darkviper7/cuSpFFT): beats cuFFT (dense 2D real-to-complex) and SpFFT (eth-cscs/SpFFT, CUDA backend); benzene: custom binary-sparse pipeline 14.65 ms vs dense cuFFT 23.64 ms ('1.61x faster, 10.7x less memory'); variant using cuFFT inside 9.60 ms ('2.46x faster, 
+- eFFT (event-based FFT) (https://github.com/raultapia/efft): beats FFTW (fftw_plan_dft_2d, full N x N 2D FFT recomputed after every event or event packet); No comparative numbers published in the repo or on any opened page. The README says FFTW3 'served as the benchmark for testing and evaluation' and benchmarks/ef
+- FastAndFourier (FAF, JIT-compiled DSP/FFT library) (https://github.com/NotoriousLOB/FastAndFourier): beats KissFFT (and FFTW3 FFTW_ESTIMATE/FFTW_MEASURE, which beat it); also NotoriousFFT; x86_64 macOS, 2.3 GHz AVX2: at N=65536 907 us vs KissFFT 3253 us (README: 3.2-3.6x faster; 3.6x derived from page data) but slower at N=64 (4.40 vs 1.11 us), 10
+- FFTS (The Fastest Fourier Transform in the South) (https://github.com/anthonix/ffts): beats FFTW; On Core i7-870 (SSE4.2, no AVX) FFTS 1.11x-1.88x faster than FFTW; on i5-3340M (AVX) FFTS wins at N<=32 (1.17-1.81x) and loses at N>=64 (0.64-0.91x) (issue #28 
+- GPU_FFT (Raspberry Pi VideoCore IV, hello_fft in raspberrypi/userland) (https://github.com/raspberrypi/userland): beats FFTW (FFTW_MEASURE) running on the Raspberry Pi 1 ARM CPU; Doc text: 'ten times more data throughput than is possible on the 700 MHz ARM of the Pi 1'. Per-transform milliseconds, GPU_FFT (batch 1) vs FFTW_MEASURE: 2^8 0
+- gpu_fftw (https://github.com/gpu-fftw/gpu_fftw): beats FFTW3 (running on the Raspberry Pi CPU); Self-test output: 'GPU FFTW 7.11652 times faster (11523.3 ffts/sec, 86.781 usec/fft, fftw3: 1619.23 ffts/sec)'. README: 'They can be up to ten times faster than
+- heFFTe (Highly Efficient FFT for Exascale) (https://github.com/icl-utk-edu/heffte): beats Distributed 3-D FFT libraries fftMPI, SWFFT, AccFFT and P3DFFT (FFTW-MPI-class); FFTW is heFFTe's own CPU backend; Repo: no competitor numbers; benchmarks/speed3d.h prints only heFFTe's own 'Performance: <x> GFlops/s' for the chosen backend (stock, FFTW, MKL, cuFFT, rocFFT, 
+- JTransforms (https://github.com/wendykierp/JTransforms): beats FFTW 3 through the ezFFTW Java wrapper (single-threaded); FFTBench README (s/op, 3 JMH iterations; 2 for 3-D): 1-D arrayInput, JTransforms with its heuristic multithreading vs single-threaded ezFFTW/FFTW: 10,000,000 el
+- juFFTe (https://github.com/FZJ-JSC/juFFTe): beats FFTW3; Repo README and benchmark README contain no numbers. Preprint arXiv 2608.28076 (seen only through search-result summaries; arxiv.org and pith.science blocked): 
+- KFR (https://github.com/kfrlib/kfr): beats FFTW; Graphs only. Independent LVK paper (arXiv 2503.14292 Fig. 6): KFR 6.0.2 shows higher MFlops than FFTW 3.3.10 for complex forward in-place FFTs across sizes (no 
+- matchedfilter (formerly peak-fft) (https://github.com/ahnitz/matchedfilter): beats FFTW (inverse transform only, timed through pyFFTW); on GPU rocFFT / MLX FFT inverse-only references; Milliseconds per batch (16 x 512 x 4096-point complex64, one thread), FFTW inverse-only vs matchedfilter full / peak-only / hierarchical fd=0.01 at SNR 5.5: Ryz
+- minfft (https://github.com/aimukhin/minfft): beats KissFFT (the README also plots PocketFFT and FFTW with SSE2 for reference); README says its speed and accuracy are compared with 'the libraries of similar design - KissFFT and PocketFFT', with 'a highly optimized machine-specific versio
+- MPSFT (Matrix Pencil Sparse Fourier Transform) (https://github.com/jiaweichiu/mpsft): beats FFTW (FFTW_ESTIMATE and FFTW_MEASURE plans); At N=4194301 (prime near 2^22) MPSFT takes 19.4 ms at S=64, 75.8 ms at S=512, 140.8 ms at S=1024 and 263.4 ms at S=2048; FFTW at N=4194304 takes 225.3 ms with F
+- Ne10 (NEON FFT) (https://github.com/projectNe10/Ne10): beats FFmpeg libavcodec FFT (assembly); also tricl_fft and CkFft; Issue #165 table ('Cycles', unit and measurement method not explained): SuperpoweredFFT 7375; ne10_fft (asm) 10125; libavcodec (asm) 14375; tricl_fft_fft 21833;
+- OFFT (https://github.com/christian-volmer/OFFT): beats FFTW 3.3.5 (FFTW_ESTIMATE, with and without SIMD) and Intel oneMKL; Author: for arbitrary sizes OFFT is often faster than FFTW, even the SIMD version. From the table (ns per n ln n): OFFT beats FFTW_ESTIMATE with SIMD at 10 of 3
+- pocketfft-tuned (benchmark-driven PocketFFT fork) (https://github.com/Dimandragon/pocketfft-tuned): beats FFTW3 FFTW_ESTIMATE, upstream PocketFFT (ref 32424d2) and KissFFT; the fork is slower than FFTW_MEASURE and KFR; SIMD build, median ratio other/tuned (tuned wins/ratios): 1-D c2c 2.40x vs upstream PocketFFT (1258/1260), 1.35x vs FFTW_ESTIMATE (813/1260), 4.63x vs KissFFT (
+- SFFT3 (3-D FFT built from FFTW 1-D transforms) (https://github.com/elgw/sfft3): beats FFTW3 own 3-D routines (FFTW_PATIENT on the Ryzen table, FFTW_MEASURE on the i7 table); 8-core Ryzen 3700X, both FFTW_PATIENT: 512^3 8.428e-2 s vs FFTW3-P 1.009e-1 s (1.20x, derived from page data); 1024^3 7.733e-1 vs 1.011 s (1.31x, derived); 1024
+- SYLT-FFT (fixed-point FFT for Cortex-M4) (https://github.com/sylt-collab/SYLT-FFT): beats CMSIS-DSP arm_cfft_radix2_q31 (arm_cortexM4I_math.lib 1.4.2); +25.6% faster (Keil C 5.01 -O3) and +15.1% faster (GNU ARM 4.8.4 -O3) than arm_cfft_radix2_q31 for fft_inverse at N=256.
+- VectorFFT (https://github.com/Tugbars/VectorFFT): beats Intel oneMKL 2025.3 FFT (DFTI, sequential); 1D: 1.29x median over MKL across N=2..4,096 (89% of 4,095 lengths at/above parity; best 7.04x at N=89; powers of two 1.13x median, 75% at/above parity); 2D 1.34
+- wavelib (https://github.com/rafat/wavelib): beats discrete-wavelets (npm pure-JavaScript 1D DWT package, ^5.0.15); PyWavelets under Pyodide also measured; wavedec vs discrete-wavelets (pure JS): 100000 db2 1.28 vs 162.48 ms (~127x, derived from page data); 100000 db4 2.27 vs 185.34 ms (~82x derived); 1000000 db2 1
+- AOCL-FFTW (AMD-optimized FFTW) (https://github.com/amd/amd-fftw): beats FFTW 3.3.10 (upstream MIT/FFTW release it is derived from); No numbers on the page. Qualitative claim in README_AMD.md: 'AOCL-FFTW achieves high performance as a result of its various optimizations involving improved SIM
+- gpuNUFFT (https://github.com/andyschwarzl/gpuNUFFT): beats cuFINUFFT (3D, single-coil and 32-coil MRI data, as measured in cufinufft issue #126, Jan 2022); CPU NUFFT libraries only directionally via the MRI-NUFFT benchmark statement; cufinufft issue #126 (paquiteau, Jan 28 2022), 3D 128x128x160: forward 73.42 +/- 1.119 ms vs cufinufft 279.36 +/- 0.552 ms (3.8x), adjoint 62.73 +/- 0.640 vs 13
+- OTFFT (OK Ojisan's Template FFT) (https://github.com/DEWETRON/otfft): beats FFTW; Project homepage title 'OTFFT -- FFT library using AVX that is faster than FFTW'; no numbers were available on any page opened here (the akinomyoga/OTFFT README
+- SFFT library (ETH Zurich optimized sparse FFT, versions 1-3) (https://github.com/davidediger/sfft): beats FFTW; No numbers anywhere in the repository or its docs. The docs call it a 'high-performance C++ implementation' of sFFT v1, v2 and v3 with SSE kernels. The underlyi
+- SpFFT (sparse-input 3D FFT) (https://github.com/eth-cscs/SpFFT): beats FFTW / MKL and cuFFT / rocFFT dense 3D FFT (implied; no comparison is published; SpFFT itself calls these libraries for its 1D/2D sub-transforms); none: no numbers or speedup claim appear in the README, docs/source details.rst, index.rst, examples.rst or tests/programs/benchmark.cpp
+- tinyfft (https://github.com/ryuhei-mori/tinyfft): beats FFTW3 (FFTW_MEASURE planner); README: 'Empirically, for vectors of length between 2^17 and 2^20, Tiny FFT is faster than FFTW3 with FFTW_MEASURE. For other cases, Tiny FFT is slower than FFT
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /home/user/fastpp/data/wave8/enrich/raw/github_com_nvidia_matx.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /home/user/fastpp/data/wave8/enrich/raw/github_com_nvidia_matx.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.
