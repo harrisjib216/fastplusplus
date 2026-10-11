@@ -1,0 +1,78 @@
+[
+  {
+    "id": "https://github.com/boostorg/log",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Third-party benchmark code is public (reckless benchmarks/*.cpp, adapters benchmarks/boost_log.hpp and fstream.hpp) with gcc 7.3.0 and a Ryzen 7 2700X stated, but the flags of the published run are not stated and the public tup.config.template defaults to CONFIG_DEBUG=yes, which Tuprules.lua maps to -O0, so the build flags are absent from public sources (tier C rule). The wins over the named baseline also come from an unequal setup: the Boost.Log adapter calls add_file_log without auto_flush (buffered), while the fstream adapter flushes after every line.",
+    "corrections": {
+      "claimed_speedup": "Mixed, and slower than the named baseline in most scenarios. Lower overhead than std::fstream only in multithreaded Mandelbrot and the disk-I/O scenario: 4 threads 13.17 vs fstream 15.66 and stdio 15.03 (about 1.19x lower than fstream, derived from page data), 8 threads 1.82 vs fstream 4.62 and stdio 3.70 (about 2.5x lower, derived from page data), disk I/O 46.03 vs fstream 5719.93 relative call latency (about 124x, derived from page data; fstream flushes every line and hits multi-second kernel stalls while the Boost.Log adapter does not flush). Beats g3log 1.3.2 in periodic calls (67.42 vs 78.19) and call bursts (3.84 vs 4.20). Slower than std::fstream, stdio and spdlog in periodic calls (67.42 vs 41.32, 43.77, 40.85), call bursts (3.84 vs 2.36, 2.55, 1.93) and 1-thread Mandelbrot (15.21 vs 10.73, 12.21, 9.21; slowest of all). All values are relative to reckless (1.00).",
+      "caveats": "Boost.Log is not claimed to be fast by its authors, and the numbers come from a competitor's benchmark (reckless) in which Boost.Log is slower than reckless, spdlog and often plain stdio and std::fstream. Its only wins against std::fstream (4- and 8-thread Mandelbrot, disk I/O) are tilted by configuration: the reckless adapter (benchmarks/boost_log.hpp) uses add_file_log without keywords::auto_flush, so Boost.Log writes through a buffer and does not flush per record, while the fstream adapter ends every line with std::endl or std::flush and the stdio adapter calls fflush; the 124x disk-I/O ratio is driven by multi-second synchronous flush stalls in fstream, which a buffered ofstream would avoid. Results are from Boost 1.65.0 and gcc 7.3.0 (about 2018), the flags of the published run are not stated (tup.config.template defaults to CONFIG_DEBUG=yes, which Tuprules.lua builds at -O0; release is -O3), and the page gives charts plus relative-time tables with IQR only. Other third-party shootouts show Boost.Log slower than the incumbents they list: NanoLog README latency table (Boost 1.55 1764 ns vs glog 1198 ns vs spdlog 214 ns, static string, 50th percentile) and an older spdlog README table (boost log 1.54 4.169 s vs glog 1.066 s vs spdlog 0.302 s for 1M lines, single thread; snippet only, page not opened, row no longer in the current README). Boost.org documentation was not reachable from this environment."
+    },
+    "notes": "Numbers on reckless doc/performance.md match the record, but the record missed the 4-thread Mandelbrot table (Boost.Log 13.17 beats fstream 15.66 there too). Shortcomings for the orchestrator: slower than std::fstream and stdio in 3 of 5 scenarios; wins over fstream come from a buffered (no auto_flush) Boost.Log sink against a flush-every-line fstream; published-run flags unstated with a -O0 default in the public config; Boost 1.65 era numbers. Metadata checked: BSL-1.0, 212 stars, last commit 2026-10-02 on develop, not a fork, not archived.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/doc/performance.md",
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/boost_log.hpp",
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/fstream.hpp",
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/Tupfile.lua",
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/Tuprules.lua",
+      "https://raw.githubusercontent.com/mattiasflodin/reckless/master/tup.config.template",
+      "https://github.com/boostorg/log",
+      "https://github.com/boostorg/log/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/david-haim/concurrencpp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "tzcnt/runtime-benchmarks is a public third-party suite (build_and_bench_all.py, cpp/concurrencpp/{fib,skynet,nqueens,matmul}.cpp pinned to concurrencpp v.0.1.7, cpp/libcoro pinned to commit 44d12235) whose README states Clang 21.1.7 Release -O3 -march=native, tcmalloc and an EPYC 7742 64-core machine; every libcoro and HPX number in the record matches its summary table. Same suite and tier as the already verified citor entry.",
+    "corrections": {
+      "claimed_speedup": "Faster than libcoro on every fork-join benchmark: skynet 12514888 us vs 119686148 us (about 9.6x, derived from page data), nqueens 8000700 us vs 33347402 us (about 4.2x), fib(39) 20663744 us vs 238019884 us (about 11.5x), matmul(2048) 57383 us vs 374412 us (about 6.5x); peak RSS on skynet 11.38 MB vs libcoro 14.66 GB (derived from page data, about 1300x less). Against HPX only matmul is faster (57383 us vs 59066 us, about 1.03x, within noise); HPX wins skynet, nqueens and fib(39). Memory (separate cpp_tasks_bench repo, i7-8550U under WSL): 605972 kb vs Asio 853144 kb for 1M tasks (about 1.4x less, derived from page data).",
+      "caveats": "The project makes no numeric performance claim; the README only calls the design fast and clean. The numbers come from a third-party suite written by the author of a competing runtime (TooManyCooks). In that same suite concurrencpp is far slower than the fast runtimes: mean ratio to best 258.19x (TBB 3.25x, taskflow 3.34x, cppcoro 3.67x, libfork 1.18x), for example skynet 12514888 us vs TBB 142887 us (about 88x slower, derived) and fib(39) 20663744 us vs TBB 215592 us (about 96x slower). The win over libcoro is against the slowest runtime in the table (mean ratio 2513.96x). The suite pins concurrencpp v.0.1.7 (cpp/concurrencpp/CMakeLists.txt) and libcoro at commit 44d12235a218a93cf6ce462f67c06a1287901c54; its fib benchmark is the concurrencpp README example with the serial cutoff removed. Last commit is 'Version 0.1.7' dated 2023-07-15, over three years old. Memory results in cpp_tasks_bench lose to tokio (605972 kb vs 214136 kb for 1M tasks) and that repo states no compiler or flags beyond a default Release build."
+    },
+    "notes": "All suite numbers match the README summary tables; the record's claim that the version is unstated was wrong (v.0.1.7 is pinned in the suite's CMakeLists). Shortcomings: wins only against libcoro (slowest in the suite) and marginally HPX on matmul; about 88-96x slower than TBB on skynet and fib; abandoned (last commit 2023-07-15); third-party suite author maintains a competing runtime. Metadata: MIT, 2.8k stars, master branch, not a fork, not archived.",
+    "urls_opened": [
+      "https://github.com/tzcnt/runtime-benchmarks",
+      "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/build_and_bench_all.py",
+      "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/CMakeLists.txt",
+      "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/concurrencpp/fib.cpp",
+      "https://raw.githubusercontent.com/tzcnt/runtime-benchmarks/HEAD/cpp/libcoro/CMakeLists.txt",
+      "https://github.com/David-Haim/concurrencpp",
+      "https://github.com/David-Haim/concurrencpp/commits",
+      "https://raw.githubusercontent.com/David-Haim/concurrencpp/HEAD/README.md",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/alpaka-group/alpaka",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README charts (docs/images/babelstream-grace-cpu.svg and babelstream-gh200-gpu.svg) compare alpaka3 against NVIDIA reference results; the alpaka benchmark code is public (benchmark/babelstream/src) and the CPU chart names GNU 14.3 and its flags, but the reference bars were not run from public code with stated flags ('Native results are the mean of supplied runs' on the GPU chart), so the baseline comparison is not reproducible and stays C.",
+    "corrections": {
+      "claimed_speedup": "On NVIDIA Grace CPU (OpenMP, 72 threads, GNU 14.3, -ftree-vectorize -mcpu=neoverse-v2): alpaka3 reaches 107% of the NVIDIA reference throughput on average over Copy/Mult/Add/Triad (alpaka3 Copy 469, Mult 469, Add 453, Triad 456 GB/s; reference bars about 455, 458, 408, 408 GB/s and mainline alpaka about 450, 452, 428, 423 GB/s, derived from page data: bar heights in the SVG scaled by the labelled alpaka3 values). Dot 447 GB/s for alpaka3 versus 40 GB/s for mainline alpaka; no Dot reference. On NVIDIA GH200 GPU (CUDA 13.3): 99% of the NVIDIA reference on average (alpaka3 Copy 3,636, Mult 3,634, Add 3,665, Triad 3,667 GB/s; reference bars about 3,663, 3,664, 3,735, 3,731 GB/s, derived from page data), i.e. parity, not a win; Dot 3,731 GB/s versus 3,678 GB/s for mainline alpaka.",
+      "caveats": "The numbers exist only as two matplotlib SVG charts embedded in the README (labels are rendered as glyph paths; the labelled values are readable from the SVG's text comments, unlabelled reference bars only from bar geometry). The GPU chart says 'Native results are the mean of supplied runs', so the NVIDIA reference was not re-run by the project, and neither chart names the reference code, its build or its flags. The GPU run states no flags. Benchmark source is public in benchmark/babelstream (with run commands in benchmark/babelstream/src/README.md, carrying BabelStream's own licence with publication restrictions), but the JUPITER run configuration is not given. The GPU result is parity (99%), only the CPU run is faster (107%, i.e. about 7%, mostly on Add and Triad), and Dot has no reference. The old listed repo ComputationalRadiationPhysics/alpaka now only redirects to alpaka-group/alpaka, and the listed LGPLv3+ licence is outdated (now MPL-2.0). Only memory-bandwidth kernels are measured, no thread-pool or scheduling workload; alpaka is a performance-portability kernel abstraction library, so thread-pools-work-stealing is the wrong category."
+    },
+    "notes": "Labelled values in both SVGs match the record exactly (text comments in the matplotlib SVGs); I derived the unlabelled reference and mainline bars from bar geometry. Shortcomings: wrong category (portability layer, not a thread pool; consider a category override); GPU is parity, CPU win about 7%; baseline numbers supplied rather than re-run, reference code and flags unstated. Metadata: MPL-2.0, 428 stars, branch dev_v3.x, last commit 2026-10-01, not a fork.",
+    "urls_opened": [
+      "https://github.com/alpaka-group/alpaka",
+      "https://github.com/alpaka-group/alpaka/commits/dev_v3.x",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/docs/images/babelstream-grace-cpu.svg",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/docs/images/babelstream-gh200-gpu.svg",
+      "https://github.com/alpaka-group/alpaka/tree/dev_v3.x/benchmark/babelstream",
+      "https://github.com/alpaka-group/alpaka/tree/dev_v3.x/benchmark/babelstream/src",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/benchmark/babelstream/CMakeLists.txt",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/benchmark/babelstream/src/README.md",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/benchmark/babelstream/src/LICENSE",
+      "https://raw.githubusercontent.com/alpaka-group/alpaka/dev_v3.x/LICENSE"
+    ]
+  }
+]
