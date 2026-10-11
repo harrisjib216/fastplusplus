@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/boostorg/log",
+  "one_liner": "Boost's attribute-based logging framework; beats a flush-every-line std::fstream only under multithreaded or disk-stalled load.",
+  "what_it_does": "Boost.Log is a general logging framework: sources (loggers) attach attributes such as severity, timestamp, thread id or channel to records, a global core filters them, and sinks (frontend plus backend) format and write them to text files with rotation, streams, syslog, the Windows event log, debugger output or an interprocess queue. The API is its own (BOOST_LOG_SEV macros, record_ostream, lambda-like filter and formatter expressions), not a replacement for std::ofstream or printf.",
+  "how_it_is_fast": "It is not built for low call-site latency. Its advantages in third-party runs come from structure rather than a fast path: the file backend writes through a buffered stream and flushes only when auto_flush is enabled, formatting happens before the backend lock so several threads can format concurrently, and the severity level is kept in thread-local storage so that severity loggers avoid the logger mutex. An asynchronous_sink frontend moves the write to a dedicated thread through a FIFO or ordering queue (bounded or unbounded, block or drop on overflow).",
+  "when_to_use": [
+    "Applications already built on Boost that need structured attributes, run-time filtering and several sinks (rotating files, syslog, Windows event log, IPC queue) from one configuration.",
+    "Multithreaded programs that log heavily to one file and would otherwise use a mutex-guarded std::ofstream flushed each line: in the reckless Mandelbrot run with 8 threads Boost.Log's overhead was 1.82 vs 4.62 for fstream and 3.70 for stdio (relative to reckless = 1).",
+    "Logging on a slow or busy disk where losing the last buffered lines on a crash is acceptable: the buffered sink avoided the multi-second flush stalls that made fstream 124x worse in the reckless disk-I/O scenario (46.03 vs 5719.93).",
+    "Records that stream whole containers through operator<<: in Quill's vector-of-strings table Boost.Log (async sink) beat spdlog at the 90th percentile (4,145 vs 7,120 ns with 1 thread, 4,342 vs 7,581 ns with 4)."
+  ],
+  "when_not_to_use": [
+    "Latency-critical hot paths: Quill's harness (GCC 14.2, i5-12600) measured 3,093 ns median per call for three numbers vs 271 ns for spdlog, 1,066 ns for g3log and 6 ns for Quill or fmtlog; throughput was 0.33 M msg/s vs 2.57 M for spdlog.",
+    "Single-threaded or low-volume logging: in the reckless run it was slower than plain fstream and stdio in periodic calls (67.42 vs 41.32 and 43.77), call bursts (3.84 vs 2.36 and 2.55) and 1-thread Mandelbrot (15.21 vs 10.73 and 12.21, slowest of all).",
+    "Code with many disabled debug statements: filtered-out records still build a record and allocate (open issue #202 measured about 14 s for 100 million rejected BOOST_LOG_SEV calls); wrap calls in your own level-check macro.",
+    "Crash-forensics logging: without auto_flush the last records sit in the stream buffer, and the docs say enabling auto_flush degrades performance; the default asynchronous queue is unbounded and the docs warn it can grow without limit.",
+    "Builds that cannot take compiled Boost libraries, RTTI-off code or LTO: it needs Boost.Filesystem, System, DateTime and Thread binaries, requires RTTI, and does not support LTO."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (must be shared when several modules of one application log)",
+    "dependencies": "Boost.Filesystem, Boost.System, Boost.DateTime, Boost.Thread, Boost.Regex in some configurations, Boost.Asio unless BOOST_LOG_WITHOUT_ASIO; boost_log_setup for settings parsers",
+    "min_toolchain": "C++11 (C++03 dropped in Boost 1.84); GCC 5+, Clang 3.5+, MSVC 14.0+; RTTI required; LTO not supported",
+    "platforms": "Linux, Windows 10, Cygwin, other POSIX systems Boost supports (OpenBSD process-name support added for Boost 1.93); any architecture Boost supports, i586+ on 32-bit x86",
+    "thread_safety": "_mt loggers and the synchronous and asynchronous sink frontends are thread-safe; records from one thread keep their order but records from different threads are only weakly ordered; forking a multithreaded process can leave Boost.Log locks broken",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The reckless comparison is unequal: its Boost.Log adapter calls add_file_log without auto_flush (buffered) while the fstream and stdio adapters flush every line, and the fstream adapter writes no timestamp or severity while Boost.Log formats both, so the wins come from the flush policy and the losses partly from extra formatting. The page also says spdlog was put in force-flush mode, but its adapter passes true as the third argument of basic_logger_mt, which in spdlog 1.3.1 is truncate, so spdlog ran buffered too.",
+    "The published reckless run states gcc 7.3.0 and Boost 1.65.0 but not its flags, and the public tup.config.template defaults to CONFIG_DEBUG=yes, which Tuprules.lua builds at -O0; the numbers are also about eight years and roughly 28 Boost releases old (the C++ std threading switch in 1.87 changed internals).",
+    "Shared global loggers are a contention point: the maintainer advises per-thread non-_mt loggers and avoiding global loggers (issue #144: severity_channel_logger_mt was 7.9x slower than severity_logger_mt with 10 threads); the reckless adapter uses one global severity_logger_mt.",
+    "Boost.Log's win over spdlog in Quill's vector-of-strings table compares a hand-written loop that streams each string with quotes (logger_benchmarks benchmark_boost_log_call_site_latency.cpp) against spdlog formatting the vector through fmt's range formatter, so the two do different work."
+  ],
+  "pick_this_over_siblings_when": "Pick Boost.Log over the catalogued fast loggers (Quill, fmtlog, PlatformLab NanoLog, binlog, XTR) only when you need its attribute, filter and sink framework and already ship Boost; for call-site latency those siblings are roughly 170x to 500x faster in Quill's tables, g3log beats it there too (though not in reckless's periodic and burst runs), and glog beat it about 3.9x in an old spdlog table.",
+  "verified_claims_summary": "Third-party benchmark by the reckless author (doc/performance.md; gcc 7.3.0, Boost 1.65.0, Ryzen 7 2700X, flags of the run unstated): a synchronous Boost.Log text-file sink without auto_flush had lower overhead than a mutex-guarded std::fstream flushed every line in 4-thread Mandelbrot (13.17 vs 15.66), 8-thread Mandelbrot (1.82 vs 4.62) and the disk-I/O scenario (46.03 vs 5719.93), all relative to reckless = 1, but was slower than fstream, stdio and spdlog in periodic calls, call bursts and 1-thread Mandelbrot. Quill's newer harness (Quill v13.0.0, GCC 14.2, i5-12600, async sink) puts it last on number and string latency and throughput, ahead of spdlog only for vector-of-strings records.",
+  "status_note": "Actively maintained by Andrey Semashev as part of Boost (develop commits through 2026-10-02, changelog at Boost 1.93, 13 open issues) under BSL-1.0, but it is a feature-rich framework rather than a fast logger: choose it for flexibility, not speed.",
+  "sources_read": [
+    "https://github.com/boostorg/log",
+    "https://github.com/boostorg/log/commits/develop",
+    "https://raw.githubusercontent.com/boostorg/log/develop/README.md",
+    "https://github.com/boostorg/log/tree/develop/doc",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/install.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/intro.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/rationale.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/changelog.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/sink_backends.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/doc/sink_frontends.qbk",
+    "https://raw.githubusercontent.com/boostorg/log/develop/test/performance/record_emission.cpp",
+    "https://github.com/boostorg/log/issues?q=is%3Aissue%20performance",
+    "https://github.com/boostorg/log/issues/202",
+    "https://github.com/boostorg/log/issues/144",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/doc/performance.md",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/boost_log.hpp",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/fstream.hpp",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/stdio.hpp",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/spdlog.hpp",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/benchmarks/Tupfile.lua",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/Tuprules.lua",
+    "https://raw.githubusercontent.com/mattiasflodin/reckless/master/tup.config.template",
+    "https://raw.githubusercontent.com/gabime/spdlog/v1.3.1/include/spdlog/sinks/basic_file_sink.h",
+    "https://raw.githubusercontent.com/odygrd/quill/master/README.md",
+    "https://github.com/odygrd/logger_benchmarks",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks",
+    "https://github.com/odygrd/logger_benchmarks/tree/master/benchmarks/call_site_latency",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_boost_log_call_site_latency.cpp",
+    "https://raw.githubusercontent.com/odygrd/logger_benchmarks/master/benchmarks/call_site_latency/benchmark_spdlog_call_site_latency.cpp"
+  ],
+  "confidence": 0.65
+}
