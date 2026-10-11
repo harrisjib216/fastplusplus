@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/yhirose/cpp-httplib",
+  "one_liner": "Single-header C++11 HTTP/1.1 client and server; easiest to embed, but not shown faster than C++ REST SDK.",
+  "what_it_does": "A blocking-socket HTTP/1.1 server and client in one header (httplib.h): register lambdas with svr.Get/Post/... and call svr.listen(), or create httplib::Client and call cli.Get(). It adds HTTPS through OpenSSL 3.0+, Mbed TLS or wolfSSL, gzip/Brotli/zstd compression, multipart forms, range requests, static file mounts, Server-Sent Events, a stream API and WebSocket. The API is unrelated to cpprestsdk's task-based http_listener/http_client, so moving over means rewriting handlers.",
+  "how_it_is_fast": "It is not built for speed: each accepted connection is handed to a thread pool (8 or hardware_concurrency()-1 base threads, growing to 4x under load) and served with blocking reads and writes. There is no event loop, io_uring or HTTP/2 multiplexing. The one measured edge over C++ REST SDK comes from lower per-request overhead on a fast local link; current code also puts small bodies (under 16 KiB) in the same write as the headers.",
+  "when_to_use": [
+    "Adding an embedded admin, health or REST endpoint to a C++ program where one header with no required dependencies matters more than requests per second.",
+    "Tools and tests that need both an HTTP client and an HTTPS server from one small library, with a choice of OpenSSL, Mbed TLS or wolfSSL.",
+    "Low to moderate concurrency (tens of clients) on 64-bit Linux, macOS or Windows 10+, where thread-per-connection costs little.",
+    "Replacing cpprestsdk in a small service that has fewer worker threads than clients; in the 2020 shootout cpprestsdk deadlocked in all six C=4 cells while cpp-httplib finished."
+  ],
+  "when_not_to_use": [
+    "High-throughput or many-idle-connection servers: blocking I/O ties up one thread per connection, and in the 2020 shootout it was slower than Crow, Pistache, Restbed and Restinio in the local sprint cell and worst in 7 of 12 cells.",
+    "High-latency links: over the shootout's VPN its per-request overhead was about twice that of the other frameworks (210 s vs about 105 s per 1000 requests), and it trailed cpprestsdk in every VPN C=28 cell.",
+    "Anything needing HTTP/2 or HTTP/3 (not implemented), WebSocket compression (permessage-deflate not supported) or many concurrent WebSocket clients (one thread per connection plus one per heartbeat).",
+    "32-bit targets, MinGW, Cygwin/MSYS2 or Windows 8 and older: the README says these are unsupported, and security reports that only affect 32-bit builds are closed without action.",
+    "Internet-facing services that cannot be upgraded often: the repository lists 23 security advisories, 10 of them published between March and October 2026, including request smuggling, CRLF injection and leaking cookies or credentials on cross-origin redirects."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none required; optional OpenSSL 3.0+ / Mbed TLS 2.x-4.x / wolfSSL 5.x for TLS, zlib, Brotli and zstd for compression; pthreads",
+    "min_toolchain": "C++11 (BoringSSL needs C++14); g++ 4.9+ (4.8 has broken <regex>); latest Visual Studio only",
+    "platforms": "64-bit Linux, macOS, Windows 10+; 32-bit, MinGW and Cygwin unsupported",
+    "thread_safety": "The server runs handlers concurrently on its thread pool, so shared state in handlers needs its own locking; the README marks the static-file mount methods as not thread-safe. Client thread safety is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "TCP_NODELAY is off by default (CPPHTTPLIB_TCP_NODELAY false). Issue #2264 measured about 82 ms per keep-alive POST with an httplib client and server, fixed by set_tcp_nodelay(true) on both sides. Set it for any request/response latency test.",
+    "Shootout harness flaw: the tested v0.5.8 header (vendored at basic-httplib/httplib/httplib.h) wrote response headers and body in two separate send() calls and had no TCP_NODELAY option. With Nagle's algorithm, the second send can wait one round trip for an ACK. This likely explains, but does not prove, its doubled VPN overhead. Current headers coalesce bodies under 16 KiB into one write.",
+    "The shootout's 'C=28' cpp-httplib build actually ran hardware_concurrency()-1 = 27 pool threads (the v0.5.8 default), while its log line printed 28. The C=4 build needs CPPHTTPLIB_THREAD_POOL_COUNT uncommented and a recompile; the published main.cpp leaves it commented out. v0.5.8 also used a listen backlog of 5 (now 128).",
+    "SO_REUSEPORT is set by default on Linux and macOS, so a second server binding the same port succeeds silently and the kernel splits connections between them. Regex routes are skipped for paths longer than 256 characters to avoid std::regex stack overflow."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Crow, Drogon, aeronet or Sogou Workflow when integration effort dominates: it is one header that also gives you an HTTPS client, and it needs no Boost, event loop or build system. For throughput, any of those (or httpserver.h for a minimal C server) is the better choice. cofetch reports 35% more single-thread throughput than cpp-httplib's own sync client.",
+  "verified_claims_summary": "The only numbers come from a single-run 2020 shootout (guteksan/REST-CPP-benchmark; 28-thread Xeon E5-2660 v4, Ubuntu 16.04, CMake Release, compiler unstated). Ten Python processes POSTed small JSON to cpp-httplib v0.5.8 and cpprestsdk v2.10.15, opening a new connection per request. cpp-httplib won one of six comparable cells (local, 1000 requests each, no delay: 3.015 s vs 3.401 s, 1.13x), tied two and lost three by up to 1.88x over VPN; in the C=4 cells cpprestsdk deadlocked.",
+  "status_note": "Very active (eight commits on 2026-10-09, header at v0.60.1, 16.9k stars, MIT) and trivially vendorable, but security fixes land often, so track releases rather than pinning an old copy; the 2020 performance data describe v0.5.8, which predates write coalescing and the dynamic thread pool.",
+  "sources_read": [
+    "https://github.com/yhirose/cpp-httplib",
+    "https://github.com/yhirose/cpp-httplib/commits/master",
+    "https://raw.githubusercontent.com/yhirose/cpp-httplib/HEAD/README.md",
+    "https://raw.githubusercontent.com/yhirose/cpp-httplib/HEAD/httplib.h",
+    "https://raw.githubusercontent.com/yhirose/cpp-httplib/HEAD/benchmark/Makefile",
+    "https://github.com/yhirose/cpp-httplib/security",
+    "https://github.com/yhirose/cpp-httplib/issues?q=is%3Aissue+performance",
+    "https://github.com/yhirose/cpp-httplib/issues/1180",
+    "https://github.com/yhirose/cpp-httplib/issues/2264",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/README.md",
+    "https://github.com/guteksan/REST-CPP-benchmark/tree/master/basic-httplib",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-httplib/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-httplib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-httplib/httplib/httplib.h",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/postInLoop.py"
+  ],
+  "confidence": 0.75
+}

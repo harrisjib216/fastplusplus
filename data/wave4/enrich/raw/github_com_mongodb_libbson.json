@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/mongodb/libbson",
+  "one_liner": "MongoDB's C library for building and iterating BSON; in one third-party C shootout it round-trips faster than cJSON on 4 of 5 payloads.",
+  "what_it_does": "libbson builds, parses, validates and iterates BSON, MongoDB's length-prefixed binary document format, and converts BSON to and from (Extended) JSON. Documents are written with bson_append_* calls (or BSON_APPEND_* macros, plus bson_array_builder_t for arrays) and read with a bson_iter_t cursor; there is no DOM and no schema. It is not a drop-in for a JSON library: the wire format, API and data model (typed int32/int64/double/decimal128/ObjectId/date fields) are all different.",
+  "how_it_is_fast": "A bson_t carries a 120-byte inline buffer, so small documents are built without any heap allocation; appends memcpy little-endian scalars into one contiguous buffer and back-patch the length prefix. Reading is zero-copy: bson_init_static wraps an existing buffer and bson_iter_t walks it in place with no allocation, returning pointers into the buffer for strings and sub-documents. Against text JSON the gain comes from skipping number formatting/parsing and string escaping, not from any clever search; key lookup (bson_iter_find) is a linear scan.",
+  "when_to_use": [
+    "You already talk to MongoDB or store BSON and need a C serializer that matches the server's format byte for byte.",
+    "You want a self-describing binary document format with typed fields (int64, decimal128, dates, binary) instead of JSON text, and can afford larger output.",
+    "Write-heavy C code that today formats JSON with cJSON, json-c, jansson or parson: in the GLD shootout libbson serializes 1.5x to 10x faster than cJSON on message, document, telemetry and event (derived from page data).",
+    "You need in-place, allocation-free iteration of received documents (bson_init_static + bson_iter_t) rather than building a tree."
+  ],
+  "when_not_to_use": [
+    "You want the fastest C serializer of any format: in the same run mpack, msgpack-c, flatcc, the protobuf rows and libcbor's streaming encoder all beat libbson on every payload.",
+    "You need the fastest JSON: yyjson round-trips faster than libbson on document, telemetry, strings and event (for example telemetry 357,412 ns vs 962,634 ns at 100 instances).",
+    "Payloads dominated by strings or by arrays read element-by-element: libbson lost to cJSON, json-c and parson on the strings payload (1,168,630 ns vs cJSON 669,472 ns).",
+    "Compactness matters: BSON stores array indexes as decimal key strings and fixed-width integers, so output was 1.2x to 1.7x larger than CBOR or MessagePack and larger than JSON text on three payloads.",
+    "Out-of-memory handling matters: libbson's own docs say it calls abort() on OOM rather than returning an error."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (built from mongo-c-driver with CMake; libbson can be built alone, target bson_static / bson::static in 2.x)",
+    "dependencies": "none beyond libc (part of the mongo-c-driver source tree; libmongoc is optional)",
+    "min_toolchain": "C99 (CMAKE_C_STANDARD 99 by default), CMake 3.15+",
+    "platforms": "cross-platform C: Linux, macOS, Windows (MSVC) and other POSIX systems; little- and big-endian handled in the byte-order layer",
+    "thread_safety": "not documented as a guarantee for shared objects; bson_t and bson_iter_t are plain caller-owned structs with no internal locking, so share them across threads only with external synchronization; the global allocator vtable (bson_mem_set_vtable) is process-wide",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the numbers: the GLD wrapper (c/src/serializers/ser_libbson.c) reads array element i with bson_iter_init_find on the key \"i\", a linear scan from the array start, and copies every scalar element into a freshly bson_init'ed wrapper document that is then destroyed; the writer formats every array key with snprintf instead of libbson's bson_uint32_to_string table or bson_array_builder_t, and writes every integer as INT64. cJSON's reader also walks its linked list per index (cJSON_GetArrayItem), so the index pattern is shared, but the wrapper documents and key parsing are libbson-only costs that probably explain the strings loss.",
+    "BSON arrays are documents keyed \"0\", \"1\", ...; there is no O(1) indexing, so iterate once with bson_iter_next instead of looking up indexes.",
+    "Small documents live in the bson_t's inline buffer and spill to the heap when they grow, so bson_destroy() is required even for stack-declared documents; bson_init_static wrappers must not outlive the buffer they point into.",
+    "Security fixes keep landing: CVE-2025-0755 (bson_append_* could write past the buffer near the INT32_MAX size limit) was fixed in 1.27.5, the version benchmarked; CVE-2024-6381 and CVE-2024-6383 hit bson_strfreev and bson_string_append (per secondary CVE aggregators, not NVD). The 2.x line removed bson_as_json and renamed the CMake package and targets."
+  ],
+  "pick_this_over_siblings_when": "Pick libbson over libcbor or flatcc only when the consumer is MongoDB or another BSON reader; on raw speed and size libcbor's streaming encoder (1.4x to 5.5x faster round trip in the same run) and flatcc (document 75,146 ns vs 546,018 ns) both win.",
+  "verified_claims_summary": "GLD.SerializerBenchmark's C suite (run 2026-09-29-182101, gcc 11.4.0, i7-12800H on the powersave governor, IQR-filtered means) timed libbson 1.27.5 from mongo-c-driver against C JSON libraries on five fixed payloads: at 100 instances libbson's serialize plus deserialize was 1.55x to 3.2x faster than cJSON 1.7.19 on message, document, telemetry and event but 1.75x slower on strings; all rows passed the suite's fidelity check (1.0). The project makes no speed claim, the comparison is cross-format (BSON vs JSON text), and libbson is slower than every MessagePack, protobuf and FlatBuffers row in the same run.",
+  "status_note": "The listed mongodb/libbson repository has been archived since 2020-10-13 (last code 1.9.0, 2017); the maintained libbson lives in mongodb/mongo-c-driver under src/libbson (Apache-2.0, 883 stars, commits as recent as 2026-10-09, releases 2.5.6 and 1.30.13), with bugs tracked in MongoDB's CDRIVER JIRA rather than GitHub issues.",
+  "sources_read": [
+    "https://github.com/mongodb/libbson",
+    "https://github.com/mongodb/mongo-c-driver",
+    "https://github.com/mongodb/mongo-c-driver/commits/master/src/libbson",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/README.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/NEWS",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/NEWS",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/src/bson/bson.h",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/src/bson/bson-types.h",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/src/bson/bson-keys.c",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/index.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_t.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_iter_t.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_iter_find.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_iter_init_find.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_array_builder_t.rst",
+    "https://raw.githubusercontent.com/mongodb/mongo-c-driver/HEAD/src/libbson/doc/bson_memory.rst",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/dashboard/public/data/c_latest.json.gz",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_libbson.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_cjson.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_yyjson.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/v2_codec.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/v2_codec.h",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/CMakeLists.txt",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/scripts/fetch-and-build-deps.sh",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/third_party/VERSIONS.md",
+    "WebSearch: libbson CVE mongo-c-driver vulnerability (snippets from tracker.debian.org, cpe.gcve.eu, watchstack.io)"
+  ],
+  "confidence": 0.45
+}

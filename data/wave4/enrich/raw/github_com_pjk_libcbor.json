@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/pjk/libcbor",
+  "one_liner": "Full RFC 8949 CBOR library in C99; its low-level encoder writes CBOR 1.2x to 1.6x faster than Intel tinycbor in one third-party C shootout.",
+  "what_it_does": "libcbor parses and generates CBOR (RFC 8949) and CBOR Sequences in portable C99. It has three layers: low-level cbor_encode_* functions that write single CBOR heads and values into a caller buffer, a callback-driven streaming decoder (cbor_stream_decode), and a reference-counted cbor_item_t tree built with cbor_build_*/cbor_new_* and read with cbor_load and cbor_serialize. It is not source-compatible with tinycbor, whose API is a CborEncoder plus a forward-only CborValue cursor.",
+  "how_it_is_fast": "The low-level encoder is a set of small functions that emit minimal-width CBOR heads straight into the output buffer and return the byte count; definite-length containers are announced up front, so there is no close-container bookkeeping. cbor_load builds maps and arrays as contiguous handle arrays, so decoded elements are reachable by index in O(1) instead of re-walking the byte stream. Allocation goes through a replaceable malloc/realloc/free triple (cbor_set_allocs), which lets a caller point the tree at an arena; the benchmark rows rely on that.",
+  "when_to_use": [
+    "C or C++ code that writes CBOR into a preallocated buffer and wants a small, MIT-licensed, dependency-free encoder: the cbor_encode_* path matched mpack's MessagePack encoder and beat tinycbor, QCBOR and zcbor on encode in the GLD run.",
+    "You need random access to decoded CBOR (look up array element i or many keys) and can afford building a tree; with an arena allocator the tree decode beat tinycbor's cursor-based access on all five payloads.",
+    "You need complete RFC 8949 coverage: indefinite-length items, tags, half floats, CBOR Sequences, streaming and incremental decoding of large inputs.",
+    "WebAuthn/FIDO2, COSE or attestation code where libcbor is already in the dependency tree (libfido2, AWS C SDK, QEMU and fwupd use it per the README)."
+  ],
+  "when_not_to_use": [
+    "You are free to pick the format and want the fastest round trip: in the same run mpack and msgpack-c beat libcbor-stream on all five payloads (decode 1.4x to 2x faster), and flatcc and the protobuf rows are faster still.",
+    "Tiny embedded targets that cannot afford heap use or a tree: tinycbor's allocation-free cursor or zcbor fit better; libcbor's fast decode path builds one item per value.",
+    "Parsing untrusted input with the default allocator: cbor_load pre-allocates definite-length arrays and maps by their declared count, so a few bytes can request a huge allocation unless you install a capping allocator.",
+    "Building documents through the cbor_item_t API in a hot loop: the DOM build was 2x to 4x slower than tinycbor's encoder (document 277,071 vs 71,654 ns at 100 instances); use the cbor_encode_* functions instead.",
+    "You need semantic validation (valid UTF-8 policies, tag semantics, NaN rules): libcbor checks well-formedness only, by design (issue #440)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; also Bazel module and distro packages such as libcbor-dev, Homebrew libcbor)",
+    "dependencies": "none at runtime",
+    "min_toolchain": "C99 (uses C23 when the compiler offers it since 0.13.0); CMake 3.5+ from 0.13.0 (0.11.0, the benchmarked version, needed CMake 3.0)",
+    "platforms": "Linux, macOS, Windows, BSD on x86, x86-64, arm, arm64, mips(el) and riscv64 (README test matrix)",
+    "thread_safety": "README claims no shared global state, but cbor_set_allocs replaces process-global allocator pointers and is documented as not thread-safe with any libcbor function that uses the heap; item refcounts are plain size_t, so share cbor_item_t trees across threads only with external locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the numbers: both libcbor rows were reworked by libcbor's own author (GLD PR #117, merged 2026-08-25 as 797bcbb) with a 16 MiB static bump arena installed through cbor_set_allocs (free is a no-op, reset every op) and an O(1)-indexed DOM decoder, while the tinycbor wrapper was never tuned: it finds every key with cbor_value_map_find_value and reaches array element i by advancing i times from the start, so its decode grows quadratically with array length. In the PR the GLD maintainer said the stream row's decode is not comparable to tinycbor's allocation-free parser. Builds are asymmetric too: libcbor 0.11.0 at -O3 -DNDEBUG with LTO, tinycbor at plain -O2 with asserts live. Only the encode-only numbers (1.2x to 1.6x) are a like-for-like comparison, and even they carry the flag gap.",
+    "The arena pattern used in the benchmark is unsafe in general code: it is global, not thread-safe, and invalidates every live item on reset; with the default malloc, the per-item allocations of cbor_load and cbor_build_* are paid in full.",
+    "Untrusted input: definite-length containers are allocated by declared size before any element is read (issues #418, #428, #431); the documented mitigation is a capping custom malloc that makes cbor_load fail with CBOR_ERR_MEMERROR.",
+    "The benchmark measured 0.11.0; 0.12.0, 0.13.0 and 0.14.0 (2026-04-07) and unreleased master changed NaN encoding, made cbor_incref/cbor_decref inline (ABI break; PR #434 is said by its author to speed DOM-building workloads 1.3x to 1.5x), return NULL handles for empty items (custom free must accept NULL), and fixed NULL dereferences and an integer overflow in the builder's map-start callback."
+  ],
+  "pick_this_over_siblings_when": "Pick libcbor over libbson when you control the format: in the same GLD C run libcbor-stream round-trips faster than libbson on every payload with 1.2x to 1.7x smaller output. Pick flatcc instead when a schema is acceptable and zero-copy reads matter, and minicbor when the code is Rust rather than C.",
+  "verified_claims_summary": "GLD.SerializerBenchmark's C suite (run 2026-09-29-182101, gcc 11.4.0, i7-12800H on the powersave governor, IQR-filtered means) shows libcbor 0.11.0's streaming encoder plus arena-backed cbor_load decoder round-tripping five fixed payloads 1.45x to 4.4x faster than tinycbor 0.6.0 at 100 instances, with encode alone 1.2x to 1.6x faster and the decode gap mostly from tinycbor's untuned quadratic access wrapper; all rows passed the suite's fidelity check. The project itself publishes no benchmark, and the libcbor rows lose to mpack and msgpack-c on every payload.",
+  "status_note": "Actively maintained (MIT, 406 stars, last commit 2026-10-04, release 0.14.0 on 2026-04-07 with a breaking master after it) and widely packaged; vendoring is easy, but pin a version because recent releases carry breaking changes to NaN encoding, empty-item handles and the refcount ABI.",
+  "sources_read": [
+    "https://github.com/PJK/libcbor",
+    "https://github.com/PJK/libcbor/commits/master",
+    "https://github.com/PJK/libcbor/issues?q=is%3Aissue",
+    "https://github.com/PJK/libcbor/issues/433",
+    "https://github.com/PJK/libcbor/issues/440",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/pull/117",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/README.md",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PJK/libcbor/v0.11.0/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/src/cbor/common.h",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/src/cbor/encoding.h",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/doc/source/api.rst",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/doc/source/api/item_reference_counting.rst",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/doc/source/api/streaming_decoding.rst",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/doc/source/internal.rst",
+    "https://raw.githubusercontent.com/PJK/libcbor/HEAD/doc/source/standard_conformance.rst",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/dashboard/public/data/c_latest.json.gz",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_libcbor.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_libcbor_stream.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_libcbor_common.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/serializers/ser_tinycbor.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/src/v2_codec.c",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/CMakeLists.txt",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/scripts/fetch-and-build-deps.sh",
+    "https://raw.githubusercontent.com/leo-gan/GLD.SerializerBenchmark/HEAD/c/third_party/VERSIONS.md"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,56 @@
+{
+  "id": "https://gitlab.com/libidn/libidn",
+  "one_liner": "GNU C library for IDNA2003, Stringprep and Punycode. One Ruby benchmark shows it ~1.47x faster than libidn2.",
+  "what_it_does": "Converts internationalized domain names to and from their ASCII-compatible xn-- form under the old IDNA2003 rules (RFC 3490). It also includes a generic Stringprep engine with Nameprep, SASL, XMPP, iSCSI and Kerberos V5 profiles, a Punycode encoder/decoder and TLD-specific validation tables. The API is small and C-style: idna_to_ascii_8z / idna_to_unicode_8z8z (plus UTF-32 and locale-encoding variants) return malloc'ed strings and integer error codes. libidn2 was designed to accept the same idna.h-style calls, but its results differ.",
+  "how_it_is_fast": "ToASCII runs the Nameprep profile, then RFC 3492 Punycode encoding. Nameprep does character mapping and prohibited/bidi checks by bsearch over RFC 3454 range tables, plus NFKC normalization through code taken from GLib. A source comment says this table lookup once took nearly all CPU time; switching from a linear scan to bsearch cut fuzz-corpus time about 20x, and _g_utf8_normalize_wc now dominates. Its edge over libidn2 comes mostly from doing less per label: no UTS #46 mapping pass, no NFC re-check, no IDNA2008 CONTEXTJ/CONTEXTO or unassigned-code-point tests when IDNA_ALLOW_UNASSIGNED is passed, and no punycode round-trip in ToASCII.",
+  "when_to_use": [
+    "You must reproduce historic IDNA2003 output bit for bit, e.g. matching stored legacy names where 'faß.de' became 'fass.de'.",
+    "You need a Stringprep profile (SASLprep, XMPP nodeprep/resourceprep, iSCSI, Kerberos V5) rather than domain-name processing. The README calls this and IDNA2003 compatibility the only reasonable uses today.",
+    "C code on Unix or Windows that needs a small, stateless, re-entrant library with no required runtime dependencies on glibc systems."
+  ],
+  "when_not_to_use": [
+    "Any new code that resolves, registers or compares domain names: IDNA2003 is superseded by IDNA2008, and its maintainers ask users to migrate to libidn2. Outputs differ, e.g. 'faß.de' gives 'fass.de' here but 'xn--fa-hia.de' under libidn2 non-transitional, so you can end up at a different host.",
+    "As a speed upgrade over libidn2: the only number is one Ruby benchmark (one domain string, 5.2 vs 7.6 us per round trip) through unequal bindings. No C-level measurement exists.",
+    "Text containing characters assigned after Unicode 3.2: the IDNA2003 tables stop there, so newer code points are rejected unless IDNA_ALLOW_UNASSIGNED is set, and then they pass unchecked.",
+    "Projects that cannot accept LGPL-3.0-or-later / GPL-2.0-or-later terms (the idn tool is GPL-3.0-or-later). libidn2 carries the same terms, so switching libraries does not help."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none required on glibc; libintl recommended elsewhere; libiconv used for the locale-encoding (_lz) entry points",
+    "min_toolchain": "ANSI C89 compiler with an autotools build (GNU Make 3.79.1+); Visual Studio 2005+ solution for Windows",
+    "platforms": "GNU/Linux, 20+ other Unix systems, Windows (MinGW or Visual Studio); C# and Java ports included",
+    "thread_safety": "Re-entrant: the manual states no global state is kept and no initialization is needed.",
+    "drop_in_for_baseline": "partial: libidn2 was built to accept libidn's idna.h calls, so code using only idna_to_ascii_8z-style names can switch back by swapping the header. Code calling idn2_* functions cannot, and results change for deviation characters such as ß and for post-3.2 code points."
+  },
+  "gotchas": [
+    "Harness flaw in the only benchmark (addressable PR #496, benchmark/idna.rb): libidn is called through idn-ruby's native C extension, while libidn2 goes through Ruby FFI with a fresh FFI::MemoryPointer, read_string, a separate idn2_free FFI call and force_encoding per call. Part of the 2.4 us per round-trip gap is binding overhead.",
+    "Unequal work in the same harness: libidn runs with IDNA_ALLOW_UNASSIGNED, which skips the unassigned check, while libidn2 runs NONTRANSITIONAL with all IDNA2008 tests. libidn2's idn2_to_unicode_8z8z only punycode-decodes (flags unused, no validation), while libidn's ToUnicode re-runs Nameprep and a full ToASCII round trip. Per-direction costs are therefore not comparable, the script asserts only the to_ascii outputs, and the timings are a 2023 comment pasted into the script (the branch was rebased in May 2026).",
+    "Pass valid UTF-8 only. Release 1.31 began rejecting invalid UTF-8 in stringprep_utf8_to_ucs4 (CVE-2015-2059). Fuzzing-found integer overflows in the Punycode decoder and combine_hangul were fixed in 1.34, and a read out of bounds in the ToUnicode APIs was fixed in 1.44 (2026-06-16). Use 1.44 or later on untrusted input.",
+    "Output strings are malloc'ed and must be freed by the caller. On Windows, free them with idn_free from idn-free.h, because DLLs can use separate heaps."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when IDNA2003 or Stringprep semantics are required. For current IDNA (UTS #46 / IDNA2008) processing, the catalogued ada-url/idna beats ICU at it, and ICU is the general-purpose alternative; both follow the current rules that libidn does not.",
+  "verified_claims_summary": "In an unmerged third-party Ruby PR (addressable #496), 100,000 to_ascii+to_unicode round trips of one domain string took 0.52 s with libidn (idn-ruby C extension), 0.76 s with libidn2 (Ruby FFI) and 6.04 s with pure Ruby: about 1.47x for libidn over libidn2. Hardware, OS, Ruby version and compiler are not stated, and the bindings and validation work differ between the two libraries.",
+  "status_note": "Maintained by GNU (v1.44 released 2026-06-16 with an out-of-bounds read fix; commits through 2026-08-27) but frozen on a superseded standard that its own README tells users to leave; usable for legacy IDNA2003 and Stringprep needs under LGPL-3.0+/GPL-2.0+.",
+  "sources_read": [
+    "https://gitlab.com/libidn/libidn/-/raw/master/README.md",
+    "https://gitlab.com/libidn/libidn/-/raw/master/NEWS",
+    "https://gitlab.com/libidn/libidn/-/raw/master/doc/libidn.texi",
+    "https://gitlab.com/libidn/libidn/-/raw/master/lib/idna.h",
+    "https://gitlab.com/libidn/libidn/-/raw/master/lib/idna.c",
+    "https://gitlab.com/libidn/libidn/-/raw/master/lib/stringprep.c",
+    "https://gitlab.com/libidn/libidn/-/raw/master/lib/nfkc.c",
+    "https://gitlab.com/libidn/libidn/-/raw/master/DEPENDENCIES.md",
+    "https://gitlab.com/libidn/libidn/-/raw/master/configure.ac",
+    "https://gitlab.com/api/v4/projects/libidn%2Flibidn/repository/tags?per_page=3",
+    "https://gitlab.com/libidn/libidn2/-/raw/master/README.md",
+    "https://gitlab.com/libidn/libidn2/-/raw/master/lib/lookup.c",
+    "https://gitlab.com/libidn/libidn2/-/raw/master/lib/decode.c",
+    "https://github.com/sporkmonger/addressable/pull/496",
+    "https://raw.githubusercontent.com/jarthod/addressable/libidn2/benchmark/idna.rb",
+    "https://raw.githubusercontent.com/jarthod/addressable/libidn2/lib/addressable/idna/libidn1.rb",
+    "https://raw.githubusercontent.com/jarthod/addressable/libidn2/lib/addressable/idna/libidn2.rb",
+    "https://raw.githubusercontent.com/jarthod/addressable/libidn2/spec/addressable/idna_spec.rb",
+    "https://raw.githubusercontent.com/deepfryed/idn-ruby/HEAD/ext/idna.c"
+  ],
+  "confidence": 0.75
+}
