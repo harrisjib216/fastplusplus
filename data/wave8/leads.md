@@ -140,3 +140,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - microsoft/LightGBM (https://github.com/microsoft/LightGBM): GBM-perf shows 2x faster than xgboost at 10M rows on CPU, 3.5x at 100M; not catalogued (XGBoost enricher, 2026-10-07).
 - nmslib/hnswlib (https://github.com/nmslib/hnswlib): usearch issue #439 says hnswlib is faster on SIFT1M; not catalogued (USearch enricher, 2026-10-07).
 - Paper-access leads from w8-mine-l (2026-10-11, all blocked): STFC DL-TR-2022-001 (preCICE vs MUI, OpenPALM, MOOSE, PLE); Pazouki, Mazhar, Negrut 2012 (Chrono GPU ellipsoids 14x vs Bullet); arXiv 2009.01194 (Reaktoro); pyscf issue #1956 (Psi4 about 45-50 s vs PySCF about 110 s, DF, one thread); Quantum++ PLoS ONE paper doi 10.1371/journal.pone.0208073.
+- Paper-access leads from w8-mine-k (2026-10-11): mpfr.org/mpfr-2.3.0/timings.html and arXiv 2002.04717 (PARI/GP), arXiv 1607.00351 (PETSc comparisons); all blocked.
