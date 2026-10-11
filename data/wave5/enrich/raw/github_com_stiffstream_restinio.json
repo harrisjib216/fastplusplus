@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/stiffstream/restinio",
+  "one_liner": "Header-only C++17 embedded async HTTP/WebSocket server on ASIO; served a 10-client POST echo test 1.3-2.1x faster than Restbed.",
+  "what_it_does": "RESTinio embeds an HTTP/1.1 (plus basic WebSocket) server in a C++ program: restinio::run(on_this_thread() or on_thread_pool(n) ... .request_handler(...)) starts it on standalone ASIO or Boost.ASIO, or you attach it to your own asio::io_context. Handlers receive a request_handle_t and may answer at once or keep the handle and finish the response later from another execution context. It ships an ExpressJS-style router, an easy_parser-based router, a type-safe router, chained handlers (middleware), response builders for chunked and user-controlled output, sendfile/TransmitFile, deflate/gzip and TLS. It is not API-compatible with Restbed, cpprestsdk or any other baseline.",
+  "how_it_is_fast": "The server is a thin layer over ASIO's proactor: connections are accepted and read asynchronously on a single thread or a pool, each connection's operations are serialised by an asio strand (a no-op strand in single-thread mode), and the request is parsed by nodejs/llhttp (nodejs/http-parser 2.9.2 in the benchmarked 0.6.2). The handler gets the fully parsed request, and the response is queued and written asynchronously, with HTTP pipelining supported. The benchmark gives no profile, so which of these explains the margin over Restbed is not documented.",
+  "when_to_use": [
+    "Embedding a REST endpoint into an existing ASIO-based C++ service, sharing its io_context, where handlers often complete asynchronously (database or message-bus calls).",
+    "Moderate-concurrency internal APIs with small requests and responses, where the measured margin over Restbed (1.3x at 28 threads, 2.1x at 4 threads in the 10-client local sprint) and over Crow v0.1 (1.5-1.7x) matters.",
+    "Projects that want a BSD-3-Clause server rather than Restbed's AGPL/commercial licence, and need TLS, compression, sendfile and WebSocket upgrade in one library.",
+    "Code bases on C++17 or later with GCC 13, Clang 18, MSVC or macOS toolchains (the CI matrix)."
+  ],
+  "when_not_to_use": [
+    "Maximum raw throughput: the only measurement is a 2020 shootout of six C++ frameworks driven by a Python client; Drogon, cinatra or Boost.Beast-based servers have stronger published numbers on standard harnesses.",
+    "HTTP/2 or HTTP/3 (open issue #211), streaming uploads of large request bodies (the whole body is buffered before the handler runs; issue #177 says partial reception is unsupported), or other new features: development beyond maintenance has been on hold since March 2021 (issue #148).",
+    "Handlers that take real time: with 200 ms of handling time every framework that completed was within about 3 percent, so the advantage is in request overhead only.",
+    "Teams wanting a dependency-free single header: RESTinio needs ASIO, llhttp (compiled), fmt and expected-lite, plus zlib, OpenSSL or a regex engine for the optional features; the benchmark author rated it hardest to integrate (restinio issue #86 on Ubuntu Xenial)."
+  ],
+  "integration": {
+    "form": "header-only library plus the compiled nodejs/llhttp parser; CMake package, also vcpkg (Conan was used for the benchmarked 0.6.2)",
+    "dependencies": "standalone ASIO 1.36 or Boost.ASIO, nodejs/llhttp 9.3.0, fmt 12.0.0, expected-lite 0.8.0; optional zlib (compression), OpenSSL (TLS), PCRE/PCRE2/Boost.Regex router engines, SObjectizer timer integration",
+    "min_toolchain": "C++17, CMake 3.14 (CI: GCC 13, Clang 18, MSVC latest, macOS 15; C++17/20/23). The benchmarked 0.6.2 was C++14.",
+    "platforms": "Linux, Windows and macOS per CI; anything ASIO supports in principle (32-bit narrowing errors in open issue #124, QNX untested)",
+    "thread_safety": "On a thread pool the same request handler object is called concurrently from pool threads, so it must be thread-safe; per-connection I/O is serialised by an asio strand (default_strand_t, or noop_strand_t for single-thread traits). A request_handle_t may be completed from another thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "incoming_http_msg_limits_t defaults to unlimited URL, header and body sizes, and bodies are fully buffered in memory; set max_body_size and the other limits on any public-facing server.",
+    "express_router_t<> uses std::regex by default; for many routes switch to the PCRE, PCRE2 or Boost.Regex engine or to the easy_parser_router (since 0.6.6).",
+    "The independent numbers are for RESTinio 0.6.2, which used nodejs/http-parser 2.9.2, ASIO 1.14.0 and C++14; current 0.7.x uses llhttp and C++17 and has not been re-measured.",
+    "Issue #246, a heap-use-after-free at shutdown with separate_accept_and_create_connect(true) and the connection-count limiter, was fixed only in 0.7.10 (September 2026); use 0.7.10 or later if you enable those options."
+  ],
+  "pick_this_over_siblings_when": "Against cpp-httplib (same shootout, where RESTinio's 1.025 s beat httplib's roughly 3 s at C=28) and Crow (1.5-1.7x slower here, v0.1), pick RESTinio when you need asynchronous handlers, an externally owned io_context, pipelining and WebSocket in a BSD library. Pick Drogon or cinatra instead when peak req/s on wrk-style harnesses is the goal; both have stronger published numbers than RESTinio's single obscure shootout.",
+  "verified_claims_summary": "In guteksan/REST-CPP-benchmark (independent, 2020, one run per cell, results only as a screenshot), ten Python processes each sent 1,000 POSTs to /test over a new TCP connection per request on the same 28-thread Xeon E5-2660 v4 (Ubuntu 16.04, Release builds, compiler not stated). RESTinio 0.6.2 finished in 1.025 s at C=28 and 0.85 s at C=4 against Restbed 4.6's 1.333 s and 1.789 s (1.30x and 2.10x, derived from page data), with Pistache close behind (1.03x and 1.13x). That is about 1 ms per closed-loop request per client (derived from page data), so the Python client sets most of the floor. The timer runs from the service's first logged request to its last 'Processing finished' line, which RESTinio writes before resp.done() and Restbed after the asynchronous yield(), so neither includes the socket write; with a 200 ms handler or over a VPN the frameworks tie.",
+  "status_note": "Maintenance-mode but alive: releases continue (0.7.10 on 2026-09-03, last commit 2026-09-03, 1.3k stars, BSD-3-Clause), while feature development has been on hold since 2021 for lack of funding; safe to adopt for HTTP/1.1 if you pin a recent release and set message limits.",
+  "sources_read": [
+    "https://github.com/Stiffstream/restinio",
+    "https://github.com/Stiffstream/restinio/releases",
+    "https://github.com/Stiffstream/restinio/tree/master/dev",
+    "https://github.com/Stiffstream/restinio/tree/master/dev/benches",
+    "https://github.com/Stiffstream/restinio/tree/master/.github/workflows",
+    "https://github.com/Stiffstream/restinio/issues?q=is%3Aissue+performance+OR+slow+OR+crash+OR+leak",
+    "https://github.com/Stiffstream/restinio/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/Stiffstream/restinio/issues/148",
+    "https://github.com/Stiffstream/restinio/issues/177",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/README.md",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/externals.rb",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/dev/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/dev/restinio/incoming_http_msg_limits.hpp",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/dev/restinio/traits.hpp",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/dev/restinio/router/express.hpp",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/dev/restinio/router/easy_parser_router.hpp",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/v.0.6.2/README.md",
+    "https://raw.githubusercontent.com/Stiffstream/restinio/v.0.6.2/externals.rb",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/postInLoop.py",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-restinio/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-restinio/CMakeLists.txt",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-restbed/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-pistache/main.cpp",
+    "https://raw.githubusercontent.com/guteksan/REST-CPP-benchmark/HEAD/basic-crow/main.cpp"
+  ],
+  "confidence": 0.75
+}

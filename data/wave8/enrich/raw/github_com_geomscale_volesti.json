@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/geomscale/volesti",
+  "one_liner": "Randomised C++ volume estimation and sampling for high-dimensional convex polytopes; orders of magnitude faster than exact VINCI above about 10 dimensions.",
+  "what_it_does": "Estimates the volume of convex bodies (H-polytopes, V-polytopes, zonotopes, intersections, spectrahedra) and samples points from them (uniform, Gaussian, log-concave) with geometric random walks. The C++ API is a set of templated free functions such as volume_sequence_of_balls<CDHRWalk>(P, error, walk_length), volume_cooling_gaussians and volume_cooling_balls, parameterised by walk policy and RNG type; it returns an estimate, not an exact value. R bindings live in Rvolesti/CRAN and a limited Python interface in dingo.",
+  "how_it_is_fast": "Multiphase Monte Carlo: the 'sequence of balls' method samples the polytope intersected with concentric balls between the Chebyshev ball and an enclosing ball, and multiplies the estimated volume ratios, using about 400 eps^-2 d log d points per phase. Points come from Coordinate-Directions Hit-and-Run, whose boundary oracle is updated incrementally to O(m) amortised work per step instead of O(md), and the 2014 algorithm added iterative rounding by a minimum enclosing ellipsoid. Later releases add annealing schedules (Cousins-Vempala Gaussian cooling and the cooling-balls schedule from the ICMS 2020 paper) and billiard and Hamiltonian walks. The gains over exact tools come from replacing exact decomposition (exponential in dimension) with a polynomial-time randomised estimator.",
+  "when_to_use": [
+    "You need the volume of an H-polytope in roughly 12 to 100 dimensions, where exact codes (VINCI, qhull, birkhoff) run out of memory or take days.",
+    "About 1% relative error is acceptable, e.g. probability estimates, portfolio or financial-crisis indicators, metabolic flux-space analysis.",
+    "You need uniform or Gaussian samples from a convex polytope as well as its volume (same random-walk machinery).",
+    "You already work in R (CRAN volesti/Rvolesti) or can use Eigen and Boost in a C++17 build."
+  ],
+  "when_not_to_use": [
+    "Low dimensions (up to about 10) or simplices: exact VINCI answered in 0.01 to 0.40 s where VolEsti took 0.4 to 1.4 s on cubes, and simplices took VolEsti up to 919 s vs 0.02 s exact in the paper.",
+    "You need an exact or certified volume, or bit-reproducible output: the estimator is randomised and the default RNG is seeded from the system clock.",
+    "Very high dimensions at tight error with the sequence-of-balls method: in the paper the Cousins-Vempala Gaussian-cooling Matlab code was already faster from cube-80 up (cube-100 884 s vs 1285 s); use volesti's own cooling_gaussians or cooling_balls instead.",
+    "Degenerate or lower-dimensional polytopes: open issues #463 (max_inscribed_ball instability), #394 and #396 (ball walks can silently stagnate) and #325 (inscribed-ellipsoid segfault on a 2-D polytope).",
+    "LGPL-3.0 is a problem for your distribution, or you need a macOS/ARM clang build (issue #295, compile errors, open since 2024)."
+  ],
+  "integration": {
+    "form": "header-only templates (include/) plus the lp_solve C library, which the CMake helper downloads and builds as a static library",
+    "dependencies": "Eigen, Boost (random), lp_solve 5.5.2.11; optional Intel MKL, autodiff, Spectra and QD; ifopt, GMP, MPSolve and FFTW3 only when the non-linear oracles are enabled (off by default)",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17, 'needed by autodiff'), CMake 3.11; CI builds with g++ 9-12 and clang++ 11-14 on Ubuntu 22.04",
+    "platforms": "Linux x86-64 tested in CI; R package checked on Ubuntu, macOS and Windows; macOS/ARM clang compile errors reported (issue #295)",
+    "thread_safety": "Not documented. Functions take the polytope by non-const reference (the interior_point overloads mutate it) and each call owns its RNG, so separate polytope copies and RNGs per thread should be used; the n_threads argument does not spawn threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "volume_sequence_of_balls(..., n_threads) is not parallel and does not average: the loop over n_threads runs sequentially, divides the sample count by n_threads, and each pass resets vol to the first ball's volume, so the function returns only the last pass's estimate built from 1/n_threads of the points (the comment says 'take the average'). Leave n_threads at 1.",
+    "The convenience overloads default to walk_length = 1 (the SoCG 2014 runs used W = floor(10 + d/10)), and the argument order differs between overloads: (P, error, walk_length) versus (P, interior_point, walk_length, error).",
+    "The current volume_sequence_of_balls does no rounding, unlike the 2014 algorithm: round skinny polytopes first with the preprocess functions (inscribed_ellipsoid_rounding, min_sampling_covering_ellipsoid_rounding, svd_rounding).",
+    "is_in() returns -1 for inside and 0 for outside; issue #391 ('Unintuitive is_in() semantics') is open and earlier reports (#385, #387, #389) found walks that misread it, so custom bodies and walks must follow that convention."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued geometry-spatial siblings (geogram, CGAL-based Manifold or kigumi, Boost.Geometry alternatives, nanoflann) estimates d-dimensional polytope volume or samples convex bodies; pick volesti for that job in moderate to high dimension, and keep exact CGAL/qhull-style tools for low-dimensional exact answers.",
+  "verified_claims_summary": "In the SoCG 2014 paper (Emiris and Fisikopoulos) the precursor C++ code (sourceforge randgeom, CGAL d-dimensional kernel with a GMP LP solver, Eigen, Boost mt19937; compiler and flags not stated) on an Intel Core i5-2400 took, at eps = 1 and about 1% error, 1.58 s vs 388.50 s for exact VINCI on cross-10 and 5.19 s vs 6141.40 s on cross-11, handled cube-20 to cube-100 where VINCI ran out of memory, and beat the Cousins-Vempala Matlab code up to cube-70 (cube-20 4.62 s vs 21.48 s) while losing from cube-80 up. These are algorithmic speedups of an approximate estimator over exact computation, measured on code that predates today's Eigen and lp_solve rewrite.",
+  "status_note": "Actively maintained (last commit 2026-06-29, GSoC contributions, CRAN package and JOSS paper); LGPL-3.0-or-later header-only code is copyable as a dependency, but the published speed numbers describe the 2014 precursor, not the current algorithms or defaults.",
+  "sources_read": [
+    "https://github.com/GeomScale/volesti",
+    "https://github.com/GeomScale/volesti/tree/develop/include",
+    "https://github.com/GeomScale/volesti/tree/develop/include/preprocess",
+    "https://github.com/GeomScale/volesti/commits/develop",
+    "https://github.com/GeomScale/volesti/issues?q=is%3Aissue+volume+wrong+OR+bug+OR+crash",
+    "https://github.com/GeomScale/volesti/issues/387",
+    "https://github.com/GeomScale/volesti/issues/391",
+    "https://raw.githubusercontent.com/GeomScale/volesti/HEAD/README.md",
+    "https://raw.githubusercontent.com/GeomScale/volesti/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/GeomScale/volesti/HEAD/docs/misc/publications.md",
+    "https://raw.githubusercontent.com/GeomScale/volesti/HEAD/docs/getting_started/install.md",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/test/benchmarks_sob.cpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/test/benchmarks_cg.cpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/volume/volume_sequence_of_balls.hpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/volume/volume_cooling_balls.hpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/volume/volume_cooling_gaussians.hpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/generators/boost_random_number_generator.hpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/random_walks/uniform_ball_walk.hpp",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/convex_bodies/hpolytope.h",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/include/convex_bodies/ball.h",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/external/cmake-files/LPSolve.cmake",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/external/cmake-files/Eigen.cmake",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/external/cmake-files/Boost.cmake",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/.github/workflows/cmake-gcc.yml",
+    "https://raw.githubusercontent.com/GeomScale/volesti/develop/.github/workflows/cmake-clang.yml",
+    "https://raw.githubusercontent.com/vissarion/vissarion.github.io/master/publications/EF_socg14.pdf"
+  ],
+  "confidence": 0.75
+}

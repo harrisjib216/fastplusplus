@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/clmathlibraries/clblas",
+  "one_liner": "AMD's OpenCL BLAS (levels 1-3) with AutoGemm kernels; on a FirePro S9150 it out-ran cuBLAS 7.5 on a K40 at large GEMMs.",
+  "what_it_does": "clBLAS implements the full Netlib BLAS level 1, 2 and 3 routine set in four precisions as OpenCL kernels that the library generates and enqueues for you. The C API (clblasSgemm, clblasDtrsm and so on) takes cl_mem buffers with offsets, leading dimensions, row- or column-major order, a list of command queues and event wait lists; you keep ownership of the OpenCL context, queues and buffers, and must call clblasSetup once before use. It is not a drop-in for cuBLAS (different API and runtime) or for CPU BLAS.",
+  "how_it_is_fast": "Level-3 GEMM uses AutoGemm: Python scripts generate tiled OpenCL GEMM kernels at build time (16x16 work-groups with 1x1 to 6x6 register micro-tiles, so up to 96x96 macro-tiles), and a per-precision size table picks the tile for each problem size (for example, SGEMM at size 4000 and above uses only the 16x16 6x6 kernel). The tables were tuned for AMD Hawaii (the default, the S9150's GPU family) and Fiji only. Other routines come from a kernel generator, and kernels are compiled at run time on first call and cached.",
+  "when_to_use": [
+    "Legacy code already written against the clBLAS API on AMD GCN GPUs of the Hawaii or Fiji generation, the only devices AutoGemm has selection tables for.",
+    "Large square single- or complex-precision GEMM (sizes above about 3000) on those AMD GPUs, where the 2015 charts show 3600-4100 GFlop/s SGEMM and about 4500 GFlop/s CGEMM on an S9150.",
+    "Portable OpenCL 1.2 code that needs the complete BLAS routine list, including level 1 and 2 routines and a CPU OpenCL device path for debugging."
+  ],
+  "when_not_to_use": [
+    "Any new project: the repository has had no commits since 2017-03-23 (v2.12 bugfix roll-up), with 89 open issues including test failures on RX 5700 XT (gfx1010, #351) and ROCm (#341), a runtime error with Intel OpenCL 18.1 (#339) and an abort on OpenCL 1.1 (#343).",
+    "Choosing a GPU BLAS by these charts: they compare different GPUs (AMD S9150 vs NVIDIA K40), so they say nothing about clBLAS vs cuBLAS on the same card; on NVIDIA hardware use cuBLAS, and for OpenCL on non-AMD devices the catalogued CLBlast beats clBLAS 2.12 in its IWOCL '18 paper.",
+    "Small and mid-size GEMMs: cuBLAS on the K40 leads or ties up to about 1000 (CGEMM, ZGEMM), 1200 (DGEMM) and 2500-3000 (SGEMM), partly because of first-call kernel compilation and small-tile kernels.",
+    "DTRSM-heavy work: clBLAS reaches about 1200 GFlop/s, only about 47% of the S9150's 2530 GFlop/s DP peak drawn on its own chart, while cuBLAS reaches about 73% of the K40's 1660 (derived from page data).",
+    "Workloads needing batched, FP16 or mixed-precision GEMM, which clBLAS does not provide."
+  ],
+  "integration": {
+    "form": "shared lib by default (BUILD_SHARED_LIBS ON); static possible",
+    "dependencies": "an OpenCL SDK/ICD (OpenCL 1.2 by default, configurable 1.1 to 2.0) and a Python interpreter at build time for AutoGemm; Boost program_options plus Netlib CBLAS for the client; Google Test, Boost and Netlib CBLAS or ACML for tests",
+    "min_toolchain": "GCC 4.6+ on Linux or Visual Studio 2010 SP1/2012 on Windows (README); CMake 2.8+",
+    "platforms": "Windows, Linux and macOS hosts; any OpenCL device in principle, but GEMM tile tables exist only for AMD Hawaii and Fiji; newer AMD (gfx1010, ROCm) and Intel runtimes have open failure reports",
+    "thread_safety": "clBLAS.h states the library is thread-safe except clblasSetup and clblasTeardown, which must be called once, outside concurrent use",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the cuBLAS curves cannot be reproduced from this repository. measurePerformance.py accepts only --library clamdblas and the client (src/client) only calls clBLAS, so the K40 numbers came from an unpublished tool whose timing method is unknown; the clBLAS side times host wall-clock around enqueue plus clWaitForEvents, averaging 20 calls after one warm-up call and pruning 3-sigma outliers.",
+    "The comparison crosses hardware, and the result depends on precision. DGEMM and ZGEMM reach 72-77% of each card's DP peak on both cards (DGEMM 1880-1900 of 2530 vs about 1250 of 1660; ZGEMM about 1940 vs about 1200), so the 1.5x-1.6x gaps mostly track the 1.52x DP-peak ratio. Single precision is closer to a library comparison: the S9150's 5.07 TFLOPS SP peak is about the K40's at the boost clock implied by the chart's 1660 DP line (search snippets give a 3:1 SP:DP ratio, 4.29/1.43). There clBLAS SGEMM (71-81%) and CGEMM (about 89%) are ahead of cuBLAS (about 60-64%). All ratios are derived from page data and snippets.",
+    "The S9150 SGEMM points split into separate performance bands at the same size (about 3600 vs about 4100 GFlop/s near 5750), probably from AutoGemm's fixed 96x96 tile and edge handling, so performance depends on whether your sizes are tile multiples. The Perf page also says better SGEMM and DGEMM need NDA-only compiler flags and a proprietary clock-stabilization tool.",
+    "The top-level CMake defaults CMAKE_BUILD_TYPE to Debug when unset, and BUILD_CLIENT is off by default; pass -DCMAKE_BUILD_TYPE=Release for host-side overhead comparable to the charts."
+  ],
+  "pick_this_over_siblings_when": "Pick clBLAS over CLBlast only when you maintain existing clBLAS-API code on Hawaii- or Fiji-class AMD GPUs; CLBlast is maintained, auto-tuned for many more devices and beats clBLAS 2.12 in its paper. Neither replaces cuBLAS on NVIDIA hardware or rocBLAS (the base of the catalogued emugemm-cdna) on current AMD GPUs.",
+  "verified_claims_summary": "AMD's wiki charts (2015) plot clBLAS 2.8.0 on a FirePro S9150 (driver 14.50.2) against cuBLAS 7.5 on a Tesla K40, with both GPUs at max clocks and the host CPU and compiler flags unstated. At sizes near 5750, clBLAS is ahead by about 1.15x-1.3x on SGEMM, 1.45x on CGEMM and 1.5x-1.6x on DGEMM and ZGEMM, and roughly level on DTRSM; cuBLAS leads below about 1000-3000 depending on precision. These are two different GPUs, the double-precision gaps match the DP peak ratio, and the cuBLAS numbers come from a harness not in the repo.",
+  "status_note": "Abandoned since 2017-03-23 (v2.12) but Apache-2.0 and buildable with CMake and Python. Its value now is legacy AMD OpenCL support, not speed: the evidence is a first-party cross-GPU chart whose cuBLAS side is unreproducible from the repo, so tier C is the ceiling, and D is defensible because the DGEMM and ZGEMM wins track the hardware's DP peaks.",
+  "sources_read": [
+    "https://github.com/clMathLibraries/clBLAS",
+    "https://github.com/clMathLibraries/clBLAS/issues",
+    "https://github.com/clMathLibraries/clBLAS/tree/master/src/client",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/README.md",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/CHANGELOG",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/library/CMakeLists.txt",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/clBLAS.h",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/library/blas/AutoGemm/AutoGemmParameters.py",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/client/client.cpp",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/client/clfunc_xgemm.hpp",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/client/clfunc_common.hpp",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/client/clfunc_xtrsm.hpp",
+    "https://raw.githubusercontent.com/clMathLibraries/clBLAS/HEAD/src/client/statisticalTimer.cpp",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.md",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.img/sgemm_s9150_k40.png",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.img/dgemm_s9150_k40.png",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.img/cgemm_s9150_k40.png",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.img/zgemm_s9150_k40.png",
+    "https://raw.githubusercontent.com/wiki/clMathLibraries/clBLAS/Perf.img/dtrsm_s9150_k40.png",
+    "WebSearch: FirePro S9150 peak single precision TFLOPS vs Tesla K40 (snippets: AMD press release 5.07 TFLOPS SP / 2.53 DP; K40 4.29 SP / 1.43 DP)"
+  ],
+  "confidence": 0.7
+}

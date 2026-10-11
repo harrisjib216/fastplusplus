@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/bulletphysics/bullet3",
+  "one_liner": "Zlib-licensed C++ rigid/soft-body physics and collision SDK (PyBullet's core); beat DART and Simbody inside Gazebo-classic, not ODE.",
+  "what_it_does": "Bullet is a general physics SDK: collision detection (broadphase, GJK/EPA, convex and concave meshes, GImpact), rigid-body dynamics in maximal coordinates (btDiscreteDynamicsWorld), Featherstone articulated bodies (btMultiBody), soft bodies, vehicles and character controllers, plus the PyBullet Python module used for robotics and reinforcement learning. You build worlds from a collision configuration, dispatcher, broadphase and constraint solver and call stepSimulation; its API is unrelated to DART, Simbody or ODE, so switching means rewriting against it or using a host such as Gazebo-classic that can swap engines with a flag.",
+  "how_it_is_fast": "The rigid-body path is an iterative sequential-impulse (projected Gauss-Seidel) constraint solver with a fixed iteration count, so cost per step grows roughly linearly with contacts and bodies; broadphase uses a dynamic AABB tree (btDbvtBroadphase, the one Gazebo-classic's plugin selects), and simulation islands let resting groups sleep. An optional multithreaded world (btDiscreteDynamicsWorldMt with OpenMP, TBB or PPL task schedulers) solves islands in parallel. In the benchmark the advantage over DART is mostly scaling: Bullet's marginal cost was about 6.5-6.7 us per extra box per step against DART's 21-35 us (derived from page data), while the fixed per-step cost through Gazebo was similar (about 64 us vs 68-71 us).",
+  "when_to_use": [
+    "Games, VR and interactive tools that need a mature, permissively licensed (zlib) rigid-body plus collision library with convex, mesh and compound shapes and a long track record.",
+    "Robotics and RL prototyping from Python via PyBullet (pip wheels, 3.2.7 released 2025-01-30), including URDF/SDF loading and Featherstone multibodies.",
+    "Scenes with tens to a hundred-plus free bodies inside Gazebo-classic where you would otherwise run DART or Simbody: in the 2015 boxes data Bullet was 1.08x to 5.0x faster than DART and 1.25x to 1.30x faster than Simbody at 81 to 101 boxes.",
+    "Projects that want soft bodies, vehicles or GPU-experimental collision (OpenCL pipeline) in the same codebase as rigid bodies."
+  ],
+  "when_not_to_use": [
+    "If ODE is an option: in the same Gazebo benchmark ODE was faster in 10 of 12 box rows (1 box 0.102 vs 0.127 time ratio) and in the ROSCon 2014 stacking slide (0.4 vs 0.5); Bullet led only at 81 and 101 boxes without collision shapes, by about 4% and 7%.",
+    "Single small scenes where per-step overhead dominates: in the single-box step-size sweep Bullet was slower than ODE at every step size (0.129 vs 0.112 at 0.0005 s) and only about 8% faster than DART.",
+    "Large new game or multi-core projects: the catalogued Jolt Physics beats Bullet (via Ammo.js) on settled scenes, and Bullet's multithreaded build has open reports of mutex contention in the collision algorithm pool (#4347) and release-mode crashes (#4292).",
+    "If you need active upstream support: the issue tracker is closed to support questions (README), with 268 open issues and 165 open PRs; the last merged code PRs date from 2024-04-09.",
+    "Stiff articulated robots in maximal coordinates: joint damping is explicit in Gazebo's Bullet path (ROSCon 2014 slide), so stability needs small steps; use btMultiBody or a generalized-coordinate engine instead."
+  ],
+  "integration": {
+    "form": "static lib by default (BUILD_SHARED_LIBS OFF); shared lib optional; vcpkg port and pip wheel (pybullet)",
+    "dependencies": "none for the core libraries (LinearMath, BulletCollision, BulletDynamics, BulletSoftBody); OpenGL only for the example browser; optional OpenMP, TBB or PPL for multithreading; Python for PyBullet",
+    "min_toolchain": "a C++03 compiler per the README; CMake 3.5+ (or the bundled premake4)",
+    "platforms": "Windows, Linux, macOS, iOS, Android per the README; single precision by default (USE_DOUBLE_PRECISION option); SSE is auto-enabled only for 32-bit-float MSVC builds and x86 macOS, NEON only for clang on Apple ARM",
+    "thread_safety": "Single-threaded by default; build with BULLET2_MULTITHREADING (BT_THREADSAFE) and use btDiscreteDynamicsWorldMt with a task scheduler (OpenMP, TBB or PPL, up to 64 threads) for parallel island solving; btMutex helpers called from code compiled without BT_THREADSAFE race (btThreads.h warning)",
+    "drop_in_for_baseline": "partial: inside Gazebo-classic it is a one-flag engine swap (gazebo -e bullet), but as a library its API is unrelated to DART's, and it uses maximal rather than generalized coordinates"
+  },
+  "gotchas": [
+    "Harness flaw: in scpeters/benchmark boxes.cc (commit 55c3b05, the code behind the 2015 CSV) every box gets the same initial linear and angular velocity and spawns 1.8 m apart along y in a blank world, so the boxes never touch; the 'collision 1' rows only add shapes to the broadphase and no contact is solved. Each configuration ran once, with no CPU, compiler, flags, or Bullet version recorded, and timing goes through Gazebo's world->Step, so Gazebo's roughly 50-70 us fixed per-step overhead is a large share of every row.",
+    "Baseline handicap: the DART rows are DART 4.3.4 (dart issue #424, opened by the benchmark author in June 2015) with a known angular momentum conservation bug (relative error 2.2 to 2.5 in every tumbling-box DART row against 0.006 for Bullet), and the authors' Multibody 2015 slides say DART's collision checker in Gazebo 'doesn't use a broadphase'. That explains DART's superlinear scaling and why adding never-touching collision shapes slows DART by 1.65x at 101 boxes while Bullet is unchanged; the headline 5.0x over DART (flag 1) is mostly that missing broadphase, and the 3.0x with flag 0 is the cleaner figure.",
+    "Linux builds get no SSE by default: btScalar.h defines BT_USE_SSE only for float MSVC builds and x86 macOS, so a GCC/Clang build on Linux (as Gazebo on Ubuntu used) runs scalar vector math unless you define it yourself; double-precision builds never get SSE.",
+    "CVE-2025-8854 (stack-based overflow in the VHACD OFF-file parser LoadOFF, reachable through PyBullet's vhacd; reported as affecting versions up to 3.25, snippet-only via a search) affects the tools, not the core dynamics; avoid feeding untrusted mesh files to the VHACD utilities on old versions."
+  ],
+  "pick_this_over_siblings_when": "Pick Bullet over ODE when you need soft bodies, convex and concave mesh collision, Featherstone multibodies or PyBullet, accepting that ODE was a little faster in the same Gazebo benchmark; over Simbody when per-step speed for many free bodies matters more than generalized-coordinate accuracy. For a new multi-core game engine, Jolt Physics is the catalogued faster rigid-body choice.",
+  "verified_claims_summary": "In OSRF's 2015 Gazebo-classic boxes benchmark (single runs, 10 s simulated at 0.0005 s steps, CPU, compiler and engine versions unstated) Bullet's wall/sim time ratio at 101 boxes was 1.44-1.48 against DART 4.3.4's 4.37-7.23 (3.0x to 5.0x), Simbody's 1.84-1.87 (Simbody at a 0.001 s step) and ODE's 1.34-1.58; the boxes never collide, and DART's large gap comes largely from its Gazebo collision path having no broadphase. ROSCon 2014's stacking slide gives ODE 0.4, Bullet 0.5, DART 1.1, Simbody over 100 with no parameters.",
+  "status_note": "Maintenance mode: recent commits are README and packaging changes (last 2026-10-09, pyproject.toml 2025-10-22), the last code PRs merged 2024-04-09 and the issue tracker is closed to support questions, but it is zlib-licensed, dependency-free and widely packaged (vcpkg, pip) so easy to adopt; its only speed evidence is a 2015 third-party Gazebo benchmark whose boxes never collide and whose DART baseline lacked a broadphase and had a momentum bug, which argues for tier D or for re-baselining the entry on ODE, where Bullet is not faster.",
+  "sources_read": [
+    "https://github.com/bulletphysics/bullet3",
+    "https://github.com/bulletphysics/bullet3/commits/master",
+    "https://github.com/bulletphysics/bullet3/issues?q=is%3Aissue+is%3Aopen+performance",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/README.md",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/VERSION",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/setup.py",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/src/LinearMath/btScalar.h",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/src/LinearMath/btThreads.h",
+    "https://raw.githubusercontent.com/bulletphysics/bullet3/HEAD/src/BulletDynamics/Dynamics/btDiscreteDynamicsWorldMt.h",
+    "https://pypi.org/pypi/pybullet/json",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/boxes.cc",
+    "https://raw.githubusercontent.com/scpeters/benchmark/55c3b05/boxes.cc",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_model_count.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/test_results/BENCHMARK_boxes_dt.csv",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/roscon2014_scpeters.pdf",
+    "https://raw.githubusercontent.com/scpeters/benchmark/HEAD/pdf/multibody2015_scpeters.pdf",
+    "https://raw.githubusercontent.com/gazebosim/gazebo-classic/gazebo11/gazebo/physics/bullet/BulletPhysics.cc",
+    "https://github.com/dartsim/dart/issues/424",
+    "WebSearch: bullet3 bulletphysics CVE vulnerability heap buffer overflow (snippets for CVE-2025-8854)"
+  ],
+  "confidence": 0.75
+}

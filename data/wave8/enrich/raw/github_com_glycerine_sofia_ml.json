@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/glycerine/sofia-ml",
+  "one_liner": "Stochastic pairwise-descent linear SVM and ranking trainer for sparse data; about 160x faster than SVM-perf RankSVM on RCV1.",
+  "what_it_does": "A command-line tool and small C++ library (D. Sculley, Google, 2009-2010) that trains linear classifiers and pairwise rankers on sparse SVM-light-format data with SGD-style learners: Pegasos, SGD-SVM, passive-aggressive, margin perceptron, ROMMA, logistic regression and LMS. Sampling loops choose single examples (stochastic, balanced-stochastic) or candidate pairs (rank, roc, query-norm-rank, combined), so the same binary trains either a classifier or a RankSVM-style ranker. It is not a drop-in for SVM-light or SVM-perf: input format is shared, but the flags and the model file (one line of dense weights) differ. cluster-src adds sofia-kmeans (mini-batch k-means).",
+  "how_it_is_fast": "Stochastic pairwise descent: instead of building the quadratic set of preference pairs or solving the RankSVM problem with SVM-light's QP or SVM-perf/SVM-struct cutting planes, each step samples one candidate pair in constant time from an index of examples grouped by (qid, label) and takes a hinge-loss gradient step, for a fixed step count (default 100,000) that does not grow with n. The weight vector is stored as a scalar times a dense float array, so the L2 shrink is an O(1) scale update and the Pegasos projection uses an incrementally tracked squared norm; each step therefore costs O(nnz) of the two sparse vectors. Data loading uses a 40 MB ifstream buffer and atoi/atof per token rather than stream extraction.",
+  "when_to_use": [
+    "Linear pairwise ranking or ROC-area optimisation over large sparse data (text, click logs) in SVM-light format, where SVM-light or SVM-perf RankSVM takes minutes to hours.",
+    "Heavily imbalanced binary problems (RCV1 E311 has 0.2% positives): the roc and balanced-stochastic loops sample a positive and a negative in O(1) per step.",
+    "Cheap baselines and parameter sweeps: 100,000 steps took 0.2 to 0.3 CPU s per task in the paper, so many lambda values cost little.",
+    "You want a small, dependency-free, Apache-2.0 C++ codebase (a few thousand lines in src/) to vendor and patch, and the data fits in RAM."
+  ],
+  "when_not_to_use": [
+    "You need non-linear models or kernels, or LETOR-style dense features where gradient-boosted rankers are the norm: it trains linear models only.",
+    "You need the exact RankSVM optimum: the timed runs used 100,000 steps, while the paper's own convergence trials show the Pegasos and SGD-SVM objectives settle only after about 10^6 steps; equal ROC area on RCV1 E311 is the only quality evidence for the speed claim.",
+    "Production use without patching: abandoned since 2010 (GitHub copy is a 2016 Google Code export), with 14 imported issues still open, including memory-safety bugs in qid parsing, dimensionality handling and hashed models.",
+    "Multi-threaded, multi-class or multi-label training: single-threaded with global rand(), no multi-class or multi-label support (issues #5 and #17).",
+    "Windows/MSVC builds: sampling uses rand() % n, and with MSVC's RAND_MAX of 32767 only the first 32,768 examples can be drawn; modern compilers also need missing <cstdlib>/<stdio.h> includes (issue #15)."
+  ],
+  "integration": {
+    "form": "CLI binary built by a plain Makefile, or source-drop of the src/*.cc files into your project",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "pre-C++11 C++ built with 'g++ -O3 -lm -Wall'; GCC 4.7 and later need the missing includes added (issue #15)",
+    "platforms": "any POSIX system with g++; Windows not supported or tested",
+    "thread_safety": "Not thread-safe: training draws from the global rand()/srand state and mutates a shared weight vector; no concurrency support.",
+    "drop_in_for_baseline": "partial — reads the same SVM-light/SVM-perf input format (including qid), but command-line flags, model format and solver (approximate SGD vs exact RankSVM) differ"
+  },
+  "gotchas": [
+    "qid parsing bug (issue #7, reported 2012, author said a fix was ready in 2013 but none was uploaded): SfSparseVector::Init strncpy's the qid into an uninitialised char[1000] without a terminator, so group ids can pick up trailing bytes from earlier lines and the rank, query-norm-rank and combined-ranking loops may merge or split queries; a qid at end of line or longer than 999 characters overflows. The unit test that checks the group id fails (issues #7 and #19); one reporter's workaround was to comment that assertion out (issue #15). This affects qid-based runs such as the paper's LETOR tasks, not the RCV1 roc loop.",
+    "Dimensionality off-by-one (issue #10): AddVector checks 'feature > dimensions_' instead of '>=', so a feature id equal to --dimensionality writes one float past the heap array, and InnerProduct has no bounds check, so test files with feature ids beyond the model size read out of bounds. Set --dimensionality to the largest feature id plus one or more.",
+    "--hash_mask_bits is broken for reuse: SfHashWeightVector's destructor and the base destructor both delete[] weights_ (double free when --model_in replaces it; issue #4 'malloc error'), and LoadModelFromFile always rebuilds a plain SfWeightVector, so a hashed model loaded from a file predicts without hashing or cross-product features.",
+    "Smaller logic errors: SingleMarginPerceptronRankStep adds eta*(a-b) without the pair sign y, so margin-perceptron with the rank loops steps the wrong way whenever a ranks below b (the roc loop always samples the positive first and is unaffected); --training_objective passes CMD_LINE_BOOLS[\"--lambda\"] (0) so the reported objective omits regularisation (issue #12); the README's basic eta 1000/(i+1000) is 10/(i+10) in code."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued ML siblings, pick sofia-ml over XGBoost or CatBoost ranking objectives when you want a linear pairwise ranker on very sparse, high-dimensional features trained in seconds, and over mlpack when you specifically need ROC-area or RankSVM-style pairwise sampling; prefer those maintained libraries for non-linear accuracy, multi-class support or anything that must be memory-safe without patching.",
+  "verified_claims_summary": "The author's NIPS 2009 workshop paper (checked into papers/stochastic-rank.pdf) timed 100,000 stochastic pairwise steps on RCV1 E311 (781,265 training examples) at 0.20 CPU s for SPD Pegasos and SGD-SVM vs 31.92 s for SVM-perf-roc and 30,716.33 s for SVM-struct-rank, all at ROC area 0.9992, and reports 0.2 to 0.3 CPU s per LETOR task, up to 100x faster than SVM-light and up to 5x faster than SVM-struct-rank. All runs were on an unnamed dual-core 2.8 GHz laptop with 2 GB RAM; the repo Makefile builds with g++ -O3 but the paper names no compiler, and the gain comes from an approximate SGD solver against exact solvers, not from faster code for the same algorithm.",
+  "status_note": "Abandoned: the author's last code commit is 2010-07-26 and the GitHub repo is a 2016 Google Code export with 14 untouched issues; it is Apache-2.0 and small enough to vendor, but fix the qid parser, the dimensionality bounds check and the hashed-weight-vector destructor before relying on it.",
+  "sources_read": [
+    "https://github.com/glycerine/sofia-ml",
+    "https://github.com/glycerine/sofia-ml/tree/master/src",
+    "https://github.com/glycerine/sofia-ml/issues",
+    "https://github.com/glycerine/sofia-ml/issues/7",
+    "https://github.com/glycerine/sofia-ml/issues/10",
+    "https://github.com/glycerine/sofia-ml/issues/15",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/README",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/eval.pl",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/papers/stochastic-rank.pdf",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/cluster-src/Makefile",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sofia-ml.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sofia-ml-methods.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sofia-ml-methods.h",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-weight-vector.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-weight-vector.h",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-sparse-vector.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-sparse-vector.h",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-data-set.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-data-set.h",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-hash-weight-vector.cc",
+    "https://raw.githubusercontent.com/glycerine/sofia-ml/HEAD/src/sf-hash-inline.cc",
+    "https://github.com/npinto/bottou-sgd"
+  ],
+  "confidence": 0.75
+}

@@ -146,3 +146,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Paper-access retiers: MeTA ACL 2016 demo P16-4016 (C to B if Gov2/20news/Webspam tables confirm); Quantum++ PLoS ONE 10.1371/journal.pone.0208073 with the v1.1 stress_tests harness (D to A/B); GLPK on Mittelmann's plato.asu.edu or Sandia SAND2013-8847 (C to B); htslib GigaScience 2021 full text; Torch7 Bahrampour arXiv 1511.06435 (snippet only, confidence 0.35).
 - Uncatalogued faster projects: HiGHS and COIN-OR Clp (both beat GLPK by 5x and 20x on Mittelmann tables); SDPA (faster than SCS on SDPs); CLBlast already listed.
 - SeqAn: Rahn 2018 Bioinformatics, AnySeq arXiv 2002.04561, BMC s12859-018-2014-8 Table 1 (SeqAn ED 7.97 vs Parasail 0.69 GCUPS, snippet only) all blocked.
+- Enricher w8 pair-030 lead: Leon Bottou SGD/ASGD mirror https://github.com/npinto/bottou-sgd (LGPL-3.0, 34 stars, no README benchmarks).
