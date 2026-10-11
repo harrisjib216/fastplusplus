@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/gstreamer/gstreamer",
+  "one_liner": "Plugin-based C media framework; its VA-API pipelines decoded and encoded on an Intel iGPU 1.2-10x faster than OpenCV's software FFmpeg backend.",
+  "what_it_does": "GStreamer builds media pipelines from elements (sources, demuxers, decoders, converters, encoders, muxers, sinks) linked by caps negotiation and run in their own streaming threads. Codecs come from plugins: gst-libav wraps libavcodec, and the VA-API elements (the measured gstreamer-vaapi vaapidecodebin/vaapih264enc, now replaced by the va plugin's vah264dec/vah264enc in gst-plugins-bad) drive the GPU's fixed-function codecs. In the benchmark it is reached through OpenCV: VideoCapture/VideoWriter with CAP_GSTREAMER and a gst-launch style pipeline string ending in appsink or starting with appsrc, instead of CAP_FFMPEG with a file name.",
+  "how_it_is_fast": "The headline wins are hardware offload, not faster software: vaapidecodebin and vaapih264enc/vaapivp8enc hand the bitstream to the Skylake GT2 media engine through libva, so the CPU only demuxes, copies surfaces back and colour-converts. The pipeline also overlaps work across threads (demuxer, decoder queue, converter and the application run concurrently), and in the OpenCV sample the GStreamer pipelines convert colour with videoconvert n-threads set to OpenCV's thread count, while the FFmpeg backend converts with a single sws_scale call (SWS_BICUBIC) on the calling thread.",
+  "when_to_use": [
+    "Linux machines with an Intel or AMD GPU and a working VA-API driver that must encode H.264, HEVC or VP8 faster than software encoders can, e.g. writing many 720p/1080p streams from an OpenCV or camera application where the measured gap was 3.7-3.8x for H.264 and about 10x for VP8.",
+    "Decoding H.264/HEVC from MP4 or AVI on such hardware while freeing CPU cores: the page measured 376 vs 169 fps (mp4/h264) and 391 vs 256 fps (mp4/h265) at 1080p to BGR.",
+    "Applications that need a full pipeline (capture, RTSP/WebRTC, muxing, compositing) with swappable hardware backends (VA, NVCODEC, V4L2, MediaSDK/QSV) rather than a single codec library.",
+    "OpenCV programs on Linux that already have WITH_GSTREAMER builds and can express their I/O as a pipeline string."
+  ],
+  "when_not_to_use": [
+    "Matroska input on the measured stack: gst-vaapi decoded every mkv clip far slower than FFmpeg (h264 59 vs 158, h265 65 vs 255, vp8 68 vs 309 fps); the page gives no explanation, so test your container before switching.",
+    "Pure CPU decoding: gst-libav wraps the same libavcodec and lost to OpenCV's FFmpeg backend on h264, h265 and vp8 decode and on mpeg2 encode (81 vs 106 fps).",
+    "When compression efficiency or quality per bit matters: hardware encoders at VA-API defaults were compared with libx264 CRF 23 and libvpx good-quality output, with no bitrate or quality figures, so the speed buys an unmeasured quality loss.",
+    "Machines without a supported GPU and VA driver (or non-Linux targets for the VA elements); the speedup does not exist there.",
+    "As evidence against FFmpeg itself: FFmpeg's own VA-API path was never measured, and current OpenCV 4.x can enable VA-API in its FFmpeg backend (cap_ffmpeg_hw.hpp, VIDEO_ACCELERATION_VAAPI), removing the 2018 reason for the comparison."
+  ],
+  "integration": {
+    "form": "shared lib (libgstreamer-1.0 core plus dynamically loaded plugin libraries)",
+    "dependencies": "GLib/GObject, libintl, zlib, libffi (mandatory, bundled as meson subprojects); for this result libva plus a VA driver and the VA plugin, gst-libav needs FFmpeg; OpenCV built with -DWITH_GSTREAMER=ON to use it from OpenCV",
+    "min_toolchain": "C compiler; building the monorepo needs Meson 1.4+, ninja and Python 3.8+ (README); measured with Ubuntu 17.10 packages (GStreamer 1.12 series)",
+    "platforms": "Linux, Windows, macOS, Android, iOS for the core; VA-API elements are Linux-oriented and need Intel/AMD hardware decode/encode support for the codec",
+    "thread_safety": "Pipelines run on internal streaming threads; the thread-safety contract of the API was not read this session (not documented in the sources read)",
+    "drop_in_for_baseline": "partial — in OpenCV you swap CAP_FFMPEG for CAP_GSTREAMER and pass a pipeline string (e.g. filesrc ! qtdemux ! vaapidecodebin ! videoconvert ! appsink); outside OpenCV it is a different framework API from libavcodec/libavformat"
+  },
+  "gotchas": [
+    "Harness asymmetry in the OpenCV 3.4 sample and backends: GStreamer pipelines colour-convert with videoconvert n-threads=getNumThreads() (4 on the i5-6600) while the FFmpeg backend converts each 1080p frame to BGR24 with one single-threaded sws_scale inside the timed retrieve; and OpenCV's FFmpeg writer never sets thread_count, so libvpx (VP8, deadline good, cpu-used 1) and FFmpeg's mpeg2video encoder ran single-threaded (libx264 alone gets automatic threads from its codec defaults). The 10.3x VP8 and 1.2x MPEG-2 encode ratios are therefore hardware versus one CPU core, and part of the CPU-side gaps (including gst-libav's mpeg2 decode wins) is conversion threading, not codec speed.",
+    "Encode timing covers only the VideoWriter write call: GStreamer's appsrc (block=1, default max-bytes) returns once the previous frame is dequeued, so encoding overlaps the untimed synthetic-frame grab; FFmpeg's x264 lookahead frames and GStreamer's in-flight frames are flushed in close(), also untimed. The input is 1000 identical videotestsrc SMPTE colour-bar frames (default 720p, 30 fps target), not real video, and the output files are never decoded or checked.",
+    "The measured plugin is gone: gstreamer-vaapi was removed from the monorepo on 2025-06-10 ('gstreamer-vaapi: remove subproject', after 1.26.0); current code uses the va plugin in gst-plugins-bad (vah264enc since 1.22, plus vah265, vavp8, vavp9, av1 and jpeg elements), which this benchmark never measured. The OpenCV sample still names vaapi elements.",
+    "Licensing: the core is LGPL-2.1-or-later, but some plugins with GPL dependencies (x265enc, mpeg2enc, the sample's 'gst-basic' MPEG-2 encoder) are only built with -Dgpl=enabled. Container parsers have had many CVEs (e.g. the December 2024 batch for matroskademux and qtdemux fixed in 1.24.10), so keep it updated when handling untrusted files."
+  ],
+  "pick_this_over_siblings_when": "Pick GStreamer when you need GPU-offloaded encode or decode inside a full streaming pipeline on Linux; for decoding straight into arrays from Python, Nelux (FFmpeg with NVDEC) or video_reader-rs (beats OpenCV VideoCapture) are simpler, and for a faster pure-software H.264 decoder edge264 or rivet-h26x target libavcodec directly.",
+  "verified_claims_summary": "OpenCV's 2018 wiki benchmark (single runs, Ubuntu 17.10 packages, Core i5-6600 with HD Graphics 530) timed its gstreamer_pipeline sample: gst-vaapi encoded 1000 synthetic frames at 193/194/185 fps H.264 and 124 fps VP8 versus 51/51/50 and 12 fps through OpenCV's FFmpeg writer, and decoded 1080p mp4/avi H.264 at 376/373 fps versus 169/159 fps, but lost on every mkv input. It is iGPU fixed-function hardware against CPU software codecs with unequal conversion threading and encoder settings, not GStreamer's own code against FFmpeg's.",
+  "status_note": "Actively developed (GitHub read-only mirror of gitlab.freedesktop.org, 126k commits, last commit 2026-10-11) and LGPL-2.1-or-later, so linking is usable in closed products; the measured gstreamer-vaapi plugin was removed in June 2025 in favour of the va plugin, so the numbers describe a component you can no longer get from main.",
+  "sources_read": [
+    "https://github.com/opencv/opencv/wiki/Video-capture-and-write-benchmark",
+    "https://raw.githubusercontent.com/opencv/opencv/3.4.3/samples/cpp/gstreamer_pipeline.cpp",
+    "https://raw.githubusercontent.com/opencv/opencv/3.4.2/modules/videoio/src/cap_gstreamer.cpp",
+    "https://raw.githubusercontent.com/opencv/opencv/3.4.2/modules/videoio/src/cap_ffmpeg_impl.hpp",
+    "https://raw.githubusercontent.com/opencv/opencv/4.x/modules/videoio/src/cap_ffmpeg_hw.hpp",
+    "https://raw.githubusercontent.com/GStreamer/gst-plugins-base/1.12/gst/videoconvert/gstvideoconvert.c",
+    "https://raw.githubusercontent.com/GStreamer/gst-plugins-base/1.14/gst/videoconvert/gstvideoconvert.c",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/3.3/libavcodec/libx264.c",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/3.3/libavcodec/options_table.h",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/3.3/libavcodec/options.c",
+    "https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/3.3/libavcodec/libvpxenc.c",
+    "https://github.com/GStreamer/gstreamer",
+    "https://raw.githubusercontent.com/GStreamer/gstreamer/main/README.md",
+    "https://github.com/GStreamer/gstreamer/tree/main/subprojects",
+    "https://github.com/GStreamer/gstreamer/commits/main/subprojects/gstreamer-vaapi",
+    "https://raw.githubusercontent.com/GStreamer/gstreamer/main/subprojects/gst-plugins-bad/sys/va/meson.build",
+    "https://raw.githubusercontent.com/GStreamer/gstreamer/main/subprojects/gst-plugins-bad/sys/va/gstvah264enc.c",
+    "WebSearch: GStreamer security advisories 2024 (gstreamer.freedesktop.org/security index, sa-2024-0030; snippets only)"
+  ],
+  "confidence": 0.65
+}

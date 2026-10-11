@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/progschj/threadpool",
+  "one_liner": "Single-header C++11 fixed-size thread pool returning futures; not shown to beat std::async thread-per-task overall.",
+  "what_it_does": "ThreadPool pool(n) starts n std::thread workers. pool.enqueue(f, args...) returns a std::future of f's result, much like std::async(std::launch::async, f, args...), except that the call runs on one of the existing workers. The destructor sets a stop flag, lets the workers drain the queue and joins them. That is the whole API (about 100 lines): there is no wait-all, resize, cancellation, priority or affinity control.",
+  "how_it_is_fast": "The only saving is thread reuse. Workers are created once, so an enqueue costs a mutex lock, a push onto one std::queue<std::function<void()>> and a condition_variable::notify_one, instead of creating an OS thread per task. Each task still allocates a std::packaged_task through make_shared, its future's shared state and a std::function wrapper. All workers share one mutex-protected FIFO; there is no work stealing or per-worker queue.",
+  "when_to_use": [
+    "Coarse, independent tasks (milliseconds each or more) where creating a thread per task is the cost to avoid. In the benchmark, 1024 std::async launches spent 473.7 ms forking, against 0.29 ms of enqueue calls for ThreadPool.",
+    "Capping concurrency at a fixed thread count in a service or tool that would otherwise call std::async per request.",
+    "Projects that want a tiny, auditable, dependency-free header under the permissive Zlib licence, or a teaching example of the mutex-plus-condition-variable pool pattern.",
+    "Pre-C++17 codebases (C++11/14) that need futures from a pool."
+  ],
+  "when_not_to_use": [
+    "Fine-grained tasks: every task takes the global queue lock and several heap allocations. In issue #84, 1,000,000 trivial tasks on 10 threads took about 5 s, against 0.005 s for a plain loop.",
+    "Throughput-critical parallel loops: in the only benchmark, the Sean Parent pools, GCD and TBB all finished both workloads faster (matrix multiplication 423.7-490.0 ms vs 562.7 ms; fluid solver 1158.4-1235.6 ms vs 1567.7 ms).",
+    "Recursive or fork-join code where tasks block on futures of tasks they enqueue: with a fixed worker count and no work stealing, every worker can end up waiting and the pool deadlocks.",
+    "C++20 builds: it uses std::result_of, which fails to compile with clang 16 in C++20 mode (issue #109). MSVC already flags it in C++17 (C4996/STL4014, issue #89).",
+    "Unmaintained since 2014-09-26 with 41 open issues; choose a maintained pool if you need fixes or features."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library threads; link the platform thread library, e.g. -pthread)",
+    "min_toolchain": "C++11; C++17 compiles with deprecation warnings; C++20 needs std::result_of replaced with std::invoke_result_t",
+    "platforms": "any platform with std::thread",
+    "thread_safety": "enqueue may be called from several threads (the queue is guarded by one mutex). Not documented in the README; enqueue after the destructor has set stop throws std::runtime_error.",
+    "drop_in_for_baseline": "partial: enqueue(f, args...) returns a std::future like std::async(std::launch::async, ...), but tasks share n workers, can queue behind each other, and the returned future does not block in its destructor as a std::async future does"
+  },
+  "gotchas": [
+    "Arguments go through std::bind, which passes them to the callable as lvalues, so a move-only argument such as std::unique_ptr taken by value does not compile (issue #93). Enqueue a lambda that move-captures it instead.",
+    "The destructor runs every queued task before joining (workers exit only when stop is set and the queue is empty), so destroying a pool with a backlog blocks. ThreadPool(0) starts no workers, so its futures never become ready.",
+    "A task's exception is stored in its future by std::packaged_task; if the caller drops the future, the exception is lost silently.",
+    "The benchmark behind the record is flawed. Its CMakeLists.txt never applies -O3, so the build was probably unoptimized. ThreadPool was hard-coded to 4 workers on a 4-core/8-thread i7-7700HQ, while the Sean Parent pools use hardware_concurrency() and std::async uses a thread per task. The fluid solver never calls addInflow, so all fields stay zero and the pressure solve exits after one sweep. Each of its 2048 row tasks restarts idx at 0, so they all write row 0 of _dst (a data race), and check_result compares zeros with zeros, so it cannot catch this. The 3.7% fluid 'win' is measured on that racy, degenerate workload."
+  ],
+  "pick_this_over_siblings_when": "Pick it only for the smallest dependency-free C++11 pool with futures. riften::Thiefpool and dp::thread_pool (per-worker or work-stealing queues, measured faster than BS::thread_pool), inkooboo/thread-pool-cpp (about 20x faster job reposting than a boost::asio pool) or nexus are better whenever per-task overhead or throughput matters.",
+  "verified_claims_summary": "In Red-Portal's 'Thread Pool Colosseum' (one run per row, clang 6.0.0, i7-7700HQ, Manjaro, optimization flags never applied), ThreadPool with 4 workers took 562.66 ms against 488.52 ms for std::async-per-row on a 1024x1024 float matrix multiplication (about 15% slower). It took 1567.72 against 1628.18 ms on a 2048x2048 fluid solver (about 3.7% faster, but on a zero-field workload whose tasks all write the same row). Its one clear advantage was enqueue cost: 0.29 ms against 473.69 ms spent launching std::async threads.",
+  "status_note": "Abandoned since 2014-09-26 (28 commits, 8.8k stars, 41 open issues). It is a Zlib-licensed header of about 100 lines that is easy to vendor after swapping std::result_of for std::invoke_result_t. Its only third-party benchmark is broken (unoptimized build, 4 workers against 8 hardware threads, racy all-zero fluid workload), so treat it as a convenient pool, not a fast one.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/progschj/ThreadPool/HEAD/README.md",
+    "https://raw.githubusercontent.com/progschj/ThreadPool/HEAD/ThreadPool.h",
+    "https://raw.githubusercontent.com/progschj/ThreadPool/HEAD/example.cpp",
+    "https://raw.githubusercontent.com/progschj/ThreadPool/HEAD/COPYING",
+    "https://github.com/progschj/ThreadPool",
+    "https://github.com/progschj/ThreadPool/issues",
+    "https://github.com/progschj/ThreadPool/issues/115",
+    "https://github.com/progschj/ThreadPool/issues/93",
+    "https://github.com/progschj/ThreadPool/issues/89",
+    "https://github.com/progschj/ThreadPool/issues/84",
+    "https://github.com/progschj/ThreadPool/issues/109",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/include/pool_bench.hpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/cpp_threads/cpp_threads.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/progschj_ThreadPool/progschj_ThreadPool.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/sean_parent/sean_parent.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/sean_parent/sean_parent_naive.hpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/thread_building_blocks/thread_building_blocks.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_candidates/grand_central_dispatch/grand_central_dispatch.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_problems/matrix_multiplication.cpp",
+    "https://raw.githubusercontent.com/Red-Portal/thread-pool-benchmark/HEAD/benchmark_problems/fluid_solver.cpp",
+    "https://techpowerup.com/cpu-specs/core-i7-7700hq.c3098 (search-result snippet only: 4 cores, 8 threads)"
+  ],
+  "confidence": 0.8
+}

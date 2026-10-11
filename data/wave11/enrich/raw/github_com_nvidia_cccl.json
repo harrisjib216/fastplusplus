@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/nvidia/cccl",
+  "one_liner": "Header-only CUDA algorithms library; thrust::sort's GPU radix sort beat single-threaded std::sort 80-320x on large int arrays.",
+  "what_it_does": "Thrust is the STL-style layer of NVIDIA's CUDA Core Compute Libraries (CCCL, which merged Thrust, CUB and libcu++). thrust::sort(first, last[, comp]) has the std::sort signature, but the execution policy or iterator type picks the backend: device_vector iterators or thrust::device run on the GPU, while host iterators run on the host backend. The data has to be in device memory (thrust::device_vector or raw device pointers) for the GPU path, so in practice you copy to the device, sort, and copy back.",
+  "how_it_is_fast": "For arithmetic keys (and __half or __nv_bfloat16) with the default less or greater comparator, Thrust's CUDA backend picks at compile time (CUB __can_use_radix_sort) a CUB DeviceRadixSort, an LSD radix sort. In current CCCL this is the 'onesweep' variant: one histogram kernel, then one kernel per digit pass that scatters with decoupled look-back prefix sums. Thousands of GPU threads work on the data in device memory, so a pass runs at close to memory bandwidth. Any other key type or comparator falls back to CUB's DeviceMergeSort, a comparison sort that the benchmark did not measure.",
+  "when_to_use": [
+    "The keys are already on an NVIDIA GPU, e.g. as part of a CUDA pipeline: sorting there avoids two PCIe transfers and beats any CPU sort from a few thousand elements up.",
+    "Large arrays (about 10^5 to 10^8+) of int, unsigned, float, double, __half or bfloat16 with ascending or descending order: these take the radix path.",
+    "Key-value sorts (thrust::sort_by_key) of primitive keys, e.g. building sort-based groupings or compaction indices on the GPU.",
+    "Code that also needs a CPU fallback: the same Thrust calls can be built against the OpenMP, TBB or serial backends by changing THRUST_DEVICE_SYSTEM, with lower speed (see when_not_to_use)."
+  ],
+  "when_not_to_use": [
+    "Small arrays: in the measured run thrust::sort cost about 0.037 ms even for 256 ints, where std::sort took 0.003 ms; it only pulled ahead at about 2,048 elements (derived from page data).",
+    "Data that lives on the host and is sorted once: the benchmark excluded the host-to-device and device-to-host copies, which the speedup does not account for.",
+    "Custom comparators or struct keys: these use the merge-sort fallback. Issue #754 reported large slowdowns and code bloat from forced unrolling with complex comparators (closed in April 2025; the workaround was a __noinline__ operator()).",
+    "CPU-only machines: with the OpenMP backend, thrust::sort on 100M floats took 80-117 s versus 31-34 s for std::sort, because the final merge runs on one thread (issue #1244, still open).",
+    "Memory-tight GPUs: the radix path allocates a second key buffer of n*sizeof(Key), plus CUB's scratch space, on every call."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA Toolkit (nvcc or another CUDA compiler) for the GPU backend; optional OpenMP or TBB for the CPU backends. Thrust ships inside the CUDA Toolkit and can also be used from a newer CCCL checkout via -I.",
+    "min_toolchain": "CCCL 3.x: C++17, CUDA Toolkit 12.x or 13.x, GCC 7+ on Linux (CCCL 2.x supports CTK 11.1-12.x)",
+    "platforms": "NVIDIA GPUs supported by the CUDA Toolkit (CTK 13.x: sm_75 and newer; CTK 12.x: sm_50 and newer); Linux and Windows host compilers that the CTK supports",
+    "thread_safety": "Each call runs on the stream carried by its execution policy and synchronizes before returning with the default policy. Concurrent calls from several host threads are not documented in the README.",
+    "drop_in_for_baseline": "partial: same (first, last[, comp]) signature, but the GPU speedup requires device-resident data (device_vector or thrust::device policy) and an explicit copy in and out; std::vector iterators run on the host backend"
+  },
+  "gotchas": [
+    "Each thrust::sort call allocates and frees its temporary storage with cudaMalloc/cudaFree unless a caching allocator is passed through the execution policy. In the benchmark's Nsight trace this allocation was up to about 70% of a 1M-element Thrust call, and the measured time jumped from 0.09 to 0.32 ms between 131,072 and 262,144 elements.",
+    "The radix path sorts all sizeof(Key)*8 bits; thrust::sort cannot be told that values are small, so [0,1000) keys took about the same passes as full-range ints (0.67 vs 0.90 ms at 1M). Use cub::DeviceRadixSort with begin_bit/end_bit for that.",
+    "Floats are sorted by bit pattern: -0.0 and +0.0 compare equal (stable order kept), and NaNs are placed by their bits (negative NaNs first, positive NaNs last), where std::sort with NaNs has undefined behaviour.",
+    "Errors surface as exceptions (thrust::system_error from throw_on_error, bad_alloc when the temporary allocation fails), and the default policy blocks until the sort finishes; use thrust::cuda::par_nosync to avoid the sync."
+  ],
+  "pick_this_over_siblings_when": "Pick Thrust when the data already lives on an NVIDIA GPU or the batch is large enough to repay the PCIe copies. On the CPU, Highway vqsort or x86-simd-sort (SIMD, about 4-10x std::sort) and IPS4o (parallel) avoid the GPU dependency and the transfer cost, and they win on small or host-resident inputs.",
+  "verified_claims_summary": "A third-party CUDA course project (Josh0323/Project2-Stream-Compaction) timed thrust::sort on a Tesla T4 (CUDA 13.3, CUDA events) against single-threaded std::sort on a 2.30 GHz Xeon cloud vCPU (std::chrono, nvcc Release build, host compiler unstated). Medians of 7 runs after a warm-up, copies to and from the device outside the timers: 0.67 vs 54.6 ms at 1M ints in [0,1000), 3.73 vs 912.7 ms at 16M, and 0.90 vs 88.8 ms and 2.52 vs 801.6 ms at 1M and 8M full-range ints. Its --stress mode checks thrust::sort against std::sort on 61 sizes (0 failures reported), but at 256 elements Thrust was about 13x slower than std::sort (derived from page data).",
+  "status_note": "Actively developed inside NVIDIA/cccl (14,947 commits, 2.5k stars; the standalone NVIDIA/thrust repo was archived in 2024) and shipped with every CUDA Toolkit; Thrust is Apache-2.0 and CUB is BSD-3-Clause, so it is copyable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/README.md",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/src/perf.cpp",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/stream_compaction/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/perf/data/sort.csv",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/stream_compaction/cpu.cu",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/stream_compaction/thrust.cu",
+    "https://raw.githubusercontent.com/Josh0323/Project2-Stream-Compaction/HEAD/stream_compaction/common.h",
+    "https://raw.githubusercontent.com/NVIDIA/cccl/main/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/cccl/main/thrust/thrust/system/cuda/detail/sort.h",
+    "https://raw.githubusercontent.com/NVIDIA/cccl/main/cub/cub/device/device_radix_sort.cuh",
+    "https://raw.githubusercontent.com/NVIDIA/cccl/main/cub/cub/device/dispatch/dispatch_radix_sort.cuh",
+    "https://raw.githubusercontent.com/NVIDIA/cccl/main/cub/cub/util_type.cuh",
+    "https://github.com/NVIDIA/cccl",
+    "https://github.com/NVIDIA/cccl/issues?q=is%3Aissue%20thrust%3A%3Asort%20performance",
+    "https://github.com/NVIDIA/cccl/issues/1244",
+    "https://github.com/NVIDIA/cccl/issues/754"
+  ],
+  "confidence": 0.75
+}

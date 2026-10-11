@@ -22461,10 +22461,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "OpenCV wiki tables (2018, Ubuntu 17.10, i5-6600) match, but they compare iGPU hardware codecs through gst-vaapi with CPU software codecs through OpenCV's FFmpeg wrapper, which had no VA-API path, so FFmpeg's own hardware path was never measured; unequal encoder settings; encode input is synthetic 720p SMPTE bars, not the 1080p clip; the encode timer covers only the write call (small bias for GStreamer's async appsrc); gst-vaapi is slower on every mkv decode; no compiler, flags, versions or run counts. gstreamer-vaapi has since been removed from the GStreamer main branch in favour of the va plugin (snippet only). Benchmark code exists: samples/cpp/gstreamer_pipeline.cpp at OpenCV tag 3.4.3."
+      "OpenCV wiki tables (2018, Ubuntu 17.10, i5-6600) match, but they compare iGPU hardware codecs through gst-vaapi with CPU software codecs through OpenCV's FFmpeg wrapper, which had no VA-API path, so FFmpeg's own hardware path was never measured; unequal encoder settings; encode input is synthetic 720p SMPTE bars, not the 1080p clip; the encode timer covers only the write call (small bias for GStreamer's async appsrc); gst-vaapi is slower on every mkv decode; no compiler, flags, versions or run counts. gstreamer-vaapi has since been removed from the GStreamer main branch in favour of the va plugin (snippet only). Benchmark code exists: samples/cpp/gstreamer_pipeline.cpp at OpenCV tag 3.4.3.",
+      "Enricher: OpenCV 3.4.2's FFmpeg writer (cap_ffmpeg_impl.hpp) never sets thread_count, so libvpx VP8 (deadline good, cpu-used 1) and mpeg2video ran single-threaded while only libx264 got auto threads, making the 10.3x VP8 and 1.2x MPEG-2 rows iGPU vs one CPU core; the GStreamer pipelines use videoconvert n-threads=4 while the FFmpeg path converts with single-threaded sws_scale inside the timed retrieve; encode input is 1000 identical SMPTE frames, output never checked, write-only timer with untimed flush tails on both sides. gstreamer-vaapi was removed from the monorepo 2025-06-10 (va plugin replaced it) and OpenCV 4.x's FFmpeg backend now has VAAPI (cap_ffmpeg_hw.hpp)."
     ],
     "measurements": [
-      "verifier batch-114 (wave 10)"
+      "verifier batch-114 (wave 10)",
+      "enricher w10 pair-028"
     ]
   },
   {
@@ -22524,10 +22526,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "rustybuzz benches (July 2024, M1 Pro, HarfBuzz about 9.0 via harfbuzz_rs rev 43f0fb5): geomean 1.76x over rustybuzz, 65 of 70 rows faster, but the baseline is a deliberately unoptimized Rust port and compiler and flags are unstated. Licence is MIT-Modern-Variant."
+      "rustybuzz benches (July 2024, M1 Pro, HarfBuzz about 9.0 via harfbuzz_rs rev 43f0fb5): geomean 1.76x over rustybuzz, 65 of 70 rows faster, but the baseline is a deliberately unoptimized Rust port and compiler and flags are unstated. Licence is MIT-Modern-Variant.",
+      "Enricher: the rustybuzz harness rebuilds face, font and buffer every iteration (cold, plan compile timed), so it says little about cached use; numbers are HarfBuzz about 9.0 (Jul 2024) while HarfBuzz is now 14.6.0 and its own NEWS reports AAT 14.6 to 5.9 ms, so the gap is likely understated; the rustybuzz baseline is archived; since 12.3.0 invalid GSUB/GPOS fonts are rejected outright; first-party discussion #5375 has HarfBuzz ot 1.2-160x faster than kbts. CVE-2024-56732, CVE-2026-22693."
     ],
     "measurements": [
-      "verifier batch-113 (wave 10)"
+      "verifier batch-113 (wave 10)",
+      "enricher w10 pair-028"
     ]
   },
   {
@@ -22873,10 +22877,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "thrust::sort numbers come from a student project README and perf/data/sort.csv (Tesla T4, medians of 7 runs): GPU against one CPU core running std::sort, transfers excluded, no host compiler or CPU model. Licence composite: Apache-2.0 (Thrust) and BSD-3-Clause (CUB)."
+      "thrust::sort numbers come from a student project README and perf/data/sort.csv (Tesla T4, medians of 7 runs): GPU against one CPU core running std::sort, transfers excluded, no host compiler or CPU model. Licence composite: Apache-2.0 (Thrust) and BSD-3-Clause (CUB).",
+      "Enricher: thrust::sort numbers check out (sort.csv medians, --stress mode verifies against std::sort with 0 failures) but per-call cudaMalloc/cudaFree temp storage sits inside the timer (up to about 70% of a 1M call), Thrust is about 13x slower at 256 elements and wins only from about 2048 (derived from page data); the radix path sorts all 32 bits whatever the value range; non-primitive keys or custom comparators fall back to merge sort (#754); the OMP backend takes 80-117 s vs std::sort 31-34 s on 100M floats (#1244, open)."
     ],
     "measurements": [
-      "verifier batch-62 (wave 11)"
+      "verifier batch-62 (wave 11)",
+      "enricher w11 pair-028"
     ]
   },
   {
@@ -22884,10 +22890,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Not faster: +3.7% on the fluid solver (1567.7 vs 1628.2 ms) and -15% on matmul (562.7 vs 488.5 ms) against std::async thread-per-task; the benchmark CMake never applies -O3, so the build is likely unoptimized."
+      "Not faster: +3.7% on the fluid solver (1567.7 vs 1628.2 ms) and -15% on matmul (562.7 vs 488.5 ms) against std::async thread-per-task; the benchmark CMake never applies -O3, so the build is likely unoptimized.",
+      "Enricher: the Red-Portal benchmark is degenerate: fluid_solver.cpp never calls addInflow so all fields stay zero and project exits after one sweep; each of the 2048 row tasks restarts idx at 0 so all write row 0 of _dst (data race) and check_result compares zeros with zeros; ThreadPool is hard-coded to 4 workers on a 4C/8T i7-7700HQ while the Sean Parent pools use hardware_concurrency(); -O3 is never applied; matmul _C is not reset between runners. std::result_of fails with clang 16 C++20 (#109); move-only arguments fail through std::bind (#93); 1M trivial tasks take 5 s vs 0.005 s in a loop (#84); abandoned 2014-09-26."
     ],
     "measurements": [
-      "verifier batch-62 (wave 11)"
+      "verifier batch-62 (wave 11)",
+      "enricher w11 pair-028"
     ]
   },
   {

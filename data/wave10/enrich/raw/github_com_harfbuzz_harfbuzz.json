@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/harfbuzz/harfbuzz",
+  "one_liner": "The standard OpenType/AAT text shaping engine (C++11, no C++ standard library); 1.76x geomean faster than its Rust port rustybuzz.",
+  "what_it_does": "HarfBuzz turns a run of Unicode text plus a font into positioned glyph IDs with cluster mapping: create an hb_face_t from a blob, an hb_font_t from the face, fill an hb_buffer_t, call hb_shape(). Around the shaper it ships a draw/paint API, libharfbuzz-subset for subsetting and variable-font instancing, optional backends (FreeType, CoreText, DirectWrite, Uniscribe, GDI, ICU, GLib, graphite2) and experimental raster, vector and GPU libraries. It shapes runs; font hinting is not implemented, and paragraph layout comes from the layer above (Pango, Parley, browser engines). The C API and ABI have stayed compatible since the 0.9.x series.",
+  "how_it_is_fast": "Per-face accelerators and caches that the rustybuzz port deliberately left out (its README blames the gap on HarfBuzz's 'accelerators and caches'): lazily built GSUB/GPOS lookup accelerators, a per-face shaping cache for kerning and ligature lookups (about 1 KB per face, 10.3.0), Coverage caching and a (Chain)Context fast path (12.3.0), a faster AAT state machine (10.3.0 and 12.3.0), and allocation-free draw/paint in the hb-ot path (11.0.0). It uses its own containers instead of the C++ standard library, generated state machines for the Indic-family shapers (ragel) and packed Unicode tables (PackTab). Shape plans are cached on the face, so long-lived faces and fonts amortize setup.",
+  "when_to_use": [
+    "Any product that has to shape complex scripts correctly and quickly (Arabic, Nastaliq Urdu, Devanagari and other Indic scripts, Khmer, Myanmar, Thai, Hebrew) or apply OpenType features and variable-font axes; it is the engine inside Android, Chrome, Firefox, Qt, GTK, LibreOffice and Unreal according to its README.",
+    "Long-lived renderers (editors, browsers, game UIs) that keep hb_face_t/hb_font_t objects alive and shape many runs per frame: caches and shape plans then amortize, the case the rival port's cold-start harness did not measure.",
+    "Cross-platform apps that want identical shaping on Linux, Windows, macOS, Android and WASM instead of CoreText/DirectWrite differences, including AAT (morx/kerx/trak) fonts on non-Apple systems.",
+    "C or C++ codebases that can vendor one file: the amalgamated src/harfbuzz.cc builds with a plain C++11 compiler and no required dependencies; bindings exist for Python (uharfbuzz), Rust (harfbuzz_rs/harfbuzz-sys) and .NET (HarfBuzzSharp).",
+    "Font pipelines that also need subsetting or instancing (hb-subset) next to shaping."
+  ],
+  "when_not_to_use": [
+    "Pure-Rust or no-C++-toolchain projects: HarfRust (the maintained successor of rustybuzz, tracking HarfBuzz 14.5.1) says it is less than 25% slower on most common fonts and needs no C++ build; rustybuzz itself is archived.",
+    "Hinted glyph rendering: HarfBuzz does no hinting or autohinting; pair it with FreeType or Skrifa.",
+    "Shaping single words with a freshly created face and font every call: in the cold-start harness rustybuzz won five such rows (English AAT word 4.4 vs 10.5 us, Arabic single words about 10.4 vs 12.6 us), so cache faces and fonts.",
+    "Expecting a full text-layout stack: line breaking, font fallback and paragraph layout are outside libharfbuzz; use Pango, Parley or a browser engine on top.",
+    "Rendering text from fonts with broken GSUB/GPOS and expecting partial features: since 12.3.0 invalid layout tables are rejected outright (like CoreText, unlike DirectWrite and HarfRust), so such fonts shape without those features."
+  ],
+  "integration": {
+    "form": "shared lib or static lib (Meson build), or source-drop via the amalgamated src/harfbuzz.cc (also harfbuzz-subset.cc and harfbuzz-world.cc)",
+    "dependencies": "none required for libharfbuzz; optional FreeType, GLib/GObject, ICU, Cairo, graphite2, CoreText, DirectWrite, GDI, Uniscribe and fontations/HarfRust backends (BUILD.md's distro package lists also include ragel)",
+    "min_toolchain": "C++11 (meson.build sets cpp_std=c++11; the benchmark compiled it with -std=c++11); Meson 0.60+ for the official build; GCC, Clang and MSVC are covered by CI",
+    "platforms": "any: CI on Linux, macOS and Windows (MSVC); also used through WASM (harfbuzzjs) and mobile; scalar portable code",
+    "thread_safety": "Thread-safe by default (HB_NO_MT or the HB_TINY profile disables it); faces and fonts can be shared once set up (make_immutable), lifecycle calls are always thread-safe, and an hb_buffer_t may be used by only one thread at a time",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness design behind the 1.76x: rustybuzz's benches/src/lib.rs creates the face, font and buffer inside every timed iteration on both sides, so shape-plan compilation and HarfBuzz's lazily loaded table accelerators are paid on every call. That is why HarfBuzz loses on single words and why the numbers say little about warm, cached use; HarfBuzz's own perf/benchmark-shape.cc warms the font and buffer once and reuses them. Both sides otherwise do equivalent work (harfbuzz_rs::shape guesses segment properties like rustybuzz, Face::from_bytes wraps the bytes without copying).",
+    "Stale versions on both sides: the numbers are from July 2024 with HarfBuzz about 9.0 (harfbuzz_rs rev 43f0fb5); HarfBuzz is at 14.6.0 (2026-10-05) and its own NEWS reports AAT shaping on LucidaGrande going from 14.6 to 5.9 ms in 10.3.0 plus a further 12% in 12.3.0, so the measured 1.26x on the AAT paragraph row likely understates the current gap. The baseline rustybuzz was archived and replaced by HarfRust, whose own '<25% slower' comparison sits in a Google spreadsheet that could not be opened.",
+    "First-party cross-check only: in discussion #5375 (2025-07-23) the HarfBuzz maintainer ran perf/benchmark-shape with the 'ot' shaper against the kbts backend (kb_text_shape): Roboto little-prince 9.11 vs 26.5 ms, Roboto words 11.3 vs 38.4 ms, Amiri Persian 40.6 vs 48.3 ms, Gulzar Persian 782 vs 5198 ms, Devanagari words 25.3 vs 50.5 ms; hardware and build type not stated. No published comparison against CoreText, DirectWrite or Uniscribe exists, although benchmark-shape can run those shapers when they are compiled in.",
+    "Security history to track: CVE-2024-56732 (heap overflow in hb_cairo_glyphs_from_buffer, the Cairo integration, 8.5.0 to 10.0.1, CVSS 8.8) and CVE-2026-22693 (NULL dereference in the cmap cache, fixed in 12.3.0), both from search snippets; the core is fuzzed continuously on OSS-Fuzz, and the project asks for 90 days before public disclosure."
+  ],
+  "pick_this_over_siblings_when": "Pick HarfBuzz over kb_text_shape whenever script coverage or speed matters (the maintainer's run shows HarfBuzz 1.2-6.6x faster on four script rows, 160x on Gulzar with English text, and kbts 40-760x slower at font load), and over managed or WASM-side shapers (SixLabors.Fonts, text-shaper, rustybuzz-wasm, which compare against HarfBuzzSharp or harfbuzzjs rather than native HarfBuzz) when you can link native C++; choose HarfRust or Parley's stack only when a pure-Rust build matters more than the last 25%.",
+  "verified_claims_summary": "The rival rustybuzz project's cargo +nightly bench on an Apple M1 Pro (July 2024) timed face, font and buffer creation plus one shaping call per iteration over 70 text/font pairs, with HarfBuzz about 9.0 compiled from harfbuzz_rs's bundled amalgamation via the cc crate (-std=c++11): HarfBuzz was faster on 65 rows, geomean 1.76x and median 1.89x (English long paragraph 134 vs 350 us, Myanmar 1.04 vs 2.95 ms), and slower on five single-word rows (0.42x to 0.87x). Compiler versions are not stated.",
+  "status_note": "Actively developed (14.6.0 released 2026-10-05, about 22k commits, 6.1k stars, two main maintainers per SECURITY.md) under the Old MIT licence with a stable API/ABI, and the single-file amalgamation makes it easy to vendor; the benchmark's baseline, rustybuzz, is archived.",
+  "sources_read": [
+    "https://github.com/harfbuzz/harfbuzz",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/README.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/NEWS",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/perf/README.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/perf/benchmark-shape.cc",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/perf/meson.build",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/meson.build",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/CONFIG.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/BUILD.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/docs/usermanual-object-model.xml",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/docs/usermanual-buffers-language-script-and-direction.xml",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz/HEAD/docs/usermanual-install-harfbuzz.xml",
+    "https://github.com/harfbuzz/harfbuzz/discussions/5375",
+    "https://raw.githubusercontent.com/harfbuzz/rustybuzz/HEAD/benches/README.md",
+    "https://raw.githubusercontent.com/harfbuzz/rustybuzz/HEAD/benches/src/lib.rs",
+    "https://raw.githubusercontent.com/harfbuzz/rustybuzz/HEAD/benches/Cargo.toml",
+    "https://raw.githubusercontent.com/harfbuzz/rustybuzz/HEAD/README.md",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz_rs/43f0fb5/build.rs",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz_rs/43f0fb5/Cargo.toml",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz_rs/43f0fb5/src/lib.rs",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz_rs/43f0fb5/src/font.rs",
+    "https://raw.githubusercontent.com/harfbuzz/harfbuzz_rs/43f0fb5/src/face.rs",
+    "https://raw.githubusercontent.com/harfbuzz/harfrust/HEAD/README.md",
+    "https://github.com/harfbuzz/harfrust",
+    "WebSearch: harfbuzz CVE 2025 2026 (snippets: CVE-2024-56732, CVE-2026-22693)"
+  ],
+  "confidence": 0.7
+}
