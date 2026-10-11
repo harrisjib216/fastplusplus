@@ -70,3 +70,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - libde265 vs OpenHEVC: KICS-IEEE paper (pure.skku.edu blocked), mixed result.
 - libigl PR 1895 (7x mesh_boolean, 14x remesh_self_intersections vs previous libigl) and a secondhand 6.8x over CGAL claim, paper unreachable.
 - libfacedetection fits autodiff-and-ml-kernels better than image-codecs (verifier to decide via category override).
+- Seed w10-mine-s (no evidence, all hosts blocked): Video++ paper (32x vs naive loops, perso.ensta-paris.fr), VTK Flying Edges, VLFeat vlSIFT, x265 speed; snippets only.
