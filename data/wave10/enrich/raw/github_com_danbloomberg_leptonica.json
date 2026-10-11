@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/danbloomberg/leptonica",
+  "one_liner": "BSD-licensed C image-analysis library for document images; its projection-profile deskew was reported 30-40x faster than ImageMagick -deskew.",
+  "what_it_does": "Leptonica is a large ANSI C library (over 2700 functions per its README) built around a PIX image struct: format I/O, rasterop, affine and projective transforms, binary and grayscale morphology, connected components, binarization, quantization, page segmentation, dewarping and skew/orientation detection. For this entry the relevant calls are pixFindSkew / pixFindSkewSweepAndSearch (angle and confidence) and pixDeskew / pixFindSkewAndDeskew / pixDeskewGeneral (find and rotate in one call). It is the image layer under Tesseract and is not a drop-in for ImageMagick's command line: you call C functions, or reach them through a binding.",
+  "how_it_is_fast": "Skew is found with a projection-profile method (Postl's differential line-sum variance): the 1 bpp page is vertically sheared rather than rotated for each trial angle, black pixels are summed per raster line, and the score is the sum of squared differences between adjacent line sums. A coarse sweep runs on a 4x rank-reduced binary image (default +/-7 degrees in 1 degree steps, peak refined by quadratic fit) and an interval-halving search then runs at 2x reduction down to 0.01 degrees, so very few full-resolution pixels are touched. Binary images are packed into 32-bit words and shears and reductions work word-at-a-time; no SIMD intrinsics or OpenMP appear in skew.c, rotate.c or rotateshear.c. ImageMagick's DeskewImage, by contrast, computes a full-resolution fast Radon transform (MagickCore/shear.c RadonTransform, not a Hough transform as the PR said) over a thresholded copy of the whole image before an affine resample.",
+  "when_to_use": [
+    "Deskewing scanned text pages (OCR pre-processing, archival scanning) where the skew is small (default search +/-7 degrees) and throughput per page matters.",
+    "Pipelines already linking Tesseract, which depends on Leptonica, so the deskew, binarization and background-normalization calls cost no new dependency.",
+    "Batch document work on 1 bpp or grayscale images where you also need connected components, morphology, page segmentation or JBIG2-style classification from one library.",
+    "C or C++ projects that want a permissive (BSD-2-Clause), actively maintained, fuzzed library rather than shelling out to ImageMagick."
+  ],
+  "when_not_to_use": [
+    "Pages skewed by more than about 7 degrees: the default sweep misses them (maintainer in issues #622 and #644); widen sweeprange in pixDeskewGeneral at extra cost, and angles near 90 degrees fail because the method uses shears.",
+    "Photographs or images with many strong straight lines that are not text lines, which can mislead the projection score (maintainer in #644); the method assumes text baselines.",
+    "Resampling-quality or throughput work on natural images (resize, colour conversion): Leptonica has no SIMD paths in the files read, and the catalogued SIMD resizers and converters are the better pick.",
+    "Expecting the 30-40x figure to hold today: it is a 2014 anecdote against an ImageMagick binary launched as a subprocess, and OCRmyPDF, the project it was measured for, later dropped Leptonica (v13.0.0 release notes) for ABI and platform-loading reasons, computing the angle with Tesseract and rotating with Pillow instead."
+  ],
+  "integration": {
+    "form": "shared or static lib (CMake, autotools or sw); also packaged in vcpkg and most Linux distributions",
+    "dependencies": "none required; optional zlib, libpng, giflib 5, libjpeg, libtiff, libwebp (webpmux) and OpenJPEG for image formats (each switchable with a CMake ENABLE_* option)",
+    "min_toolchain": "C11 (CMAKE_C_STANDARD 11 required), CMake 3.10+",
+    "platforms": "Linux, macOS, MinGW, Cygwin, Windows per README; CI badges for CMake on Linux, Win64 and autotools on macOS; endian-independent",
+    "thread_safety": "README says thread-safe via atomic reference counting (C11 stdatomic l_atomic, falling back to plain int when atomics are unavailable); message severity (LeptMsgSeverity) and the stderr handler are process-global",
+    "drop_in_for_baseline": "partial — same job as convert -deskew but a C API (pixDeskew and friends) instead of a CLI flag; results differ (no auto-crop, different rotation filter, deskew skipped below 0.1 degree or low confidence)"
+  },
+  "gotchas": [
+    "pixDeskew and pixDeskewGeneral silently return an unrotated clone when the angle is under 0.1 degree, the confidence (max/min score ratio) is under 3.0, or the search fails; read the pangle/pconf outputs to tell 'no skew' from 'gave up'.",
+    "pixDeskewGeneral calls pixRotate with width and height 0, so the output keeps the input size and corner content rotated outside the frame is clipped, with white brought in; 1 bpp images rotate by shear, other depths by area mapping (colormaps removed).",
+    "Only binary images are scored: colour and gray input is thresholded at 160 by default (or adaptive with thresh -1, via pixFindSkewAdaptAndDeskew), so light-on-dark or inverted text can yield a wrong angle (maintainer in #622).",
+    "Error reporting goes to stderr through a global severity level; bindings such as OCRmyPDF's old ctypes/CFFI wrapper had to trap stderr and later needed a thread lock for Leptonica before 1.79 (OCRmyPDF v10.3.0 notes). Image-format parsers have had fuzzing CVEs (CVE-2020-36277 to 36281, fixed in 1.80.0, snippet only), so keep the library current when reading untrusted files."
+  ],
+  "pick_this_over_siblings_when": "Pick Leptonica over OpenCV, libvips or ImageMagick-class tools when the job is document-page skew detection and binarization, which it does in one call with a text-specific algorithm; pick OpenCV, libvips or the SIMD resizers such as fast_image_resize for natural-image resampling and colour conversion, where Leptonica has no measured advantage.",
+  "verified_claims_summary": "One third-party pull request (jbarlow83, OCRmyPDF PR #61, January 2014, never merged) reports Leptonica deskew '30-40x faster' than ImageMagick convert -deskew on its own, and 216 s versus 371 s (about 40% less) for deskew plus Tesseract OCR on 'a mixed bag of files', with no hardware, versions, file list or per-file times; the ImageMagick side was a separate convert process while Leptonica ran in-process through ctypes, and the two tools do different amounts of work (Leptonica scores reduced binary images, ImageMagick, in its current MagickCore/shear.c, a full-resolution Radon transform; the 2014 build's code was not read), so the ratio is algorithmic and unreproduced.",
+  "status_note": "Actively maintained (1.87.0 released 2025-12-24, 1.88.0 in progress, commits into October 2026), BSD-2-Clause, fuzzed in OSS-Fuzz per its README, and safe to depend on; the speed claim itself is a single 2014 anecdote.",
+  "sources_read": [
+    "https://github.com/DanBloomberg/leptonica",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/README.md",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/version-notes.html",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/src/skew.c",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/src/rotate.c",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/src/rotateshear.c",
+    "https://raw.githubusercontent.com/DanBloomberg/leptonica/HEAD/src/environ.h",
+    "https://github.com/DanBloomberg/leptonica/issues?q=is%3Aissue+skew",
+    "https://github.com/DanBloomberg/leptonica/issues/644",
+    "https://github.com/DanBloomberg/leptonica/issues/622",
+    "https://github.com/fritz-hh/OCRmyPDF/pull/61",
+    "https://github.com/jbarlow83/OCRmyPDF/blob/v15.4.0/docs/release_notes.rst",
+    "https://raw.githubusercontent.com/ImageMagick/ImageMagick/HEAD/MagickCore/shear.c",
+    "WebSearch: OCRmyPDF deskew leptonica removed release notes (snippets)",
+    "WebSearch: leptonica CVE heap buffer overflow fixed version (security-tracker.debian.org and mageia snippets only)"
+  ],
+  "confidence": 0.75
+}

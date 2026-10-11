@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/caryll/otfcc",
+  "one_liner": "Archived C library and CLI pair that dumps OpenType fonts to JSON and builds them back, claimed far faster than ttx and makeotf.",
+  "what_it_does": "otfccdump reads a TTF, OTF or TTC subfont and writes the whole font (glyf or CFF outlines, cmap, GSUB/GPOS/GDEF, name, hinting tables, CPAL/COLR/SVG and more) as one JSON document; otfccbuild reads that JSON and writes a binary font, with -O0 to -O3 controlling how much it rewrites (feature/lookup merging, CFF subroutinization, CID conversion). The C API mirrors this: otfcc_newOTFReader / otfcc_newJsonReader produce an otfcc_Font struct holding one pointer per table, and otfcc_newJsonWriter / otfcc_newOTFWriter serialize it. It replaces ttx-style dump/edit/rebuild pipelines, not a shaping or rasterizing engine.",
+  "how_it_is_fast": "It is compiled C with a JSON DOM (udp json-parser/json-builder), sds strings, uthash tables and a vendored fast double-to-string routine (dep/extern/emyg-dtoa), against ttx, which is pure Python and emits XML. The 900x build row rests mostly on its CFF Type 2 charstring subroutinizer (lib/libcff/subr.c), which runs the SEQUITUR (Nevill-Manning) grammar-inference algorithm over operator-level tokens in a single pass instead of a costly repeated-substring search; how makeotf subroutinizes was not read. Table writing goes through a block graph (lib/bk/bkgraph.c) that hashes and deduplicates identical subtables, orders them by height and copies blocks to untangle 16-bit offset overflows.",
+  "when_to_use": [
+    "Batch dump/patch/rebuild pipelines over many fonts or large CJK fonts where ttx's Python XML round trip takes minutes per file.",
+    "Producing a subroutinized CFF OTF from a font you already hold as JSON or binary, for example as the last step of a build that generates outlines programmatically and emits otfcc JSON.",
+    "Scripting font edits from any language that can read and write JSON, instead of linking a font-tooling library.",
+    "Embedding a small, dependency-free C font reader/writer under Apache-2.0 in a C or C++ build after hardening it yourself."
+  ],
+  "when_not_to_use": [
+    "Parsing fonts from untrusted sources: otfccdump has many 2022 fuzzing CVEs (heap out-of-bounds writes, CWE-787, CVSS 6.5, public PoCs) filed after the repo was archived, so none are fixed upstream.",
+    "When byte-exact or validator-clean round trips matter: issue #68 (rsms, 2020) reports Inter-Regular.otf grows and fails Font Book and OTS 7.1.7 validation after dump/build even at -O0 on master, and the maintainer replied the project had stalled; issue #58 reports added GPOS kerning on an older release.",
+    "Fonts with legacy kern tables, bitmap tables (issue #64) or variable-font building: kern is not processed (maintainer in #58) and variable support stayed alpha (v0.10.0-alpha dumps fvar/gvar).",
+    "Building fonts from UFO or feature-file (FEA) sources: otfccbuild only takes its own JSON, so it does not replace makeotf or fontmake for source compilation.",
+    "Any project that needs fixes or new OpenType features: archived 2022-06-04, last release v0.10.4."
+  ],
+  "integration": {
+    "form": "static lib (libotfcc plus a deps static lib) and two CLI tools; prebuilt Windows and macOS binaries on the releases page",
+    "dependencies": "none external; vendored json-parser, json-builder, sds, uthash and emyg-dtoa under dep/ and include/dep/; premake5 is needed to generate build files",
+    "min_toolchain": "C11 (gnu11); README recommends Clang/LLVM, GCC 5.1+ otherwise; Windows builds used Clang-CL via vs2015/vs2017 toolsets",
+    "platforms": "Linux, macOS, Windows; x64 and x86 build configurations (an arm64 macOS zip request, #71, was closed at archive time)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — same job as ttx (dump to text, rebuild) but JSON instead of TTX XML with a different schema, so ttx files and fontTools scripts do not carry over; not a makeotf replacement because it does not compile UFO or FEA sources"
+  },
+  "gotchas": [
+    "Dumped JSON is not always valid UTF-8 text per issue #51 (open): non-Windows name records holding legacy encodings break strict JSON readers such as Python json.load; the maintainer said they should come out as Base64, but the report was never closed.",
+    "otfccbuild -O2 and -O3 rewrite the font (merge features, drop glyph names via --short-post, subroutinize, force CID, ignore glyph order); use --keep-glyph-order or -O1 when glyph IDs must stay stable.",
+    "otfccdump holds the whole parsed font, the full JSON DOM and the complete output string in memory at once (src/otfccdump.c measures, callocs and serializes one buffer), so very large CJK fonts need several times the JSON size in RAM.",
+    "Offset overflow is silent: bk_untangleGraph gives up after 16 passes, and getoffset() in lib/bk/bkgraph.c has its 'Unable to fit offset' warning commented out and casts the distance before bufwrite16b, so an oversized GSUB/GPOS that cannot be untangled is written with wrapped 16-bit offsets instead of failing."
+  ],
+  "pick_this_over_siblings_when": "Pick otfcc over ttf-parser, Fontations (skrifa / read-fonts) or Typr.js when you must write fonts back out, not only read them: those siblings are read-side parsers with active maintenance and are the better choice for parsing untrusted fonts or extracting outlines. None of the siblings is a ttx-style full dump/rebuild tool, so otfcc has no direct catalogued competitor for that job.",
+  "verified_claims_summary": "The README alone states otfccdump is 4x faster than ttx (fontTools, Python) on CFF OTF and 40x on TTF, and otfccbuild 900x faster than Adobe makeotf for a fully optimized CFF OTF; no fonts, hardware, compiler, tool versions, -O level or timing method are given and the repo has no benchmark script, though both tools have a --time flag that logs per-step times, so the claims are easy to re-measure but unmeasured by anyone in public.",
+  "status_note": "Archived and read-only since 2022-06-04 (last release v0.10.4) with unfixed fuzzing CVEs and open round-trip bugs, so treat it as Apache-2.0 code to vendor and harden rather than a maintained dependency.",
+  "sources_read": [
+    "https://github.com/caryll/otfcc",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/README.md",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/premake5.lua",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/include/otfcc/font.h",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/include/otfcc/sfnt.h",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/src/otfccdump.c",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/src/otfccbuild.c",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/lib/libcff/subr.c",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/lib/libcff/subr.h",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/lib/libcff/charstring-il.c",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/lib/bk/bkgraph.c",
+    "https://raw.githubusercontent.com/caryll/otfcc/HEAD/LICENSE",
+    "https://github.com/caryll/otfcc/tree/master/lib",
+    "https://github.com/caryll/otfcc/tree/master/lib/libcff",
+    "https://github.com/caryll/otfcc/tree/master/lib/bk",
+    "https://github.com/caryll/otfcc/tree/master/dep/extern",
+    "https://github.com/caryll/otfcc/tree/master/include/dep",
+    "https://github.com/caryll/otfcc/issues?q=is%3Aissue",
+    "https://github.com/caryll/otfcc/issues/58",
+    "https://github.com/caryll/otfcc/issues/51",
+    "https://github.com/caryll/otfcc/issues/68",
+    "https://github.com/caryll/otfcc/releases",
+    "WebSearch: otfcc otfccdump CVE-2022 heap buffer overflow (opencve.io and stack.watch snippets only)"
+  ],
+  "confidence": 0.7
+}
