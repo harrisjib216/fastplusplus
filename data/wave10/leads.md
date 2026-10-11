@@ -71,3 +71,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - libigl PR 1895 (7x mesh_boolean, 14x remesh_self_intersections vs previous libigl) and a secondhand 6.8x over CGAL claim, paper unreachable.
 - libfacedetection fits autodiff-and-ml-kernels better than image-codecs (verifier to decide via category override).
 - Seed w10-mine-s (no evidence, all hosts blocked): Video++ paper (32x vs naive loops, perso.ensta-paris.fr), VTK Flying Edges, VLFeat vlSIFT, x265 speed; snippets only.
+- OpenCV 5.x DNN engine vs ONNX Runtime 1.25.1 (official wiki, ms per model, mixed wins, first-party): second claim folded into the OpenCV entry; retier lead if an independent run appears.
+- OpenH264: issues #2962 and #2067 show x264 faster; a snippet claiming OpenH264 4x faster looks reversed (its 54.7 s equals the x264 time in #2962). OpenVDB 2013 changelog 'order of magnitude faster than ZLIB' has no method (paper hosts blocked).
