@@ -1,0 +1,75 @@
+[
+  {
+    "id": "https://github.com/tmthrgd/go-memset",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party go test benchmarks (memset_test.go: BenchmarkMemset vs BenchmarkGoSet/BenchmarkGoZero) with README output and a benchcmp table, but no Go version, flags or CPU model, so not A; no independent measurement, so C.",
+    "corrections": {
+      "claimed_speedup": "README benchcmp table, non-zero fill (BenchmarkSet, Go fill loop vs Memset): 2.75x at 32 B, 11.13x at 128 B, 23.84x at 1k (545 ns vs 22.9 ns), peak 31.04x at 16k, 18.54x at 128k, 13.74x at 1M, 7.92x to 8.11x at 16M-512M (-63.68% to -96.78% ns/op). Zeroing (BenchmarkZero, Go's memclr-optimised loop vs Memset): slower at small sizes (0.54x at 32 B, 0.69x at 128 B, 0.84x at 1k), parity at 16k-1M, 1.18x to 1.22x faster at 16M-512M where the AVX path switches to non-temporal stores.",
+      "caveats": "Baseline is a plain Go loop, not libc memset; for zeroing the Go compiler already lowers the loop to runtime memclr, and Memset is slower than it below 16k. The README benchmark output was last updated on 2016-11-11 (README commit history), before the April 2018 commits that rewrote the assembly for go1.10 and moved CPU detection to x/sys/cpu, so the published numbers were measured on an older version of the code with a 2016 Go toolchain (sub-benchmarks imply Go 1.7+); no Go version, CPU model or flags are given (the -8 suffix is GOMAXPROCS=8). The amd64 assembly uses PSHUFB (SSSE3) for buffers of 16 bytes or more without checking for SSSE3; only AVX is detected. Large fills (16 MB and up) use VMOVNTDQ non-temporal stores, which bypass cache and can hurt a consumer that reads the buffer right after. The repository was archived by its owner on 2024-12-14 and the description says 'Not maintained'. Later Go toolchains may behave differently."
+    },
+    "notes": "README numbers and old/new column assignment check out (old = BenchmarkGoSet/GoZero, new = BenchmarkMemset); README even prints its own speedup column. Repo archived 2024-12-14, last commit 2019-09-04, BSD-3-Clause (Modified BSD LICENSE), 32 stars. Shortcomings: Go-loop baseline not libc, slower than Go's zeroing loop under 16k, numbers predate the 2018 assembly rewrite, no CPU or Go version, unchecked SSSE3.",
+    "urls_opened": [
+      "https://github.com/tmthrgd/go-memset",
+      "https://github.com/tmthrgd/go-memset/commits",
+      "https://github.com/tmthrgd/go-memset/commits/master/README.md",
+      "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/gofiber/utils",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party single-run go test numbers in the README from public benchmark code (simd/bench_test.go) on an unnamed 'AMD EPYC' with no exact Go toolchain version, so not A; no independent or peer-reviewed measurement, so C.",
+    "corrections": {
+      "baseline": "Go standard library, per simd/bench_test.go: bytes.Contains (bytes.Index) for Memmem; bytes.ContainsAny(data, \"zy\") and bytes.ContainsAny(data, \"zyx\") for Memchr2 and Memchr3 (a per-byte ASCII-set loop, not a vectorised search); the package's own scalar loops (memchr2Generic, memchr3Generic) and SWAR fallbacks as second baselines. bytes.IndexByte is deliberately not wrapped because the Go runtime already vectorises it.",
+      "claimed_speedup": "README amd64 table (go test ./simd/ -count=1): Memmem 4096 B 38.44 ns (simd) vs 921.5 ns (bytes.Contains), about 24x; 512 B 10.22 vs 119.8 ns, about 11.7x; 96 B 8.323 vs 20.11 ns, about 2.4x; slower up to 64 B (8 B 4.450 vs 3.551 ns). Memchr2 4096 B 26.22 ns vs 1572 ns for bytes.ContainsAny (about 60x) but vs 422.0 ns for the package's own scalar loop (about 16x); Memchr3 4096 B 35.38 vs 1620 ns ContainsAny (about 46x), vs 506.4 ns scalar (about 14x); IsASCII 4096 B 14.17 vs 46.72 ns SWAR (about 3.3x). All ratios derived from page data. README text also quotes benchstat -count=10 gains of -35% to -88% ns/op against the SWAR paths at 32-512 B.",
+      "compiler_and_flags": "Go toolchain version not stated (go.mod requires go 1.26.0, so 1.26 or later); go test ./simd/ -benchmem -run=^$ -bench=Benchmark_ -count=1",
+      "workload": "simd/bench_test.go: synthetic haystacks of 8-4096 B filled with the repeating bytes 'a'..'w', worst-case misses so every variant scans the whole input; Memchr2/Memchr3 search for 'z','y'(,'x'); Memmem searches for the needle \"q7z\" (8-4096 B); IsASCII, FirstNonASCII, CountNonASCII, MemchrPair, MemchrDigit, MemchrWord scans; each reported as simd, scalar/swar and default (stdlib) rows in ns/op.",
+      "caveats": "Baseline is the Go standard library, not glibc or musl. The 60x Memchr2 and 46x Memchr3 ratios are against bytes.ContainsAny, a per-byte ASCII-set loop with setup overhead (15.47 ns even at 8 B), not against a vectorised stdlib path; against the package's own scalar loop the gain is about 16x and 14x at 4096 B. The Memmem benchmark is favourable to the paired prefilter: two of the needle's three bytes ('7', 'z') never occur in the 'a'..'w' haystack, so the prefilter never produces a candidate while bytes.Index anchors on 'q' every 23 bytes; when the anchor byte is common the single-rare-byte path tracks or trails bytes.Index (Benchmark_Memmem_Prefilter 4096 B single 922.7 ns vs 863.5 ns stdlib), and the adversarial case is at parity. Numbers are one run (-count=1) on an unspecified EPYC model with an unstated Go 1.26+ toolchain and GOMAXPROCS=4; the README itself warns that small-input rows drifted up to 17% between runs. Per-commit benchmark charts live on gofiber.github.io (blocked here). The kernels are adapted from the coregx/coregex simd package (MIT, simd/LICENSE), so part of the design is upstream. Inputs under 32 bytes never reach the AVX2 kernels, and Memmem delegates to bytes.Index up to 64 bytes. AVX2 path is amd64-only."
+    },
+    "notes": "Numbers in the record match the README, but the Memchr2/Memchr3 'default' baseline is bytes.ContainsAny (scalar per-byte set lookup), which inflates the 60x figure; corrected baseline, claimed_speedup and caveats, and noted the favourable Memmem needle. MIT, 57 stars, last commit 2026-10-11, not archived. Shortcomings: weak ContainsAny baseline, synthetic best-case Memmem needle, single-run unnamed EPYC, slower below 32-64 B.",
+    "urls_opened": [
+      "https://github.com/gofiber/utils",
+      "https://github.com/gofiber/utils/commits",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/README.md",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/simd/bench_test.go",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/simd/simd_test.go",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/simd/LICENSE",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/gofiber/utils/HEAD/go.mod"
+    ]
+  },
+  {
+    "id": "https://github.com/gamesun/memcpy_fast",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party timings (memcpy_test() in memcpy_fast.c, results table in memcpy_fast_vs_memcpy.png) against the toolchain memcpy, with no compiler, flags, C library or MCU part stated, so C.",
+    "corrections": {
+      "claimed_speedup": "Results table (memcpy_fast_vs_memcpy.png, linked from the README), 10240-byte copies, times in microseconds: same alignment mod 8 but not 8-aligned (a=b=1,2,3,5,6,7) 121-122 us vs 640-641 us for memcpy, 5.25x-5.29x; both 8-aligned or 4-offset pairs (0,0 and 4,4) 121-122 vs 213 us, 1.75x-1.76x; (4,0) and (0,4) 161-162 vs 214 us, 1.32x-1.33x; other mismatched alignments 188-268 us vs 640-641 us, 2.39x-3.41x. The README's '1.3 to 5.2 times' slightly understates the top of the table (528.9% = 5.29x).",
+      "hardware": "Cortex-M4 STM32 microcontroller (memcpy_test uses the STM32 Standard Peripheral Library and TIM5 at a 1 MHz tick); part number, clock and memory region not stated.",
+      "compiler_and_flags": "Not stated; the C library providing the baseline memcpy (newlib, newlib-nano or a vendor libc) is also not stated.",
+      "workload": "memcpy_test() in memcpy_fast.c: for each destination offset a, source offset b and length offset c in 0-7, copy TEST_BUFF_SIZE (10240) + c bytes from an 8-byte-aligned static source to an 8-byte-aligned static destination with memcpy_fast and then with memcpy, timing each with TIM5 (1 us resolution) with interrupts disabled; memcpy_fast's result is checked with memcmp. The published table collapses c = 0-7 into one row per (a, b) pair.",
+      "caveats": "No compiler, flags, C library or MCU part are given, and the 10240-byte copy is the only size tested (no small copies, where the dispatch overhead matters). The baseline memcpy takes 640 us for any mismatched or odd alignment but 213 us when both pointers are 4-aligned (derived from page data), which looks like a size-optimised byte-loop memcpy such as newlib-nano's; a speed-optimised libc memcpy would narrow the gap. memcpy_unaligned4 dereferences misaligned long pointers, which is undefined behaviour in C and relies on Cortex-M4 tolerating unaligned LDR/STR; a compiler that merges those accesses into LDM/LDRD would fault, and the author works around this with a reverse-indexed loop. The code casts pointers to u32 (32-bit only) and includes a types.h that is not in the repository. GPL-3.0 is copyleft. Eleven commits in August 2020, no later activity."
+    },
+    "notes": "README range matches the PNG table (132.1% to 528.9%); the per-case numbers exist only in the image, now transcribed into claimed_speedup. GPL-3.0, 7 stars, 1 fork, last commit 2020-08-25. Shortcomings: unnamed compiler, flags, libc and MCU, single 10 KB size, baseline likely a size-optimised byte-loop memcpy, misaligned-pointer UB in the unaligned path.",
+    "urls_opened": [
+      "https://github.com/gamesun/memcpy_fast",
+      "https://github.com/gamesun/memcpy_fast/commits",
+      "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/README.md",
+      "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast.c",
+      "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast.h",
+      "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast_vs_memcpy.png"
+    ]
+  }
+]
