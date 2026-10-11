@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/restream/reindexer",
+  "one_liner": "Embeddable in-memory document database (C++ core, Go API) with secondary and full-text indexes; first-party benchmarks show 3-6x SQLite on indexed reads.",
+  "what_it_does": "Reindexer keeps every namespace (collection) fully in RAM and answers queries over indexed fields of Go structs, with persistence to LevelDB, joins, aggregations, full-text, vector (HNSW/IVF) and geometry indexes, replication and basic sharding. Applications use an ORM-like Go query builder or SQL strings; the C++ core is either linked into the Go binary through cgo ('builtin'), embedded with a server, or run as a standalone server reached over cproto/HTTP. It is not a drop-in for SQLite: queries only work on fields tagged as indexes, and the API is document-oriented rather than SQL tables.",
+  "how_it_is_fast": "Documents and indexes live in dense C++ structs outside Go's garbage collector, with about 32 bytes overhead per document plus 4-16 bytes per index, duplicate strings merged and sync.Pool-reused query buffers, so most queries allocate nothing. Indexed lookups go straight to per-field hash indexes (EQ/SET) or tree indexes (ranges, sorting) with no SQL parse or plan step on the builder path. On the Go side an optional object cache returns already-deserialized structs, and AllowUnsafe(true) hands back shared pointers into that cache, which is where the fastest benchmark rows come from. Writes to disk are batched asynchronously in the background.",
+  "when_to_use": [
+    "A Go service that needs microsecond-scale, in-process lookups by primary key or indexed fields on a data set that fits in RAM: single-core by-ID gets measured at 4,224 ns with full unmarshalling vs 23,735 ns for SQLite via go-sqlite3.",
+    "Read-heavy catalogue or metadata stores (the benchmark's 100K-document shape: id, name, year, description) that need filters, sorting, joins and full-text search in one embedded engine instead of SQLite plus FTS5.",
+    "Read-mostly workloads that can use the object cache with treat-as-immutable results, where by-ID gets drop to 2,530 ns with zero allocations.",
+    "You need to switch later from embedded to client-server without changing the query API (builtin, builtinserver and standalone modes share the Go interface)."
+  ],
+  "when_not_to_use": [
+    "Data larger than RAM: every namespace is loaded fully into memory and disk is only a LevelDB backup.",
+    "Write-heavy or durability-critical work: disk writes happen asynchronously in background batches, and in the vendor's own web table Redis (30,025 RPS) and Tarantool (33,905) beat embedded Reindexer (27,000) on updates.",
+    "Non-Go applications wanting an embedded library: the embedded path is the Go binding; Python and Java connectors exist, and the internal C++ API is documented as unstable.",
+    "Ad-hoc SQL over arbitrary columns or multi-statement transactions with fine-grained isolation: only indexed fields are queryable and each transaction takes an exclusive lock on its namespace."
+  ],
+  "integration": {
+    "form": "static lib (C++ core linked into a Go program through the builtin cgo binding) or standalone server with Go, Python and Java clients",
+    "dependencies": "CMake, LevelDB (snappy in the Go module); OpenMP and BLAS/LAPACK only for FAISS-based IVF vector indexes (HNSW-only build available)",
+    "min_toolchain": "C++20: g++ 10+, clang 15+ or mingw64; Go 1.24 for the v5 module",
+    "platforms": "Linux x86_64 packages (RHEL/CentOS/Fedora, Debian/Ubuntu, Redos, AltLinux), Windows 64- and 32-bit installers (32-bit HNSW-only), macOS from source; other architectures not documented",
+    "thread_safety": "Database handle usable from many goroutines (one binding multiplexes up to 32 simultaneous streams); Transaction objects are not thread safe; objects returned with AllowUnsafe(true) are shared and must not be modified",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Web table is not like for like: the benchmark server's main.go calls ForceObjCache() on the Reindexer repo, so every 'Reindexer Embeded/Standalone' web row serves shared pointers from the object cache while SQLite, MySQL and the others unmarshal every row; in addition the SQL repos call Preparex and Close on every HTTP request (each handler runs QueryByID(1, ...) and the like), so SQLite and MySQL recompile their statement per request. The readme discloses neither.",
+    "Single-core full-text rows are not like for like either: the Reindexer QueryFullText harness always sets AllowUnsafe(true) (object cache on, 109 B and 1 alloc per op) while SQLite StructScans every row, and the SQLite query adds ORDER BY rank (BM25 sort of all matches) over an FTS5 table that also indexes id, name and year; the 32x full-text figure is therefore not a fair engine comparison. The by-ID and 1-/2-condition 'object cache disabled' rows do unmarshal on both sides.",
+    "SQLite ran on disk, not in memory: repo/sqlite.go opens '/tmp/foo.db?mode=memory&cache=shared' without the 'file:' prefix, and go-sqlite3 v1.6.0 cuts the query string in that case (sqlite3.go line 859), so updates paid a synced rollback journal with a 5,000 ms busy timeout under 8 pooled connections, and sqlUpdate only logs errors, so failed updates still count as served requests. Reindexer itself persists asynchronously, so the 27,000 vs 452 update gap is mostly durability.",
+    "Smaller asymmetries: the SQLite by-ID benchmark draws one random id per benchmark call and re-reads it N times while Reindexer draws a new id per iteration (favours SQLite); Redis, Tarantool, MySQL and the other servers are reached over TCP while Reindexer embedded and SQLite run in-process; the harness imports an internal git.restream.ru module path, so it cannot be rebuilt as published."
+  ],
+  "pick_this_over_siblings_when": "Pick Reindexer over mpedb or LMDB when you want an in-memory document store with secondary, sorted and full-text indexes behind a Go query builder rather than a raw key-value or SQL interface; pick LMDB when data exceeds RAM or commits must be durable on return, and SQLite-replacement siblings such as mpedb when you need SQL semantics.",
+  "verified_claims_summary": "Restream's own Go benchmarks (Go 1.9.3, clang-802.0.42, 2016 MacBook Pro 2.7 GHz Core i7, 100K documents, one core) show Reindexer by-ID gets at 4,224 ns/op vs 23,735 for SQLite 3.17.0 through go-sqlite3 (5.6x) and 1-condition queries at 17,403 vs 60,749 ns/op (3.5x), with both sides unmarshalling; an 8-core wrk web test in Docker on the same laptop gives 158,797 vs 28,496 by-ID RPS, but there Reindexer serves from its object cache while SQLite unmarshals and re-prepares per request. The SQLite baseline ran on disk despite an in-memory DSN.",
+  "status_note": "Actively maintained (v5.17.0 on 2026-09-26, code arrives as periodic vendor drops plus a few community PRs), Apache-2.0 and production-used, but the benchmark repo has 2 commits, 2018-era database versions and harness asymmetries that favour Reindexer on the web and full-text rows.",
+  "sources_read": [
+    "https://github.com/Restream/reindexer",
+    "https://github.com/Restream/reindexer/commits/master",
+    "https://github.com/Restream/reindexer/issues?q=is%3Aissue+crash+OR+segfault+OR+performance",
+    "https://github.com/Restream/reindexer/pull/100",
+    "https://raw.githubusercontent.com/Restream/reindexer/HEAD/readme.md",
+    "https://raw.githubusercontent.com/Restream/reindexer/HEAD/cpp_src/readme.md",
+    "https://raw.githubusercontent.com/Restream/reindexer/HEAD/go.mod",
+    "https://github.com/Restream/reindexer-benchmarks",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/readme.md",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/init_test.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/bench_queries_test.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/bench_text_test.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/main.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/http.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/run_benches.sh",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/repo/sqlite.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/repo/sql.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/repo/reindex.go",
+    "https://raw.githubusercontent.com/Restream/reindexer-benchmarks/HEAD/repo/redis.go",
+    "https://raw.githubusercontent.com/mattn/go-sqlite3/v1.6.0/sqlite3.go"
+  ],
+  "confidence": 0.75
+}

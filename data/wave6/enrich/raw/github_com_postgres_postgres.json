@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/postgres/postgres",
+  "one_liner": "Client-server SQL RDBMS; one advocate's durability-off sysbench run beats MySQL 8.0's published point-select peak, not read-write.",
+  "what_it_does": "PostgreSQL is a full object-relational database server: SQL with transactions, foreign keys, subqueries, triggers, user-defined types and functions, reached by clients over a socket through libpq or a driver. It is not an embedded key-value library; it sits in this category only because wave 6 has no relational category. Against MySQL it is a replacement server, not a drop-in: SQL dialect, tooling and replication differ.",
+  "how_it_is_fast": "The quoted numbers come from tuning rather than a single algorithm: a 128 GB shared buffer pool holding the whole 95 GB point-select data set after pg_prewarm, heap tables rebuilt at fillfactor 75 so updates can stay on the same page (HOT updates), sysbench clients on the same host over a Unix socket, and WAL durability switched off (fsync, synchronous_commit and full_page_writes off, wal_level minimal, autovacuum off). Point selects are B-tree primary-key probes answered entirely from shared memory, which is why reads scale to about 2.33M QPS at 104 client threads on a 96-vCPU box.",
+  "when_to_use": [
+    "You need a general-purpose relational server and want read-heavy OLTP throughput: the pgtpc run reached about 1.37M point-select QPS with a standard production config and 2.33M with durability off on one c5d.metal.",
+    "Primary-key lookups over a working set that fits in shared_buffers (the pgtpc runs size shared_buffers at 128 GB of 192 GB RAM and prewarm the tables).",
+    "Many concurrent clients on a large multi-core host, where point-select throughput keeps rising up to about 104 client threads on 96 vCPUs before flattening.",
+    "You want SQL features (joins, constraints, extensions) and a permissive licence (PostgreSQL licence, BSD-style) rather than a key-value API."
+  ],
+  "when_not_to_use": [
+    "You need an embedded in-process key-value store: PostgreSQL needs a running server, a client protocol round trip per query and server tuning; the catalogue's real embedded baselines (SQLite, LMDB, RocksDB) were never measured against it.",
+    "Write-heavy OLTP is the deciding factor: in the same pgtpc table MySQL 8.0's published oltp_read_write figure (900,000 QPS) beats PostgreSQL's 722,907 at 48 threads, and PostgreSQL only reaches parity (910,554) at 128 threads.",
+    "Production deployments that copy the benchmark config: fsync off can cause unrecoverable corruption after a crash or power loss (PostgreSQL's own docs), and autovacuum off leads to bloat and eventually transaction-ID wraparound shutdown.",
+    "Workloads with thousands of short-lived connections and no pooler: each connection is a separate backend process (the benchmark caps max_connections at 256)."
+  ],
+  "integration": {
+    "form": "server application built from source (autoconf/make or Meson >= 0.57.2) or installed from distribution packages; clients link the libpq shared library or use a language driver",
+    "dependencies": "build: C11 compiler, flex, bison 2.3+, Perl 5.14+; readline (or libedit) and zlib by default; ICU, OpenSSL, LZ4 and zstd optional",
+    "min_toolchain": "C11 compiler (current master, version 20devel); the benchmarked 14.5 release needed only C99",
+    "platforms": "x86, ARM, PowerPC, S/390, SPARC, MIPS, RISC-V; Linux, Windows, macOS, FreeBSD, OpenBSD, NetBSD, DragonFlyBSD, AIX, Solaris, illumos",
+    "thread_safety": "multi-process server with one backend process per connection and shared memory between them; client-side thread safety depends on the driver (not documented in the pages read)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Point-select headline is not like for like: PostgreSQL's 50M x 8 tables (95 GB) were prewarmed into 128 GB shared_buffers, so the run is fully in memory, while MySQL's 1,050,000 QPS figure is from the '1M IO-bound QPS' Optane run by Dimitri of Oracle's MySQL performance team (dimitrik.free.fr) (storage saturated, per a WebSearch snippet of his slides; the blog is blocked here). The 1.73x win compares an in-memory run against an IO-bound one.",
+    "The published scripts do not reproduce as written: initdb creates /data/pg/data with LATIN1 and C locale, but the config is copied into and the server started from /data/pgtpcb; huge_pages is set to 'on' and later to 'try', and PostgreSQL uses only the last entry; the only prepare command shown builds 50M-row tables while the read_only, read_write and update runs pass --table_size=10000000, so those runs probably touched the first 10M rows of 50M-row tables.",
+    "Column labels are loose: 'PGSQL.48C' point select is the 64-thread result (48 threads gives 1,503,656 QPS, 1.43x), the 96C figures are 104- and 128-thread peaks, the MySQL table is headed 'TPS' though it lists QPS, and MySQL read_write is given as 780,000 ('39k/78W') on one page and 900,000 on another.",
+    "Both sides run with durability off (MySQL without checksum, doublewrite, binlog, PFS and fsync; PostgreSQL with fsync, synchronous_commit and full_page_writes off) on different machines (48 cores at 2.7 GHz with Optane versus 96 vCPU at 3.6 GHz with NVMe), so neither number describes a production server."
+  ],
+  "pick_this_over_siblings_when": "Pick PostgreSQL over the catalogued MySQL entry for read-heavy primary-key OLTP that fits in memory and for its licence and SQL feature set; stay with MySQL if a read-write mix at moderate concurrency is the bottleneck, and pick an embedded sibling such as LMDB, mpedb or Reindexer when you need in-process storage without a server.",
+  "verified_claims_summary": "Vonng's pgtpc ran sysbench against PostgreSQL 14.5 with a 'NOT FOR PRODUCTION' durability-off config on one AWS c5d.metal (96 vCPU, 192 GB, local NVMe; compiler and CPU model not stated) and compared the peaks with MySQL 8.0 numbers copied from blog runs by Oracle's MySQL performance team (dimitrik.free.fr) on a 48-core 2.7 GHz Optane machine: point select 1,814,404 vs 1,050,000 QPS, read_only 941,694 vs 920,000, update_non_index 269,233 vs 240,000, read_write 722,907 vs 900,000 (MySQL ahead). No same-machine run exists, and the point-select comparison sets an in-memory PostgreSQL run against an IO-bound MySQL one.",
+  "status_note": "Very actively maintained (commits on 2026-10-10, master at 20devel; the GitHub repo is a read-only mirror that takes no pull requests) and copyable under the BSD-style PostgreSQL licence, but the evidence is a single advocate's unlicensed 42-star benchmark repo last updated 2022-08-22, and the category (embedded-kv) does not fit a client-server RDBMS.",
+  "sources_read": [
+    "https://github.com/postgres/postgres",
+    "https://github.com/postgres/postgres/commits/master",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/README.md",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/COPYRIGHT",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/meson.build",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/doc/src/sgml/installation.sgml",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/doc/src/sgml/maintenance.sgml",
+    "https://raw.githubusercontent.com/postgres/postgres/HEAD/doc/src/sgml/config.sgml",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/HEAD/README.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/HEAD/sysbench/README.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/HEAD/sysbench/aws.c5d.metal.extreme.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/HEAD/sysbench/aws.c5d.metal.normal.md",
+    "https://raw.githubusercontent.com/Vonng/pgtpc/HEAD/sysbench/ref-mysql.md",
+    "WebSearch: dimitrik 1M IO-bound QPS MySQL 8.0 GA Intel Optane (snippets of https://lefred.be/wp-content/uploads/2019/02/MySQL_Tuning-Feb2019-dim.pdf, https://www.mysql.com/why-mysql/benchmarks/mysql/ and https://www.percona.com/blog/2018/07/13/on-mysql-and-intel-optane-performance/; dimitrik.free.fr, lefred.be and postgresql.org were unreachable)"
+  ],
+  "confidence": 0.6
+}
