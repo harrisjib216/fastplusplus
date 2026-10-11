@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/ccxvii/mujs",
+  "one_liner": "Small ISC-licensed ES5 bytecode interpreter in C for embedding; outscores goja, Boa and Jint on V8 v7, trails Duktape and QuickJS.",
+  "what_it_does": "MuJS (Artifex, the Ghostscript/MuPDF company) is an embeddable ES5 JavaScript interpreter of about 15,000 lines of C that builds from a single amalgamated one.c. The host drives it through a Lua-style C API: a js_State with a value stack, js_newcfunction/js_setglobal to expose C functions, js_dostring/js_pcall to run code, and userdata objects with finalizers. It is what mpv (meson dependency 'mujs') and MuPDF (Makethird) embed for scripting; it is not a drop-in for goja, Boa or Jint, which are Go, Rust and .NET libraries with their own host APIs.",
+  "how_it_is_fast": "Its lead over the Go, Rust and .NET interpreters comes from being a plain compiled-C switch-dispatched stack bytecode VM: 16-bit instructions, a tagged-union js_Value on a fixed 4096-slot value stack, interned strings, a dense 'flat' array part for simple arrays, and a stop-the-world mark-and-sweep collector that runs when allocations reach 5x the live set (JS_GCFACTOR 5.0). It does no JIT and has no hidden classes or inline caches: every property access is a strcmp walk of a per-object AA-tree (jsproperty.c), each opcode carries a line-number word, and the loop checks the GC counter on every instruction. That is why Duktape and QuickJS, also C interpreters, beat it.",
+  "when_to_use": [
+    "You need ES5 scripting inside a C or C++ application and binary size matters: the ubuntu CLI binary is 378.8 KB (about 180-260 KB for the library per the project docs), against 2.2 MB for QuickJS.",
+    "You want a permissive ISC licence, no build system (compile one.c with any C99 compiler) and no C++ runtime dependency.",
+    "Your scripts are glue that calls into C for heavy work; the docs describe a very fast C call-out path and recommend doing the heavy lifting in C.",
+    "You are replacing a Go, Rust or .NET JavaScript interpreter (goja, Boa, Jint) with a native one and only need ES5: MuJS scored 1.19x-1.48x goja and 1.56x-1.77x Boa on the V8 v7 suite.",
+    "You want the engine already shipped by mpv, MuPDF and the Debian/Ubuntu/openSUSE packages."
+  ],
+  "when_not_to_use": [
+    "Raw script throughput matters: Duktape scores 1.09x-1.61x and QuickJS 3.2x-3.5x higher on the same suite and runners, and any JIT engine is one to two orders of magnitude faster.",
+    "Your code uses ES2015 or later (let/const, classes, arrow functions, modules, Promises, BigInt): MuJS implements ES5 only.",
+    "GC- or allocation-heavy workloads: on ubuntu goja beats it on Splay (1074 vs 818), EarleyBoyer (666 vs 534) and RegExp (271 vs 251), and on macOS goja still wins Splay.",
+    "You run hostile scripts and need a hardened engine: the GitHub tracker lists heap-use-after-free (#209, GC during an Array.prototype.sort comparator), heap-buffer-overflows in jsarray.c (#207, #208) and Ap_sort_cmp (#193, #211), all on 1.3.x; earlier CVEs include CVE-2021-45005 (nested try/finally heap overflow in 1.1.3) and an O_getOwnPropertyDescriptor memory-corruption bug fixed in 1.3.2.",
+    "Deep recursion or large regex backtracking: the value stack is fixed at 4096 slots and the environment stack at 1024, and the backtracking regex matcher gives up past 1024 recursion levels."
+  ],
+  "integration": {
+    "form": "source-drop (single one.c amalgamation) or static/shared lib via make release",
+    "dependencies": "none beyond libc and libm (readline optional for the shell; regenerating utfdata.h needs python3 and the Unicode data files)",
+    "min_toolchain": "C99 compiler (Makefile uses -std=c99 -pedantic -O3); gcc, clang and MinGW-w64 all build it in the benchmark's CI",
+    "platforms": "any: Linux, macOS (arm64 tested), Windows via MinGW, Android/iOS and small boards per the docs",
+    "thread_safety": "not documented; all mutable state lives in js_State (the static sentinels in jsproperty.c and jsintern.c are read-only), so one state per thread with no sharing is the safe pattern",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Errors use setjmp/longjmp (js_try, js_pcall); a JavaScript exception or error unwinds straight through C++ frames without running destructors, and an error outside any protected call runs the panic handler and then abort() unless the panic function longjmps out.",
+    "A regex whose backtracking exceeds REG_MAXREC (1024) does not match slowly; js_regexec returns -1 and the script gets a thrown Error 'regexec failed'.",
+    "The GitHub repository is a stub since 2025-08-13 ('Migrate to Codeberg'); the 1.3.8 code measured here lives on codeberg.org/ccxvii/mujs, and many GitHub memory-safety issues (#206-#211) were closed as completed on 2026-03-31 with no linked commit, so check the Codeberg history for the fixes before pinning a version.",
+    "Allocation sizes are int (js_Alloc takes int size); arrays are capped at 64M entries (JS_ARRAYLIMIT) and strings at 256 MB (JS_STRLIMIT)."
+  ],
+  "pick_this_over_siblings_when": "Pick MuJS over Duktape when you want the smallest, simplest ES5 C engine with an ISC licence and a Lua-like stack API, and you can live with roughly 1.1-1.6x lower V8 v7 scores (Duktape won even when built -Os). Pick QuickJS instead when you need modern JavaScript or about 3x more interpreter throughput and can afford a 2 MB binary; pick MuJS over goja only when the host is C or C++ rather than Go.",
+  "verified_claims_summary": "On ahaoboy/js-engine-benchmark, a daily third-party GitHub Actions run of the V8 v7 suite (8 benchmarks, in-process timing after a warm-up, geometric-mean Score), MuJS 1.3.8 built with the stock Makefile (-O3, runner default cc) scored 435 / 522 / 339 on ubuntu / macos-arm64 / windows against goja 365 / 358 / 229, Boa 279 / 302 and Jint 246 / 239 / 159 (about 1.2-1.5x goja, derived from page data). The runners' CPU models and compiler versions are not stated, each engine runs once per day, and the same table puts Duktape (682 / 842 / 371) and QuickJS (1522 / 1672 / 1105) ahead of MuJS on every platform.",
+  "status_note": "Actively maintained by Artifex on Codeberg (1.3.8 is the version built in the benchmark's daily job; the GitHub mirror stopped at 2025-08-13), ISC-licensed and small enough to vendor as one C file, but treat it as unsafe for untrusted scripts given its steady stream of fuzzer-found memory-safety bugs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/README",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/Makefile",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/mujs.h",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/COPYING",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsi.h",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsrun.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jscompile.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsproperty.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsgc.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsintern.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsstate.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsvalue.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/regexp.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/jsregexp.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/main.c",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/docs/introduction.html",
+    "https://raw.githubusercontent.com/ccxvii/mujs/05cd646/docs/reference.html",
+    "https://github.com/ccxvii/mujs/commits",
+    "https://github.com/ccxvii/mujs/issues?q=is%3Aissue",
+    "https://github.com/ccxvii/mujs/issues/209",
+    "https://codeberg.org/ccxvii/mujs (blocked: proxy CONNECT 403)",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/scripts/update.ts",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/run.js",
+    "https://raw.githubusercontent.com/ahaoboy/js-engine-benchmark/HEAD/v8-v7/base.js",
+    "https://raw.githubusercontent.com/ahaoboy/mujs-build/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/mpv-player/mpv/master/meson.build",
+    "https://raw.githubusercontent.com/ArtifexSoftware/mupdf/master/Makethird",
+    "WebSearch: mujs CVE 2025 OR 2026 heap overflow Artifex mujs 1.3.8 (snippets from rapid7.com CVE-2021-45005, cvefeed.io CVE-2016-10133, db.gcve.eu CVE-2016-7564)"
+  ],
+  "confidence": 0.75
+}
