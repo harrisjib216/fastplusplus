@@ -1,0 +1,89 @@
+[
+  {
+    "id": "https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party vitest bench (src/tinymt.bench.ts) with public code and stated asc/em++ flags and Node 24.18.0, but no CPU model or OS anywhere, so not A; single-author repo, no independent measurement.",
+    "corrections": {
+      "compiler_and_flags": "AssemblyScript via asc ^0.28.20 with --optimizeLevel 3 --shrinkLevel 2 -b esm --enable simd --enable stringref --enable relaxed-simd --noAssert --converge (the Makefile's separate wasm-opt -O3 rule applies only to hand-written .wat files such as the unused main.wat demo, not to the asc output); C++ via em++ -O3 -Oz -lembind -std=c++20 (the later -Oz wins, so a size-optimised build); vitest bench on Node 24.18.0, TypeScript ~6.0.2; native comparison rows from clang++ -O3 -Oz -flto=thin with nanobench",
+      "caveats": "Single-author benchmark repo with no stated CPU or OS; no licence file, so code is reference only. Float comparison is inflated because the TypeScript temperConv allocates an ArrayBuffer, a Uint8Array and a DataView on every call (the author says so; a shared typed-array view would remove the allocation), where Wasm has a single reinterpret instruction. The C++ contender is size-optimised (-Oz overrides -O3) and every call goes through an embind-generated JS invoker, while the AssemblyScript exports are called directly, so the 1.08-1.12x AssemblyScript-over-C++ margin probably includes call-boundary overhead rather than codegen. The integer comparison is the fairer one (1.25-1.42x over TypeScript). Native x86 C++ is 2.4-3.4x faster than the best Wasm row on the same page. The README's native table at x10,000 lists 19,315.69 hz for AssemblyScript, which is the C++/Emscripten number (copy error). Evidence for AssemblyScript (already catalogued) rather than a library of its own."
+    },
+    "notes": "All claimed numbers (ints x10 and x10,000, floats x10,000 87x, sizes 1,260/3,568/36,445 bytes) match the README and the derived ratios are correct. Record wrongly said the AssemblyScript output also went through wasm-opt -O3; corrected. Shortcomings: no CPU/OS, no licence, TypeScript float path allocates per call, C++ baseline -Oz plus embind call overhead.",
+    "urls_opened": [
+      "https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark",
+      "https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark/commits",
+      "https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark/tree/main/src",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/README.md",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/Makefile",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/package.json",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/src/tinymt.bench.ts",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/src/rnd/tinymt.ts",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/src/wasm/tinymt.asm.ts",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/src/cpp/tinymt.cpp",
+      "https://raw.githubusercontent.com/matthewtolman/tinymt-wasm-typescript-benchmark/HEAD/src/cpp/main.cpp"
+    ]
+  },
+  {
+    "id": "https://github.com/teamchong/vectorjson",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party numbers from the project's own bench/ai-parsers/bench.mjs run in its GitHub Actions benchmark job (ubuntu-latest, Bun 'latest', CPU model not named), so code is public but CPU and runtime version are missing: C.",
+    "corrections": {
+      "compiler_and_flags": "zig build -Doptimize=ReleaseSmall for wasm32 with simd128 (Zig 0.15.2 in CI), then wasm-opt -Oz --enable-simd --enable-bulk-memory and others, JS bundled with bun build --minify; benchmarks run as 'cd bench/ai-parsers && bun --expose-gc bench.mjs' and 'bun --expose-gc bench/parse-stream.mjs' in the CI benchmark job with Bun 'latest' (unpinned); baselines pinned in bench/ai-parsers/package.json: @anthropic-ai/sdk 0.74.0, ai ^6.0.86, @tanstack/ai ^0.5.0, partial-json ^0.1.7",
+      "caveats": "The 14x-2028x streaming figures come from an algorithmic difference, not raw parse speed: the stock loop does buffer += chunk and re-parses the whole buffer into a fresh object graph on every 12-character chunk (O(n^2)), while VectorJSON's createParser().getValue() returns the same live object that a JavaScript byte-by-byte scanner (spScan in src/js/index.ts) extends in place, so per-chunk work and allocation differ by design; the bench comment saying getValue() re-parses the accumulated buffer with SIMD does not match the code, and no WebAssembly or SIMD contribution is isolated. Where a stock run is slow (warmup x 4 > 30 s, e.g. Anthropic SDK and OpenClaw at 100 KB) the stock time is a single cold warmup run, while VectorJSON is the median of 3 runs after 2 warmups. One-shot JSON.parse is much faster on small inputs (1 KB: 2.16M vs 1.37K ops/s) and still slightly faster at 500 KB-2 MB. Runtime is Bun (JavaScriptCore), not V8; first-party CI numbers, CPU not named, Bun version unpinned. The streaming engine is zimdjson (a Zig port of simdjson) vendored in deps/zimdjson. Fits a JSON-parsing category better than assemblyscript-and-wasm-langs."
+    },
+    "notes": "All claimed numbers match the README Benchmarks section (1 KB 14x/12x, 5 KB 31x/47x, 50 KB Anthropic 1255x, 100 KB 920x/2028x, one-shot 2.16M vs 1.37K ops/s). Metadata checked: Apache-2.0, 18 stars, 188 commits, last commit 2026-03-10, not a fork. Main shortcoming: the win is incremental O(n) live-object building versus O(n^2) re-parse, largely in JavaScript; the WebAssembly/SIMD part is not what the headline numbers measure, and category fit is weak.",
+    "urls_opened": [
+      "https://github.com/teamchong/vectorjson",
+      "https://github.com/teamchong/vectorjson/commits",
+      "https://github.com/teamchong/vectorjson/tree/main/src",
+      "https://github.com/teamchong/vectorjson/tree/main/src/js",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/README.md",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/bench/ai-parsers/bench.mjs",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/bench/ai-parsers/package.json",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/build.zig",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/package.json",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/.github/workflows/ci.yml",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/teamchong/vectorjson/HEAD/src/js/index.ts"
+    ]
+  },
+  {
+    "id": "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party benchmark.js (benchmark.js suite) with public code and build commands, but no CPU, OS or Node version stated: C.",
+    "corrections": {
+      "baseline": "JavaScript Number-based Collatz loop in Node (V8), and the same Rust function built as a native cdylib (cargo build --release, no LTO) called through ffi-napi 4.0.3",
+      "compiler_and_flags": "WASM: wasm-pack build --target nodejs --release, Cargo release profile lto = true, wasm-bindgen 0.2.92; FFI: cargo build --release (default profile, no LTO) loaded with ffi-napi ^4.0.3 and ref-napi ^3.0.3; benchmark ^2.1.4; Node version not stated",
+      "caveats": "Single-commit toy benchmark; no CPU, OS or Node version stated. The Collatz sequence for 670617279 takes 986 steps and peaks near 9.7e11, above the int32 range, so the JS version runs float64 % and / on heap numbers while the Rust version uses u64 integer ops, which probably explains much of the 45x gap. The 6.5x WASM-over-FFI result measures ffi-napi's per-call marshalling overhead (about 4.4 us per call versus about 0.7 us for the whole WASM call), not native versus WASM code quality; a N-API addon or an in-process native loop would be expected to beat WASM. The wasm wrapper converts the Number argument to BigInt on every call and returns a BigInt. Results are checked for equal step counts before timing. README gives speculative reasons for the win without profiling."
+    },
+    "notes": "README numbers match (JS 32,172, FFI 225,918, WASM 1,465,898 ops/sec; 45.6x and 6.5x derived correctly). MIT, 10 stars, 1 commit dated 2024-04-21, stale. Shortcomings: no hardware/runtime version, JS kernel forced into float64 math by the input size, FFI baseline dominated by ffi-napi call overhead.",
+    "urls_opened": [
+      "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node",
+      "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/commits",
+      "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/tree/main/wasm",
+      "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/tree/main/ffi",
+      "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/tree/main/js",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/README.md",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/benchmark.js",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/package.json",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/js/collatz.js",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/wasm/collatz.js",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/wasm/Cargo.toml",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/wasm/src/lib.rs",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/ffi/collatz.js",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/ffi/Cargo.toml",
+      "https://raw.githubusercontent.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node/HEAD/ffi/src/lib.rs"
+    ]
+  }
+]
