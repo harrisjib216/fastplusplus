@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/xtensor-stack/xtensor",
+  "one_liner": "Header-only C++ n-d arrays with NumPy-style broadcasting and lazy expressions; beats NumPy on SIMD transcendentals, loses on large reductions.",
+  "what_it_does": "xtensor gives C++ NumPy-like containers (xarray with dynamic rank, xtensor<T, N> with fixed rank, fixed-shape tensors), views, broadcasting and universal functions, plus adaptors over existing buffers; xtensor-python, xtensor-julia and xtensor-r wrap NumPy, Julia and R arrays in place. Expressions such as sin(a) + b are lazy and evaluate on assignment. It is a different API from NumPy (C++ only; a NumPy-to-xtensor cheat sheet exists), and linear algebra (dot, solve, decompositions) lives in the separate xtensor-blas package over BLAS/LAPACK, so it is not itself a BLAS.",
+  "how_it_is_fast": "Expression templates fuse a whole elementwise expression into one loop with no temporaries, and xt::noalias skips the aliasing temporary on assignment. With XTENSOR_USE_XSIMD the fused loop runs on xsimd batches (SSE through AVX-512, NEON), and transcendental functions use xsimd's Boost.SIMD-derived polynomial and rational kernels instead of scalar libm calls, which is where the 2-4x wins over NumPy on sin, cos, tan, hypot, log10 and atanh come from. Fixed-rank xtensor and fixed-shape containers keep shapes and strides on the stack, which the README says matters for speed. Optional TBB or OpenMP parallel assignment exists (XTENSOR_USE_TBB / XTENSOR_USE_OPENMP, mutually exclusive).",
+  "when_to_use": [
+    "Porting NumPy elementwise math to C++ while keeping broadcasting semantics, especially transcendental-heavy code (sin, cos, tan, log10, log1p, atanh, hypot were 2.0-3.7x faster than NumPy at 512x512 float64 in PR #2915)",
+    "Small arrays called in tight loops from C++, where NumPy's per-call Python overhead dominates (most 64x64 benchmarks were 1.1-4.7x faster, largely for this reason)",
+    "Operating in place on NumPy, Julia or R buffers from a C++ extension through xtensor-python, xtensor-julia or xtensor-r",
+    "Fixed-rank float64 work with known dimensionality, using xt::xtensor<T, N> and xt::noalias with xsimd enabled"
+  ],
+  "when_not_to_use": [
+    "Large reductions: at 512x512 xtensor lost 13 of 15 reduction benchmarks to NumPy (sum_all 0.45x, amax_all 0.22x, sum/mean/amin/amax/prod along axis 0 at 0.09-0.11x); only prod_all and prod_axis1 won; issue #2771 reports slow means over strided axes",
+    "When Eigen is an option for vectors and matrices: navigation2 issue #4237 measured a 2000x60 dot product at 5.36 ms in xtensor vs 0.76 ms in Eigen, and MPPI controllers 20-26% faster after porting to Eigen::Array; the README's 'match Eigen' claim has no published numbers",
+    "Exp-family functions: NumPy was faster on exp (0.92x), exp2 (0.83x), expm1 (0.77x) and cosh (0.55x) at 512x512",
+    "Mixed-precision or integer arithmetic: issue #2849 shows uint16 division by 2 about 19-37x slower than std::transform (integer promotion blocks the SIMD path; still open), and #2881 reports xsimd slower than scalar for mixed precision",
+    "Toolchains older than C++20: master and 0.27.x require C++20 (0.26.x C++17), so older compilers must pin an old release"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "xtl (>= 0.8.0); optional xsimd (CMake on master asks for 14.2.0 while the README table says ^13.2.0), TBB or OpenMP, nlohmann_json; xtensor-blas plus a BLAS/LAPACK for linear algebra",
+    "min_toolchain": "C++20 for 0.27.x and master (cxx_std_20), C++17 for 0.26.x, C++14 before 0.26.0; CMake 3.15+",
+    "platforms": "any C++20 target; SIMD via xsimd on x86 (SSE through AVX-512) and Arm NEON, scalar otherwise; conda-forge packages",
+    "thread_safety": "not documented beyond plain value semantics; separate containers can be used from separate threads, and opt-in TBB/OpenMP parallelizes assignment internally",
+    "drop_in_for_baseline": "partial: NumPy-like function names and broadcasting rules, but a C++ API; xtensor-python lets NumPy arrays be passed to C++ code written with it"
+  },
+  "gotchas": [
+    "PR #2915 harness flaw behind the headline: init_benchmark_data makes inputs shrink with size (0.5*j/(j+1) + sqrt(i)*9/cols), so every 512x512 input is below 0.90 while 76% of 64x64 inputs are at or above 1. xsimd's sinh returns from its polynomial kernel early when all lanes are below 1 and only otherwise runs the exp path, so the 9.43x sinh figure at 512 (0.63 ns per element, against 3.3 ns per element at 64) is an artifact of the input range, not of typical sinh workloads.",
+    "PR #2915 summary overstates the win count: its 34-of-46 tally is a geomean over 64x64, where every NumPy call pays PyObject_Call and np.sum wrapper overhead (np.sum takes 2978 ns at 64x64 vs 58006 ns for 64x the data at 512x512), and 512x512. At 512x512 alone (derived from page data) xtensor is faster on 23, within 5% on 6 and slower on 17. The harness also never checks that xtensor and NumPy return the same values, and xt::round (std::round, halves away from zero) is timed against np.round (halves to even).",
+    "SIMD is off unless XTENSOR_USE_XSIMD is defined before any xtensor header (or the CMake option is set); without it the transcendental wins disappear.",
+    "Accuracy under -ffast-math is unverified: open issue #2811 reports xt::cos returning wrong values with GCC 13 and -ffast-math (fine with GCC 11 or without the flag); xsimd's approximations were not compared against libm in the benchmark."
+  ],
+  "pick_this_over_siblings_when": "Pick xtensor over Eigen or Armadillo when you need NumPy semantics (n-d arrays, broadcasting, universal functions) or zero-copy work on NumPy buffers; for matrix and vector algebra and for reductions, Eigen is the measured-faster choice and Armadillo the simpler MATLAB-like one.",
+  "verified_claims_summary": "In open contributor PR #2915 (single laptop run, CPU model, compiler and NumPy version not reported, CPU scaling on, Google Benchmark cpu_time, single thread, xsimd on, -O3 -march=native), xtensor with xt::noalias into a preallocated float64 buffer beat NumPy (built from source, called with out= through embedded Python) by 1.4-3.7x on most transcendental ufuncs at 512x512 and by about 1.1x on add/multiply/divide, but lost every reduction except prod_all and prod_axis1 (2-11x slower) and the exp family. The 9.43x sinh headline comes from inputs that all fall under xsimd's |x| < 1 fast path.",
+  "status_note": "Active (QuantStack; last commit 2026-08-27, 384 open issues, 44 open PRs), BSD-3-Clause and header-only, so it is easy to vendor; the NumPy benchmark is still an unmerged, unreviewed PR, so treat its numbers as first-party and correct the record's sinh and 34-of-46 claims as described in gotchas (tier stays C).",
+  "sources_read": [
+    "https://github.com/xtensor-stack/xtensor",
+    "https://raw.githubusercontent.com/xtensor-stack/xtensor/HEAD/README.md",
+    "https://raw.githubusercontent.com/xtensor-stack/xtensor/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/xtensor-stack/xtensor/HEAD/environment-dev.yml",
+    "https://raw.githubusercontent.com/xtensor-stack/xtensor/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/xtensor-stack/xtensor/HEAD/benchmark/benchmark_stl.cpp",
+    "https://github.com/xtensor-stack/xtensor/pull/2915",
+    "https://raw.githubusercontent.com/Alex-PLACET/xtensor/78bcf9db3864fb71d0243992a4672c6321622be2/benchmark/benchmark_numpy.cpp",
+    "https://raw.githubusercontent.com/Alex-PLACET/xtensor/78bcf9db3864fb71d0243992a4672c6321622be2/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Alex-PLACET/xtensor/78bcf9db3864fb71d0243992a4672c6321622be2/tools/report_numpy_benchmarks.py",
+    "https://github.com/xtensor-stack/xsimd/tree/master/include/xsimd/arch/common",
+    "https://raw.githubusercontent.com/xtensor-stack/xsimd/HEAD/include/xsimd/arch/common/xsimd_common_trigo.hpp",
+    "https://raw.githubusercontent.com/xtensor-stack/xsimd/HEAD/include/xsimd/arch/common/xsimd_common_math.hpp",
+    "https://raw.githubusercontent.com/xtensor-stack/xsimd/HEAD/include/xsimd/arch/common/xsimd_common_details.hpp",
+    "https://github.com/xtensor-stack/xtensor/issues?q=is%3Aissue+is%3Aopen+slow+OR+performance+OR+wrong",
+    "https://github.com/xtensor-stack/xtensor/issues/2849",
+    "https://github.com/xtensor-stack/xtensor/issues/2811",
+    "https://github.com/ros-navigation/navigation2/issues/4237"
+  ],
+  "confidence": 0.7
+}
