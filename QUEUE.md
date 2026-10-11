@@ -97,9 +97,8 @@ The rewrite was built on the original spec, so its tier definitions, 15–25 cal
 
 ## Order
 
-1. **Seed-list mining, static lists** (section F): awesome-cpp (70 sections), awesome-c (55). Skip GUI, game,
-   book and tutorial sections. Seeds feed a backfill pass for every finished wave. No current entry came from
-   an awesome list, so yield should be real.
+1. **Seed-list mining, static lists** (section F): DONE 2026-10-11 (rounds 1 and 2: 152 groups, 266 verified, 637
+   no-evidence seeds; see CLAUDE.md Status). Remaining per-list leads are in each wave's leads.md.
 2. **Whole-stdlib decomposition** (end of section F): EASTL has only `eastl::vector` (tier C); ETL,
    micron.cpp, rpp, itlib, Coost, sfl are not catalogued.
 3. **Wave 13 — assembly-simd-kernels-and-wasm** (section D), seeded from the asm/wasm lists and GitHub topics.

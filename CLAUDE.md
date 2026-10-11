@@ -183,7 +183,42 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   enrich/raw files had the full 13-key set; shortcomings were taken from their gotchas and status_note fields,
   and only the 7 missing partners were relaunched (4 agents at a time after the reset).
 
-## Status (2026-10-06)
+- Backfill round 2 (2026-10-11): a seed record for a repo already verified in another wave must get a `paper:` id
+  before `merge.py` runs, else the merged copy adopts the old id and verify render silently skips it (icey,
+  Boost.Fiber, oneTBB); `adddec.py` refuses `paper:` ids until the merge has happened, so the order is set id in the
+  raw file, merge, record `duplicate`, then `verify.py render` (a render before the decision cut three wave-12
+  batches that had to be deleted and re-rendered). `addretier_w.py` likewise refuses an id until `verify.py apply`
+  has put it in verified.json. Category overrides that move an entry to another wave's category need a `domain`
+  override too, or render_lists.py shows the category under two domains. Enrichers keep finding harness defects the
+  verifier missed (re-keying on one side only, uninitialised buffers, cached pre-fix builds, single-threaded baselines
+  by harness default, GPU-vs-CPU decode asymmetry, degenerate zero-field workloads, cross-run comparisons); each
+  becomes a retier entry, and cross-run or no-valid-measurement cases go to D. 18-19 Opus agents at once ran for the
+  whole pass without a usage-limit kill on 2026-10-11. The stop hook asks to commit untracked files after every
+  turn while agents are writing; decline until each report is recorded.
+
+## Status (2026-10-11)
+
+- QUEUE extension 1 (seed-list mining, awesome-cpp and awesome-c, rounds 1 and 2) closed 2026-10-11: 152 seed groups
+  (`data/waveN/raw/wN-mine-*.json`, about 7 seeds each), 324 raw records, 266 verified (A 39, B 41, C 153, D 33; wave 1
+  68, wave 8 37, wave 11 26, wave 5 27, wave 4 28, wave 6 17, wave 10 18, wave 3 15, wave 12 11, wave 7 8, wave 9 6,
+  wave 2 5), 637 no-evidence seeds in `data/seeds/no_evidence/` rendered to SEEDS_NO_EVIDENCE.md (620 after dedup).
+  Lists: COPYABLE 2155, REFERENCE 210, REJECTED 36; tiers A 486, B 438, C 1309, D 132. Every verified entry is
+  enriched except RetroWrite (user hold). Round 2 (2026-10-11) ran under the user's order "searches and verifies
+  first, enrichment at the very end": 23 backfill groups (w10-mine-m to t, w11-mine-e to o, w12-mine-d to g), 26
+  verify batches (w7 54-55, w8 172-179, w9 67, w10 112-119, w11 56-62, w12 98-100), then one enrichment pass of
+  37 Opus pairs (73 entries across waves 5-12). Enricher-driven retiers from that pass: down PostgreSQL, MySQL and
+  ODB to D (cross-run comparisons), Crypto++ and Botan to D (harness UB; OpenSSL re-keyed per message), clBLAS to D,
+  ThreadPool to D (degenerate benchmark), GStreamer B to C (single-threaded FFmpeg baseline), Psi4 B to C, SHOGUN
+  B to C (unequal k-means work, later rewritten), PEGTL B to C (stale cached build), TensorFlow B to C (asymmetric
+  DLPerf harness), libfacedetection A to C (numbers predate PR #383), Box2D A to C, ONNX Runtime A to C, Ultimate++
+  A to C, Boost.Log B to C, OpenEXR A to B; up G3log B to A (Quill benchmark), Sophia D to C (Howard Chu gist),
+  MuJS C to B. Retier files: w5 retier-03, w6 retier-03/04, w7 retier-03, w8 retier-18, w9 retier-08, w10
+  retier-40, w11 retier-05, w12 retier-02. Second claims on already-listed repos (FFmpeg ffvp9, OpenCV DNN,
+  Boost.Fiber, icey, oneTBB parallel reduce, AngelScript, ChakraCore, pocketpy, QuickJS re-seeds) carry `paper:`
+  ids with decision `duplicate`. Domain overrides now keep every category inside one domain. Next: QUEUE
+  extension 2 (whole-stdlib decomposition), then waves 13-14.
+
+## Status (2026-10-06, kept for history)
 
 - Waves 1-12 are finished except the open items below. Lists after the 2026-10-07 backlog seed sweep: COPYABLE 1905,
   REFERENCE 202, REJECTED 34. The next open work is in QUEUE.md "Unfinished work" (wave 11 seed leads and the
