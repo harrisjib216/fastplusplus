@@ -148,3 +148,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - SeqAn: Rahn 2018 Bioinformatics, AnySeq arXiv 2002.04561, BMC s12859-018-2014-8 Table 1 (SeqAn ED 7.97 vs Parasail 0.69 GCUPS, snippet only) all blocked.
 - Enricher w8 pair-030 lead: Leon Bottou SGD/ASGD mirror https://github.com/npinto/bottou-sgd (LGPL-3.0, 34 stars, no README benchmarks).
 - Enricher w8 pair-036 leads (unchecked): GauXC (https://github.com/wavefunction91/GauXC, sn-LinK exchange), libcint (https://github.com/sunqm/libcint), NVIDIA-Omniverse/PhysX (successor of physx-3.4; repo_url override candidate).
+- Enricher w8 pair-044: mattmilten/mittelmann-plots holds scraped Mittelmann LP/QP/MIP data reachable via raw.githubusercontent.com, usable for solver retiers (HiGHS and COIN-OR Clp still uncatalogued; GLPK absent from Mittelmann since 2022).

@@ -1,0 +1,58 @@
+{
+  "id": "https://gnu.org/software/gsl",
+  "one_liner": "GNU's C numerics library; its Marsaglia-Tsang gamma sampler outran Boost.Random's Knuth-method gamma_distribution about 4x.",
+  "what_it_does": "GSL is a broad C library (special functions, linear algebra, FFT, integration, statistics, random numbers and about 40 distributions). For random variates you allocate a generator with gsl_rng_alloc(gsl_rng_mt19937 or taus, gfsr4, ranlux and others) and call samplers such as gsl_ran_gamma(r, a, b). It is a C function API, not a C++ distribution object, so it does not plug into <random> or Boost.Random engines.",
+  "how_it_is_fast": "gsl_ran_gamma uses the Marsaglia-Tsang (2000) squeeze-and-reject method: one normal and one uniform per attempt, a cheap polynomial squeeze that usually avoids the log, and shape a < 1 handled by boosting to a+1 and multiplying by u^(1/a). Its normals come from gsl_ran_gaussian_ziggurat, a 128-strip ziggurat that takes the strip index, sign and a 24-bit position from a single 32-bit draw for full-range generators. Boost.Random's gamma_distribution instead uses Knuth's Cauchy-proposal rejection for a > 1, which costs tan, exp, log and two square roots per attempt.",
+  "when_to_use": [
+    "C or C++ code that samples many gamma (or chi-squared, beta, Dirichlet) variates and currently uses Boost.Random's gamma_distribution, which still uses Knuth's tan()-based rejection on Boost develop.",
+    "You want one stable C API covering many distributions and the rest of a numerics stack (special functions, CDFs and inverse CDFs, integration), and GPL-3.0 linking is acceptable.",
+    "You need reproducible, named generators (mt19937, taus, ranlxd1/2) selectable at run time through GSL_RNG_TYPE and GSL_RNG_SEED.",
+    "Multi-threaded Monte Carlo with one gsl_rng per thread: the docs say functions keep no static state."
+  ],
+  "when_not_to_use": [
+    "You already use libstdc++'s std::gamma_distribution: it also uses Marsaglia-Tsang (with polar-method normals), so GSL's only possible edge there is ziggurat normals, and no measurement of that was found.",
+    "Bulk throughput matters: every draw goes through a function pointer (gsl_rng_get calls r->type->get) and nothing is vectorized; SIMD samplers such as EigenRand or Zest's ziggurat are built for speed.",
+    "Proprietary or permissively licensed code: GPL-3.0-or-later, so linking makes the combined work GPL.",
+    "Tiny shapes (a well below 1): the u^(1/a) boost underflows to exactly 0.0 for a large share of draws (with a = 0.001, any u below about 0.47), outside the distribution's support; this is derived from the code, not measured.",
+    "You need modern evidence: the only speed number is a 2011 Boost bug-ticket timing seen through search snippets."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools; ampl/gsl adds a CMake build)",
+    "dependencies": "none; ships its own reference CBLAS (libgslcblas), which can be swapped for an optimized CBLAS at link time; ampl/gsl's default CMake build also wants the AMPL ASL submodule unless -DNO_AMPL_BINDINGS=1",
+    "min_toolchain": "C compiler (autotools); ampl/gsl CMake needs CMake 3.11+",
+    "platforms": "any (portable C)",
+    "thread_safety": "Functions keep no static variables; use one gsl_rng (and workspace) per thread. A few globals (error handler, range checking, gsl_rng_default) must be set once at startup (doc/usage.rst).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default error handler prints the message and calls abort() (err/error.c); call gsl_set_error_handler_off() or install your own handler in library code.",
+    "gsl_ran_gamma does no parameter checking (source comment 'assume a > 0'): a <= 0 returns garbage or 0 with no error.",
+    "Gaussian draws from gsl_ran_gaussian_ziggurat carry only 24 bits of position within a strip, and speed depends on the generator's range: below 2^32 it takes two draws, below 2^24 it calls gsl_rng_uniform_int twice.",
+    "gsl_ran_gamma_knuth (the old default before GSL 1.9) is still in the library; make sure you call gsl_ran_gamma (alias gsl_ran_gamma_mt) to get the fast method."
+  ],
+  "pick_this_over_siblings_when": "Pick GSL over Zest or EigenRand when you want a plain-C, GPL-compatible library that covers dozens of distributions plus CDFs and inverse CDFs and you can live with scalar speed. Zest (ziggurat gamma, about 2.5x over the STL) and EigenRand (SIMD) target raw sampling throughput, and Randompack reports about 15x over C++ std <random> on uniform draws.",
+  "verified_claims_summary": "A 2011 Boost trac ticket (#6135, search snippets only) timed 100 million gamma draws: GSL about 22.3 million/s against Boost.Random gamma_distribution's 5.4 million/s (about 4.1x), and about 1.6x after the reporter's Marsaglia-Tsang patch. The compiler, flags, CPU, Boost version, generator and shape parameter are unknown. The source confirms the algorithms: Boost develop still uses Knuth's method while GSL uses Marsaglia-Tsang with ziggurat normals.",
+  "status_note": "GPL-3.0-or-later, GSL 2.8 (configure.ac AC_INIT 2.8) is the current release mirrored by ampl/gsl (639 stars, CMake and AMPL bindings, actively repackaged); upstream savannah git and gnu.org were unreachable, so the upstream commit date is unknown. The 2011 ticket's explanation of the remaining gap (Boost's Box-Muller normals) is obsolete, because Boost's normal_distribution now uses a ziggurat; the 4.1x figure for unpatched Boost still matches the current code path for a > 1.",
+  "sources_read": [
+    "https://github.com/ampl/gsl",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/README",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/NEWS",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/randist/gamma.c",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/randist/gausszig.c",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/randist/gauss.c",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/rng/gsl_rng.h",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/err/error.c",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/doc/usage.rst",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/doc/rng.rst",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/doc/randist.rst",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ampl/gsl/HEAD/BUGS",
+    "https://raw.githubusercontent.com/boostorg/random/develop/include/boost/random/gamma_distribution.hpp",
+    "https://raw.githubusercontent.com/boostorg/random/develop/include/boost/random/normal_distribution.hpp",
+    "https://raw.githubusercontent.com/boostorg/random/develop/include/boost/random/exponential_distribution.hpp",
+    "https://github.com/boostorg/random/issues?q=gamma",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc++-v3/include/bits/random.tcc"
+  ],
+  "confidence": 0.35
+}

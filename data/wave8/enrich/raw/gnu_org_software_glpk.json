@@ -1,0 +1,73 @@
+{
+  "id": "https://gnu.org/software/glpk",
+  "one_liner": "GNU's plain-C LP/MIP solver with MathProg modelling; ranks ahead of lp_solve but far behind HiGHS and Clp.",
+  "what_it_does": "GLPK is a callable C library (glpk.h: glp_create_prob, glp_load_matrix, glp_simplex, glp_exact, glp_interior, glp_intopt) plus the glpsol command-line solver for linear and mixed-integer programs. It reads MPS, CPLEX LP and GNU MathProg (an AMPL subset) models, so it doubles as a small modelling system. Its API is its own; it is not a drop-in for lp_solve's lprec interface.",
+  "how_it_is_fast": "Revised primal and dual simplex with projected steepest-edge pricing, Harris' two-pass ratio test and an optional long-step (bound-flipping) dual ratio test (GLP_RT_FLIP), on an LU basis factorization with Forrest-Tomlin or Schur-complement updates (bflib). An LP presolver, a primal-dual interior-point method with AMD ordering, and a branch-and-cut MIP solver with Gomory, MIR, cover and clique cuts plus feasibility-pump and proximity heuristics complete it. The edge over lp_solve comes from these standard techniques; there is no parallelism or SIMD.",
+  "when_to_use": [
+    "You use lp_solve or need a free embeddable LP/MIP solver, and GPL-3.0 linking is acceptable: GLPK beat lp_solve in every third-party table seen (about 3.8-4.3x on Mittelmann-derived 2019 tables, about 1.5x on ALGLIB's NETLIB set).",
+    "Small to medium LPs and easy MIPs where solve time is not the bottleneck and a dependency-free C library is worth more than top speed.",
+    "Models written in GNU MathProg or AMPL-like syntax that you want to solve from the glpsol CLI without a commercial modelling system.",
+    "You need an exact rational-arithmetic simplex (glp_exact, with GMP) to certify an optimal basis.",
+    "Browser or Node use through the Emscripten build (glpk.js) or a vendored source tree (igraph ships GLPK 5.0 in vendor/glpk)."
+  ],
+  "when_not_to_use": [
+    "LP speed matters: GLPK sits about 5x behind HiGHS and about 20-26x behind Clp on the same 2019 tables, and Mittelmann's current LPopt benchmark (29 Apr 2026: COPT 1.00, HiGHS 13.07, CLP 27.38) no longer includes GLPK at all.",
+    "Hard MIPs or large instances that need multithreading: the solver runs single-threaded and was reported (Sandia 2013, snippet only) unable to match Clp or CPLEX.",
+    "Proprietary or permissively licensed products: GPL-3.0-or-later, so linking makes the combined work GPL.",
+    "Large LPs through the interior-point path: glp_interior is a basic primal-dual method, and in 5.0 the QMD ordering is a stub that aborts.",
+    "You need an actively developed project: 5.0 (Dec 2020) is still the release every packager ships, there is no public repository, and GCC 15 needs a downstream patch."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools build of the GNU tarball); also a source-drop (igraph vendors src/ with its own CMake)",
+    "dependencies": "none required; optional GMP (exact simplex; Homebrew and conda-forge build --with-gmp), zlib, libltdl/dlfcn, ODBC and MySQL drivers for MathProg tables; bundles copies of SuiteSparse AMD/COLAMD and MiniSat (Debian and msys2 patch these out)",
+    "min_toolchain": "ANSI C compiler; GCC 15's default C23 mode breaks on minisat.h's 'typedef int bool' unless patched (msys2 0005-fix-build-with-gcc-15.patch, igraph's own fix)",
+    "platforms": "any: POSIX autotools, Windows (w32/w64 MSVC build files, mingw-w64 via msys2), every Julia Yggdrasil target, WebAssembly via Emscripten (glpk.js)",
+    "thread_safety": "The global environment pointer (env/tls.c) is thread-local only if the TLS macro is defined at build time; then independent problems can be solved in separate threads, one glp_prob per thread. The 4.60 autotools config.h.in defines no TLS; whether 5.0's configure enables it by default was not checked (configure.ac for 5.0 was unreachable).",
+    "drop_in_for_baseline": "partial — not API-compatible with lp_solve (glp_prob/glp_simplex vs lprec); models move between them through files such as MPS, or the model-building code is rewritten"
+  },
+  "gotchas": [
+    "Any detected error, including an invalid control parameter, prints a message and calls abort() (env/error.c); only a glp_error_hook that longjmps out keeps the host process alive.",
+    "Defaults are conservative: glp_init_smcp selects the primal simplex with presolve off and msg_lev GLP_MSG_ALL (terminal output). Switch to GLP_DUALP and enable presolve before comparing speed, and note that the benchmark tables do not say which settings they used.",
+    "GLPK 5.0 replaced the QMD ordering routines (misc/qmd.c) and glp_gridgen with stubs that call xerror ('temporarily disabled due to licensing problems'), so ord_alg = GLP_ORD_QMD aborts; glp_netgen_prob was removed but left in the Windows .def file (conda-forge patch).",
+    "Numbers behind the lp_solve ratio are shifted geometric means in which unsolved instances count at the time limit, and lp_solve solved fewer instances (23 vs GLPK's 31 in October 2019, snippet only), so part of the gap is robustness rather than per-instance speed."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued siblings, SCS (first-order conic, no basic solution) and the QP solvers PIQP, QPALM and ProxQP solve continuous problems only; pick GLPK when you need simplex basic solutions, integer variables or MathProg models in a small C library. For pure LP speed, look at HiGHS or Clp, which are not catalogued yet.",
+  "verified_claims_summary": "HiGHS-team slides (Hall, INFORMS 2019), drawn from Mittelmann's simplex benchmark, give GLPK a relative time of 24-28 against lp_solve's 92-112 (about 3.8-4.3x), and ALGLIB's 90-problem NETLIB run puts GLPK about 2x and lp_solve about 3x behind the leaders (about 1.5x). All of this comes from search snippets: no solver versions, settings, compiler or hardware were seen, and the slides note that HiGHS presolve and crash were off while Clp used its Idiot crash.",
+  "status_note": "GPL-3.0-or-later; GLPK 5.0 (16 Dec 2020) is still what Homebrew, conda-forge, msys2 and Julia Yggdrasil package in 2026, with no public repository and a GCC 15 build patch needed downstream. The evidence is snippet-only and stale: Mittelmann's LP benchmarks have not included GLPK since at least the December 2022 snapshot in the mittelmann-plots archive.",
+  "sources_read": [
+    "https://github.com/firedrakeproject/glpk",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/README",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/NEWS",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/config.h.in",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/w64/config_VC",
+    "https://raw.githubusercontent.com/firedrakeproject/glpk/HEAD/src/env/error.c",
+    "https://github.com/igraph/igraph/tree/master/vendor/glpk",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/README",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/glpk.h",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/glpk_tls_config.h",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/env/tls.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/env/env.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/env/env.h",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/simplex/spxprim.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/simplex/spydual.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/CMakeLists.txt",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/draft/glpapi06.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/draft/glpapi08.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/misc/qmd.c",
+    "https://raw.githubusercontent.com/igraph/igraph/master/vendor/glpk/minisat/minisat.h",
+    "https://raw.githubusercontent.com/conda-forge/glpk-feedstock/HEAD/recipe/meta.yaml",
+    "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/g/glpk.rb",
+    "https://raw.githubusercontent.com/JuliaPackaging/Yggdrasil/HEAD/G/GLPK/build_tarballs.jl",
+    "https://raw.githubusercontent.com/msys2/MINGW-packages/HEAD/mingw-w64-glpk/PKGBUILD",
+    "https://raw.githubusercontent.com/msys2/MINGW-packages/HEAD/mingw-w64-glpk/0005-fix-build-with-gcc-15.patch",
+    "https://raw.githubusercontent.com/msys2/MINGW-packages/HEAD/mingw-w64-glpk/0004-no-embedded-suitesparse.patch",
+    "https://raw.githubusercontent.com/jvail/glpk.js/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jvail/glpk.js/HEAD/.gitmodules",
+    "https://github.com/mattmilten/mittelmann-plots",
+    "https://raw.githubusercontent.com/mattmilten/mittelmann-plots/master/mittelmann_plots.py",
+    "https://raw.githubusercontent.com/mattmilten/mittelmann-plots/master/docs/index.md",
+    "https://raw.githubusercontent.com/mattmilten/mittelmann-plots/master/docs/lpopt-14-Dec-2022.html"
+  ],
+  "confidence": 0.4
+}
