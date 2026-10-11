@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/snaewe/loki-lib",
+  "one_liner": "Alexandrescu's 2001 policy-based std::basic_string clone; only evidence is an anecdotal 5-10% Boost.Wave speedup.",
+  "what_it_does": "flex_string<E, Traits, Alloc, Storage> re-implements the C++03 std::basic_string interface on top of a pluggable storage policy, so one typedef swaps the string type in existing code. Shipped policies are SimpleStringStorage (malloc/realloc), AllocatorStringStorage (the default, std::allocator), VectorStringStorage (wraps std::vector), SmallStringOpt<Storage, N> (in-object buffer up to 126 chars) and CowStringOpt<Storage> (reference-counted copy-on-write). The repo is a GitHub mirror of the SourceForge Loki library; flex_string is a set of headers under include/loki/flex/.",
+  "how_it_is_fast": "There is no single algorithmic trick: the speed argument is that you pick the storage layout per workload. SimpleStringStorage grows with realloc (can extend in place, which std::allocator cannot), SmallStringOpt avoids heap allocation for short strings, and CowStringOpt makes copies O(1) by sharing a buffer whose reference count is stored in the buffer's first character. Character moves use memcpy/memmove and fills use a Duff's-device loop (flex_string_details.h). Boost.Wave's reported gain came from its default CowString<AllocatorStringStorage<char>> configuration, i.e. cheap copies of token strings.",
+  "when_to_use": [
+    "Maintaining legacy C++03 code (or Boost.Wave-era code) that already uses flex_string and you need to understand or tune its storage policy.",
+    "Copy-heavy, single-threaded workloads such as token or symbol strings that are copied far more often than mutated, where a COW policy saves allocations.",
+    "Studying or teaching policy-based design: each storage policy is a few hundred lines and the interface contract is documented at the top of every policy header.",
+    "Experiments that need a custom string layout (arena-backed, fixed-size SSO threshold, malloc/realloc growth) without writing the full basic_string surface yourself."
+  ],
+  "when_not_to_use": [
+    "Any new C++11-or-later code: flex_string has no move constructor or move assignment, so std::move, vector<flex_string> reallocation and swaps through generic code fall back to deep copies (or refcount traffic) where std::string moves in O(1).",
+    "C++20 builds with std::allocator: the Loki copy reads A::reference, A::pointer, A::const_pointer and calls A::allocate(n, hint), all removed in C++20; Boost.Wave had to patch exactly this (boostorg/wave PR #72, 2020) and the Loki mirror has not changed since 2013.",
+    "Strings shared across threads with CowStringOpt: the reference count is a plain unsigned char/short in the buffer, incremented and decremented without atomics, so concurrent copies of one string are a data race.",
+    "Workloads built from many small appends (s += \"ab\" in a loop): Storage::append reserves exactly size()+n, so with the default AllocatorStringStorage every append that overflows reallocates and copies the whole string (quadratic); only push_back doubles capacity.",
+    "Search-heavy code: find(const char*, pos, n) calls traits::compare at every position and find(char) is implemented as a 1-character compare per position, with no memchr first-character skip as in libstdc++."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (the rest of Loki needs src/*.cpp for SmallObj, Singleton and OrderedStatic, but flex_string does not)",
+    "min_toolchain": "C++03; README lists GCC 3.4-4.1 and MSVC 7.1/8.0; the Loki copy does not compile as C++20 with std::allocator (removed allocator members)",
+    "platforms": "any (portable C++, no intrinsics)",
+    "thread_safety": "Not documented. Separate strings are independent; CowStringOpt shares buffers with a non-atomic in-buffer reference count, and c_str() (a const member) writes the terminating zero into the buffer, so concurrent const access is formally a data race.",
+    "drop_in_for_baseline": "partial — C++03 std::basic_string interface only: no move semantics, none of the C++11 members (pop_back, front, back, shrink_to_fit), data() is not guaranteed null-terminated (only c_str() writes the terminator), and const at(n) accepts n == size() instead of throwing."
+  },
+  "gotchas": [
+    "CowStringOpt keeps the reference count in the first element of the buffer, typed as the unsigned variant of the character type (unsigned char for char), so after 255 sharers a copy silently becomes a deep copy; the count is not atomic.",
+    "data() returns the buffer without writing a terminator; only c_str() writes E() at pEnd_, so passing data() to C APIs reads whatever byte follows the string.",
+    "AllocatorStringStorage computes its allocation in bytes and passes byte counts to A::allocate(1 + (sz-1)/sizeof(E)) but A::deallocate(p, bytes), which mismatches for wchar_t under sized deallocation; Boost.Wave also hit gcc 11 -Wfree-nonheap-object warnings on the shared emptyString_ sentinel (boostorg/wave issue #159).",
+    "The SmallStringOpt threshold is capped at 126 characters by a compile-time check, and its size/flag byte lives in the last buffer slot, so sizeof(flex_string) grows with the threshold."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you specifically want a C++03 policy-based string (COW, realloc growth or tunable SSO behind one interface); FastString and MengRao/str have measured wins over a modern std::string with numbers you can reproduce, and buffet or to_static_string cover the narrower append and number-formatting cases.",
+  "verified_claims_summary": "The only number is second-hand: Hartmut Kaiser told the author that dropping flex_string (in Boost.Wave's default copy-on-write configuration) into the Boost.Wave preprocessor made it 5-10% faster depending on input, against an unstated 2001-2005 era std::string, with no compiler, hardware or benchmark code; the doc page itself says no performance comparison suite exists, and the repo's test/flex_string/main.cpp is a randomized correctness comparison against std::string with no timing.",
+  "status_note": "Abandoned since 2013 (last mirror commit 2013-08-06, README last updated 2005, one open unrelated issue); permissively licensed (Alexandrescu notice, Loki MIT, BSL-1.0 copy in Boost.Wave) and small enough to vendor, but the maintained copy is Boost.Wave's boost/wave/util/flex_string.hpp, which carries C++20 and warning fixes the Loki mirror lacks.",
+  "sources_read": [
+    "https://github.com/snaewe/loki-lib",
+    "https://github.com/snaewe/loki-lib/issues?q=is%3Aissue",
+    "https://github.com/snaewe/loki-lib/tree/master/test/flex_string",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/doc/flex/flex_string.html",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/README",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/flex_string.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/flex_string_shell.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/flex_string_details.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/simplestringstorage.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/allocatorstringstorage.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/vectorstringstorage.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/smallstringopt.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/include/loki/flex/cowstringopt.h",
+    "https://raw.githubusercontent.com/snaewe/loki-lib/HEAD/test/flex_string/main.cpp",
+    "https://raw.githubusercontent.com/boostorg/wave/HEAD/include/boost/wave/util/flex_string.hpp",
+    "https://raw.githubusercontent.com/boostorg/wave/HEAD/include/boost/wave/wave_config.hpp",
+    "https://github.com/boostorg/wave/issues?q=flex_string",
+    "https://github.com/boostorg/wave/pull/72",
+    "https://github.com/boostorg/wave/pull/46",
+    "https://github.com/boostorg/wave/issues/159"
+  ],
+  "confidence": 0.75
+}

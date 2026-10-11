@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/taocpp/pegtl",
+  "one_liner": "Header-only C++ PEG parser-combinator library; its JSON grammar validates 1.7-5.5x faster than nlohmann::json::accept in lexy's benchmark.",
+  "what_it_does": "PEGTL lets you write a Parsing Expression Grammar directly as C++ types (struct integer : seq< opt< sign >, plus< digit > > {}) and run it with tao::pegtl::parse< Grammar, Action >( input, states... ). There is no generator step or separate lexer: rules, user actions attached by template specialization, control classes, parse-tree building and inputs (memory views, files, mmap, streams) are all library templates. It is a general parsing toolkit, not a JSON library; the measured JSON grammar ships as an example grammar.",
+  "how_it_is_fast": "Each grammar rule is a type with a static match() function, so a grammar compiles into a hand-written-style recursive-descent parser that the optimizer inlines; the docs say it relies on the compiler for performance and should always be built with inlining enabled. Rules declare a rewind mode so sub-rules can drop their backtracking guards when the caller does not need rewinding, and plain inputs skip line/column bookkeeping. There is deliberately no packrat memoization; the authors argue simple recursive descent usually beats it in practice.",
+  "when_to_use": [
+    "Writing a parser for a custom text format, DSL, config or protocol in C++ without a code-generation step (Bison/ANTLR) and without Boost.",
+    "Syntax validation or event-style parsing where you attach actions only to the rules you care about and never build a DOM.",
+    "Projects that want a long-lived, BSL-1.0 dependency with released versions, sanitizer and CodeQL CI, and coverage of Linux, macOS, Windows and Android.",
+    "Reusing one grammar with different action sets (validate, extract, build a parse tree) through template specialization."
+  ],
+  "when_not_to_use": [
+    "JSON specifically: on the same lexy benchmark page it is slower than rapidjson SAX, lexy and glaze on all three files (glaze 3.1-4.4x faster, derived from page data); use a dedicated JSON library.",
+    "Grammars that backtrack heavily: there is no memoization (packrat request #35 closed wontfix), so worst-case cost depends entirely on how the grammar is written; the docs tell you to factor out common prefixes.",
+    "Untrusted deeply nested input with the default setup: rules recurse on the C++ stack and depth is unbounded unless you opt into the depth limiter (limit_depth in 3.x, check_depth with input_with_depth on main).",
+    "Debug or -O0 builds where parser speed matters, and MSVC builds that dislike large object files (the install guide warns /bigobj is often needed).",
+    "Codebases that cannot absorb API churn: 4.0.0 (2026-06-07) replaced memory_input/string_input, made parse_error a template and dissolved contrib/, and main is already an unreleased 5.0 requiring C++20."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (ICU optional for Unicode property rules; RTTI used for demangling on compilers other than GCC, Clang and MSVC)",
+    "min_toolchain": "main (5.0, unreleased): C++20, GCC 11, Clang 13, Visual Studio 2022; 4.x and 3.x branches: C++17; 2.x: C++11",
+    "platforms": "Linux, macOS, Windows, Android; architecture-independent (no SIMD or intrinsics)",
+    "thread_safety": "not documented; grammars are stateless types and per-run state lives in the input and the state objects you pass to parse()",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers: lexy's benchmarks/json/pegtl.cpp includes tao/pegtl/contrib/json.hpp, constructs pegtl::memory_input and catches the non-template pegtl::parse_error, but PEGTL main dropped memory_input in the input refactor (commit 71e1807, 2023-12-13) and had a templated parse_error by 7ab5fa0 (2025-08-04, the last main commit before the page's 2025-10-13 regeneration); the CMake fetches PEGTL main.zip, so the PEGTL column must come from a cached pre-December-2023 download, the measured version is unknown, and the harness no longer builds as published.",
+    "Unequal work against the baseline: nlohmann::json::accept still converts every floating-point token to a double (and, in older versions, every integer), while PEGTL's json::text only checks number syntax, which plausibly explains much of the 5.5x gap on float-heavy canada.json; nlohmann's current develop lexer has since added accept-only shortcuts (discard_number_values, contiguous bulk number scanning), so the ratios are stale.",
+    "Parse errors are exceptions by default (global failures from must<>, if_must<>, raise<> and the try_catch rules); -fno-exceptions is supported but those rules are unavailable and file I/O errors call std::perror and std::terminate, so validate-only code typically catches parse_error_base (4.x and later) or parse_error (3.x).",
+    "Text inputs track line and column with selectable eol strategies (rule, scan or lazy tracking); plain view/file inputs do not, so choose the input type deliberately when error positions or speed matter."
+  ],
+  "pick_this_over_siblings_when": "Choose PEGTL over lexy when you value a 2007-era, widely used library with semver releases and a large rule, action and parse-tree toolkit over raw speed; lexy validated the same JSON files 1.6-2.2x faster on the same page. Against re2c, PEGTL is a full PEG parser rather than a lexer generator; winnow and chumsky are the Rust counterparts.",
+  "verified_claims_summary": "In lexy's nanobench JSON validation benchmark on a 2020 M1 Mac Mini (compiler, flags and build type unstated, 11 samples per series), PEGTL's JSON grammar over an in-memory buffer took 3.65/2.37/1.41 ms on canada/citm_catalog/twitter.json versus 20.20/6.60/2.42 ms for nlohmann::json::accept (5.5x/2.8x/1.7x, derived from page data). The PEGTL version measured is unknown (pre-December-2023 main), and PEGTL itself publishes no benchmarks; the maintainers declined to provide performance data in issue #261.",
+  "status_note": "Actively maintained (4.0.0 released 2026-06-07, 5.0 in progress on main, 2.2k stars, one open issue) under BSL-1.0 and safe to depend on, but pin a release tag since main breaks APIs and requires C++20.",
+  "sources_read": [
+    "https://github.com/taocpp/PEGTL",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/README.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/README.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Rules-and-Grammars.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Inputs-and-Parsing.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Changelog.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Migration-Guide.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Install-Guide.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Control-Reference.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/doc/Extra-Reference.md",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/main/include/tao/pegtl/example/json.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/3.x/include/tao/pegtl/contrib/json.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/3.x/include/tao/pegtl/contrib/limit_depth.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/71e1807/include/tao/pegtl/inputs.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/7ab5fa00104eae6c050b9b5c3852c797f6968921/include/tao/pegtl/inputs.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/7ab5fa00104eae6c050b9b5c3852c797f6968921/include/tao/pegtl/internal/inputs.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/7ab5fa00104eae6c050b9b5c3852c797f6968921/include/tao/pegtl/parse_error.hpp",
+    "https://raw.githubusercontent.com/taocpp/PEGTL/7ab5fa00104eae6c050b9b5c3852c797f6968921/include/tao/pegtl/contrib/json.hpp",
+    "https://github.com/taocpp/PEGTL/commits/main/include/tao/pegtl/contrib/json.hpp",
+    "https://github.com/taocpp/PEGTL/commits/main/include/tao/pegtl/memory_input.hpp",
+    "https://github.com/taocpp/PEGTL/commits/main/?until=2025-10-13",
+    "https://github.com/taocpp/PEGTL/issues?q=is%3Aissue+performance",
+    "https://github.com/taocpp/PEGTL/issues/261",
+    "https://github.com/taocpp/PEGTL/issues/35",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/docs/content/benchmark_json.adoc",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/benchmarks/json/pegtl.cpp",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/benchmarks/json/nlohmann.cpp",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/benchmarks/json/main.cpp",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/foonathan/lexy/HEAD/benchmarks/json/CMakeLists.txt",
+    "https://github.com/foonathan/lexy/commits/main/benchmarks/json/pegtl.cpp",
+    "https://raw.githubusercontent.com/nlohmann/json/develop/include/nlohmann/detail/input/lexer.hpp",
+    "https://raw.githubusercontent.com/nlohmann/json/develop/include/nlohmann/detail/input/parser.hpp"
+  ],
+  "confidence": 0.75
+}
