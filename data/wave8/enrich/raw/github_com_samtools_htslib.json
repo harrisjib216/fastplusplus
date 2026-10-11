@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/samtools/htslib",
+  "one_liner": "C library for SAM/BAM/CRAM/VCF/BCF I/O; 5x faster BAM read-write and 13x faster BAM-to-SAM than Samtools 0.1.19 at 16 threads.",
+  "what_it_does": "HTSlib is the reference C implementation of the GA4GH sequencing formats (SAM, BAM, CRAM, VCF, BCF) plus BGZF block-gzip, tabix/CSI/BAI indexes and the bgzip and tabix tools; samtools and bcftools are built on it. The API is format-agnostic: hts_open/sam_open returns an htsFile, sam_hdr_read and sam_read1 fill a bam1_t, sam_itr_queryi gives indexed region iterators, and hts_set_thread_pool attaches worker threads. It is not a drop-in for Samtools 0.1.19's libbam API; the paper describes it as grown out of that code with a new interface.",
+  "how_it_is_fast": "BAM and bgzipped VCF/SAM are sequences of independently DEFLATE-compressed blocks of at most 64 KB (BGZF), so HTSlib farms block (de)compression out to a shared thread pool (hts_tpool) whose ordered process queues keep output in sequence; SAM text parsing/formatting, CRAM slice encode/decode and index building also run in the pool. Builds probe for libdeflate, which the project's own Sep 2019 benchmark shows reading a BAM 1.79x faster than zlib 1.2.11 on one core. CRAM 3.1 uses the htscodecs codecs (rANS Nx16 with SSE4.1/AVX2/AVX-512 variants chosen at configure time, fqzcomp qualities, a read-name tokeniser), and NEWS lists many targeted speedups (nibble2base SIMD on x86 and ARM, kputll, SAM header parsing).",
+  "when_to_use": [
+    "Any C or C++ program that reads or writes BAM, CRAM, SAM, VCF or BCF: it is the reference implementation, and bindings exist for Python (pysam), Perl, R and Rust.",
+    "Throughput-bound BAM/CRAM pipelines on multi-core machines: give the file a shared thread pool so BGZF or CRAM slice (de)compression scales with cores.",
+    "Random access by genomic region through BAI/CSI/TBI/CRAI indexes, including remote files over HTTPS, S3 and GCS when built with libcurl.",
+    "Writing compact archives: CRAM 3.1 (the default since 1.22) stores the project's 10M-read NovaSeq set in 176 MB versus 515 MB of default BAM, encoding in 5.4 s versus 9.2 s wall at 8 threads, though decoding takes 1.9 s versus 0.8 s (Apr 2025 benchmark page, Skylake Xeon)."
+  ],
+  "when_not_to_use": [
+    "Parsing untrusted CRAM or BCF with an old release: 1.23.1 (Mar 2026) fixed ten CRAM-decoder CVEs (CVE-2026-31962 to 31971) and 1.24 (Jul 2026) removed CRAM v4 and tightened BCF checks after further advisories; pin 1.24 or later.",
+    "Single-threaded BAM writing at default or high levels with plain zlib: BAM level 9 encode costs 1661 CPU-seconds versus 61.7 at the default on the NovaSeq set, and without libdeflate compression is roughly 2x slower.",
+    "Seeking in multi-threaded SAM text input: NEWS says the threaded SAM reader does not support seeks and drops back to single-threaded mode for iterator range requests.",
+    "Generic file I/O or archive handling: it only speaks genomics formats and BGZF; the filesystems-and-io siblings (liburing, libarchive) are the tools for anything else."
+  ],
+  "integration": {
+    "form": "static lib (libhts.a) and shared lib, built with autoconf/configure and GNU make; also bundled inside pysam and other bindings",
+    "dependencies": "zlib (required); libbz2 and liblzma required by default (--disable-bz2/--disable-lzma, at the cost of reading some CRAM files); optional libdeflate (probed and used if found), libcurl (HTTPS/S3/GCS), libcrypto (S3 on non-macOS); htscodecs as a git submodule or external library",
+    "min_toolchain": "C compiler such as gcc or clang (README: compatible with gcc, g++ and clang); GNU make; autoconf, autoheader and autoreconf when building from git",
+    "platforms": "Linux, macOS and Windows via MinGW64/MSYS2 (CI on all three); x86 SIMD rANS paths need SSE4.1, AVX2 or AVX-512 detected at configure time, with scalar fallbacks",
+    "thread_safety": "Internal worker threads via hts_set_threads (per-file) or the recommended shared hts_tpool (hts_set_thread_pool); sharing one htsFile between caller threads is not documented in the headers read, so use one handle per thread",
+    "drop_in_for_baseline": "partial — samtools commands keep their names and file formats, but the C API differs from Samtools 0.1.19's libbam, so programs linking the old library need porting"
+  },
+  "gotchas": [
+    "The headline 5x/13x compares 16-thread HTSlib with Samtools 0.1.19, which (per a snippet of the 'Twelve years of SAMtools and BCFtools' paper) only threaded sorting and BAM writing, so the BAM-to-SAM gain is largely multi-threaded decoding; per-core speedup, hardware, compiler and dataset are not visible (the paper full text was unreachable; a bioRxiv snippet says chromosome 1 of one ENA run with HTSlib 1.10.2-32-ga22a0af, HTSJDK 2.22.0, Sambamba 0.7.1 and Scramble 1.14.13).",
+    "Performance depends on build options: libdeflate is used only if found at configure time, and with it BGZF levels 1-9 are remapped onto libdeflate's 1-12 scale, so file sizes differ from zlib builds (Sep 2019 page: level 6 BAM 6.53 GB with libdeflate vs 6.50 GB with zlib).",
+    "Pipe-fed bgzip lost about 26% throughput in 1.17-1.19 (issue #1767: 351 to 260 MiB/s at -@ 128 on a 64-core EPYC) because pipes reported a 4 KB preferred block size; PR #1768 raised the input block size. Issue #1869 (open) asks for a way to disable the periodic hflush during multi-threaded writes.",
+    "README says HTSlib depends only on zlib, but INSTALL makes libbz2 and liblzma required unless disabled, and git checkouts need the htscodecs submodule; setting a thread pool on an htsFile twice is rejected since 1.23.1."
+  ],
+  "pick_this_over_siblings_when": "None of the filesystems-and-io siblings handles sequencing formats: pick HTSlib for BAM/CRAM/VCF/BCF and BGZF, and reach for liburing or SPDK only when the bottleneck is raw block I/O beneath it; libarchive covers generic archives, not BGZF random access by index.",
+  "verified_claims_summary": "The peer-reviewed GigaScience 2021 paper (abstract reproduced in the README) reports HTSlib-based tools running a BAM read-write loop 5x faster and BAM-to-SAM 13x faster than Samtools 0.1.19, both at 16 threads, with no hardware or compiler visible from here. A separate first-party page in samtools/www.htslib.org (Sep 2019, Intel Core i5-4570 named in the page source, compiler not stated, data file not public) shows libdeflate inside HTSlib reading a BAM in 43 s versus 77 s with zlib 1.2.11 (1.79x) and rewriting BAM at level 6 with 4 threads in 1m20s versus 3m12s (2.4x), both derived from page data.",
+  "status_note": "Very active (release 1.24 on 9 Jul 2026, commits through 8 Oct 2026, OSS-Fuzz harness added), MIT/Expat outside cram/ and 3-clause BSD inside it; the de facto standard library for these formats, with a steady stream of 2026 security fixes for malformed CRAM, BCF and index input.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/samtools/htslib/develop/README.md",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/NEWS",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/INSTALL",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/LICENSE",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/configure.ac",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/htslib/hts.h",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/htslib/bgzf.h",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/htslib/thread_pool.h",
+    "https://raw.githubusercontent.com/samtools/htslib/develop/htslib/sam.h",
+    "https://github.com/samtools/htslib/commits/develop",
+    "https://github.com/samtools/htslib/issues?q=is%3Aissue%20slow%20OR%20performance",
+    "https://github.com/samtools/htslib/issues/1767",
+    "https://github.com/samtools/htslib/issues/1780",
+    "https://github.com/orgs/samtools/repositories",
+    "https://raw.githubusercontent.com/samtools/www.htslib.org/master/benchmarks/zlib.md",
+    "https://raw.githubusercontent.com/samtools/www.htslib.org/master/benchmarks/CRAM.md",
+    "https://www.htslib.org/benchmarks/zlib.html (ENOTFOUND)",
+    "https://eprints.gla.ac.uk/254019/1/254019.pdf (ENOTFOUND)",
+    "https://www.ebi.ac.uk/europepmc/webservices/rest/search (ENOTFOUND)",
+    "WebSearch snippets: bioRxiv 10.1101/2020.12.16.423064 and 'Twelve years of SAMtools and BCFtools' (not opened)"
+  ],
+  "confidence": 0.75
+}

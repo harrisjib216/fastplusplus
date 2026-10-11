@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/rafat/wavelib",
+  "one_liner": "Plain C wavelet library (DWT, SWT, MODWT, packets, CWT); its WebAssembly build beats pure-JS discrete-wavelets by 82-154x on wavedec.",
+  "what_it_does": "A BSD-3-Clause C library covering 1-D and 2-D decimated DWT/IDWT, stationary (SWT) and maximal-overlap (MODWT) transforms, wavelet-tree and best-basis packet transforms (WTREE, DWPT), and a CWT translated from Torrence and Compo. The API is object-style C: wave_init(\"db4\") builds the filter bank, wt_init(wave, \"dwt\", N, J) allocates a transform object, dwt(wt, x) fills wt->output plus a per-level length[] array, and idwt(wt, out) inverts from that same object. It is not a drop-in for anything; the flatironinstitute/wasmlets npm package wraps it with a PyWavelets-style wavedec/waverec for JavaScript.",
+  "how_it_is_fast": "Nothing exotic: the default 'direct' path evaluates the decimated filter only at every second output position with periodic or symmetric extension handled inline per tap (dwt_per_stride / dwt_sym_stride in wtmath.c), computing the low-pass and high-pass outputs in the same loop instead of convolving fully and then downsampling. An optional FFT convolution path uses the library's own mixed-radix plus Bluestein FFT (hsfft.c), and the CWT is FFT-based. The code is scalar, single-threaded C with no SIMD or OpenMP; the measured 82-154x gap is compiled C (as WebAssembly) against a pure-JavaScript implementation, not an algorithmic advantage.",
+  "when_to_use": [
+    "You need DWT, SWT, MODWT or wavelet packets from plain C (or C++ via extern \"C\") with a permissive licence and no dependencies beyond libm.",
+    "Browser or Node.js code that needs a 1-D wavedec/waverec without loading Pyodide: through wasmlets it runs 1M-sample db2/db4 decompositions in 13-23 ms versus 2.0-2.6 s for the pure-JS discrete-wavelets package.",
+    "Embedded or small builds where vendoring a handful of .c files is preferable to depending on PyWavelets, GSL or a C++ template library.",
+    "MODWT on signals of arbitrary length (orthogonal wavelets only), following Percival and Walden."
+  ],
+  "when_not_to_use": [
+    "Continuous wavelet transforms where speed matters: fCWT's README (MacBook Pro 2019 i9) shows wavelib slowest of all tested CWTs, 45.04 s at 100k samples x 3000 scales against PyWavelets 12.69 s and fCWT 0.32 s.",
+    "As a faster PyWavelets: in the same WebAssembly benchmark PyWavelets under Pyodide decomposes faster at every size (up to 1.5x on 1M db4) and reconstructs faster on 1M db4.",
+    "Library code that must not terminate the host: invalid wavelet names, too many levels or a bad extension string call printf and exit(-1) (56 exit calls in wavelib.c alone).",
+    "Very large inputs: buffer sizes are computed in int and none of the ~120 malloc results in wavelib.c is checked; issue #19 (open) reports a null-pointer write in modwt2 on a 23000x30000 image.",
+    "As an FFT library: the category is a loose fit; the internal FFT exists only to serve convolution and CWT and has no published comparison against FFTW, PocketFFT or KissFFT."
+  ],
+  "integration": {
+    "form": "static lib (CMake builds libwavelib and libwauxlib) or source-drop of the src/*.c files",
+    "dependencies": "none beyond the C standard library and libm; the default BUILD_UT=ON also builds a C++ unit-test target",
+    "min_toolchain": "C compiler accepting zero-length trailing arrays (params[0], a GNU/MSVC extension); CMake 3.5+ (issue #41, opened Oct 2026, reports configure failure with CMake 4.5, no details yet); Emscripten for the wasmlets build",
+    "platforms": "any (portable scalar C; WebAssembly via wasmlets)",
+    "thread_safety": "not documented; each transform object holds mutable state (output buffer, FFT convolution object), so use one wt_object per thread; no file-scope mutable state seen in the sources read",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Error handling is printf plus exit(-1) throughout (bad wavelet name, J above the maximum level, unknown extension or convolution method), so a malformed argument terminates the calling process instead of returning an error code; wrappers must validate inputs first.",
+    "Allocation sizes such as siglength*(J+1) are int arithmetic and no malloc result is NULL-checked; large 2-D inputs can overflow or dereference NULL (issue #19, modwt2/swt2 on 23000x30000).",
+    "idwt only reads coefficients left in the object by a prior dwt(); there is no public setter, so wasmlets patches wt->output and wt->length through a helper its own comments call 'not an official part of the wavelib API'. SWT additionally requires the signal length to be a multiple of 2^J.",
+    "Benchmark harness notes (flatironinstitute/web-wavelets-benchmarking src/benchmark.ts): wasmlets and PyWavelets round trips are checked against each other to 1e-6, but discrete-wavelets output is never checked and its waverec is disabled because it hangs; wasmlets and discrete-wavelets use the same PyWavelets max-level formula and symmetric mode, so levels match; the runner CPU is not recorded and the systemInfo label says wasmlets 0.0.3 while package.json pins ^0.0.6. No correctness bug was found behind the numbers."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued siblings only fCWT overlaps, and it is far faster for CWT; pick wavelib when you need decimated or undecimated discrete transforms (DWT, SWT, MODWT, packets), which fCWT does not provide. The FFT siblings (PocketFFT, PFFFT, KFR and others) are better choices for plain FFTs.",
+  "verified_claims_summary": "A third-party CI benchmark by the wasmlets authors ran wavelib compiled with emcc -O3 --closure 1 on Node.js 18 (GitHub Actions ubuntu-latest, CPU not recorded), averaging each op over a 1000 ms loop: db2/db4 wavedec at 100k and 1M samples took 1.28-22.94 ms versus 162-2573 ms for the pure-JS discrete-wavelets package (82-154x, derived from page data). Against PyWavelets compiled to WebAssembly under Pyodide it is slower on all four decompositions (e.g. 22.94 vs 14.93 ms at 1M db4) and faster on three of four reconstructions; it wins every row only when PyWavelets pays JS-to-Python marshalling per call.",
+  "status_note": "Maintained at a low rate by one author (last commits 2025-12-12 fixing a modwt_fft leak and the CMake minimum; open CMake 4.5 configure issue from October 2026); BSD-3-Clause, dependency-free and small enough to vendor, but its exit-on-error and unchecked-allocation style needs wrapping before use inside a long-running service.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rafat/wavelib/master/README.md",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/header/wavelib.h",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/unitTests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/unitTests/wavelibBoostTests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/auxiliary/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/wavelib.c",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/wtmath.c",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/conv.c",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/hsfft.c",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/real.c",
+    "https://raw.githubusercontent.com/rafat/wavelib/master/src/wavefunc.c",
+    "https://github.com/rafat/wavelib/issues?q=is%3Aissue",
+    "https://github.com/rafat/wavelib/issues/41",
+    "https://github.com/rafat/wavelib/issues/19",
+    "https://github.com/rafat/wavelib/commits/master",
+    "https://raw.githubusercontent.com/flatironinstitute/web-wavelets-benchmarking/benchmark-results/benchmark-results/benchmark.md",
+    "https://raw.githubusercontent.com/flatironinstitute/web-wavelets-benchmarking/main/src/benchmark.ts",
+    "https://raw.githubusercontent.com/flatironinstitute/web-wavelets-benchmarking/main/README.md",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/Makefile",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/README.md",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/package.json",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/src/index.ts",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/src/functional.ts",
+    "https://raw.githubusercontent.com/flatironinstitute/wasmlets/main/c/wavelib_helpers.c",
+    "https://raw.githubusercontent.com/Symmetronic/discrete-wavelets/master/src/wt.ts",
+    "https://raw.githubusercontent.com/fastlib/fCWT/main/README.md"
+  ],
+  "confidence": 0.75
+}
