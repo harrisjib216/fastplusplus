@@ -1,0 +1,90 @@
+[
+  {
+    "id": "https://github.com/zeebo/blake3",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party Go benchmark (bench_test.go BenchmarkBLAKE3, go test -bench) with the CPU named (i7-6700K, Apple M4), but no Go version or build flags are stated and the author says no attempt was made at precise measurement, so it falls short of A; no independent measurement found.",
+    "corrections": {
+      "claimed_speedup": "README timing tables, asm vs the same library without assembly. x86 (i7-6700K, AVX2, tables written Feb 2020): 64 B full buffer 205ns vs 254ns (about 1.24x, derived from page data); 1 KiB 1.01us vs 1.77us (about 1.75x, derived); 1024 KiB 262us (4.00GB/s) vs 883us (595MB/s). The 1024 KiB no-ASM row is internally inconsistent: from timings the ratio is about 3.4x, from the rate column about 6.7x (both derived from page data). The rate column matches the author's note that no-ASM speed caps out at about 1 KiB (580MB/s at 1 KiB), so the 883us cell is the more likely error and the real large-input gain is probably nearer 6.7x, but the page does not settle it. Apple M4 NEON (table added Jul 2026): 1024 KiB 459us (2.29GB/s) vs 1.00ms pure Go (1.05GB/s), about 2.2x (derived); 4 KiB 2.11us vs 4.03us (about 1.9x); 1 KiB 1.10us vs 1.08us (no gain; inputs of two chunks or fewer use the pure path). Versus the upstream Rust crate (single-threaded, SVG charts only, numbers not read): README says large full-buffer inputs perform similarly and small inputs are 3-4x slower in rate (about 100ns absolute) because of internal buffering. No AVX-512 or SVE2 numbers are published.",
+      "hardware": "Intel i7-6700K (x86 tables; no AVX-512, so the AVX-512 kernels were never measured) and Apple M4 (NEON table); the author says CPU throttling and noise were not controlled",
+      "compiler_and_flags": "Go toolchain, version not stated (the x86 tables were committed on 2020-02-12, so a Go release of that era; the NEON table on 2026-07-23); go test -bench with default flags; the README does not say how the 'No ASM' build was made (the repo has a purego build tag)",
+      "caveats": "First-party numbers with an unstated Go version; the author states no attempt at precise measurement. The x86 tables (Small, Large, No ASM) date from 2020-02-12 (git blame) and the code has since been rewritten (AVX-512 backends and a two-chunk ymm layout for the AVX2 path in Aug 2026), and the NEON table (2026-07-23) predates the 2026-08-19 NEON critical-path change, so all published numbers are stale relative to current code (performance work, not correctness fixes). The 1024 KiB no-ASM row is internally inconsistent (883us at 595MB/s implies about 0.5 MiB). The Rust comparison appears only as SVG charts whose numbers were not read; Rust was limited to AVX2 and one thread. The baseline is the same Go code without assembly, not a C or C++ implementation. Go-only library: a C++ project cannot use it without cgo, so its value to the catalog is as a reference for avo-generated BLAKE3 kernels. The README also lists an SVE2 backend not named in the record."
+    },
+    "notes": "Numbers in the record match the README. Main shortcomings: first-party, Go version unstated, x86 tables from Feb 2020 code and NEON table from before Aug 2026 kernel rewrites, no AVX-512/SVE2 measurements, internally inconsistent 1024 KiB no-ASM row (true ratio 3.4x or 6.7x), Go-only. Not a duplicate of the listed BLAKE3-team/BLAKE3 entry (wave 7): independent Go implementation, not a wrapper.",
+    "urls_opened": [
+      "https://github.com/zeebo/blake3",
+      "https://github.com/zeebo/blake3#timing-tables",
+      "https://raw.githubusercontent.com/zeebo/blake3/HEAD/README.md",
+      "https://github.com/zeebo/blake3/commits",
+      "https://github.com/zeebo/blake3/commits/master/README.md",
+      "https://github.com/zeebo/blake3/blame/master/README.md",
+      "https://raw.githubusercontent.com/zeebo/blake3/HEAD/bench_test.go",
+      "https://raw.githubusercontent.com/zeebo/blake3/HEAD/Makefile",
+      "https://raw.githubusercontent.com/zeebo/blake3/HEAD/go.mod"
+    ]
+  },
+  {
+    "id": "https://github.com/jkivilin/camellia-simd-aesni",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Benchmark code is public (main.c do_speedtest, clock_gettime loop over an in-place buffer, with test-vector self-tests) and the README gives the exact GCC command lines (-O2 plus per-target -march/-maes/-mvaes/-mgfni/-mavx512*) and the CPU models; several rows also name gcc-13/14/15. The reference is compiled in the same harness (camellia-BSD-1.2.0/camellia.c at -O2).",
+    "corrections": {
+      "claimed_speedup": "README bullets, versus the table-based reference camellia.c in the same harness: SIMD256 32-block intrinsics, AVX512+GFNI ~18.7x on Ryzen 9 7900X, ~17.8x on Core i3-1115G4 (gcc-14), ~14.1x on Ryzen 9 9950X3D (gcc-15); AVX512+VAES 7.4x to 8.9x; AVX2+AES-NI ~5.4x on Core i5-6500. SIMD256 assembly: AVX2+GFNI ~18.2x on 7900X (~0.92 cycles/byte), ~14.1x on 9950X3D; AES-NI AVX2 ~5.8x on i5-6500. SIMD128 16-block: ~3.1x to 4.5x on x86, ~2.2x to 3.0x on ARM (ThunderX2, Cortex-A53) and ~2.4x on POWER9. The 1-block SIMD128 (constant-time) variants are 1.2x to 2.9x slower than the reference except AVX512+GFNI on the i3-1115G4 (~1.2x faster). README sample outputs on the 7900X: test_simd256_asm_x86_64 reference 372.041 MiB/s vs SIMD256 5159.460 MiB/s (about 13.9x, derived from page data); test_simd256_intrinsics_x86_64_gfni_avx512 reference 313.426 vs SIMD256 5977.907 MiB/s (about 19.1x, derived). Cortex-A53 sample: 29.027 vs 36.700 MiB/s for 16 blocks (about 1.26x, derived), below the ~2.2x bullet.",
+      "caveats": "First-party numbers. The baseline is the NTT table-based reference camellia.c (which the README calls the OpenSSL reference) compiled at -O2 without -march, one block at a time; OpenSSL's Camellia x86-64 assembly, libgcrypt and the Linux kernel's AES-NI/AVX2 Camellia were not measured, so the gain over an optimised incumbent is unknown. Best-case ratios (14-19x) need GFNI on AVX-512 hardware; the 1-block SIMD128 variants are 1.2x to 2.9x slower than the reference on most listed CPUs (one 1.2x faster case), as the README admits. The README sample outputs do not match its own bullets: the plain AES-NI AVX2 assembly sample shows 13.9x on the 7900X while the bullet for the faster VAES build on the same CPU says ~9.2x, the reference itself reads 372 vs 313 MiB/s in two samples on the same machine, and the Cortex-A53 sample shows 1.26x against a ~2.2x bullet, so the samples come from older builds or compilers than the bullets. Only a 16-32 block parallel workload benefits (CTR, CBC/CFB decryption, XTS, OCB). Better filed under a cipher category than simd-intrinsics-libraries. Last commit date taken from the commits page."
+    },
+    "notes": "Numbers in the record match the README; tier A stands on main.c plus exact GCC flags and CPU models. Main shortcomings: baseline is the table-based reference C code rather than OpenSSL's Camellia assembly or libgcrypt, 1-block variants slower than the reference, README sample outputs disagree with its bullets (13.9x sample vs 9.2x VAES bullet on the 7900X; 1.26x vs 2.2x on Cortex-A53), only 20 stars. Category would fit a crypto/cipher category better.",
+    "urls_opened": [
+      "https://github.com/jkivilin/camellia-simd-aesni",
+      "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/README.md",
+      "https://github.com/jkivilin/camellia-simd-aesni/commits",
+      "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/main.c"
+    ]
+  },
+  {
+    "id": "https://github.com/oldcrow/corvus",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Benchmark code is public (tests/bench_trig.cpp and the other tests/bench_* sources, run by tools/quiet_bench.ps1/.sh), raw per-target outputs are committed under docs/bench-evidence/, and the Kaby Lake rows state Apple Clang 15, the CMake 'release' preset (CMakePresets.json, CMAKE_BUILD_TYPE=Release, project -ffp-contract=off) and the exact CPU (i7-7820HQ). The Zen 4 rows alone would fall short of A: the CPU is given only as 'Ryzen 7 (Zen 4)' and the clang-cl version is not stated in PERFORMANCE.md.",
+    "corrections": {
+      "claimed_speedup": "docs/PERFORMANCE.md section 11.1 (n = 10^6, tier-asserted) and raw outputs in docs/bench-evidence: cos/sin 5.50x/5.58x vs UCRT on Zen 4 (1.6 ns/el), 4.87x/4.98x vs Apple x86 libm on Kaby Lake (4.4 ns/el), 3.27x/3.21x vs Apple arm64 libm on M1 (single gated run, 'reported, not published'). The trig gain is size dependent: at n <= 10^4 it is 2.2x to 2.4x on Zen 4 and 2.7x to 3.0x at n = 1000 on Kaby, and at n = 1000 on M1 sin is 0.28x and cos 1.35x (raw evidence files). exp: 1.20x vs UCRT and 1.28x vs Apple arm64, but 0.65x (slower) vs Apple x86 libm on Kaby. erf: 6.33x vs UCRT at n = 10^6 (3.71x at n = 1000), 3.56x vs Apple x86 libm; erfc 3.12x to 9.34x vs UCRT by band, 1.27x to 3.46x vs Apple x86 libm. lgamma 1.5x to 5.2x vs UCRT but 0.2x to 0.93x vs Apple libm (Kaby and M1). log 0.64x, 0.27x, 0.21x and log1p 0.92x, 0.40x, 0.32x (slower than every libm, by design for correct rounding). Other families (gamma_p, beta, digamma, inverses, Bessel) are timed only against corvus called one element at a time ('upper bnd', 4-140x), not against any library, and those batching tables overstate today's gain by up to about 2.5x after the 2026-09-30 baseline change (#42).",
+      "baseline_stdlib": [
+        "MSVC STL",
+        "libc++"
+      ],
+      "hardware": "Ryzen 7 (Zen 4, AVX3_ZEN4 tier; exact model not stated) on Windows 11, Intel i7-7820HQ (Kaby Lake, AVX2) on macOS 13.7, Mac Mini M1 (NEON) on macOS Tahoe",
+      "compiler_and_flags": "clang-cl Release via the windows-clang-cl CMake preset with Ninja (version not stated in PERFORMANCE.md; PLAN.md cites clang-cl 22.1.3 for a later 2026-09-30 build) on Zen 4; Apple Clang 15 Release ('release' preset, Ninja) on Kaby Lake; project-wide -ffp-contract=off (CORVUS_FP_FLAGS); harness tools/quiet_bench.ps1 / tools/quiet_bench.sh, bench sources tests/bench_*.cpp, raw evidence under docs/bench-evidence/2026-08-30-zen4-quiet, 2026-08-30-kaby-quiet and 2026-08-31-m1-indicative",
+      "caveats": "Wins are function specific: sin, cos and erf/erfc win against every libm measured, exp is slower than Apple's x86 libm (0.65x), log and log1p are slower than every vendor libm by design (correctly rounded), and lgamma is faster than UCRT but slower than Apple's libm in all stable bands. The libm baseline matters more than the kernel (the document says so). Only Windows UCRT and Apple libms were measured; glibc/libstdc++ and MSVC-compiled builds were not. The baseline is a scalar std:: libm loop; vectorised peers the README itself names (SLEEF, Highway contrib math) were not compared, so the result shows the gain of SIMD batching over scalar libm, not over the SIMD incumbent. Ratios depend on array size: the 5.5x trig headline is the streaming n >= 10^5 figure, n <= 10^4 gives 2.2-2.4x on Zen 4, and M1 at n = 1000 is slower for sin (0.28x). Trig inputs are uniform in [-1e6, 1e6], so the huge-argument reduction path is not timed. The M1 elementary column is a single run (indicative only), the Zen 4 CPU model is not named, erfinv and Bessel families are flagged not reproducible, and the batching-gain tables predate the 2026-09-30 per-element baseline change (#42). A 1-star repository maintained by one author; depends on Google Highway (Apache-2.0)."
+    },
+    "notes": "Numbers in the record match PERFORMANCE.md section 11 and the committed raw outputs; the bench harness (tests/bench_trig.cpp) writes every output and sinks a value, median of 11-51 reps after a warm-up, no harness defect found. Corrections add the size dependence (5.5x streaming vs 2.2-2.4x in cache on Zen 4; M1 sin 0.28x at n = 1000), exp 0.65x vs Apple x86 libm, the erf/erfc rows and the batching-table caveat. baseline_stdlib set to MSVC STL (clang-cl, math from UCRT) and libc++ (Apple Clang, math from libSystem); no comparison against SLEEF or Highway contrib math.",
+    "urls_opened": [
+      "https://github.com/OldCrow/corvus",
+      "https://github.com/OldCrow/corvus/commits",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/README.md",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/PERFORMANCE.md",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/CMakePresets.json",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/PLAN.md",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/tools/quiet_bench.sh",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/tools/quiet_bench.ps1",
+      "https://github.com/OldCrow/corvus/tree/main/tools",
+      "https://github.com/OldCrow/corvus/tree/main/docs/bench-evidence/2026-08-30-zen4-quiet",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/tests/bench_trig.cpp",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_trig.txt",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench_bench_exp.txt",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-zen4-quiet/quiet_bench.log",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_trig.txt",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-30-kaby-quiet/quiet_bench_bench_exp.txt",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_trig.txt",
+      "https://raw.githubusercontent.com/OldCrow/corvus/HEAD/docs/bench-evidence/2026-08-31-m1-indicative/quiet_bench_bench_exp.txt"
+    ]
+  }
+]
