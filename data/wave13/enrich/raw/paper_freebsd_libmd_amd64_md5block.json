@@ -1,0 +1,56 @@
+{
+  "id": "paper:freebsd-libmd-amd64-md5block",
+  "one_liner": "FreeBSD libmd's hand-written amd64 MD5 block kernels (scalar, BMI1, AVX-512), 1.2-1.6x faster than libmd's C MD5.",
+  "what_it_does": "Replaces the C md5block() inside FreeBSD's libmd with three x86-64 assembly versions of the MD5 compression function, chosen once at load time by an ifunc resolver in md5dispatch.c. Callers keep the usual MD5Init/MD5Update/MD5Final/MD5Data API; only the internal block function changes, so on FreeBSD 15 amd64 every libmd user (md5(1) and anything linking libmd) gets it without code changes. Out of tree, md5block.S is a 363-line GNU-as file exposing md5block(MD5_CTX *, const void *buf, size_t len) for whole 64-byte blocks.",
+  "how_it_is_fast": "MD5 is one serial dependency chain, so the gain comes from shortening each round's critical path rather than from parallelism: the baseline kernel keeps a, b, c, d in registers, folds the round constant and message word into the add chain before the round function result arrives, and unrolls all 64 rounds through GAS macros. The BMI1 kernel rewrites round function G as (d & b) + (~d & c) and I as -1 - (c ^ (~b & d)) using ANDN, which removes a dependent mov/xor step. The AVX-512 kernel is not vectorised across messages: it uses single-lane XMM registers so that VPTERNLOGD computes each round function in one instruction and VPROLD does the rotate, with the constant added through an embedded-broadcast load.",
+  "when_to_use": [
+    "You hash large files or streams with MD5 on FreeBSD amd64 (checksums, legacy protocol fields, dedup keys) and want the fastest single-stream libmd path for free.",
+    "You need a small, BSD-2-Clause, dependency-free single-buffer MD5 kernel to vendor into C or C++ code on x86-64 SysV, with a ready CPU dispatch policy (AVX-512VL on Intel, BMI1 elsewhere, scalar fallback).",
+    "Intel parts with AVX-512F and AVX-512VL (Ice Lake, Tiger Lake, Xeon Scalable): the AVX-512 kernel was the fastest variant there in the author's runs (965.1 MB/s vs 587.8 MB/s for the new C code on a Core i7-1165G7).",
+    "AMD Zen and other BMI1 CPUs: the BMI1 kernel (1062.4 MB/s vs 758.5 MB/s for the new C code on a Ryzen 7 PRO 7840U)."
+  ],
+  "when_not_to_use": [
+    "Many independent messages at once: a multi-buffer SIMD MD5 (minio/md5-simd, or the md5x8 kernel in gocrack) runs several streams per core and gets far higher aggregate throughput.",
+    "Anything security-relevant: MD5 is broken for collisions; use SHA-256 or BLAKE3.",
+    "You already link OpenSSL: its MD5 is also hand-written x86-64 assembly, and no comparison of these kernels against OpenSSL (or animetosho/md5-optimisation) was published; the measured baseline is only libmd's own C code.",
+    "Windows x64 or other non-SysV ABIs, and non-amd64 targets (aarch64 has a separate kernel in lib/libmd/aarch64): the kernels take arguments in rdi/rsi/rdx and clobber xmm8-xmm15 without saving them.",
+    "Kernel, bootloader or bootstrap builds: the FreeBSD kernel, libsa and libcrypt use the C md5c.c, and the asm is skipped when BOOTSTRAPPING or WITHOUT_MACHDEP_OPTIMIZATIONS is set."
+  ],
+  "integration": {
+    "form": "shared lib (part of FreeBSD base libmd on amd64) or source-drop of md5block.S plus a small dispatcher",
+    "dependencies": "none at run time; in tree it uses FreeBSD headers <machine/asm.h> (ENTRY/END), <x86/ifunc.h> (DEFINE_UIFUNC), <machine/cpufunc.h> and <machine/specialreg.h>, which an out-of-tree copy replaces with plain .globl symbols and its own CPUID check",
+    "min_toolchain": "not documented; needs an assembler that understands BMI1 and AVX-512VL with EVEX embedded broadcast (FreeBSD base builds it with clang); the companion C fallback uses clang's _Pragma(\"unroll\")",
+    "platforms": "x86-64 only (SysV ABI); scalar kernel on any x86-64, BMI1 kernel needs BMI1, AVX-512 kernel needs AVX-512F and AVX-512VL and is never selected on AMD",
+    "thread_safety": "not documented; all state lives in the caller's MD5_CTX and the dispatcher resolves once at load time, so separate contexts can be used from separate threads",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Context-wipe regression in the code that ships with the kernels: the C rewrite imported under the same review (commit 90fa789, sys/crypto/md5c.c on main) ends MD5Final with explicit_bzero(ctx, sizeof(ctx)), which clears only 8 bytes (pointer size) of the 88-byte MD5_CTX; state[2..3], the bit count and the 64-byte buffer holding the message tail stay in memory, whereas the pre-rewrite code cleared sizeof(*context). Digests and speed are unaffected.",
+    "The AVX-512 kernel is slower than the BMI1 kernel on AMD Zen 4 in the author's own numbers (936.0 vs 1062.4 MB/s, even below the scalar asm at 945.5), so md5dispatch.c excludes AMD by vendor string; a copy that dispatches on feature bits alone picks the slower kernel on Zen 4. A Zen 4 performance regression the author mentioned in the related review D52909 is probably this, but the resolution is snippet-only.",
+    "lib/libmd/tests checks only the seven RFC 1321 vectors through whichever kernel the ifunc picks on the test host, so the two kernels not selected on that machine are not exercised by the in-tree tests.",
+    "The kernels process only whole 64-byte blocks (len is masked with ~63) and never touch MD5_CTX.count or buffer; padding, length and partial blocks stay in the C MD5Update/MD5Final, whose length parameter is unsigned int (split inputs over 4 GiB)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over animetosho/md5-optimisation when you want a short, already-integrated BSD-2-Clause kernel set with a tested dispatch policy rather than the widest menu of single-buffer variants (animetosho's work is the one actually measured against OpenSSL's assembly); pick minio/md5-simd or gocrack instead when you hash many independent streams and can use multi-buffer SIMD.",
+  "verified_claims_summary": "Robert Clausecker's own runs in Phabricator review D45670, known here only from search snippets: MD5 throughput over a large input with unknown compiler, flags and command, on a Ryzen 7 PRO 7840U (old C 774.6, new C 758.5, scalar asm 945.5, BMI1 1062.4, AVX-512 936.0 MB/s) and a Core i7-1165G7 (old C 605.9, new C 587.8, scalar asm 765.3, BMI1 854.0, AVX-512 965.1 MB/s). The dispatched kernel is 1.40x (Zen 4) and 1.64x (Tiger Lake) faster than the new C fallback and 1.37x and 1.59x faster than the previous md5c.c (derived from snippet data); the C rewrite's commit message itself says it is slightly slower than the original C.",
+  "status_note": "Active: committed to FreeBSD main on 2025-10-24 (d92e987, with an aarch64 SIMD kernel in c1135b2 whose only later change is a GNU-as build fix), BSD-2-Clause and small enough to vendor; evidence stays first-party and snippet-only, and the C MD5Final shipped alongside wipes only 8 bytes of the context (explicit_bzero(ctx, sizeof(ctx))).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/amd64/md5block.S",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/amd64/md5dispatch.c",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/Makefile",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/md5.h",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libmd/tests/Makefile",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/sys/md5.h",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/crypto/md5c.c",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/73a9b273d3d315716304c2cc237fef3141a93f2a/sys/crypto/md5c.c",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libcrypt/Makefile",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/conf/files.amd64",
+    "https://github.com/freebsd/freebsd-src/commits/main/lib/libmd",
+    "https://github.com/freebsd/freebsd-src/commits/main/sys/crypto/md5c.c",
+    "https://github.com/freebsd/freebsd-src/commit/90fa789cfab54294d4c3a0ac74e01747ce074386",
+    "https://github.com/freebsd/freebsd-src/commits/main/lib/libmd/aarch64",
+    "https://github.com/freebsd/freebsd-src/commit/244f498074b5574d18d4518583863580498b8d3b",
+    "https://reviews.freebsd.org/D45670 (WebSearch snippet only, host unreachable)",
+    "https://reviews-dev.freebsd.org/differential/diff/163567/ (D52909, WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}

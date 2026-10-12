@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/oldcrow/libstats",
+  "one_liner": "C++20 statistical-distributions library with runtime-dispatched SSE2/AVX/AVX2/AVX-512/NEON exp, log, erf and cos kernels that beat scalar libm loops.",
+  "what_it_does": "libstats provides 27 distributions (PDF, log-PDF, CDF, quantiles, MLE fitting, goodness-of-fit tests) with batch APIs that run through internal SIMD kernels and optional thread-pool dispatch. The kernels sit in stats::arch::simd::VectorOps (vector_exp, vector_log, vector_erf, vector_cos and others take a const double* input, a double* output and a length) and pick the highest compiled ISA tier at run time. It is a library to link against, not a drop-in libm: you replace a scalar std::exp loop with one array call.",
+  "how_it_is_fast": "Each kernel processes 2 (NEON), 4 (AVX2) or 8 (AVX-512) doubles per instruction with FMA Horner evaluation: a SLEEF-derived 10-term polynomial exp and SLEEF xlog_u1 log on x86, a musl-derived rational erf, and a quadrant-reduction cos with a 4-part pi/2 split and degree-6 minimax cores. On NEON, exp is a 128-entry table plus order-5 polynomial derived from ARM optimized-routines (software gather via vld1q), and log and erf use clean-room table-plus-series kernels. Edge cases (overflow, infinities, |x| above 2^23 for cos) fall back to scalar std:: calls lane by lane.",
+  "when_to_use": [
+    "You evaluate densities, log-densities or CDFs of standard distributions over arrays of thousands to millions of doubles and want SIMD plus parallel dispatch without writing kernels",
+    "You need vectorised double-precision exp/log/erf/cos at roughly 0.5-1 ULP on both x86-64 (AVX2 or AVX-512) and Apple Silicon NEON from one code base",
+    "Batch statistical workloads replacing scipy.stats loops: the project's own N = 100k runs show 6-35x for several log-PDF and PDF paths (first-party)",
+    "MIT-licensed code you can read and vendor kernels from: the derivation and divergence-audit documents explain each kernel's accuracy"
+  ],
+  "when_not_to_use": [
+    "You need correctly rounded results: the kernels are about 0.52-1 ULP; the same author's corvus keeps 0-ULP exp and log gates on NEON",
+    "Single-precision (float) or scalar one-at-a-time calls: kernels are double-only array calls, and arrays shorter than one vector go through the scalar tail loop",
+    "Distributions the doc lists as structural ceilings: Cauchy CDF 0.2x and von Mises CDF 0.1x of scipy on Zen 4, and Beta PDF/log-PDF lose under a parallel fork on every tier",
+    "Streaming arrays far larger than cache: the doc's Zen 4 data show exp at 0.55 ns per element is memory-bound at 256K elements, so the 1,024-element speedups shrink",
+    "You need a widely used dependency: one maintainer, 1 star, frequent releases (v2.4.1 current) and an open M1 throughput regression on the v2.5.0 work (issue #156)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none required; optional TBB (Linux/Windows) or GCD (macOS) for the parallel paths",
+    "min_toolchain": "C++20, CMake 3.25+; validated with AppleClang, MSVC, clang-cl and GCC",
+    "platforms": "x86-64 (SSE2 baseline, AVX, AVX2+FMA, AVX-512 with runtime dispatch), aarch64 NEON; Windows, macOS, Linux",
+    "thread_safety": "VectorOps kernels are stateless noexcept functions; distribution objects document concurrent read access with thread-safe cache management",
+    "drop_in_for_baseline": "partial — replaces a loop of std::exp/log/erf/cos with one array call, but results differ from libm by up to about 1 ULP and the kernels live in an internal arch namespace"
+  },
+  "gotchas": [
+    "Harness flaw behind the v1.5.x VectorCos rows (AVX2 4.9x, NEON 3.0x, AVX-512 8.5x): those numbers were measured on cos kernels later replaced for accuracy bugs. The NEON source says the v1.4.0 Taylor kernel had about 6e8 ULP error inside [-2pi, 2pi] and sign errors near k*pi/2 for |x| in the thousands, and issue #95 says x86 vector_cos was about 3e5 ULP. tools/simd_verification only tests [-4pi, 4pi] at a 1e-9 absolute tolerance, so it passed them. No current cos speedup over libm is published; the record's '7-term Horner cos' description is out of date.",
+    "The NEON exp, log, erf and cos kernels were all replaced on or after 2026-07-19, so the whole v1.5.x NEON row (2.1x, 1.8x, 8.0x, 3.0x) describes earlier code; only NEON exp has a current figure (2.5-2.6x).",
+    "Benchmark method: 1,024 cache-resident doubles, one warm-up, then the mean of 5 timed calls, scalar timed before SIMD, against whatever libm the platform ships (Apple libm, MSVC UCRT, glibc), with no compiler version in the table.",
+    "Windows MSVC and clang-cl builds apply /arch:AVX512 or /arch:AVX2 (or -mavx512f/-mavx2) globally from the build machine unless LIBSTATS_PORTABLE=ON, so default Windows binaries are not portable to older CPUs."
+  ],
+  "pick_this_over_siblings_when": "Pick libstats over corvus (same author, standalone correctly rounded elementary functions built on Highway) when you want distribution-level batch PDF/CDF code and can accept about 1 ULP for faster NEON exp and log (1.0 vs 2.4 and 1.7 vs 3.9 ns per element on M1). Pick it over math_intrinsics or SIMD-math-prims when you need double precision with near-libm accuracy instead of float approximations.",
+  "verified_claims_summary": "First-party tools/simd_verification runs (Release, 1,024 doubles, mean of 5 calls) report v1.5.x speedups over a scalar platform-libm loop of 3.4x/1.7x/2.5x/4.9x (exp/log/erf/cos, AVX2+FMA), 2.1x/1.8x/8.0x/3.0x (NEON) and 5.0x/3.9x/1.3x/8.5x (AVX-512), without saying which machine produced each row; the current NEON exp kernel measures 2.5-2.6x on a Mac Mini M1. In the author's corvus issue #43 (M1, AppleClang 21, n = 1e6) libstats v2.4.1 took 1.0/1.7/2.5/1.4 ns per element for exp/log/cos/erf against corvus 2.4/3.9/2.6/1.8 after its fixes.",
+  "status_note": "Actively developed (commits through 2026-10-11, v2.4.1 current release, CI and mpmath accuracy tests) and MIT-licensed, but a one-author, 1-star project whose published primitive speedups mostly predate the current kernels.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/README.md",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/docs/SIMD_BENCHMARK_RESULTS.md",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/tools/simd_verification.cpp",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/cmake/CompilerFlags.cmake",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/src/simd_avx2.cpp",
+    "https://raw.githubusercontent.com/OldCrow/libstats/HEAD/src/simd_neon.cpp",
+    "https://github.com/OldCrow/libstats/issues?q=is%3Aissue+cos",
+    "https://github.com/OldCrow/corvus/issues/43"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/sebastian-software/ferromark",
+  "one_liner": "Rust CommonMark/GFM Markdown-to-HTML engine, about 3x faster than md4c and 5-6x faster than cmark in its own harness.",
+  "what_it_does": "Parses Markdown (CommonMark profile passing all 652 spec examples, GFM tables, strikethrough and task lists, plus opt-in Ferromark Flavored Markdown) into an arena-allocated document tree and renders HTML or JSX/MDX. The Rust API is ferromark::to_html for one-shot use, or Parser::with_options on an Allocator plus HtmlRenderer::render / render_borrowed for reuse; native Node.js bindings expose toHtml and a JsxCompiler. It is not a C library and has no md4c-style callback API, so it replaces md4c only in Rust or Node.js code.",
+  "how_it_is_fast": "The document tree lives in a bumpalo arena that can be reset between documents, and the renderer reserves twice the source length for its output up front and can lend the buffer out (render_borrowed) instead of allocating a String per call. Inline scanners stop on ASCII byte classes found with a nibble-table vector lookup (pshufb on SSSE3/AVX2 detected at run time, vqtbl1q_u8 on aarch64), and the line pre-pass uses an SSE2/NEON plus SWAR newline scan because memchr's per-call setup dominated on short lines. The v2 core is an import of the OX-Content parser (ubugeeei-prod/ox-content v3.2.3, 2026-09-13) that the project then rewrote; its own report measures v2 at about 2.1x its earlier v1 engine.",
+  "when_to_use": [
+    "Rust or Node.js services and static-site generators rendering many Markdown documents per second, where a reused arena and output buffer can be kept per worker.",
+    "CommonMark or GFM documents from tens of bytes to about 100 KB (the measured corpus spans 37 to 113,609 bytes) where md4c, cmark, cmark-gfm, pulldown-cmark or Comrak is the current bottleneck.",
+    "Pipelines that also want JSX/MDX output, front matter, heading IDs, footnotes, callouts or a document tree to transform before rendering, from the same engine.",
+    "x86-64 machines with SSSE3/AVX2 or aarch64 machines with NEON, where the vector byte scans are active."
+  ],
+  "when_not_to_use": [
+    "C or C++ codebases that embed md4c or cmark directly: there is no documented C API, so you would add a Rust toolchain (1.95+) and your own FFI shim.",
+    "Projects that need a stable API: v2 was re-based on an OX-Content snapshot in September 2026, v3 broke the Rust API on 2026-10-01, and crates.io shows eight releases between 2026-09-26 and 2026-10-11.",
+    "When you need byte-identical output to md4c or cmark: only 14 of the 57 benchmark documents render the same across all six engines, and md4c's output differs on 7 of them.",
+    "Untrusted input through the Rust API with default options: Rust defaults preserve raw HTML, so sanitize must be set explicitly (Node defaults escape it).",
+    "Workloads that enable the product defaults (heading IDs, callouts, TOC, fence metadata, tag filtering): the benchmarks switch these off, and extra syntax adds parsing work, so the measured margin is an upper bound."
+  ],
+  "integration": {
+    "form": "crate (Rust, edition 2024) plus a native Node.js package (npm ferromark)",
+    "dependencies": "bumpalo, compact_str, smallvec, memchr, rustc-hash, thiserror, serde_json; optional ferriki (syntax highlighting) and oxc_* crates for the jsx feature",
+    "min_toolchain": "Rust 1.95 (rust-version in Cargo.toml); Node.js 22.12+ for the bindings; the published benchmarks used nightly-2026-07-20",
+    "platforms": "any Rust target; SSSE3/AVX2 vector scans on x86-64 detected at run time with a table-walk fallback, NEON scans on aarch64, SWAR elsewhere",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured engine is Ferromark v2 at commit 09e5e866da (2026-09-24) and the blacksmith run used source 9af95fc3; the current crate is 3.5.0 with a breaking Rust API, so the numbers describe an earlier revision.",
+    "Harness asymmetry in the fresh lifecycle: the md4c adapter (worker.rs) starts each call with an empty Vec that grows through md4c's per-chunk output callback across FFI, while Ferromark's renderer reserves 2x the source length before rendering. The reuse lifecycle, where md4c also keeps a warm Vec, gives a similar ratio (0.29x vs 0.31x), so the effect is small but favours Ferromark.",
+    "Toolchains differ: Rust engines use LLVM 22.1.8 with fat LTO, codegen-units=1 and panic=abort, md4c uses Ubuntu clang 18.1.3 -O3 with no LTO, and md4c's malloc calls are redirected to mimalloc by a benchmark-only header; PGO rows apply profiles to the Rust engines only.",
+    "Earlier releases had super-linear paths on untrusted input (reference-link resolution #142, angle autolinks #244, footnote numbering #44) and a Node binding that aborted the process on any panic (#140); all are closed, but they were filed against the v1 code base before the OX-Content import, and no fuzzing or limit guarantee for v2 is documented in the README."
+  ],
+  "pick_this_over_siblings_when": "Pick it over rushdown or zigmark when you need GFM and JSX/MDX output and want the evidence with the widest baseline set (md4c, cmark, cmark-gfm, pulldown-cmark, Comrak and Bun's engine in one preserved harness); rushdown and zigmark are measured only against cmark/cmark-gfm. For non-Markdown text work (regex, CSV, word counting) the other siblings in this category apply instead.",
+  "verified_claims_summary": "On one GitHub-hosted AMD EPYC 7763 runner (4 vCPUs, 2026-09-24), Ferromark v2 rendered the 50 documents whose HTML agreed across five engines about 3.2x faster fresh and 3.4x faster with reuse than md4c built with clang 18 -O3 and sharing mimalloc (derived from page data: md4c 0.31x and 0.29x), and about 4.2x and 5.0x on the 14 documents where all six engines agreed. A later short balanced-profile run on an unnamed AMD EPYC blacksmith runner over all 57 documents, including differing outputs, gave 2.95x and 3.06x against md4c and 5.70x and 6.25x against cmark built with GCC 13.3 -O3.",
+  "status_note": "Very active (963 commits, releases almost daily, last crates.io release 3.5.0 on 2026-10-11) but young and small (9 stars, about 5,700 crate downloads), MIT-licensed with preserved OX-Content attribution, and the API is still changing between major versions.",
+  "sources_read": [
+    "https://github.com/sebastian-software/ferromark",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/README.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/Cargo.toml",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/UPSTREAM.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/README.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/PROVENANCE.md",
+    "https://github.com/sebastian-software/ferromark/tree/main/docs/reports/2026-09-24-native-linux-x86-64/harness",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/harness/worker.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/harness/md4c_alloc.h",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/harness/native.h",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-09-24-native-linux-x86-64/harness/stack.c",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/docs/reports/2026-10-01-blacksmith-linux-x86-64/README.md",
+    "https://github.com/sebastian-software/ferromark/tree/main/src/parser",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/src/parser/byte_class.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/src/parser/line_scan.rs",
+    "https://github.com/sebastian-software/ferromark/tree/main/src/renderer",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/src/renderer/html.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/main/src/renderer/html/renderer.rs",
+    "https://github.com/sebastian-software/ferromark/issues?q=is%3Aissue",
+    "https://github.com/sebastian-software/ferromark/issues?q=is%3Aissue%20label%3Atype%3Abug",
+    "https://crates.io/api/v1/crates/ferromark"
+  ],
+  "confidence": 0.75
+}
