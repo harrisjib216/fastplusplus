@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/bitcoinjs/tiny-secp256k1",
+  "one_liner": "bitcoin-core libsecp256k1 compiled to WebAssembly with a TypeScript API; about 2-4x faster than elliptic, but slower than native addons.",
+  "what_it_does": "Provides the secp256k1 operations the bitcoinjs ecosystem needs as plain functions over Uint8Array: key and point checks, point and scalar tweaks, ECDSA sign/verify/recover with RFC6979 nonces, and BIP340 Schnorr sign/verify. It is the ECC backend that bitcoinjs-lib, ecpair and bip32 take as a plug-in. Since 2.0 one WASM binary serves Node and browsers. It replaced the 1.x design, which used a NAN C++ addon with elliptic as the fallback.",
+  "how_it_is_fast": "The C library bitcoin-core/secp256k1 is compiled to wasm32-unknown-unknown through the Rust crate secp256k1-sys 0.8.1, then optimized with wasm-opt -O4. Build settings: Rust release profile with LTO, panic=abort and codegen-units=1; vendored libsecp256k1 revision 21ffe4b. The WASM therefore runs libsecp256k1's own field and scalar arithmetic and constant-time multiplication by the generator, instead of elliptic's bn.js big-number arithmetic. Since 2.2.4 the build no longer uses the lowmemory feature, so it embeds precomputed tables (ECMULT_WINDOW_SIZE 15, ECMULT_GEN_PREC_BITS 4). The context is a 192-byte static buffer, created and randomized once. The JS wrapper copies arguments into fixed static buffers in WASM memory, so there are no allocations on the hot path.",
+  "when_to_use": [
+    "Browser or other non-Node JS code that needs secp256k1 ECDSA or BIP340 Schnorr, where the alternative is elliptic or another pure-JS library.",
+    "bitcoinjs-lib, ecpair and bip32 projects that need the exact tiny-secp256k1 interface and its test vectors (validation errors such as 'Expected Private' and 'Expected Point').",
+    "Verify-heavy code in JS: in the maintainer's 2021 runs, verify gained the most over elliptic (4.3x on i5-8250U, 7.1x on Apple M1).",
+    "Deployments that want one portable artifact, with no node-gyp toolchain at install time and no native addon per platform."
+  ],
+  "when_not_to_use": [
+    "Node.js servers where a native binding is allowed. In the same PR #53 run, the old tiny-secp256k1 1.1.6 C++ NAN addon signed in 49.33 us/op against 469.03 us/op for WASM (about 9.5x faster), and the unshipped Rust N-API addon took 51.71 us/op.",
+    "React Native/Hermes or other runtimes without WebAssembly (issue #91). Use the asm.js build (@bitcoin-js/tiny-secp256k1-asmjs; the README says it is 10-20x slower than WASM) or @bitcoinerlab/secp256k1 on noble (README: 1.5-5x slower than WASM).",
+    "Bundle-size-sensitive front ends: the 2.2.4 secp256k1.wasm is 1,242,788 bytes, against 163,363 bytes in 2.2.3, because of the full precomputed tables.",
+    "Bundlers or frameworks without WASM-module support. Open loading bugs: #122 (NestJS ENOENT on lib/secp256k1.wasm) and #92 (wrong path under Electron); closed reports: #116 (missing wasm file), #86 (fs.readFileSync in Vue) and #98 (browserify).",
+    "Projects that need fast releases: the repo calls itself 'under development' and 'a research effort'. Commits are sparse; the last one, on 2025-06-21, shipped a performance fix that had waited about two years."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "uint8array-tools 0.0.7 at runtime. Building from source needs Rust (pinned to 1.70.0 in rust-toolchain) with the wasm32-unknown-unknown target, a clang that compiles libsecp256k1 to wasm (the Dockerfile uses LLVM 12) and binaryen wasm-opt (version_114 in the Dockerfile).",
+    "min_toolchain": "Node.js >= 14 (package.json engines). For browsers, a bundler that can import a .wasm ES module, because lib/wasm_loader.browser.js runs `import * as wasm from './secp256k1.wasm'`. The README still says 'Rust >= 1.50.0', but Cargo.toml uses edition 2021 and the repo pins 1.70.0.",
+    "platforms": "Any JS runtime with WebAssembly: Node (loads the binary synchronously with fs.readFileSync and new WebAssembly.Module at import time) and browsers through a bundler. No WebAssembly in React Native/Hermes.",
+    "thread_safety": "Not documented. Each module instance has one WASM instance, its static input buffers and a lazily created global context, and every call is synchronous. Single-threaded JS calls are therefore safe, and each worker_thread loads its own instance.",
+    "drop_in_for_baseline": "partial: it keeps the tiny-secp256k1 function set that the bitcoinjs ecc plug-ins expect, so it is a drop-in for the 1.x package, elliptic fallback included. It is not a drop-in for elliptic's own EC/KeyPair API, and it needs WASM support in the runtime or bundler."
+  },
+  "gotchas": [
+    "Avoid 2.2.3. It switched secp256k1-sys to its lowmemory feature, and pointFromScalar slowed from 99.09 to 176.99 us/op in the maintainer's measurement (issue #123). 2.2.4 removed the feature, but npm only got that release on 2025-06-21; 2.2.3 had been the latest release since 2023-06-29.",
+    "The catalogued numbers are from pre-release PR #53 code (March 2021; closed unmerged, and the work landed in #55 without node bindings). No one has re-measured the shipped 2.2.4, which uses a newer libsecp256k1, different tables and a different toolchain. The Node.js version, wasm-opt flags and repetition count of the 2021 runs are not given.",
+    "Harness quirk in benches/index.js. The 'recover' row passes f.recoveryId, but the fecdsa fixtures never set that field, so every recover runs with recoveryId undefined, treated as 0, whatever the signature's real id. That row is not in the catalogued claim. The sign, verify and pointFromScalar rows look sound: each module runs the same valid test vectors, warms up for 2 s, then is timed for at least 5 s with process.hrtime.",
+    "Secret keys pass through fixed static buffers in WASM memory, which the wrapper zeroes after every call. libsecp256k1's constant-time C code is compiled to WASM, but the project does not document any side-channel guarantee once a JIT engine runs that code."
+  ],
+  "pick_this_over_siblings_when": "Pick this one when you need secp256k1 (Bitcoin, BIP340 Schnorr, bitcoinjs plug-ins). bls-eth-wasm covers BLS12-381 and starknet-rs's WASM build covers the StarkNet Pedersen hash; neither does secp256k1. Like those two, this entry is a native crypto library compiled to WASM that beats pure-JS code but not native bindings.",
+  "verified_claims_summary": "Source: the maintainer's run of the repo's benches harness on pre-release PR #53 code (2021-03-18), against tiny-secp256k1 1.1.6's elliptic fallback. Node.js version unstated. On an i5-8250U under Linux, WASM was 1.9x faster for sign (469 vs 914 us/op), 4.3x for verify (605 vs 2577) and 1.9x for pointFromScalar (280 vs 543). On an Apple M1 the gaps were 3.9x, 7.1x and 3.3x (ratios derived from page data). In the same run the C++ and Rust native addons signed about 9x faster than WASM.",
+  "status_note": "Stale but usable: MIT-licensed, npm latest is 2.2.4 (2025-06-21, the lowmemory fix), the last commit is from 2025-06-21, and open issues are mostly about loading the .wasm file in bundlers and frameworks.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/package.json",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/rust-toolchain",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/index.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/wasm_loader.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/wasm_loader.browser.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/wasm_path.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/rand.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/validate.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/src_ts/validate_error.ts",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/benches/index.js",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/benches/package.json",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/benches/fixtures.js",
+    "https://raw.githubusercontent.com/bitcoinjs/tiny-secp256k1/HEAD/benches/cryptocoinjs_secp256k1.js",
+    "https://github.com/bitcoinjs/tiny-secp256k1/pull/53",
+    "https://github.com/bitcoinjs/tiny-secp256k1/pull/55",
+    "https://github.com/bitcoinjs/tiny-secp256k1/issues?q=is%3Aissue",
+    "https://github.com/bitcoinjs/tiny-secp256k1/issues/123",
+    "https://github.com/bitcoinjs/tiny-secp256k1/issues/106",
+    "https://github.com/bitcoinjs/tiny-secp256k1/commits/master",
+    "https://raw.githubusercontent.com/rust-bitcoin/rust-secp256k1/secp256k1-sys-0.8.1/secp256k1-sys/build.rs",
+    "https://raw.githubusercontent.com/rust-bitcoin/rust-secp256k1/secp256k1-sys-0.8.1/secp256k1-sys/depend/secp256k1-HEAD-revision.txt",
+    "https://registry.npmjs.org/tiny-secp256k1",
+    "https://registry.npmjs.org/tiny-secp256k1/-/tiny-secp256k1-2.2.4.tgz",
+    "https://registry.npmjs.org/tiny-secp256k1/-/tiny-secp256k1-2.2.3.tgz",
+    "https://raw.githubusercontent.com/bitcoinerlab/secp256k1/HEAD/README.md"
+  ],
+  "confidence": 0.62
+}

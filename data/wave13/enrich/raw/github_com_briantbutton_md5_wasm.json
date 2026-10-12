@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/briantbutton/md5-wasm",
+  "one_liner": "Promise-based MD5 for Node and browsers with a hand-written WAT core; about 39x faster than md5 npm on 37 MB.",
+  "what_it_does": "md5WASM(data) takes a Buffer, ArrayBuffer or Uint8Array and returns a Promise that resolves to the hex MD5 string. It ships as one dependency-free JavaScript file (about 26 KB) with the WebAssembly module embedded as base64, exported for CommonJS, AMD and window.md5WASM. It is not a drop-in for the md5 npm package: strings must be converted to bytes first, there is no synchronous or incremental (streaming) API, and inputs above 268,369,920 bytes (255.9 MB) are rejected.",
+  "how_it_is_fast": "The core is a hand-written WebAssembly text module (four-logics-syntax.wat) whose loops() export runs the 64 MD5 steps over 61,440 consecutive 64-byte blocks (3.75 MiB) per call, reading message words straight from linear memory with i32.load and keeping the A-D state in wasm globals, so no JavaScript number conversions happen inside the loop (the README's explanation for the gap). Input bytes are packed into a Uint32Array view of the wasm memory, and whatever the wasm chunks do not cover is finished by a hand-unrolled JavaScript MD5 over that typed array. Much of the advantage over the md5 npm package comes from this better-written JavaScript as well: the rows where no WebAssembly runs are still 1.3-8.3x faster than md5 (derived from page data).",
+  "when_to_use": [
+    "MD5 checksums of multi-megabyte buffers (well above 4 MiB) in a browser, where Node's crypto module is not available, e.g. hashing a user-selected video before upload.",
+    "Replacing the md5 npm package in legacy code that hashes large Buffers or Uint8Arrays and can accept a Promise-based call.",
+    "When a single MIT-licensed file with no dependencies and no build step is preferred over a larger hashing library."
+  ],
+  "when_not_to_use": [
+    "In Node.js: the built-in crypto.createHash('md5') (native OpenSSL) is the obvious incumbent and was never compared.",
+    "Inputs up to about 4 MiB: no WebAssembly runs (see gotchas), and an independent run at 1 MiB measured md5-wasm's JS path at 131.77 MB/s versus 171.73 MB/s for pure-JS spark-md5 3.0.2 and 850.31 MB/s for hash-wasm 4.10.0 (Chrome 131, Ryzen 9 7900X).",
+    "Streaming or chunked hashing of files larger than memory, or inputs over 255.9 MB: the whole input must be in one buffer and is copied into a fresh wasm memory.",
+    "Latency-sensitive UI or server threads: the hash is computed synchronously on the calling thread despite the Promise API, and each WebAssembly call recompiles the module (about 150 ms on the author's server).",
+    "Code that passes strings or needs a synchronous result (issue #3 asked for synchronous support; none was added)."
+  ],
+  "integration": {
+    "form": "source-drop (single JS file with base64-embedded wasm; npm package md5-wasm 2.0.0)",
+    "dependencies": "none",
+    "min_toolchain": "A JavaScript engine with WebAssembly and Promise (falls back to JavaScript with a console message if WebAssembly is missing); README numbers from Node v10.18.1",
+    "platforms": "Node.js and browsers (any CPU)",
+    "thread_safety": "Each call builds its own closures, WebAssembly.Memory and instance, so concurrent calls are independent (a multiple-simultaneous-calls bug was fixed in May 2020 per the commit log); hashing itself runs synchronously on the calling thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Unit mismatch behind the README table: md5WASM sends inputs larger than 1,048,576 bytes down the WebAssembly path, but md5WA only calls the wasm loops() while more than 1,048,576 32-bit words (4 MiB) remain, since len and i count words. Inputs from 1 MiB to about 4 MiB therefore compile the module, allocate wasm memory and copy the data, then hash entirely in JavaScript, and on larger inputs the last 0.25-4 MiB is always hashed in JavaScript. The README's 0.2-2 MB rows ran no WebAssembly at all; the same thresholds are in npm 1.0.2, 1.1.0 and the current file.",
+    "'Non-blocking' describes only the API shape: the JavaScript path hashes inside the Promise executor before md5WASM returns, and the WebAssembly path hashes synchronously in the instantiate callback. Every WebAssembly-path call recompiles the module from bytes and allocates at least 512 wasm pages (32 MiB) of memory, up to 4,096 pages (256 MiB) for the largest inputs.",
+    "The README table is a set of single runs committed 2020-05-02, before the May 2020 WebAssembly optimisation and the v2.0.0 rewrite (Feb 2021). Its small rows are non-monotonic (0.2 MB 90 ms, 0.3 MB 300 ms, 0.5 MB 360 ms, 1 MB 170 ms), which points to cold-JIT noise, and it names no CPU and ships no benchmark script.",
+    "The only independent numbers (hash-wasm README, via hash-wasm-benchmark's md5.worker.js) time md5-wasm at 32 B and exactly 1 MiB, both on its pure-JS path: 6.1x over md5 2.3.0 at 1 MiB (derived from page data), but slower than spark-md5 and 6.5x slower than hash-wasm's compiled-C WebAssembly MD5."
+  ],
+  "pick_this_over_siblings_when": "None of the sibling hashes (superfasthash, sha2-wasm, tape-sha256) computes MD5, so the real choice is against hash-wasm, which is already in this wave's merged records and measured 6.5x faster at 1 MiB, or spark-md5. Pick md5-wasm only for large in-memory buffers where a tiny dependency-free file matters more than peak speed.",
+  "verified_claims_summary": "First-party README table (Node v10.18.1, unnamed low-powered Ubuntu server, single runs, no script): MD5 of a 37 MB file takes 990 ms versus 38,500 ms with the md5 npm package (37 vs 0.96 MB/s, about 39x), falling to 1.3-2.9x on the 0.2-0.5 MB rows, where only JavaScript runs. An independent hash-wasm benchmark (Chrome 131, Ryzen 9 7900X) puts md5-wasm 2.0.0 at 131.77 MB/s versus 21.65 MB/s for md5 2.3.0 at 1 MiB, on its JavaScript fallback.",
+  "status_note": "The code has been frozen since v2.0.0 (February 2021); later commits only touch the README or are housekeeping (the 2026-04-23 commit is 'Fighting with git'), and there are no tests (the npm test script is a stub). It is MIT-licensed and small enough to vendor, but the speedup is overstated for inputs under about 4 MiB because of the byte/word threshold mismatch.",
+  "sources_read": [
+    "https://github.com/briantbutton/md5-wasm/commits",
+    "https://github.com/briantbutton/md5-wasm/issues?q=is%3Aissue",
+    "https://github.com/briantbutton/md5-wasm/issues/1",
+    "https://raw.githubusercontent.com/briantbutton/md5-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/briantbutton/md5-wasm/HEAD/md5-wasm.js",
+    "https://raw.githubusercontent.com/briantbutton/md5-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/briantbutton/md5-wasm/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/briantbutton/md5-wasm/HEAD/four-logics-syntax.wat",
+    "https://registry.npmjs.org/md5-wasm",
+    "https://registry.npmjs.org/md5-wasm/-/md5-wasm-1.0.2.tgz",
+    "https://registry.npmjs.org/md5-wasm/-/md5-wasm-1.1.0.tgz",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/README.md",
+    "https://github.com/Daninet/hash-wasm-benchmark",
+    "https://github.com/Daninet/hash-wasm-benchmark/tree/master/src",
+    "https://github.com/Daninet/hash-wasm-benchmark/tree/master/src/benchmark",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm-benchmark/HEAD/src/benchmark/md5.worker.js",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm-benchmark/HEAD/src/benchmark/bench.js"
+  ],
+  "confidence": 0.8
+}

@@ -331,7 +331,7 @@
     "baseline_in_list": false,
     "metric": "throughput",
     "workload": "Criterion 'i386' benchmark (benches/i386.rs at tag v0.2.1; now bench/benches/i386.rs): short haystack: words of data/words.txt sorted by length, each searched in every later word; long haystack: every word searched in data/i386.txt (read with fs::read and from_utf8_lossy at v0.2.1, include_bytes in the current bench); single-pattern substring search returning a bool. sliceslice and memmem searchers are constructed outside the timed loop; String::find, twoway and sse4-strstr build per call.",
-    "claimed_speedup": "README table (criterion time, lower is better): short haystack String::find 335.56 ms vs sliceslice DynamicAvx2Searcher 79.416 ms (about 4.2x faster, derived from page data); long haystack 345.01 ms vs 35.181 ms (about 9.8x faster, derived from page data). sse4-strstr avx2_strstr_v2 measures 75.515 ms and 38.579 ms in the same table.",
+    "claimed_speedup": "README table (criterion): short haystack String::find 335.56 ms vs sliceslice DynamicAvx2Searcher 79.416 ms (4.2x, mostly setup cost excluded; prebuilt scalar memmem 0.1.1 88.029 ms, 1.11x derived); long haystack 9.8x (real SIMD gain); rebar 2026-07-30: memchr::memmem prebuilt beats sliceslice on ports of these workloads (i386 8.57 vs 10.33 ms, short 6.20 vs 16.13 ms)",
     "evidence_tier": "A",
     "benchmark_url": "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/README.md",
     "baseline_stdlib": [],
@@ -346,7 +346,7 @@
     "stars_or_usage": "106 stars; by Cloudflare",
     "has_code": true,
     "tradeoffs": "Rust crate (no C API); x86 AVX2 searcher built on Wojciech Mula's SIMD-friendly algorithm with the needle fixed at construction, and unlike sse4-strstr it never reads past the end of the haystack (README footnote).",
-    "caveats": "Baseline is Rust 1.46 std String::find (2020), not libc memmem or any C++ std; README numbers are for sliceslice 0.2.0 on 2020 toolchains with the v0.2.1 harness, and the README table omits the memchr::memmem rows the current bench now runs. The benchmark is asymmetric: sliceslice (and memmem) searchers are prebuilt outside the timed loop while String::find rebuilds its Two-Way searcher per call, so needle preprocessing is excluded only for the prebuilt rows. In BurntSushi's memchr rebar record (benchmarks/record/x86_64/2026-07-30.csv, sliceslice 0.4.3) sliceslice oneshot is about 2.17x faster than libc memmem by geomean of medians over 39 benchmarks (faster on 30) and about 3.9x faster than Rust std memmem oneshot (faster on 34 of 38), but prebuilt sliceslice beats memchr 2.8.3 prebuilt on only 15 of 42 benchmarks (geomean 0.90x) (derived from that CSV; older records 2023-12-29 and 2025-09-25 give 2.08x and 2.14x vs libc). Open issue #97 (January 2025, no maintainer reply) reports that Avx2Searcher can read past the end of the haystack (OOB read in vector_search_in_chunk); the API is unsafe and x86 AVX2 only; issue #47 recorded a performance regression with Rust 1.52.",
+    "caveats": "Baseline is Rust 1.46 std String::find (2020), not libc memmem or any C++ std; README numbers are for sliceslice 0.2.0 on 2020 toolchains with the v0.2.1 harness, and the README table omits the memchr::memmem rows the current bench now runs. The benchmark is asymmetric: sliceslice (and memmem) searchers are prebuilt outside the timed loop while String::find rebuilds its Two-Way searcher per call, so needle preprocessing is excluded only for the prebuilt rows. In BurntSushi's memchr rebar record (benchmarks/record/x86_64/2026-07-30.csv, sliceslice 0.4.3) sliceslice oneshot is about 2.17x faster than libc memmem by geomean of medians over 39 benchmarks (faster on 30) and about 3.9x faster than Rust std memmem oneshot (faster on 34 of 38), but prebuilt sliceslice beats memchr 2.8.3 prebuilt on only 15 of 42 benchmarks (geomean 0.90x) (derived from that CSV; older records 2023-12-29 and 2025-09-25 give 2.08x and 2.14x vs libc). Open issue #97 (January 2025, no maintainer reply) reports that Avx2Searcher can read past the end of the haystack (OOB read in vector_search_in_chunk); the API is unsafe and x86 AVX2 only; issue #47 recorded a performance regression with Rust 1.52. [retier] Setup cost excluded on the sliceslice side of the short-haystack row; memchr::memmem ahead in rebar; pathological defeat-simple-vector-freq-alphabet case 201.94 us vs libc memmem 37.05 us; also ships aarch64 NEON, wasm32 simd128 and nightly stdsimd searchers; 'Dynamic' is needle-length specialisation, not CPU dispatch (UB without AVX2); issue #97 OOB report unfounded on code reading",
     "found_via": [
       "WebSearch 'SIMD-friendly substring search strstr memmem AVX2 SSE4.2 speedup over glibc github' surfaced cloudflare/sliceslice-rs; opened README.md, bench/Cargo.toml, bench/benches/i386.rs"
     ],
@@ -389,7 +389,8 @@
     "corrected_fields": {
       "compiler_and_flags": "Rust 1.46.0 and gcc 9.3.0; bench/Cargo.toml sets [profile.bench] lto = true, codegen-units = 1; criterion 0.5 harness (bench code in bench/benches/i386.rs)",
       "workload": "Criterion 'i386' benchmark (bench/benches/i386.rs): short haystack: every word of data/words.txt searched in every later word; long haystack: every word searched in data/i386.txt (include_bytes); single-pattern substring search.",
-      "caveats": "Baseline is Rust 1.46 std (2020) String::find, not libc; the memchr crate's own rebar CSV shows sliceslice about 2.06x faster than libc memmem over 39 benchmarks but slower than the memchr crate on 23 of 42 prebuilt comparisons (derived from that CSV); README numbers are from 2020 toolchains."
+      "caveats": "Baseline is Rust 1.46 std (2020) String::find, not libc; the memchr crate's own rebar CSV shows sliceslice about 2.06x faster than libc memmem over 39 benchmarks but slower than the memchr crate on 23 of 42 prebuilt comparisons (derived from that CSV); README numbers are from 2020 toolchains.",
+      "claimed_speedup": "README table (criterion time, lower is better): short haystack String::find 335.56 ms vs sliceslice DynamicAvx2Searcher 79.416 ms (about 4.2x faster, derived from page data); long haystack 345.01 ms vs 35.181 ms (about 9.8x faster, derived from page data). sse4-strstr avx2_strstr_v2 measures 75.515 ms and 38.579 ms in the same table."
     }
   },
   {
@@ -6752,7 +6753,7 @@
     "metric": "throughput",
     "workload": "MD5 of files from 0.2 MB to 37 MB on a low-powered Ubuntu production server with NodeJS v10.18.1, elapsed ms and MB/s per size",
     "claimed_speedup": "README: '30x faster than the most popular md5 utility' (md5 npm). Table (Node v10.18.1, Ubuntu): 37 MB 38,500 ms vs 990 ms (0.96 vs 37 MB/s), about 39x (derived from page data); 24 MB 23,600 vs 700 ms; 12 MB 12,400 vs 490 ms; 8 MB 7,600 vs 400 ms; 4 MB 4,000 vs 330 ms; 2 MB 2,000 vs 240 ms; 1 MB 1,000 vs 170 ms; 0.5 MB 520 vs 360 ms; 0.3 MB 390 vs 300 ms; 0.2 MB 260 vs 90 ms",
-    "evidence_tier": "C",
+    "evidence_tier": "D",
     "benchmark_url": "https://github.com/briantbutton/md5-wasm",
     "baseline_stdlib": [],
     "compiler_and_flags": "hand-written WAT (four-logics-syntax.wat) assembled to wasm; NodeJS v10.18.1 on Ubuntu; no benchmark script found in the visible file list",
@@ -6766,7 +6767,7 @@
     "stars_or_usage": "34 stars; npm package md5-wasm",
     "has_code": true,
     "tradeoffs": "Asynchronous (Promise) API only, no synchronous version; about 150 ms WebAssembly instantiation cost on the author's server; takes bytes not strings, so strings must be converted first; wasm is used only above a size threshold.",
-    "caveats": "First-party table from an unnamed 'slow production server', Node v10.18.1 (2019-era V8), no CPU model and no public benchmark script. The baseline md5 npm package runs at about 1 MB/s and is not a tuned JavaScript MD5; Node's built-in crypto.createHash('md5') (native OpenSSL), the obvious server-side incumbent, is not compared. In the current md5-wasm.js only inputs larger than 1,048,576 bytes (bounder) go to WebAssembly; smaller inputs use the bundled pure-JS MD5, so the 0.2-1 MB rows compare two JavaScript implementations, and the WASM path instantiates a new module on every call (about 150 ms per the README) and finishes the tail in JS. The README itself expected 3-5x and attributes the larger gap to number-format conversions in the md5 package. Code dates from 2020-2021; the 2026-04-23 commit ('Fighting with git') is housekeeping.",
+    "caveats": "First-party table from an unnamed 'slow production server', Node v10.18.1 (2019-era V8), no CPU model and no public benchmark script. The baseline md5 npm package runs at about 1 MB/s and is not a tuned JavaScript MD5; Node's built-in crypto.createHash('md5') (native OpenSSL), the obvious server-side incumbent, is not compared. In the current md5-wasm.js only inputs larger than 1,048,576 bytes (bounder) go to WebAssembly; smaller inputs use the bundled pure-JS MD5, so the 0.2-1 MB rows compare two JavaScript implementations, and the WASM path instantiates a new module on every call (about 150 ms per the README) and finishes the tail in JS. The README itself expected 3-5x and attributes the larger gap to number-format conversions in the md5 package. Code dates from 2020-2021; the 2026-04-23 commit ('Fighting with git') is housekeeping. [retier] Byte/word threshold mismatch means the 0.2-2 MB rows ran no WebAssembly and larger inputs finish in JS; synchronous despite the 'non-blocking' claim; module recompiled per call",
     "found_via": [
       "WebSearch 'WebAssembly module faster than pure JS implementation benchmark table README npm package wasm' (github.com): briantbutton/md5-wasm"
     ],
@@ -6792,7 +6793,15 @@
         "https://github.com/briantbutton/md5-wasm/issues/1"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "C",
+        "to": "D",
+        "reason": "Enricher (2026-10-12): the measured code never ran the WebAssembly path for the README's 0.2-2 MB rows (the WASM branch is taken above 1,048,576 bytes but the wasm loop only runs while more than 1,048,576 words remain) and hashes the last 0.25-4 MiB of every input in JS, so the published wasm-vs-JS table measures JS against JS; the only independent run (hash-wasm benchmark) shows it below spark-md5 and hash-wasm. No valid measurement of the wasm claim.",
+        "urls_opened": [
+          "https://github.com/briantbutton/md5-wasm/blob/master/md5-wasm.js"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "README: 30x faster than the most popular md5 utility. Table: 37 MB file 38,500 ms (md5) vs 990 ms (MD5-WASM), 37 MB/s vs 0.96 MB/s, about 39x (derived from page data, README says 30x); 1 MB 1,000 ms vs 170 ms; 4 MB 4,000 vs 330 ms; 0.2 MB 260 vs 90 ms; 0.5 MB 520 vs 360 ms",

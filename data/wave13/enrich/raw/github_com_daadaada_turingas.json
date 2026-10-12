@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/daadaada/turingas",
+  "one_liner": "Python SASS assembler for NVIDIA SM70-SM86; its authors' hand-written Winograd kernels beat cuDNN 7.6.1 2.13-2.65x (paper only).",
+  "what_it_does": "TuringAs turns hand-written NVIDIA SASS (native GPU machine code, below PTX) into a .cubin, which the CUDA driver API loads with cuModuleLoad and cuModuleGetFunction. NVIDIA ships no public SASS assembler. You run `python -m turingas.main -i k.sass -o k.cubin -arch 70|75|80|86 [-name kern] [-inc files]`. Sources use symbolic register (<REGS>), parameter (<PARAMS>) and constant maps, labels, shared-memory size tags, and inline Python that generates instructions. It replaces ptxas for kernels you write yourself; it does not replace cuDNN, and the speedup belongs to kernels its authors wrote with it.",
+  "how_it_is_fast": "The assembler itself is not the fast part. Writing SASS directly gives you control that nvcc and ptxas do not expose: register allocation and bank conflicts, operand-reuse cache flags (.reuse), and the per-instruction control codes (stall cycles, yield, read and write dependency barriers, wait masks). The PPoPP 2020 paper used that control to build batched Winograd convolution kernels with better latency hiding and data reuse than cuDNN's. The encoder is a table of regex grammar rules for 59 opcodes that emit 128-bit Volta-style instruction words.",
+  "when_to_use": [
+    "Hand-tuning a hot CUDA kernel (GEMM, convolution, microbenchmarks) on Volta (SM70), Turing (SM75) or Ampere (SM80, SM86) after nvcc output has hit a scheduling or register-allocation ceiling",
+    "GPU microarchitecture research, such as measuring instruction latency, shared-memory throughput or reuse-cache effects; the repo's examples/bench/smem times LDS with SR_CLOCKLO",
+    "Teaching or studying the Volta and Turing encoding and control-code format; tools/disasm.py turns cuobjdump output back into TuringAs syntax",
+    "Pure-Python tooling with no dependencies beyond the standard library, which is easy to vendor and patch"
+  ],
+  "when_not_to_use": [
+    "Ada (SM89), Hopper (SM90) or Blackwell GPUs: only -arch 70, 75, 80 and 86 are accepted, and issue #13 (2024, no reply) calls the project dead for new GPUs",
+    "You want automatic scheduling: you write every stall count, barrier and yield bit by hand. The owner declined to add a scheduler in issue #4 ('I'd rather leave this task to high-level compilers').",
+    "You want the Winograd speedups: the kernels behind the 2.13x and 2.65x claims were never released (issue #2, open since February 2020, 'We plan to open source the Winograd implementation later')",
+    "Code that needs texture or surface instructions, CALL, JMP, or multiple kernels and relocations in one cubin: these are missing, and one invocation emits one kernel",
+    "Production builds: there are no releases (setup.py version 0.1), no tests, and no maintenance since 2022-01-13"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Python standard library only); running the .cubin needs the CUDA driver API and an NVIDIA GPU",
+    "min_toolchain": "Python 3.6+ (README; uses f-strings)",
+    "platforms": "Emits SASS for NVIDIA SM70, SM75, SM80 and SM86 (the -arch choices in main.py); the assembler runs anywhere Python runs",
+    "thread_safety": "not documented; inline-code blocks and include files are exec()'d into the assembler module's globals, so separate runs in one process share and overwrite state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Assembling a file runs arbitrary Python: <CODE> blocks and every -inc include file are passed to exec(), and any {...} on a line is passed to eval(), all in the assembler's module globals. Include files are executed twice, once by ExpandCode and once by ExpandInline. Never assemble untrusted .sass files.",
+    "Control-code notation differs from MaxAs: the wait-barrier mask in 'wait:read:write:yield:stall' is parsed as a decimal integer (int(watdb) in grammar.py ReadCtrl, matching tools/disasm.py's {:02d}), although the regex accepts hex digits. '3f' raises ValueError and '10' means barriers 1 and 3, not barrier 4. Read and write barrier indices are 0 to 5 (fixed in issue #8).",
+    "-arch only sets the cubin ELF header flags (cubin.py). GenCode uses one opcode table for every architecture with no per-architecture check, so an instruction the target lacks is not rejected, for example uniform-datapath ops on SM70 or LDGSTS below SM80 (inference from the source). The register count is a heuristic: the highest register index plus 1, plus 4 when above 8, and a FIXME notes that multi-register operands are not counted. Check the result with cuobjdump.",
+    "The README's TODO list is out of date: grammar.py already has LDSM, F2F, F2FP, F2I, I2F, uniform-datapath ops (UMOV, USHF, UIADD3, ULEA, ULDC, S2UR), the HMMA, IMMA and BMMA tensor-core ops, and Ampere's LDGSTS, LDGDEPBAR and DEPBAR. Texture, surface, CALL and JMP are still absent."
+  ],
+  "pick_this_over_siblings_when": "Pick TuringAs over MaxAs (Maxwell and Pascal only, with a built-in scheduler and register allocator, and a public SGEMM walkthrough that beats cuBLAS by 4.8-25%) and KeplerAs (Kepler only, with a PPoPP 2017 artifact measuring 1.15x over cuBLAS 7.0 SGEMM) when the target is Volta, Turing or Ampere, which neither supports. Unlike those siblings, though, TuringAs ships no published kernel that reproduces its headline numbers.",
+  "verified_claims_summary": "The only numbers are in the PPoPP 2020 paper by Yan, Wang and Chu, which could not be opened here; they were read from search snippets only. Single-precision batched Winograd convolution kernels hand-written in SASS with TuringAs reach up to 2.13x on a Tesla V100 and up to 2.65x on an RTX 2070 over cuDNN 7.6.1's Winograd convolution, and up to 93% of device peak. The same snippets say cuDNN 7.6.1's Winograd was itself only 0.81-1.67x (average 1.4x) faster than GEMM-based convolution, so the baseline is cuDNN's Winograd path, not necessarily its fastest algorithm. The repository contains no comparison benchmark and no Winograd code.",
+  "status_note": "Abandoned since 2022-01-13 (54 commits, no releases, 2022-2024 issues unanswered), but MIT-licensed and only about 1,900 lines of dependency-free Python, so it is easy to vendor for SM70-SM86 experiments; the evidence tier rests on an unopened paper and on kernels that were never released.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/README.md",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/setup.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/main.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/turas.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/grammar.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/cubin.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/ELF.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/turingas/__init__.py",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/examples/bench/smem/Makefile",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/examples/bench/smem/lds32.sass",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/examples/bench/smem/main.cu",
+    "https://raw.githubusercontent.com/daadaada/turingas/HEAD/tools/disasm.py",
+    "https://github.com/daadaada/turingas",
+    "https://github.com/daadaada/turingas/tree/master/turingas",
+    "https://github.com/daadaada/turingas/tree/master/examples/bench/smem",
+    "https://github.com/daadaada/turingas/tree/master/tools",
+    "https://github.com/daadaada/turingas/commits/master",
+    "https://github.com/daadaada/turingas/issues?q=is%3Aissue",
+    "https://github.com/daadaada/turingas/issues/2",
+    "https://github.com/daadaada/turingas/issues/4",
+    "https://github.com/daadaada/turingas/issues/13",
+    "https://github.com/daadaada?tab=repositories",
+    "https://github.com/daadaada/gas",
+    "https://github.com/daadaada/misc",
+    "https://home.cse.ust.hk/~weiwa/papers/yan-ppopp20.pdf (ENOTFOUND)",
+    "https://hgpu.org/?p=20724 (ENOTFOUND)",
+    "WebSearch: \"Optimizing Batched Winograd Convolution on GPUs\" Yan Wang Chu PPoPP 2020 cuDNN speedup SASS TuringAs"
+  ],
+  "confidence": 0.6
+}

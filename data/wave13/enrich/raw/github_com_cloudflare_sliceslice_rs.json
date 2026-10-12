@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/cloudflare/sliceslice-rs",
+  "one_liner": "Rust crate for SIMD substring-existence search (Mula's generic SIMD); beat Rust 1.46 String::find 4.2-9.8x in Cloudflare's benchmark.",
+  "what_it_does": "Single-pattern substring search that answers only whether the needle occurs in the haystack: search_in returns a bool, with no match position (issue #41 asking for positions is still open). You build a searcher once per needle (Avx2Searcher or DynamicAvx2Searcher on x86_64, NeonSearcher on aarch64, Wasm32Searcher on wasm32, StdSimdSearcher behind the nightly `stdsimd` feature) and then call search_in on many haystacks. It is a different interface from str::find, str::contains or memmem, and the x86, aarch64 and wasm32 constructors and search calls are `unsafe`.",
+  "how_it_is_fast": "It implements Wojciech Mula's 'generic SIMD' strstr. The first needle byte and one other byte (by default the last, but any position can be chosen to resist worst-case inputs) are broadcast into vectors. Each step compares 32 haystack positions at once using two loads offset by that position, ANDs the two equality masks, and confirms each remaining candidate with memcmp. DynamicAvx2Searcher monomorphises needles of 2 to 16 bytes into fixed-size arrays so the confirming memcmp has a constant length, sends 1-byte needles to memchr, and uses 16-, 8-, 4- and 2-lane SSE variants for short haystacks. The tail is handled by an overlapping, masked final chunk instead of reading past the end of the haystack.",
+  "when_to_use": [
+    "Rust code that tests the same fixed needle against many haystacks and needs only a yes or no answer, such as matching records or headers against a keyword list",
+    "x86_64 machines with AVX2 (Haswell or later); aarch64 NEON and wasm32 simd128 searchers also exist",
+    "Replacing str::find or str::contains in a hot loop: in BurntSushi's rebar record (2026-07-30, sliceslice 0.4.3), oneshot sliceslice is about 3.9x faster than Rust std memmem by geometric mean (faster on 34 of 38 benchmarks) and about 2.17x faster than libc memmem (faster on 30 of 39) (derived from the CSV)",
+    "Inputs where rebar shows it ahead of memchr::memmem prebuilt: code search (rust-library-rare-fn-from-str, about 4.6x), random bytes (seemingly-random, 47.71 vs 70.87 us), and rare-repeated-small-tricky (about 1.5x) (derived from the CSV)"
+  ],
+  "when_not_to_use": [
+    "You need the match offset or an iterator over matches; the API returns only a bool",
+    "You already use memchr::memmem: with prebuilt searchers on both sides, memchr 2.8.3 wins 27 of 42 rebar benchmarks (sliceslice geomean 0.90x), including rebar's ports of sliceslice's own workloads: i386 8.57 ms for memchr vs 10.33 ms, and short words 6.20 ms vs 16.13 ms (derived from the 2026-07-30 CSV)",
+    "Adversarial or low-entropy inputs: it has no linear worst-case bound. On rebar's defeat-simple-vector-freq-alphabet it takes 201.94 us against 37.05 us for libc memmem and 25.52 us for memchr (about 5.5x and 7.9x slower), and on defeat-simple-vector-repeated-alphabet it runs at 0.43x of memchr. In issue #40 BurntSushi traced the repeated-alphabet case to sliceslice thrashing in memcmp on false candidates.",
+    "C or C++ projects: it is a Rust crate with no C API",
+    "Long-lived dependencies: the last release is 0.4.3 (2024-06-29), the last commit is 2024-09-20, and issues #25 (safety documentation), #39 (no_std), #40, #41 and #97 are open"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, paste, memchr (>= 2.3), seq-macro",
+    "min_toolchain": "Rust edition 2021 (implies Rust 1.56 or later; no rust-version field); the stdsimd feature needs nightly (portable_simd)",
+    "platforms": "x86_64 with AVX2 required at run time (no automatic CPU dispatch); aarch64 NEON (built in CI but its tests are not run there); wasm32 simd128 (tested under wasmtime in CI); any target with nightly portable SIMD via StdSimdSearcher",
+    "thread_safety": "not documented; search_in takes &self and a searcher holds only the needle and two broadcast vectors, so sharing a built searcher across threads should be safe by Rust's auto traits",
+    "drop_in_for_baseline": "partial — it replaces only the existence check (str::contains or find(..).is_some()) and requires prebuilding an unsafe searcher per needle; it returns no position"
+  },
+  "gotchas": [
+    "The 'Dynamic' in DynamicAvx2Searcher refers to choosing a specialisation by needle length; it does not detect the CPU. new and search_in are `unsafe` and marked #[target_feature(enable = \"avx2\")], so calling them on a CPU without AVX2 is undefined behaviour. Gate the calls with is_x86_feature_detected!(\"avx2\"). The safety contract is undocumented (issue #25, open since 2020).",
+    "Harness flaw behind the README's 4.2x short-haystack figure: the sliceslice and memmem rows build their searchers outside the timed loop, while String::find rebuilds its Two-Way searcher on every call (benches/i386.rs at v0.2.1). The scalar, prebuilt memmem 0.1.1 TwoWaySearcher measures 88.029 ms against sliceslice's 79.416 ms in the same table (1.11x, derived from page data), so most of the short-haystack gain is excluded setup cost, not SIMD. The 9.8x long-haystack figure is a real SIMD gain: prebuilt memmem is slower than String::find there (401.59 vs 345.01 ms).",
+    "Issue #97 (January 2025, no reply, no reproducer) says Avx2Searcher reads past the haystack in vector_search_in_chunk. A reading of src/lib.rs and src/x86.rs at HEAD this session suggests the claim is unfounded: inlined_search_in passes end = haystack.len() - needle.size() + 1, only chunks below end are loaded, and with_position asserts position < needle.size(), so start + position + LANES <= haystack.len(). CI also runs the tests, which try every position for each needle, under AddressSanitizer. This was not tested here. The README's out-of-bounds footnote refers to sse4-strstr, not sliceslice.",
+    "Docs have drifted: the x86.rs doc comment still describes a scalar Rabin-Karp fallback for very short haystacks, which 0.3.1 removed while fixing the Rust 1.52 regression (#47). The README table still shows 0.2.0 on Rust 1.46 and omits the memchr::memmem rows that the current bench runs."
+  ],
+  "pick_this_over_siblings_when": "Pick it over memx-cdy (a Rust memmem with a C ABI) when you are in Rust, reuse a fixed needle many times and only need a bool; pick memx-cdy when you need a C ABI or match positions. WojciechMula's toys strstr and sse4-strstr implement the same algorithm for C++; use them from C++ but note that sse4-strstr reads past the end of the haystack, which sliceslice avoids.",
+  "verified_claims_summary": "Cloudflare's README reports the i386 Criterion benchmark on an Intel Core i7-6700 with Rust 1.46.0 and gcc 9.3.0. sliceslice 0.2.0 DynamicAvx2Searcher took 79.4 ms against 335.6 ms for Rust std String::find on the word-in-word workload, and 35.2 ms against 345.0 ms when searching every word in an i386 manual text (4.2x and 9.8x, derived from page data). Prebuilt searchers make the short-haystack comparison uneven. BurntSushi's rebar record (memchr repo, 2026-07-30, sliceslice 0.4.3, CPU not stated in the CSV) independently shows oneshot sliceslice 2.17x faster than libc memmem and 3.9x faster than Rust std memmem, but 0.96x against memchr::memmem oneshot and 0.90x against it prebuilt (geometric means, derived from the CSV).",
+  "status_note": "Stale (last release 0.4.3 on 2024-06-29, last commit 2024-09-20, issues unanswered since 2021) but MIT-licensed, about 2,000 lines of Rust and heavily downloaded (7.59M from crates.io, 1.65M recently); usable as is, though memchr::memmem is the maintained and usually faster default.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/x86.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/aarch64.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/wasm32.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/stdsimd.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/src/multiversion.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/.github/workflows/check.yml",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/bench/Cargo.toml",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/HEAD/bench/benches/i386.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/v0.2.1/README.md",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/v0.2.1/Cargo.toml",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/v0.2.1/benches/i386.rs",
+    "https://raw.githubusercontent.com/cloudflare/sliceslice-rs/v0.2.1/sse4-strstr/build.rs",
+    "https://github.com/cloudflare/sliceslice-rs/issues?q=is%3Aissue",
+    "https://github.com/cloudflare/sliceslice-rs/issues/97",
+    "https://github.com/cloudflare/sliceslice-rs/issues/40",
+    "https://github.com/cloudflare/sliceslice-rs/issues/47",
+    "https://crates.io/api/v1/crates/sliceslice",
+    "https://crates.io/api/v1/crates/sliceslice/reverse_dependencies",
+    "https://raw.githubusercontent.com/BurntSushi/memchr/master/benchmarks/record/x86_64/2026-07-30.csv"
+  ],
+  "confidence": 0.8
+}
