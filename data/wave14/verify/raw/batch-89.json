@@ -1,0 +1,84 @@
+[
+  {
+    "id": "lang:nim/edin/raytracer#render-500x500",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The readme.md table does show Nim 130 ms against C (GCC) 160 ms and C++ (GCC) 160 ms on an AMD FX-8120, but the build scripts show a tuned Nim build (-d:quake fast inverse sqrt, -d:intpow integer pow, -march=native, LTO) against plain C at -O3 and C++ at -O2 with libm pow. Under the crippled-baseline precedent (naive baseline against a tuned other-language version, unequal flags), the result is tier D. Compiler versions are not stated either.",
+    "corrections": {
+      "compiler_and_flags": "At the time of the README table (per-language scripts at commit 80bb306, before the June 2026 move to projects.xml): Nim 'nim c -d:danger -d:lto -d:intpow -d:quake --passC:\"-march=native\"'; C 'g++ RayTracer.c -x c -O3' (no -march=native, no LTO); C++ 'g++ RayTracer.cpp -O2 -std=c++17 -s'. The current projects.xml keeps the same C and C++ commands (gcc RayTracer.c -O3 on Linux) and builds Nim with '-d:danger -d:lto -d:intpow --passC:\"-march=native\"' (no -d:quake). Compiler versions are not stated.",
+      "caveats": "Not the same algorithm and not the same flags, so the 130 ms vs 160 ms gap is not a language win. The Nim build used -d:quake, which replaces 1/len in norm() with the Quake fast inverse square root (magic constant 0x5fe6eb50c7b537a9 plus one Newton step, an approximation that changes the output), and -d:intpow, which replaces the specular pow(specular, 250.0 or 150.0) with integer exponentiation by squaring, while the C and C++ versions call libm pow(double, double). On top of that, Nim was built with -march=native and -d:lto, while C got plain -O3 (compiled as C by g++ -x c on Windows) and C++ only -O2. Compiler versions are not stated, and the table is old (an FX-8120 CPU, Node 15 and PHP 8.0 rows, MSVC rows), so it is not tied to a dated run. The README comment that C++ does bounds checking is not borne out by the C++ source (no .at() calls). Only Nim beats the GCC C and C++ builds; D (LDC) 210 ms, Crystal 190 ms and Rust 220 ms lose to them and beat only the MSVC builds (250 ms). There is no repeat count or variance.",
+      "same_algorithm": false,
+      "same_opt_level": false,
+      "why_faster": "From the build scripts and source: different algorithms and flags, not the language. The Nim build uses -d:intpow (integer exponentiation by squaring for the specular exponent, where C and C++ call libm pow) and -d:quake (an approximate fast inverse square root in norm), plus -march=native and LTO, which the C (-O3) and C++ (-O2) builds lack."
+    },
+    "notes": "Downgraded C to D under the crippled-baseline precedent: the README note 'Uses Quake square root algorithm' understates the asymmetry, because the pre-June-2026 nim/run.bat also enabled -d:intpow (integer pow replacing libm pow with exponent 250/150), -march=native and LTO, while C was built at plain -O3 and C++ at -O2. Shortcomings to record: different algorithm (approximate inverse sqrt, integer pow), unequal flags, no compiler versions, an undated old table on an FX-8120. Metadata checked: MIT, 61 stars, last commit 2026-06-18.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/edin/raytracer/HEAD/readme.md",
+      "https://raw.githubusercontent.com/edin/raytracer/HEAD/projects.xml",
+      "https://raw.githubusercontent.com/edin/raytracer/HEAD/nim/RayTracer.nim",
+      "https://raw.githubusercontent.com/edin/raytracer/HEAD/c/RayTracer.c",
+      "https://raw.githubusercontent.com/edin/raytracer/HEAD/c++/RayTracer.cpp",
+      "https://raw.githubusercontent.com/edin/raytracer/80bb306/nim/run.bat",
+      "https://raw.githubusercontent.com/edin/raytracer/80bb306/nim/build.bat",
+      "https://raw.githubusercontent.com/edin/raytracer/80bb306/c/run.bat",
+      "https://raw.githubusercontent.com/edin/raytracer/80bb306/c/run.sh",
+      "https://raw.githubusercontent.com/edin/raytracer/80bb306/c++/run.bat",
+      "https://github.com/edin/raytracer",
+      "https://github.com/edin/raytracer/commits/master"
+    ]
+  },
+  {
+    "id": "https://github.com/burntsushi/rust-snappy",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README Performance section has a critcmp table for snappy/cpp (Snappy/C++ 1.1.8) and snappy/snap on an Intel i7-6900K, and the harness is public (bench/src/bench.rs with the snappy-cpp FFI crate). Compiler versions and the C++ library's build flags are not stated (it links the system libsnappy shared library), so it falls short of A. These are first-party numbers, so tier C.",
+    "corrections": {
+      "compiler_and_flags": "Not stated. The Rust side is run with 'cargo bench --features cpp' in bench/ (Criterion 0.3), using Cargo's bench profile; the root Cargo.toml sets only debug = true for release. The C++ side is whatever system libsnappy shared library was installed: snappy-cpp/build.rs only emits 'cargo:rustc-link-lib=dylib=snappy', so its build flags are the distribution's and are not given. The rustc version is not stated.",
+      "caveats": "This is a parity result, not a clear win. The README says the Rust crate 'should roughly match' C++ Snappy on x86_64. snap is faster on about half the rows (up to 1.10x: compress zflat03_jpg_200, decompress uflat07_txt2 and uflat09_txt4 1.09x) and slower on others (decompress uflat04_pdf C++ 1.10x faster, uflat10_pb 1.05x, compress zflat01_urls 1.04x). The C++ side is the system libsnappy shared library called through Rust FFI (snappy-cpp/build.rs links dylib=snappy), so its optimisation flags are the distribution's and are not stated, and each call crosses a dynamic-library boundary. The 200-byte jpg_200 rows (about 120 to 260 ns per call), where snap wins by 8-10%, are the most sensitive to that call overhead. The numbers are from an old setup (Snappy/C++ 1.1.8, i7-6900K) and predate snap 1.1.2 (2026-07-15, 'impl: more closely align with the Snappy spec'). Newer Snappy 1.1.9+/1.2.x releases were not tested. First-party measurement by the crate author."
+    },
+    "notes": "Numbers match the README critcmp table exactly; this is a near-parity result (wins and losses of up to 10%) by the crate author, so it stays at tier C. Shortcomings to record: no clear win, the C++ baseline is a system shared library with unknown build flags called through FFI (this also affects the tiny jpg_200 rows), an old Snappy 1.1.8, no compiler versions. Metadata checked: BSD-3-Clause, 514 stars, not archived, last commit 2026-07-15.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/README.md",
+      "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/bench/Cargo.toml",
+      "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/snappy-cpp/Cargo.toml",
+      "https://raw.githubusercontent.com/BurntSushi/rust-snappy/HEAD/snappy-cpp/build.rs",
+      "https://github.com/BurntSushi/rust-snappy",
+      "https://github.com/BurntSushi/rust-snappy/commits/master"
+    ]
+  },
+  {
+    "id": "lang:v/kostya/benchmarks#brainfuck-bench-b",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README bench.b table shows V/gcc 0.985 s against C++/g++ 1.097 s and C/gcc 1.112 s. The suite is public, with code (brainfuck/bf.v, bf.cpp, bf.c), compilers (gcc/g++ 16.1.0, clang 22.1.8, V 0.5.2), flags (common/commands.mk) and CPU (Xeon E-2324G) all stated, so it would otherwise reach A. Spec Part 4 caps a language-level claim with no stated mechanism at C, and neither the README nor the sources say why V wins.",
+    "corrections": {
+      "compiler_and_flags": "common/commands.mk: COMMON_FLAGS = '-Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries'. V: 'v -prod -no-bounds-checking -prealloc -cflags \"-Wno-error=implicit-function-declaration $(COMMON_FLAGS)\" -cc gcc'. C++: 'g++ $(COMMON_FLAGS) -std=c++23' (libstdc++); C++/clang++: 'clang++ $(COMMON_FLAGS) -std=c++23 -stdlib=libc++'. C: 'gcc $(COMMON_FLAGS) -std=c23'. Versions: V 0.5.2 (7647ce1), gcc/g++ 16.1.0, clang 22.1.8.",
+      "baseline_stdlib": [
+        "libstdc++",
+        "libc++"
+      ],
+      "caveats": "Capped at tier C because the source states no mechanism. V compiles to C, so the V/gcc row is GCC 16.1.0 compiling V-generated C with the same COMMON_FLAGS as the hand-written C and C++. The roughly 10% lead is therefore a difference between two C-level programs, not between compilers, and V adds -prealloc (arena allocator) and -no-bounds-checking. The three programs share the op-tree design but differ in detail: the V Op carries a full []Op array header, the C op is a 16-byte tagged union with a tape_get that returns char, and C++ uses std::vector<Op> with a resize-doubling tape. Only the gcc backend wins: V/clang is 1.846 s, slower than every C and C++ row. On the suite's other brainfuck sample, mandel.b, V/gcc takes 17.865 s against C++/g++ 10.143 s (C++ 1.76x faster, derived from page data), so the bench.b result does not generalise. Single machine (Xeon E-2324G), medians with MAD of about 0.001-0.002 s."
+    },
+    "notes": "Numbers, flags, versions and CPU match the README (UPDATE 2026-07-19) and common/commands.mk; both sides use equal -O3 -march=native -flto=auto flags, so same_opt_level=true and same_algorithm=true (the same op-tree interpreter, with minor data-layout differences) hold. Confirmed at C under the spec's no-mechanism cap; the record would be A if a mechanism were shown. Shortcomings to record: no mechanism, V is C compiled by the same gcc, the win reverses on mandel.b (C++/g++ 1.76x faster) and with the clang backend. Metadata checked: MIT, 2.9k stars, last commit 2026-07-19.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.v",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.cpp",
+      "https://raw.githubusercontent.com/kostya/benchmarks/master/brainfuck/bf.c",
+      "https://github.com/kostya/benchmarks",
+      "https://github.com/kostya/benchmarks/commits/master"
+    ]
+  }
+]
