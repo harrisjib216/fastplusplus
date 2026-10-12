@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/yujiosaka/wa-ulid",
+  "one_liner": "Rust-to-WebAssembly ULID generator with the ulid npm API; about 43x faster ulid() than ulid 2.3.0 in Node.",
+  "what_it_does": "Generates ULIDs (48-bit millisecond timestamp plus 80 random bits in Crockford base32) from a Rust core compiled to WebAssembly, behind a TypeScript wrapper that re-exports the ulid package's API: ulid(), monotonicFactory(), factory(prng), encodeTime, decodeTime, detectPrng, incrementBase32 and friends. It is a near drop-in, except that you must `await init()` once before the first call, and detectPrng ignores its arguments and returns the wasm-side generator.",
+  "how_it_is_fast": "The headline gain is random-number plumbing, not wasm code generation: ulid 2.3.0 draws one byte per character through Node's crypto.randomBytes(1), which means 16 native calls and Buffer allocations per ULID, while wa-ulid fills all 16 characters inside wasm from rand 0.8's ThreadRng (a userspace ChaCha12 CSPRNG, rand_chacha 0.3.1) seeded through getrandom's js feature, then returns one string. decodeTime gains 2.7x because the baseline builds arrays (substr/split/reverse/reduce with Math.pow per character) where the Rust code runs a plain loop. encodeTime and the monotonic path, which mostly increments the previous random part within the same millisecond, gain only 1.27x and 1.47x once the RNG is out of the picture.",
+  "when_to_use": [
+    "Node.js 20+ backends that mint many non-monotonic ULIDs per second with ulid 2.x and where ULID generation shows up in profiles (about 22 us per ulid() call in the baseline vs about 0.5 us here, as measured by the author).",
+    "Code already written against the ulid 2.x API that can absorb one `await init()` at startup.",
+    "Services that want a CSPRNG-backed ULID without paying one native crypto call per character."
+  ],
+  "when_not_to_use": [
+    "Browser bundles: the package adds about 110 KB of JavaScript (a 68 KB wasm binary inlined as base64, once in the ESM and once in the UMD build) versus 4.7 KB for ulid, and the wasm is compiled synchronously at import time.",
+    "Monotonic ULID generation inside one millisecond, encodeTime or decodeTime alone: the gains there are 1.27x to 2.73x, and a JavaScript implementation that avoids per-call allocations would probably close them (not measured).",
+    "When a pure JavaScript ULID library that draws its randomness in batches is acceptable: the 43x comes from replacing per-byte crypto calls, which JS can also do, without a 110 KB module or an init step (uniku's README claims a 116x ULID speedup in TypeScript; not verified here).",
+    "Projects that need maintenance or a working npm install: one release (1.0.0, 2024-05-05), four commits, nothing since 2024-05-11.",
+    "Custom PRNGs via factory(prng): wasm calls back into JavaScript once per character, and that path was never benchmarked."
+  ],
+  "integration": {
+    "form": "module (npm package wa-ulid 1.0.0: ESM and UMD builds with the wasm inlined as base64, plus a CLI)",
+    "dependencies": "none at runtime; building from source needs Rust, wasm-pack and pnpm (crates rand 0.8.5, rand_chacha 0.3.1, getrandom 0.2.14 with the js feature, wasm-bindgen 0.2.92)",
+    "min_toolchain": "Node.js 20 (package engines field; .node-version pins 20.12.2); Rust version not documented",
+    "platforms": "Node.js 20+ (benchmarked on Apple M2 Pro); browsers are claimed, but the synchronous compile of a 68 KB module is a risk there",
+    "thread_safety": "not documented; each JavaScript realm or worker gets its own wasm instance and its own thread-local RNG, and a monotonicFactory() keeps its state in its own wasm-side context",
+    "drop_in_for_baseline": "partial: same function names and signatures as ulid 2.x, but an `await init()` is required before use, detectPrng arguments are ignored, and invalid non-ASCII inputs can trap instead of throwing ulid's errors"
+  },
+  "gotchas": [
+    "The published npm tarball (1.0.0) still declares \"postinstall\": \"pnpm build\" but ships only dist/, bin/, README and LICENSE (no Cargo.toml, src or rollup config). npm and Yarn classic run dependency postinstall scripts, so `npm install wa-ulid` would try to run pnpm and wasm-pack inside node_modules and should fail unless scripts are skipped (--ignore-scripts, or pnpm's default blocking of dependency build scripts). Not tested here; inferred from the tarball's package.json.",
+    "The 68 KB wasm is listed under @rollup/plugin-wasm's `sync` option, so importing the package runs `new WebAssembly.Module()` synchronously on a base64-decoded buffer. The plugin's own README says runtimes allow synchronous compilation only for small modules (under 4 KB), so the README's 'fully functional in browsers' is doubtful on a browser main thread. The import-time compile cost is also excluded from the benchmark, which awaits init() before timing.",
+    "Byte and character indexing are mixed in the Rust code: decode_time checks the byte length and then slices &id[0..10], and replace_char_at compares an index against the byte length but indexes a Vec<char>. Non-ASCII input can therefore panic, which in wasm surfaces as a RuntimeError ('unreachable') rather than ulid's 'malformed ulid' error.",
+    "The README says randomness 'does not utilize the browser or Node.js crypto APIs', but this holds per call only: the shipped glue imports crypto.getRandomValues and randomFillSync, which getrandom uses to seed the ChaCha12 generator. Characters come from a uniform float in [0,1) times 32, slightly better than ulid 2.3.0, whose byte/0xff mapping with a clamp over-weights 'Z'."
+  ],
+  "pick_this_over_siblings_when": "No other ULID generator is catalogued. Siblings such as hash-wasm and xxhash-wasm win through compute kernels in wasm, while wa-ulid's 43x win comes from avoiding per-byte crypto calls. Pick it only for a Node backend locked into the ulid 2.x API; a pure JavaScript ULID with batched randomness is the likelier better choice.",
+  "verified_claims_summary": "Author's Benchmark.js run in Node (.node-version pins 20.12.2; the version used is not stated) on an Apple M2 Pro, comparing wa-ulid 1.0.0 with ulid 2.3.0 (pnpm-lock), wasm init done before timing: ulid() 1,933,859 vs 44,758 ops/s (43.2x), decodeTime 5,336,862 vs 1,951,730 (2.73x), monotonic ulid 3,505,757 vs 2,382,881 (1.47x), encodeTime 4,904,495 vs 3,863,741 (1.27x). The 43x row measures ChaCha12-in-wasm against 16 crypto.randomBytes(1) calls per ULID, and the current ulid 3.0.2 still draws one byte per character (now through getRandomValues on a 1-byte array), but no run against ulid 3.x exists.",
+  "status_note": "Stale: four commits, all in May 2024, one npm release (1.0.0 on 2024-05-05) and one closed issue. It is MIT-licensed and small (about 170 lines of Rust), so vendoring or rebuilding is easy, but the published npm package's leftover postinstall hook and the synchronous 68 KB wasm compile make the package itself risky to depend on.",
+  "sources_read": [
+    "https://github.com/yujiosaka/wa-ulid",
+    "https://github.com/yujiosaka/wa-ulid/commits/main",
+    "https://github.com/yujiosaka/wa-ulid/issues?q=is%3Aissue",
+    "https://github.com/yujiosaka/wa-ulid/issues/1",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/README.md",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/benchmark.js",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/Cargo.lock",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/package.json",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/pnpm-lock.yaml",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/rollup.config.js",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/test/index.test.ts",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/bin/cli.js",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/docs/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yujiosaka/wa-ulid/HEAD/.node-version",
+    "https://registry.npmjs.org/wa-ulid",
+    "https://registry.npmjs.org/wa-ulid/-/wa-ulid-1.0.0.tgz",
+    "https://raw.githubusercontent.com/ulid/javascript/v2.3.0/lib/index.ts",
+    "https://raw.githubusercontent.com/ulid/javascript/v2.3.0/package.json",
+    "https://raw.githubusercontent.com/ulid/javascript/HEAD/package.json",
+    "https://raw.githubusercontent.com/ulid/javascript/HEAD/source/ulid.ts",
+    "https://raw.githubusercontent.com/ulid/javascript/HEAD/source/utils.ts",
+    "https://github.com/ulid/javascript/tree/master/source",
+    "https://raw.githubusercontent.com/rollup/plugins/master/packages/wasm/README.md",
+    "https://github.com/jkomyno/uniku"
+  ],
+  "confidence": 0.75
+}

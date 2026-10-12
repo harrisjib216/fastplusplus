@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/yahorbarkouski/ultrachess",
+  "one_liner": "Rust chess rules core compiled to a 158 KB WASM module with a TypeScript API, aimed at replacing chess.js; its speedup over chess.js is cited, not measured.",
+  "what_it_does": "A chess rules library for JS and TS runtimes: legal move generation, FEN, SAN, PGN, Zobrist hashing, game-end checks and perft, exposed through a Chess class (npm package ultrachess 1.4.0, zero runtime dependencies). The API resembles chess.js but is not a drop-in: construction is async (await Chess.create()) unless you import ultrachess/inline, moves come back as packed 16-bit integers or SAN strings, errors are typed exceptions, and every instance holds a WASM handle that must be disposed. A low-level entry exposes the raw extern \"C\" ABI for building engines on top.",
+  "how_it_is_fast": "Legal-only move generation with pin masks and check masks after Peter Ellis Jones's write-up (no pseudo-legal-then-filter pass), and fancy magic bitboards for sliders whose tables are searched at module init. The checkers bitboard and Zobrist key are kept incrementally, so inCheck() and hash() are O(1). perft adds two perft-only fast paths in rust/core/src/perft.rs: at depth 1 it popcounts target bitboards (count_legal_moves) instead of emitting moves, and at depth 2 and above it uses make_move_perft, which skips Zobrist, history and clock updates. The whole recursion runs inside one WASM call, and moves({raw:true}) reads a Uint32Array view over linear memory without allocating.",
+  "when_to_use": [
+    "Bulk move-generation work in JS that can stay inside one WASM call: perft, legal-move counts, validating large position sets (startpos perft(6), 119M nodes, in 204.9 ms on Bun 1.3.10 and 353.7 ms on Node 25.7.0, Apple M4 Max).",
+    "Server-side move validation or game-end detection for many concurrent games on Node, Bun, Deno, Cloudflare Workers or Vercel Edge, where chess.js is the CPU bottleneck and a 45 KB brotli WASM is acceptable.",
+    "UI or search loops that call inCheck(), hash() or legal-move enumeration after every move: cached O(1) check and 64-bit Zobrist key, plus allocation-free packed moves.",
+    "Building a JS or TS engine on the raw ABI (ultrachess/low-level) with direct linear-memory access."
+  ],
+  "when_not_to_use": [
+    "Chess960 or other variants (atomic, antichess, crazyhouse, three-check): not supported; the README itself points to chessops.",
+    "PGN tooling that must keep comments, NAGs or variations: COMPAT.md says the WASM ABI does not surface them, so Chess.loadPgn drops them when replaying the mainline, although the README advertises a NAG and comment round-trip.",
+    "Code that creates many short-lived Chess objects without dispose() or `using`: the shipped dist has no FinalizationRegistry, so undisposed instances keep their WASM slab slots.",
+    "Strict CSP without wasm-unsafe-eval: the README's runtime table marks both entries unsupported unless the .wasm is served from an allowed URL.",
+    "If you need proof of a per-call speedup for move(), SAN or PGN work: only perft was measured, chess.js was never run in the same harness, and each of those calls crosses the JS/WASM boundary with string copies."
+  ],
+  "integration": {
+    "form": "module (npm package ultrachess 1.4.0, ESM and CJS, entries ultrachess, ultrachess/inline and ultrachess/low-level; the Rust crates ultrachess-core and ultrachess-wasm live in the repo and the wasm crate is publish = false)",
+    "dependencies": "none at runtime (the .wasm ships in the package); building needs cargo with the wasm32-unknown-unknown target, tsup, and optionally binaryen wasm-opt",
+    "min_toolchain": "Rust 1.95 (workspace rust-version) to build; Node 18+, Bun 1.2+, Deno 1.40+ or an evergreen browser to run; `using` disposal needs TypeScript 5.2+ and Node 22+",
+    "platforms": "any WebAssembly 2.0 runtime (wasm-opt run with bulk-memory, sign-ext, mutable-globals and nontrapping-float-to-int); no WASM SIMD",
+    "thread_safety": "Single-threaded WASM instance with global scratch buffers ('WASM is single-threaded and ABI entry points never re-enter'); one instance per worker.",
+    "drop_in_for_baseline": "partial — chess.js-style method names (move, moves, fen, pgn, history, put, remove), object-form move shim and aliases, but async construction, packed Move integers, typed exceptions instead of sentinel returns, put() returning the replaced piece and throwing on a second king, no clear() or validate_fen, and mandatory dispose()"
+  },
+  "gotchas": [
+    "The headline ~55x (Node) and ~95x (Bun) over chess.js divides ultrachess's measured perft by a 5-7 Mnps chess.js figure cited without a source ('Node 22'), never run in rust/bench/wasm-perft.mjs even though chess.js ^1.4.0 is a devDependency. The two perfts also do different work: chess.js perft() generates pseudo-legal moves and makes, king-checks and unmakes every leaf (src/chess.ts), while ultrachess popcounts legal targets at depth 1 and skips Zobrist and history updates above it. The ratio is cross-run and overstates the gap for move-by-move use.",
+    "'Through the WASM boundary' means one boundary crossing per perft() call: the harness times only chess.perft(depth), after a warm-up and excluding Chess.create, min of 3. It measures compiled move-generation speed inside WASM, not the per-call cost of move(), moves() or SAN that a chess.js port actually exercises.",
+    "Size figures in the README are understated: the published inline.js is 212,379 bytes (base64 of the 157,882-byte .wasm), not '~60 KB', and the ESM TypeScript shim is 31,947 + 3,759 bytes unminified, not '~10 KB'. The README puts magic-table init at about 1 ms while BENCH.md says embedding magics would save about 20 ms of WASM init.",
+    "The README's '100k-game lock-step differential' is the manual pre-RC tier (just test-diff-100k, about 55 min); the default PR gate runs 200 games of up to 150 plies (test/differential/vs-chess-js.test.ts). The bench-wasm recipe also does not depend on bench-gate, although the README says every benchmark gate-runs the Rust tests (the WASM harness does check leaf counts itself)."
+  ],
+  "pick_this_over_siblings_when": "No chess library is catalogued in this category. Like berith or rsmod-pathfinder it is a Rust-to-WASM package that wins when the work stays inside one call; pick it when move-generation throughput in JS matters more than chess.js's synchronous API and variant-free scope is fine.",
+  "verified_claims_summary": "On an Apple M4 Max, the npm build (rustc 1.95, fat LTO, codegen-units 1, wasm-opt -O4) ran startpos perft(6) inside one WASM call in 204.9 ms on Bun 1.3.10 (581 Mnps) and 353.7 ms on Node 25.7.0 (337 Mnps), 0.70x and 0.40x of its native Rust speed. chess.js was not measured: the 5-7 Mnps it is compared with is a cited figure, so the ~55-95x claim is a cross-run estimate. In the same native harness, all four perft wrappers bulk-count at depth 1, so the separate result of 836 vs 600 Mnps for cozy-chess 0.3.4 and 345 for shakmaty 0.30 (geomean 1.23x and 3.70x over six positions) is like-for-like.",
+  "status_note": "Single-author project with 43 commits, all in April 2026 (last 2026-04-18), 7 stars, no issues filed; npm 1.4.0, MIT, well tested (perft gate, property tests, coverage gates), but young and unproven in production.",
+  "sources_read": [
+    "https://github.com/yahorbarkouski/ultrachess",
+    "https://github.com/yahorbarkouski/ultrachess/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/README.md",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/BENCH.md",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/COMPAT.md",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/TESTING.md",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/package.json",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/justfile",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/scripts/wasm-opt.mjs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/bench/wasm-perft.mjs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/bench/Cargo.toml",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/bench/src/lib.rs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/bench/src/bin/nps.rs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/core/Cargo.toml",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/core/src/perft.rs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/wasm/Cargo.toml",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/rust/wasm/src/lib.rs",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/src/chess.ts",
+    "https://raw.githubusercontent.com/yahorbarkouski/ultrachess/HEAD/test/differential/vs-chess-js.test.ts",
+    "https://raw.githubusercontent.com/jhlywa/chess.js/HEAD/src/chess.ts",
+    "https://registry.npmjs.org/ultrachess",
+    "https://registry.npmjs.org/ultrachess/-/ultrachess-1.4.0.tgz",
+    "https://registry.npmjs.org/chess.js/latest",
+    "https://github.com/Gigantua/Gigantua"
+  ],
+  "confidence": 0.6
+}

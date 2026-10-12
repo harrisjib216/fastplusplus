@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/xuehua-s/fast-md5-web",
+  "one_liner": "Browser MD5 library: RustCrypto md-5 in WebAssembly plus a Web Worker pool, claimed 8-16x faster than spark-md5.",
+  "what_it_does": "fast-md5-web hashes Files or Uint8Arrays with MD5 off the main thread: Md5CalculatorPool spreads files across a pool of module Web Workers (calculateMd5 with timeout, progress callback and priority; calculateMd5Batch; cancelTask; getPoolStatus), and Md5Calculator exposes the wasm hasher directly (calculate_md5_async plus start/update/finalize incremental sessions). Inputs larger than chunkSize are read in chunks and fed to an incremental hasher, through a SharedArrayBuffer slot when the page is cross-origin isolated, else by transferring ArrayBuffers. It is not a drop-in for spark-md5: the API is promise-based and File-oriented, ESM-only, and returns hex strings of length 32 or 16.",
+  "how_it_is_fast": "The MD5 compression function is the RustCrypto md-5 0.10.6 crate compiled to WebAssembly with wasm-bindgen (release profile opt-level \"s\", a 59 KB .wasm in the npm package), so the 32-bit add/rotate rounds run as wasm i32 ops instead of JavaScript number arithmetic. Most of the headline speedup comes from parallelism: the pool runs one file per worker, sized by default to navigator.hardwareConcurrency, and a SharedArrayBuffer allocator avoids structured-clone copies when cross-origin isolation is on. MD5 is sequential within one input, so a single large file is hashed by one worker and gains nothing from the pool beyond keeping the UI thread free.",
+  "when_to_use": [
+    "Browser apps that checksum many user-selected files before upload (deduplication, resumable or instant uploads to object storage that wants an MD5) and can spread them over several cores.",
+    "When hashing must stay off the UI thread and you want a ready-made pool with per-file timeouts, progress callbacks, priorities and cancellation rather than writing your own worker plumbing.",
+    "Sites that already serve Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp, so the SharedArrayBuffer path is available (but see the large-file race in gotchas).",
+    "Interop with existing MD5-based APIs where the checksum format is fixed; it is a checksum, not a security primitive."
+  ],
+  "when_not_to_use": [
+    "Anything security-related (signatures, password hashing, integrity against an adversary): MD5 is not collision resistant.",
+    "Hashing one file or a few small buffers: the pool brings no speedup there and the 8x single-thread claim has no published measurement; hash-wasm publishes a reproducible MD5 throughput table.",
+    "Large files (above chunkSize) with SharedArrayBuffer enabled until the slot-overwrite race described in gotchas is fixed; disable shared memory or cross-check results.",
+    "Node.js servers: node:crypto is native and faster; this package's pool calls new Worker(..., {type: 'module'}) and navigator.hardwareConcurrency, has no worker_threads code despite the README, and WasmInit() by default fetches the .wasm from a URL relative to import.meta.url.",
+    "CommonJS projects or toolchains that cannot resolve the worker and wasm files next to dist/ (issue #8 was a Vite import-resolution failure)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "uuid 11.1.0 at runtime; ships dist/index.js, dist/md5-worker.js and wasm/pkg (wasm-pack --target web output), which the bundler must serve at their relative URLs",
+    "min_toolchain": "ES2020 ESM consumers; ES module Worker support in the browser; building from source needs Rust, wasm-pack and pnpm (Node >= 18 per engines)",
+    "platforms": "Browsers (README lists Chrome 68+, Firefox 79+, Safari 15.2+ for SharedArrayBuffer, with HTTPS and COOP/COEP headers); Deno via npm: specifier per README; Node.js only for the direct Md5Calculator with manually supplied wasm bytes",
+    "thread_safety": "Each worker owns one Md5Calculator; incremental sessions are keyed by task id in a thread_local map inside the wasm module; the pool object is meant to be driven from one thread; not otherwise documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Large-file race (code reading, not reproduced): in SharedArrayBuffer mode processLargeFile writes every chunk into the same single slot, posts calculate_chunk, and moves on after only a microtask yield, with no acknowledgement from the worker; the worker copies the slot when it dequeues the message, so whenever file reads outpace hashing (or the worker is still in WasmInit) a later chunk overwrites an unread one and the MD5 is silently wrong. The same design is in npm 1.1.2 and repo HEAD, and the only large-file e2e test hashes a 300 MB file filled with the single byte 17, where every chunk is identical, so it cannot detect the race.",
+    "The published 1.1.2 worker handles messages with an async onmessage and no queue, so chunks of a stream started on a fresh worker can run before WasmInit finishes and fail with 'Stream state not found'; the serial-queue fix exists only in unpublished HEAD (March 2026), which also adds a postinstall that runs pnpm install in the example folder and is not in the package's files list.",
+    "Harness flaws behind the 16-17x: the example app times a pool of navigator.hardwareConcurrency workers against spark-md5 running single-threaded on the main thread, always runs spark-md5 first (cold reads) and reports one run on 174 undisclosed files with no hardware or browser; it also configures memorySize 6400 MiB while the comment says 64MB.",
+    "md5Length 16 returns the first 16 hex characters (64 bits; the README calls it a '128-bit half'), not the middle 16 that substr(8, 16)-style '16-bit MD5' tools return; small-file SharedArrayBuffer allocations are released only on error or timeout, so the shared region fills and later files silently fall back to copying; calculate_md5_async 'yields' with an already resolved promise, which does not let the browser render, so calling it on the main thread still blocks."
+  ],
+  "pick_this_over_siblings_when": "Against hash-wasm, which publishes a reproducible single-thread MD5 table (850.31 MB/s vs spark-md5 171.73 MB/s on 1 MB) and covers many algorithms, pick fast-md5-web only when you want its ready-made multi-file worker pool with progress, priority and timeouts and will verify its output; for one file, Node.js or audited numbers, hash-wasm (run in your own worker if needed) is the safer choice.",
+  "verified_claims_summary": "The only data is one screenshot from the repo's Vue example app: 174 user-selected files, all hashes matching, spark-md5 on the main thread with 2 MB FileReader chunks 109,271.50 ms vs the fast-md5-web pool 6,329.50 ms (17.3x, derived from page data), with hardware, browser, core count and file sizes unstated; the README's 8x single-thread figure and the SharedArrayBuffer 151 vs 200 ms example have no published measurement.",
+  "status_note": "Active (last commit 2026-03-15, MIT, 98 stars) but npm latest is still 1.1.2 from 2025-11-27, so HEAD's worker-queue fix is unpublished; evidence is a single first-party screenshot dominated by parallelism, and the shared-memory large-file path has an unguarded slot-overwrite race that its fixed-byte test file cannot catch.",
+  "sources_read": [
+    "https://github.com/XueHua-s/fast-md5-web/commits/main",
+    "https://github.com/XueHua-s/fast-md5-web/issues?q=is%3Aissue",
+    "https://github.com/XueHua-s/fast-md5-web/tree/main/example/test-fast-md5/e2e",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/README.md",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/package.json",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/tsconfig.json",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/tsup.config.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/scripts/postinstall.mjs",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/src/md5-worker.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/src/types.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/src/shared-memory-allocator.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/wasm/Cargo.toml",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/wasm/src/lib.rs",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/wasm/src/utils.rs",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/README-zh.md",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/src/App.vue",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/package.json",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/vite.config.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/e2e/api-comprehensive.test.ts",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/public/test-files/manifest.json",
+    "https://raw.githubusercontent.com/XueHua-s/fast-md5-web/HEAD/example/test-fast-md5/scripts/generate-fixtures.mjs",
+    "https://registry.npmjs.org/fast-md5-web",
+    "https://registry.npmjs.org/fast-md5-web/-/fast-md5-web-1.1.2.tgz"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/yewstack/yew",
+  "one_liner": "React-style Rust/Wasm component framework whose keyed reconciler beats React 19 on row swaps; overall it ties React and trails vanilla JS.",
+  "what_it_does": "Yew builds browser single-page apps in Rust compiled to WebAssembly, with a JSX-like html! macro and either struct components (impl Component with messages, update and view) or function components with hooks (use_state, use_reducer). The renderer diffs a virtual DOM against the mounted tree and applies changes through wasm-bindgen and web-sys; the ssr and hydration features add server-side rendering. It is not a drop-in for React: it is a different language and API, so an app has to be rewritten.",
+  "how_it_is_fast": "Re-rendering is skipped for a child whose Properties compare equal (PartialEq), so a select or update touches only the rows whose props changed. Keyed children are reconciled in BList::apply_keyed. It first diffs the matching runs at the end and the start, then splices out the mismatched middle and indexes it in a HashSet by key. It then puts that middle back by tracking runs of in-order nodes, deciding per run whether to shift it or commit to it so that as few DOM nodes as possible move. That is why swapping rows 2 and 999 takes 13.8 ms against React's 89.7 ms in the suite (paint 10 ms against 68 ms). The suite build uses LTO, codegen-units=1, panic=abort and wasm-opt -O4.",
+  "when_to_use": [
+    "Rust teams writing a browser SPA who want a React-like component model (html! macro, struct or hook components) and want to share types and logic with a Rust backend.",
+    "UIs whose hot path reorders keyed lists (drag-and-drop, sorting, swapping rows): the run-based keyed diff moves few DOM nodes, 13.8 ms against React 19.2 hooks' 89.7 ms on the suite's swap test.",
+    "Apps that need server-side rendering plus hydration from the same Rust components (ssr and hydration crate features).",
+    "Struct-component apps with stable callbacks, where the PartialEq props skip keeps select and partial update close to React (4.6 ms against 5.4 ms on select row; 13.2 against 14.7 ms on partial update)."
+  ],
+  "when_not_to_use": [
+    "When rendering speed is the goal. Unweighted geometric mean of the nine CPU tests, as a multiple of vanilla JS time: Yew 1.49x, against wasm-bindgen 1.06x, Silkenweb 1.13x, dominator 1.24x, Leptos 1.25x, Dioxus 1.27x and Sycamore 1.30x (derived from page data).",
+    "Creation-heavy screens: Yew takes 1.34x React's time to create 1,000 rows (31.7 against 23.6 ms), 1.18x to replace all rows and 1.22x to append 1,000 rows.",
+    "When bundle size or first paint matters: 56.8 compressed against React's 51.4 and vanilla's 2.5 (suite units), and first paint 262 ms against React's 227 ms.",
+    "Strict Content-Security-Policy deployments: the suite flags Yew's bundle under issue #1139, which marks packages whose dist contains Function, eval or with.",
+    "Hook-based code that builds fresh callbacks for every list item on each render, or that clones whole state in reducers: the suite's yew-hooks entry does both and is 1.26x slower than the struct entry (select row 11.9 against 4.6 ms)."
+  ],
+  "integration": {
+    "form": "crate (compiled to wasm32-unknown-unknown with wasm-bindgen; built with wasm-pack or trunk)",
+    "dependencies": "wasm-bindgen, web-sys, js-sys, gloo, yew-macro, indexmap, slab, implicit-clone, futures, serde, thiserror, tracing; wasm-bindgen-futures on wasm32; tokio on native targets (SSR)",
+    "min_toolchain": "Rust 1.84.0 (rust-version of yew 0.23.0 on crates.io), edition 2021, wasm32-unknown-unknown target",
+    "platforms": "Browsers with WebAssembly for client-side rendering (csr feature); native and WASI targets for server-side rendering (ssr feature)",
+    "thread_safety": "Not documented in the sources read. Rendering runs on the browser main thread, and the README suggests offloading heavy processing to background web workers.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The suite's yew-hooks entry carries a harness asymmetry. Every render it builds new on_select.reform and on_remove.reform callbacks for every row, which defeats Yew's props-equality skip so all 1,000 rows re-render on select, and its reducer deep-clones the whole Vec<RowData>, plus a second rows.clone() in the render. React's entry uses memo with a custom comparator and shallow array copies. The 'Yew hooks 1.030x React' result therefore measures that implementation more than hooks in Yew.",
+    "The whole geometric-mean win over React comes from the swap test. Without it the struct entry is 1.009x React hooks' time, so outside list reordering expect parity at best.",
+    "Duplicate keys in a keyed list are caught only with debug_assertions. In release builds blist.rs 'hope[s] for the best by pretending' and can lose track of mounted nodes, so test keyed lists in debug builds.",
+    "The suite serves prebuilt Wasm (build-prod is a no-op), but the bundles were rebuilt in the same commit that moved to 0.23.0 (d54bfce, 2026-03-30), so they match the source. Master's later rendering work (perf #4088 DomSlot traversal, fix #4099 sibling re-renders) is unreleased and unmeasured. The memory rows are single samples: run memory reads 5.82 MB for the struct entry and 2.2 MB for the nearly identical hooks entry."
+  ],
+  "pick_this_over_siblings_when": "Pick Yew over Leptos, Sycamore, Silkenweb or rust-dominator when you want the React-like virtual-DOM and hooks model, the largest Rust web ecosystem (32.8k stars, 5.0M crate downloads) or a mature SSR and hydration path. Pick one of those fine-grained-signal frameworks, or hand-written wasm-bindgen, when update speed matters: in this suite they are 1.06-1.30x vanilla JS against Yew's 1.49x.",
+  "verified_claims_summary": "In krausest/js-framework-benchmark (Chrome 154 snapshot, results committed 2026-10-04, CPU not stated), the medians of 15 runs (25 for select) of the total script plus paint time put the yew-v0.23.0-keyed struct-component build, compiled with LTO and wasm-opt -O4, at 0.819x react-hooks-v19.2.0-keyed's time as an unweighted geometric mean over the nine CPU tests. Swap is 13.8 ms against 89.7 ms. Without swap the ratio is 1.009x, the hooks entry is 1.030x, and vanilla JS is 1.492x faster than Yew. I re-derived all of these from results.ts.",
+  "status_note": "Actively maintained: last commit 2026-08-26, 0.23.0 released 2026-03-10 (0.22.1 yanked), MIT OR Apache-2.0, 32.8k stars. Copyable, but the speed case is narrow: it is evidence for keyed reorders, not a general win over React, and the evidence is tier B because the suite gives no CPU model.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yewstack/yew/HEAD/README.md",
+    "https://raw.githubusercontent.com/yewstack/yew/yew-v0.23.0/packages/yew/Cargo.toml",
+    "https://raw.githubusercontent.com/yewstack/yew/yew-v0.23.0/packages/yew/src/dom_bundle/blist.rs",
+    "https://github.com/yewstack/yew/commits/master",
+    "https://github.com/yewstack/yew/issues?q=is%3Aissue%20performance",
+    "https://crates.io/api/v1/crates/yew",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew/src/lib.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew-hooks/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew-hooks/src/lib.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/yew-hooks/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/react-hooks/src/main.jsx",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/react-hooks/package.json",
+    "https://github.com/krausest/js-framework-benchmark/commits/master/frameworks/keyed/yew",
+    "https://github.com/krausest/js-framework-benchmark/commit/d54bfce",
+    "https://github.com/aclueless/spair"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/yasukata/zpoline",
+  "one_liner": "LD_PRELOAD library that rewrites every x86-64 syscall instruction into callq *%rax, hooking system calls in-process instead of via ptrace.",
+  "what_it_does": "zpoline intercepts the system calls of an unmodified, dynamically linked x86-64 Linux program without kernel changes. You preload libzpoline.so and name your own hook library in LIBZPHOOK; the hook library exports __hook_init, which receives a pointer to the hook slot and swaps in a function that gets the syscall number plus six arguments and may forward to the real syscall. The hook library is loaded with dlmopen into a separate namespace with its own libc, so the hook can call printf without recursing. It is a different interface from ptrace: the hook runs inside the traced process, not in a separate tracer.",
+  "how_it_is_fast": "Before main runs, a constructor walks /proc/self/maps, disassembles every executable mapping with binutils libopcodes and overwrites each two-byte syscall (0f 05) or sysenter (0f 34) with the two-byte callq *%rax (ff d0). Because rax holds the syscall number (0 to about 500), the call lands in a nop sled mapped at virtual address 0; the sled ends in a jump to asm_syscall_hook, which saves registers and calls the C hook. A hooked syscall therefore costs a call, a slide through the sled and a register save inside the process, instead of the two stops and context switches to a tracer that ptrace needs or the signal delivery that int3 and Syscall User Dispatch need. The sled dominates the cost: 473 nops for getpid in the paper, cut by about 127 with a short jmp planted at the unused epoll_ctl_old slot (214).",
+  "when_to_use": [
+    "Tracing, filtering or emulating the syscalls of an unmodified, dynamically linked x86-64 Linux program where ptrace's per-syscall stops would dominate the run time (syscall-heavy servers such as the paper's simple HTTP server and Redis).",
+    "Exhaustive in-process hooking where LD_PRELOAD wrappers are not enough because libc and other libraries issue raw syscall instructions internally.",
+    "Prototyping user-space syscall redirection (library OS, user-space network stacks, fault injection, record and replay) on development or test machines where you control sysctl settings.",
+    "Short-running or hot-loop workloads where hook setup happens once at start-up and the per-call cost must stay in the tens of nanoseconds."
+  ],
+  "when_not_to_use": [
+    "Security sandboxing: the hook lives in the target's address space, code mapped after start-up (JIT output, later dlopen) issues unhooked syscalls, and a syscall number outside the trampoline makes callq *%rax jump to an arbitrary address (issue #8: 'we do not have the safeguard').",
+    "Shared or production hosts: it needs root to set /proc/sys/vm/mmap_min_addr to 0 system-wide, which weakens NULL-dereference protection for every process, and SELinux may still block the mapping (issue #21).",
+    "Statically linked or setuid binaries, or anything other than x86-64 Linux: it depends on LD_PRELOAD and the authors' loader for other cases is not public (issue #14); use svc-hook on ARM64.",
+    "Programs with leaf functions that use the red zone heavily or through registers other than rsp: the red-zone workaround aborts at start-up on -0x80 to -0x79(%rsp) accesses and does not track other registers (issue #9, still open).",
+    "Processes that run under vm.overcommit_memory=2 or an RLIMIT_AS cap, or that need very large virtual reservations: the default build reserves a 32 TiB bitmap."
+  ],
+  "integration": {
+    "form": "shared lib (libzpoline.so via LD_PRELOAD, plus your hook shared library named in LIBZPHOOK and loaded with dlmopen)",
+    "dependencies": "binutils libopcodes (binutils-dev, GPL-3.0), libdl; glibc for dlmopen(LM_ID_NEWLM)",
+    "min_toolchain": "gcc and make; the Makefile selects the libopcodes API by ld version (2.29+, 2.39+); builds with -O3 -Werror -Wextra; minimum versions not documented",
+    "platforms": "Linux on x86-64 only; requires vm.mmap_min_addr=0 (root) and may need SELinux disabled",
+    "thread_safety": "Rewriting runs once in a constructor before main; the hook is then called on whichever thread issues the syscall, so it must be thread-safe. clone and clone3 with CLONE_VM push the return address onto the child's stack. Touching __thread variables inside the hook can recurse through a hooked sched_getaffinity and hang or crash (issue #25, open).",
+    "drop_in_for_baseline": "partial — replaces ptrace only for in-process interception of dynamically linked x86-64 programs; it is not an out-of-process tracer, does not see code loaded after start-up, and needs a system-wide sysctl change"
+  },
+  "gotchas": [
+    "Every published number was measured on code with a stack-corruption bug that was fixed later. callq *%rax pushes its return address into the caller's 128-byte red zone, and the maintainer wrote in issue #9 (Sep 2023): 'we did not know about the red zone while we were writing the paper'. Commit 4c9362d (Dec 2023) added a partial workaround: sub $0x80,%rsp in the trampoline, and every negative disp8 rsp offset in all loaded code shifted by -8. The same commit removed the 0xeb 0x6a 0x90 trampoline behind the 10 ns figure. HEAD (512 nops plus the reviewer-C short jmp) has not been re-measured.",
+    "The red-zone workaround is heuristic (found by reading do_rewrite). It matches the printed offset against a raw byte within the next 16 bytes, so it can miss AVX-512 compressed-disp8 operands or patch a following instruction. It asserts on -0x80 to -0x79(%rsp), ignores red-zone accesses through other registers, and uses a 136-byte effective red zone that a signal frame can overwrite. Issue #9 is still open.",
+    "Coverage depends on start-up only. A single linear-sweep disassembly runs over the executable mappings that exist before main, so JIT code and later dlopen'd libraries are not rewritten unless you hook mprotect yourself (Documentation/TIPS.md). Data embedded in .text can be mis-decoded, in which case 0f 05 bytes would be overwritten. Syscalls issued before the constructor runs are not hooked.",
+    "Side effects hide inside assert(), and the default build is heavy. The mprotect calls, the fopen of /proc/self/maps, the hook_init call and the bitmap mmap are all written inside assert(), so a -DNDEBUG build silently drops them. The default Makefile defines SUPPLEMENTAL__REWRITTEN_ADDR_CHECK, which reserves a (1<<48)>>3 = 32 TiB MAP_NORESERVE bitmap that fails under strict overcommit or RLIMIT_AS, and it adds a bitmap lookup to every hooked call."
+  ],
+  "pick_this_over_siblings_when": "svc-hook is the same group's ARM64 counterpart with the same __hook_init API, so pick zpoline on x86-64 Linux and svc-hook on ARM64; the other catalogued siblings (Zydis, iced, Intel XED, bddisasm, diStorm and similar) are disassemblers or assemblers, not syscall hooks.",
+  "verified_claims_summary": "The README's '100 times faster than ptrace' carries no table, and the repository has no ptrace timing; issue #10 shows the getpid loop and a PTRACE_SYSCALL tracer, but no numbers or hardware. Documentation/README.md quotes the paper's Table 1: 41 ns of hook overhead per getpid, with a hook that returns a dummy value without entering the kernel. Against that it gives a later Intel Pin 3.27 run of 2703 ns minus 74 ns of kernel time (2629 ns, about 64x, derived), plus 31 ns and 10 ns for two trampoline variants. The CPU is only 'our hardware', and all of these figures predate the December 2023 red-zone fix. The paper abstract (search snippet only, paper not reachable) claims 28.1 to 761.0 times lower overhead than exhaustive hooking mechanisms and a 5.2% Redis throughput drop.",
+  "status_note": "A stale research prototype from the USENIX ATC 2023 best paper: the last commit is from 2025-01-06, and the red-zone (#9) and TLS (#25) issues are still open. The Apache-2.0 code is a single roughly 550-line main.c that is easy to vendor, but it links GPL-3.0 libopcodes. Its evidence stays tier C because the numbers are first-party, the hardware is unstated, and they were measured on code that was later changed for a correctness bug.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/README.md",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/Documentation/README.md",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/Documentation/TIPS.md",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/main.c",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/Makefile",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/apps/basic/main.c",
+    "https://raw.githubusercontent.com/yasukata/zpoline/HEAD/apps/basic/Makefile",
+    "https://github.com/yasukata/zpoline/commits",
+    "https://github.com/yasukata/zpoline/commit/4c9362d",
+    "https://github.com/yasukata/zpoline/issues?q=is%3Aissue",
+    "https://github.com/yasukata/zpoline/issues/8",
+    "https://github.com/yasukata/zpoline/issues/9",
+    "https://github.com/yasukata/zpoline/issues/10",
+    "https://github.com/yasukata/zpoline/issues/14",
+    "https://github.com/yasukata/zpoline/issues/25",
+    "https://github.com/yasukata/zpoline/pull/20",
+    "https://github.com/lazypoline/lazypoline"
+  ],
+  "confidence": 0.7
+}

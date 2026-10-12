@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/zandaqo/iswasmfast",
+  "one_liner": "Node.js demo that times five toy kernels as plain JS, a C++ N-API addon and C++ compiled to WebAssembly; WASM wins 2 of 5.",
+  "what_it_does": "A small benchmark and demo package (npm iswasmfast 0.0.13), not a reusable library. The same C++ sources in lib/ (Levenshtein distance, tail-recursive Fibonacci, Fermat primality, simple linear regression, SHA-256) are built twice: as a node-addon-api addon (src/node.cpp) and as an Embind WebAssembly module (src/wasm.cpp, emcc -O3 SINGLE_FILE). Both sit next to hand-written JavaScript versions in lib/*.js. index.js exports {napi, native, wasm}, each offering the same five functions, and benchmark.js runs a benchmark.js suite for each kernel.",
+  "how_it_is_fast": "Nothing is specially optimised; the results show where each route pays. WASM wins on scalar kernels with tiny arguments and no data marshalling. Fibonacci is a tail-recursive C++ function that the compiler turns into a loop, while V8 recurses up to 45 levels without tail calls. Fermat is a short modular-exponentiation loop. WASM loses wherever data crosses the boundary. Embind copies each JS string, and vecFromArray copies each 1,000-element array into linear memory through a Float64Array view; the N-API addon converts plain Arrays element by element.",
+  "when_to_use": [
+    "As a teaching example of the three ways to call C++ from Node.js (pure JS, N-API addon through node-addon-api, Emscripten/Embind WASM), with matching build scripts in package.json.",
+    "To show that per-call overhead decides small-kernel results: WASM ran 11.5 M vs 4.0 M ops/s on Fibonacci (2.85x over JS, 2.21x over the addon; derived from page data).",
+    "As a starting harness to re-measure on your own Node and Emscripten versions before deciding whether to move a hot scalar function to WASM."
+  ],
+  "when_not_to_use": [
+    "Production hashing. The SHA-256 rows compare a C++ port against Chris Veness's JavaScript reference implementation, which its own header calls 'without any optimisations' and not meant for production. It recommends Node's built-in crypto module, which is not measured here. Use node:crypto, or the sibling hash-wasm (426 MB/s SHA-256).",
+    "Array-heavy work across the JS/WASM boundary. Regression on 1,000-point arrays ran 37,117-42,521 ops/s in WASM against 291,985 for plain JS, roughly 7x slower.",
+    "Any decision that needs current numbers. The results come with no CPU, Node.js or Emscripten version, carry +-8-15% error bars, and were produced years ago: release 0.0.13 dates from 2019-05-06, and the last commit (2022-04-09) only bumped a dependency.",
+    "Reuse of the C++ kernels. The Fermat code overflows a signed 32-bit int (see gotchas), regression() takes its vectors by value, and isPrime uses the global rand()."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "node-addon-api ^4.0.0 and node-gyp for the addon. The Emscripten SDK is needed only to rebuild src/wasm.js. benchmark and jest are dev dependencies.",
+    "min_toolchain": "Node.js 8.6+ (package.json engines); C++14 (emcc -std=c++14); the Emscripten version is not stated",
+    "platforms": "The WASM build runs on any Node.js. The N-API addon needs a native C++ compiler for each host platform.",
+    "thread_safety": "Not documented. The C++ Fermat kernel calls the global rand().",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness bug behind the Fermat row. lib/fermat.cpp computes (res * a) % p and (a * a) % p in 32-bit int, but benchmark.js draws n up to 1,000,000, so products of residues reach about 10^12 and overflow for any n above 46,341 (about 95% of inputs). lib/fermat.js computes in exact doubles. A wrap-around simulation of the C++ power() reported 2,923 of 2,934 sampled primes above 46,341 as composite on the first witness. The addon and WASM therefore return wrong answers for nearly every large prime and skip the other two witnesses that JS runs. That is roughly 15% fewer power() calls overall, which inflates the 1.43x WASM-over-JS Fermat ratio. The jest tests check only 2, 7, 100, 561 and 1e6, so the bug goes unnoticed.",
+    "Harness: randomInRange(max, min) computes floor(random * (max + 1)) and ignores min, so Fibonacci n is drawn from 0-45 instead of 30-45. Every timed call also includes Math.random and array indexing. Both apply equally to all three implementations, but they shrink and add noise to the ratios.",
+    "The C++ Levenshtein kernel calls std::array<unsigned,50>::swap after every row, so it swaps 50 elements on rows that compute at most 40 (often about 20) DP cells. The JS version only swaps two references. This extra work, plus Embind's string copies, probably explains part of WASM's loss on Levenshtein (210,776 vs 295,433 ops/s for JS). This is a reading of the code, not a measurement.",
+    "README's 'Native' means the pure-JavaScript version, not native code. Several rows (Levenshtein JS 295,433 vs addon 308,924) lie within the +-9% error bars."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to learn how JS, N-API and WASM compare on toy kernels. BenchmarkingWebAssembly is a systematic study of WASM against JavaScript compiled from the same C programs, hash-wasm is a production-grade WASM SHA-256 that beats pure-JS libraries, and zaw shows how to cut the marshalling cost that sinks the regression row here.",
+  "verified_claims_summary": "First-party benchmark.js output in the README, with unknown CPU, Node and Emscripten versions and +-8-15% error bars. Against the pure-JS versions, WASM ran Fibonacci 2.85x, Fermat 1.43x (inflated by the C++ overflow bug above) and SHA-256 2.56x faster, the last against an unoptimised reference JS implementation. It ran Levenshtein at 0.71x and linear regression at 0.13-0.15x. The N-API addon beat WASM on SHA-256 (67,807 vs 34,445 ops/s) and Levenshtein. All ratios are derived from page data.",
+  "status_note": "Abandoned: release 0.0.13 dates from 2019-05-06, and the last commit (2022-04-09) is a dependabot minimist bump. It is MIT-licensed (196 stars, 12 forks) and small, but it is a demo whose C++ Fermat kernel is incorrect for n > 46,341, so treat it as an illustration rather than code to vendor.",
+  "sources_read": [
+    "https://github.com/zandaqo/iswasmfast",
+    "https://github.com/zandaqo/iswasmfast/commits/master",
+    "https://github.com/zandaqo/iswasmfast/tree/master/test",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/README.md",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/package.json",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/binding.gyp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/index.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/benchmark.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/src/wasm.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/src/node.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/src/native.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/fibonacci.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/fibonacci.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/fermat.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/fermat.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/levenstein.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/levenstein.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/regression.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/regression.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/sha256.cpp",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/lib/sha256.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/test/fermat.js",
+    "https://raw.githubusercontent.com/zandaqo/iswasmfast/HEAD/test/index.spec.js"
+  ],
+  "confidence": 0.6
+}

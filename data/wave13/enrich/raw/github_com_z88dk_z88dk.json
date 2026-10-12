@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/z88dk/z88dk",
+  "one_liner": "Z80/8080-family C toolchain (sccz80, zsdcc, z80asm) whose assembly C and maths libraries run 1.1-5.4x fewer cycles than stock SDCC 4.6.0.",
+  "what_it_does": "A cross-development kit for 8080, 8085, Z80, Z80N, Z180, eZ80, Rabbit, Game Boy and related CPUs, with built-in support for over 100 machines. The zcc front end drives one of several C compilers: sccz80 (Small-C lineage, near C90), zsdcc (z88dk's patched SDCC) or the experimental 80cc. It then calls z80asm, a relocatable macro assembler, linker and librarian, and appmake, which writes tape, disk, ROM or hex images. You pick a target (+zx, +cpm, +z80, +test ...), a compiler and one of two C library worlds, classic or newlib, whose headers and CRTs differ. It is not a drop-in for the sdcc command line, but the same C sources compile with small changes (the benchmarks only swap the timer-label macro).",
+  "how_it_is_fast": "Most of the speed comes from the libraries, not the compilers. The C standard library and the float and 32-bit integer runtimes are hand-written Z80 assembly, while SDCC ships C-implemented float and long routines (the wiki blames SDCC's losses on these). math32 is an assembly IEEE-754 single-precision package. It uses an unrolled 32_24x8 software mantissa multiply on a plain Z80, the hardware multiplies on Z80N, Z180, eZ80 and Rabbit, and a Quake magic-number seed plus three Newton-Raphson steps for sqrt. Its add and subtract use a cheaper jam-sticky rounding rule instead of round-to-nearest-even. The newlib 'fast integer' build reduces most 32-bit divides to 16-bit divides. zsdcc also uses the __z88dk_callee and __z88dk_fastcall calling conventions to pass arguments to library calls more cheaply.",
+  "when_to_use": [
+    "Float-heavy C on a Z80 (physics, Whetstone-style maths). With math32, n-Body runs in 0.81-0.86 G cycles against 4.36 G for SDCC 4.6.0 (5.1-5.4x) and 1.60 G for HI-TECH C 7.80 (about 2x).",
+    "32-bit integer arithmetic such as bignum-style division loops. The classic sccz80 library runs Pi in 1.99 G cycles against SDCC's 7.22 G (3.6x) in the default configuration.",
+    "Retro and homebrew machines (ZX Spectrum, Spectrum Next, CP/M, MSX, RC2014, RomWBW, Game Boy), where z88dk's built-in targets, CRTs and appmake output formats save porting work.",
+    "8080 and 8085 targets, where sccz80 and 80cc are the supported compilers (zsdcc is Z80-only) and math32_8085 and mbf32 cores exist.",
+    "Mixed C and assembly projects that want one assembler, linker and librarian (z80asm) with sections, macros and multi-CPU fat libraries."
+  ],
+  "when_not_to_use": [
+    "Allocation-heavy code on the newlib library. Binary-Trees takes 6.57 G cycles against SDCC's 0.19 G (about 34x slower) because newlib malloc's first-fit search walks allocated blocks too. Issue #113 has been open since 2017; use the classic library (149 M cycles, 1.30x faster than SDCC) for such code.",
+    "Tight integer loop code compiled with sccz80. On Sieve its builds take 4.67-4.96 M cycles against SDCC's 4.22 M, and on Fannkuch 67-77 M against 55.7 M. Only zsdcc with newlib wins, by 1.15x and 1.06x, and HI-TECH C 7.80 is fastest on Fannkuch.",
+    "Code-size-critical builds that assume z88dk is always smaller. SDCC is smallest on Sieve and Dhrystone, HI-TECH C is smallest on Fannkuch, and math32 rows are larger than the older 48-bit rows.",
+    "Projects that need strict IEEE-754 float semantics. math32 flushes denormals to signed zero, does not use round-to-nearest-even on add and subtract, and does not propagate NaN payloads.",
+    "Projects that need an OSI-approved licence. The Clarified Artistic License is FSF-free but not OSI-approved, and individual files may carry other licences."
+  ],
+  "integration": {
+    "form": "cross toolchain (compilers, z80asm assembler/linker and prebuilt target libraries statically linked into the output binary)",
+    "dependencies": "Host side: prebuilt Windows and macOS nightlies, a Linux Snap, a Docker image, or a source build that needs git submodules (m4 is used for the macro pass). Target side: none beyond the chosen z88dk library.",
+    "min_toolchain": "Not documented in the pages read for building from source. On the target side, sccz80 accepts near-C90 C and zsdcc accepts SDCC's larger C subset.",
+    "platforms": "Hosts: Windows, macOS, Linux. Target CPUs: 8080/8085, KR580VM1, gbz80, Z80, Z80N, Z180, eZ80 (Z80 mode), R800, Rabbit r2ka-r6k and KC160. Classic library targets cover more than 100 machines.",
+    "thread_safety": "math32 says all of its code is re-entrant. Re-entrancy of the rest of the C library is not documented in the pages read.",
+    "drop_in_for_baseline": "partial — zsdcc is the same SDCC 4.6.0 front end, but you build through zcc with a target, a -clib choice and z88dk headers. It uses __sdcccall(0) with z88dk callee/fastcall conventions, not stock SDCC's __sdcccall(1), so linking against objects from stock SDCC is not documented."
+  },
+  "gotchas": [
+    "Harness flaw in the baseline rows. All eight SDCC readmes (n-Body, Pi, Whetstone, Dhrystone, Fasta, Binary-Trees, Sieve, Fannkuch) derive TIMER_START and TIMER_STOP from .sym and .map values by hand, and in every one the documented arithmetic gives a different address from the one passed to z88dk-ticks. Examples: n-Body works out to 0xd83/0xdcc but ran with 0d7a/0dc0; Pi to 0x213/0x32e but ran with 0214/0363; Whetstone's stop to 0xbde but ran with 09ca, a window 532 bytes shorter. z88dk-ticks (cpu_run in src/ticks/ticks.c) resets its counter every time PC equals -start and halts the first time PC equals -end, so a wrong address silently changes the measured window. The z88dk rows look up the symbols from the map file (-x map -start TIMER_START), which avoids this. The counts are not at the -counter cap and their sizes look plausible, but the baseline windows cannot be checked without rebuilding.",
+    "Rows are not all like for like. Whetstone and Fasta were timed with SDCC built without -DSTATIC, while every z88dk build used -DSTATIC (static rather than stack locals). Unlabelled z88dk float rows use 48-bit genmath or math48, which zsdcc narrows to 4 bytes. The newlib *_FAST Pi rows need the z80 library rebuilt with __CLIB_OPT_IMATH=75, which is not the default. The wiki's sccz80 newlib Pi rows quote April 2020 counts (4,012,440,735 and 1,696,878,309) even though the readme has slower April 2022 remeasures (4,028,061,102 and 1,766,815,709).",
+    "Since v2.5, -lm links math32 instead of genmath (classic) or math48 (newlib). Old build lines therefore change float width and precision silently; use --genmath, --math48 or --mbf64 to get the wider formats back.",
+    "All cycle counts come from the project's own z88dk-ticks emulator, and the wall-clock columns are cycles divided by 4 MHz. The HI-TECH C and IAR rows were also run by the z88dk project, and HI-TECH C 7.80 is disqualified on Fasta for wrong output."
+  ],
+  "pick_this_over_siblings_when": "Rasm is the only other Z80 sibling, a standalone cross-assembler with an assembly-throughput claim. Pick z88dk when you need C compilers plus optimised Z80 runtime libraries, not just fast assembly of large .asm sources. The x86 siblings (Zydis, iced, Keystone, JWasm, UASM) cover other ISAs and do not compete.",
+  "verified_claims_summary": "The project's wiki tables give exact Z80 cycle counts from z88dk-ticks for programs built by SDCC 4.6.0 #16608 (sdcc -mz80 --max-allocs-per-node200000) and by z88dk's zsdcc 4.6.0 #16639 and sccz80 builds, with every command line public under support/benchmarks. Against SDCC (ratios derived from page data): n-Body 1.94x with math48 and 5.07-5.40x with math32, Whetstone 2.02x and 5.13x, Fasta 1.71x and up to 3.34x, Pi 1.80x on newlib small and 3.62x on classic sccz80, Binary-Trees 1.30x (classic), Dhrystone 1.13x, Sieve 1.15x, Fannkuch 1.06x. The gains come mainly from the assembly float and 32-bit libraries.",
+  "status_note": "Very active: 26,468 commits, eight commits on 2026-10-11 alone, 178 open issues and nightly builds. Usability is reference-grade because the Clarified Artistic License is not OSI-approved, but the toolchain is free to use and the benchmark sources and command lines are public, so a rebuild with symbol-based TIMER addresses for SDCC would settle the baseline windows.",
+  "sources_read": [
+    "https://github.com/z88dk/z88dk",
+    "https://github.com/z88dk/z88dk/commits/master",
+    "https://github.com/z88dk/z88dk/issues/113",
+    "https://github.com/z88dk/z88dk/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/README.md",
+    "https://raw.githubusercontent.com/wiki/z88dk/z88dk/Benchmarks.md",
+    "https://raw.githubusercontent.com/wiki/z88dk/z88dk/Compilers.md",
+    "https://raw.githubusercontent.com/wiki/z88dk/z88dk/Tool---z80asm.md",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/libsrc/math/float/math32/readme.md",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/src/ticks/ticks.c",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/n-body/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/n-body/n-body.c",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/n-body/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/n-body/z88dk-classic/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/n-body/z88dk-new/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/whetstone/whetstone.c",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/whetstone/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/whetstone/z88dk-classic/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/whetstone/z88dk-new/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/pi/pi.c",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/pi/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/pi/z88dk-new/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/fasta/fasta.c",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/fasta/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/fasta/z88dk-classic/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/dhrystone21/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/dhrystone21/z88dk-new/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/binary-trees/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/sieve/sdcc/readme.txt",
+    "https://raw.githubusercontent.com/z88dk/z88dk/HEAD/support/benchmarks/fannkuch/sdcc/readme.txt"
+  ],
+  "confidence": 0.6
+}

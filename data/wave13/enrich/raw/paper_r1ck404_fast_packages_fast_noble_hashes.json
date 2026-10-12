@@ -1,0 +1,62 @@
+{
+  "id": "paper:r1ck404-fast-packages-fast-noble-hashes",
+  "one_liner": "@noble/hashes 1.8.0 drop-in with SHA-2, SHA-1, MD5, PBKDF2 and scrypt in WebAssembly; 1.7-7.8x faster than noble's JS.",
+  "what_it_does": "A copy of @noble/hashes 1.8.0 in which the compression functions of SHA-256/224, the SHA-512 family, SHA-1 and MD5, PBKDF2's iteration loop and scrypt's ROMix run in WebAssembly; every other module (SHA-3, BLAKE, RIPEMD-160, Argon2, HKDF) is noble's file byte for byte. Exports, errors, callbacks and even instance fields match noble, and it must be installed under the original name (\"@noble/hashes\": \"npm:@r1ck404/fast-noble-hashes@1.8.2\") because noble's utils.js imports @noble/hashes/crypto by name. Since 1.8.2, in Node with process.getBuiltinModule, one-shot hashes of at least 64 KiB go to node:crypto instead of the WASM kernels.",
+  "how_it_is_fast": "The kernels are fully unrolled WASM (SHA-256 8.8 KB, SHA-512 11.3 KB) with state and message words in locals, expanded on first use from 244-541-byte templates written with an in-repo assembler (wasm/kernels.mjs, wasm/asm.mjs). SHA-512 uses native i64 arithmetic where noble's JS splits every 64-bit word into two 32-bit halves, which is why SHA-512/384 gain 5x while SHA-256 gains only 1.7x (V8's JIT already does 32-bit rotates well). One-shot hashers skip instance creation and UTF-8 encode strings straight into WASM memory; PBKDF2 runs all c iterations of HMAC inside WASM from the precomputed inner/outer states; scrypt's ROMix runs salsa20/8 on SIMD v128 registers (wasm/scrypt.wat).",
+  "when_to_use": [
+    "Browser or in-browser-runtime code pinned to @noble/hashes 1.8.x that hashes large buffers with SHA-512/384 (npm lockfile SRI: 5.4x in Node, 6.0x in Chromium), MD5 (7.8x / 5.7x) or SHA-1 (2.6x / 4.3x), where node:crypto is not available.",
+    "PBKDF2 key derivation in the browser or in a crypto polyfill: PBKDF2-SHA512 c=10000 7.2x (8.2x in Chromium), PBKDF2-SHA256 3.4x; scrypt N=2^14, r=8 2.3x.",
+    "Many short one-shot hashes (56-character strings: 4-7x) such as cache keys or content IDs.",
+    "Dependency trees where several packages import @noble/hashes 1.x: one npm alias or pnpm override redirects every import, with no call-site changes."
+  ],
+  "when_not_to_use": [
+    "Projects on @noble/hashes 2.x (2.4.0 is current; ESM-only, .js import paths, no string inputs): there is no matching version, and the 1.8.0 baseline also predates noble's own 2.3.0 speedups (+10-45% on 32-byte inputs, +20% PBKDF2/HKDF).",
+    "Node server code hashing large buffers: call node:crypto (OpenSSL) or WebCrypto directly; the package itself now defers to node:crypto for one-shot inputs of 64 KiB or more.",
+    "SHA-3/Keccak, BLAKE2/BLAKE3, RIPEMD-160 or Argon2: these run noble's unchanged JS (1.0x); hash-wasm or awasm-noble accelerate them.",
+    "Hosts without WebAssembly SIMD or with a CSP lacking wasm-unsafe-eval: the accelerated functions throw, there is no JS fallback.",
+    "Security-critical code that relies on noble's audits: the WASM kernels and patches are an unaudited, weeks-old re-implementation by one author, assured only by its differential and mutation tests; streaming small updates (1.2x) and HMAC on short strings (1.3x) gain little anyway."
+  ],
+  "integration": {
+    "form": "module (npm package @r1ck404/fast-noble-hashes; noble's ESM and CommonJS entry points, WASM shipped as text templates inside _fast.js)",
+    "dependencies": "none at run time (binaryen ^132 and esbuild 0.28.2 only to rebuild the kernels)",
+    "min_toolchain": "WebAssembly SIMD: Node 16.4+, Chrome/Edge 91+, Firefox 89+, Safari 16.4+ (README; the engines field says ^14.21.3 || >=16); the node:crypto path only where process.getBuiltinModule exists",
+    "platforms": "any WebAssembly host with SIMD (browser suite runs in Chromium, Firefox and WebKit, main thread and module worker)",
+    "thread_safety": "not documented; each hash family keeps one module-level WASM instance (64 KiB, wiped after every call) per JS realm, and every call copies state in and out synchronously, so async PBKDF2/scrypt slices in one realm do not clash and each worker has its own instances",
+    "drop_in_for_baseline": "partial — same exports, digests, errors and instance fields as @noble/hashes 1.8.0 when installed under its name, but it requires WebAssembly SIMD (throws without it), scrypt memory must fit in 4 GiB of WASM memory, pbkdf2Async/scryptAsync yield a different number of event-loop turns, and noble's private constant tables are gone; useless for noble 2.x"
+  },
+  "gotchas": [
+    "The published Node rows describe an older code path: they were measured on 2026-09-28, before commit 7df1749 (2026-09-30, 1.8.2) routed one-shot Uint8Array/Buffer inputs of at least 64 KiB and strings of at least 65,536 code units to node:crypto. The repo's bench uses exactly such inputs (1 MB and 64 KB plain Uint8Arrays, npm tarballs), so rerunning it on current code in Node times OpenSSL, not the WASM kernels; the Chromium rows still measure WASM.",
+    "The root README summary row (sha512 5x, md5 6.9x, sha1 2.4x, sha256 1.6x, pbkdf2 3.3-5.7x, scrypt 3.1x) is taken from the older 2026-09-27 run (results/noble-hashes-orig_vs_fast-interleaved-2026-09-27T13-31-54-604Z.md), in which the noble baseline itself ran about 1.5x slower than on 2026-09-28 (scrypt 55.30 vs 36.32 ms, sha512 4.4 MB tarball 46.55 vs 30.47 ms) while the fast scrypt barely moved (17.89 vs 16.06 ms): the 3.1x scrypt figure comes from a slow baseline run, and the detailed table gives 2.3x.",
+    "npm 1.8.0 (2026-09-27) wraps the WASM init in a /* @__PURE__ */ IIFE (esm/_fast.js line 99), so bundlers drop it and bundled apps silently get noble's JS speed; fixed in f8aa157 (1.8.1). The npm latest 1.8.3 (2026-09-30 19:12 UTC) has no commit in the repository and changes the glue to share one WASM memory across all hash families, reloading round constants on every family switch.",
+    "The package LICENSE still says the kernels are re-implemented in Rust (rust/src), but that directory was replaced by WASM templates in f8aa157; only noble's MIT licence applies."
+  ],
+  "pick_this_over_siblings_when": "Pick it over hash-wasm when existing code or dependencies already call @noble/hashes 1.8 synchronously and you need identical results and instance state with no call-site changes; pick hash-wasm (its own async API, SHA-3, BLAKE3, Argon2 and more in WASM) for new code or other algorithms, and awasm-noble when BLAKE3 throughput is the goal.",
+  "verified_claims_summary": "First-party run on a Ryzen 7 7800X3D, Node 24.16 and headless Chromium 149, alternating fresh processes and keeping the best of 3 per-process medians, against pure-JS @noble/hashes 1.8.0: sha512 of the 4.4 MB typescript tarball 30.47 vs 5.68 ms (5.4x; 6.0x in Chromium), md5 1 MB 8.95 vs 1.15 ms (7.8x), sha1 1 MB 2.64 vs 1.01 ms (2.6x), sha256 1 MB 3.65 vs 2.12 ms (1.7x; about 494 MB/s in both Node and Chromium, so the WASM kernel, not OpenSSL), PBKDF2-SHA512 c=10000 24.17 vs 3.36 ms (7.2x), scrypt N=2^14 36.32 vs 16.06 ms (2.3x). node:crypto, WebCrypto and hash-wasm were not compared.",
+  "status_note": "Active but brand new (first npm release 2026-09-27, single author, 1 star, no issues), MIT, installable by npm alias; it mirrors noble 1.8.0 while upstream is at 2.4.0, and the npm latest (1.8.3) is not reproducible from the repository, so pin a version and re-run its differential tests before trusting it with security-relevant hashing.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/README.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/package.json",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-noble-hashes/README.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-noble-hashes/package.json",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-noble-hashes/LICENSE",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-noble-hashes/esm/_fast.ts",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/noble-hashes.bench.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/noble-hashes-browser.bench.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/harness.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/interleave.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/corpus.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/results/noble-hashes-orig_vs_prev_vs_fast-interleaved-2026-09-28T10-40-08-521Z.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/results/noble-hashes-browser-orig_vs_prev_vs_fast-interleaved-2026-09-28T10-49-01-639Z.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/results/noble-hashes-orig_vs_fast-interleaved-2026-09-27T13-31-54-604Z.md",
+    "https://github.com/R1ck404/fast-packages/tree/main/results",
+    "https://github.com/R1ck404/fast-packages/commits/main",
+    "https://github.com/R1ck404/fast-packages/issues?q=is%3Aissue",
+    "https://registry.npmjs.org/@r1ck404%2ffast-noble-hashes",
+    "https://registry.npmjs.org/@r1ck404/fast-noble-hashes/-/fast-noble-hashes-1.8.0.tgz",
+    "https://registry.npmjs.org/@r1ck404/fast-noble-hashes/-/fast-noble-hashes-1.8.2.tgz",
+    "https://registry.npmjs.org/@r1ck404/fast-noble-hashes/-/fast-noble-hashes-1.8.3.tgz",
+    "https://registry.npmjs.org/@noble%2fhashes",
+    "https://github.com/paulmillr/noble-hashes/releases"
+  ],
+  "confidence": 0.7
+}

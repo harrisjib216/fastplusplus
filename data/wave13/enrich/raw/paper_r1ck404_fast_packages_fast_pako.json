@@ -1,0 +1,62 @@
+{
+  "id": "paper:r1ck404-fast-packages-fast-pako",
+  "one_liner": "pako 2.1.0's zlib ported to Rust/WebAssembly with byte-identical output; 4-6x faster inflate/ungzip, about 2x deflate.",
+  "what_it_does": "A drop-in npm replacement for pako 2.1.0 (alias it as \"pako\": \"npm:@r1ck404/fast-pako\") exposing the same deflate/deflateRaw/gzip/inflate/inflateRaw/ungzip functions, Deflate/Inflate streaming classes and constants, with the same output bytes, chunk boundaries, onData/onEnd callbacks and error messages. The zlib state machines run in an embedded wasm module that is decoded and compiled synchronously on the first call, and a TypeScript-compiled JS layer reproduces pako's option coercions and exceptions around it. It also ships @types/pako-compatible declarations, which pako itself lacks.",
+  "how_it_is_fast": "Inflate uses a new inner decode loop in Rust (64-bit bit buffer with branchless refill, single-level fast decode tables, 16-byte match copies, in the style of libdeflate) while keeping pako's case-for-case state machine for externally visible state; one-shot calls decode straight into a contiguous output buffer and skip window copies. Checksums use a table-free folding CRC-32 and SIMD128 Adler-32, and level-1 deflate emits precomputed codes. Deflate at levels 6-9 keeps zlib's match finder unchanged so output stays byte-identical, which caps that gain near 2x; small calls gain mostly because pooled wasm sessions avoid pako's per-call allocation and zeroing of windows and hash tables.",
+  "when_to_use": [
+    "Code or dependencies already calling pako 2.1.0 (for example npm tarball unpacking with ungzip, 1-100 MB) where you can swap the package via an npm/pnpm alias or bundler alias and want 4-6x faster decompression with identical results.",
+    "Browsers or in-browser Node emulators (the package was built for Nodepod) where native node:zlib or CompressionStream is unavailable or lacks pako's exact streaming semantics.",
+    "Many small one-shot calls (hundreds of bytes): 4-8x per call, and 20x for a 75-byte deflate, because sessions are pooled instead of re-allocated.",
+    "deflateRaw level 1 packing where byte-for-byte equality with pako output matters (2.6-4.8x in the author's runs)."
+  ],
+  "when_not_to_use": [
+    "Server-side Node code that can call node:zlib (native zlib) or a native binding: no comparison against native zlib, zlib-ng or fflate is published, and the README's own notes put level-6 deflate at roughly native-zlib speed at best.",
+    "Engines without WebAssembly SIMD or where wasm compilation is not allowed: the module is built with simd128 and other post-MVP features, has no JS fallback, and the first call throws.",
+    "Bundle-size-sensitive pages: the gzip-compressed bundle is about 2x pako's (30.6 KB vs 15.1 KB for the default import, README size table).",
+    "Projects needing a mature, widely used dependency: the repo is about two weeks old, has 1 star, a single author, no issue history, and npm's latest version (2.1.3) has no matching commit in the repository.",
+    "Code that relies on pako's lib/* or dist/* subpaths, its CommonJS entry, or on looping/corrupting behaviour for invalid options (fast-pako throws instead)."
+  ],
+  "integration": {
+    "form": "module (ESM npm package with the wasm embedded as text in fastzlib.wasm.mjs)",
+    "dependencies": "none at runtime; building from source needs Rust for wasm32-unknown-unknown and binaryen (wasm-opt)",
+    "min_toolchain": "Node >= 18 (package engines) or a browser with WebAssembly SIMD128, bulk-memory, sign-ext and non-trapping float-to-int; Rust version for rebuilding not stated",
+    "platforms": "any JavaScript engine with WebAssembly SIMD; CI ran Linux Node 20/22/24 and Windows Node 24; benchmarks on x86-64 (Ryzen 7 7800X3D) only",
+    "thread_safety": "not documented; module-level state (one-shot sessions, a pool of up to 4 streaming sessions) lives per JS realm, and each worker loads its own wasm instance",
+    "drop_in_for_baseline": "partial — same API, bytes and error messages as pako 2.1.0 for valid use, but ESM-only exports (no require/CommonJS entry or lib/*, dist/* subpaths), needs WebAssembly, and throws where pako loops forever or corrupts data on invalid options"
+  },
+  "gotchas": [
+    "The published tables (2026-09-28) were measured on an earlier build: commit 7df1749 (2026-09-30) changed rust/src/deflate.rs and the shipped wasm without re-measuring, and npm's latest @r1ck404/fast-pako 2.1.3 (published 2026-09-30, no gitHead) is newer than the 2.1.2 in the repository's package.json.",
+    "Benchmark harness (bench/harness.mjs, interleave.mjs): 300 ms warm-up, batched samples, per-process median, then the minimum of 3 fresh-process medians; results are discarded but each call copies its output out of wasm memory, inputs are produced by real pako, and correctness is checked by separate test suites, not during timing. Warm repeated calls favour fast-pako's pooled sessions, so the tiny-input rows measure pako's per-call setup more than compression.",
+    "Each one-shot call copies the whole input into wasm linear memory and builds the whole output there before slicing it out; the heap is trimmed to 8 MB per session, but a wasm Memory never shrinks, so the process keeps the peak of the largest call.",
+    "fflate and pako 3.0.2 are wired into bench/pako.bench.mjs as implementations but no results for them are committed, so their relative standing is unknown."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zip.js's WASM zlib codec or @mtcute/wasm when existing code is written against pako's API and must keep pako's exact bytes, stream chunking and errors; pick those when you are building a zip pipeline (zip.js) or want a small general compression-plus-crypto wasm bundle (mtcute), since both publish comparisons that also include native zlib.",
+  "verified_claims_summary": "Author-run results on a Ryzen 7 7800X3D with Node 24.16: ungzip of the typescript 5.9.3 tarball 99.8 ms with pako 2.1.0 vs 17.3 ms (5.8x), inflate of 9 MB JavaScript 28.1 vs 6.7 ms (4.2x), deflateRaw level 1 on 1 MB 9.9 vs 3.2 ms (3.0x), deflate level 6 on 1 MB 32.8 vs 15.7 ms (2.1x) and level 9 140.2 vs 64.3 ms (2.2x), with the committed raw results file matching the README; only pako is the baseline.",
+  "status_note": "Actively developed by one author since late September 2026 (last commit 2026-10-01), MIT AND Zlib licensed and installable from npm, but very young (1 star, no issues) and its README numbers predate the latest code and npm release.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/README.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/package.json",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/README.md",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/package.json",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/build.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/.cargo/config.toml",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/index.mts",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/src/inflate.rs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/src/checksum.rs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/packages/fast-pako/rust/src/heap.rs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/interleave.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/harness.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/pako.bench.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/corpus.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/bench/compare.mjs",
+    "https://raw.githubusercontent.com/R1ck404/fast-packages/HEAD/results/pako-pako_vs_prev_vs_fast-interleaved-2026-09-28T09-59-45-448Z.md",
+    "https://github.com/R1ck404/fast-packages/tree/main/packages/fast-pako/rust/src",
+    "https://github.com/R1ck404/fast-packages/tree/main/results",
+    "https://github.com/R1ck404/fast-packages/commits/main",
+    "https://github.com/R1ck404/fast-packages/issues",
+    "https://registry.npmjs.org/@r1ck404%2ffast-pako"
+  ],
+  "confidence": 0.6
+}

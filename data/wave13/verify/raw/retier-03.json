@@ -1787,5 +1787,279 @@
       "https://github.com/WojciechMula/simd-sort/blob/master/speed.cpp",
       "https://github.com/WojciechMula/simd-sort/blob/master/partition.cpp"
     ]
+  },
+  {
+    "id": "https://github.com/wunkolo/qaveragecolor",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: both AVX-512 paths misuse the in-lane _mm512_shuffle_epi8 and sum the wrong pixels twice (hidden by the benchmark's single repeated pixel value), so the AVX-512 column timed incorrect code; the SSE4.2 column cannot be rebuilt from the public CMake. Public code, flags and CPUs remain for the correct AVX2 path, but with one column invalid and one unreproducible the table is first-party C.",
+    "corrections": {
+      "claimed_speedup": "Speedup over the serial version, AVX2: 4.41x (i7-7500U), 4.24x (i3-6100), 2.65x (i5-8600K), 2.61x (i9-7900X), 4.62x (i7-1065G7), 5.35x (i9-11900K). SSE4.2: 2.07x to 4.24x (column not rebuildable from the public CMake). The README's AVX-512 rows (4.27x i9-7900X, 5.47x i7-1065G7, 6.09x i9-11900K) are struck: both AVX-512 paths sum the wrong pixels (see caveats).",
+      "caveats": "The baseline is the author's own plain serial loop, not a library such as OpenCV. Each function is timed once with std::chrono::high_resolution_clock, serial first, with no warm-up or repetition. The 10-megapixel test image is one repeated pixel value, which hides a correctness bug: both AVX-512 paths feed indices 0x00-0x3F to _mm512_shuffle_epi8, which permutes within 128-bit lanes, so red and green are summed from pixels 0-3 and 8-11 of each 16-pixel block and blue and alpha from pixels 4-7 and 12-15, each twice (4 white plus 12 black pixels give 127,127,0 instead of 63,63,63); the AVX-512 column therefore timed wrong code. SSE and AVX2 paths are correct. The public CMake cannot rebuild the SSE4.2 column, MSVC builds always take the VNNI path (which drops Count%16 pixels), and _mm_stream_load needs 16-byte alignment. The default branch is frozen since 2021-04-17; a dev branch carries alignment, MSVC, VNNI, AArch64 and Apple AMX work through 2025-10-04 without new numbers.",
+      "maintenance_status": "slow (default branch frozen since 2021-04-17; dev branch active to 2025-10-04)"
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_wunkolo_qaveragecolor.json"
+    ]
+  },
+  {
+    "id": "https://github.com/wunkolo/qhilbert",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: tier C stands (first-party), with the claim corrected: the public CMake gives the library no ISA flags, so all four README columns run the same generic Hacker's Delight code, and the pext path the README credits is wrong for every order except 8 since 2018-11-12.",
+    "corrections": {
+      "claimed_speedup": "README table, speedup over the Wikipedia d2xy loop: i9-7900x x42.5 to x50.4, i7-7500u x30.6 to x39.7, i3-6100 x31.1 to x36.2, E5-2697 v4 x20.5 to x24.2, E3-1240 v5 x9.7 to x11.0 across the Serial/BMI2, SSE4.2, AVX2 and AVX512 columns; README text: around 50 times faster. With the public CMake the library target gets no ISA flags, so all four columns run the same generic scalar code and the gain is the Hacker's Delight parallel-prefix rewrite (9.7x to 50x), not SIMD.",
+      "caveats": "The table's baseline (Wikipedia d2xy, branchy loop with one cross-translation-unit call per point and no LTO) is identified from tests/benchmark.cpp, not labelled on the README. The gain is algorithmic: the public CMakeLists.txt applies ISA flags only to the Benchmark-* executables, so the library's generic path is what every column timed (AVX2 is even slower than SSE4.2 on E5-2697 v4). The BMI2 pext serial path dropped its unpad mask on 2018-11-12 and is wrong for every order except 8 (order 7: y off by 128), so a real pext run would fail; order 16 is broken; MSVC builds run the AVX-512 path on any CPU. Abandoned since 2018-12-31."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_wunkolo_qhilbert.json"
+    ]
+  },
+  {
+    "id": "https://github.com/wunkolo/qreverse",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the i3-6100 bswap and AVX2 tables are nearly identical row by row and the bswap row is below the 8-byte store floor, so the headline 'bswap x15.8' most likely timed the AVX2 path (mislabelled column); the 16-byte AVX2 path has a wrong shuffle mask; the VS2017 MSVC baseline is obsolete. Mislabelled-measurement precedent: A to C.",
+    "corrections": {
+      "claimed_speedup": "i3-6100, g++ -m64 -Ofast -march=native, 1-byte elements vs std::reverse: 1000 elements 290 ns vs 36 ns (8.1x); 10000: 2740 vs 191 ns (14.3x); 100000: 27511 vs 1739 ns (15.8x); 1,000,000: 279525 vs 24710 ns (11.3x); 8 elements 19 vs 19 ns (1.0x). The 'bswap' and 'AVX2' tables are nearly identical (191 vs 189 ns, 875 vs 875 ns) and the bswap row is below the 8-byte store floor, so the x15.8 most likely measured the AVX2 path that -march=native also compiles; SSSE3 peaks at 10.5x and AVX2 at 16.1x (100000 elements). AVX512 on i9-7900x (VS2017 x64 Release) 22.4x at 100000 elements, against an MSVC STL that has since vectorised std::reverse.",
+      "caveats": "Numbers are from 2017-2018 (last README benchmark update 2018-10-30) with an unstated g++ version. Per-call timing with high_resolution_clock means rows under about 30 ns are clock overhead. The benchmark does not check the reversed output. Correctness bug (code reading): qReverse<16>'s AVX2 loop uses _mm256_permute4x64_epi64(x, _MM_SHUFFLE(0,1,2,3)) instead of _MM_SHUFFLE(1,0,3,2), so it also swaps the two 8-byte halves inside every 16-byte element; tests/verify.cpp fills each element with one byte value and cannot see it (1-byte rows unaffected). Under -march=native the header compiles its AVX2 loop too, and the bswap and AVX2 tables on the i3-6100 agree row by row, so the bswap column likely timed AVX2. MSVC's STL now vectorises std::reverse (VS2017 22.4x obsolete); the x86 branch keys on __x86_64__, which MSVC never defines; issue #2 reports no gain or 2-4x slowdowns for 2/4/8-byte elements on Clang 6; the bswap loops type-pun (UB)."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_wunkolo_qreverse.json"
+    ]
+  },
+  {
+    "id": "https://github.com/x1xhlol/pare",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the 6.4x/1.7x is a whole-pipeline comparison with asymmetric work (native WebCodecs decode, 4x2 worker threads and cheaper x264 settings against ffmpeg.wasm decoding in WebAssembly with stock 'faster'), and the first-party research harness starts its timer after ff.load() and writeFile; the per-core kernel claim has no table and the toolchain is unpinned. Asymmetric-harness precedent (LC, TensorFlow DLPerf): A to C.",
+    "corrections": {
+      "caveats": "First-party and very new (94 commits, first in late September 2026, 3 stars). The headline 6.4x/1.7x over ffmpeg.wasm is a whole-pipeline comparison with asymmetric work: research/ffmpeg-wasm/index.html starts its timer after ff.load() and writeFile, and within that window ffmpeg.wasm decodes H.264 in WebAssembly without ffmpeg's assembly and encodes with stock x264 'faster' CRF 19, while Pare decodes with Chrome's native WebCodecs decoder, runs 4 chunk encoders with 2 threads each and uses cheaper x264 settings (diamond motion search, no small inter partitions), with up to about 1 s of planning before its timer; ffmpeg.wasm also produced a 9% smaller file (12.2 MB vs 13.4 MB) at the same VMAF NEG. The 2.0-2.3x per-core kernel claim has no table; the README BBB row (14.3 MB) and BENCHMARKS.md (13.4 MB) disagree; native ffmpeg and Emscripten versions are unpinned."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_x1xhlol_pare.json"
+    ]
+  },
+  {
+    "id": "https://github.com/xjonathanlei/starknet-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected (bit-serial JS baseline against a 4-bit table, benchmarked code no longer ships).",
+    "corrections": {
+      "caveats": "First-party benchmark repo by the starknet-rs author, frozen since 22 November 2022 with both implementations pinned to 2022 commits (starknet-crypto rev 76e32ef, micro-starknet a1e7fa0). Harness asymmetry: the JS baseline at a1e7fa0 does a bit-serial BigInt subset sum (252 steps per input, windowed path commented out) while starknet-rs uses a 4-bit lookup table, so part of the 6.88x is the algorithm, not WebAssembly versus JS. Different harnesses on each side (criterion through wasmer-js WASI on Node vs benchmark.js with hex-string inputs parsed per call). The benchmarked code no longer ships: 0.7.4 and 0.8.1 delegate pedersen_hash to starknet-types-core/lambdaworks. The same README shows the wasm build about 7x slower than native; issue #241 closed as not planned."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_xjonathanlei_starknet_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/xuehua-s/fast-md5-web",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the only evidence is a first-party screenshot (no hardware, browser, file sizes or repetition) dominated by worker parallelism, the single-thread 8x has no measurement at all, and the shared-memory streaming path can silently produce wrong MD5 digests (unacknowledged slot overwrite, present in npm 1.1.2 and HEAD). No valid like-for-like measurement: D.",
+    "corrections": {
+      "caveats": "Screenshot only: no hardware, browser, core count, file sizes or repetition; the 174 input files are not in the repo. The harness compares a worker pool sized to navigator.hardwareConcurrency against single-threaded SparkMD5 on the main thread, so the 16-17x is mostly parallelism; SparkMD5 always runs first. The 8x single-thread claim has no published measurement. Correctness race (code reading): in SharedArrayBuffer streaming mode every chunk is written into one shared slot without waiting for a worker acknowledgement, so a later chunk can overwrite an unread one and give a silently wrong MD5 (npm 1.1.2 and HEAD; the only large-file e2e test hashes 300 MB of one byte value and cannot see it). 1.1.2 also has a 'Stream state not found' worker race fixed only in unpublished HEAD; small-file shared allocations leak; md5Length 16 returns the first 16 characters, not the middle 16; the example allocates a 6400 MiB SharedArrayBuffer."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_xuehua_s_fast_md5_web.json"
+    ]
+  },
+  {
+    "id": "https://github.com/y-crdt/y-crdt",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the published losing rows (B2.2-B2.4, B3) were produced through a since-fixed crdt-benchmarks adapter that ran every ywasm edit as its own transaction, so they understate ywasm rather than overstate it; caveats corrected.",
+    "corrections": {
+      "caveats": "Mixed result, not an overall win: ywasm is about 5x slower than Yjs on the real-world trace (B4, B4x100; per-edit on both sides, so this loss stands), and its bundle is about 10x larger; it wins prepend/append microbenchmarks and parse/load time. The 3-16x losses on B2.2-B2.4 and B3 are not like-for-like: the ywasm 0.9.3 column came from benchmarks/ywasm/factory.js at 362d241/8203fde (2024-01-24), whose transact() freed the outer transaction after the first nested operation, so every ywasm edit ran as its own transaction plus a peer apply while Yjs batched (B2.2 updateSize 177,007 vs 33,444 bytes), and the old applyUpdate bypassed the open transaction so B3 integrated 1,540 updates one by one; fixed in e03faa1 (2024-02-09), table never re-run. The suite is written by Kevin Jahns, author of Yjs and a listed y-crdt maintainer, so it is not independent of either side. One perf.now() sample per row. The table is stale (ywasm 0.9.3 vs current 0.28.0); issue #233 (unsound unsafe) open."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_y_crdt_y_crdt.json"
+    ]
+  },
+  {
+    "id": "https://github.com/yahorbarkouski/ultrachess",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the chess.js figure behind the 55x/95x was cited, never run, and the two perfts do different work (bulk-count at depth 1 versus make/unmake of every leaf); caveats corrected.",
+    "corrections": {
+      "caveats": "The chess.js (5-7 Mnps, 'Node 22') and chessops (2-3 Mnps) figures are cited without a source and were never run in the project's harness although chess.js is a devDependency; the 55x/95x are cross-run comparisons on unknown hardware. The perfts do different work: ultrachess bulk-counts at depth 1 (popcount of target bitboards, make_move_perft) while chess.js makes, king-checks and unmakes every leaf; like-for-like native perft against cozy-chess and shakmaty (all bulk-count) is 1.23x/3.70x geomean. The WASM harness times one perft() call, so the JS boundary cost is not measured. README understates sizes (inline.js 212,379 bytes vs 'about 60 KB'; TS shim about 36 KB vs 'about 10 KB'); loadPgn drops NAGs and comments; undisposed handles leak (no FinalizationRegistry); the '100k differential' is a manual pre-release tier (the PR gate runs 200 games)."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_yahorbarkouski_ultrachess.json"
+    ]
+  },
+  {
+    "id": "https://github.com/yasukata/zpoline",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; every published number was measured on code with red-zone corruption (issue #9, still open) and the trampoline behind the 10 ns figure was removed in 4c9362d without re-measurement; caveats corrected.",
+    "corrections": {
+      "caveats": "Category fit is weak: syscall-interception tooling built on instruction rewriting, with ptrace and Intel Pin as baselines. The 100x headline has no table, hardware, kernel version or flags on the README; the 41 ns, 2629 ns and 10 ns figures quote the ATC 2023 paper's Table 1 (paper not opened here). Every published number was measured on code with a stack-corruption bug: callq *%rax pushes into the caller's 128-byte red zone, and the maintainer wrote in issue #9 (Sep 2023) that they did not know about the red zone while writing the paper; commit 4c9362d (Dec 2023) added a partial workaround (sub $0x80,%rsp) and removed the 0xeb 0x6a 0x90 trampoline behind the 10 ns figure, and HEAD has not been re-measured; #9 stays open. An invalid rax jumps to an arbitrary address (#8); JIT and later-dlopen code is not hooked (TIPS.md); the default build reserves a 32 TiB MAP_NORESERVE bitmap; side effects inside assert(); TLS use in a hook recurses (#25)."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_yasukata_zpoline.json"
+    ]
+  },
+  {
+    "id": "https://github.com/yewstack/yew",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: B stands; re-derived numbers match. The like-for-like hooks entry is untuned (fresh per-row callbacks each render, deep-cloned row Vec) against a memoised React entry, and the prebuilt bundles were rebuilt with 0.23.0, so the staleness caveat is dropped.",
+    "corrections": {
+      "caveats": "Independent public suite but the CPU model for this snapshot is not stated, so tier B not A. The whole geometric-mean win over React comes from swap rows (React hooks 89.7 ms vs 13.8 ms, a known React reconciliation weakness): excluding swap, Yew's struct-component entry is 1.009x React hooks' time, and Yew is slower on create 1,000 rows (1.34x), replace all rows (1.18x) and append rows (1.22x). The like-for-like yew-hooks entry (1.030x React hooks' time) is untuned: it builds new on_select.reform and on_remove.reform callbacks for every row each render, defeating Yew's props-equality skip, and its reducer deep-clones the whole Vec<RowData>, while React's entry uses memo with a custom comparator. Yew is 1.492x vanilla JS's time. Prebuilt bundles were rebuilt with the 0.23.0 bump (d54bfce). Memory rows are single samples; duplicate keys are checked only under debug_assertions."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_yewstack_yew.json"
+    ]
+  },
+  {
+    "id": "https://github.com/yujiosaka/wa-ulid",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected (npm tarball postinstall, synchronous wasm compile at import, non-ASCII traps, ulid 3.0.2 still per-byte).",
+    "corrections": {
+      "caveats": "First-party, 4 commits, untouched since May 2024. The 43x ulid() row measures random-number batching, not wasm codegen: ulid 2.3.0 (and still 3.0.2) calls crypto.randomBytes(1) once per character while wa-ulid fills 16 characters from a userspace ChaCha12 generator seeded once; a JS implementation that batches getRandomValues would close most of the gap. The npm 1.0.0 tarball still declares postinstall 'pnpm build' but ships only dist/, so a plain npm install should fail unless scripts are skipped (inferred from the tarball, not run). The 68 KB wasm is compiled synchronously with new WebAssembly.Module at import, which browsers allow only for small modules. Non-ASCII input to decode_time or replace_char_at traps ('unreachable') instead of raising ulid's error."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_yujiosaka_wa_ulid.json"
+    ]
+  },
+  {
+    "id": "https://github.com/yujiosaka/wasm-and-ffi-performance-comparison-in-node",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected.",
+    "corrections": {
+      "caveats": "Single-commit toy benchmark; no CPU, OS or Node version stated. The Collatz sequence for 670617279 takes 986 steps and peaks at 966,616,035,460, above int32, so the JS version runs float64 % and / while Rust uses u64 integer ops (a faster n & 1 parity test was not measured). The wasm path returns a BigInt and JS a Number; the harness's loose assert.equal (986 == 986n) hides it. The 6.5x WASM-over-FFI result measures ffi-napi's per-call marshalling (about 4.4 us per call vs about 0.7 us for the whole WASM call), not native versus WASM code; the README's 'runtime symbol resolution' explanation is wrong (ffi.Library resolves once). The FFI arm has no input check, so 0 panics inside extern \"C\" (process abort on Rust 1.81+); ffi-napi 4.0.3 has had no release since 2021."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_yujiosaka_wasm_and_ffi_performance_comparison_in_node.json"
+    ]
+  },
+  {
+    "id": "https://github.com/z88dk/z88dk",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the baseline SDCC rows cannot be verified: all eight SDCC readmes hand-derive the TIMER_START/STOP addresses and none of the documented sums match the addresses passed to z88dk-ticks, whose counter resets at every start hit and halts at the first end hit; two SDCC builds lack -DSTATIC while every z88dk build has it, and the sccz80 Pi rows cite 2020 counts that 2022 remeasures contradict. First-party wiki with unverifiable baseline windows and build asymmetries: A to C.",
+    "corrections": {
+      "caveats": "The win is not uniform: with the NEW library Binary-Trees is about 34x slower than plain SDCC (fast-realloc free-block search, issue #113), on Sieve only Z88DK/SDCC_NEW wins (1.15x) and the sccz80 builds lose, and on Fannkuch HI-TECH C 7.80 is fastest. Harness flaw in the baseline rows: all eight SDCC readmes (n-Body, Pi, Whetstone, Dhrystone, Fasta, Binary-Trees, Sieve, Fannkuch) hand-derive TIMER_START and TIMER_STOP from .sym and .map values, and none of the documented sums match the addresses passed to z88dk-ticks (n-Body 0xd83/0xdcc vs 0d7a/0dc0 used; Pi 0x213/0x32e vs 0214/0363; Whetstone stop 0xbde vs 09ca); ticks.c resets the count at every start hit and halts at the first end hit, so the baseline windows cannot be verified without rebuilding (the z88dk rows use map symbols). Whetstone and Fasta SDCC builds lack the -DSTATIC every z88dk build uses; Pi *_FAST rows need newlib rebuilt with __CLIB_OPT_IMATH=75; the wiki's Pi sccz80 newlib rows cite April 2020 counts although slower April 2022 remeasures exist (1,766,815,709 vs 1,696,878,309); math32 is not strict IEEE (denormals flushed, add/sub not round-to-nearest-even). Cycle counts from an emulator, not a physical CPU."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_z88dk_z88dk.json"
+    ]
+  },
+  {
+    "id": "https://github.com/zandaqo/iswasmfast",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the Fermat row is struck because lib/fermat.cpp overflows 32-bit int for about 95% of the benchmark's inputs and returns wrong answers with less work.",
+    "corrections": {
+      "claimed_speedup": "Fibonacci: WebAssembly 11,508,910 ops/s vs N-API addon 5,204,691 and JS 4,044,156 (2.8x JS, derived from page data). SHA256: addon 67,807, WebAssembly 34,445, JS 13,453 (WebAssembly 2.6x JS, derived). The Fermat row (WebAssembly 2,402,964 vs addon 1,833,692 and JS 1,678,845) is struck: the C++ kernel overflows and returns wrong answers for n > 46,341. WebAssembly loses on Levenshtein (210,776 vs addon 308,924 and JS 295,433) and on simple linear regression (37,117 and 42,521 vs JS 291,985).",
+      "caveats": "Toy kernels with 8-15% reported variance; no CPU, Node version or Emscripten version stated, and the README labels the pure-JS version 'Native'. Correctness bug: lib/fermat.cpp computes (res*a)%p and (a*a)%p in 32-bit int while benchmark.js draws n up to 1,000,000, so products overflow for any n above 46,341 (about 95% of inputs); a wrap simulation misreported 2,923 of 2,934 sampled large primes as composite, and the wrong path does about 15% fewer power() calls, so the C++ addon and WASM Fermat rows timed incorrect, cheaper work (Jest tests miss it). The SHA256 JS baseline is an unoptimised reference implementation by its own header (node:crypto not measured); the C++ Levenshtein swaps a 50-element std::array every row. WebAssembly beats pure JS on Fibonacci and SHA256 only; it loses to JS on Levenshtein and linear regression and to the N-API addon on three of five tasks."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_zandaqo_iswasmfast.json"
+    ]
+  },
+  {
+    "id": "https://github.com/zeebo/blake3",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: contributor PRs #41, #42, #51, #53 and #54 publish benchstat tables for the repo's BenchmarkBLAKE3 (Go 1.26.5, n=6/20, named AWS CPUs, BLAKE3_PUREGO baseline), which gives public benchmark code, toolchain, flags and CPU model for the current assembly; the README's 2020 tables stay as the stale first-party figures. C to A.",
+    "corrections": {
+      "claimed_speedup": "Contributor benchstat tables (PRs #41, #42, #51, #53, #54; Go 1.26.5, assembly vs BLAKE3_PUREGO=1), 1 MiB input: AVX-512 7.70x and AVX2 6.13x (Xeon 6975P); SVE2 3.65x (Graviton5); NEON 2.12x (Graviton3). README tables (i7-6700K, Feb 2020 code): 64 B 205 ns vs 254 ns (1.24x), 1 KiB 1.01 us vs 1.77 us (1.75x), 512 KiB 131 us vs 883 us (6.7x; the No-ASM row labelled '1024 kib' is a 512 KiB measurement: 524288 B / 883 us = 594 MB/s, derived from page data).",
+      "hardware": "PR benchstat tables: AWS Xeon 6975P (AVX-512, AVX2), Graviton5 (SVE2), Graviton3 (NEON). README tables: Intel i7-6700K (x86, 2020) and Apple M4 (NEON, 2026-07-23).",
+      "compiler_and_flags": "PR tables: Go 1.26.5, go test -bench BenchmarkBLAKE3 -count 6 or 20, baseline with BLAKE3_PUREGO=1 (no assembly). README tables: Go toolchain version not stated.",
+      "caveats": "The README x86 tables date from 2020-02-12 code on an i7-6700K and the No-ASM '1024 kib' row is a 512 KiB measurement (6.7x like-for-like, not 3.4x); the NEON table (2026-07-23) predates the 2026-08-19 NEON change. The current numbers come from contributor PRs #41/#42/#51/#53/#54 (BobDu, Aug 2026) as benchstat output in PR descriptions, not from a results file in the repo. CI never exercises AVX-512 dispatch (qemu jobs cover Haswell, Penryn, qemu64 and Neoverse only); arm64 inputs up to 2 KiB run pure Go; benchmarks are single-threaded on a hot-cache all-zero buffer; the baseline is the same library without assembly, not another BLAKE3 implementation."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_zeebo_blake3.json"
+    ]
+  },
+  {
+    "id": "https://github.com/zwegner/faster-utf8-validator",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: lemire/validateutf8-experiments carries an adapted port (zwegneravx) measured at 1.28x and 1.82x over the fastvalidate-style 'basic' routine, an independent measurement; a Python model of the validation logic matched a strict decoder on 4.25 million cases and the F0 fix changed only table constants, so the README timings hold for valid input. C to B, with the tail over-read recorded.",
+    "corrections": {
+      "caveats": "The license is MIT, given only in the header of z_validate.c; no LICENSE file. The baseline is an older SIMD validator, not a scalar one, and the benchmark harness (a modified fastvalidate-utf-8 benchmark) is not published; the README table (2019-11-15) predates the F0 table fix 2b0ad07, which changed only constants, so the timings hold. Independent numbers: lemire/validateutf8-experiments' adapted port (zwegneravx) runs 1.28x and 1.82x the speed of the fastvalidate-style 'basic' routine. Out-of-bounds read: the main loop loads the next shifted vector before the loop check, so it reads up to 30 bytes (AVX2) or 14 bytes (SSE4) past the input end for most lengths, can fault near an unmapped page and trips ASan; test.lua's padding hides it. Plain inline breaks -O0 builds, cont is maybe-uninitialized under -Werror, no runtime dispatch, abandoned since 2019-11-18."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_zwegner_faster_utf8_validator.json"
+    ]
+  },
+  {
+    "id": "https://github.com/zyantific/zydis",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the hardware field is corrected (the i5-6600K belongs to the 2021 icedland fork, the charts ran on a Ryzen 9 9950X with GCC 13.3 and an i9-13900K with GCC 14.2) and benchmark_url points at athre0z/disas-bench.",
+    "corrections": {
+      "hardware": "Ryzen 9 9950X (GCC 13.3) and Intel i9-13900K (GCC 14.2) for the athre0z/disas-bench charts; the 2021 icedland fork run used an i5-6600K on Kubuntu 21.04. Test file: 0x2460400-byte code section of Firefox xul.dll.",
+      "benchmark_url": "https://github.com/athre0z/disas-bench",
+      "caveats": "Marginal win over Capstone on decode+format; slower than iced, yaxpeax-x86, diStorm and bddisasm in the same charts, and the README makes no numeric claim. The suite's owner, Joel Hoener (athre0z), is a co-copyright holder of Zydis. Each tool is timed in a single run (clock() CPU time over 20 passes), no repetition. disas-bench passes 5 to ZydisDecoderDecodeOperands, which clamps to operand_count including hidden operands, so Zydis also decodes implicit operands the formatter never prints (extra work, does not inflate it). The measured build is the v4.1.0 tag (569320a, 2024-02-04); the July 2026 formatter speedups on master are unmeasured; open #539: 0f 1a de drops an operand. The icedland run gives Zydis 22.24 vs Capstone 14.02 MB/s decode+format (1.59x)."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_zyantific_zydis.json"
+    ]
+  },
+  {
+    "id": "https://github.com/zzau13/delorean",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected.",
+    "corrections": {
+      "caveats": "Non-keyed implementation, so the win over keyed React hooks (swap rows 8.2 vs 89.7 ms, replace all 0.42x) is partly a mode difference; the suite has no non-keyed React entry. Against non-keyed vanilla JS the entry is not faster (1.010x vanillajs-non-keyed, 1.112x vanillajs-3-non-keyed), so the README's 'Fastest than vanillajs' is unsupported; 0.978x Kobold's time at 36.1 vs 9.7 kB. The crate is about 200 lines of message queue and the speed comes from hand-written web-sys code in the benchmark entry. Benchmark-code bug that does not affect the timings: run_n never truncates (Create 1,000 after Create 10,000 leaves 10,000 rows) and Select toggles off on a second click; the measured sequences never shrink the table. build.rs on nightly swaps in an unchecked unwrap. Abandoned since 2023-03-30."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_zzau13_delorean.json"
+    ]
+  },
+  {
+    "id": "paper:r1ck404-fast-packages-fast-es-module-lexer",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the bench on current code times a one-entry cache added in 7df1749 (1.7.2), the shipped npm 1.7.3 carries the older 1.7.1 wasm and the same lib.rs and build.mjs produce different wasm bytes (unpinned toolchain), so the published numbers cannot be reproduced from the public sources; the baseline es-module-lexer 1.7.0 is two major versions behind an upstream that has since added its own SIMD scans. First-party, unreproducible build: A to C.",
+    "corrections": {
+      "caveats": "The bench imports 'es-module-lexer' and calls initSync, so the baseline ran its default C-to-WASM build: this is a SIMD Rust WASM port against scalar C WASM, not WASM against JS. The published numbers (2026-09-28 results file) predate commit 7df1749 (2026-09-30, 1.7.2), which added a one-entry cache that reuses the last WASM scan when the same 4,096-1,048,576-code-unit string is parsed again; the repo's bench parses the same string in a loop, so rerunning it on current code times cache hits. Stale baseline: es-module-lexer 1.7.0 (2025-04) versus current 3.0.3, whose 2.3.1-3.0.0 releases added a Node fast copy and SIMD comment/template scans (354 to 238 ns per parse), so 18x overstates the gain over current upstream. npm latest 1.7.3 has no repo commit and ships the older 1.7.1 wasm; the same lib.rs and build.mjs gave different wasm bytes, so the measured build is not reproducible from the public sources."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/paper_r1ck404_fast_packages_fast_es_module_lexer.json"
+    ]
+  },
+  {
+    "id": "paper:r1ck404-fast-packages-fast-noble-hashes",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected (node:crypto path since 1.8.2, README summary from a run with a 1.5x slower baseline, PURE-annotated wasm init in 1.8.0, stale noble baseline).",
+    "corrections": {
+      "caveats": "First-party numbers on a days-old repository with 1 star (measured 2026-09-28). The published Node rows are the WASM kernel (sha256 1 MB 2.12 ms, about 494 MB/s, same as Chromium), measured before commit 7df1749 (2026-09-30, 1.8.2) routed one-shot inputs of 64 KiB or more to node:crypto; rerunning the bench in Node now times OpenSSL. The root README summary (scrypt 3.1x and others) comes from a 2026-09-27 run in which the noble baseline ran about 1.5x slower (scrypt 55.30 vs 36.32 ms) than in the detailed table (2.3x). npm 1.8.0 marks the wasm init /* @__PURE__ */ (esm/_fast.js:99), so tree-shaking bundlers shipped noble's JS instead; npm 1.8.3 is not in the repo and shares one wasm memory across hash families. Baseline stale: noble 1.8.0 versus current 2.4.0 (2.3.0 added 10-45% on short inputs and 20% on pbkdf2)."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/paper_r1ck404_fast_packages_fast_noble_hashes.json"
+    ]
+  },
+  {
+    "id": "paper:r1ck404-fast-packages-fast-pako",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; caveats corrected.",
+    "corrections": {
+      "caveats": "First-party numbers on a repository only days old (1 star). The harness is sound (300 ms warmup, per-process median, minimum of 3 interleaved fresh-process rounds, output copied out of wasm memory), but the tiny-input rows (75 B, 20x) mostly time pako's per-call setup against fast-pako's pooled sessions. The tables (2026-09-28) predate commit 7df1749 (2026-09-30), which changed rust/src/deflate.rs and the shipped wasm without re-measuring; npm latest 2.1.3 has no gitHead while the repo is at 2.1.2. fflate and pako3 are wired into the bench with no committed results; no native zlib baseline; ESM-only exports; requires wasm SIMD with no JS fallback; wasm memory keeps the peak of the largest call; the gzip bundle is twice pako's."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/paper_r1ck404_fast_packages_fast_pako.json"
+    ]
+  },
+  {
+    "id": "paper:wojciechmula-toys-avx512-string",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: emulation of the kernels' lane arithmetic shows strchr and strrchr miss characters >= 0x80 at byte offsets 1-3 (some inputs hit assert(false)), both return NULL for '\\0', and strcmp gives the wrong sign for bytes >= 0x80; the speed_strrchr harness also over-reads the heap on 4 of 5 passes. Numbers measured on code with hot-path correctness bugs: A to C (uniwidth precedent).",
+    "corrections": {
+      "caveats": "Author says the tests 'aren't very good': one 10 KiB buffer filled with '?', the terminator or target moved through every position, 5 iterations, gettimeofday timing, no repetitions or variance. Measured once in October 2016 on a Knights Landing with GCC 5.4.3 (not an official release number); the glibc version and which ifunc variants ran are not stated. Correctness bugs (emulated, not run): strchr and strrchr broadcast 0x01010101u * uint32_t(signed char), so for characters >= 0x80 matches at byte offsets 1-3 are missed and some inputs reach assert(false); strchr/strrchr(s, '\\0') return NULL; strcmp compares signed char, wrong sign for bytes >= 0x80; test.cpp never checks strchr's found path. Harness flaw: speed_strrchr overwrites the only terminator at i=size-1, so 4 of 5 passes over-read the heap on both sides (UB). The benchmark uses 'X' only, so the ratios probably stand, but they time buggy kernels."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/paper_wojciechmula_toys_avx512_string.json"
+    ]
+  },
+  {
+    "id": "paper:wojciechmula-toys-strstr-swar",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the kernel has confirmed false positives and over-reads, and the author's later sse4-strstr results show swar64-strstr-v2 slower than libc strstr on four x86 CPUs; caveats corrected.",
+    "corrections": {
+      "caveats": "The 2-3x figure is a single README sentence matching analyze.py's '2.00 - 2.99 faster' bucket; no stored output, CPU, compiler or library versions. analyze.py has no 1.0-2.0 bucket (sub-2x gains are invisible), timing is gettimeofday at 1 us granularity over 10 calls and 0 us prints 'faster inf'. The harness also times libc strstr (mislabelled 'strlen'), with no margin claimed. Correctness bugs confirmed by emulating strstr64: 'abb' in 'a`bb' returns 1 and 'all' in 'xx a`ll yy all' returns 4 instead of 11 (the has-zero borrow flags a byte equal to 0x01 above a real candidate and memcmp checks only needle[1..k-1]); the last start is skipped when n-k is a multiple of 8; n<k wraps past the buffer; an empty needle reads needle[-1]; reads run 5 bytes past the NUL; strstr32 shares the bugs. Counter-evidence from the author's sse4-strstr results for the fixed swar64-strstr-v2: 1.70x (ARMv7) and 3.93x (ARMv8) over std::string::find, but 2.12-3.04x slower than libc strstr on i7-6700, i7-4770, M540 and Gold 5217."
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/paper_wojciechmula_toys_strstr_swar.json"
+    ]
+  },
+  {
+    "id": "https://github.com/terraspace/uasm",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: maintenance status corrected; master is frozen at 2.53pre (2022-03-16) but development continues on per-version branches (v2.58 last commit 2025-11-30).",
+    "corrections": {
+      "maintenance_status": "slow (master frozen at 2.53pre, 2022-03-16; development continues on per-version branches, v2.58 last commit 2025-11-30)"
+    },
+    "urls_opened": [
+      "enricher record data/wave13/enrich/raw/github_com_terraspace_uasm.json"
+    ]
   }
 ]

@@ -1,0 +1,58 @@
+{
+  "id": "paper:wojciechmula-toys-avx512-string",
+  "one_liner": "2016 AVX512F SWAR versions of strlen, strchr, strrchr and strcmp; 4-16x over a 2016 glibc on Knights Landing.",
+  "what_it_does": "Four standalone C++ functions (avx512f_strlen, avx512f_strchr, avx512f_strrchr, avx512f_strcmp), each a small .cpp file that the test and speed programs #include directly; there is no header or library. They mimic the libc signatures except that strchr/strrchr take a char instead of an int and return char*. They are research toys from Wojciech Mula's snippet repository, written for Xeon Phi Knights Landing, whose AVX-512F has no byte-granularity compares.",
+  "how_it_is_fast": "Each loop iteration loads 64 bytes with an unaligned _mm512_loadu_si512 and applies the classic SWAR zero-byte test ((v - 0x01010101) & ~v & 0x80808080, fused into one vpternlogd) to 16 dwords at once, giving a 16-bit dword mask; strchr/strrchr run the same test on v XOR a broadcast of the character, and strcmp combines s1's zero mask with a dword-inequality mask (vpcmpneqd). Once a mask bit fires, a short scalar check of the 4 bytes of that dword finds the exact position, and strrchr uses clz on the mask to find the last match per block. The loop body has no per-byte work, so long strings run at about 12-16 GB/s versus 0.7-3 GB/s for the libc baseline in the author's run.",
+  "when_to_use": [
+    "As a reference or starting point for SWAR-in-SIMD string scanning on AVX-512F-only targets (Knights Landing/Knights Mill) where byte compares (AVX-512BW) are missing.",
+    "Long ASCII strings (kilobytes) held in buffers you control and pad with at least 64 readable bytes past the terminator, where a 4-16x scan speedup over an old SSE2-era libc matters.",
+    "Teaching material: each kernel is 30-100 lines and shows mask-based early exit, dword-to-byte refinement and the last-match trick for strrchr."
+  ],
+  "when_not_to_use": [
+    "As a general libc replacement: the kernels read up to 63 bytes past the terminator (and past the first difference in strcmp) with no page-boundary handling, so a string ending near the end of a mapped page can fault.",
+    "Non-ASCII data or a NUL search character: strchr/strrchr miss matches for characters 0x80-0xFF, strchr(s, 0) and strrchr(s, 0) return NULL, and strcmp orders bytes 0x80-0xFF as negative (see gotchas).",
+    "CPUs with AVX-512BW/VL (Skylake-SP and later, Zen 4): byte compares make the SWAR detour unnecessary, and current glibc already selects EVEX string variants there; nothing here was measured on such hardware.",
+    "Short strings (tens of bytes), which dominate real strlen/strcmp calls: the benchmark measured only average lengths of about 5-10 KB, and per-call overhead and the scalar tail were not studied.",
+    "Projects needing maintenance or a build system: the code dates from October 2016, the README calls the tests 'not very good', and there is no packaging beyond a Makefile."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (immintrin.h, cassert)",
+    "min_toolchain": "C++14 as the Makefile builds it (-std=c++14 -mavx512f -O3); GCC or Clang for __builtin_ctz/__builtin_clz and __attribute__((always_inline)); measured with GCC 5.4.3",
+    "platforms": "x86-64 with AVX-512F only (Knights Landing used for the numbers; Intel SDE suggested for emulation)",
+    "thread_safety": "stateless pure functions, safe to call concurrently",
+    "drop_in_for_baseline": "partial — libc-like names and results only for ASCII strings, non-NUL search characters and buffers padded by 64 bytes; strchr/strrchr take char rather than int"
+  },
+  "gotchas": [
+    "Correctness bug (found by exact emulation of the kernels' 32-bit lane arithmetic): avx512f_strchr and avx512f_strrchr build the broadcast pattern as 0x01010101u * uint32_t(c) with c a signed char, so a character >= 0x80 sign-extends (0xE9 becomes 0xE8E8E8E9). A match is then seen only in byte 0 of each dword: occurrences at byte offsets 1-3 are missed (NULL returned), and a byte equal to c-1 at offsets 1-3 trips assert(false), which aborts because the Makefile does not define NDEBUG. The benchmark searches only for 'X' (0x58), so the timing is unaffected.",
+    "avx512f_strchr(s, '\\0') and avx512f_strrchr(s, '\\0') return NULL instead of a pointer to the terminator, and avx512f_strcmp compares bytes as signed char (int a = c1[i]), so \"caf\\xC3\\xA9\" vs \"cafe\" returns -162 where libc strcmp returns a positive value. test.cpp misses all of this: it uses only '?', 'X' and 0, compares strcmp results for exact equality, and its strchr test only places 'X' after the terminator, so the found path is never validated.",
+    "Harness flaw in speed_strrchr.cpp: the loop writes 'X' at every index i and then restores '?', including i = size-1 where the only terminator sits, so after the first of the 5 iterations the 10 KiB buffer (plus its 64-byte '?' padding) has no NUL. Both std::strrchr and the AVX512F version then read past the heap allocation until they hit a stray zero byte (undefined behaviour). Both sides do it, so the ratio probably holds, but 4 of the 5 timed passes run on unterminated strings.",
+    "Every call in all four harnesses starts at the same buffer start (plain new char[], not forced to 64-byte alignment), lengths are uniform over 0-10 KiB (strrchr always scans the full 10 KiB), the 10 KiB buffer stays cache-resident, and timing is a single gettimeofday interval per implementation with no repetitions."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to study or adapt the AVX-512F SWAR technique (Knights Landing-class hardware); for a production x86 replacement use AOCL-LibMem or Agner Fog's asmlib, which dispatch by CPU and cover many more functions, and for Arm use Arm Optimized Routines.",
+  "verified_claims_summary": "In the author's single October 2016 run on a Xeon Phi 7210 (Knights Landing) with GCC 5.4.3 and -O3 -mavx512f, 5 passes over a 10 KiB buffer took 0.0829 s with libc strlen vs 0.0167 s (4.96x), strchr 0.1000 vs 0.0225 s (4.44x), strrchr 0.7211 vs 0.0450 s (16.03x) and strcmp 0.1171 vs 0.0297 s (3.94x); about 0.7-3.2 GB/s for libc vs 9-16 GB/s for AVX512F (derived from the harness's byte counts). The glibc version and which variant it picked on KNL are not stated; a 2016 glibc probably ran an SSE2 path (inference).",
+  "status_note": "Untouched since a 2020 strcmp simplification (core code from October 2016) in a BSD-2-Clause snippet repository; small enough to copy, but fix the signed-char broadcast, NUL-character and strcmp sign bugs and add page-safe tail handling before using it on real data.",
+  "sources_read": [
+    "https://github.com/WojciechMula/toys",
+    "https://github.com/WojciechMula/toys/commits/master/avx512-string",
+    "https://github.com/WojciechMula/toys/issues?q=is%3Aissue+avx512",
+    "https://github.com/WojciechMula/toys/issues/5",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/README.rst",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/Makefile",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/common.h",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/test.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/gettime.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strlen.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strchr.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strrchr.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/speed_strcmp.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strlen.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strchr.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strrchr.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/avx512f-strcmp.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/scalar-strlen.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/toys/master/avx512-string/scalar-strchr.cpp",
+    "WebSearch: glibc x86_64 multiarch strrchr-evex strlen-evex (snippets: EVEX variants selected on AVX512VL+AVX512BW CPUs)"
+  ],
+  "confidence": 0.75
+}

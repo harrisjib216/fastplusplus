@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/wunkolo/qhilbert",
+  "one_liner": "Batch Hilbert-curve index-to-point mapping (Hacker's Delight parallel prefix, SSE/AVX2/AVX-512); 10-50x over Wikipedia's d2xy loop.",
+  "what_it_does": "qHilbert2D(Order, Distances[], Positions[], Count) converts a batch of 32-bit distances along an order-N 2D Hilbert curve into (x, y) points stored as glm::u32vec2, the job Wikipedia's d2xy does one point at a time. It maps index to point only (no xy2d inverse, no 3D), takes the curve order (log2 of the width) rather than the width, and needs GLM for the output type. It is a 2018 write-up with one source file, not a maintained library.",
+  "how_it_is_fast": "Instead of d2xy's per-level loop (a branchy rot() call and signed divisions for every level), it uses the Lam-Shapiro method as rewritten by Guy Steele in Hacker's Delight: pad the index with 01 pairs, get the complement and swap bits from one add plus a parallel-prefix XOR, then unshuffle odd and even bits into x and y, in constant time whatever the order. The same bit operations are written for 4, 8 and 16 lanes with SSE, AVX2 and AVX-512 (vpternlogd fuses the XOR/AND steps), and a BMI2 variant replaces the unshuffle with two pext instructions. Paths are picked at compile time by recursive template specialisation, with remainders falling through to narrower widths.",
+  "when_to_use": [
+    "Generating many Hilbert-order coordinates at once (tile or texture swizzles, cache-friendly traversal orders, spatial sort keys) for orders up to 15, when a d2xy-style loop shows up in profiles.",
+    "As a copyable reference for the constant-time Hacker's Delight d2xy: the generic scalar path alone accounts for most of the measured gain.",
+    "x86-64 builds where you control the flags of source/qHilbert.cpp itself and can enable -msse4.2/-mavx2/-mavx512f without -mbmi2 (see gotchas).",
+    "Batches whose size is a multiple of 16, so every point goes through the vector paths."
+  ],
+  "when_not_to_use": [
+    "Any build where source/qHilbert.cpp sees __BMI2__ (for example -march=native on Haswell or later): the pext serial path, which handles whole batches in a BMI2-only build and the Count % 4 tail otherwise, returns wrong coordinates for every order except 8 (at order 7, y is off by 128 for every point).",
+    "MSVC: every path is enabled under _MSC_VER and the MSVC CMake branch sets no /arch, so the binary executes AVX-512F instructions on all CPUs (illegal instruction without AVX-512) and uses the broken pext path for tails.",
+    "Order 16 (65536 x 65536) or larger: 0x55555555 << 2*Order and 1 << 2*Order shift by 32 (undefined; on x86 the unpad mask becomes 0), so even the generic and SIMD paths return wrong points, although the benchmark's static_assert accepts 16. Only orders 1-15 are correct.",
+    "Needing xy2d (point to index), 3D curves, ARM SIMD (the README's NEON code is an illustration; the source has no NEON path, so ARM gets generic scalar code) or a maintained dependency.",
+    "Choosing it for the SIMD columns of the README table: the public build compiles the library without ISA flags, so those columns are not evidence for SIMD gains over the scalar rewrite."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "GLM (git submodule dependencies/glm, for glm::u32vec2)",
+    "min_toolchain": "C++17 with GNU extensions, CMake 3.2.2; compiler and version behind the README numbers not stated",
+    "platforms": "x86-64 for the SSE4.2, AVX2, AVX-512F and BMI2 paths; generic scalar C++ elsewhere (no NEON implementation in the source)",
+    "thread_safety": "not documented; a pure function over caller-owned arrays with no shared state, so reentrant by construction",
+    "drop_in_for_baseline": "partial — on the non-BMI2 paths it computes the same points as d2xy for orders 1-15, but as a batch call that takes the order (log2 width) and writes glm::u32vec2 instead of per-point d2xy(n, d, &x, &y)"
+  },
+  "gotchas": [
+    "Correctness bug in the pext (BMI2) serial path: commit 'Remove un-needed mask-cleanup in favor of pext' (2018-11-12) dropped the s &= (1 << 2*Order) - 1 unpad step, but _pext_u32 with masks 0xAAAA/0x5555 still reads padding bits below bit 16 and ignores coordinate bits above it. A Python emulation of the source (this session) matches d2xy at every order 1-15 on the generic path, but on the pext path mismatches every point for orders 1-7 and 75-100% of sampled points for orders 9-15; at the benchmark's order 7, d = 0 gives (0, 128) instead of (0, 0). The README credits pext for its 'around 50 times faster' headline and labels the first column 'Serial/BMI2'; had that column really run the pext path, the benchmark's own check would have printed FAIL.",
+    "Harness flaw: CMakeLists.txt (last changed 2018-12-29 in 'Add multiple benchmark variants', before every table row was added from 2018-12-29 to 2018-12-31, with no later source change) passes -mbmi2/-msse4.2/-mavx2/-mavx512f only to the Benchmark-* executables, not to the qHilbert library that holds the paths, so a GCC build runs the same generic scalar code in all four columns. The column differences (AVX2 below SSE4.2 on the E5-2697 v4 and E3-1240 v5) look like run-to-run noise; what the table supports is Hacker's Delight scalar code against d2xy, 9.7x to 50x.",
+    "Timing is 10 back-to-back trials of 16,384 points (microsecond-scale per qHilbert trial), d2xy first, std::chrono::high_resolution_clock, no warm-up; the d2xy baseline is a non-inlined cross-translation-unit call per point with signed division and no LTO. The benchmark prints PASS/FAIL but continues on FAIL, and the d2xy FAIL string has a malformed escape code ('\\033[0;31FAIL').",
+    "Remainders fall through the template chain to the serial path, so in a -march=native build most of a batch is right and only the last Count % 4 points are wrong: a silent, size-dependent error rather than a crash."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling maps Hilbert indices; beside qAverageColor and qReverse (same author, same write-up style) it is the one for space-filling-curve coordinates. Take it as a reference for the constant-time d2xy, not for its SIMD columns.",
+  "verified_claims_summary": "The README table (2018, compiler not stated) divides Wikipedia d2xy time by qHilbert time for all 16,384 points of an order-7 curve, averaged over 10 trials: 42.5x to 50.4x on an i9-7900X, down to 9.7x to 11.0x on a Xeon E3-1240 v5. Because the published CMake build compiles the library without ISA flags, these effectively measure the scalar Hacker's Delight parallel-prefix rewrite against d2xy; the 'Serial/BMI2' pext path would fail the benchmark's own check at order 7.",
+  "status_note": "Abandoned since 2018-12-31 (master and develop both last updated then; 38 stars, MIT); small enough to vendor, but use the generic or SSE/AVX paths only, restore the unpad mask before using the pext path, and treat orders above 15 as unsupported.",
+  "sources_read": [
+    "https://github.com/Wunkolo/qHilbert",
+    "https://github.com/Wunkolo/qHilbert/commits/master",
+    "https://github.com/Wunkolo/qHilbert/commits/master/CMakeLists.txt",
+    "https://github.com/Wunkolo/qHilbert/commits/master/source/qHilbert.cpp",
+    "https://github.com/Wunkolo/qHilbert/branches/all",
+    "https://github.com/Wunkolo/qHilbert/issues?q=is%3Aissue",
+    "https://github.com/Wunkolo/qHilbert/tree/master/scripts",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/README.md",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/include/qHilbert.hpp",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/source/qHilbert.cpp",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/tests/benchmark.cpp",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/tests/TestBed.hpp",
+    "https://raw.githubusercontent.com/Wunkolo/qHilbert/HEAD/scripts/Hilbert.py",
+    "https://github.com/rawrunprotected/hilbert_curves"
+  ],
+  "confidence": 0.8
+}
