@@ -1,0 +1,47 @@
+{
+  "id": "https://gist.github.com/carandiru0/a4069c03b32ad4e1ec77a67d78f999c4",
+  "one_liner": "MSVC/Windows header that splits huge memcpy and memset across Intel TBB threads using AVX2 non-temporal loads and stores.",
+  "what_it_does": "A single header (mem.h) exposing ___memcpy_threaded<alignment>(dest, src, bytes, block_size) and ___memset_threaded<alignment>(dest, value, bytes, block_size) for copies and clears larger than 4 KB, plus an unused ___prefetch_vmem wrapper around PrefetchVirtualMemory. Each call is a blocking tbb::parallel_for over the buffer; every task runs an unrolled AVX2 kernel on its slice. It is not a drop-in memcpy/memset: the names, the alignment template argument and the value semantics differ. The gist is a byte-identical snapshot of Utility/mem.h in the author's Carandiru0/Common-Libraries repo at commit c4538da (June 12, 2022).",
+  "how_it_is_fast": "Memset writes 256 bytes per iteration with _mm256_stream_si256/_mm256_stream_ps (non-temporal stores that skip read-for-ownership). Memcpy bounces each 4 KiB block through a 4 KiB thread_local buffer: MOVNTDQA streaming loads (_mm256_stream_load_si256) into the buffer, an mfence, then ordinary loads and non-temporal stores to the destination. Several threads are used because one core cannot saturate DRAM bandwidth; the author reports bus traffic rising from 22 GB/s (single-threaded intrinsic memcpy) and 29 GB/s (threaded intrinsic) to 33.3 GB/s.",
+  "when_to_use": [
+    "Windows x64 MSVC code that already links oneTBB and needs to clear or copy buffers of many megabytes, where a single core cannot saturate memory bandwidth.",
+    "Destinations mapped write-combining (GPU upload heaps, mapped device memory): the author's later revision keeps the streaming kernels only for that case and says they give up to 16x there.",
+    "As a reference for a threaded non-temporal fill or copy pattern (TBB grain splitting plus AVX2 streaming stores) to rewrite under your own licence terms."
+  ],
+  "when_not_to_use": [
+    "Ordinary write-back memory: in February 2023 the author's own Common-Libraries version replaced the streaming kernels in ___memcpy_threaded/___memset_threaded with per-block calls to the intrinsic memcpy/memset, keeping streaming only in new *_stream variants for write-combined memory.",
+    "Any memset with a non-zero byte value: the fill vector is _mm256_set1_epi32(value), so value 0x41 writes the pattern 41 00 00 00, not 41 41 41 41.",
+    "Sizes that are not multiples of 16 bytes, or buffers aligned to less than 32 bytes: the kernels drop the last bytes % 16 bytes and use aligned 256-bit loads and stores.",
+    "Small or medium buffers, data that will be read again soon (non-temporal stores evict it from cache), Linux/macOS, GCC/Clang without MSVC extensions, or commercial products (CC BY-NC-SA 4.0)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Intel oneTBB (tbb::parallel_for, tbb::blocked_range, not included by the header), the author's ..\\Math\\superfastmath.h from Carandiru0/Common-Libraries (which pulls in DirectXMath and vec4_t.h) for SFM::roundToMultipleOf, and the Windows SDK for PrefetchVirtualMemory",
+    "min_toolchain": "MSVC with C++20 (constinit, __declspec(selectany) thread_local, #pragma loop(ivdep), __vectorcall); exact version not documented (the repo history mentions a 'vs 2022' commit)",
+    "platforms": "Windows x64 with AVX2",
+    "thread_safety": "Not documented; each call blocks in a TBB parallel_for and the bounce buffer is thread_local, so concurrent calls from different threads look safe from the code",
+    "drop_in_for_baseline": "partial — different names and a required alignment template argument; memset matches only for value 0 (or -1); both routines need 32-byte-aligned pointers and sizes that are multiples of 16, and source and destination must not overlap"
+  },
+  "gotchas": [
+    "Correctness bug: ___memset_threaded broadcasts the int with _mm256_set1_epi32 instead of a byte broadcast, so only zero (and -1) fills match memset; the 33.3 GB/s memset figure is presumably a zero fill (not stated). The bug is still present in the current Common-Libraries ___memset_threaded_stream.",
+    "Tails are silently dropped: the kernels stop at 16-byte granularity, so the final bytes % 16 bytes are never copied or set. The 'alignment' template parameter is never read, and the header's 'minimum alignment of 16 bytes' note understates the 32 bytes the aligned 256-bit loads and stores need.",
+    "The TBB grain is counted in __m256i elements (blocked_range over __m256i pointers), so the default block_size of 4096 makes 64-128 KiB tasks, not the 4 KB per thread the comment says.",
+    "The numbers are memory-controller bus traffic read from Intel PCM, with no CPU, compiler, buffer size or timing harness. The memcpy split (read 10 GB/s, write 23.3 GB/s) does not balance as a DRAM-to-DRAM copy would, so 33.3 GB/s cannot be converted to bytes copied per second. MOVNTDQA streaming loads only act as non-temporal on write-combining memory; on ordinary write-back memory a CPU may treat them as plain loads (Intel SDM text, via search snippets)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fast-strlen.c (bjourne) or the riteme memset gist only when you are on Windows/MSVC with TBB and want threaded non-temporal fills or copies, especially into write-combined memory. Those siblings are portable C/C++ with a timed harness and stated hardware, while this one has comment-only numbers and a memset value bug. For measured copy and fill kernels, tinymembench is the better reference.",
+  "verified_claims_summary": "The author's code comments report memory-controller bus traffic from Intel PCM: 22 GB/s for MSVC's intrinsic memcpy on one thread, 29 GB/s for it multithreaded, and 33.3 GB/s (10 GB/s read plus 23.3 GB/s write) for ___memcpy_threaded. ___memset_threaded is also reported at 33.3 GB/s of writes. That is about 1.15x over the threaded intrinsic (derived from page data). No CPU model, compiler version, flags, buffer size or harness is given, and the code that produced the numbers is not in the gist.",
+  "status_note": "Abandoned as a gist (four revisions, June 10-12, 2022). The live copy is Utility/mem.h in Carandiru0/Common-Libraries, last changed February 27, 2023, where the threaded routines now call the intrinsic memcpy/memset for normal memory. It is reference-only: Windows/MSVC/TBB-bound, licensed CC BY-NC-SA 4.0 (non-commercial, not OSI) under an 'All Rights Reserved' line, and carrying a memset value bug.",
+  "sources_read": [
+    "https://gist.github.com/Carandiru0/a4069c03b32ad4e1ec77a67d78f999c4",
+    "https://github.com/Carandiru0?tab=repositories",
+    "https://github.com/Carandiru0/Common-Libraries",
+    "https://github.com/Carandiru0/Common-Libraries/commits/main/Utility/mem.h",
+    "https://raw.githubusercontent.com/Carandiru0/Common-Libraries/HEAD/Utility/mem.h",
+    "https://raw.githubusercontent.com/Carandiru0/Common-Libraries/c4538da/Utility/mem.h",
+    "https://raw.githubusercontent.com/Carandiru0/Common-Libraries/a967e71/Utility/mem.h",
+    "https://raw.githubusercontent.com/Carandiru0/Common-Libraries/HEAD/Math/superfastmath.h",
+    "https://community.intel.com/t5/Intel-ISA-Extensions/Do-Non-Temporal-Loads-Prefetch/m-p/1027104 (WebSearch snippet only)",
+    "https://shell-storm.org/x86doc/MOVNTDQA.html (WebSearch snippet only)"
+  ],
+  "confidence": 0.7
+}

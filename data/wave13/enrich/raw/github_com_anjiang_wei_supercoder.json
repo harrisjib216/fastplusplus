@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/anjiang-wei/supercoder",
+  "one_liner": "RL-fine-tuned 7B LLM that rewrites gcc-compiled x86-64 assembly, claiming 1.46x over gcc -O3 on CodeNet programs.",
+  "what_it_does": "SuperCoder is the code and training recipe behind arXiv 2505.11480: Qwen2.5-Coder-7B-Instruct fine-tuned with PPO (a vendored copy of verl) to read a C program plus its compiler-generated assembly and emit a faster x86-64 assembly program. The output is a model (LLM4Code/Superoptimizer_Qwen7B on Hugging Face) plus Python scripts for dataset construction from CodeNet, inference against local or API-hosted models, and an evaluation harness that assembles the answer with gcc, runs it on stored test inputs and times it with hyperfine. It is not a library or a compiler pass; you prompt it per program and must check every answer yourself.",
+  "how_it_is_fast": "The speedup comes from LLM-proposed rewrites of whole small programs (about 130 lines of assembly on average), learned by reinforcement learning with a reward of 0 for wrong, non-compiling or input-identical answers and the measured mean speedup (only when above 1.0) for correct ones (verl/verl/utils/reward_score/speedup_assembly_design2.py). This is superoptimization in the STOKE sense, but driven by a learned policy and test execution instead of a stochastic search with an equivalence checker. Training programs were selected from CodeNet submissions that showed large -O0 to -O3 gains (create_top_speedup.py --threshold 3.0).",
+  "when_to_use": [
+    "Research on learned code optimization where you need a reproducible baseline model, dataset recipe and reward function for assembly-level rewriting.",
+    "Generating candidate rewrites of small, self-contained, stdin/stdout x86-64 programs (competitive-programming size) that you will re-verify and re-benchmark yourself.",
+    "Comparing LLMs (OpenAI, Anthropic, Gemini, Together or local Hugging Face models) on assembly optimization with the same harness via src/evaluate.py."
+  ],
+  "when_not_to_use": [
+    "Production builds: correctness is checked only on at most 10 stored test inputs per program, with no formal equivalence check, so a passing rewrite can still be wrong on other inputs.",
+    "Large codebases, libraries or anything beyond single-file programs; prompts and answers are capped at 2,000 tokens each in the training script and the dataset filter drops pairs above 4,000 tokens.",
+    "Non-x86-64 targets or non-gcc toolchains: the harness assembles with plain 'gcc file.s -o bin -lm' on the host.",
+    "When you need a verified result for a hot kernel: STOKE or Minotaur in this category check equivalence instead of sampling tests."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python 3.10.12 (conda), torch 2.6.0, transformers, datasets, sglang[all]>=0.4.6.post5, flash-attn, ray, vLLM and the vendored verl (pip install -e) for training, anthropic/openai/together/google-genai clients, hyperfine, gcc; Hugging Face access for the model and dataset",
+    "min_toolchain": "Python 3.10; GPUs for inference and RL (the training script sets 4 GPUs per node); gcc version not documented",
+    "platforms": "x86-64 Linux for the generated code and harness; CUDA GPUs for model inference and training",
+    "thread_safety": "not documented (the evaluation harness runs test cases in a ThreadPoolExecutor)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in src/test_benchmark.py and src/metrics.py: a generated answer identical to the input 'unoptimized_assembly' is marked 'success' for every test case without being run, so echoing the prompt counts toward the reported pass rate (at speedup 1.0); the RL reward gives such an answer 0, but the evaluation does not, so the pass-rate metric is inflated by construction.",
+    "Speedups are biased upward: each per-input ratio is floored at 1.0 ('If generated code is slower, set speedup to 1.0'), failed, non-compiling and benchmark-failing cases are scored 1.0, and print_results.py (which emits the LaTeX table rows) clamps the final geometric mean at 1.0, so whole-process timing noise on millisecond programs can only add to the score.",
+    "Baseline mismatch: in the released scripts the timed baseline and the prompt's input are gcc -O0 output (convert_to_hf_raw.py stores 'gcc -O0 -S' as unoptimized_assembly; gcc -O3 is only the reference answer), while the paper reports speedups over gcc -O3; the published HF dataset could not be opened to see which variant the numbers used.",
+    "Timings are mean whole-process wall time (hyperfine --warmup 3 --runs 10, startup included) on small CodeNet programs, measured while other test cases run concurrently in the thread pool; no CPU model or gcc version is given."
+  ],
+  "pick_this_over_siblings_when": "Pick SuperCoder over STOKE or Minotaur only when you want an LLM to propose rewrites of whole small programs and can afford independent verification; STOKE and Minotaur prove equivalence of the code they change and report measured gains on named hardware, which SuperCoder does not.",
+  "verified_claims_summary": "Per search snippets of arXiv 2505.11480 (paper not opened): on a CodeNet-derived benchmark of 8,072 programs the RL-tuned Qwen2.5-Coder-7B reaches 95.0% test pass rate and a 1.46x average speedup over gcc -O3 (Claude-opus-4 51.5% and 1.43x; untuned base 61.4% and 1.10x), measured as hyperfine whole-process means on up to 10 inputs per program, hardware and gcc version not stated. The repo's print_results.py computes that 'average' as a geometric mean over problems with incorrect ones at 1.0 and per-input speedups floored at 1.0, and the released scripts time against gcc -O0 output rather than -O3.",
+  "status_note": "Two-commit code drop from 2025-10-23 (Apache-2.0, 2 stars, no issues) accompanying a preprint; usable as research code and a model checkpoint, but the evaluation harness counts prompt echoes as passes and floors slowdowns at 1.0, so re-measure any claimed gain yourself.",
+  "sources_read": [
+    "https://github.com/Anjiang-Wei/SuperCoder",
+    "https://github.com/Anjiang-Wei/SuperCoder/issues?q=is%3Aissue",
+    "https://github.com/Anjiang-Wei/SuperCoder/tree/master/src",
+    "https://github.com/Anjiang-Wei/SuperCoder/tree/master/src/inference",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/README.md",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/print_results.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/download_parquet.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/scripts/eval.sh",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/scripts/create_ds.sh",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/scripts/install_dependencies.sh",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/evaluate.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/metrics.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/test_benchmark.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/utils.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/inference/__init__.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/inference/all_inference.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/inference/inference_clients.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/create_data/convert_to_hf_raw.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/create_data/create_top_speedup.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/create_data/precompile.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/create_data/filter_wrong.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/src/create_data/generate_io.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/verl/examples/ppo_trainer/run_qwen2.57_superopt.sh",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/verl/verl/utils/reward_score/__init__.py",
+    "https://raw.githubusercontent.com/Anjiang-Wei/SuperCoder/HEAD/verl/verl/utils/reward_score/speedup_assembly_design2.py",
+    "WebSearch snippets for arXiv 2505.11480 (arxiv.org, alphaxiv.org, papers.cool results; pages not opened)",
+    "https://huggingface.co/datasets/LLM4Code/llm_superoptimizer_ds (blocked: DNS failure and proxy CONNECT 403)"
+  ],
+  "confidence": 0.55
+}

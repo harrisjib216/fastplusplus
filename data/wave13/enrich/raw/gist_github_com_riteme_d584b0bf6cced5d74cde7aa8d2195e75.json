@@ -1,0 +1,45 @@
+{
+  "id": "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+  "one_liner": "A 20-line memset wrapper that fills huge buffers by memcpy-doubling an 8 MiB block, 2.47x faster than glibc 2.36 memset.",
+  "what_it_does": "my_memset(s, c, n) has memset's signature and return value. For n up to 8 MiB it just calls memset. Above that it memsets the first 8 MiB block, copies that block with memcpy into each later whole 8 MiB slot (the ranges never overlap), and memsets the tail. The gist is one Markdown file (main.md) holding memset_test.cpp, the compile commands, the /usr/bin/time output and lscpu/glibc details; it is a demonstration, not a library.",
+  "how_it_is_fast": "The gain comes from glibc's size heuristics, not from memcpy being inherently faster. In glibc 2.36, x86-64 memset uses rep stosb for every size above __x86_rep_stosb_threshold (2048 bytes). memcpy above __x86_shared_non_temporal_threshold (3/4 of one thread's cache share, well below 8 MiB on this CPU) switches to a page-interleaved loop with non-temporal stores that skip read-for-ownership. The repeated 8 MiB source block fits in the i7-12700's 25 MiB L3, so the copy mostly reads from cache while it streams writes to DRAM.",
+  "when_to_use": [
+    "Filling or zeroing buffers of tens of MiB or more on x86-64 Linux with glibc older than 2.40, where memset has no non-temporal path.",
+    "Write-once fills that will not be read back soon (non-temporal stores leave the destination out of cache).",
+    "As a quick experiment showing whether non-temporal stores help your fill workload, before writing a proper streaming memset."
+  ],
+  "when_not_to_use": [
+    "glibc 2.40 or newer on Intel and AMD: memset itself switches to a non-temporal store loop above the same non-temporal threshold (except on Skylake-AVX512 and Cannon Lake, where glibc sets Avoid_Non_Temporal_Memset), so the trick probably gives nothing there (not measured).",
+    "Buffers under 16 MiB: with the 8 MiB block, no memcpy runs until n reaches 16 MiB, so smaller sizes only pay for an extra branch or a split memset.",
+    "Buffers that are read right after the fill and fit in cache: non-temporal stores push the data out to DRAM.",
+    "CPUs whose last-level cache is smaller than 8 MiB, where re-reading the source block probably adds DRAM read traffic (inference, not measured); also non-glibc libcs (musl, MSVC CRT, macOS) whose memcpy and memset thresholds differ."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc memcpy and memset)",
+    "min_toolchain": "C++11 (constexpr); trivially portable to C",
+    "platforms": "any; the measured benefit is specific to x86-64 glibc before 2.40",
+    "thread_safety": "Stateless and reentrant, same as memset",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "The constant 2 * 2048 * 2048 is 8 MiB, not the 2 MiB that the code comments say.",
+    "Harness flaw: one /usr/bin/time run per variant, unpinned, on a hybrid 8P+4E Alder Lake (lscpu shows 12 cores and 9 L2 instances) with frequency scaling active. There are no repetitions or variance and the g++ version is not stated. Both runs include the 1 GiB first-touch faults, with near-equal fault counts (639 vs 634 minor).",
+    "The 'contradicting' perf bench mem numbers in the comments (i7-12700: memset 72.70 GB/s vs memcpy 31.20 GB/s) use 1 MB cache-resident buffers, a different regime from the 1 GiB fill. The result really compares rep stosb against glibc's non-temporal memcpy path, not memset against memcpy.",
+    "The gist has no licence, so the code is not formally reusable; the idea is easy to re-implement."
+  ],
+  "pick_this_over_siblings_when": "Use it on glibc 2.36-2.39 when you want a no-intrinsics, portable one-function fix and cannot vendor fancy-memset or nadavrot/memset_benchmark (AVX2 assembly) or write an explicit non-temporal store loop like Carandiru0's memset_threaded. Those siblings stream directly and do not re-read an 8 MiB source, but they need x86 assembly or intrinsics.",
+  "verified_claims_summary": "100 fills of a 1 GiB buffer (about 107 GB written) took 6.34 s elapsed (6.23 s user) with glibc 2.36-6 memset and 2.57 s elapsed (2.47 s user) with my_memset, i.e. about 16.9 vs 41.8 GB/s and 2.47x (derived from page data). Built with g++ -O3 -march=native on an Intel Core i7-12700 under Manjaro with Linux 6.1, single run each. The glibc 2.36 sources confirm that memset takes rep stosb at this size while memcpy takes the non-temporal path, which explains the gap.",
+  "status_note": "Gist from January 1-5, 2023 (12 revisions, 1 star, no licence), not maintained. It is a reference for a glibc-version-specific trick that glibc 2.40's non-temporal memset has probably made unnecessary.",
+  "sources_read": [
+    "https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.36/sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.36/sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.36/sysdeps/x86/dl-cacheinfo.h",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.40/sysdeps/x86_64/multiarch/memset-vec-unaligned-erms.S",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.40/sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.40/sysdeps/x86/dl-cacheinfo.h",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.40/sysdeps/x86/cpu-features.c"
+  ],
+  "confidence": 0.75
+}
