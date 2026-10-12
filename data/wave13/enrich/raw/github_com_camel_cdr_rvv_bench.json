@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/camel-cdr/rvv-bench",
+  "one_liner": "Hand-written RISC-V Vector 1.0 memcpy, memset and strlen kernels; memcpy averages 2x a board's scalar libc in cache.",
+  "what_it_does": "A benchmark suite of RVV 1.0 assembly kernels (bench/*.S) with a C harness that times them against the hosted libc, musl's C code, a byte loop and a compiler-vectorized loop, reporting bytes per cycle from 1 byte to 32 MB. Each kernel uses the standard C signature and calling convention (memcpy(dest, src, n), memset(dest, c, n), strlen(s)) but is emitted under macro-generated names such as memcpy_rvv_m4 for LMUL 1, 2, 4 and 8. It is a study and copy source, not a packaged or dispatched libc.",
+  "how_it_is_fast": "The kernels are RVV strip-mining loops: vsetvli sets vl = min(remaining, VLMAX), so each vle8.v/vse8.v moves a whole register group (128 bytes at LMUL 4 on VLEN 256) and the last partial chunk needs no scalar tail loop. strlen loads with fault-only-first vle8ff.v (or with page-bounded plain loads in the page_aligned variant) and finds the NUL with vmseq.vi plus vfirst.m. The baseline appears to be scalar code: on the X60 the board's libc memset is no faster than musl's 64-bit SWAR C at 16 KB and 1.46x slower at 265 KB (derived from page data).",
+  "when_to_use": [
+    "Writing or picking memcpy, memset or strlen for an RVV 1.0 core whose libc has no vector path. On a SpacemiT X60 (VLEN 256) the 7-instruction LMUL-4 memcpy ran 2.7x libc at 1-16 KB and was never slower over 233 sizes.",
+    "Freestanding, embedded or custom-libc RISC-V builds: the harness builds freestanding (nolibc.h) for rv64gcv and rv32 Zve32f, and the kernels need nothing but the vector unit.",
+    "Tuning LMUL and alignment strategy for a specific core: rvv-bench-results publishes the same kernels measured on many cores (SpacemiT X60, SiFive P870, XuanTie C920V2, Tenstorrent X280, CanMV K230 and others) next to instruction-throughput tables.",
+    "In-cache fills and copies (up to about 1 MB), where LMUL-4 memset ran 1.6-1.8x libc and memcpy 2.0-2.7x on the X60.",
+    "Long strings on the X60: the LMUL-1 vle8ff strlen held about 2x libc from 1 MB to 16 MB."
+  ],
+  "when_not_to_use": [
+    "Buffers larger than the caches: memcpy and memset converge to 1.0-1.1x libc from 8 MB up on the X60 because DRAM bandwidth is the limit.",
+    "strlen without per-core tuning: the LMUL-4 variant is slower than libc at 135 of 262 sizes and runs at 0.65-0.7x above about 280 KB, and the best in-cache variant (page_aligned_m8, 4.9x at 16 KB) drops to 0.64x at 260 KB.",
+    "Systems whose libc already dispatches an RVV routine: the measured gap is against an unnamed, apparently scalar board libc. A glibc RVV memcpy IFUNC series was still unmerged in patchwork per search snippets.",
+    "XTheadVector 0.7.1 cores (C906/C910) or RISC-V cores without V: the kernels are RVV 1.0 only.",
+    "Overlapping buffers or a drop-in libc: there is no memmove kernel, no ifunc or hwprobe dispatch and no packaging, so you must extract, rename and wire the routines in yourself."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the kernels; the harness uses the repo's nolibc.h and optionally Linux perf_event for user-mode cycle counting",
+    "min_toolchain": "GCC or Clang with an RVV 1.0 assembler (-march=rv64gcv). CI builds with clang-20 and Ubuntu's riscv64-linux-gnu-gcc; the X60 results label the compiler clang 18.",
+    "platforms": "RISC-V with the V 1.0 extension (rv64gcv; rv32 with Zve32f also builds in CI); not XTheadVector",
+    "thread_safety": "not documented; the kernels are stateless leaf routines that touch only argument, temporary and vector registers",
+    "drop_in_for_baseline": "partial — the C signatures and calling convention match memcpy, memset and strlen, but the symbols are macro-generated (memcpy_rvv_m4 and so on through bench/template.S), so you extract and rename them; there is no memmove semantics and no runtime dispatch"
+  },
+  "gotchas": [
+    "The memcpy page's 'scalar_autovec' row tracks libc within about 1% at most sizes (geomean 1.02x), which fits the compiler turning the byte loop into a libc memcpy call, so that row is not real auto-vectorized code. Memset's scalar_autovec row, by contrast, reaches 1.56x libc at 16 KB and 1.80x at 265 KB, so a plain C loop built with -march=rv64gcv already captures much of the memset gain (derived from page data).",
+    "Each plotted point is a trimmed mean of the middle 60% of 10-64 single-call timings (bench.h), not a median. Misalignment is re-randomized per repetition, and before every timed call the destination is pre-written by a libc memset outside the timed region, so copies hit a warm destination. Small sizes include call and cycle-counter overhead (the same for every implementation).",
+    "LMUL choice changes the verdict per kernel: LMUL-1 memset loses to libc at 137 of 245 sizes (0.70x at 16 KB) while LMUL 4 wins, and LMUL-8 memcpy dips to 0.78x at its worst size.",
+    "strlen_rvv_page_aligned hardcodes 4096-byte pages and, after the first page boundary, issues plain VLMAX-byte loads. That is safe only while VLEN*LMUL/8 <= 4096 bytes (VLEN up to 4096 bits at LMUL 8); CI validates the kernels in QEMU at VLEN 128-1024 with tail-agnostic all-ones on and off."
+  ],
+  "pick_this_over_siblings_when": "It is the only RISC-V Vector entry here: sve-string-routines-benchmarks and Arm Optimized Routines target Arm SVE/NEON, and tinymembench and copies-and-fills target older ARM boards. Pick rvv-bench for RVV 1.0 cores and for per-core LMUL tuning data; pick Arm Optimized Routines when you need a maintained, packaged library on Arm.",
+  "verified_claims_summary": "On a SpacemiT X60 (K1, 1.6 GHz, VLEN 256), the author's cycle-counter harness (-march=rv64gcv -O3, compiler labelled clang 18) measured the plain LMUL-4 RVV memcpy at 2.0x the board's unnamed libc by geomean over 233 sizes (4.7x at 66 B, 2.7x at 1-16 KB, 1.07x from 8 MB, never slower) and memset at 1.5x (parity from 8 MB). strlen was mixed: LMUL 4 was 1.15x by geomean and slower at 135 of 262 sizes, while LMUL 1 was about 2x at multi-MB sizes (ratios derived from page data).",
+  "status_note": "Active (135 commits, last on 2026-08-14; CI validates every bench kernel under QEMU at four VLENs) and MIT-licensed, so copyable: lift the few-instruction kernels you need and rename the MX() symbols rather than linking the repo.",
+  "sources_read": [
+    "https://github.com/camel-cdr/rvv-bench",
+    "https://github.com/camel-cdr/rvv-bench/commits/main",
+    "https://github.com/camel-cdr/rvv-bench/commit/accbe17b3d2ce21712ea480a87bb8d3c58e6d671",
+    "https://github.com/camel-cdr/rvv-bench/issues?q=is%3Aissue",
+    "https://github.com/camel-cdr/rvv-bench/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/config.mk",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/run.sh",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/nolibc.h",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/Makefile",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/config.h",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/bench.h",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/template.S",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/memcpy.c",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/memcpy.S",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/memset.c",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/memset.S",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/strlen.c",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/bench/strlen.S",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/.github/workflows/validate-bench.yml",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/.github/workflows/rv64-config-hosted.mk",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/.github/workflows/rv64-run.sh",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench/HEAD/.github/workflows/rv32-config.mk",
+    "https://github.com/camel-cdr/rvv-bench-results/tree/main/spacemit_x60",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench-results/HEAD/README.md",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench-results/HEAD/spacemit_x60/index.html",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench-results/HEAD/spacemit_x60/memcpy.html",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench-results/HEAD/spacemit_x60/memset.html",
+    "https://raw.githubusercontent.com/camel-cdr/rvv-bench-results/HEAD/spacemit_x60/strlen.html",
+    "WebSearch: glibc RISC-V vector RVV memcpy strlen ifunc merged release (snippets of patchwork.sourceware.org daichengrong v7 'RISC-V: add riscv vector support for memcpy', State: New)"
+  ],
+  "confidence": 0.78
+}

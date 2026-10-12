@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/bitshifter/glam-rs",
+  "one_liner": "Rust f32/f64 3D game-math crate with SSE2/NEON storage; 2.5x faster Mat4 inverse than cgmath in mathbench.",
+  "what_it_does": "glam provides concrete vector, matrix, quaternion and affine types (Vec2/3/3A/4, Mat2/3/3A/4, Quat, Affine2/3A, plus f64 and integer variants and camera/projection constructors) for games and graphics. The API is deliberately non-generic and trait-light: methods sit on each concrete type, components are reached through Deref (`v.x`), and conversions to other math crates go through the optional `mint-05` feature. It is not a drop-in for cgmath or nalgebra; code has to be ported to glam's types and method names.",
+  "how_it_is_fast": "Vec3A, Vec4, Quat, Mat2, Mat3A, Mat4, Affine2 and Affine3A store each vector or column in one 128-bit register (__m128 on x86, NEON on aarch64, simd128 on wasm), so loads, stores and most operations are single SIMD instructions instead of three or four scalar ones. The hot matrix routines are hand-written shuffle/multiply sequences ported from C++ libraries (ATTRIBUTION.md): Mat4 transpose is DirectXMath's XMMatrixTranspose (four shuffle pairs), and Mat4 determinant and inverse follow GLM's glm_mat4_determinant_lowp and glm_mat4_inverse cofactor schemes with no branch or invertibility check on the default `inverse()` path. The SIMD back-ends use fused multiply-add when the target enables it.",
+  "when_to_use": [
+    "Per-object 3D game or graphics math in Rust (transform hierarchies, camera matrices, physics integration) where you process one Vec3/Mat4/Quat at a time rather than restructuring data into SIMD lanes.",
+    "Code dominated by 4x4 matrix inverse, transpose and determinant, or affine transform inverse: these are the rows where mathbench shows clear wins (Mat4 inverse 12.1 ns vs 30.8 ns cgmath and 40.8 ns nalgebra; transpose 2.7 ns vs about 7.7 ns; Affine3A inverse 6.7 ns vs 20.7-40.6 ns) on equally sized types.",
+    "Arrays of 3D vectors updated in bulk when you can afford the 16-byte padded Vec3A: the euler 3d x10000 workload runs 5.86 us vs about 16.5 us for the 12-byte Vector3 types of cgmath, nalgebra, euclid, vek and ultraviolet.",
+    "Bevy or other Rust engines that already standardise on glam, and no_std or GPU (rust-gpu, CUDA-alignment) targets, which glam supports through the libm, nostd-libm and cuda features."
+  ],
+  "when_not_to_use": [
+    "Throughput kernels you can lay out as AoSoA: wide types (ultraviolet f32x8, nalgebra WideF32x8) beat glam's one-vector-at-a-time types by 2-10x in mathbench's own wide table (ray-sphere x80000 25.3 us vs 497.6 us glam).",
+    "Generic or arbitrary-dimension linear algebra (decompositions, NxM matrices, generic scalar types): glam is fixed 2/3/4-dimension only and has no generics; nalgebra covers that space.",
+    "Memory-sensitive storage of millions of 3D vectors or 3x3 matrices: Vec3A and Mat3A carry a padding lane (16 vs 12 bytes, 48 vs 36 bytes), and the 12-byte Vec3/Mat3 types run scalar code and tie the competition (vector3 length row).",
+    "wasm32 builds where speed matters: the README says simd128 passes tests but has never been benchmarked, and it is opt-in via -C target-feature=+simd128.",
+    "C++ projects: it is a Rust crate with no C ABI; the C++ libraries glam ports from (DirectXMath, Realtime Math, GLM) are the native options."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none by default (approx, bytemuck, mint, rand, serde, rkyv, speedy, encase, zerocopy, arbitrary, float_eq and libm are optional features)",
+    "min_toolchain": "Rust 1.85.0, edition 2024 (glam 0.34.x); 0.33.x accepted 1.68.2; core-simd feature needs nightly",
+    "platforms": "any Rust target; SIMD storage on x86 and x86_64 (SSE2, default on x86_64), aarch64 (NEON, default) and wasm32/wasm64 (simd128, opt-in); scalar fallback elsewhere or with the scalar-math feature; no_std via libm",
+    "thread_safety": "not documented; all types are plain Copy values with no shared or interior state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "`Mat4::inverse()` (and the other matrix `inverse` methods) never checks invertibility: a singular or ill-conditioned matrix yields NaN or infinite output silently unless the glam-assert or debug-glam-assert feature is on. Use `try_inverse` or `inverse_or_zero` (added in 0.31.0, 2026-01-21) when inputs can be singular; mathbench still times the unchecked `inverse` against cgmath's `invert` and nalgebra's `try_inverse`, which return Option.",
+    "The speed lives in the padded SIMD types: Vec3A, Mat3A and Affine3A are 16-byte aligned with an unused lane, while Vec3 and Mat3 are plain scalar structs. Component access on SIMD types goes through Deref to internal wrapper structs, so compiler errors mention those wrapper types.",
+    "Results are not bit-identical across builds: the SIMD back-ends use FMA whenever the target enables it (the fast-math feature became a no-op in 0.33.8 and was removed in 0.34.0), and vector min/max NaN propagation differs between SIMD back-ends by design (0.30.2 changelog).",
+    "Pre-1.0 churn: 0.34.0 (2026-10-03) removed the unversioned approx/mint/rand/rkyv/speedy/zerocopy/encase features and long-deprecated look_at/perspective matrix methods and raised the MSRV to 1.85; the old `rkyv` feature was deprecated as unsound in 0.33.11."
+  ],
+  "pick_this_over_siblings_when": "Pick glam over ultraviolet when your code handles one vector, quaternion or matrix at a time and you want the faster single-lane type; pick ultraviolet (or nalgebra wide types) when you can batch work into AoSoA lanes, where they beat glam 2-20x in the same benchmark suite. The C++ SIMD siblings (EVE, VCL) are general SIMD wrappers, not 3D math types, and serve C++ code.",
+  "verified_claims_summary": "In mathbench-rs (glam's author's Criterion suite, commit 8e5467c, glam 0.34.1, rustc 1.99.0, default bench profile so SSE2 only, AMD Ryzen 7 3800X on Linux), glam's Mat4 inverse took 12.1 ns vs 30.8 ns for cgmath 0.18.0 and 40.8 ns for nalgebra 0.35.0, transpose 2.72 ns vs about 7.7 ns, and determinant 4.39 ns vs 7.18 ns and 40.96 ns, with equal no-op baselines for the 64-byte Mat4 types (3.33-3.39 ns); glam loses or ties on matrix4 mul vector4 x1, matrix2 mul matrix2, rotation3 mul vector3 and the 2D transform rows. The vector3 cross, dot and normalize and the matrix2 wins are smaller than the gap in the per-type no-op baseline (glam's padded Vec3A 1.09 ns vs 1.94-2.18 ns for 12-byte Vector3 types), so they measure type layout, not arithmetic.",
+  "status_note": "Actively maintained (0.34.1 released 2026-10-06, about 159M crates.io downloads, heading for 1.0); MIT OR Apache-2.0 and copyable, but the evidence is a shootout written by glam's author, and the README tables predate mathbench 0.5.0's batched rewrite, so HEAD gives different rows and numbers. Harness findings: the single-op rows time one operation plus a type-dependent load/store per Criterion iteration (glam's matrix4 transpose at 2.72 ns runs below its own 3.33 ns no-op row, and subtracting the no-op from vector3 cross gives a negative cost); the x100 rows at 8e5467c stream a 52 MB Mat4 pool larger than the 32 MB L3, so they are memory-bound; and the 2.8x euler 3d win comes from the 16-byte Vec3A layout, which pathfinder's Vector4F matches (5.852 us).",
+  "sources_read": [
+    "https://github.com/bitshifter/glam-rs",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/ATTRIBUTION.md",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/src/f32/sse2/mat4.rs",
+    "https://raw.githubusercontent.com/bitshifter/glam-rs/HEAD/src/f32/sse2/vec3a.rs",
+    "https://github.com/bitshifter/glam-rs/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/bitshifter/glam-rs/issues?q=is%3Aissue+performance",
+    "https://github.com/bitshifter/glam-rs/issues/721",
+    "https://crates.io/api/v1/crates/glam",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/README.md",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/support/macros.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/matrix4.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/vector3.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/eulerbench.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/src/lib.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/benches/matrix4.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/benches/vector3.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/benches/support/macros.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/transform3d.rs"
+  ],
+  "confidence": 0.78
+}

@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/boltffi/boltffi",
+  "one_liner": "Rust multi-language bindings generator; returns arrays of structs to JS or Swift far faster than wasm-bindgen class handles or UniFFI.",
+  "what_it_does": "You mark Rust types with `#[data]` and functions or classes with `#[export]`, and `boltffi pack` builds ready-to-use packages: xcframework plus Swift package, Android jniLibs plus Kotlin, JVM JNI plus Java, WASM npm package plus TypeScript, NuGet for C#, Python wheels, and an experimental C package. It replaces UniFFI or wasm-bindgen rather than wrapping them: the annotations, the generated host APIs (async mapped to async/await, coroutines, CompletableFuture, Tasks or Promises) and the WASM runtime (`@boltffi/runtime`) are its own. Existing UniFFI or wasm-bindgen code has to be re-annotated.",
+  "how_it_is_fast": "Primitives cross as raw values. On native targets, `#[data]` structs with only primitive fields are passed as pointers to memory both sides can read, which avoids UniFFI's serialize-every-value RustBuffer step. On WASM, records and collections are written into one wire buffer in linear memory, and the TypeScript runtime decodes it eagerly into plain JS objects with a DataView reader (`WireReader.readArray`). wasm-bindgen instead boxes each exported struct separately in Rust and hands JS one wrapper object per element, each registered with a FinalizationRegistry. Strings and collections are still encoded and copied.",
+  "when_to_use": [
+    "Rust functions that return many small records to JavaScript: in the 2026-06-25 dashboard run, generate_locations_1k took 19.8 us vs 695 us median (35x) against wasm-bindgen's class-handle return, and generate_particles_1k 59 us vs 617 us (10x).",
+    "Swift or Kotlin apps where UniFFI's record serialization dominates: in the same day's Swift run, generate_locations_1k took 3.0 us vs 1.89 ms and process_locations_1k 1.7 us vs 48.7 us.",
+    "One Rust core shipped to Swift, Kotlin, Java, C#, Python and TypeScript from a single set of annotations, with packaging handled by one CLI.",
+    "Callback-heavy APIs (Rust calling host-implemented traits): 1.5-1.7x faster than wasm-bindgen and about 2.1x faster than UniFFI in the dashboard runs."
+  ],
+  "when_not_to_use": [
+    "Hot loops of scalar calls from JavaScript: in the 2026-06-25 dashboard run BoltFFI's noop took 236 ns vs 7 ns median for wasm-bindgen, echo_i32 160 ns vs 6 ns, enum calls 285-580 ns vs 7-10 ns, and find_even_100 ran at 0.09x.",
+    "Primitive vectors, byte buffers and stateful classes on WASM: ties or losses (sum_i32_vec 0.77-0.88x, echo_vec_i32_10k 0.72x, counter_increment 0.59-0.71x, accumulator 0.70-0.82x).",
+    "Passing records into Rust when wasm-bindgen already uses serde-wasm-bindgen: the harness's own serde-wasm-bindgen rows (user profiles) show BoltFFI 1.9x faster on generate but 0.71-0.74x (slower) on sum_user_scores and count_active_users.",
+    "C++ consumers: C++ is only 'Planned', the C target is experimental and synchronous only, and Kotlin Multiplatform supports only synchronous infallible free functions over primitives; cxx or Diplomat fit C++ better.",
+    "Projects needing a stable API: pre-1.0 (29 crates.io releases since 2026-02-17), with open lifecycle bugs such as #664 (use-after-close race in C#, Java and Kotlin wrappers) and #670 (C# class wrappers passed by value are not invalidated)."
+  ],
+  "integration": {
+    "form": "crate plus CLI code generator (boltffi crate, boltffi_cli via cargo install or prebuilt archives; WASM output also needs the @boltffi/runtime npm package)",
+    "dependencies": "boltffi crates; per-target toolchains (Xcode for Apple, Android NDK, JDK, .NET SDK, Python, Node); wasm-opt from binaryen for release WASM packs unless optimisation is turned off or on_missing is relaxed",
+    "min_toolchain": "Rust edition 2024 (so Rust 1.85 or later); no rust-version declared on crates.io",
+    "platforms": "iOS and macOS (Swift), Android and JVM (Kotlin, Java via JNI), .NET (C#), CPython, wasm32-unknown-unknown (Node.js and browsers); C experimental; Dart in progress",
+    "thread_safety": "Exported objects inherit the Rust type's own synchronization (the harness compares Mutex-backed and single-threaded counters); open issue #664 says concurrent use-after-close is still possible in the C#, Java and Kotlin wrappers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Asymmetric WASM toolchain in the benchmark: the benchmark overlay (examples/demo/boltffi.benchmark.toml) sets [targets.wasm.optimize] enabled = true, and the release CI installs binaryen, so BoltFFI's .wasm is post-processed with `wasm-opt -Os` (the default level). run-bench.sh runs no wasm-opt on the wasm-bindgen output, and the dashboard metadata records optimizer null for both sides.",
+    "A release `boltffi pack wasm` runs wasm-opt by default and aborts with 'wasm-opt not found in PATH' when binaryen is missing (on_missing defaults to Error); set level or on_missing under [targets.wasm.optimize] to change this.",
+    "The README tables are a static v0.24.0 snapshot, and the dashboard (newest runs 2026-06-25, before releases 0.29-0.31) contradicts several of them. WASM scalar calls went from a 2 ns tie to 20-35x losses. In Swift, noop and echo_i32 tie UniFFI at about 29 ns mean (41 ns median, one Apple timer tick) instead of '<1 ns vs 1,416 ns', and counter_increment is 9.3 us vs 22.6 us (2.4x), not 1,282x. The '1,000x faster than UniFFI' headline is not reproduced.",
+    "Returned records are eager JS copies; classes need an explicit dispose() (the harness calls it). wasm-bindgen's generate rows in the harness never free their class handles, so their means include GC and FinalizationRegistry pauses (generate_locations_10k max 167.6 ms vs median 6.0 ms)."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings is a bindings generator: json-as, as-proto, MoonBit and Kotlin/Wasm are WASM languages or kernels that make the code inside WASM faster. BoltFFI only reduces the cost of crossing the Rust-to-host boundary, so pick it when that boundary moves struct-shaped data, not when the work inside WASM is the bottleneck.",
+  "verified_claims_summary": "BoltFFI's own Benchmark.js suite wraps the same examples/demo crate with BoltFFI and with wasm-bindgen 0.2.108 (Node.js). The README v0.24.0 snapshot (Apple M3) shows 129-453x on generate_* means, but the dashboard CI runs (rustc 1.94-1.95, Node 20-24, Apple M3 Max and Apple M1 Virtual) show generate_* medians of 5.9-35x across five runs (7.5-35x in the 2026-06-25 run), 1.1-1.9x on passing records into Rust, and 20-35x losses on scalar calls. The Swift dashboard run shows 600x-plus wins only on record generation against UniFFI, and ties on noop.",
+  "status_note": "Active (0.31.0 on crates.io 2026-09-28, last commit 2026-10-09, MIT, copyable), but pre-1.0 with 44 bug-labelled issues and no dashboard run since 2026-06-25. Harness findings: BoltFFI's WASM build gets `wasm-opt -Os` while the wasm-bindgen build gets none; the headline means are inflated by GC outliers from never-freed wasm-bindgen class handles; the wasm-bindgen host-to-Rust rows construct 1,000 class handles through constructor FFI calls inside the timed region; and the Swift dashboard ties UniFFI on noop, contradicting the README's '1,000x' headline.",
+  "sources_read": [
+    "https://github.com/boltffi/boltffi",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/README.md",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/benchmarks/harnesses/wasm-bench/bench.mjs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/benchmarks/harnesses/wasm-bench/run-bench.sh",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/benchmarks/harnesses/wasm-bench/package.json",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/examples/demo/bench_macros/src/lib.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/examples/demo/Cargo.toml",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/examples/demo/boltffi.benchmark.toml",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/examples/demo/boltffi.toml",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/examples/demo/src/wasm_bench.rs",
+    "https://github.com/boltffi/boltffi/tree/main/examples/demo/src",
+    "https://github.com/boltffi/boltffi/tree/main/boltffi_cli/src",
+    "https://github.com/boltffi/boltffi/tree/main/boltffi_cli/src/pack",
+    "https://github.com/boltffi/boltffi/tree/main/boltffi_cli/src/pack/wasm",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/boltffi_cli/src/pack/wasm/mod.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/boltffi_cli/src/pack/wasm/module.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/boltffi_cli/src/pack/wasm/package.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/boltffi_cli/src/pack/wasm/bindgen.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/boltffi_cli/src/config/mod.rs",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/.github/workflows/benchmark-release.yml",
+    "https://github.com/boltffi/boltffi/tree/main/runtime/typescript/src",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/runtime/typescript/package.json",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/runtime/typescript/src/wire.ts",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/runtime/typescript/src/handle.ts",
+    "https://raw.githubusercontent.com/boltffi/boltffi/HEAD/runtime/typescript/src/module.ts",
+    "https://github.com/boltffi/boltffi/issues?q=is%3Aissue+wasm+performance",
+    "https://github.com/boltffi/boltffi/issues?q=is%3Aissue+label%3Abug",
+    "https://crates.io/api/v1/crates/boltffi",
+    "https://raw.githubusercontent.com/boltffi/benchmarks-dashboard/HEAD/public/data/index.json",
+    "https://raw.githubusercontent.com/boltffi/benchmarks-dashboard/HEAD/public/data/archive/2026/06/25/2026-06-25t20-20-28z-wasm-node-benchmarkjs-2dc0e963810c--ef8d99f69769.json",
+    "https://raw.githubusercontent.com/boltffi/benchmarks-dashboard/HEAD/public/data/archive/2026/06/25/2026-06-25t18-30-44z-swift-macos-benchmark-2dc0e963810c--08b9bc9ba416.json"
+  ],
+  "confidence": 0.72
+}
