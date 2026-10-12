@@ -1,0 +1,98 @@
+[
+  {
+    "id": "https://github.com/sstadick/hck",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README benchmark tables (driven by benchmark.sh in the repo root: hyperfine --warmup 3 -m 5) time hck against GNU cut 8.30 and mawk 1.3.4 on a stated Ryzen 9 3950X, but the Rust toolchain, the hck build actually timed (plain release, PGO or target-cpu=native) and the distro build flags of cut and mawk are not stated; first-party, so C rather than A.",
+    "corrections": {
+      "compiler_and_flags": "Not stated for the benchmark run. Repo Cargo.toml release profile: lto = \"fat\", codegen-units = 1; the README says release binaries are built with profile-guided optimisation and the justfile's install-native target adds -C target-cpu=native, but which hck build was timed is not said. xsv 0.13.0, choose 1.3.2 and tsv-utils 2.2.0 (ldc2) 'compiled locally with optimizations'; GNU cut 8.30 and mawk 1.3.4 are Ubuntu 20 packages (distro build flags, not stated on the page).",
+      "workload": "Selecting fields 1, 8 and 19 from the 7-million-line UCI all_train.csv with a single-character ',' delimiter, and from a derived file whose fields are separated by three spaces (benchmark.sh, hyperfine --warmup 3 -m 5, output to /dev/null). hck memory-maps the input by default; --no-mmap rows are also reported.",
+      "stars_or_usage": "745 stars; 69,173 crates.io downloads; packaged for Homebrew, conda-forge, MacPorts and as a .deb",
+      "why_faster": "From the sources: hck's single-byte parser scans the buffer with memchr::memchr2_iter (SIMD) over a memory-mapped file (src/lib/single_byte_delim_parser.rs, src/lib/core.rs), while GNU cut 8.30's field loop reads and tests one byte at a time with getc (src/cut.c lines 384-392 at tag v8.30). Different implementations and I/O strategy, not a language effect.",
+      "caveats": "First-party; the README says the benchmarks are 'not meant to be an authoritative set' and only show hck is 'in the same ballpark'. The script (benchmark.sh) and data link are public, but toolchain versions, the hck build mode (release, PGO or native) and the Ubuntu build flags of cut and mawk are unstated, so equal optimisation cannot be shown. GNU cut 8.30 dates from 2018 and processes fields byte by byte with getc; newer coreutils releases were not tested. The cut row has a wide spread (6.827-9.769 s); using its minimum the gap is about 5.8x (derived from page data); hck --no-mmap literal mode is 1.349 s. Output formats differ (hck writes tab-separated output by default, cut keeps the comma), though both go to /dev/null. The multi-character comparison pits a single tool against a pipeline: hck -Ld'   ' 1.718 s vs tr -s ' ' | cut 7.471 s (4.3x), but hck in the same tr pipeline takes 6.171 s, so most of that gap is avoiding tr; hck's headline regex-delimiter mode is slower than tr | cut on this input (-d'\\s+' 10.014 s, -d'[[:space:]]+' 8.597 s vs 7.471 s). mawk (4.993 s) also beats cut here. Not a language-level result: same_algorithm false."
+    },
+    "notes": "Numbers match the README exactly; tier C stays because compiler and flags are missing for both sides. The win is memchr plus mmap against GNU cut 8.30's per-byte getc loop, so it is an implementation win over an old cut release, and hck's regex-delimiter mode loses to tr | cut. why_faster filled from the sources.",
+    "urls_opened": [
+      "https://github.com/sstadick/hck",
+      "https://github.com/sstadick/hck/commits",
+      "https://github.com/sstadick/hck/tree/master/src/lib",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/README.md",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/benchmark.sh",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/justfile",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/single_byte_delim_parser.rs",
+      "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/core.rs",
+      "https://raw.githubusercontent.com/coreutils/coreutils/v8.30/src/cut.c",
+      "https://crates.io/api/v1/crates/hck"
+    ]
+  },
+  {
+    "id": "https://github.com/josephg/jumprope-rs",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README table comes from the public criterion harness (rope_benches/src/main.rs, 'realworld' group) on a stated Ryzen 5800X, but no Rust or C compiler version or C flags are stated, the table was last updated in October 2021, and it is the author's own measurement against his own older C library; C, not A.",
+    "corrections": {
+      "license": "ISC (LICENSE.txt and README); Cargo.toml declares ISC OR Apache-2.0",
+      "compiler_and_flags": "Not stated in the README. Workspace Cargo.toml release profile: lto = true, codegen-units = 1 (Rust side). rope_benches/build.rs compiles a vendored rope.c with cc::Build defaults (no explicit flags, no NDEBUG; cc follows Cargo's release opt-level), linked as a static library with no cross-language LTO, so every C call crosses an FFI boundary. Run with 'cargo run --release -- --bench' in rope_benches.",
+      "stars_or_usage": "152 stars; 111,025 crates.io downloads",
+      "why_faster": "README: jumprope is a skip list whose leaf nodes each contain a gap buffer, versus librope's plain skip list of fixed 136-byte string nodes (rope_benches/rope.h with ROPE_WCHAR 0). The harness also favours the Rust side: the C rope is called through FFI with a CString heap allocation and copy for every insert inside the timed loop, and rope.c's assert() calls stay live because cc never defines NDEBUG.",
+      "caveats": "First-party numbers from the author, who also wrote the C baseline. The README table was last updated on 2021-10-05/06 (README commit history), before jumprope 1.0 (2022), so it does not reflect the current code. Benchmark code is public (rope_benches/src/main.rs, criterion 'realworld' group) but loads traces from a hard-coded /home/seph/src/diamond-types/benchmark_data path; compiler versions and C flags are unstated. Harness asymmetry: the C column ('C-JumpRope' in the code) is a vendored copy of librope's rope.c built by the cc crate without NDEBUG and driven through FFI with a CString allocation and copy per insert inside the timed loop, while Jumprope takes &str directly inside the same LTO-built Rust binary; this inflates the 2.4-2.7x gap by an unmeasured amount. The realworld check compares only the final char_len, not the content. Algorithms differ (gap-buffer leaves vs plain skip-list nodes), so the win is data-structure design rather than language. librope itself is already catalogued (wave 1, https://github.com/josephg/librope) from the same table; this record is its Rust successor, not a duplicate. The linked criterion report host (home.seph.codes) does not resolve (ENOTFOUND). No commits since 2023-05-20."
+    },
+    "notes": "Numbers match the README table (16.28 vs 6.66 ms etc.); tier C stays. Same-author C baseline with a different design, called through FFI with a per-insert CString allocation and live asserts, so the 2.4-2.7x is design plus harness, not language. Not a duplicate: librope (wave 1) is the C library itself.",
+    "urls_opened": [
+      "https://github.com/josephg/jumprope-rs",
+      "https://github.com/josephg/jumprope-rs/commits",
+      "https://github.com/josephg/jumprope-rs/commits/master/README.md",
+      "https://github.com/josephg/jumprope-rs/tree/master/rope_benches",
+      "https://github.com/josephg/jumprope-rs/tree/master/rope_benches/src",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/README.md",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/build.rs",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/Cargo.toml",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/README.md",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.h",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.c",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/rope.rs",
+      "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/main.rs",
+      "https://crates.io/api/v1/crates/jumprope"
+    ]
+  },
+  {
+    "id": "https://github.com/chmln/sd",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README hyperfine tables compare sd with sed using printed command lines, but give no CPU, OS, sed version, locale, build flags or input data, and the two large-file tables date from 2018-12-31 (commit 324fd1c, sd 0.4.0 code); first-party, so C.",
+    "corrections": {
+      "baseline": "sed, both sed -E and plain sed (GNU sed implied by the \\w and \\+ BRE extensions in the commands; version and locale not stated)",
+      "compiler_and_flags": "Not stated. At the 2018-12-31 benchmark commit (7ba1ac4) Cargo.toml set the release profile to opt-level = 3, lto = true; the sed build is unstated.",
+      "workload": "Replace '\"' with \"'\" across about 1.5 GB of JSON files (*.json), regex (\\w+) -> $1$1 on one ~55 MB JSON file (both printed to /dev/null), and literal foo -> qux plus regex '(\\w+) world' replacement on a 1M-line ~36 MB file comparing sd's line-by-line default (#328, 2026) and across (-A) modes with sed.",
+      "stars_or_usage": "7.4k stars; 512,307 crates.io downloads; packaged in most distributions (repology badge)",
+      "why_faster": "From the sources: the 2018 code (src/input.rs at 7ba1ac4) reads each whole file into a String and runs the Rust regex crate's replace_all (a single-literal pattern becomes a memchr-style scan inside the regex crate; regex-crate behaviour, not stated on the page), while GNU sed applies glibc regex line by line, whose \\w matching is slow in UTF-8 locales (locale unstated). An engine and I/O-strategy difference, not a language effect; in the current line-by-line default sd is slower than sed on a literal (357.0 vs 316.4 ms).",
+      "caveats": "First-party README numbers with no CPU, OS, sed version, locale or build flags; the 1.5 GB JSON corpus and the 55 MB dump.json are not provided. The two large-file tables were added on 2018-12-31 (commit 324fd1c; identical numbers at 7ba1ac4, Cargo version 0.4.0) and never re-run; the 2018 hyperfine command lists two commands while the table has three rows, and the current README's command lines (with --warmup 3) were rewritten after the measurement. In 2018 a file argument printed to stdout, but since sd 0.6.0 (2019-06-15) a file list implies in-place modification, so re-running the README commands with current sd rewrites the inputs (the (\\w+) -> $1$1 case doubles every word on each hyperfine iteration) and cannot reproduce the table. The line-by-line tables (2026-02-25, #328) measure unreleased master code (latest crates.io release is 1.0.0 of 2023-11-08), give no input method, and show default-mode sd slower than sed on a literal replacement (357.0 vs 316.4 ms). The large regex gaps (11.9x, 7.8x derived) compare the Rust regex crate with glibc regex, an engine difference that also depends on sed's locale. The README itself calls its syntax examples cherry-picked."
+    },
+    "notes": "Numbers match the README; tier C stays. The big-file numbers are 2018 measurements of sd 0.4.0, and the printed commands now edit the input files in place with current sd, so they do not reproduce. The current default mode loses to sed on a literal replacement, and the regex wins are Rust regex against glibc regex.",
+    "urls_opened": [
+      "https://github.com/chmln/sd",
+      "https://github.com/chmln/sd/commits",
+      "https://github.com/chmln/sd/commits/master/README.md",
+      "https://github.com/chmln/sd/tree/7ba1ac4/src",
+      "https://raw.githubusercontent.com/chmln/sd/HEAD/README.md",
+      "https://raw.githubusercontent.com/chmln/sd/HEAD/CHANGELOG.md",
+      "https://raw.githubusercontent.com/chmln/sd/7ba1ac4/README.md",
+      "https://raw.githubusercontent.com/chmln/sd/7ba1ac4/Cargo.toml",
+      "https://raw.githubusercontent.com/chmln/sd/7ba1ac4/src/input.rs",
+      "https://raw.githubusercontent.com/chmln/sd/7ba1ac4/src/app.rs",
+      "https://raw.githubusercontent.com/chmln/sd/7ba1ac4/src/main.rs",
+      "https://crates.io/api/v1/crates/sd"
+    ]
+  }
+]
