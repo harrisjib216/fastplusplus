@@ -1,0 +1,100 @@
+[
+ {
+  "id": "https://github.com/matyushkin/djvu-rs",
+  "verdict": "downgrade",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "Benchmark code is public (benches/render.rs, scripts/djvulibre_bench.c with scripts/bench_djvulibre.sh, examples/encoder_parity_scorecard.rs) and the djvu-rs toolchain and Apple M1 Max are stated, but DjVuLibre 3.5.29 is a Homebrew install whose build flags are never stated (only the C harness's cc -O2), so not A; first-party numbers, so C. Tier unchanged; the headline range is narrowed because two of its five rows are not like-for-like.",
+  "corrections": {
+   "benchmark_url": "https://github.com/matyushkin/djvu-rs/blob/main/BENCHMARKS_RESULTS.md",
+   "claimed_speedup": "README table (Apple M1 Max) matches BENCHMARKS_RESULTS.md 'Comparison with DjVuLibre 3.5.29'. Render, 2026-10-03 run, djvu-rs warm Criterion render_pixmap vs libdjvulibre C API render-only on an already decoded page: boy.djvu @72 dpi 61.7 us vs 124 us (2.0x), colorbook.djvu @150 dpi 4.46 ms vs 6.37 ms (1.4x), watchmaker.djvu @300 dpi 26.8 ms vs 37.8 ms (1.4x), cable_1973_100133.djvu @300 dpi 22.6 ms vs 36.8 ms (1.6x). Cold colorbook 13.7 ms vs 41.6 ms (3.0x, which the page itself calls 'close but not identical measurements'). Encode, encoder parity scorecard re-run 2026-10-06, median of 5: watchmaker IW44 150.7 ms vs c44 473.8 ms (3.1x), goody two-shoes 111.7 vs 364.7 ms (3.3x), map atlas JB2 lossless 102.0 vs cjb2 352.7 ms (3.5x), cable 7.0 vs 26.6 ms (3.8x), Chinese cookbook 5.4 vs 23.9 ms (4.4x); output size 0.952-1.040x of DjVuLibre. The like-for-like rows are the warm renders (1.4-2.0x) and the large-page encodes (3.1-3.5x); the 3.8x and 4.4x small-page encode rows are dominated by fixed process start-up cost (see caveats). In the 2026-06-18 comparison column djvu-rs rendered 1.2-2.1x slower than libdjvulibre.",
+   "compiler_and_flags": "djvu-rs: Rust 1.98 for the 2026-10-03/06 comparison runs (older tables Rust 1.92.0); Cargo.toml [profile.release] and [profile.bench] set lto = \"fat\", codegen-units = 1 (the BENCHMARKS_RESULTS.md header still says opt-level 3 with thin LTO, from the 2026-05-17 run). DjVuLibre 3.5.29: installed with 'brew install djvulibre' per scripts/bench_djvulibre.sh, library build flags not stated; render harness scripts/djvulibre_bench.c compiled with cc -O2 against ddjvuapi.",
+   "hardware": "Apple M1 Max (10 cores), macOS arm64; the 2026-10-06 encode re-run ran under background load (load average about 10), each djvu-rs/DjVuLibre pair back to back.",
+   "workload": "Render: djvu-rs warm Criterion render_pixmap (RGBA, aa off) vs libdjvulibre ddjvu_page_render (RGB24) timed render-only over 10-50 repeats on a page already decoded, for boy @72 dpi, colorbook @150 dpi, watchmaker and cable @300 dpi; cold: Criterion parse plus first render vs one unrepeated libdjvulibre open+decode plus the render mean. Encode: examples/encoder_parity_scorecard.rs renders each corpus page to PPM/PBM with ddjvu, then times c44 or cjb2 against the djvu-rs PageEncoder (Photo or Lossless profile), both as subprocess workers writing a file, median of 5 runs, with ddjvu decode fidelity checks (PSNR/SSIM for IW44, pixel-exact for JB2).",
+   "caveats": "First-party numbers on one Apple M1 Max; DjVuLibre 3.5.29 is the Homebrew build (flags not stated) driven by a C harness built with cc -O2. Render rows compare a warm Criterion mean with a libdjvulibre render-only mean; there is no pixel or PSNR equality check for renders, and the djvu-rs colorbook 150 dpi path decodes only the first BG44 chunk and samples a cached max-pooled 1/4-resolution mask (BENCHMARKS_RESULTS.md notes), so the 1.4x colorbook row may compare different output quality; the native-resolution cable bilevel row (1.6x) is the cleanest. The 3.0x cold row adds a single unrepeated libdjvulibre open+decode (35.3 ms, including context creation and threaded decode with message waits) to the render mean and sets it against a Criterion mean, and the djvu-rs cold path also decodes only the first BG44 chunk. Encode rows time whole subprocesses on both sides, but the DjVuLibre side pays an extra spawn (the scorecard binary's --external-worker launches c44/cjb2) and DjVuLibre start-up: cjb2 takes 20.8-28.4 ms on both the cable page and the near-empty Chinese cookbook page (67-byte output) in every snapshot from 2026-07-13 to 2026-10-06, while djvu-rs now takes 4.4-7.4 ms on them (2026-10-05/06 runs) (derived from page data), so the README's 3.8x cable row and the 4.4x cookbook row mostly measure fixed start-up cost, not JB2 coding; the large-page encodes (watchmaker 3.1x, goody two-shoes 3.3x, map atlas 3.5x) are the meaningful encode rows. Encode timings moved sharply between snapshots (goody two-shoes djvu-rs 405.8 ms on 2026-10-03, 311.9 ms on 2026-10-05, 111.7 ms on 2026-10-06 after PRs #937-#939) and the latest run was under load. c44's default schedule codes one slice fewer than djvu-rs (74,89,99), so djvu-rs IW44 output is 1.025-1.040x larger at slightly higher PSNR (parity at an equal slice count); JB2 lossless outputs are pixel-exact at 0.952-1.011x cjb2 size. The 2026-07-13 scorecard rows that showed goody two-shoes slower and much larger came from two IW44 encoder bugs fixed on 2026-07-16 and are superseded. No DjVuLibre comparison numbers are published for x86; the github.io dashboard is blocked here.",
+   "why_faster": "Implementation work documented in BENCHMARKS_RESULTS.md and the encoder-parity doc, not a Rust-language effect: ZP decoder state widened from u16 to u32 (jb2 corpus decode 3.36 ms to 423 us), ZP bit coder inlined into the IW44 and BZZ encoder passes (#937, #938), NEON zigzag scatter of IW44 blocks (#939), and for downscaled renders partial BG44 decode (first chunk only), a cached max-pooled mask pyramid and shifts instead of division in coordinate transforms; the small-page encode rows are additionally inflated by DjVuLibre process start-up."
+  },
+  "notes": "Real and active project (11 stars, MIT, last commit 2026-10-11, 13,395 crates.io downloads); README numbers are all on BENCHMARKS_RESULTS.md, and the record's caveats about a goody two-shoes loss and an in-process Rust encoder were wrong or stale and are replaced. Shortcomings to record: baseline build flags unstated; cold 3.0x row not like-for-like; 3.8x/4.4x small-page encode rows dominated by start-up cost; renders not checked for equal output; djvu-rs was slower than libdjvulibre as recently as 2026-06-18.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/README.md",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/BENCHMARKS_RESULTS.md",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/scripts/bench_djvulibre.sh",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/scripts/djvulibre_bench.c",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/scripts/djvulibre_compare.py",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/examples/encoder_parity_scorecard.rs",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/docs/encoder-parity.md",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/benches/render.rs",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/.github/workflows/bench.yml",
+   "https://raw.githubusercontent.com/matyushkin/djvu-rs/HEAD/Cargo.toml",
+   "https://github.com/matyushkin/djvu-rs",
+   "https://github.com/matyushkin/djvu-rs/commits/main",
+   "https://crates.io/api/v1/crates/djvu-rs"
+  ]
+ },
+ {
+  "id": "https://github.com/trifectatechfoundation/libbzip2-rs",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": false,
+  "evidence_tier_final": "A",
+  "tier_reason": "Upgraded from C: the project's public benchmark data (trifectatechfoundation/libbzip2-rs-bench metrics-linux-x86.json and metrics-macos-arm64.json) records C-vs-Rust results per commit with the CPU model (AMD Ryzen 9 9900X; Apple M2), produced by public code (bzip2_benchmarks.json, test-libbz2-rs-sys/examples/compress.rs and decompress.rs, .github/workflows/bench.yml) with stated compilers and flags (CC=clang, cargo --release, RUSTFLAGS=-Cllvm-args=-enable-dfa-jump-thread; C built by bzip2-sys's build.rs via the cc crate at the release opt-level). Compiler versions appear only in CI logs, which I could not open.",
+  "corrections": {
+   "benchmark_url": "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-linux-x86.json",
+   "claimed_speedup": "Latest run in trifectatechfoundation/libbzip2-rs-bench (commit ac73367, 2026-10-06), mean of 20 repetitions per command. Linux x86-64, AMD Ryzen 9 9900X, CPU cycles of Rust vs C: compression of silesia-small.tar at levels 1-9 -10.1% to -12.3% (level 1 -12.28%, level 9 -10.12%), sample3.ref level 1 -5.49%, decompression of six bzip2 test files -3.4% to -7.4%. macOS arm64, Apple M2, user time: compression -3.3% to -4.2%, sample3.ref -5.6%, but decompression is slower in Rust on five of six files (+0.1% to +9.5%), a pattern stable across the 2025-08 to 2026-10 runs (derived from page data). The blog figures in the original record (-14.87% sample3.ref level 1, -14.30% and -9.66% silesia-small levels 1 and 9, 'significant speedups across the board' for decompression) come only from a blocked blog post and do not match any run in the public data (best runs: -12.95% small, -12.51% level 1).",
+   "compiler_and_flags": "Workflow .github/workflows/bench.yml: Rust side cargo build --release -p test-libbz2-rs-sys --examples with RUSTFLAGS=-Cllvm-args=-enable-dfa-jump-thread (release profile defaults, opt-level 3, no LTO), rustc stable from rustup (version printed only in CI logs). C side: libbzip2 1.0.8 sources from bzip2-sys 0.1.13+1.0.8 (feature static) compiled by its build.rs through the cc crate with CC=clang at the release opt-level (-O3), -D_FILE_OFFSET_BITS=64 -DBZ_NO_STDIO; the extra LLVM DFA jump-threading pass is given to rustc only. Both libraries are linked into the same harness binaries and measured by trifectatechfoundation/benchmarker-action (perf counters, 20 repetitions).",
+   "hardware": "AMD Ryzen 9 9900X 12-core (self-hosted runner amd-bench, Linux x86-64; cycles, instructions, task-clock) and Apple M2 (runner mini-bench, macOS arm64; user time).",
+   "usability": "reference",
+   "caveats": "Gains are modest and platform-dependent: about 10-12% fewer cycles for compression and 3-7% for decompression on the Ryzen 9 9900X, but only 3-4% faster compression and up to 9.5% slower decompression on Apple M2. Flag asymmetry: the Rust build gets the LLVM -enable-dfa-jump-thread pass (useful for bzip2's switch-based decoder state machine) while the clang-built C does not, so part of the decompression gain may be the extra pass rather than the port. Whole-process measurement includes reading the input file, equally for both sides. Compiler versions are not in the public data. The port began as a c2rust translation of libbzip2, so the algorithm is the same and the gain comes from implementation changes. The blog numbers quoted earlier were snippet only and do not match the public data. License is the bzip2 and libbzip2 License v1.0.6 (SPDX bzip2-1.0.6), a permissive BSD-style licence that the SPDX list does not mark OSI-approved; usability set to reference for consistency with the wave 9 gitlab.com/bzip2/bzip2 record; no patent grant.",
+   "same_opt_level": false,
+   "why_faster": "Not explained in any source I could open (the blog is blocked). Same algorithm as libbzip2 (c2rust translation, then rewritten code); the Rust build additionally gets LLVM's DFA jump-threading pass that the C build does not."
+  },
+  "notes": "Real, widely used port (79 stars; libbz2-rs-sys 42.7M crates.io downloads, default backend of the bzip2 crate since 0.6; last commit 2026-10-06). The public bench repo upgrades the evidence to A for the x86 compression win; record shortcomings: Apple M2 decompression slower than C, Rust-only -enable-dfa-jump-thread flag, compiler versions unstated, blog snippet numbers unverifiable, bzip2-1.0.6 licence not OSI-approved (usability reference).",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/README.md",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/bzip2_benchmarks.json",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/.github/workflows/bench.yml",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/Cargo.toml",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/examples/compress.rs",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/examples/decompress.rs",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/Cargo.toml",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/Cargo.lock",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/LICENSE",
+   "https://github.com/trifectatechfoundation/libbzip2-rs",
+   "https://github.com/trifectatechfoundation/libbzip2-rs/commits/main",
+   "https://github.com/trifectatechfoundation/libbzip2-rs/tree/main/.github/workflows",
+   "https://github.com/trifectatechfoundation/libbzip2-rs/tree/main/test-libbz2-rs-sys",
+   "https://github.com/trifectatechfoundation/libbzip2-rs-bench",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-linux-x86.json",
+   "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-macos-arm64.json",
+   "https://static.crates.io/crates/bzip2-sys/bzip2-sys-0.1.13+1.0.8.crate",
+   "https://crates.io/api/v1/crates/libbz2-rs-sys"
+  ]
+ },
+ {
+  "id": "https://github.com/ericlbuehler/mistral.rs",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "First-party release report (releases/v0.8.2/report.md) with commands, commits and GPU models, but llama.cpp's build flags (CUDA architectures, GGML options) are not stated and the llama.cpp rows were copied from an earlier sweep, so not A; no independent measurement, so C.",
+  "corrections": {
+   "claimed_speedup": "Report headline, Gemma 4 E4B, mistral.rs UQFF q8 vs llama.cpp GGUF Q8_0: prefill 1.382x-2.113x (GB10) and 1.246x-2.793x (B200), decode 1.086x-1.097x (GB10) and 1.210x-1.263x (B200); mean prefill 1.828x (GB10) and 2.194x (B200), mean decode 1.090x and 1.242x. The appendix is less uniform: Gemma 4 26B-A4B 128-token prefill on B200 favours llama.cpp (0.771x Q4_K_M, 0.788x Q8_0), H100 26B-A4B Q4_K_M is a tie or loss at the edges (0.996x prefill at 128, 0.984x decode at depth 16384), GB10 26B-A4B Q8 decode is 1.000x-1.017x, and in BF16 mistral.rs is 0.075x-0.413x of vLLM prefill for 26B-A4B on all three GPUs.",
+   "compiler_and_flags": "mistral.rs v0.8.2 (commit 8b49f963 on branch cuda_graphs_v1) built with cargo release and features cuda,cudnn,flash-attn,cutile; rustc 1.96.0 recorded for the H100 host only. llama.cpp commit 751ebd17 run with llama-bench -ngl 99 -fa 1 (default batch and ubatch); llama.cpp build flags not stated. vLLM 0.21.0 with torch 2.11.0+cu130 (H100 rows: vLLM 0.19.0, torch 2.10.0+cu128).",
+   "caveats": "GPU-bound workload whose hot code is CUDA C++ on both sides: mistral.rs ships nvcc-compiled kernels (mistralrs-paged-attn/src/cuda: pagedattention_v1/v2 .cu, flashinfer_decode.cu, fa3 and flashinfer directories) and enables flash-attn and cuDNN, so Rust is only the host language and the win is not a Rust-over-C++ effect. Different quantisation formats (UQFF q8/q4 vs GGUF Q8_0/Q4_K_M), so the per-token work is not shown to be equal. Cross-run comparison: llama.cpp and vLLM rows were copied from the 2026-05-31 sweep, while mistral.rs rows were rerun on 2026-06-01 after a Gemma 4 KV-sharing correctness fix. llama-bench was run with only -ngl 99 -fa 1 recorded (no batch or ubatch tuning) and its build flags are unstated. The benchmarked commit sits on the cuda_graphs_v1 branch. Headline covers only Gemma 4 E4B; the appendix shows llama.cpp ahead at 26B-A4B short-prompt prefill on B200 and mistral.rs far behind vLLM in BF16 for 26B-A4B. First-party; 1 warmup and 3 measured iterations.",
+   "why_faster": "Report and README credit paged-attention and MoE optimisations (plus CUDA graphs on the benchmarked branch); these are CUDA C++ kernels (paged attention, FlashInfer decode, FlashAttention-3) launched from Rust, so the speedup is a kernel and scheduling difference between two engines whose GPU code is CUDA C++, not a property of Rust."
+  },
+  "notes": "Numbers match the report exactly; metadata correct (7.7k stars, MIT, last commit 2026-10-01). Shortcomings to record: hot path is CUDA C++ kernels (partly wrapped FlashInfer/FlashAttention/cuDNN), so it is off-thesis for a Rust-vs-C++ wave; different quantisation formats; cross-run baseline rows; llama.cpp flags and batch settings unstated; appendix losses at 26B-A4B and vs vLLM BF16.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/releases/v0.8.2/report.md",
+   "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/README.md",
+   "https://github.com/EricLBuehler/mistral.rs",
+   "https://github.com/EricLBuehler/mistral.rs/commits/master",
+   "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-paged-attn/src",
+   "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-paged-attn/src/cuda"
+  ]
+ }
+]
