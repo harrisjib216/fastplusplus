@@ -1,0 +1,105 @@
+[
+  {
+    "id": "lang:ocaml/glebolsen/benchlang#binary-trees",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The README results table (3 September 2026, one run) gives Binary Trees 0.865 s for OCaml 5.4.1 against 1.010 s for C and 1.147 s for C++ (GCC 16.2.0). Code for every side is public (languages/C/bench.c, languages/C++/bench.cpp, languages/OCaml/bench.ml with monotonic.c, run_benchmarks.sh), with Nix-pinned toolchains, exact build commands and the CPU (Ryzen 9 5900X locked at 3.5 GHz), so it meets A.",
+    "corrections": {
+      "compiler_and_flags": "C: gcc 16.2.0 -O3 -march=native -flto -funroll-loops -ffp-contract=off -s; C++: g++ 16.2.0 -std=c++20 with the same flags (nixpkgs-unstable pins, run_benchmarks.sh). OCaml 5.4.1: ocamlopt -O3 -unsafe -inline 200 -nodynlink monotonic.c bench.ml -o bench -ccopt -s. flake.nix installs the plain nixpkgs `ocaml` package, and nixpkgs' pkgs/development/compilers/ocaml/generic.nix defaults flambdaSupport to false, so -O3 has no effect and the OCaml side is a non-flambda (closure-mode) build.",
+      "caveats": "One run per language (no variance) from a single machine on 2026-09-03. The C and C++ programs allocate every node with malloc/new and walk every tree a second time to free it inside the timer (languages/C/bench.c make_tree/free_tree), while OCaml just drops the references and its minor GC never traces dead young trees; an arena or pool allocator in C would likely beat the runtimes here. The column is an allocator benchmark, not a codegen one: the malloc-based native rows spread from 0.986 s (Fortran) through 1.010 s (C), 1.033 s (Rust), 1.109 s (Ada) and 1.119 s (Zig) to 1.147 s (C++), and Java 0.347 s, Nim 0.809 s, Bun 0.816 s, Dart AOT 0.865 s and C# 0.931 s also beat C. ocamlopt is an ahead-of-time compiler, so the win comes from the OCaml GC runtime, not from a JIT. Binary trees is 1 of 5 workloads and C wins overall (total 9.762 s vs OCaml 16.233 s); OCaml loses primes (3.200 s vs 2.725 s), Fibonacci (4.897 s vs 1.694 s), strings (5.000 s vs 2.132 s) and Mandelbrot (2.271 s vs 2.201 s). OCaml peak RSS 89.7 MiB vs 33.3 MiB for C. OCaml uses 63-bit tagged ints where C uses long long; the analyzer checks that checksums agree. The -O3 flag is ignored because the nixpkgs OCaml is built without flambda.",
+      "why_faster": "Source: the README says native code frees inside the timer while GC runtimes collect when they like, and languages/C/bench.c calls malloc per node plus a recursive free_tree pass. From the OCaml sources (languages/OCaml/bench.ml, Node of tree * tree * int): nodes are bump-allocated inline on the minor heap and a minor collection copies only live nodes, so the dead short-lived trees cost no per-node free (inference from the OCaml runtime design, not measured by the suite).",
+      "baseline_stdlib": [
+        "libstdc++"
+      ]
+    },
+    "notes": "Numbers and the derived ratios (1.17x over C, 1.33x over C++) match the README; same tree build/check algorithm on all sides, C/C++ at -O3 with -march=native and LTO, so the baseline is not crippled and A stands. Main shortcomings: one run, a modest margin, C/C++ pay an explicit free traversal inside the timer, the win is GC bump allocation against glibc malloc/free (Java, Nim, Bun, Dart and C# also beat C), OCaml is AOT so the runtime-jit-beats-aot category is loose, and -O3 is a no-op without flambda. Sibling ids for the same table: lang:csharp (batch 53), lang:javascript (batch 56), lang:java (this batch).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+      "https://github.com/GlebOlsen/benchLANG",
+      "https://github.com/GlebOlsen/benchLANG/commits",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C%2B%2B/bench.cpp",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.nix",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/OCaml/bench.ml",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/OCaml/monotonic.c",
+      "https://raw.githubusercontent.com/NixOS/nixpkgs/nixpkgs-unstable/pkgs/development/compilers/ocaml/generic.nix"
+    ]
+  },
+  {
+    "id": "lang:java/glebolsen/benchlang#binary-trees",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The README results table (3 September 2026, one run) gives Binary Trees 0.347 s for Java (OpenJDK 25.0.4) against 1.010 s for C and 1.147 s for C++ (GCC 16.2.0). Code for every side is public (languages/C/bench.c, languages/C++/bench.cpp, languages/Java/bench.java, run_benchmarks.sh), with Nix-pinned versions, exact build and run commands and the CPU (Ryzen 9 5900X locked at 3.5 GHz), so it meets A.",
+    "corrections": {
+      "baseline_stdlib": [
+        "libstdc++"
+      ],
+      "caveats": "One run per language ('1 run/lang'), no variance. In-program wall times from a monotonic clock: JIT warm-up is inside the timed region, young-generation collections run inside it too, but garbage still live in the heap when the timer stops is never collected ('GC runtimes collect when they like'), while C/C++ walk every tree a second time to free it inside the timer. The Java run uses JVM ergonomics (default G1 with parallel GC worker threads on a 12-core CPU); the README defines CPUx = (user+sys)/wall but the published table does not show it, so extra GC-thread CPU time is not visible. Peak RSS 987.8 MiB for Java vs 33.3 MiB for C: the win trades about 30x memory for time. The column is an allocator benchmark: Nim 0.809 s, Bun 0.816 s, OCaml and Dart AOT 0.865 s, C# 0.931 s and Fortran 0.986 s also beat C's 1.010 s, so per-node glibc malloc/free is the bottleneck and an arena or pool allocator in C/C++ would likely beat every managed runtime (compare the Arena variant in LangArena). Only the binary-trees column is a Java win: Java loses Fibonacci (4.109 s vs 1.694 s), strings (4.075 s vs 2.132 s) and Mandelbrot (2.275 s vs 2.201 s) and ties primes (2.730 s vs 2.725 s); total 13.536 s vs C 9.762 s.",
+      "why_faster": "Source: the README states 'Allocator + GC + pointer chase, native code frees inside the timer, GC runtimes collect when they like', and languages/C/bench.c calls malloc per node plus a recursive free_tree pass. Inference from the HotSpot design: languages/Java/bench.java allocates each Node with new, which the JIT turns into an inline thread-local (TLAB) bump-pointer allocation, and G1 young collections copy only live objects in parallel threads, so the dead short-lived trees are never traced or freed one by one."
+    },
+    "notes": "Numbers and derived ratios (2.9x over C, 3.3x over C++) match the README; same tree build/check algorithm, C/C++ at -O3 with -march=native and LTO, so the baseline is not crippled and A stands. Main shortcomings: one run, C/C++ pay an explicit free traversal inside the timer, the final heap is never collected, GC-thread CPU time is unreported, and 987.8 MiB peak RSS vs 33.3 MiB; the win is GC bump allocation against glibc malloc/free, not JIT code generation. Fixed two caveat errors: Ada (1.666 s), not C, is fastest on Fibonacci, and the current README no longer carries an 'Updated May 2026' header.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/README.md",
+      "https://github.com/GlebOlsen/benchLANG",
+      "https://github.com/GlebOlsen/benchLANG/commits",
+      "https://github.com/GlebOlsen/benchLANG/tree/main/languages",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C/bench.c",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/C%2B%2B/bench.cpp",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/run_benchmarks.sh",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/flake.nix",
+      "https://raw.githubusercontent.com/GlebOlsen/benchLANG/main/languages/Java/bench.java"
+    ]
+  },
+  {
+    "id": "lang:java/coralblocks/coralbench#intmap",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The numbers are in README.md, but the whole Java-vs-C++ section was wrapped in an HTML comment by the same commit that last revised it (d3f73f5, 2026-08-28), and the C++ output is byte-identical to the December 2024 README: it came from an -Ofast build of a C++ IntMap that did not pre-size its buckets, while the Java IntMap did. The only PUT win therefore rests on unequal work (crippled-baseline precedent) plus a cross-run pairing with the 2026 JVMCI run, so no valid measurement supports a Java speedup.",
+    "corrections": {
+      "claimed_speedup": "No valid speedup. The hidden README section shows PUT 31.34 ns avg for HotSpot with Graal JVMCI (Oracle GraalVM 25.0.4.1, re-run 2026-08-28) and 32.40 ns for HotSpot C2 against C++ 47.75 ns (about 1.5x, derived from page data); GET 26.92 ns and 29.13 ns vs C++ 25.98 ns (parity); DEL 36.29 ns and 37.73 ns vs C++ 25.93 ns (C++ about 1.4x faster). The C++, C2, -Xcomp and native-image outputs are unchanged from the December 2024 README (Java 23.0.1 era), and the C++ PUT figure was measured on code whose PUT grew bucket vectors inside the timer.",
+      "baseline": "C++ IntMap as it stood in December 2024 (src/main/c/int_map.hpp at commit 46103a6: std::vector<std::vector<Entry>> buckets, 64-bit size_t keys, no bucket reserve, so the first three puts into each bucket malloc and reallocate the vector inside the timed region), built with clang++ 18.1.0 -Ofast -march=native -flto -std=c++17 and driven by src/main/c/int_map_benchmark.cpp. The current header (pre-sized buckets since commit 9281b82, 32-bit keys since 259d856, both 2026-08-28) has never been benchmarked in the README.",
+      "compiler_and_flags": "C++ numbers: Ubuntu clang 18.1.0, clang++ -Ofast -march=native -flto -std=c++17 (December 2024 README); commit f11598d later changed the README commands to -O3 without re-running, so the -O3 commands shown next to the C++ output did not produce it. Java JVMCI run: Oracle GraalVM 25.0.4.1 HotSpot, java -XX:+AlwaysPreTouch -Xms4g -Xmx4g -XX:NewSize=512m -XX:MaxNewSize=1024m. HotSpot C2 (-XX:-UseJVMCICompiler), -Xcomp and native-image outputs date from the earlier Java 23.0.1 run. The C++ standard library is not stated (Ubuntu clang defaults to libstdc++ unless -stdlib is given).",
+      "caveats": "The Java-vs-C++ section sits inside an HTML comment (<!-- ... -->) that the author added in commit d3f73f5 ('Revise benchmark data and Java version in README', 2026-08-28), so it does not render on github.com and reads as withdrawn or unfinished. Unequal work: the C++ map that produced the 47.75 ns PUT figure started with empty bucket vectors (no reserve), so PUT paid malloc plus vector reallocation and copy for the first three entries of every bucket inside the timer, while the Java IntMap pre-sized every bucket ArrayList to initialBucketSize = 3 and only bump-allocated an Entry; the author added the matching reserve to C++ on 2026-08-28 (commit 9281b82 'Pre-size C++ IntMap buckets') but did not re-run C++. The 2024 C++ map also used 64-bit size_t keys and 64-bit modulo against Java's 32-bit int keys. Cross-run comparison: the JVMCI figures were re-measured with Java 25.0.4.1 in 2026 (PUT 28.04 ns became 31.34 ns), while C++ and the other Java modes are 2024 outputs; the environment block lists only the 2026 versions. Not the same data structure: C++ stores entries inline in each bucket vector, Java stores references to pooled Entry objects. Mixed result even as published: Java ties GET and loses DEL. One run per configuration with warm-up 0, so JIT compilation is inside the measured region; the C++ and Java Bench classes use different histogram maps (std::unordered_map vs CoralDS LongMap) outside the timed span.",
+      "why_faster": "No valid mechanism: the published PUT gap comes from unequal work. The December 2024 C++ PUT grew each bucket vector (malloc, then reallocation from 1 to 2 to 4 entries with copy and free) inside the timer, while the Java map pre-sized every bucket and only bump-allocated an Entry from the thread-local allocation buffer. The C++ map with pre-sized buckets (current int_map.hpp) has no published numbers."
+    },
+    "notes": "Downgrade C to D: the only Java win (PUT) compares a pre-sized Java map with a 2024 C++ map that reallocated buckets inside the timer, the author fixed that asymmetry and switched the flags text to -O3 on 2026-08-28 without re-running C++, paired the stale C++ output with a fresh 2026 JVMCI run, and hid the whole section in an HTML comment. Not a reject (the code and outputs are real and public), but no valid measurement shows Java faster; GET is parity and DEL is slower in Java. Metadata checked: Apache-2.0, 15 stars, 3 forks, last commit 2026-08-30, active.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/README.md",
+      "https://github.com/coralblocks/CoralBench",
+      "https://github.com/coralblocks/CoralBench/commits/main",
+      "https://github.com/coralblocks/CoralBench/commits/main/README.md",
+      "https://github.com/coralblocks/CoralBench/commits/main/src/main/c/int_map.hpp",
+      "https://github.com/coralblocks/CoralBench/commit/d3f73f5",
+      "https://github.com/coralblocks/CoralBench/commit/f11598d",
+      "https://github.com/coralblocks/CoralBench/commit/6817e95",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/int_map.hpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/int_map_benchmark.cpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/bench.cpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/c/bench.hpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/example/IntMap.java",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/example/IntMapBenchmark.java",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/main/src/main/java/com/coralblocks/coralbench/Bench.java",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/README.md",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map.hpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map.cpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/c/int_map_benchmark.cpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/java/com/coralblocks/coralbench/example/IntMap.java",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/46103a6/src/main/java/com/coralblocks/coralbench/example/IntMapBenchmark.java",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/33df33e/README.md",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/33df33e/src/main/c/int_map.hpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/f11598d/src/main/c/int_map.hpp",
+      "https://raw.githubusercontent.com/coralblocks/CoralBench/d3f73f5/README.md"
+    ]
+  }
+]
