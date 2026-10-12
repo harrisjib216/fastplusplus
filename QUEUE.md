@@ -105,7 +105,7 @@ The rewrite was built on the original spec, so its tier definitions, 15–25 cal
 1. **Seed-list mining, static lists** (section F): DONE 2026-10-11 (rounds 1 and 2: 152 groups, 266 verified, 637
    no-evidence seeds; see CLAUDE.md Status). Remaining per-list leads are in each wave's leads.md.
 2. **Whole-stdlib decomposition** (end of section F): DONE 2026-10-13 as wave 1 stdlib seeds (10 entries enriched;
-   `data/wave1/raw/w1-stdlib-*.json`).
+   `data/wave1/raw/w1-seed-stdlib-{a,b}.json`).
 3. **Wave 13 — assembly-simd-kernels-and-wasm** (section D): DONE 2026-10-12 (303 verified, all enriched; see
    CLAUDE.md Status 2026-10-13).
 4. **Wave 14 — other-languages-faster-than-c-cpp-asm** (section E): DONE 2026-10-13 (274 verified, all enriched;
