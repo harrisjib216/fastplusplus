@@ -1,0 +1,64 @@
+{
+  "id": "lang:go/arxiv-1405.7153#thread-ring",
+  "one_liner": "Go goroutines passing a token round a 503-member ring, 2.4x faster than a C++ Boost.Asio program on 503 OS threads.",
+  "what_it_does": "This entry is the Go language runtime (goroutines plus sync primitives), measured on the Benchmarks Game thread-ring task in the SCOOP/Qs paper (West, Nanz, Meyer). The Go program starts 503 goroutines, each holding a sync.Mutex used as a binary semaphore; a hand-off writes the next member's counter, unlocks its mutex and calls runtime.Gosched(). It is not a library and not a drop-in for anything in C++: to get the effect you write the service in Go.",
+  "how_it_is_fast": "A hand-off never leaves user space in the common case: Mutex.Unlock on a parked waiter calls the runtime semaphore release, which readies the waiting goroutine on the current P (runtime.ready puts it in the run queue), and Gosched puts the current goroutine on the global queue and runs the next one on the same OS thread. The C++ baseline instead posts each pass to one shared boost::asio::io_service queue; in Boost 1.55 every post() takes the io_service mutex and signals an idle OS thread's wakeup event (task_io_service::wake_one_thread_and_unlock), so each pass is a kernel-level wake-up and context switch among 503 pthreads. The win is M:N user-space scheduling against 1:1 OS threads, not code generation.",
+  "when_to_use": [
+    "Services built from thousands of mostly-blocked tasks that hand work to each other in sequence (pipelines, actor-like rings), where a C++ design would otherwise park one OS thread per task.",
+    "Choosing a language for a new concurrent service when the C++ alternative under consideration is thread-per-task rather than coroutines or fibers.",
+    "Message-passing code where cheap goroutine creation (503 here, millions in practice) matters more than peak single-thread speed."
+  ],
+  "when_not_to_use": [
+    "As evidence that Go beats C++ in general: the paper's own geometric mean over its concurrent tasks ranks C++/TBB first (1.57 s) ahead of Go (1.82 s); thread-ring and condition are the stated exceptions because both are essentially single-threaded (search snippet).",
+    "When a C++ fiber or coroutine runtime (Boost.Fiber, Boost.Context, C++20 coroutines) or a single-threaded loop is an option: none was measured, and those remove the OS-thread wake-up that the baseline pays on every pass.",
+    "When you need the fastest runtime for this pattern: Erlang processes did the same ring in 3.30 s against Go's 13.98 s in the same table.",
+    "Inside an existing C++ program: calling Go goes through cgo or a separate process, and Go brings a garbage collector and its own scheduler."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Go toolchain and runtime (no third-party packages; the benchmark uses only fmt, os, runtime, strconv, sync)",
+    "min_toolchain": "Not stated by the paper or repo; code dates from 2014 (Go 1.2/1.3 era) and uses only APIs still present in current Go",
+    "platforms": "any platform Go supports",
+    "thread_safety": "sync.Mutex is documented as not tied to a goroutine (one goroutine may lock, another unlock), which the benchmark relies on; Unlock synchronizes-before the next Lock per the Go memory model",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry: run_all.py passes the worker count as $2, and only the Go run.sh uses it (GOMAXPROCS=$2). The C++ program ignores its second argument and always runs 503 OS threads on every core, and Erlang's run.sh sets no +S, so it uses all schedulers. The concurrent tasks run with worker_range = [4] at HEAD, and the search snippet ties the paper's '32 cores' label to Figure 18 (parallel tasks), so Table 5 may be GOMAXPROCS=4 rather than 32.",
+    "The baseline's '4 KB stacks' never took effect on Linux: glibc's pthread_attr_setstack returns EINVAL below PTHREAD_STACK_MIN (check_stacksize_attr in glibc 2.19; 16384 bytes on x86-64), main.cpp ignores the return value, and the 503 threads were created with default-size stacks. This does not change the timing much, but the record's baseline description is wrong on this point.",
+    "Each language was run once (range(0, 1)) and timed as wall clock around Popen, so process start and creating 503 pthreads count against C++. Erlang alone reports its own timer:tc figure, which excludes VM boot.",
+    "Not reproducible as published against current Boost: main.cpp uses asio::io_service and io_service::post(), and boostorg/asio develop (Asio 1.38.2) has neither the io_service typedef nor an io_context::post member, so it needs a port to io_context and asio::post() before it builds."
+  ],
+  "pick_this_over_siblings_when": "Pick this over the GHC skynet entry when the question is hand-off latency between long-lived tasks rather than spawn cost. Pick Erlang's thread-ring entry, from the same paper, if the fastest runtime for this pattern matters (3.30 s against Go's 13.98 s). Pick the luncliff Comparison-Go-CppTBB entry when the C++ alternative is a real TBB task scheduler, because this entry's 'TBB' column is Boost.Asio over OS threads.",
+  "verified_claims_summary": "WebSearch summaries of Table 5 in arXiv 1405.7153 give 13.98 s for Go and 34.13 s for the 'C++/TBB' column on thread-ring (503 members, 5,000,000 passes), about 2.4x. The C++ program is the Benchmarks Game Boost.Asio version over 503 pthreads, built with g++ -O3. Compiler and runtime versions, the CPU model and the effective GOMAXPROCS of the published run are not stated anywhere opened.",
+  "status_note": "Go is active and BSD-3-Clause licensed (139.2k stars); the evidence is a single-run 2014 academic comparison whose paper could not be opened (snippet only), whose C++ side no longer builds against current Boost.Asio, and whose worker setting constrained only the Go run, so treat the 2.4x as directional for goroutines against OS threads.",
+  "sources_read": [
+    "https://github.com/golang/go",
+    "https://raw.githubusercontent.com/golang/go/master/src/sync/mutex.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/internal/sync/mutex.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/proc.go",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/run_all.py",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/run.sh",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/Makefile",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/cxx/Makefile",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/cxx/threadring/main.cpp",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/cxx/threadring/Makefile",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/cxx/threadring/run.sh",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/go/Makefile",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/go/threadring/main.go",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/go/threadring/Makefile",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/go/threadring/run.sh",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/erlang/threadring/main.erl",
+    "https://raw.githubusercontent.com/scottgw/quicksilver/master/benchmarks/concurrent/erlang/threadring/run.sh",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.19/nptl/pthread_attr_setstack.c",
+    "https://raw.githubusercontent.com/bminor/glibc/glibc-2.19/nptl/pthreadP.h",
+    "https://raw.githubusercontent.com/bminor/glibc/master/nptl/pthread_attr_setstack.c",
+    "https://raw.githubusercontent.com/boostorg/asio/boost-1.55.0/include/boost/asio/detail/impl/task_io_service.ipp",
+    "https://raw.githubusercontent.com/boostorg/asio/boost-1.66.0/include/boost/asio/io_service.hpp",
+    "https://raw.githubusercontent.com/boostorg/asio/develop/include/boost/asio/io_context.hpp",
+    "https://raw.githubusercontent.com/boostorg/asio/develop/include/boost/asio/version.hpp",
+    "https://github.com/scottgw?tab=repositories",
+    "https://arxiv.org/abs/1405.7153 (blocked: ENOTFOUND)",
+    "WebSearch: Efficient and Reasonable Object-Oriented Concurrency thread-ring table (2 queries; snippets give Table 5 times, the 32-core label on Figure 18 and the concurrent-task geometric means)"
+  ],
+  "confidence": 0.4
+}

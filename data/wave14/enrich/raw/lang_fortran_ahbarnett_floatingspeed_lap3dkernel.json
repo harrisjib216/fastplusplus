@@ -1,0 +1,58 @@
+{
+  "id": "lang:fortran/ahbarnett/floatingspeed#lap3dkernel",
+  "one_liner": "Naive OpenMP Fortran 1/r direct-sum loop built with ifort 2019 runs 1.88x faster than the same plain loop in C++ (g++ 9 or icpc 2019).",
+  "what_it_does": "This is a benchmark kernel, not a library. lap3dpottest.f90 times the subroutine lap3dpot(pot, y, q, x, ns, nt). It writes into pot the Laplace potential sum over j of q(j)/(4*pi*|x_i - y_j|) at 10,000 targets from 10,000 sources, in double precision, with an OpenMP loop over targets. The C++ comparison in lap3dkernel.cpp (test_kernel_ts and test_kernel_st) does the same sum without the 1/(4 pi) factor on separate X/Y/Z arrays. The same C++ file holds hand-vectorised VCL versions.",
+  "how_it_is_fast": "The source documents no mechanism; what follows comes from reading the code. Both plain kernels add each source's contribution straight into the output element (pot(i) in Fortran, pot[t] in C++), which makes a loop-carried floating-point sum through memory. Fortran's rule that dummy arguments do not alias lets the compiler keep that sum in a register. ifort's default value-unsafe fp-model fast=1 also lets it reorder the sum, so the source loop can be vectorised. g++ and gfortran at -O3 without -ffast-math must add in order, and the C++ pot pointer has no __restrict. Supporting evidence: gfortran ties g++ (4.0 against 4.1 Gpair/s), and a 2026 variant that only moves the sum into a local scalar (lap3dpot_accum) takes gfortran from 2.3 to 5.9 Gpair/s on a Ryzen 5700U (comment in lap3dpottest.f90).",
+  "when_to_use": [
+    "You keep naive Fortran direct-summation kernels (N-body, boundary-integral or near-field FMM sums) and have the Intel Fortran toolchain: the plain triple loop with only OpenMP got 7.7 Gpair/s on a 12-core AVX-512 Xeon, above g++ with VCL hand-SIMD (6.1).",
+    "Choosing a compiler for 1/r kernel sums: the single file is a ready-made A/B test across gfortran, ifort, g++ and icpc at identical -O3 -march=native -funroll-loops flags.",
+    "On gfortran, the 2026 SoA plus `!$omp simd reduction(+:accum)` variant (lap3dpot_soa_simd) reached 8.1 Gpair/s on a Ryzen 5700U, matching C++ with VCL (8.1), without intrinsics.",
+    "As a reference implementation when porting a direct-sum kernel: one short subroutine, Apache-2.0."
+  ],
+  "when_not_to_use": [
+    "When you want the fastest kernel: hand-vectorised C++ with VCL and a custom double rsqrt reached 18.3 Gpair/s with g++ on the same Xeon, 2.4x the ifort Fortran.",
+    "With gfortran on the naive kernel: no win (4.0 against 4.1 Gpair/s on the Xeon, 1.3 against 1.1 on the i7-7700HQ laptop). The 1.88x needs ifort 2019, the Classic compiler, which the verified record says Intel has discontinued. Its successor, ifx, was not measured.",
+    "When bit-for-bit reproducible sums matter: ifort's default fp-model fast=1 is value-unsafe and allows reordering (Intel docs, search snippet only), and the README prints no accuracy check for the ifort row.",
+    "As a reason to move a C++ code base to Fortran: the plain C++ kernel was not tuned. A local accumulator, __restrict or `#pragma omp simd reduction` is the C++ counterpart of the Fortran changes that gave 2.5x to 3.5x in the 2026 variants (that change was not measured in C++).",
+    "On CPUs other than the three tested x86 machines; the ifort comparison exists only for the AVX-512 Xeon Gold 6128."
+  ],
+  "integration": {
+    "form": "source-drop (single Fortran 90 file; the kernel is the subroutine lap3dpot)",
+    "dependencies": "OpenMP. At HEAD the test program also calls rsqrtps_nr4 and rsqrtps_block1024 from lap3dkernel/fortran/rsqrtps.c (x86 SSE/AVX intrinsics), which must be compiled and linked; lap3dpot itself needs nothing else.",
+    "min_toolchain": "Fortran 90 compiler with OpenMP for lap3dpot. The HEAD test program uses iso_c_binding/bind(C) (Fortran 2003) and `!$omp simd` (OpenMP 4.0). Measured with ifort 2019, gfortran 9, g++ 9 and icpc 2019 (update numbers not given).",
+    "platforms": "Measured on x86-64 only: Xeon Gold 6128 (AVX-512), i7-7700HQ and Ryzen 5700U (AVX2). lap3dpot is portable Fortran; rsqrtps.c needs x86 intrinsics.",
+    "thread_safety": "lap3dpot is an OpenMP-parallel loop over targets that writes only pot(i). Its pi variable is initialised in its declaration, which implies SAVE, but it is never modified. Calling it from several threads at once with distinct pot arrays should be safe, but this is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Reproduction trap at HEAD: since the January-February 2026 commits (b179191, 3219b82), lap3dpottest.f90 calls rsqrtps_nr4 and rsqrtps_block1024, which are defined only in rsqrtps.c. Neither run_all_tests.sh nor fortran/compileandtest.sh compiles or links rsqrtps.o, so the scripted Fortran build should fail to link (read from the code; not compiled here). Build as the header of lap3dpottest.f90 says (gcc -O3 -march=native -c rsqrtps.c; gfortran ... rsqrtps.o), or check out commit b1c14d2, whose single-kernel lap3dpottest.f90 produced the 2020 Xeon rows.",
+    "The two sides were not run identically. At the measured commit b1c14d2 the C++ main used ntest = 5 and the Fortran ntest = 20, although both normalise to pairs per second. The Fortran timer includes start-up of the program's first OpenMP region, while the C++ plain kernels run after four VCL tests have warmed the thread pool. The inputs come from different generators (drand48 against random_number), and the Fortran adds a 1/(4 pi) factor, so the printed checksums cannot be compared across languages. The README does not say which plain C++ kernel the '4.1' row is. In issue #2, target-outer (1.18-1.68 Gpair/s) beats source-outer (0.70-0.84), so the row is probably target-outer.",
+    "Each row is one figure, and the timings are noisy. In issue #2, four runs on a Dell Precision 7530 gave 2.64-4.13 Gpair/s for the same C++ VCL kernel, and the 2020 Fortran header asks 'why is run time so variable, compared to other language versions??'. The 1.88x gap is larger than that spread, but the 4.0 against 4.1 tie is not a meaningful difference.",
+    "The 2026 soa+rsqrt Fortran variants are only accurate to single precision. r2 is rounded to float before _mm_rsqrt_ps, and the double Newton steps converge to 1/sqrt(float(r2)); the program prints the relative difference. They are also slower than soa+simd (3.39 and 7.25 against 8.10 Gpair/s, file comments)."
+  ],
+  "pick_this_over_siblings_when": "Use this entry when the question is which compiler to use for a multithreaded direct-sum kernel. It is the only Fortran sibling where the win comes from one vendor compiler (ifort) beating both g++ and icpc at identical flags, and the same table shows the hand-SIMD C++ ceiling. For gfortran-only evidence of Fortran beating C, the plb2 matmul (about 6% on M1) and fortran-lang poisson2d siblings are the better references.",
+  "verified_claims_summary": "lap3dkernel/README, with flags tied to the rows by commit b1c14d2: on an Intel Xeon Gold 6128 (12 cores, AVX-512, 12 OpenMP threads), the naive OpenMP Fortran lap3dpot built with ifort 2019 (-qopenmp -fPIC -O3 -march=native -funroll-loops -mkl) summed 10,000 x 10,000 double-precision 1/r pairs at 7.7 Gpair/s. The plain C++ kernel reached 4.1 Gpair/s with both g++ 9 and icpc 2019 at matching flags, so ifort is 1.88x (derived from page data). gfortran 9 reached 4.0, and hand-SIMD C++ with VCL reached 6.1 Gpair/s, or 18.3 with a custom rsqrt (both g++).",
+  "status_note": "The repo is a small personal benchmark (Apache-2.0, Simons Foundation, 8 stars, 41 commits, last commit 2026-02-03, 3 open issues), not a maintained library. The kernel is trivially copyable, but the headline result needs the legacy ifort 2019 compiler. At HEAD the scripted Fortran build no longer links (rsqrtps.c is missing from the scripts), so reproduce from commit b1c14d2.",
+  "sources_read": [
+    "https://github.com/ahbarnett/floatingspeed",
+    "https://github.com/ahbarnett/floatingspeed/issues",
+    "https://github.com/ahbarnett/floatingspeed/issues/2",
+    "https://github.com/ahbarnett/floatingspeed/tree/master/lap3dkernel/fortran",
+    "https://github.com/ahbarnett/floatingspeed/commits/master/lap3dkernel",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/README.md",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/README",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/run_all_tests.sh",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/c++SIMD/lap3dkernel.cpp",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/fortran/lap3dpottest.f90",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/fortran/lap3dpottest_accum.f90",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/fortran/compileandtest.sh",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/HEAD/lap3dkernel/fortran/rsqrtps.c",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/b1c14d2c59aaa4dc34c78fba658815677dadb8e2/lap3dkernel/fortran/lap3dpottest.f90",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/b1c14d2c59aaa4dc34c78fba658815677dadb8e2/lap3dkernel/c++SIMD/lap3dkernel.cpp",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/b1c14d2c59aaa4dc34c78fba658815677dadb8e2/lap3dkernel/run_all_tests.sh",
+    "https://raw.githubusercontent.com/ahbarnett/floatingspeed/b1c14d2c59aaa4dc34c78fba658815677dadb8e2/lap3dkernel/README",
+    "https://www.intel.com/content/www/us/en/docs/fortran-compiler/developer-guide-reference/2024-1/floating-point-optimizations.html (blocked: DNS lookup failed; WebSearch snippet of Intel fp-model docs used instead)"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,55 @@
+{
+  "id": "lang:go/boostorg/redis#tcp-echo-direct",
+  "one_liner": "Go's net package with one goroutine per connection, as a TCP echo server; about 1.22x less wall time than the libuv docs example.",
+  "what_it_does": "This entry is Go's standard net package used the plain way: Listen, Accept, and one goroutine per connection that loops Read into a 1 KiB buffer and Write back, with runtime.GOMAXPROCS(1). The Boost.Redis author wrote it as one of five echo servers (Asio, Tokio, Go, libuv, Node.js) and drove each with the same C++ client. It is not a C or C++ library: using it means writing the service in Go.",
+  "how_it_is_fast": "The code is blocking-style but runs on Go's netpoller. A conn.Read that hits EAGAIN parks the goroutine (internal/poll FD.Read calls waitRead), the runtime's edge-triggered epoll wakes it, and the scheduler runs ready goroutines on the single P without an OS thread per connection. Each echo is one read and one write syscall into a buffer reused for the whole connection. The libuv baseline does the same syscalls but, as the unmodified docs example, mallocs a 64 KiB read buffer on every read callback (libuv passes 64 * 1024 as suggested_size) and a write request on every echo, then frees both. The measured gap therefore comes mostly from the baseline's per-message allocation, not from a Go runtime advantage.",
+  "when_to_use": [
+    "New network services with many concurrent, mostly idle connections exchanging small messages, where one blocking goroutine per connection is the easiest correct design.",
+    "When the C alternative under consideration is a straightforward libuv callback server written from the docs, without buffer pooling.",
+    "Single-process, single-core deployments: the measured server pinned itself to GOMAXPROCS(1) and still beat the libuv example on 1000 localhost connections."
+  ],
+  "when_not_to_use": [
+    "When C++ is an option: the Boost.Asio C++20 coroutine echo server in the same chart took 29.5 s against Go's 35.6 s, and Tokio took 30.7 s.",
+    "As proof that Go beats libuv: the libuv server allocates per message and was never revised, while the Go server was rewritten before its 35.6 s run; a libuv server that reuses its buffers was not measured.",
+    "Latency-critical paths that cannot tolerate garbage-collector work or scheduler latency; no tail-latency figures exist, only total wall time.",
+    "Inside an existing C or C++ process: Go needs cgo or a separate process, plus its own runtime and garbage collector."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond the Go standard library (net, runtime, fmt, os)",
+    "min_toolchain": "Not stated; measured in August 2022 with an unrecorded Go version; the code uses only long-stable net APIs",
+    "platforms": "any Go platform; on Linux the netpoller uses edge-triggered epoll (runtime/netpoll_epoll.go); other OS pollers not checked",
+    "thread_safety": "not documented in the pages read; the benchmark gives each connection its own goroutine and shares no state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The doc page's 'code used' link for Go points to commit 3fb018c, the earlier bufio.ReadBytes server that scored 81.0 s, not the f11622e rewrite behind the 35.6 s bar. That old server never left its loop on EOF or error, because `break` inside its switch exits only the switch, so each goroutine kept calling ReadBytes and Write on a closed socket after its client finished, with no GOMAXPROCS cap. That bug probably explains part of the 81.0 s to 35.6 s drop (inferred from the code, not measured).",
+    "Each bar is one `time ./echo_server_client 1000 5000` run, and the bars were recorded on different dates (libuv by 2022-07-15, Go 2022-08-25, Asio re-run 2022-10-07). The client catches each session's exception, prints it to stderr and carries on, and it never counts completed echoes. Nothing in the repo shows that all 5,000,000 round trips completed in every run.",
+    "The libuv baseline is the docs example built with `gcc -O2` against an unstated system libuv. It mallocs and frees a 64 KiB buffer and a write_req_t per message, while the Go, Asio and Tokio servers reuse one 1 KiB buffer per connection.",
+    "The current Go server checks the stale read error after conn.Write, so write errors are ignored, and it never closes connections. Both are harmless for a single timed run but need fixing before reuse."
+  ],
+  "pick_this_over_siblings_when": "The Tokio echo entry runs the same harness and is faster (30.7 s against 35.6 s), so pick Go only when its blocking goroutine style and standard library outweigh about 16% more wall time. Pick evio or Redcon (Go event-loop frameworks) when you need more requests per second than net's goroutine-per-connection model gives and can accept a callback API.",
+  "verified_claims_summary": "Each server had one timed run of the single-threaded Boost.Asio client (1000 localhost connections x 5000 13-byte echoes) on the author's unnamed machine (localhost latency 0.07 ms). The rewritten Go net server took 35.6 s, the libuv docs example built with gcc -O2 took 43.6 s (about 1.22x more), Asio took 29.5 s and Tokio 30.7 s. No CPU, OS, Go, libuv or compiler versions are given.",
+  "status_note": "Go is active and BSD-3-Clause licensed. The evidence is a 2022 single-run composite chart that the 2025 doc page still shows unchanged (and links the wrong Go code for), against an allocation-heavy C example, so it supports only a directional, tier-D claim.",
+  "sources_read": [
+    "https://github.com/golang/go",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/netpoll_epoll.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/internal/poll/fd_unix.go",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/doc/modules/ROOT/pages/benchmarks.adoc",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/go/echo_server_direct.go",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/c/libuv/echo_server_direct.c",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/c/libuv/README.md",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/cpp/asio/echo_server_direct.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/cpp/asio/echo_server_client.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/rust/echo_server_direct/src/main.rs",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/nodejs/echo_server_direct/echo_server_direct.js",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/go/echo_server_direct.go",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/benchmarks.tex",
+    "https://github.com/boostorg/redis/commit/f11622e74678f9d1b9082bad103798871591f6d4",
+    "https://github.com/boostorg/redis/commits/develop/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/libuv/libuv/v1.x/src/unix/stream.c"
+  ],
+  "confidence": 0.55
+}
