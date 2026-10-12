@@ -433,16 +433,16 @@ def write_exports(entries):
 def readme_blocks(tree, entries, rejected):
     t = tier_counts(entries)
     n_cats = sum(len(tree[d]) for d in tree)
-    last = max(e["verification"].get("date", "") for e in entries)
     badge = lambda label, msg, color: (f"<img alt=\"{label}: {msg}\" src=\"https://img.shields.io/badge/"
-                                       f"{label.replace(' ', '_')}-{str(msg).replace('-', '--').replace(' ', '_')}"
+                                       f"{label.replace(' ', '_')}-{str(msg).replace('-', '--').replace(' ', '_').replace(',', '%2C')}"
                                        f"-{color}\">")
     blocks = {"badges": "<p align=\"center\">\n  " + "\n  ".join([
         badge("verified entries", group(len(entries)), "2ea44f"),
         badge("tier A", group(t["A"]), "1f6feb"),
         badge("categories", n_cats, "8250df"),
-        badge("updated", last, "6e7781"),
-        badge("license", "MIT", "blue")]) + "\n</p>"}
+        badge("claims rejected", len(rejected), "cf222e"),
+        badge("license", "MIT", "blue"),
+        f"<a href=\"docs/how-it-was-built.md\">{badge('built with', 'Claude Code', 'd97757')}</a>"]) + "\n</p>"}
 
     blocks["stats"] = (f"**{group(len(entries))} entries** across **{n_cats} categories** in **{len(tree)} domains** · "
                        f"{group(t['A'])} tier A · {group(t['B'])} tier B · {group(t['C'])} tier C · "

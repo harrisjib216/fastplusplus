@@ -93,7 +93,8 @@ plus an optional `seed` assignment. Build a new wave's file from spec Part 4 the
    and enrich the seed records.
 6. Close: final `verify.py apply`, confirm every verified entry has `enrich/raw/<slug>.json`
    (slug = `re.sub(r"[^a-z0-9]+","_", id.removeprefix("https://")).strip("_")`), run
-   `python3 pipeline/render_lists.py`, commit, push, and update these notes.
+   `python3 pipeline/render_lists.py` (and `pipeline/seeds_no_evidence.py` when seeds changed), run
+   `python3 pipeline/check_pii.py`, commit, push, and update these notes.
 
 Recording decisions: pipe JSON lines into `python3 pipeline/add_decisions.py`, e.g.
 

@@ -4,11 +4,12 @@
 
 <!-- fastpp:badges -->
 <p align="center">
-  <img alt="verified entries: 3,012" src="https://img.shields.io/badge/verified_entries-3,012-2ea44f">
+  <img alt="verified entries: 3,012" src="https://img.shields.io/badge/verified_entries-3%2C012-2ea44f">
   <img alt="tier A: 600" src="https://img.shields.io/badge/tier_A-600-1f6feb">
   <img alt="categories: 101" src="https://img.shields.io/badge/categories-101-8250df">
-  <img alt="updated: 2026-10-11" src="https://img.shields.io/badge/updated-2026--10--11-6e7781">
+  <img alt="claims rejected: 41" src="https://img.shields.io/badge/claims_rejected-41-cf222e">
   <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <a href="docs/how-it-was-built.md"><img alt="built with: Claude Code" src="https://img.shields.io/badge/built_with-Claude_Code-d97757"></a>
 </p>
 <!-- /fastpp:badges -->
 
@@ -108,8 +109,8 @@ Every entry has its own page with the same sections:
 
 ## How it was built
 
-fastpp was researched, verified and written by Claude Code agents between 23 September and 13 October 2026, run as
-14 waves (one domain each) plus backfill passes that mined curated lists such as awesome-cpp and awesome-c.
+fastpp was researched, verified and written by Claude Code agents over three weeks in September and October 2026,
+run as 14 waves (one domain each) plus backfill passes that mined curated lists such as awesome-cpp and awesome-c.
 
 <!-- fastpp:pipeline -->
 ```mermaid
