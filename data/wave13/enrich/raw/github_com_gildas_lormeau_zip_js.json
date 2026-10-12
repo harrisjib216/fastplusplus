@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/gildas-lormeau/zip.js",
+  "one_liner": "ZIP library whose bundled WebAssembly zlib inflates about 2x faster than pako/jszip and its own JS port.",
+  "what_it_does": "zip.js reads and writes ZIP files (Zip64, split archives, AES encryption, Deflate64 decompression, Web Streams, a Web Worker pool) in browsers, Node, Deno and Bun. This entry is its bundled WebAssembly backend: one module holding zlib deflate/inflate plus an AES-CTR/HMAC-SHA1 kernel. zip.js uses it instead of its pure-JavaScript zlib port when a non-default level is requested, when the host has no CompressionStream, or when useCompressionStream: false is set. The API is zip.js's own ZipWriter/ZipReader (not jszip-compatible); the codec also ships standalone as CompressionStreamZlib/DecompressionStreamZlib in gildas-lormeau/zlib-streams, shaped like the native CompressionStream.",
+  "how_it_is_fast": "The codec is madler zlib compiled to a standalone WebAssembly module with Emscripten (-Oz -flto, then wasm-opt -Oz), with Chromium zlib's chunked inflate fast path (INFLATE_CHUNK_GENERIC with 64-bit bit-buffer reads), 8-bytes-at-a-time match extension in longest_match (DEFLATE_COMPARE256_64LE) and an 8-byte braided CRC-32 that the Makefile says is about 12x faster than zlib's Z_SOLO byte loop. Compiled C with native 64-bit integer ops beats JIT-compiled JavaScript ports (pako, zip.js's port, fflate) and, warm, Node's DecompressionStream on inflate. No WebAssembly SIMD is used (issue #677 measured -msimd128 within noise), and the deflate output stays byte-identical to madler zlib because the Rabin-Karp hash is kept.",
+  "when_to_use": [
+    "Browser, Deno, Bun or Node apps that need real ZIP features (Zip64, AES, split archives, streaming) with a faster bundled codec than jszip/pako: 20 MB text read 71 ms vs 140 ms jszip and 155 ms for zip.js's pure-JS port.",
+    "Non-default compression levels, which bypass CompressionStream: on Node, WASM level 5 took 512 ms vs 691 ms for the level-6 native stream (7% more bytes), level 1 runs at about 116 MB/s.",
+    "Archives of many small entries: 5,000 x ~2 KB files compressed in 551 ms vs 731 ms through CompressionStream and read in 342 ms vs 485 ms, because the per-entry cost of a WASM stream is lower than a native one.",
+    "Hosts without CompressionStream, or output that must not depend on the host's zlib (useCompressionStream: false gives madler-identical bytes on every runtime).",
+    "AES-encrypted entries in browsers: WASM 125-138 MB/s vs 79-104 MB/s for the JavaScript engine (Firefox 156, Chrome 153)."
+  ],
+  "when_not_to_use": [
+    "Large entries at the default level on Node, Bun or Deno: native CompressionStream and node:zlib compress 20 MB of text in 678-730 ms vs 1098 ms, and concurrent add() spreads native streams across the libuv threadpool (602 ms vs 3402 ms for WASM on 8 x 8 MB) while the WASM codec stays on one thread.",
+    "Many small files where fflate is acceptable: fflate compressed the 5,000-file set in 278 ms and read it in 101 ms vs 551 ms and 342 ms for the WASM backend, and won on incompressible data (298 vs 460 ms).",
+    "Memory-constrained hosts: the zip.js rows had the highest peaks (139 MB vs 68 MB for fflate compressing 20 MB of text; 171 MB vs 97 MB decompressing).",
+    "Short-lived processes or tiny archives: a fresh process pays about 20 ms of module instantiation before the first byte.",
+    "Throughput-critical encryption: the AES kernel is software (WebAssembly has no AES instructions), 119-138 MB/s against 9.4 GB/s for OpenSSL with ARMv8 AES on the same M2, and on Deno the JavaScript engine is faster (144/133 vs 124/124 MB/s)."
+  ],
+  "integration": {
+    "form": "module (npm @zip.js/zip.js and JSR, ES module and CommonJS builds; the WASM binary ships with the package and is also exported as dist/zip-module.wasm)",
+    "dependencies": "none at runtime (package.json lists only devDependencies)",
+    "min_toolchain": "Node >= 18, Deno >= 1.0, Bun >= 0.7 (package.json engines); browsers with WebAssembly and Web Streams",
+    "platforms": "any JavaScript runtime with WebAssembly (Node, Deno, Bun, browsers); falls back to the JavaScript engine where the module cannot load, e.g. a Content Security Policy without 'wasm-unsafe-eval'",
+    "thread_safety": "The WASM codec runs on the calling thread (or inside zip.js Web Workers when useWebWorkers is on); the module heap is fixed (16.9 MB per issue #677), so the number of streams alive at once is bounded and exhaustion fails with Z_MEM_ERROR 'allocation failed'.",
+    "drop_in_for_baseline": "partial — replaces jszip/pako only by moving to zip.js's ZipWriter/ZipReader API; the standalone zlib-streams classes mirror the CompressionStream interface but not pako's"
+  },
+  "gotchas": [
+    "Backend choice is implicit: the default level 6 runs the host CompressionStream when it exists, any other level or useCompressionStream: false runs the WASM codec, and a module that fails to load falls back silently (the benchmark adapter's own comment warns that a failed initModule makes zip.js measure the native stream instead), so check which codec your configuration actually runs.",
+    "CRC-32 is not verified on read by default (checkCrc32 defaults to false). Issue #661 shows why it matters: Deflate64 entries came back truncated with a bad CRC-32 and no error until v2.8.28. Turning the check on costs about 7 ms per 20 MB on the WASM codec.",
+    "The zlib-streams driver rejects trailing data after the end of a stream and does not decode concatenated gzip members; AES authentication codes are checked by default (checkAuthenticationCode true), so the AES read numbers include HMAC verification.",
+    "Harness notes: the numbers come from zip.js 2.19.0 while HEAD is 2.23.0, and the corpus is synthetic: seeded word salad from a vocabulary of about 170 English and JavaScript words, not real files. BENCHMARKS.md says the codec script does one warmup run, but bench-codecs.js's measure() has none: its median of 3 includes the cold run. The WASM module was already warm from the compression rows before the inflate rows ran, so this does not change the 41 ms vs 56 ms inflate result."
+  ],
+  "pick_this_over_siblings_when": "Pick zip.js when you need a full ZIP container (Zip64, AES, streaming, worker pool) with the WASM codec bundled; for raw deflate/gzip buffers without a ZIP container, fast-pako (4.2-5.8x pako on inflate) or @mtcute/wasm are narrower pako replacements, and @bytedance/tar-wasm covers tar rather than zip.",
+  "verified_claims_summary": "The author ran zip.js 2.19.0 on Node v26.10.0 on an Apple M2 (2026-09-30), one fresh process per row, median of 3, every library at its own level 6. The WASM zlib backend decompressed a 20 MB text archive in 71 ms vs 155 ms (zip.js pure-JS port), 140 ms (jszip/pako) and 116 ms (fflate), and compressed 20 MB of incompressible data in 460 ms vs 787 and 854 ms; warm, codec-only inflate took 41 ms vs 56 ms for Node's DecompressionStream. It loses to native zlib on compression and to fflate on incompressible data and small files.",
+  "status_note": "Actively maintained (last commit 2026-10-03, v2.23.0 at HEAD, frequent releases), BSD-3-Clause with no runtime dependencies; the WASM codec is a committed binary built from gildas-lormeau/zlib-streams (madler zlib plus Chromium inflate/deflate options, -Oz).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/README.md",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/package.json",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/index.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/index.d.ts",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/lib/zip-module-wasm-base.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/lib/zip-fs-wasm.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/lib/core/configuration.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/lib/core/streams/zlib-wasm/zlib-streams-loader.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/bench.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/run-one.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/bench-codecs.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/bench-aes.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/package.json",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/adapters/zipjs.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/adapters/fflate.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/adapters/jszip.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/lib/settings.js",
+    "https://raw.githubusercontent.com/gildas-lormeau/zip.js/HEAD/benchmarks/lib/corpus.js",
+    "https://github.com/gildas-lormeau/zip.js/commits/master",
+    "https://github.com/gildas-lormeau/zip.js/issues?q=is%3Aissue+wasm",
+    "https://github.com/gildas-lormeau/zip.js/issues/677",
+    "https://github.com/gildas-lormeau/zip.js/issues/661",
+    "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/README.md",
+    "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/Makefile",
+    "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/gildas-lormeau/zlib-streams/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}

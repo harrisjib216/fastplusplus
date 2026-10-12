@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/ibob/itlib",
+  "one_liner": "Single-header C++11 flat_map/flat_set (sorted vector) plus small_vector and static_vector; claims to beat std::map for small sizes, unmeasured.",
+  "what_it_does": "itlib is a collection of standalone single-header libraries; this entry covers four containers. itlib::flat_map and itlib::flat_set expose the std::map/std::set member functions over a sorted vector-like container chosen by the last template parameter (std::vector by default, itlib::static_vector or small_vector also work). itlib::small_vector is a std::vector with an inline buffer (16 elements by default) that spills to the heap, and itlib::static_vector is a fixed-capacity vector with no heap use.",
+  "how_it_is_fast": "flat_map/flat_set are sorted-array maps: std::lower_bound binary search for lookups and contiguous storage for iteration, so there is no per-node allocation or pointer chasing, at the cost of O(n) element shifts on insert and erase. small_vector and static_vector avoid heap allocation while the size stays under the inline capacity; past that, small_vector grows by about 1.5x. There is no SIMD and no memcpy fast path: elements are moved one at a time through allocator_traits or placement new.",
+  "when_to_use": [
+    "Small maps or sets (tens to low hundreds of entries) built once and then looked up or iterated many times, with keys that are cheap to compare and move",
+    "You want a std::map-shaped API without Boost: one MIT header, C++11, no dependencies",
+    "You need a fixed-capacity map with no heap use (embedded or real-time code): back flat_map with itlib::static_vector, as the unit tests do",
+    "Per-object short lists that usually stay under N elements (small_vector), or a known maximum size (static_vector)"
+  ],
+  "when_not_to_use": [
+    "Large maps with frequent inserts or erases in the middle: each one shifts O(n) elements, so the B-tree siblings fit better",
+    "Code that relies on std::map's stable iterators and references across insert and erase",
+    "Code that inserts or push_backs an element of the same small_vector or static_vector, or erases empty ranges of non-trivial types (see gotchas)",
+    "You need measured evidence of a speedup: the project publishes none; boost::container::flat_map has numbers, and a C++23 standard library that ships std::flat_map is the standard alternative",
+    "Bulk loading unsorted keys one insert at a time: there is no range insert, so this is O(n^2); build the vector and use the sorting constructor instead"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only)",
+    "min_toolchain": "C++11; CI builds with MSVC on Windows, GCC on Ubuntu and clang on macOS (compiler versions not stated); CMake 3.24 is needed only for the project's own build and tests",
+    "platforms": "any (portable standard C++, no intrinsics)",
+    "thread_safety": "not documented; the headers contain no internal locking",
+    "drop_in_for_baseline": "partial: flat_map has std::map's lookup and modifier names, but its 4th template parameter is a container rather than an allocator, value_type is std::pair<Key, T> rather than pair<const Key, T>, insert and erase invalidate all iterators, and try_emplace, insert_or_assign, contains, extract, merge and range insert are missing"
+  },
+  "gotchas": [
+    "Aliasing bug (found by code reading, not run): small_vector's push_back, emplace_back and insert call grow_at first, which moves the existing elements (into a new buffer when full, or shifting right in place) and destroys the sources (freeing an old heap buffer) before constructing from the argument. So v.push_back(v[0]) at capacity reads a destroyed or freed element, and v.insert(v.begin(), v[2]) copies whatever was shifted into slot 2 ({10,20,30,40} becomes {20,10,20,30,40}). static_vector::insert has the same in-place problem. std::vector guarantees both cases work, and the unit tests do not cover them.",
+    "Empty-range erase (code reading): erase(first, last) with first == last before end() runs shrink_at with num = 0, which destroys each element from first to end and then move-constructs it from itself. That is undefined behaviour for types such as std::string. The only empty-erase unit test uses int.",
+    "flat_map and flat_set iterators are the container's mutable iterators and flat_map's value_type has a non-const key, so writing through an iterator can silently break the sort order. The default comparator is a transparent operator< functor, not std::less<Key>. When duplicate keys are passed to the container or initializer_list constructor, std::sort (unstable) followed by std::unique decides which value survives, whereas std::map keeps the first.",
+    "small_vector's move constructor and move assignment are unconditionally noexcept but move a static-mode vector element by element, so a throwing T move calls std::terminate. Element transfers use std::move rather than move_if_noexcept, so there is no strong exception guarantee. With the default RevertToStaticBelow = 0 a vector that has spilled to the heap stays there even after clear(); a nonzero value makes erase, resize or pop_back move the elements back into the inline buffer, invalidating all iterators."
+  ],
+  "pick_this_over_siblings_when": "Pick it over boost::container::flat_map/flat_set (the closest sibling, and the one with numbers: about 1.1-2.5x faster than std::set at sizes 2-128) only when you cannot take a Boost dependency or want to swap the backing container, for example to static_vector. For large maps, tlx btree_map, cpp-btree, frozenca/BTree or fast-containers are the measured choices.",
+  "verified_claims_summary": "Nothing has been measured. The only performance statement is the header comment that flat_map and flat_set 'generally perform much faster than std::map [std::set] for smaller sets of elements', with no sizes, compiler or hardware. The repo's only benchmark target (test/b-rand_dist.cpp, built with picobench) covers random distributions, and a web search found no third-party numbers.",
+  "status_note": "Actively maintained (last commit 2026-10-06, 451 commits, 212 stars, CI with sanitizers on MSVC, GCC and clang), MIT-licensed and easy to vendor one header at a time, but tier D: no performance numbers exist, and code reading shows that small_vector and static_vector mishandle self-referencing insert and push_back and empty-range erase of non-trivial types.",
+  "sources_read": [
+    "https://github.com/iboB/itlib",
+    "https://github.com/iboB/itlib/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/README.md",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/include/itlib/flat_map.hpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/include/itlib/flat_set.hpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/include/itlib/small_vector.hpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/include/itlib/static_vector.hpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/test/t-small_vector-11.cpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/test/t-static_vector-11.cpp",
+    "https://raw.githubusercontent.com/iboB/itlib/HEAD/test/t-flat_map-11.cpp"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/giladfrid009/simplesimd",
+  "one_liner": "C# .NET 7 generic Vector<T> span helpers (Sum, Min/Max, Dot, elementwise); about 6x a naive int loop.",
+  "what_it_does": "A static SimdOps class with generic methods over T[], Span<T> and ReadOnlySpan<T> of primitive numeric types (byte to double, nint/nuint): comparisons that return one bool for the whole span, elementwise ops (Add, Multiply, Divide, Sqrt, Select, Concat, Ternary) that write into a result span or return a new array, reductions (Sum, Average, Min, Max, Dot, Aggregate) and All/Any/Contains/IndexOf/Fill/Foreach. Custom kernels are passed as two structs, one implementing IFunc<Vector<T>,...> and one IFunc<T,...>; a Roslyn source generator adds Func-delegate and array-returning overloads. It is an eager, span-based API, not a LINQ replacement.",
+  "how_it_is_fast": "Each method reinterprets the span as a run of System.Numerics.Vector<T> with MemoryMarshal.GetReference and Unsafe.As (no bounds checks), processes whole vectors (8 int lanes on an AVX2 host), then finishes with a scalar tail; reductions keep one vector accumulator and reduce it at the end with Vector.Dot(v, One). The 'value delegate' pattern (struct type parameters constrained to IFunc) lets RyuJIT specialize and inline the user's kernel; the README's own table shows the Func-delegate overloads 2.4-4.5x slower. The measured gain comes from 8-lane AVX2 Vector<int> against a scalar loop that .NET 7 RyuJIT does not auto-vectorize.",
+  "when_to_use": [
+    ".NET 7 or 8 code that needs one generic (INumber<T>) API for span reductions and elementwise arithmetic across all primitive numeric types without hand-writing Vector<T> loops.",
+    "Integer or float arrays of roughly 100 elements and up: the README shows 5-6.7x over a naive int loop from 100 to 100,000 elements (only about 1.5x at 10).",
+    "Custom per-element kernels where you can supply both a Vector<T> and a scalar version as structs (for example Sum of a transformed value, IndexOf with a predicate).",
+    "As a small, readable MIT template for Vector<T> loops to copy into your own code."
+  ],
+  "when_not_to_use": [
+    ".NET 9 and later: System.Numerics.Tensors.TensorPrimitives ships vectorized Sum/Max/Min and elementwise ops generic over INumber<T>, and the LinqFaster README says .NET 9 moved most such optimizations into LINQ; SimpleSIMD has no numbers against either.",
+    "Code that relies on LINQ semantics: Sum returns T and wraps on overflow, Average<int> is an integer division of that wrapped sum, and Min/Max of an empty span return a sentinel instead of throwing.",
+    "Floating-point reductions that must be bit-reproducible with a sequential loop: the vector accumulator reorders additions.",
+    "Select or Concat with an output type whose Vector<TRes>.Count differs from Vector<T>.Count (see gotchas: out-of-bounds write or unwritten results).",
+    "Projects that need a maintained package: last commit 2022-11-19, NuGet 4.6.0 targets net7.0 only; no explicit Vector128/256/512 or hardware-intrinsic paths, so AVX-512-specific code gains nothing extra."
+  ],
+  "integration": {
+    "form": "NuGet package (SimpleSIMD 4.6.0) or source-drop (C# class library plus a Roslyn source generator project)",
+    "dependencies": "System.Runtime.Experimental >= 6.0.2 (declared NuGet dependency); the Generator project uses Microsoft.CodeAnalysis.CSharp 4.4.0 at build time",
+    "min_toolchain": ".NET 7 (net7.0 target), C# 11; Generator targets netstandard2.0",
+    "platforms": "any .NET 7 runtime; the vector path runs only when Vector.IsHardwareAccelerated is true, otherwise the scalar loop runs",
+    "thread_safety": "not documented; methods are static and keep no shared state",
+    "drop_in_for_baseline": "partial — one call replaces a hand-written loop over T[]/Span<T>, but it is not LINQ: eager, span-only, wrapping integer Sum and integer Average"
+  },
+  "gotchas": [
+    "Memory-safety bug in Select<T,TRes> and Concat<T,TRes>: the loop count is span.Length / Vector<T>.Count but each iteration stores a whole Vector<TRes> at Offset(i). Commit 2b7bd56 (2022-11-16, shipped in 4.6.0) removed the check that threw when Vector<TRes>.Count != Vector<T>.Count, so a narrower TRes (int to short or byte) writes past the end of the result span through Unsafe.As, and a wider TRes (int to long or double) leaves part of the result unwritten. The tests only call Select<int,int> and Concat<int,int>.",
+    "Max and Min start from T.MinValue and T.MaxValue, so a float span of all -Infinity returns float.MinValue from Max, an empty span returns the sentinel, and NaN handling differs between the vector loop (Vector.Max/Min) and the scalar tail (T.Max/Min).",
+    "Each custom kernel needs two structs that must compute the same function (vector and scalar); a mismatch silently gives results that depend on the span length. The generated Func overloads are 2.4-4.5x slower than the struct versions (README ValueDelegate table).",
+    "Reductions use a single vector accumulator and the Tests project has no reduction tests (only Comparison.cs and Elementwise.cs); the README benchmark source is not in the repo."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LinqFaster when you are on .NET 7 and want one generic INumber<T> API with custom struct kernels rather than LINQ-shaped helpers; pick LitMath instead for vectorized Exp/Log/Sin, which SimpleSIMD lacks (Sqrt is its only math function). C++ users should look at EVE or the Vector Class Library; SimpleSIMD is C# only.",
+  "verified_claims_summary": "The author's BenchmarkDotNet 0.13.2 run on .NET 7.0.0 (RyuJIT AVX2, Intel i7-10510U, Windows 11) timed SimdOps.Sum over an int[] at 585 ns against 3,938 ns for a naive scalar loop at 10,000 elements (about 6.7x), 5-6.7x from 100 to 100,000 elements and 1.5x at 10. Only Sum on int was measured, the benchmark project is not public, and neither LINQ nor TensorPrimitives was compared.",
+  "status_note": "Abandoned since 2022-11-19 (NuGet 4.6.0 for net7.0 only); MIT and small enough to vendor, but restore the Vector<TRes>.Count check in Select/Concat before using mixed-type kernels, and prefer TensorPrimitives on .NET 9+.",
+  "sources_read": [
+    "https://github.com/giladfrid009/SimpleSIMD",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/README.md",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD.sln",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/SimpleSIMD.csproj",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/SimdOps.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Delegates.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Reduction/Sum.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Reduction/Average.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Reduction/Max.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Reduction/Min.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Reduction/Dot.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/General/IndexOf.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/General/All.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Elementwise/Add.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Elementwise/Divide.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Elementwise/Sqrt.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Elementwise/Select.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Elementwise/Concat.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/SimpleSIMD/Comparison/Equal.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/Generator/Generator.csproj",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/Tests/Tests.csproj",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/Tests/Elementwise.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/Tests/Comparison.cs",
+    "https://raw.githubusercontent.com/giladfrid009/SimpleSIMD/HEAD/LICENSE",
+    "https://github.com/giladfrid009/SimpleSIMD/tree/master/SimpleSIMD",
+    "https://github.com/giladfrid009/SimpleSIMD/tree/master/Tests",
+    "https://github.com/giladfrid009/SimpleSIMD/issues?q=is%3Aissue",
+    "https://github.com/giladfrid009/SimpleSIMD/commits/master",
+    "https://github.com/giladfrid009/SimpleSIMD/commit/2b7bd56",
+    "https://api.nuget.org/v3/registration5-semver1/simplesimd/index.json",
+    "https://raw.githubusercontent.com/jackmott/LinqFaster/HEAD/README.md",
+    "https://raw.githubusercontent.com/matthewkolbe/LitMath/HEAD/README.md",
+    "WebSearch snippet: '.NET 9 TensorPrimitives generic INumber Sum Max Dot System.Numerics.Tensors vectorized' (dotnet/runtime PR 91596, source.dot.net TensorPrimitives references)"
+  ],
+  "confidence": 0.78
+}

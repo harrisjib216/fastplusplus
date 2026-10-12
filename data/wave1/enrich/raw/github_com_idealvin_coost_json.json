@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/idealvin/coost#json",
+  "one_liner": "JSON DOM module of the coost C++ base library; first-party numbers claim 1.4-3.6x faster parse/stringify than RapidJSON 1.1.0.",
+  "what_it_does": "co/json is the JSON module of coost, a C++ base library that also covers coroutines, logging, flags and RPC. It parses text into a json::any DOM (alias Json) and serializes it with str() or pretty(). Documents are built from initializer lists or a fluent add_member/push_back chain and read with get(), operator[] and as_int/as_string conversions. It is not RapidJSON-compatible: it uses its own types (co::string), has no SAX or in-situ mode, and ships inside the libco library rather than as headers.",
+  "how_it_is_fast": "A non-recursive, goto-driven parser keeps an explicit value stack and builds each array or object at its closing bracket as one contiguous pointer array (objects are stored as flat key/value pairs). Strings are scanned with memchr for the closing quote and the backslash, and an escape-free string is copied once. Whitespace and output escapes use 8-way unrolled table scans. Each value is a 16-byte header allocated from thread-local size-class free lists (16/32/64/128 bytes) backed by coost's co::alloc, so repeated parse-and-free cycles reuse warm memory. Integers use a plain digit loop, doubles use libc strtod, and stringify formats doubles with milo::dtoa (Grisu2).",
+  "when_to_use": [
+    "You already build coost (coroutines, flag, log, RPC) and want JSON on the same string and allocator types",
+    "Config files and RPC payloads of small to medium size that you build or inspect through a fluent API",
+    "Stringify-heavy code: serialization shows the largest first-party gains (1.6-3.6x over RapidJSON on minified twitter.json)",
+    "One thread that repeatedly parses and discards documents, where the thread-local node free lists stay warm"
+  ],
+  "when_not_to_use": [
+    "Raw parse speed: in coost's own harness simdjson parsed faster than co/json on Linux (385 vs 667 us), and the yyjson and simdjson siblings publish numbers with hardware and compiler stated",
+    "Untrusted or strictly conforming input: object keys with escape sequences are not handled, strings are not checked for UTF-8 or raw control characters, and errors return only a null value",
+    "Number-heavy documents (canada.json-style): doubles go through libc strtod and were never benchmarked, since only twitter.json was measured",
+    "Wide objects with many lookups: get() and operator[] do a linear strcmp scan over the members",
+    "You want a standalone JSON dependency: this requires building libco (C++17 on master) rather than dropping in a header"
+  ],
+  "integration": {
+    "form": "static lib (part of libco, built with xmake or CMake; shared build possible)",
+    "dependencies": "none external; the JSON module uses coost's own string type and allocator (co::string, co::alloc)",
+    "min_toolchain": "C++17 on master (xmake set_languages c++17, CMake 3.15+); the benchmarked pre-4.0 code built as C++11. Default non-MSVC flags are -O2 -g; MSVC builds add /fp:fast",
+    "platforms": "Linux, macOS, Windows, FreeBSD; x86, x64, ARM, ARM64 (per README, with CI badges for each OS and for Windows-arm64)",
+    "thread_safety": "not documented; parser scratch state and node free lists are thread-local (static __thread Cache*), and a json::any has no internal locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaws behind the RapidJSON numbers (benchmark branch json_bm.cc). The baseline is a vendored RapidJSON 1.1.0 built without RAPIDJSON_SSE42, since CO_SSE42 is never defined in benchmark/xmake.lua. Stringify is timed as one call, not averaged. The largest ratios (Windows, 3.6x/2.7x) likely measure allocators rather than parsing: RapidJSON's parse time rises from about 1070-1270 us on Linux to 4197-4260 us on Windows in the benchmark-branch files (2495 us in the README row), while co/json stays between 667 and 1071 us on both. RapidJSON's per-Document MemoryPoolAllocator mallocs 64 KB chunks through the static MSVC CRT (/MT) on every loop iteration, whereas co/json reuses its thread-local free lists across all 1000 iterations.",
+    "Object keys are found with memchr to the next quote and get no escape processing. A key containing an escaped quote fails to parse, and keys with escapes such as \\n or \\u00e9 keep the raw escape text. str() then writes keys verbatim, so a key set from code that contains a quote or a control character produces invalid JSON. String values are unescaped and escaped correctly, but the output escape table covers only \\r \\n \\t \\b \\f, the quote and the backslash, so other control bytes are written raw.",
+    "json::parse returns a null json::any on any error, with no position or message, so a malformed document looks the same as the literal null; use parse_from() and check its bool.",
+    "Doubles are parsed with strtod, which depends on the C locale's decimal point and ignores strtod's end pointer. str(), dbg() and pretty() default to mdp = 16 maximum decimal places, so fixed-notation values with more decimals are rounded on output."
+  ],
+  "pick_this_over_siblings_when": "Choose co/json only if you already depend on coost and want its fluent json::any API. For speed, yyjson (about 2.3x RapidJSON parse on a stated EPYC 7R32 with gcc 9.3) and simdjson (faster than co/json even in coost's own harness) are the better-evidenced choices; Boost.JSON or glaze cover a standalone DOM or struct mapping.",
+  "verified_claims_summary": "First-party only, measured on minified twitter.json against RapidJSON 1.1.0 with default parse flags. The master README reports stringify at 468-783 us vs 1289-2089 us (1.6-3.6x) and parse at 764-1097 us vs 1070-2495 us (1.4-2.7x) across unnamed Windows, macOS and Linux machines, with no CPU or compiler version given. The figures come from pre-4.0 code whose harness exists only on the 2023 benchmark branch, and that harness also showed simdjson parsing faster than co/json on Linux.",
+  "status_note": "Actively maintained (MIT, 4.2k stars, CMake project version 4.0.0, last commit 2026-09-28 per the verifier), but the JSON numbers are first-party, predate the 4.0 API, and the headline Windows ratios likely reflect RapidJSON's per-document malloc on the MSVC CRT heap rather than parse speed; escaped object keys are not handled.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/idealvin/coost/master/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/master/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/idealvin/coost/master/LICENSE.md",
+    "https://raw.githubusercontent.com/idealvin/coost/master/include/co/json.h",
+    "https://raw.githubusercontent.com/idealvin/coost/master/include/co/string.h",
+    "https://raw.githubusercontent.com/idealvin/coost/master/src/json.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/master/test/jbm.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/src/json.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/include/co/json.h",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/json_bm.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/rapidjson.h",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/rapidjson/rapidjson.h",
+    "https://raw.githubusercontent.com/idealvin/coost/benchmark/benchmark/rapidjson/allocators.h",
+    "https://github.com/idealvin/coost/issues?q=is%3Aissue+json",
+    "https://github.com/idealvin/coost/issues/353"
+  ],
+  "confidence": 0.7
+}

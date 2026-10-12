@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/dpdk/dpdk",
+  "one_liner": "DPDK's header-inlined x86 SSE/AVX2/AVX-512 memcpy for small, cache-hot, non-overlapping packet-sized copies, pitched against glibc memcpy.",
+  "what_it_does": "rte_memcpy(dst, src, n) copies n bytes between non-overlapping buffers and returns dst, with the same signature as memcpy but declared __rte_restrict and force-inlined from lib/eal/x86/include/rte_memcpy.h. It is used throughout the DPDK data plane (mbuf, vhost, drivers) to copy headers, descriptors and packet payloads. Outside x86 it is mostly a thin alias: on arm64, LoongArch and (by default) RISC-V rte_memcpy is a #define for plain memcpy, and on POWER it is a VSX routine that sends compile-time-constant sizes to memcpy.",
+  "how_it_is_fast": "The whole copy is inlined at the call site, so there is no call, PLT or ifunc dispatch; sizes below 16 bytes use 8/4/2/1-byte moves selected by the bits of n, and 16 to 64 bytes use two overlapping unaligned vector moves (head and tail) with no loop. Larger copies align the store side and run unrolled 128-byte (AVX2) or 512-byte (AVX-512) blocks of unaligned loads, and the SSE-only build uses PALIGNR (_mm_alignr_epi8) with one switch case per source misalignment. The ISA is fixed at compile time from -march macros, and there is no non-temporal store, prefetch or REP MOVSB path.",
+  "when_to_use": [
+    "Code already built against DPDK on x86-64 that copies packet headers, descriptors or small payloads (roughly 1 B to 1.5 KB) between buffers that are already in cache.",
+    "Hot loops where variable small sizes would otherwise be an out-of-line libc call, and where inlining the copy is the gain you are after.",
+    "Builds with an old toolchain or glibc whose small-size memcpy is weak; that was the original motivation, and the arm64 header still says its opt-in variant only helps with glibc 2.17/2.19-era libraries.",
+    "Images built with a fixed -march (DPDK's default platform is 'native'), so the AVX2 or AVX-512 path is chosen once at build time."
+  ],
+  "when_not_to_use": [
+    "Overlapping buffers: it is restrict-qualified and has no memmove semantics.",
+    "Large streaming copies (tens of KB to MB): the header has no non-temporal stores, prefetch or REP MOVSB path, and nobody publishes rte_memcpy numbers for that range.",
+    "Generic distribution binaries that must run on many x86 CPUs: there is no runtime dispatch, so a portable build gets the SSE path even on AVX-512 hardware.",
+    "Non-x86 targets: on arm64 and LoongArch it is literally memcpy, so there is nothing to gain.",
+    "Code checked by sanitizers or fortify tooling: DPDK reviewers note that bounds tooling understands memcpy but not rte_memcpy, and upstream is moving drivers back to plain memcpy."
+  ],
+  "integration": {
+    "form": "header-only (part of DPDK's EAL headers; vendoring it needs the rte_common.h/rte_vect.h macros)",
+    "dependencies": "DPDK EAL headers (rte_common.h, rte_vect.h, rte_config.h) for macros such as __rte_always_inline, __rte_restrict, __rte_constant and __rte_may_alias",
+    "min_toolchain": "C11 compiler as used by DPDK's meson build; x86 builds force at least SSE4.2 (-msse4), the SSE path needs SSSE3 for PALIGNR, and the plain-AVX (non-AVX2) path is used only on GCC 11+ or Clang",
+    "platforms": "x86-64 (SSE, AVX, AVX2, opt-in AVX-512) is the real implementation; POWER has a VSX version; arm64, LoongArch and default RISC-V map to memcpy (opt-in RTE_ARCH_ARM64_MEMCPY and RTE_ARCH_RISCV_MEMCPY variants exist)",
+    "thread_safety": "Stateless copy function; safe to call concurrently on disjoint buffers (no shared state in the header)",
+    "drop_in_for_baseline": "partial: same (dst, src, n) signature and return value, but it is an inline header function rather than a libc symbol, it requires non-overlapping buffers, and the documented contract is a macro whose address should not be taken and whose arguments may be evaluated more than once"
+  },
+  "gotchas": [
+    "AVX-512 is opt-in: even with __AVX512F__ defined, the 64-byte zmm path is used only if RTE_MEMCPY_AVX512 is defined before including the header; otherwise an AVX-512 build runs the AVX2 path. A DPDK list report (search snippet only) found the AVX-512 path slower than AVX2 in an OvS-DPDK test.",
+    "Harness asymmetry in app/test/test_memcpy_perf.c: rte_memcpy is force-inlined into the timed loop, while variable-size libc memcpy is an out-of-line call through the PLT, so small-size tick gaps partly measure call overhead. Constant-size rows let the compiler expand memcpy inline, so they compare against the GCC/Clang builtin rather than glibc. rte_memcpy always runs first, per-copy times are printed rounded to whole TSC ticks (a 4-vs-7-tick row has about ±0.5 tick of rounding error), and no results are checked in.",
+    "In the SSE-only build (no -mavx), copies over 512 bytes with a 16-byte-aligned destination and an unaligned source enter the PALIGNR loop without the 17-31-byte head copy, so the first load reads the aligned 16-byte block containing src, up to 15 bytes before it (code reading, untested). It cannot fault because the read never crosses a page, but it touches memory outside the source object; the functional test only uses offsets inside a larger array, so it would not catch this.",
+    "Small-size loads and stores were undefined behaviour (misaligned, strict-aliasing) from the first public release until commit 00901e4 in 2022 moved them to packed may_alias structs; the 2026 rewrite d0ab5a7 also dropped the header's stringop-overflow warning suppression after drivers that tripped it were switched to memcpy."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you are already inside DPDK on x86 and want inlined small copies with the ISA fixed at build time; for a drop-in libc replacement with runtime dispatch, AOCL-LibMem (AMD Zen) or Agner Fog's asmlib fit better, and nadavrot/memset_benchmark at least publishes charts against glibc, which rte_memcpy does not.",
+  "verified_claims_summary": "No rte_memcpy-versus-glibc microbenchmark result is published: the in-repo memcpy_perf_autotest prints rte_memcpy and memcpy TSC ticks side by side for 1 to 8192 bytes, but no output, CPU, compiler or glibc version is recorded. The only glibc comparison is Intel's vendor figure (search snippet only) of 22% more vhost Rx/Tx bandwidth in a physical-VM-physical OvS-DPDK setup with no methodology, and the 2026 commit d0ab5a7 compares rte_memcpy only with its own previous version (for example 8 bytes 7 to 4 cycles, 64 bytes 7 to 4, cache to cache, CPU not named).",
+  "status_note": "Actively maintained (rte_memcpy.h last changed 2026-09-23, repository head 2026-10-10) and BSD-3-Clause, so it is easy to lift, but DPDK maintainers themselves question its advantage over modern compiler and glibc memcpy and a 2026 series is replacing many call sites with plain memcpy.",
+  "sources_read": [
+    "https://github.com/DPDK/dpdk",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/README",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/x86/include/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/include/generic/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/arm/include/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/arm/include/rte_memcpy_64.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/ppc/include/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/riscv/include/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/lib/eal/loongarch/include/rte_memcpy.h",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/app/test/test_memcpy_perf.c",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/app/test/test_memcpy.c",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/meson_options.txt",
+    "https://raw.githubusercontent.com/DPDK/dpdk/main/config/x86/meson.build",
+    "https://github.com/DPDK/dpdk/commits/main/lib/eal/x86/include/rte_memcpy.h",
+    "https://github.com/DPDK/dpdk/commit/d0ab5a7",
+    "https://github.com/DPDK/dpdk/commit/2ef17be",
+    "https://github.com/DPDK/dpdk/commit/00901e4"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/dssgabriel/sve-string-routines-benchmarks",
+  "one_liner": "Research SVE assembly for strcpy, strncpy, strcmp and strncmp that times 1.3-1.6x faster than glibc on Graviton3E, but drops page-fault safety.",
+  "what_it_does": "A benchmark repository from UVSQ LI-PaRAD (EMOPASS project) that pits rewritten AArch64 SVE string routines (new_strcpy_aarch64_sve, new_strcmp_aarch64_sve and others in string/aarch64/new/*.S) against Arm Optimized Routines 23.01 SVE versions or, with -DCMP_LIBC, the system glibc. The routines keep the C signatures of their libc counterparts under new_* symbol names. It is a harness plus about a dozen short .S files, not a packaged library.",
+  "how_it_is_fast": "On Neoverse V1 the authors found SVE INCB/INCP loop-offset increments slow. They read the vector length once with CNTB and advance the offset with a plain ADD. They also removed the first-fault machinery (SETFFR, LDFF1B, RDFFRS and the partial-vector fallback path) that Arm's versions use. Each routine becomes a tight loop: full-vector LD1B, CMPEQ/CMPNE against zero, B.ANY or B.NONE, then BRKA/BRKB and LASTA to finish.",
+  "when_to_use": [
+    "Studying why INCx-based SVE loops underperform on Neoverse V1 (Graviton3/3E) and testing the CNTx+ADD rewrite in your own SVE kernels.",
+    "Benchmarking your own AArch64 string routines: the harness compares any routine against glibc or AOR across 1-128 B and 64 B-512 MiB, aligned and malloc-aligned.",
+    "Internal code on Graviton3-class hardware where every string is known to sit in a buffer with at least one vector length (32 bytes on Graviton3) of readable memory after its terminator, and strncpy padding is not needed."
+  ],
+  "when_not_to_use": [
+    "As a general libc replacement: the new strcpy, strcmp and strlen do unaligned full-vector LD1B loads with no first-fault or alignment step, so a string that ends within one vector of an unmapped page can raise SIGSEGV. glibc avoids this by aligning loads down to 16 bytes (bic src, srcin, 15), and AOR avoids it with LDFF1B.",
+    "Anywhere strncpy semantics matter: the new strncpy ignores n on its first vector and does no zero padding (details under gotchas).",
+    "On Neoverse V2 (NVIDIA Grace): the repo's own Grace data shows strcpy only 1.06x and strcmp 1.01x over glibc, so the gain is largely a Neoverse V1 quirk.",
+    "Short unaligned strings: some lengths are up to 2.7x slower than glibc (strcpy dips to 0.37x).",
+    "Non-SVE AArch64 or other ISAs: the routines need SVE (built with -march=armv8.4-a+sve)."
+  ],
+  "integration": {
+    "form": "source-drop (AArch64 SVE .S files with a C benchmark driver built by CMake)",
+    "dependencies": "none for the routines (they include the repo's asmdefs.h); the harness needs CMake 3.16+ and libm",
+    "min_toolchain": "C11 compiler and assembler with SVE support (results built with GCC 12.3.0 and -march=armv8.4-a+sve)",
+    "platforms": "AArch64 with SVE only (measured on AWS Graviton3E and NVIDIA Grace)",
+    "thread_safety": "Stateless leaf routines with no shared state; reentrant",
+    "drop_in_for_baseline": "partial: same C signatures as strcpy/strncpy/strcmp/strncmp under new_* names, but not safe to substitute for glibc because of the page-crossing loads and the strncpy semantic bugs"
+  },
+  "gotchas": [
+    "Correctness bug (code reading): new_strncpy_aarch64_sve sets p0 with PTRUE and only applies WHILELO after the first vector. When n is less than the vector length it writes up to the terminator or a full vector regardless of n, so it can write past dst+n. It never zero-fills when src is shorter than n, and with n == 0 it still writes. The benchmark always passes n == strlen(src), so none of this shows up in the numbers, and the DEBUG-only check (strncmp(src, dst, n) == 0) would not catch it either.",
+    "Memory-safety flaw behind the AOR comparison: the 2.8x (strcpy), 3.0x (strlen) and 1.8x (strcmp) gains over Arm Optimized Routines come partly from deleting the LDFF1B/RDFFRS first-fault path, which exists so that reads past the terminator cannot fault. The README says the FFR-free path is used only 'where the whole vector is known to be valid', but the code never checks this and uses unaligned full-vector LD1B from the first byte. The benchmark's malloc'd buffers always have mapped memory after the string, so the hazard never shows.",
+    "Harness details: the C driver builds at GCC's default -O0 (CMAKE_BUILD_TYPE Release is commented out), so each timed call carries a fixed loop and indirect-call overhead that is a sizeable share of the roughly 2 ns short-string timings (it dilutes ratios rather than inflating them). The 'median' is sorted[nsamples/2 + 1] (the 52nd of 101 samples), and the printed SPEEDUP column uses means, not medians. Warm-up calls only the libc routine, and the baseline always runs first. 'Unaligned' mode is plain malloc rather than aligned_alloc(64), not arbitrary byte misalignment.",
+    "The 'GNU libc 2.39' label is hard-coded in src/main.c, and the stpcpy build of new strcpy-sve.S (BUILD_STPCPY) uses predicate p2, which that routine never initialises (not built by default)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a reference for the Neoverse V1 INCx-versus-CNTx+ADD finding. For production AArch64 string functions, Arm Optimized Routines (its fault-safe upstream) or glibc are the safer choice. Among siblings it is the only one with public raw data comparing SVE string routines against both glibc and AOR on Graviton3E and Grace.",
+  "verified_claims_summary": "On an AWS Graviton3E (hpc7g.16xlarge, kernel 6.2.0-1018-aws, harness built with GCC 12.3.0; glibc version labelled 2.39 but unconfirmed), median hot-cache per-call times in the raw .dat files give geomean speedups over glibc of 1.64x strcpy, 1.40x strncpy, 1.37x strcmp and 1.45x strncmp from 64 B to 512 MiB (aligned), and 2.8x, 3.0x and 1.8x over AOR 23.01 SVE strcpy, strlen and strcmp. On NVIDIA Grace the glibc gains shrink to about 1.0-1.35x. The routines measured are not fault-safe, and the strncpy is non-conforming.",
+  "status_note": "Stale research code (last commit 2024-05-29, 0 stars, LGPL-3.0 harness with Arm's MIT OR Apache-2.0 headers on the routines); one search found no upstreamed version in glibc or AOR, and the page-fault and strncpy defects mean it should be treated as a reference for the CNTx+ADD idea, not copied into production.",
+  "sources_read": [
+    "https://github.com/dssgabriel/sve-string-routines-benchmarks",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/results/README.md",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/src/driver.c",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/src/bench.c",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/src/utils.c",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/new/strcpy-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/new/strncpy-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/new/strcmp-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/new/strncmp-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/new/strlen-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/baseline/strcpy-sve.S",
+    "https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/string/aarch64/baseline/strcmp-sve.S",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/aarch64/strlen.S",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/aarch64/strcpy.S",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/aarch64/strcmp.S"
+  ],
+  "confidence": 0.8
+}
