@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/turnerj/quickenshtein",
+  "one_liner": "Allocation-free .NET Levenshtein distance with an SSE4.1/AVX2 anti-diagonal kernel; about 4.8-5.3x faster than Fastenshtein on long strings.",
+  "what_it_does": "Computes the exact, unbounded Levenshtein edit distance between two strings or ReadOnlySpan<char> in C#: Levenshtein.GetDistance(a, b) returns an int. An optional CalculationOptions turns on multi-threading for very long strings. Comparison is ordinal over UTF-16 code units. There is no edit script, threshold or similarity-ratio API.",
+  "how_it_is_fast": "It trims the common prefix and suffix first, then fills the DP matrix along anti-diagonals, so cells on one diagonal are independent. Using .NET hardware intrinsics it computes 16 ushort cells per AVX2 instruction (8 with SSE4.1; int32 lanes instead when the shorter string has 16 chars or fewer or either string reaches 65,535), with min/add/compare-equal and a byte shuffle that reverses the target slice. The wavefront scheme is credited in the code to Anna Henningsen's C++ levenshtein-sse. Only two diagonals are kept, rented from ArrayPool, so single-threaded calls do not allocate. Without intrinsics it falls back to a row-wise loop unrolled four rows at a time.",
+  "when_to_use": [
+    ".NET Core 3.0+ / .NET 5+ on x86-64 with AVX2 and strings of hundreds to tens of thousands of characters: 64.8 µs vs Fastenshtein's 342.3 µs at 400 chars and 17.3 ms vs 82.2 ms at 8,000 chars (.NET Core 5, i7-6700HQ).",
+    "GC-sensitive hot loops: single-threaded calls rent their buffers from ArrayPool and report 0-9 B allocated per call.",
+    "Pairs that share a long common prefix or suffix, which are trimmed before the DP (516.4 ns vs Fastenshtein 672.1 ns on a 20-char similar pair in issue #86).",
+    ".NET Framework with very long strings, where opt-in threading cut 8,000 chars from 99.8 ms to 30.8 ms on 4 cores."
+  ],
+  "when_not_to_use": [
+    "Short strings without a shared prefix or suffix: Fastenshtein wins at 10 chars on .NET Core 5 (181.4 ns vs 317.7 ns) and at 20 chars on .NET 6 in a user report (663.8 ns vs 935.7 ns, issue #86, closed as not planned).",
+    ".NET Framework / netstandard2.0 consumers and ARM64 (Apple Silicon, Graviton): the SIMD paths use only x86 Sse41/Avx2 classes, so these get the scalar loop, which lost to Fastenshtein at 400 chars on .NET 4.7.2 (625.7 µs vs 346.1 µs).",
+    "When you need a distance cutoff, Damerau transpositions, weights, an edit script or fuzzy ratios: none exist (k-threshold issue #16 and edit-script issue #68 are closed with no such API in CalculationOptions or GetDistance).",
+    "Grapheme- or culture-aware comparison: it compares UTF-16 code units ordinally, so a surrogate pair counts as two characters.",
+    "C/C++ projects: this is C#. The algorithm comes from the header-only C++ levenshtein-sse, and bit-parallel Myers/Hyyrö implementations such as rapidfuzz-cpp (already catalogued) handle 64 DP cells per machine word versus 16 lanes here."
+  ],
+  "integration": {
+    "form": "NuGet package (pure C# library with unsafe code)",
+    "dependencies": "none on netcoreapp3.0+; System.Memory on netstandard2.0",
+    "min_toolchain": ".NET Core 3.0+ for the intrinsics paths (NuGet 1.5.1 targets netcoreapp3.0 and netstandard2.0; repo main targets netcoreapp3.1 and netstandard2.0)",
+    "platforms": "any .NET platform; SIMD only on x86/x64 with SSE4.1 (16-lane path needs AVX2); ARM64 and .NET Framework run the scalar path",
+    "thread_safety": "Static API with no mutable shared state apart from ArrayPool.Shared, so concurrent calls look safe from the code; not documented. Threaded mode itself fans one call out over the shared ThreadPool",
+    "drop_in_for_baseline": "partial: same shape as Fastenshtein's static distance call (two strings in, int out) but a different namespace and method name (Levenshtein.GetDistance)"
+  },
+  "gotchas": [
+    "Harness flaw in docs/OverallComparison.md: on .NET Core, CalculationOptions.DefaultWithThreading enables threading only at 16,000 chars (4,000 on .NET Framework), but the benchmark tops out at 8,000. The .NET Core 'Quickenshtein_Threaded' rows therefore run the single-threaded path: 16.97 ms vs 17.25 ms with the same 9 B allocated, against 1,024 B on the genuinely threaded .NET 4.7.2 row. docs/StringScenarios.md, an older run, shows threading barely helps on .NET Core (18.53 ms vs 18.02 ms at 8,192 chars; 286.3 ms vs 295.4 ms at 32,768). The threaded path uses the row-wise SSE4.1 kernel, not the AVX2 anti-diagonal kernel.",
+    "Threaded mode busy-waits on Interlocked.CompareExchange without yielding, queues up to Environment.ProcessorCount - 1 workers on the shared ThreadPool and runs the last segment on the caller. Under ThreadPool starvation or oversubscription the caller spins until queued workers start; issue #13, 'Improving Threading Calculation Performance', is still open.",
+    "The headline 20.92x is against a deliberately naive LINQ jagged-matrix baseline that allocates 256 MB at 8,000 chars, and the Ratio/Speedup columns are relative to the .NET 4.7.2 Baseline job (20.65x against the same-runtime baseline). Fastenshtein (about 4.8x) and the library's own no-intrinsics path (5.78x, 100.04 ms vs 17.31 ms) are the meaningful comparisons.",
+    "Docs are stale relative to the code: published numbers are .NET Core 5.0.4 with a BenchmarkDotNet 0.12.1 ShortRun (3 iterations, 8,000-char error ±3.56 ms), while HEAD's benchmark project targets net6.0/net472 with BenchmarkDotNet 0.13.4. The StringScenarios header names .NET Core 3.0.1 jobs while its rows say .NET Core 5.0. All inputs are one synthetic pair of periodic 17-char patterns."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling in simd-intrinsics-libraries does edit distance; they cover argmin/argmax, popcount, sorting, noise and linear algebra. For C++ the closer catalogued alternative is rapidfuzz-cpp (bit-parallel Levenshtein); pick Quickenshtein only when you are in .NET on x86 and need exact, unbounded Levenshtein on long strings.",
+  "verified_claims_summary": "On an Intel i7-6700HQ (Skylake, 4 cores) with .NET Core 5.0.4 x64 RyuJIT and a BenchmarkDotNet 0.12.1 ShortRun over one synthetic periodic string pair, single-threaded Quickenshtein took 17.25 ms at 8,000 chars versus Fastenshtein 1.0.0.x at 82.21 ms (4.76x) and the repo's naive LINQ baseline at 356.3 ms (20.65x). At 400 chars it was 5.28x faster than Fastenshtein; at 10 chars it was 1.75x slower. AVX2 accounts for 28.94 ms down to 17.31 ms and SSE4.1 for the drop from about 100 ms.",
+  "status_note": "Abandoned: last release NuGet 1.5.1 on 2021-05-23 (about 888K downloads), last commit a 2023-08-01 dependency bump, four open performance issues since 2020; MIT, pure C# and a handful of files, so easy to vendor, but no ARM64 SIMD path.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/readme.md",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/docs/OverallComparison.md",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/docs/IntrinsicsPerformance.md",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/docs/StringScenarios.md",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/Levenshtein.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/Levenshtein.Intrinsics.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/Levenshtein.Threaded.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/Levenshtein.Common.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/CalculationOptions.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/WorkerState.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/AssemblyInternals.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Quickenshtein/Quickenshtein.csproj",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/src/Directory.Build.props",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/benchmarks/Quickenshtein.Benchmarks/LevenshteinBaseline.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/benchmarks/Quickenshtein.Benchmarks/Comparisons/QuickComparisonBenchmark.cs",
+    "https://raw.githubusercontent.com/Turnerj/Quickenshtein/main/benchmarks/Quickenshtein.Benchmarks/Quickenshtein.Benchmarks.csproj",
+    "https://github.com/Turnerj/Quickenshtein/tree/main/src/Quickenshtein",
+    "https://github.com/Turnerj/Quickenshtein/issues?q=is%3Aissue",
+    "https://github.com/Turnerj/Quickenshtein/issues/86",
+    "https://www.nuget.org/packages/Quickenshtein/",
+    "https://github.com/addaleax/levenshtein-sse"
+  ],
+  "confidence": 0.75
+}

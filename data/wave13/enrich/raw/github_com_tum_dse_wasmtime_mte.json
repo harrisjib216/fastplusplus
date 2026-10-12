@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/tum-dse/wasmtime-mte",
+  "one_liner": "Research fork of Wasmtime 16 that swaps wasm64 software bounds checks for Arm MTE tag checks and adds MTE/PAC memory safety.",
+  "what_it_does": "Wasmtime fork (workspace version 16.0.0, last upstream merge November 2023) that is the runtime half of the Cage toolchain; the other halves are forks of LLVM, wasm-tools and wasi-libc. It adds codegen options mte, mte_bounds_checks and pac plus wasm options mem_safety and ptr_auth (crates/cli-flags/src/lib.rs), and the matching Config methods enable_mte, enable_mte_bounds_checks, wasm_mte_mem_safety and wasm_pac_ptr_auth. Plain 64-bit (memory64) modules run with MTE bounds checks; heap and stack memory safety and pointer authentication need modules built with Cage's LLVM fork, which emits the custom mem-safety and ptr-auth instructions.",
+  "how_it_is_fast": "Wasmtime cannot rely on guard pages for 64-bit memories, so every wasm64 load and store gets an explicit index-plus-offset compare against the bound. With mte_bounds_checks, Cranelift's bounds_checks.rs drops the compare and returns base + index + offset directly. The runtime maps linear memory with PROT_MTE, tags it in 16-byte granules with stg, and hands out a base pointer carrying tag 1 (RUNTIME_MEM_TAG). An access that lands on memory with a different allocation tag raises a synchronous tag-check fault instead of passing a software check, and guard sizes default to 0. Memory safety tags heap and stack objects with irg/stg; a prctl include mask of 0x5555 keeps those random tags even, so bit 0 stays reserved for the sandbox tag.",
+  "when_to_use": [
+    "Research or prototyping of 64-bit (memory64) Wasm on Arm CPUs with MTE, such as the Google Pixel 8 (Tensor G3) used in the paper.",
+    "Small in-order cores like Cortex-A510, where the paper snippet reports about 34% over software-checked wasm64; on bigger cores the reported gain is single digits.",
+    "You want hardware-assisted spatial and temporal heap and stack safety for unmodified C/C++ compiled to Wasm and can adopt the authors' LLVM and wasi-libc forks.",
+    "Reproducing or extending the CGO 2025 Cage results, where this fork is the reference runtime."
+  ],
+  "when_not_to_use": [
+    "Production or multi-tenant sandboxing: it is a 1-star research fork pinned to Wasmtime 16 with no upstream security fixes since November 2023, and its tag scheme (see gotchas) is weaker than the checks it removes.",
+    "32-bit Wasm modules: upstream Wasmtime already removes bounds checks there with guard-page reservations, so MTE has nothing to win.",
+    "Any CPU or kernel without MTE (all x86-64, Arm cores without the extension): the MTE options fail with 'cannot enable mte on os ..., arch ...' and you are left with plain Wasmtime 16.",
+    "Big out-of-order cores where the reported mean gain (3.7% with a 6.5% spread on one core type) is within noise.",
+    "Workloads that depend on Wasmtime's copy-on-write memory images for fast instantiation; they are disabled when MTE is on."
+  ],
+  "integration": {
+    "form": "built from source (Rust workspace fork of the wasmtime CLI and crates)",
+    "dependencies": "TUM-DSE/wasm-tools-mte (pinned git rev 0a5ce697) for parsing; for memory safety and PAC also the LLVM fork TUM-DSE/llvm-memsafe-wasm and the wasi-libc fork martin-fink/wasi-libc",
+    "min_toolchain": "Rust nightly per flake.nix (Cargo rust-version 1.72.0); the MTE code paths compile only with target_feature mte enabled on aarch64",
+    "platforms": "aarch64 Linux or Android with MTE hardware and kernel PROT_MTE support (Pixel 8 in the paper); elsewhere it builds as ordinary Wasmtime 16 without the MTE features",
+    "thread_safety": "Inherits Wasmtime's model; the MTE tag-check mode is set with prctl, which is per thread, only on the thread that allocates or grows a memory, and multi-threaded embedding is not documented",
+    "drop_in_for_baseline": "partial: same wasmtime CLI and embedding API (as of 16.0.0) for memory64 modules plus extra flags; memory safety and PAC need recompilation with the Cage LLVM fork, and newer upstream Wasmtime APIs are missing"
+  },
+  "gotchas": [
+    "Sandbox strength, from reading the code: every MTE linear memory gets the same constant tag 1 (RUNTIME_MEM_TAG in crates/runtime/src/mte.rs, applied in crates/runtime/src/mmap/unix.rs), although the CGO slides (search snippet) describe a distinct tag per sandbox. With mte_bounds_checks Cranelift emits no compare at all, and only with mem_safety is tag bit 56 forced back on. A wasm64 index that reaches another instance's linear memory, or any mapping without PROT_MTE (the Linux arm64 MTE doc raises tag-check faults only on PROT_MTE ranges), is therefore not trapped; isolation reduces to a 4-bit tag match plus unmapped pages. The paper's threat model was unreachable here.",
+    "The tag-check mode is per thread (prctl PR_SET_TAGGED_ADDR_CTRL) and is set inside memory allocation. Growing a dynamic memory turns checking off (MTEMode::None) for the memcpy, then forces Sync mode back on and copies the tags. Wasm code running on a thread that never allocated a memory may run with tag checks ignored, which is the kernel default.",
+    "Copy-on-write memory images are disabled with MTE: grow_to bails with 'when using MTE, memory images should be disabled', and a January 2026 commit is titled 'mte: avoid cow images with mte'. Guard regions default to 0 when mte_bounds_checks is on. Commit titles such as 'Hacky fix for address_transform w/ mte' and 'Remove potentially buggy lowering', plus three open PRs from 2023 (PAC support, deterministic stack tagging), mark this as research code.",
+    "The speedup is only against wasm64 with software bounds checks in Wasmtime, not against 32-bit Wasm with guard pages. Whether the baseline build had Cranelift's Spectre-mitigating select enabled is not stated on any page reachable here, and the benchmark harness is in the Zenodo artifact, not in this repo."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (DTVM lazy JIT, wasman and KinoWASM interpreters, WasmKit, VectorVisor on GPUs) beat other runtimes on startup, interpretation speed or GPU throughput on ordinary hardware. Pick Cage only when you specifically need wasm64 on MTE-capable Arm with hardware memory safety; for plain speed, upstream Wasmtime with 32-bit modules and guard pages already avoids the checks Cage removes.",
+  "verified_claims_summary": "The CGO 2025 abstract (reproduced in the cage-meta README) claims MTE-based sandboxing speeds up Wasm 'by over 5.1%' at under 5.8% runtime overhead for full memory safety. An arXiv 2408.11456 search snippet (paper not reachable here) puts this as PolyBench/C on a Google Pixel 8 (Tensor G3) against wasm64 with software bounds checks in Wasmtime: 3.7±6.5%, 5.1±4.0% and 33.9±2.4% faster on the three core types (33.9% on the in-order Cortex-A510), and 2.1±5.6%, 4.5±4.1% and 29.2±2.5% with memory safety on as well. Compiler flags and harness were not inspectable.",
+  "status_note": "Research fork, Apache-2.0 WITH LLVM-exception, last commits 2026-01-14 (two MTE fixes) on a Wasmtime 16.0.0 base that has not been merged with upstream since November 2023; copyable for research on MTE hardware but not a maintained runtime.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/TUM-DSE/cage-meta/HEAD/README.md",
+    "https://github.com/TUM-DSE/wasmtime-mte",
+    "https://github.com/TUM-DSE/wasmtime-mte/commits",
+    "https://github.com/TUM-DSE/wasmtime-mte/commit/1129079",
+    "https://github.com/TUM-DSE/wasmtime-mte/commit/e4775b7",
+    "https://github.com/TUM-DSE/wasmtime-mte/commit/67d88cf",
+    "https://github.com/TUM-DSE/wasmtime-mte/commit/33bdf89",
+    "https://github.com/TUM-DSE/wasmtime-mte/pulls",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/cranelift/wasm/src/code_translator/bounds_checks.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/mte.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/mmap.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/mmap/unix.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/memory.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/cow.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/runtime/src/lib.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/cli-flags/src/lib.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/wasmtime/src/config.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/crates/environ/src/tunables.rs",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/TUM-DSE/wasmtime-mte/HEAD/CITATION.cff",
+    "https://github.com/TUM-DSE/llvm-memsafe-wasm",
+    "https://raw.githubusercontent.com/TUM-DSE/llvm-memsafe-wasm/HEAD/configure.sh",
+    "https://raw.githubusercontent.com/torvalds/linux/master/Documentation/arch/arm64/memory-tagging-extension.rst",
+    "WebSearch: Cage hardware-accelerated safe WebAssembly MTE sandboxing (snippets of arXiv 2408.11456 and CGO 2025 slides)",
+    "https://themoonlight.io/review/cage-hardware-accelerated-safe-webassembly (DNS blocked)",
+    "https://arxiv.org/pdf/2408.11456v2 (DNS blocked)"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/tmthrgd/go-byte-test",
+  "one_liner": "SSE assembly predicate for Go that checks whether every byte of a slice equals one value; 5-42x a naive Go loop.",
+  "what_it_does": "Package bytetest exposes a single function, Test(data []byte, value byte) bool, which returns true when every byte of data equals value (an empty slice returns true). On amd64 with the gc toolchain it calls a hand-written Go-assembly routine (testAsm in test_amd64.s); on every other target, and under gccgo or appengine, test_other.go supplies the plain range loop with identical semantics. It is a drop-in for the loop you would otherwise write by hand; there is no stdlib function with this exact contract.",
+  "how_it_is_fast": "The value is broadcast to all 16 lanes of an XMM register (PINSRB then PSHUFB with a zero mask); the routine then walks the slice backwards from the end in 128-byte blocks (eight unaligned MOVOU loads), XORs each 16-byte vector with the broadcast, ORs the eight results together and does a single PTEST per block, exiting on the first non-zero. Remainders drop to 64-byte and 16-byte vector blocks and finally a byte loop, so there is no over-read past the slice and no alignment prologue. This is plain SIMD compare-and-reduce with one branch per 128 bytes; the gain comes from Go's gc compiler never auto-vectorizing the scalar loop.",
+  "when_to_use": [
+    "Hot checks that a buffer is all-zero or all one fill byte (sparse-block detection, zero-page skipping, verifying a memset or wiped key) on amd64 with the gc toolchain.",
+    "Buffers from about 128 B to a few hundred KiB, where the README shows 15-42x over a naive Go loop (16 KiB: 325 ns vs 13760 ns).",
+    "Large buffers where you want to run at memory bandwidth instead of about 1.2 GB/s: from 16 MiB up the README shows about 17 GB/s, roughly 14.7x the naive loop.",
+    "Code that wants an early exit on the first mismatch, which a bytes.Count-based check does not give."
+  ],
+  "when_not_to_use": [
+    "Inputs under 16 bytes: they go straight to a byte loop in assembly plus a non-inlinable call, so expect no gain; 32 B is only 5x.",
+    "Any non-amd64 target (arm64, ppc64le, wasm) or gccgo: you get the same scalar loop you would write yourself.",
+    "Fleets that may include amd64 CPUs without SSE4.1 (pre-Penryn Intel, AMD K8/K10): there is no CPUID check, so PINSRB/PTEST raise SIGILL instead of falling back.",
+    "Projects that need a maintained dependency: the repo is archived (2024-12-14), described as not maintained, has no go.mod, 1 star and one known importer (tmthrgd/go-bitset).",
+    "When you already depend on a newer SIMD library: the kernel is 128-bit SSE only, with no AVX2 or AVX-512 path, so it leaves L1/L2 throughput on the table on current CPUs."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at run time; tests import github.com/tmthrgd/go-memset",
+    "min_toolchain": "Go gc toolchain 1.10+ (the PTEST mnemonic replaced hand-encoded bytes in 48837c9, 'Update assembly for go1.10'); Travis tested 1.10-1.13; no go.mod, so it is imported as a pseudo-version",
+    "platforms": "amd64 with SSE4.1 (SSSE3 PSHUFB, SSE4.1 PINSRB and PTEST) for the fast path; any Go target via the scalar fallback",
+    "thread_safety": "Pure function over a read-only slice with no shared state; safe for concurrent use (not stated in the docs, follows from the code).",
+    "drop_in_for_baseline": "partial - same semantics as the hand-written range loop it replaces, but the call is a new package function rather than a stdlib API"
+  },
+  "gotchas": [
+    "No runtime CPU feature check: testAsm uses PSHUFB (SSSE3) and PINSRB/PTEST (SSE4.1) unconditionally, while Go's amd64 baseline (GOAMD64=v1) only guarantees SSE2. The Go stdlib's own bytealg.Count checks internal/cpu for POPCNT/AVX2 and broadcasts with SSE2 PUNPCKLBW/PSHUFL; an SSE2-only PCMPEQB/PMOVMSKB version would have avoided the requirement.",
+    "The benchmark only measures the full-scan case: both BenchmarkTest and BenchmarkGoTest fill the buffer entirely with the value, so early-exit behaviour and mismatch latency are never timed. TestCorrect's negative case only flips the last byte, which is the first block the backward scan reads, so mismatches deep in the buffer are covered by code reading, not tests (the code reviewed this session handles them correctly).",
+    "The baseline is the naive byte loop written inline in the benchmark; a uint64-word Go loop or the SIMD-backed stdlib route bytes.Count(data, []byte{value}) == len(data) (internal/bytealg count_amd64.s, SSE/AVX2 + POPCNT, no early exit) were not measured and would narrow the gap.",
+    "The function writes R15 in the byte-tail loop; Go's assembler treats R15 as clobbered by global accesses under -dynlink (plugins, shared builds). The routine touches no globals, so it assembles, but it is a register a modern rewrite would avoid."
+  ],
+  "pick_this_over_siblings_when": "Pick it over hexon/vectorcmp when you need only a yes/no all-equal answer with early exit and no output bitmask; vectorcmp's VectorEquals8 is AVX2, maintained and re-measured in 2025, so prefer it when you need per-element results or a supported dependency. Compared with bwesterb/go-and (AVX2 bitwise ops on byte slices), this solves a different predicate but has the same naive-Go-loop style baseline.",
+  "verified_claims_summary": "The README (benchmark table committed 2017-02-23 in 2eb5216, unknown CPU, GOMAXPROCS 8, Go version unstated) compares BenchmarkTest against BenchmarkGoTest, a naive range loop compiled by gc, on all-equal buffers: 5.02x at 32 B, 34.02x at 1 KiB, 42.28x at 16 KiB, and about 14.7x (17.3 vs 1.17 GB/s) from 16 MiB to 512 MiB where both are bound by memory and the scalar loop respectively. The assembly measured then is the code shipped now: later commits only replaced hand-encoded PTEST bytes with the mnemonic (48837c9, byte-identical encoding) and dropped the generator (de2b86e, whitespace-only change to test_amd64.s).",
+  "status_note": "Archived 2024-12-14 and marked not maintained (last commit 2019-09-04, 12 commits, no issues ever filed), but BSD-3-Clause and a 126-line assembly file small enough to vendor; add an SSE4.1 CPUID guard (golang.org/x/sys/cpu) before shipping it to unknown hardware.",
+  "sources_read": [
+    "https://github.com/tmthrgd/go-byte-test",
+    "https://github.com/tmthrgd/go-byte-test/commits/master",
+    "https://github.com/tmthrgd/go-byte-test/commit/2eb5216",
+    "https://github.com/tmthrgd/go-byte-test/commit/de2b86e",
+    "https://github.com/tmthrgd/go-byte-test/commit/48837c9",
+    "https://github.com/tmthrgd/go-byte-test/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/README.md",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/test_amd64.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/test_amd64.s",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/test_other.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/test_test.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-byte-test/HEAD/.travis.yml",
+    "https://pkg.go.dev/github.com/tmthrgd/go-byte-test?tab=importedby",
+    "https://raw.githubusercontent.com/golang/go/master/src/internal/bytealg/count_amd64.s"
+  ],
+  "confidence": 0.7
+}

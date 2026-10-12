@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/unison-code/unison",
+  "one_liner": "Constraint-programming register allocator and instruction scheduler for LLVM 3.8 that produces 1-10% faster or 1-4% smaller code than LLVM's heuristics.",
+  "what_it_does": "Unison replaces LLVM's register allocation and instruction scheduling for one function at a time. It solves both problems together as a combinatorial optimization (spilling, assignment, live-range splitting, coalescing, rematerialization, load-store optimization and scheduling in one model) for an optimization goal of speed or size. It is a Haskell tool chain (uni import/linearize/extend/augment/model/export) plus Gecode-based presolver and solver binaries. It reads LLVM Machine IR (.mir) and LLVM's own allocated .asm.mir as a starting solution, and is driven from a patched llc (`llc -unison`, or `clang -mllvm -unison`, or per-function `__attribute__((annotate(\"unison\")))`) in the unison-code/llvm fork, branch release_38-unison.",
+  "how_it_is_fast": "It speeds up the generated code, not compilation. Constraint programming over a dedicated program representation (Linear SSA with optional copies and alternative temporaries) lets a solver search register allocation and scheduling jointly, so trade-offs a phase-ordered heuristic compiler cannot see (for example spilling versus a longer schedule) are captured. The objective is a static cost model: estimated cycles weighted by basic-block frequency for speed, or total instruction size for size. The solving pipeline combines a presolver, a decomposition-based Gecode solver and a hybrid CP-SAT solver, and starts from LLVM's solution, so the result never costs more than LLVM's under the model.",
+  "when_to_use": [
+    "Release builds of hot functions for in-order embedded or DSP cores (Hexagon V4, ARM1156T2F-S Thumb, MIPS32) where minutes of compile time per function are acceptable.",
+    "Code-size-critical firmware on MIPS or ARM, where the authors report mean size reductions of about 2.4-3.9% over LLVM.",
+    "VLIW targets like Hexagon, where the thesis reports 9.3% mean estimated speedup and 5.4% measured speedup over whole MediaBench applications.",
+    "Research: measuring how far LLVM's heuristic register allocator and scheduler are from optimal, or prototyping a back end for an irregular processor feature (register pairing, operand forwarding, double loads)."
+  ],
+  "when_not_to_use": [
+    "x86-64 or other out-of-order cores: no upstream target, and the author said in issue #56 that the in-order cost model is not accurate enough for speed on x86-64 (an experimental X86.hs exists only in the matsc-at-sics-se fork).",
+    "Large functions: optimal solutions were reached for functions up to 647 instructions and improvements up to 874; issue #60 (a ~1,000-instruction MIPS function) ran out of memory, and the maintainer advised splitting functions or limiting inlining.",
+    "Any modern toolchain: the driver exists only for LLVM 3.8 (branch release_38-unison, last updated 2018-05-22), so you cannot use it with current clang releases.",
+    "Builds where compile time matters: solving takes tens to hundreds of seconds per medium-sized function, versus milliseconds for LLVM's greedy allocator.",
+    "ARM speed: the mean estimated gain over LLVM is only about 1%."
+  ],
+  "integration": {
+    "form": "standalone tool chain (Haskell binaries plus Gecode C++ solver) driven by a patched llc",
+    "dependencies": "Haskell Stack, Gecode 6.0.0, Qt 5 and Graphviz (both optional), and the unison-code/llvm fork (LLVM 3.8, branch release_38-unison) as the compiler driver; MiniZinc back ends are optional",
+    "min_toolchain": "Stack with the resolver pinned in the repo (updated 2023-01-15); the LLVM 3.8 fork must be built from source (issue #61 reports trouble building it alongside clang 3.8)",
+    "platforms": "Host: Linux (Debian-based instructions). Targets: Hexagon V4, ARM1156T2F-S (Thumb), MIPS32, plus a toy Minimal target",
+    "thread_safety": "Not applicable (offline compiler pass run per function); the solver portfolio can run in parallel processes",
+    "drop_in_for_baseline": "partial: switch it on with llc -unison on the 3.8 fork and it replaces LLVM's register allocator and post-RA scheduler per function, but only for three targets and only on LLVM 3.8"
+  },
+  "gotchas": [
+    "The headline speedups are estimated by Unison's own static cost model (cycles times block frequency). Only Hexagon was executed: 7.1% mean across MediaBench functions and 5.4% across whole applications. The thesis says the estimate overestimates actual speedup for 59% of the mispredicted functions, because of caches and branch prediction.",
+    "Published means differ by version: the 2018 thesis summary of the paper gives 1% to 9.3% estimated speedup and 0.8% to 3.9% size reduction (Hexagon 9.3/0.8, MIPS 5.1/3.9, ARM 1/2.4), while the TOPLAS 2019 abstract (search snippets) gives 1.1% to 10% and 1.3% to 3.8%. The baseline throughout is LLVM 3.8.",
+    "Open MIPS correctness reports: wrong stack offsets (#50, an SW at offset -1, no maintainer reply), uni normalize dropping NOP delay slots (#49), and a core dump on mesa.api.glVertex2i with -unison (#43). Validate the emitted code; do not trust it blindly.",
+    "If Unison cannot improve on LLVM's .asm.mir starting solution (manual chapter 4), it outputs that solution unchanged, so a silent 'no improvement' is a normal outcome, for example when a function is too large for the solver budget."
+  ],
+  "pick_this_over_siblings_when": "Pick Unison over STOKE or Minotaur when the target is an in-order embedded core (Hexagon, ARM Thumb, MIPS32) and you want whole-function register allocation and scheduling of compiler output rather than superoptimizing short x86-64 loop-free kernels or LLVM IR peepholes. Pick SLOTHY instead for hand-written Arm assembly kernels on current cores: it does constraint-based scheduling and register allocation too, but is maintained and targets Cortex-A/M.",
+  "verified_claims_summary": "First-party, peer-reviewed (ACM TOPLAS 2019 and the author's 2018 KTH doctoral thesis) comparison of code quality from Unison versus LLVM 3.8's register allocator and scheduler on systematically selected MediaBench and SPEC CPU2006 functions for Hexagon V4, ARM and MIPS. Mean estimated speedup is about 1% (ARM) to 9-10% (Hexagon), mean code size reduction about 1-4%, and executing MediaBench on Hexagon gave a measured 5.4% mean application speedup. No compile flags or Hexagon execution setup appear in the sources opened here.",
+  "status_note": "Abandoned: last commit 2023-01-15 (build-dependency bumps only, last functional fix 2021-09-11), the LLVM driver is frozen at 3.8, and 13 issues are open, some of them MIPS correctness bugs. It is BSD-3-Clause and usable as a research tool or for one-off release builds on its three targets, not as a production back end. Paper-access note: the author's KTH thesis (robcasloz.github.io repo, publications/TRITA-EECS-AVL-2018-48.pdf, reachable via raw.githubusercontent.com) carries the evaluation summary of the TOPLAS paper (Table 3.1 and the Hexagon execution results), so the snippet-only C could move to B.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/unison-code/unison/HEAD/README.md",
+    "https://raw.githubusercontent.com/unison-code/unison/HEAD/LICENSE.md",
+    "https://github.com/unison-code/unison",
+    "https://github.com/unison-code/unison/tree/master/src/unison/src/Unison/Target",
+    "https://github.com/unison-code/unison/commits",
+    "https://github.com/unison-code/unison/issues?q=is%3Aissue",
+    "https://github.com/unison-code/unison/issues/50",
+    "https://github.com/unison-code/unison/issues/56",
+    "https://github.com/unison-code/unison/issues/60",
+    "https://github.com/unison-code/unison-code.github.io/tree/master/doc",
+    "https://raw.githubusercontent.com/unison-code/unison-code.github.io/master/doc/manual.pdf",
+    "https://github.com/unison-code/llvm",
+    "https://github.com/unison-code/llvm/branches/all",
+    "https://github.com/unison-code/llvm/branches/all?page=2",
+    "https://raw.githubusercontent.com/unison-code/llvm/release_38-unison/README.md",
+    "https://github.com/robcasloz/robcasloz.github.io",
+    "https://github.com/robcasloz/robcasloz.github.io/tree/master/publications",
+    "https://raw.githubusercontent.com/robcasloz/robcasloz.github.io/master/publications/TRITA-EECS-AVL-2018-48.pdf"
+  ],
+  "confidence": 0.78
+}

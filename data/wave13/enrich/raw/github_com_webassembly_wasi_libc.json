@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/webassembly/wasi-libc",
+  "one_liner": "Opt-in wasm simd128 versions of strlen, memchr, strchr, strrchr, memcmp, strspn and strcspn in wasi-libc, replacing musl's scalar loops.",
+  "what_it_does": "wasi-libc is the standard C library for WASI targets (the libc in wasi-sdk's sysroot). Building it with the CMake option -DSIMD=ON defines __wasilibc_simd_string and compiles SIMD bodies for strlen, memchr, __strchrnul (and so strchr), __memrchr (and so strrchr), memcmp, strspn and strcspn. The API is the unchanged <string.h>, so it is a drop-in at the sysroot level: relink against a SIMD-built libc.a and existing code picks it up.",
+  "how_it_is_fast": "Each routine scans 16 bytes per step with v128 compares (i8x16.eq) and a cheap any_true/all_true test, only computing i8x16.bitmask plus ctz/clz once a hit is found, because bitmask lowers poorly on AArch64. strlen, memchr, strchrnul, strspn and strcspn load aligned 16-byte blocks (reading slightly before and after the object, safe because wasm memory is bounds-checked at 64 KiB page granularity) through inline assembly so the compiler cannot treat the over-read as UB; memcmp and memrchr use unaligned v128 loads strictly inside [0, n). strspn/strcspn use the Langdale/Mula nibble-bitmap byte-set lookup (the same idea as Hyperscan's truffle) with two i8x16.swizzle table lookups per block.",
+  "when_to_use": [
+    "You build your own wasi-libc sysroot (wasi-sdk does not pass -DSIMD=ON) and your runtime supports simd128 (and relaxed-simd for strspn/strcspn).",
+    "String-heavy C code compiled to wasm, such as SQLite, parsers or text tools, where strlen/memchr/strchr scans over strings of tens of bytes or more dominate.",
+    "memcmp-heavy code on buffers of 16 bytes or more, and strrchr or memrchr scans, where the musl fallback is a byte-at-a-time loop and the SIMD gain is largest.",
+    "Hosts on AArch64 or x86-64 with a JIT/AOT runtime (wasmtime, wazero, V8) that lowers v128 ops to NEON or SSE."
+  ],
+  "when_not_to_use": [
+    "Your toolchain is Clang 19 or 20: strlen, memchr, strchr, strspn and strcspn silently fall back to scalar (llvm/llvm-project#146574 ICE guard); only memcmp and memrchr/strrchr get SIMD.",
+    "You need strcmp, strncmp, strstr, memmem or strcasecmp speedups: those stay scalar musl code in wasi-libc (the larger numbers in issue #580 came from ncruces's separate go-sqlite3 libc).",
+    "Interpreted or non-SIMD wasm runtimes, or runtimes without relaxed-simd: a module containing i8x16.relaxed_swizzle (strspn_simd.c) will fail validation.",
+    "Very short strings or calls dominated by host/call overhead; the only small-string data point is about 2x for 10-byte strlen under wasmtime, and no per-size table exists.",
+    "You want a stock prebuilt sysroot: the SIMD build is opt-in and off by default, so using it means maintaining a custom wasi-libc build."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none beyond wasi-libc's own build (clang with the wasm32 target, compiler-rt builtins)",
+    "min_toolchain": "Clang 10+ for wasi-libc; SIMD string paths need Clang 21+ (Clang 19/20 compile the scalar fallback for the inline-asm routines); build flags -msimd128 -mrelaxed-simd -mbulk-memory",
+    "platforms": "wasm32 (wasip1, wasip2, wasip1-threads, ...) on runtimes with simd128; relaxed-simd needed for the SIMD strspn/strcspn",
+    "thread_safety": "Pure functions with no shared state; thread-safe like the scalar versions",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Test-coverage gap: wasi-libc's only SIMD CI job ('Test wasm32-wasi-simd', -DSIMD=ON) uses clang_version 20, which compiles out the inline-asm SIMD paths, so upstream CI exercises only the SIMD memcmp and memrchr; strlen, memchr, strchrnul, strspn and strcspn SIMD code is validated only by the contributor's Go tests and fuzzing and by abrown's out-of-tree fuzzing.",
+    "Latent C undefined behaviour in strspn_simd.c's __wasm_v128_setbit: bitmap->hi[lo_nibble] |= (uint8_t)(1u << (hi_nibble - 8)) shifts by a negative count for every byte below 0x80. It works today only because wasm's i32.shl masks the count to 5 bits, giving 1<<24..31 which truncates to 0; the shift line came up in PR #597 review but UB was not discussed.",
+    "The 'over musl's SWAR' framing is only true for strlen, memchr and strchrnul: the scalar memcmp, memrchr, strcmp and strncmp in wasi-libc are byte-at-a-time loops and strspn/strcspn use a bitset loop, which is why memcmp (10.0x) and strrchr (9.9x) show the largest gains.",
+    "memcmp and memrchr SIMD assume the whole n-byte range is readable: abrown's fuzzing found a 16-byte memcmp near the end of memory that traps in the SIMD version while the scalar version returns early (invalid input either way; documented in the source comment)."
+  ],
+  "pick_this_over_siblings_when": "Pick it whenever the target is wasm and the libc is wasi-libc: Arm Optimized Routines, AOCL-LibMem and the other native siblings cannot be used inside a wasm module, and the WebAssembly memory.copy entry only covers memcpy/memmove/memset, not search and compare routines. For native code use Arm Optimized Routines or the host glibc instead.",
+  "verified_claims_summary": "The only per-function table (memchr 4.3x, memcmp 10.0x, strlen 4.9x, strchr 4.2x, strrchr 9.9x, strspn 9.1x, strcspn 9.7x over the musl scalar code) is a rough comment by the contributor in issue #580, measured with Go under wazero on GitHub Actions x86-64 and AArch64 runners against his go-sqlite3 libc, with no CPU model, string sizes, compiler or flags; PR #586 adds about 3x strlen and 2x memchr on mixed lengths (7x and 5x on large inputs) and about 2x for 10-byte strlen under wasmtime on amd64. The SIMD-versus-scalar comparison is wasm-to-wasm within the same libc, not against native glibc.",
+  "status_note": "Actively maintained WebAssembly-organisation project (commits through 2026-10-01) under Apache-2.0 WITH LLVM-exception, Apache-2.0 and MIT; the SIMD routines landed between June and December 2025 and remain opt-in, with maintainers asking for real-world users before considering enabling them by default.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/README.md",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/.github/workflows/main.yml",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strlen.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/memchr.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/memcmp.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strchrnul.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/memrchr.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strrchr.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strchr.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strcmp.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strncmp.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strstr.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strspn.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strcspn.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/main/libc-top-half/musl/src/string/strspn_simd.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-sdk/main/cmake/wasi-sdk-sysroot.cmake",
+    "https://github.com/WebAssembly/wasi-libc/issues/580",
+    "https://github.com/WebAssembly/wasi-libc/issues?q=simd",
+    "https://github.com/WebAssembly/wasi-libc/pull/586",
+    "https://github.com/WebAssembly/wasi-libc/pull/592",
+    "https://github.com/WebAssembly/wasi-libc/pull/593",
+    "https://github.com/WebAssembly/wasi-libc/pull/597",
+    "https://github.com/WebAssembly/wasi-libc/pull/603",
+    "https://github.com/ncruces/go-sqlite3/tree/main/sqlite3/libc",
+    "https://github.com/ncruces/go-sqlite3"
+  ],
+  "confidence": 0.75
+}

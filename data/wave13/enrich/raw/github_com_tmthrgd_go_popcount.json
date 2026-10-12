@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/tmthrgd/go-popcount",
+  "one_liner": "Go amd64 POPCNT assembly that counts set bits in []byte or []uint64, 1.2-2.9x a math/bits.OnesCount64 loop.",
+  "what_it_does": "Two functions, CountBytes([]byte) and CountSlice64([]uint64), return the total number of set bits in a slice as a uint64; a deprecated Count64(uint64) SWAR helper is kept for old callers. On amd64 (non-gccgo, non-appengine) both call one assembly routine after a one-time CPUID check for POPCNT; without POPCNT, and on every other platform, they fall back to Go loops over math/bits.OnesCount64.",
+  "how_it_is_fast": "The kernel walks the buffer backwards 32 bytes at a time with four POPCNTQ memory-operand instructions into four separate destination registers, then sums them, so the loop body is unrolled 4x and the counts are independent. Leftover 8-byte words go through a loop that XORs its destination before POPCNT, and the final 1-7 bytes are assembled into one register with 4-, 2- and 1-byte loads so nothing is read past the end. The asm comments credit the separate registers to Intel's POPCNT false output dependency, but gc already zeroes POPCNT's destination in the baseline (golang/go commit de4edf3: MOVQ $0 before CL 82516, an XOR after it, still present in master's amd64/ssa.go), so the measured gap is more plausibly the 4x unroll plus the per-call POPCNT feature branch the intrinsic carries unless built with GOAMD64=v2 (inference)."
+  ,
+  "when_to_use": [
+    "Pure-Go bitmap or bitset cardinality on amd64 (Bloom filters, rank structures, similarity hashes) over cache-resident slices of 1-128 KiB, where the README shows 2.3-2.9x over the math/bits loop.",
+    "Counting bits in a []byte directly, without converting to []uint64 yourself; CountBytes gains 2.0x even at 32 B.",
+    "Builds that cannot raise GOAMD64 to v2, where every math/bits.OnesCount64 call keeps a POPCNT feature branch (intrinsics.go makeOnesCountAMD64).",
+    "As a short, readable POPCNT kernel to vendor (one 95-line assembly file plus a CPUID probe)."
+  ],
+  "when_not_to_use": [
+    "Small []uint64 inputs: CountSlice64 gains only 1.2x at 32 B.",
+    "Huge slices where memory bandwidth dominates: the gain falls to 1.5x at 16-512 MiB, and the asm rows themselves moved about 10% between the 2016 and 2018 README runs.",
+    "When you need more than about one 8-byte word per cycle: the kernel is scalar POPCNT only, with no AVX2 or AVX-512 path; the sibling pospop reaches 34.8 GB/s (AVX2) and 82.1 GB/s (AVX-512) on a harder positional-count problem.",
+    "Byte slices over 1 GiB on any path that uses countBytesGo (non-amd64 platforms, gccgo, or amd64 without POPCNT): the unsafe cast panics (see gotchas).",
+    "Code tested with -race outside amd64, or anyone running the package's own tests with -race: countBytesGo trips checkptr (see gotchas)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (standard library only); no go.mod in the repository, so modules resolve it as a pseudo-version",
+    "min_toolchain": "Go 1.9 (math/bits); .travis.yml tested go1.9.x to go1.13.x; later releases not tested by the project",
+    "platforms": "amd64 assembly path (POPCNT detected at init via CPUID leaf 1 ECX bit 23); all other GOARCH values, gccgo and appengine use Go fallbacks",
+    "thread_safety": "Not documented; the functions are pure (usePOPCNT is set once at package init), so concurrent calls are safe.",
+    "drop_in_for_baseline": "partial — it replaces a hand-written OnesCount64 loop with one call, but it is a separate API; there is no stdlib slice popcount to substitute for"
+  },
+  "gotchas": [
+    "countBytesGo (popcount_unsafe.go, used on every non-amd64 platform, under gccgo and on amd64 without POPCNT) views the input as (*[1 << 27]uint64)(unsafe.Pointer(&s[0]))[:len(s)>>3]. That array type caps the view at 1 GiB, so CountBytes panics with 'slice bounds out of range' for slices of 1 GiB + 8 bytes or more. The benchmarks stop at 512 MiB and the tests use small quick-check inputs, so neither reaches it (found by code reading, not executed).",
+    "The same two-index cast fails Go's checkptr instrumentation, which -race, -msan and -asan turn on (cmd/compile base/flag.go). Only three-index slices get the special count path in ssagen/ssa.go; this two-index cast is checked as one 1 GiB object, and runtime checkptrStraddles reports 'converted pointer straddles multiple allocations' for any heap or stack slice of 8+ bytes. So `go test -race` of the package (TestCountBytesGo) and -race builds that call CountBytes off amd64 should abort (code reading, not executed).",
+    "Harness provenance: the asm and Go README blocks were refreshed in one commit (3918361, 2018-01-11), but the Go rows carry '1k/16k/128k' labels (and one asm row '128k') while benchmark_test.go has used '1K/16K/128K' since its 2016 rewrite. The blocks were therefore pasted from separate or hand-edited runs, not one go test invocation. CPU model and Go version are not given.",
+    "Like all Go assembly, countBytesASM is never asynchronously preempted (runtime/preempt.go excludes FuncFlagAsm), so a 512 MiB count (45 ms in the README) delays stop-the-world GC for its duration."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you need a plain total popcount of a Go slice on amd64 with no cgo. pospop solves a different problem (per-bit-position counts) with SIMD kernels, and go-and and cespare/xxhash are Go-assembly siblings for bitwise ops and hashing, not counting. For C or C++ code, the verifier points to the separately catalogued libpopcnt and sse-popcount instead.",
+  "verified_claims_summary": "The README (refreshed 2018-01-11; 'an AMD64 CPU with POPCOUNT support', GOMAXPROCS 8, Go version unstated, Travis on go1.9 that day) times the assembly against a Go loop over math/bits.OnesCount64 on the same random data. CountBytes runs 2.03x at 32 B, 2.34x at 1 KiB and 2.87x at 16 KiB, falling to 1.52x at 512 MiB (11.9 vs 7.9 GB/s); CountSlice64 runs 1.20x at 32 B, 2.74x at 16 KiB and 1.52x at 512 MiB (ratios derived from page data).",
+  "status_note": "Abandoned: last commit 2019-09-04, archived 2024-12-14 and marked 'Not maintained', no issues ever filed, 10 known importers on pkg.go.dev. The licence is BSD-3-Clause plus MIT portions from Hideaki Ohno and the code is easy to vendor, but replace the 1 GiB array cast with unsafe.Slice (Go 1.17+) first.",
+  "sources_read": [
+    "https://github.com/tmthrgd/go-popcount",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/README.md",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/benchmark_test.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcnt_amd64.s",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_amd64.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_amd64.s",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_generic.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_safe.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_test.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/popcount_unsafe.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/tmthrgd/go-popcount/HEAD/go.mod",
+    "https://github.com/tmthrgd/go-popcount/commits/master",
+    "https://github.com/tmthrgd/go-popcount/commit/3918361",
+    "https://github.com/tmthrgd/go-popcount/commits/master/benchmark_test.go",
+    "https://github.com/tmthrgd/go-popcount/commit/41d1db1",
+    "https://github.com/tmthrgd/go-popcount/issues?q=is%3Aissue",
+    "https://pkg.go.dev/github.com/tmthrgd/go-popcount?tab=importedby",
+    "https://github.com/golang/go/commit/de4edf3de7acda2cc7da8764ecdb3ff2e85c7a2d",
+    "https://raw.githubusercontent.com/golang/go/master/src/cmd/compile/internal/amd64/ssa.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/cmd/compile/internal/ssagen/intrinsics.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/cmd/compile/internal/ssagen/ssa.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/cmd/compile/internal/base/flag.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/checkptr.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/preempt.go",
+    "https://go.googlesource.com/go/+/b99abf3cce16721d79351c92031239a27fec3d22 (WebSearch snippet only; host unreachable)"
+  ],
+  "confidence": 0.8
+}

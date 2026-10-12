@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/vusolapohvistr/kmeans-wasm",
+  "one_liner": "Rust-to-WebAssembly k-means (Hamerly bounds, distinct-colour weighting) for colour quantisation and vectors; beats the naive JS skmeans.",
+  "what_it_does": "An npm package (wasm-bindgen, ES module) with three clustering entry points: kmeans_rgb and kmeans_rgba take a packed Uint8Array and return a u8 palette, and kmeans takes Array<Array<number>> and returns an skmeans-shaped object (k, it, centroids, idxs as Uint32Array, test). apply_palette maps a palette back onto packed pixels and returns RGBA for putImageData. Seeding is k distinct random input points (Forgy-style) drawn from Math.random.",
+  "how_it_is_fast": "The core is Hamerly's bounded Lloyd iteration: each point keeps an upper bound to its centroid and a lower bound to the runner-up, and the full k-centroid scan is skipped when the upper bound is below max(half the distance to the nearest other centroid, lower bound). The packed entry points first collapse the input to its distinct colours with occurrence weights in a fixed 2^18-slot open-addressing table (Celebi's weighted sort-means), which is exact for u8 data and shrinks real photographs 2x to 16x. Points and centroids sit in flat row-major f64 buffers and the squared distance uses an f64x2 simd128 kernel (fearless_simd). The k=2 rows, where bounds prune little, run level with the JS baseline (0.9x to 1.1x, derived from page data), so wasm plus SIMD alone adds little and the gain is algorithmic.",
+  "when_to_use": [
+    "Colour quantisation of photographs or canvas ImageData in a browser or Node: kmeans_rgba reads ImageData.data directly and apply_palette produces the RGBA output; on 6% to 46% distinct photos it ran 6x to 102x faster than skmeans.",
+    "Replacing a naive Lloyd k-means in JavaScript (skmeans or hand-written) on low-dimensional data with k of 8 or more, where the README shows 5.7x to 17.5x on 10,000 to 100,000 points.",
+    "Code that already consumes skmeans' result shape (centroids, idxs, test) and can adapt to a different argument order.",
+    "The palette-mapping step alone: apply_palette was 1.1x to 2.1x faster than a Map-memoised JS nearest-colour loop with byte-identical output."
+  ],
+  "when_not_to_use": [
+    "k=2 or small inputs: 1,000 pixels at k=2 was 0.9x (slower) and 100,000 pixels at k=2 1.1x; there is nothing for the bounds to skip.",
+    "When the alternative is already a bounds-based or tree-based k-means (a JS Hamerly/Elkan port, or a native ML library): no such baseline was measured, and most of the reported gain is the algorithm rather than wasm.",
+    "When you need deterministic results without monkey-patching Math.random, k-means++ seeding, a custom distance during clustering, mini-batch or streaming updates, or worker/thread parallelism; none is offered.",
+    "Runtimes without wasm SIMD (Safari before 16.4, older Chrome/Firefox): the module requires simd128 and ships no scalar fallback.",
+    "Projects that need a mature dependency: 2 stars, no issues filed, five releases (3.3.0 to 3.7.0) within four days, and the README says most code since 3.2.0 was written by AI assistants."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (wasm-bindgen JS glue plus the .wasm); build uses wasm-bindgen, js-sys, rand, fearless_simd and getrandom crates",
+    "min_toolchain": "Rust 1.98 (edition 2024) and wasm-pack to build; runtime needs WebAssembly SIMD (Chrome 91+, Firefox 89+, Safari 16.4+); dev tooling pins Node ^22.22.2, ^24.15.0 or >=26",
+    "platforms": "any WebAssembly runtime with simd128; the published npm package is the wasm-pack bundler target (ESM-only), while the benchmarks used a separate --target nodejs build",
+    "thread_safety": "not documented; calls are synchronous on one wasm instance and there is no worker or threads support",
+    "drop_in_for_baseline": "partial — kmeans(data, k, maxIter, threshold) returns skmeans' result shape, but the third argument is maxIter rather than skmeans' initial centroids, there is no seeding option or clustering distance callback, idxs is a Uint32Array, and test() returns an index instead of skmeans' {idx, centroid}"
+  },
+  "gotchas": [
+    "Harness flaw: the real-image skmeans column (the 69x to 102x rows) is one measured run after one warm-up with an unpinned Math.random seed, while kmeans-wasm gets eight runs; the project's own AGENTS.md says single samples on that machine vary by up to 50% and that unpinned-seed comparisons compare two different initialisations. Neither harness logs the iteration count of either side, and once Hamerly converges its extra rounds cost only bound checks plus k^2 centroid distances, so the README's 'threshold 0 makes the speed-ups a floor' argument is weaker than stated.",
+    "The convergence test compares the sum over all centroids of squared movement against an absolute threshold, so it scales with k and data range; kmeans() defaults to 0 (always runs maxIter) and the packed calls default to 0.1.",
+    "Rows that are not plain JS Arrays (e.g. Float64Array) or non-numeric values hit unwrap() in kmeans() and abort as a wasm 'unreachable' trap (panic = abort) instead of the documented string error.",
+    "Packed palettes truncate centroids with 'as u8' (floor, not round); k above the number of distinct colours repeats the last seed and returns duplicate palette entries. README tables before commit 0f53d6a (2026-09-27) measured a 256-colour repeating LCG pattern labelled random; the current tables are from the fixed mulberry32-style generator."
+  ],
+  "pick_this_over_siblings_when": "No other k-means library is catalogued in this category; the closest numeric siblings are Ubique (nalgebra in wasm vs math.js) and the TensorFlow.js wasm backend, so pick kmeans-wasm when the job is specifically clustering or palette extraction rather than general linear algebra or neural-network inference.",
+  "verified_claims_summary": "First-party js_bench Node harnesses (Node.js 26.10.0, AMD Ryzen 5 9600X, release build with LTO, codegen-units 1, wasm-opt -O4 and +simd128) against skmeans 0.11.3, a plain-JS Lloyd k-means, both capped at 100 iterations with kmeans-wasm's threshold at 0: 10,000 points x 50 dims, k=10 83.15 vs 1456.35 ms (17.5x); 100,000 random RGB pixels, 32 colours 247.03 vs 1677.87 ms (6.8x); the 922,560-pixel blue-marble photo at 16 colours 109.24 vs 11133.62 ms (101.8x, skmeans a single sample); 1,000 pixels at k=2 0.47 vs 0.41 ms (0.9x, slower).",
+  "status_note": "Actively developed (v3.7.0 on npm 2026-09-27, 65 commits) and MIT-licensed with a small core, but tiny (2 stars), largely AI-written, and its photo speed-ups rest on single unpinned-seed skmeans samples against a naive JS baseline, so treat the large ratios as algorithmic and directional.",
+  "sources_read": [
+    "https://github.com/vusolapohvistr/kmeans-wasm",
+    "https://github.com/vusolapohvistr/kmeans-wasm/commits/main",
+    "https://github.com/vusolapohvistr/kmeans-wasm/commit/0f53d6a",
+    "https://github.com/vusolapohvistr/kmeans-wasm/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/js_bench/package.json",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/js_bench/src/vector.ts",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/js_bench/src/rgb.ts",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/js_bench/src/images.ts",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/src/kmeans_triangle.rs",
+    "https://raw.githubusercontent.com/vusolapohvistr/kmeans-wasm/HEAD/src/packed_histogram.rs",
+    "https://raw.githubusercontent.com/solzimer/skmeans/HEAD/main.js",
+    "https://raw.githubusercontent.com/solzimer/skmeans/HEAD/distance.js",
+    "https://raw.githubusercontent.com/solzimer/skmeans/HEAD/kinit.js",
+    "https://raw.githubusercontent.com/solzimer/skmeans/HEAD/package.json",
+    "https://registry.npmjs.org/kmeans-wasm"
+  ],
+  "confidence": 0.75
+}

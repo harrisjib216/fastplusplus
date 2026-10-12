@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/un-ts/sh-syntax",
+  "one_liner": "mvdan/sh (shfmt) shell parser and formatter compiled to WebAssembly with TinyGo; 4.3x faster than the GopherJS mvdan-sh package.",
+  "what_it_does": "Parses and formats bash, POSIX sh, mksh, bats and (since 0.6.0) zsh scripts from Node.js or the browser using the same Go parser and printer as shfmt. The API is promise-based: parse(text, options) returns a JSON AST and print(text, options) returns formatted text; in browsers you call getProcessor() with your own wasm loader (fetch or Vite's wasm?init). It replaces the archived mvdan-sh npm package, which mvdan/sh's own README now points users away from, and it powers prettier-plugin-sh.",
+  "how_it_is_fast": "The speedup comes from the compilation target, not a new algorithm: the Go code runs as TinyGo-compiled WebAssembly (about 750 KB main.wasm) instead of GopherJS-transpiled JavaScript. Input is copied into wasm linear memory, the Go side parses and optionally prints, and the result is returned as one null-terminated JSON string (written with easyjson's jwriter) that JS decodes and JSON.parses. On the published run the wasm build executed about 289M instructions per format against 1.29G for mvdan-sh.",
+  "when_to_use": [
+    "Formatting or parsing shell scripts from JavaScript (Prettier via prettier-plugin-sh, editors, CI linters, web playgrounds), where the only alternative is the archived mvdan-sh.",
+    "Larger scripts: the 140 KB, 4,352-line benchmark fixture formats in about 18 ms on an M1 Max under Node 18, against 79 ms for mvdan-sh.",
+    "Browser apps that can fetch or bundle the roughly 750 KB main.wasm (CDN fetch or Vite wasm?init loader).",
+    "Node code that needs a synchronous call: the synckit worker variant measured the same per-call time (18.38 ms)."
+  ],
+  "when_not_to_use": [
+    "Hot loops over many tiny snippets: every call builds a new Go runtime and WebAssembly instance with a 10 MB initial memory, a fixed cost the benchmark (one large file) does not isolate.",
+    "AST-transform pipelines: print(ast, { originalText }) never sends the AST to wasm; it re-parses and formats originalText, so edits made to the AST are lost.",
+    "Bundle-size-sensitive pages: the wasm alone is about 750 KB before compression.",
+    "When you can shell out to the native shfmt Go binary; native Go was not part of the comparison.",
+    "Code that passes raw numeric LangVariant values written for 0.5.x: 0.6.0 switched to bit flags (LangBash 0 to 1, LangPOSIX 1 to 2, LangAuto 4 to 32)."
+  ],
+  "integration": {
+    "form": "module (npm package, ESM and CJS, shipping a prebuilt TinyGo main.wasm)",
+    "dependencies": "none at runtime (vendored TinyGo wasm_exec glue); synckit only for a synchronous wrapper; rebuilding main.wasm needs Go, TinyGo and easyjson",
+    "min_toolchain": "Node >= 16 per package.json engines (CI tests Node 20, 22, 24 and 26); any browser with WebAssembly; rebuild needs go 1.25 (go.mod) and TinyGo (version not stated; glue copied from TinyGo v0.41.1)",
+    "platforms": "any JavaScript runtime with WebAssembly; CI runs on macOS, Windows and Linux",
+    "thread_safety": "not documented; each call creates its own wasm instance, so concurrent async calls share no Go state",
+    "drop_in_for_baseline": "partial: same mvdan/sh parser and printer options, but exposed as async parse/print functions with an options object instead of mvdan-sh's syntax.NewParser/NewPrinter object API"
+  },
+  "gotchas": [
+    "Per-call instantiation: processor() runs new Go() and WebAssembly.instantiate on the cached bytes for every parse or print (as it already did in April 2025), so the measured 18.33 ms includes instance creation and Go runtime start-up; the mitata memory column (28.52 KB to 9.82 MB per iteration) matches a fresh 10 MB linear memory per call.",
+    "Latent memory-safety bug, found by reading the code (not reproduced): main.go's wasmAlloc returns *[]byte, the address of the heap-allocated slice header, not of its backing array, and processor.ts copies the whole input to that address and passes it to process() as the slice data pointer. Writes therefore run past the 12-byte header; this appears to work only because, in each fresh per-call heap, the header sits directly before the slice's own backing array.",
+    "The benchmark numbers are stale and the build is not reproducible from CI: benchmark.txt dates from 2025-04-08 (wasm built against mvdan/sh v3.11.0), while main.wasm was rebuilt against v3.13.1 in July 2026 and again in September 2026. main.wasm is a checked-in binary built locally (issue #115, 'Build easyjson and wasm on CI', is still open). The TinyGo version appears only in the vendored glue's header: TinyGo v0.41.1 now, and TinyGo commit 3e60eeb in the April 2025 copy.",
+    "benchmark/index.js still passes variant 0, which after 0.6.0 is not LangBash (now 1). It still runs as bash only because mvdan/sh v3.13 maps the legacy zero value (langBashLegacy) to LangBash. In the synckit row the hardware counters (434.86k cycles) see only the blocked main thread, not the worker doing the work."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling parses or formats shell; the nearest are wasm text parsers for other languages (markdown-wasm, md4w, es-module-lexer). Use sh-syntax whenever you need shfmt-compatible parsing or formatting from JavaScript, since its only alternative, mvdan-sh, is archived and was 4.3x slower on the published run.",
+  "verified_claims_summary": "mitata under Node 18.20.8 on an Apple M1 Max formatted the repo's 140 KB, 4,352-line test/fixtures/install.sh (nvm.sh content) as bash with fixed printer options. sh-syntax took 18.33 ms/iter (synckit worker 18.38 ms) against 79.47 ms/iter for mvdan-sh 0.10.1 (GopherJS), 4.34x. The run dates from 2025-04-08, used the wasm built against mvdan/sh v3.11.0 with an unstated TinyGo version, and its sh-syntax times include per-call wasm instantiation.",
+  "status_note": "Active (107 commits, last 2026-09-24, CI on four Node versions and three OSes), MIT and endorsed upstream as the mvdan-sh replacement. But the shipped main.wasm is a locally built binary, the published benchmark predates it, and wasmAlloc hands JS a slice-header pointer (latent memory-safety bug, from code reading).",
+  "sources_read": [
+    "https://github.com/un-ts/sh-syntax",
+    "https://github.com/un-ts/sh-syntax/tree/main/processor",
+    "https://github.com/un-ts/sh-syntax/commits/main/vendors/wasm_exec.cjs",
+    "https://github.com/un-ts/sh-syntax/commits/main/main.wasm",
+    "https://github.com/un-ts/sh-syntax/issues?q=is%3Aissue",
+    "https://github.com/un-ts/sh-syntax/issues/45",
+    "https://github.com/un-ts/sh-syntax/issues/115",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/README.md",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/benchmark/benchmark.txt",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/benchmark/index.js",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/benchmark/worker.mjs",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/package.json",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/target.json",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/go.mod",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/main.go",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/processor/main.go",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/processor/structs.go",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/src/browser.ts",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/src/processor.ts",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/src/types.ts",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/src/shim.ts",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/vendors/wasm_exec.cjs",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/test/fixtures/install.sh",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/main.wasm (HEAD request for size only)",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/HEAD/.github/workflows/release.yml",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/c500f6d/vendors/wasm_exec.cjs",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/28d68ba/vendors/wasm_exec.cjs",
+    "https://raw.githubusercontent.com/un-ts/sh-syntax/c500f6d/src/processor.ts",
+    "https://raw.githubusercontent.com/mvdan/sh/v3.13.1/syntax/parser.go",
+    "https://raw.githubusercontent.com/mvdan/sh/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/tmthrgd/go-memset",
+  "one_liner": "Go amd64 assembly Memset for non-zero byte fills; 8-31x a plain Go fill loop, slower than Go's zeroing loop.",
+  "what_it_does": "A single function, Memset(data []byte, value byte), that fills a byte slice with one value. It covers the case the Go compiler does not optimise: gc lowers only `for i := range b { b[i] = 0 }` to runtime memclr (current walk/range.go still returns early unless the assigned value is zero), so a non-zero fill loop stays a byte-at-a-time store loop. On amd64 (non-gccgo, non-appengine) it calls a hand-written assembly routine; elsewhere it falls back to a pure-Go version.",
+  "how_it_is_fast": "The byte is broadcast into an XMM register (PINSRB then PSHUFB with a zero shuffle mask) and the buffer is written backwards from its end: 16-byte MOVOU stores without AVX, or two 32-byte VMOVDQU stores per iteration when AVX is present and the length is at least 64 bytes, with a byte loop for the last 1-15 bytes. From 16 MiB up it aligns the end to 32 bytes and switches to four VMOVNTDQ non-temporal stores per 128-byte iteration followed by SFENCE, which avoids reading destination lines into cache. The portable fallback uses the copy-doubling idiom (write one byte, then copy(data[i:], data[:i]) with i doubling), which rides on runtime memmove.",
+  "when_to_use": [
+    "Pure-Go code on amd64 that fills large byte buffers with a non-zero value (0xFF masks, padding bytes, test patterns), where the README shows 11-31x over the Go loop between 128 B and 128 KiB.",
+    "Fills of 16 MiB and more that will not be read back soon, where the non-temporal path gave 1.18-1.22x even over Go's memclr loop in the 2016 measurements.",
+    "Code that must avoid cgo: a C memset reached through cgo pays the cgo call cost on every call, while this is a plain Go assembly call.",
+    "As a reference for a small, readable SSE/AVX fill kernel to vendor and adapt (about 100 lines of Go assembly, BSD-3-Clause)."
+  ],
+  "when_not_to_use": [
+    "Zeroing: use the `for i := range b { b[i] = 0 }` idiom or clear(b); the README shows Memset at 0.54x, 0.69x and 0.84x of it at 32 B, 128 B and 1 KiB, and parity from 16 KiB to 1 MiB.",
+    "CPUs without SSE4.1 (for example AMD K8/K10 and 65 nm Core 2): any call with 16 or more bytes executes PINSRB and dies with SIGILL (see gotchas).",
+    "Buffers that are filled and then read right away at 16 MiB and above: the non-temporal stores push the data out of cache, so the consumer pays DRAM latency.",
+    "Latency-sensitive services with very large fills: one call over hundreds of MiB runs as an unpreemptible assembly loop (35 ms at 512 MiB in the README).",
+    "Projects that want a maintained dependency: archived on 2024-12-14, no go.mod, CI last ran go1.10-go1.13 on Travis."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys/cpu (amd64 build only, for the AVX check); the repository has no go.mod, so Go modules resolve it as a pseudo-version",
+    "min_toolchain": "go1.10 per the 2018 'Update assembly to go1.10' commit (VINSERTF128 mnemonic); .travis.yml tested go1.10.x to go1.13.x; newer Go releases not tested by the project",
+    "platforms": "amd64 assembly path (needs SSE4.1 for lengths of 16 bytes or more; AVX optional and detected); every other GOARCH, gccgo and appengine use the pure-Go copy-doubling fallback",
+    "thread_safety": "Not documented; the function keeps no mutable state (useAVX is read-only after init), so concurrent calls on disjoint slices are safe; overlapping writers race as with any fill.",
+    "drop_in_for_baseline": "partial — it replaces a hand-written fill loop with one call, but it is a new API, not a compiler-recognised idiom, and for value 0 it is slower than the loop the compiler already lowers to memclr"
+  },
+  "gotchas": [
+    "Unchecked SSE4.1 requirement: memset_amd64.s executes PINSRB (an SSE4.1 instruction, CPUID.01H:ECX bit 19) and PSHUFB (SSSE3) for every length of 16 bytes or more, but only AVX is detected (cpu.X86.HasAVX). Go's amd64 baseline only guarantees SSE2, so the package can SIGILL on x86-64 CPUs that Go itself supports. The verifier's note named SSSE3; the actual floor is SSE4.1.",
+    "The published numbers are old: README output dates from 2016-11-11 (Go 1.7-era toolchain, CPU not named, GOMAXPROCS 8). The 2018 commits only replaced a hand-encoded VINSERTF128 with its mnemonic, rewrote two constants and moved CPU detection to x/sys/cpu, so the loops benchmarked are the ones shipped. Today's runtime memclr_amd64.s uses REP STOSQ from 2 KiB on ERMS CPUs and VMOVNTDQ from 32 MiB on AVX2 CPUs, so the 1.18-1.22x zeroing gain at 128-512 MiB probably no longer holds (inference, not measured).",
+    "The non-zero baseline is the slowest possible Go version (a byte loop at about 1.9 GB/s at every size). The package's own fallback, the copy-doubling idiom, was never benchmarked against Memset, so the gain over the best pure-Go fill is unknown and certainly far below 8-31x for large buffers. README labels ('1k') do not match the committed test file ('1K') from the same commit, and the benchcmp rows were renamed by hand to pair GoZero/GoSet with Memset.",
+    "Go never asynchronously preempts assembly functions (runtime/preempt.go skips FuncFlagAsm code), so a stop-the-world GC waits for the whole call; split fills of hundreds of MiB into chunks if pause latency matters."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fancy-memset or nadavrot/memset_benchmark when the caller is Go and cgo is off the table, because those are C/assembly memsets measured against glibc. The riteme memset-by-memcpy-doubling gist uses the same idea as this package's portable fallback and needs no assembly, which makes it the safer choice if you cannot vouch for SSE4.1 on every target.",
+  "verified_claims_summary": "First-party go test benchmarks in the README (CPU, Go version and flags not stated; 2016 toolchain) time Memset against a Go loop storing a variable byte: 2.75x at 32 B, 23.8x at 1 KiB (545 ns vs 22.9 ns), a peak of 31x at 16 KiB, then about 8x at 16-512 MiB (15.3 GB/s vs 1.89 GB/s). Against Go's memclr-lowered zeroing loop it is slower up to 1 KiB, equal from 16 KiB to 1 MiB and 1.18-1.22x faster at 16-512 MiB thanks to non-temporal stores.",
+  "status_note": "Abandoned: last commit 2019-09-04, archived 2024-12-14 and marked 'Not maintained', no issues ever filed and 3 known importers on pkg.go.dev. It is BSD-3-Clause and small enough to vendor, but add an SSE4.1 check before you rely on it.",
+  "sources_read": [
+    "https://github.com/tmthrgd/go-memset",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/README.md",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/memset_amd64.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/memset_amd64.s",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/memset_other.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/memset_test.go",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/tmthrgd/go-memset/HEAD/go.mod",
+    "https://github.com/tmthrgd/go-memset/commits/master",
+    "https://github.com/tmthrgd/go-memset/commit/ee9bc4d",
+    "https://github.com/tmthrgd/go-memset/commit/bc1da5c",
+    "https://github.com/tmthrgd/go-memset/commits/master/memset_test.go",
+    "https://github.com/tmthrgd/go-memset/commits/master/README.md",
+    "https://github.com/tmthrgd/go-memset/issues?q=is%3Aissue",
+    "https://pkg.go.dev/github.com/tmthrgd/go-memset?tab=importedby",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/memclr_amd64.s",
+    "https://raw.githubusercontent.com/golang/go/master/src/cmd/compile/internal/walk/range.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/preempt.go",
+    "https://felixcloutier.com/x86/pinsrb:pinsrd:pinsrq (WebSearch snippet only)",
+    "https://code.google.com/p/go/issues/detail?id=5373 (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

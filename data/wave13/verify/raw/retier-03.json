@@ -1585,5 +1585,76 @@
       "https://github.com/bitshifter/mathbench-rs/blob/master/README.md",
       "https://github.com/fu5ha/ultraviolet/issues/132"
     ]
+  },
+  {
+    "id": "https://github.com/tmthrgd/go-hex",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the README decode ratios were measured against Go 1.7's branchy decoder that Go 1.19 replaced with a table lookup, and the 2026 independent run shows about 4.57x on decode and about 19x on encode; the claim now leads with the current ratios. First-party 2016 table plus one independent CI run, C stays.",
+    "corrections": {
+      "claimed_speedup": "Independent 2026 re-measurement (go-simd/hex README, 1 MiB random buffer, GitHub Actions ubuntu runner): go-hex encode about 19x and decode about 4.57x the current encoding/hex (Go 1.19+ reverseHexTable decoder). README benchmark table (committed 2016-11-11, Go 1.7 era; unknown CPU, GOMAXPROCS 8): Encode/1k 11572.80 vs encoding/hex 451.49 MB/s (25.63x); Decode/1k 6093.43 vs 245.43 MB/s (24.83x); encode 2.08x (15 B) to 31.17x (16k), decode 4.26x (14 B) to 44.70x (128k); Encode/128M 10.49x; Decode/128M 37.56x; the decode rows were measured against Go 1.7's branchy fromHexChar and no longer hold.",
+      "caveats": "The README numbers were committed on 2016-11-11 (Go 1.7 era); CPU model, Go version and flags are not given. The decode ratios (24.83x to 44.70x) ran against Go 1.7's branchy fromHexChar decoder; Go 1.19 replaced it with a reverseHexTable lookup, and the 2026 independent run shows only about 4.57x, while the encode gap (the stdlib encode is still a scalar table loop) holds at about 19x. In the README the stdlib decode rate falls from about 250 MB/s at 1 KiB and below to 144 MB/s from 16 KiB up while go-hex stays near 6.4 GB/s, consistent with the branch predictor memorising the small buffers the benchmark loop repeats (inference), so the 44x peaks reflect a mispredicting 2016 baseline on random hex. The decode benchmarks build their input with an overlapping in-place Encode(src, src[:m]), valid only because the amd64 kernel walks backwards; on the Go fallback (non-amd64 or pre-SSE4.1) the forward loop overwrites unread input and produces an all-digit string, so decode numbers reproduced off amd64 time a degenerate input. The asm was regenerated afterwards without re-running the table (go1.8/go1.10 updates, PEXTRB workaround 77b1f74, AVX/SSE split, pre-SSE4.1 fallback), none a correctness fix of the measured path. Error semantics differ from the stdlib (unexported errLength, returns 0 on error, odd length checked first); DecodeString copies the string before decoding (issue #2); the arm64 fallback is slower than the stdlib. 118 known importers (go-pg, uptrace/bun, Hyperledger Burrow)."
+    },
+    "urls_opened": [
+      "https://github.com/go-simd/hex/blob/main/README.md",
+      "https://github.com/tmthrgd/go-hex/blob/master/hex_test.go",
+      "https://github.com/golang/go/blob/go1.19/src/encoding/hex/hex.go",
+      "https://github.com/golang/go/blob/go1.18/src/encoding/hex/hex.go"
+    ]
+  },
+  {
+    "id": "https://github.com/tum-dse/wasmtime-mte",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the implementation gives every MTE linear memory the same constant tag and, in mte_bounds_checks mode, emits no bounds compare at all, so the measured 'MTE sandboxing' speedup over wasm64 software bounds checks comes from dropping the check without the per-sandbox tagging the paper describes (an out-of-bounds index reaching another instance's memory is not trapped); the paper and artifact remain unreachable and the per-core numbers are search snippets only. Measured configuration does less safety work than claimed (stb-zip precedent for a fast path that skips work): B to C.",
+    "corrections": {
+      "caveats": "The CGO 2025 paper, arXiv 2408.11456, the slides and the Zenodo artifact were all unreachable; per-core numbers come from search snippets only, and the benchmark harness is in the Zenodo artifact, not this repo. The 5.1% is a mean with a plus or minus 4.0% spread on one core type; on the big cores the mean is 3.7% with a 6.5% spread, and only the in-order Cortex-A510 shows a large gain (33.9%). The win is against wasm64 with software bounds checks in Wasmtime, not against 32-bit Wasm with guard pages. Sandbox strength, from reading the code: every MTE linear memory gets the same constant tag 1 (RUNTIME_MEM_TAG in crates/runtime/src/mte.rs, applied in crates/runtime/src/mmap/unix.rs), although the CGO slides (snippet) describe a distinct tag per sandbox; with mte_bounds_checks Cranelift emits no compare at all (bounds_checks.rs) and only with mem_safety is tag bit 56 forced back on, so a wasm64 index that reaches another instance's linear memory or any non-PROT_MTE mapping is not trapped, and the measured speedup partly reflects removed bounds checks rather than hardware-enforced isolation. The tag-check mode is per thread (prctl PR_SET_TAGGED_ADDR_CTRL) and set inside memory allocation, so Wasm code on a thread that never allocated a memory may run with tag checks ignored; copy-on-write memory images are disabled with MTE ('mte: avoid cow images with mte', January 2026); guard regions default to 0 when mte_bounds_checks is on. The base is Wasmtime 16.0.0 (upstream merge November 2023); commit titles such as 'Hacky fix for address_transform w/ mte' and three open 2023 PRs mark it as research code."
+    },
+    "urls_opened": [
+      "https://github.com/TUM-DSE/wasmtime-mte/blob/main/crates/runtime/src/mte.rs",
+      "https://github.com/TUM-DSE/wasmtime-mte/blob/main/crates/runtime/src/mmap/unix.rs",
+      "https://github.com/TUM-DSE/wasmtime-mte/blob/main/cranelift/codegen/src/isa/aarch64/lower/isle.rs",
+      "https://github.com/TUM-DSE/cage-meta"
+    ]
+  },
+  {
+    "id": "https://github.com/turnerj/quickenshtein",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: on .NET Core the DefaultWithThreading option enables threads only from 16,000 characters while the benchmark tops out at 8,000, so the .NET Core 'Threaded' rows ran single-threaded; the single-threaded intrinsics rows (about 20.65x over the naive baseline, 4.76x over Fastenshtein) stand on a public BenchmarkDotNet harness with CPU and runtime named. A stays with the threaded rows corrected.",
+    "corrections": {
+      "claimed_speedup": "docs/OverallComparison.md (BenchmarkDotNet 0.12.1 ShortRun, i7-6700HQ), 8000 characters on .NET Core 5.0: Baseline 356,315,300.0 ns, Quickenshtein 17,253,112.5 ns, Fastenshtein 82,207,344.4 ns; about 20.65x over the same-runtime naive baseline (the table's 20.92x is relative to the .NET 4.7.2 Baseline job) and about 4.76x faster than Fastenshtein (derived from page data); the library's own no-intrinsics path is 5.78x slower (100.04 vs 17.31 ms). The .NET Core 5.0 'Quickenshtein_Threaded' row (16,973,617.7 ns) is not a threaded result: CalculationOptions.DefaultWithThreading enables threading only from 16,000 characters on .NET Core (4,000 on .NET Framework) while the benchmark tops out at 8,000, so that row ran the single-threaded path (same 9 B allocation); only the .NET 4.7.2 threaded row (30,820,936.5 ns, 1,024 B allocated) is genuinely multi-threaded, against single-threaded Fastenshtein. 400 and 10 character rows per the docs; slower than Fastenshtein on 10-character strings (317.7 vs 181.4 ns) and at 20 characters on .NET 6 (issue #86: 935.7 vs 663.8 ns).",
+      "caveats": "The headline 20.92x is against a deliberately naive LINQ jagged-matrix baseline that allocates the full (n+1)x(m+1) matrix (256 MB at 8,000 chars); Fastenshtein (about 4.8x) and the library's own no-intrinsics path (5.78x) are the meaningful comparisons. Harness flaw: the .NET Core 'Threaded' rows ran single-threaded (threading threshold 16,000 chars above the benchmark's 8,000), and docs/StringScenarios.md shows threading giving about no gain on .NET Core (18.53 vs 18.02 ms). On .NET Framework 4.7.2 (no hardware intrinsics) Quickenshtein loses to Fastenshtein at 400 characters and ties it at 8000 single-threaded, winning only in threaded mode. Threaded mode busy-waits on Interlocked.CompareExchange without yielding and queues workers on the shared ThreadPool (issue #13 open). Published numbers are .NET Core 5.0.4 with a 3-iteration ShortRun (error plus or minus 3.56 ms at 8,000 chars) while HEAD's benchmark project targets net6.0/net472 with BenchmarkDotNet 0.13.4; all inputs are one synthetic pair of periodic 17-char patterns. No ARM64 SIMD path; last NuGet release 1.5.1 (2021-05-23)."
+    },
+    "urls_opened": [
+      "https://github.com/Turnerj/Quickenshtein/blob/master/docs/OverallComparison.md",
+      "https://github.com/Turnerj/Quickenshtein/blob/master/src/Quickenshtein/CalculationOptions.cs",
+      "https://github.com/Turnerj/Quickenshtein/blob/master/docs/StringScenarios.md",
+      "https://github.com/Turnerj/Quickenshtein/issues/86"
+    ]
+  },
+  {
+    "id": "https://github.com/unison-code/unison",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher reached the author's KTH thesis (robcasloz.github.io mirror via raw.githubusercontent.com, TRITA-EECS-AVL-2018-48), whose Table 3.1 summarises the peer-reviewed TOPLAS 2019 evaluation: estimated speedups over LLVM 3.8 of 1-9.3% (thesis) / 1.1-10% (TOPLAS) and code-size reductions of 0.8-3.9% / 1.3-3.8% by architecture, with the only real execution on Hexagon at 5.4% across whole applications. Peer-reviewed measurement now read from a primary source: C to B, with the estimate-versus-measurement caveat recorded.",
+    "corrections": {
+      "claimed_speedup": "TOPLAS 2019 paper (arXiv 1804.02452) as summarised in the author's KTH thesis Table 3.1: mean estimated speedup over LLVM 3.8 of 1.1% to 10% (thesis preprint figures: Hexagon 9.3%, MIPS 5.1%, ARM 1%) and mean code-size reduction of 1.3% to 3.8% (thesis: MIPS 3.9%, ARM 2.4%, Hexagon 0.8%) on functions from MediaBench and SPEC CPU2006; the speedups are static cost-model estimates, and the only executed confirmation is Hexagon at 7.1% mean across MediaBench functions and 5.4% across whole applications.",
+      "caveats": "Numbers are estimated speedups from Unison's own static cost model (cycles times block frequency), not measured runtimes, except for the Hexagon execution check (5.4% across whole applications); the thesis says the estimate overestimates the actual speedup for 59% of the mispredicted functions because of caches and branch prediction. The baseline throughout is LLVM 3.8, and the driver is stuck on LLVM 3.8 (release_38-unison), so the comparison is against a 2016 compiler. Unison's constraint solving is far slower than LLVM's heuristic register allocator and scheduler; it scales to medium-sized functions of up to about 1,000 instructions and runs out of memory beyond that (#60), and if it cannot improve on LLVM's starting solution it outputs it unchanged. Open MIPS correctness reports: wrong stack offsets (#50), uni normalize dropping NOP delay slots (#49), a core dump on mesa.api.glVertex2i with -unison (#43). The repo README and project site make no performance claims."
+    },
+    "urls_opened": [
+      "https://raw.githubusercontent.com/robcasloz/robcasloz.github.io/master/publications/TRITA-EECS-AVL-2018-48.pdf",
+      "https://github.com/unison-code/unison/issues/60",
+      "https://github.com/unison-code/unison/issues/50"
+    ]
+  },
+  {
+    "id": "https://github.com/vusolapohvistr/kmeans-wasm",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the headline real-image rows (69x-102x) time the skmeans baseline once after one warm-up with an unpinned Math.random seed while kmeans-wasm gets eight runs, on a machine whose own AGENTS.md says single samples vary by up to 50% and unpinned seeds compare different initialisations; the win is mostly algorithmic (Hamerly bounds plus distinct-colour dedup against a naive Lloyd loop) and the pre-0f53d6a tables measured a 256-colour LCG pattern labelled random. Asymmetric sampling on the headline rows (LC and TensorFlow precedents): A to C.",
+    "corrections": {
+      "caveats": "First-party; most of the code and the harness since v3.2.0 were written by AI assistants (README says so). Harness flaw: the real-image skmeans column (the 69x to 102x rows) is one measured run after one warm-up with an unpinned Math.random seed while kmeans-wasm gets eight runs; the project's own AGENTS.md says single samples on that machine vary by up to 50% and that unpinned-seed comparisons compare two different initialisations; neither harness logs either side's iteration count. The baseline skmeans is a naive Lloyd k-means in plain JavaScript that scans all n*k distances every round, while kmeans-wasm uses Hamerly bounds and, for the packed RGB/RGBA entry points, collapses the input to its distinct colours with weights, so most of the speed-up is algorithmic (the README says the image speed-up falls from 84x to 13x as the distinct-colour share grows) and the k = 2 rows at 0.9x-1.1x show wasm plus SIMD alone adds little; no stronger JS k-means was compared. README tables before commit 0f53d6a (2026-09-27) measured a 256-colour repeating LCG pattern labelled random. The convergence test scales with k and data range; non-Array rows abort as a wasm 'unreachable' trap; packed palettes truncate centroids with 'as u8' and k above the number of distinct colours returns duplicate entries."
+    },
+    "urls_opened": [
+      "https://github.com/vusolapohvistr/kmeans-wasm/blob/main/AGENTS.md",
+      "https://github.com/vusolapohvistr/kmeans-wasm/blob/main/benchmark/real-images.mjs",
+      "https://github.com/vusolapohvistr/kmeans-wasm/commit/0f53d6a"
+    ]
   }
 ]

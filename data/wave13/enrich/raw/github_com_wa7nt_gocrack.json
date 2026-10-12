@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/wa7nt/gocrack",
+  "one_liner": "Go program with hand-written 8-way AVX2 multi-buffer MD5/SHA-1 compression kernels; beats single-stream crypto/md5 and crypto/sha1 on aggregate throughput.",
+  "what_it_does": "A standalone Go command-line program (not an importable library) that computes MD5 or SHA-1 digests of many short inputs at once for one-block messages of up to 55 bytes. The core is in internal/md5x8 and internal/sha1x8: a multi-buffer layout that packs 8 inputs side by side, one per 256-bit AVX2 lane, and a hand-written Go-assembly compression kernel that advances all 8 lanes per step. A compare-in-register tail (VPCMPEQD then VPMOVMSKB) returns a lane bitmask against a pre-broadcast target digest, so a block with no match stores no digest to memory.",
+  "how_it_is_fast": "Standard SIMD multi-buffer hashing: 8 independent single-block messages are transposed so word w of every lane is one VMOVDQU, and the scalar MD5/SHA-1 round functions run on whole YMM registers as pure bitwise identities (e.g. F(b,c,d)=d^(b&(c^d))), avoiding byte shuffles. State registers are statically assigned across all 64/80 steps by rotating lane roles rather than moving data. The input buffer itself is the counter: internal/cand writes brute-force candidates directly into the transposed layout with a precomputed (carry, character) table, which the author reports cut generation from 28.3 to 4.97 ns per input. The author measured both kernels at 88-90% of a machine-specific ALU-op ceiling (md5x8 640 ops/block at 3.8 ops/ns; sha1x8 1404 at 3.9).",
+  "when_to_use": [
+    "You need to study a clean, heavily-commented example of an 8-lane AVX2 multi-buffer hash compression kernel written in Go's Plan 9 assembler, with an unusually detailed account of the assembler traps and A/B measurement methodology.",
+    "Aggregate throughput over many independent short (<=55 byte) one-block inputs matters more than per-message latency, on an AVX2 x86-64 CPU.",
+    "You want the compare-in-kernel idea (return a lane bitmask, skip digest stores on a miss) as a reference for a filter or matching workload.",
+    "Go 1.24+ and an AVX2 core (it falls back to nothing: there is no scalar path in the kernels, only the avx2Enabled guard)."
+  ],
+  "when_not_to_use": [
+    "You need a maintainable, importable dependency: it is a program with internal/ packages (not go-get-able), has no LICENSE file (all-rights-reserved by default, so not copyable), 1 star, and two commits all dated 2026-09-28.",
+    "Messages longer than 55 bytes, multi-block inputs, or any keyed/iterated KDF (bcrypt, scrypt, PBKDF2): rejected or out of scope; only MD5 and SHA-1 single-block are implemented.",
+    "Per-message latency: a multi-buffer kernel needs 8 inputs in flight and does not speed up a single hash.",
+    "Non-x86-64 or AVX2-less hardware: no AVX-512, SHA-NI, or NEON path; no portable fallback kernel.",
+    "You want a like-for-like replacement for crypto/md5 or crypto/sha1: the API is a program, not a Hash, and the baselines are single-stream scalar assembly while this is 8-lane aggregate."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard library only; go.mod declares module gocrack, go 1.24)",
+    "min_toolchain": "Go 1.24 per go.mod (README states it was built with Go 1.26 darwin/amd64)",
+    "platforms": "x86-64 with AVX2 only; kernels are guarded by an avx2Enabled check and have no fallback",
+    "thread_safety": "not documented as an API; the program shards the brute-force space across goroutines (measured 1.87x on 2 physical cores, 76.6 MH/s on 4 with SMT) but exports no reusable concurrent hasher",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark-methodology flaw on the kernel row: internal/md5x8/bench_test.go TestBenchmarkReport times md5x8 doing compression only, on one pre-built constant transposed buffer reused every iteration (the same 8 'cand-000N' inputs), against md5.Sum([]byte(\"cand-0000\")) which also pays digest init, padding and finalization each call. So the headline 48 vs 5.7 MH/s (about 8.4x) overstates the per-compression advantage; the whole-pipeline 1-core figure (38 MH/s, generator included) against 5.7 MH/s, about 6.7x, is the fairer comparison.",
+    "The crypto/sha1 4.1 MH/s baseline row has no harness in the repository: internal/sha1x8/bench_test.go benchmarks only sha1x8 (digest) and sha1x8msg (match), never crypto/sha1, so that ratio is not reproducible from the repo. The README also never states which command produced its throughput table.",
+    "The baselines (Go crypto/md5 and crypto/sha1 on amd64) are themselves hand-written scalar assembly running one stream; this is 8-lane multi-buffer vs single-stream, i.e. a throughput-vs-latency comparison, not instruction-for-instruction.",
+    "Single machine (i5-7360U, 2 physical cores), single run, no repeat/variance statistics reported; the author notes the clock drifts enough between runs to invert a 12% result, and mitigates it only inside the same-process A/B step-form harness, not for the headline table."
+  ],
+  "pick_this_over_siblings_when": "The closest catalogued sibling is minio/md5-simd, which is also an 8-lane AVX2/AVX-512 multi-buffer MD5 in Go assembly beating crypto/md5 (3.31x aggregate on 4 vCPUs) but is a maintained, importable, licensed package; prefer minio/md5-simd for production and gocrack only as a readable single-file-per-kernel reference that also covers SHA-1 and documents the Go-assembler pitfalls. Against the hashing siblings lukechampine/blake3, zeebo/blake3 and animetosho/md5-optimisation, gocrack is the one to read specifically for multi-buffer transposed-layout MD5/SHA-1 and compare-in-register matching.",
+  "verified_claims_summary": "First-party README table on an Intel Core i5-7360U (Skylake, AVX2, no AVX-512/SHA-NI), Go 1.26 darwin/amd64, no repeat statistics: md5x8 compression kernel 48 MH/s vs crypto/md5 5.7 MH/s (about 8.4x, derived; but compression-only vs full md5.Sum), whole MD5 brute-force pipeline 38 MH/s on 1 core (about 6.7x over stdlib) and 151 MH/s on 4 threads; sha1x8 22 MH/s vs a crypto/sha1 4.1 MH/s row that has no harness in the repo. Kernels reported at 88-90% of a measured per-machine ALU-op ceiling.",
+  "status_note": "Active but brand-new and tiny (1 star, two commits 2026-09-28) with no LICENSE file, so it is reference-only, not copyable; treat the numbers as directional first-party measurements from a single 2-core laptop.",
+  "sources_read": [
+    "https://github.com/wa7nt/gocrack",
+    "https://github.com/wa7nt/gocrack/tree/main/internal",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/README.md",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/go.mod",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/cmd/gocrack/main.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/md5x8/bench_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/md5x8/profile_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/md5x8/md5x8_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/sha1x8/bench_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/sha1x8/sha1x8_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/internal/sha1x8/plain_test.go",
+    "https://raw.githubusercontent.com/wa7nt/gocrack/HEAD/LICENSE"
+  ],
+  "confidence": 0.6
+}
