@@ -1,0 +1,92 @@
+[
+  {
+    "id": "https://github.com/julialinearalgebra/lowrankapprox.jl",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README gives three approximate first-party timings (~0.02 s Julia, ~0.07 s SciPy, ~0.3 s MATLAB) for an ID of a 1024x1024 Hilbert matrix with no benchmark script, hardware, library versions or flags, so it is first-party numbers without methodology (C). The baseline is off-target for this wave (Python over Fortran77, now Cython; MATLAB), not C or C++ at -O3.",
+    "corrections": {
+      "baseline": "SciPy interpolative decomposition (scipy.linalg.interpolative via PyMatrixID), which at the README's time wrapped the Fortran77 ID library; SciPy 1.15.0 ported that code to Cython. The README also names MATLAB. Neither is a C or C++ -O3 baseline.",
+      "why_faster": "README: 'This difference can be attributed in part to both algorithmic improvements as well as to some low-level optimizations.' Source (src/pqr.jl geqp3_adap!, src/lapack.jl): the ID is built on an adaptive, early-terminating pivoted QR whose blocks call LAPACK xLAQPS through ccall into Julia's liblapack (OpenBLAS), with BLAS.ger! and LAPACK.orgqr! for the rest, so the heavy arithmetic runs in the BLAS/LAPACK library, not in Julia-generated code.",
+      "caveats": "Single approximate figure per language ('early tests', package origin 2015) with no hardware, Julia, SciPy, BLAS or compiler versions and no benchmark script; it is not stated whether SciPy ran its deterministic or randomized ID routine. The baseline is a Python wrapper over Fortran77 (since SciPy 1.15.0 a Cython port), not C or C++ at -O3, so the README figure no longer describes current SciPy. The README attributes the gap partly to a different algorithm, and the package's core work is LAPACK xLAQPS plus BLAS calls through ccall, so any win is algorithm plus OpenBLAS/LAPACK rather than Julia codegen. The 'even some in Fortran and C' claim has no numbers. Last commit 2024-02-10 (stale)."
+    },
+    "notes": "Numbers match the README exactly (3.5x vs SciPy derived from page data). Not a language-level win: the ID's heavy lifting is LAPACK xLAQPS and BLAS via ccall into OpenBLAS, the baseline is Fortran77-through-Python (Cython since SciPy 1.15.0), and no C or C++ baseline exists; record as off-baseline, library- and algorithm-driven. Metadata checked: MIT (Expat) LICENSE.md, 129 stars, last commit 2024-02-10, not a fork.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/README.md",
+      "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl",
+      "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/commits",
+      "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/LICENSE.md",
+      "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/tree/master/src",
+      "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/lapack.jl",
+      "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/pqr.jl",
+      "https://raw.githubusercontent.com/scipy/scipy/main/doc/source/release/1.15.0-notes.rst"
+    ]
+  },
+  {
+    "id": "https://github.com/mtsch/ripserer.jl",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Author's own benchmark: code is public (mtsch/RipsererBenchmarks.jl src/ripser.jl, src/ripserer.jl, src/benchmarksuites.jl), the CPU is stated (i5-4200U) and the C++ flags follow from the harness's `make all` on Ripser's public Makefile (-Ofast -D NDEBUG), but the compiler behind `c++`, its version and the Julia version are not stated, so not A; first-party, so C.",
+    "corrections": {
+      "baseline_in_list": false,
+      "compiler_and_flags": "Ripserer v0.15 (Julia version not stated; the RipsererBenchmarks.jl Manifest.toml does not record it). Ripser (commit 286d369) built by the harness (RipsererBenchmarks.jl src/ripser.jl get_ripsers runs `make all`) from its Makefile line `c++ -std=c++11 -Wall ripser.cpp -o ripser -Ofast -D NDEBUG`; Cubical Ripser 2D (6edb9c5) and 3D (a063dac) Makefiles compile every file with `c++ -std=c++11 -Ofast`. The compiler behind `c++` and its version are not stated. Timing: BenchmarkTools, samples=5, minimum reported.",
+      "same_opt_level": true,
+      "why_faster": "Not stated: the docs say Ripserer uses the same tricks as Ripser (implicit simplicial complex, clearing) and also computes critical simplices Ripser skips. The harness is asymmetric: Ripser runs as a subprocess timed with read(cmd), so process launch and printing every interval to stdout count against it, while Ripserer runs in-process after warm-up and returns diagrams in memory (both include file parsing); that asymmetry can explain the millisecond-scale wins (random16 8 ms vs 10 ms, alpha_dragon_2000 56 ms vs 76 ms).",
+      "caveats": "Mostly parity or slower: dense mode is 1.04-1.99x slower on 5 of 6 Rips sets (o3_4096 151.5 s vs 76.2 s), so the docs' 'usually within around 30%' holds only with sparse=true; sparse mode is 0.993-1.304; wins of about 1.06-1.35x appear only on very sparse Alpha-Rips inputs and tiny random16. Ripser is timed as an external process (launch plus stdout text output) against in-process Ripserer, which favours Ripserer on short runs. Ripserer's heap is 3-5x Ripser's on Alpha-Rips (includes the Julia runtime). Against Cubical Ripser, which the docs say uses a more specialized algorithm, Ripserer wins only bonsai64 (0.96) and is up to 2.6x slower elsewhere. Single 2020-era run (Ripserer v0.15, 2020 Ripser commits) on an old dual-core laptop; compiler and Julia versions not stated."
+    },
+    "notes": "All ratios on docs/src/benchmarks.md match the record; the 'within around 30%' and 'can sometimes outperform Ripser' quotes are from docs/src/index.md. Ripser is not in the catalog (baseline_in_list corrected to false). Build flags recovered from the harness and the baselines' public Makefiles (-Ofast); the main shortcoming is a subprocess-vs-in-process timing asymmetry and wins limited to very sparse inputs. Metadata checked: MIT, 82 stars, last commit 2026-06-29, not a fork.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/benchmarks.md",
+      "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/index.md",
+      "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/README.md",
+      "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/LICENSE",
+      "https://github.com/mtsch/Ripserer.jl",
+      "https://github.com/mtsch/Ripserer.jl/commits",
+      "https://github.com/mtsch/RipsererBenchmarks.jl",
+      "https://github.com/mtsch/RipsererBenchmarks.jl/tree/master/src",
+      "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/run_everything.jl",
+      "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/Manifest.toml",
+      "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripser.jl",
+      "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripserer.jl",
+      "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/benchmarksuites.jl",
+      "https://raw.githubusercontent.com/Ripser/ripser/286d369/Makefile",
+      "https://raw.githubusercontent.com/CubicalRipser/CubicalRipser_2dim/6edb9c5/Makefile",
+      "https://raw.githubusercontent.com/CubicalRipser/CubicalRipser_3dim/a063dac/Makefile"
+    ]
+  },
+  {
+    "id": "https://github.com/juliasymbolics/symbolicutils.jl",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party SciML benchmark (SciMLBenchmarks.jl benchmarks/Symbolics/SymEngineComparison.jmd) with Julia 1.13.0 and EPYC 7502 stated; the SymEngine side is the prebuilt SymEngine_jll 0.12.0 whose compiler is not stated (flags only derivable from the Yggdrasil recipe), so not A; C. Downgraded as a claim: two of the four 'wins' exist only with an IRStructure built outside the timed region.",
+    "corrections": {
+      "claimed_speedup": "Summary table (SymEngine s vs SymbolicUtils s; the SymbolicUtils column is the faster of two variants): SymbolicUtils faster in 4 of 10 rows: compiled call with CSE 6.93256e-7 vs 3.13135e-7 (2.2x), variable search on dissimilar expressions 4.67036e-4 vs 2.13078e-4 (2.2x), variable search on common subtrees 1.02663e-3 vs 4.89876e-4 (2.1x), sparse-rule substitution 1.10077e-3 vs 5.92595e-4 (1.9x). The per-variant tables show the plain variants: search_variables! without IRStructure is slower than SymEngine (1.37841e-3 vs 1.02663e-3 common, 5.97345e-4 vs 4.67036e-4 dissimilar), and the plain Substituter wins the sparse rule by only 1.28x (8.61063e-4 vs 1.10077e-3) on a 2810-node tree against SymEngine's 3271-node tree. The compiled call without CSE is 1.0665e-5 vs 2.559e-6 (4.2x). SymEngine faster in the other 6 rows: diff of expand 6.95691e-3 vs 0.332787 (48x), eval_double of a 10000-deep expression 0.0116745 vs 0.331982 (28x), codegen init without CSE 1.15092e-3 vs 1.34645e-2 (12x; with CSE 1.66448e-4 vs 3.34998e-3, 20x), series 1.99123e-3 vs 1.98982e-2 (10x), trig-product substitution 1.478e-5 vs 6.0009e-5 (4.1x), dense-rule substitution 1.13195e-3 vs 3.95472e-3 (3.5x). All ratios derived from page data.",
+      "compiler_and_flags": "Julia 1.13.0 (LLVM 20.1.8, JIT target znver2), SymbolicUtils v4.46.6, Symbolics v7.39.2, SymEngine.jl v0.13.2 over the prebuilt SymEngine_jll v0.12.0+0. Per the public Yggdrasil recipe (S/SymEngine/build_tarballs.jl, symengine commit 088aa01) SymEngine_jll is built with CMake and no CMAKE_BUILD_TYPE, which SymEngine's CMakeLists defaults to Release (CMake's -O3 -DNDEBUG), for a generic x86_64 target, with WITH_SYMENGINE_THREAD_SAFE=yes, GMP integers and no LLVM (derived from public build recipe; compiler version not stated). Timings are minimum over samples (Chairmarks).",
+      "same_opt_level": false,
+      "why_faster": "Per the benchmark text and source: the search and sparse-substitution wins come from SymbolicUtils' IRStructure (a hash-consed DAG with a dependency graph) whose construction is excluded from timing (populate_ir! runs before the search benchmark; IRSubstituter keeps its populated IR across samples and only clear_cache! empties the per-call result cache), so shared subexpressions are visited once over a prebuilt graph. The compiled-call win is a native Julia function produced by Code.toexpr plus eval and JIT compiled for znver2, against SymEngine's LambdaRealDoubleVisitor, 'an interpreter over the expression tree'; SymEngine's own LLVM visitor is unavailable because SymEngine_jll is built without LLVM. Neither is the same algorithm in a different language.",
+      "caveats": "First-party benchmark by the Symbolics/SciML maintainers, single CI run without variance; the file says the first workload set 'plays to SymEngine's strengths', and SymEngine wins 6 of 10 rows by 3.5-48x. Two of the four SymbolicUtils wins (variable search) need an IRStructure populated outside the timed region; the plain search_variables! is 1.28-1.34x slower than SymEngine, and the IR-backed substitution likewise reuses an IR built in warm-up, so the IR rows exclude the DAG construction SymEngine's subs and free_symbols pay for. The plain Substituter's 1.28x sparse-rule win is on a tree 14% smaller than SymEngine's (2810 vs 3271 nodes). SymEngine 'variable search' is free_symbols converted to a Julia Vector and unioned into a Julia Set through ccall-based hashing, not an identical operation. The compiled-call row is JIT-compiled native code against SymEngine's tree interpreter (the jll has no LLVM backend), and the SymbolicUtils codegen-init row times only toexpr plus eval, so LLVM compilation of the generated function, which happens on the first call, is in neither row. SymEngine_jll is SymEngine 0.12.0 (three releases behind 0.15.0) built thread-safe (atomic reference counts) for generic x86_64 without TCMalloc, not SymEngine's tuned configuration, and its compiler version is not stated."
+    },
+    "notes": "Summary numbers on the page match the record, but the headline '4 of 10 rows faster' overstates the language win: the two search wins and most of the sparse-substitution win come from an IRStructure precomputed outside the timed region (plain variants lose search and win sparse substitution by only 1.28x on a smaller tree), and the compiled-call win is JIT code against SymEngine's interpreter in an LLVM-less, thread-safe SymEngine_jll build. SymEngine is already listed in COPYABLE.md with this same page as its benchmark, so this is the reverse claim on the same benchmark; keep as tier C with these shortcomings. Metadata checked: MIT LICENSE.md, 560 stars, last commit 2026-10-11, not a fork.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/Symbolics/SymEngineComparison.md",
+      "https://github.com/JuliaSymbolics/SymbolicUtils.jl",
+      "https://github.com/JuliaSymbolics/SymbolicUtils.jl/commits",
+      "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/LICENSE.md",
+      "https://github.com/JuliaSymbolics/SymbolicUtils.jl/tree/master/src",
+      "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/irstructure.jl",
+      "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/substitute.jl",
+      "https://raw.githubusercontent.com/JuliaPackaging/Yggdrasil/master/S/SymEngine/build_tarballs.jl",
+      "https://raw.githubusercontent.com/symengine/symengine/088aa01bf4ba020e22b7492086abdc08b37a5f7f/CMakeLists.txt",
+      "https://raw.githubusercontent.com/symengine/SymEngine.jl/master/src/subs.jl",
+      "https://raw.githubusercontent.com/symengine/SymEngine.jl/master/src/types.jl"
+    ]
+  }
+]

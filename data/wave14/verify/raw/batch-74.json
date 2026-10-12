@@ -1,0 +1,111 @@
+[
+ {
+  "id": "https://github.com/jipolanco/nonuniformffts.jl",
+  "verdict": "downgrade",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "The docs page benchmarks.md, the script benchmark/CPU+CUDA/run_benchmarks.jl and the raw medians in benchmark/CPU+CUDA/results.H100_jean-zay/*.dat are public and name the CPU (Xeon Platinum 8468) and GPU (H100), but the Julia version is not stated anywhere (the benchmark Project.toml has no Manifest or compat bounds), the nvc++ version is not given and the actual FINUFFT Release flags are not printed, so it falls short of A (same rule as the wave-14 AcceleratedKernels verdict); first-party, hence C.",
+  "corrections": {
+   "claimed_speedup": "Docs and README text match the record (CPU 'comparable'; GPU default method 'slightly faster than CuFINUFFT at low point densities, but slightly slower at large ones'; shared-memory method gives 'important gains'). Numbers come from the raw medians in benchmark/CPU+CUDA/results.H100_jean-zay/*.dat (ComplexF64, 256^3, tol 1e-6, set_points plus exec; all ratios derived from page data). GPU type 1: at density 1e-4 (1,678 points) NonuniformFFTs global-memory 0.00322 s vs CuFINUFFT 0.00536 s (1.66x faster); at density 1 (16.8M points) NonuniformFFTs shared-memory 0.0415 s vs CuFINUFFT's best 0.1774 s (4.27x faster) while the default global-memory method is 0.2809 s vs 0.1809 s (1.55x slower); at density 10 (167.8M points) shared-memory 0.300 s vs CuFINUFFT's best (its own SM method) 0.822 s (2.74x faster; 6.97x against CuFINUFFT GM 2.089 s) while the default method is 3.187 s (1.53x slower than CuFINUFFT GM). GPU type 2: 1.92x faster at density 1e-4 (0.00280 s vs 0.00538 s) but slower at high density with either method (best 0.0295 s vs 0.0223 s at density 1, 1.32x slower; 0.2166 s vs 0.1087 s at density 10, 1.99x slower). CPU (24 threads): type 1 ranges from 1.93x faster (atomics variant, 0.105 s vs 0.202 s at density 1e-4) to 1.78x slower (atomics, 1.273 s vs 0.717 s at density 1), and 1.03-1.17x faster at density 10; type 2 is 1.84x faster at density 1e-4 (0.0867 s vs 0.1598 s) and 1.56x at 1e-3 (FFT-dominated cases), 0.89-0.96x at densities 0.1 and 1, and 1.05x at density 10.",
+   "compiler_and_flags": "FINUFFT v2.4.1 built with Nvidia nvc++ (version not stated) via CMake 'Release' with default flags (actual flags not printed); cuFINUFFT built with nvcc from CUDA 12.8, CMAKE_CUDA_ARCHITECTURES=90; both called through FINUFFT.jl v3.4.0 with locally compiled binaries. FINUFFT options: tol 1e-6, modeord=1, spread_sort=1, spread_kerevalmeth=1, FFTW.ESTIMATE, nthreads = Julia thread count (24); cuFINUFFT gpu_sort=1, gpu_kerevalmeth=1, gpu_method 1 and 2; upsampfac left at the library default (only the 1e-14 reference plans set 2.0). NonuniformFFTs.jl v0.8.3 (2025-07-11), sigma=1.5, HalfSupport(4), FFTW.ESTIMATE, KernelAbstractions/CUDA.jl; Julia version not stated (benchmark Project.toml has no Manifest or compat). BenchmarkTools @benchmark medians. Script: benchmark/CPU+CUDA/run_benchmarks.jl.",
+   "caveats": "Author's own benchmark; the docs show only SVG plots, numbers exist only in the raw .dat files. The CPU result is parity (wins and losses by up to about 2x either way depending on density), not a win. The GPU win is limited to type 1 with the non-default shared-memory method at densities of about 1 and above, or to very sparse problems; the default global-memory method is about 1.5x slower than CuFINUFFT at high density, and type 2 at high density is slower than CuFINUFFT with either method. The docs say CuFINUFFT's gpu_method=2 'seems to be considerably slower in nearly all cases', but the raw data show it beating CuFINUFFT's method 1 for type 1 at densities of 1 and above (0.822 s vs 2.089 s at density 10), so fair comparisons must use CuFINUFFT's SM curve. The two libraries do not do the same work: NonuniformFFTs uses sigma=1.5 with a width-8 Kaiser-Bessel-type kernel while (Cu)FINUFFT uses its own kernel with its default upsampling factor (not set by the script); measured errors are of the same order (type 1 about 1.7e-6 vs 1.4e-6 on GPU, 1.3e-6 vs 3.7e-6 on CPU). The docs say points are uniform in [0, 2*pi)^3, but run_benchmarks.jl draws standard-normal coordinates (randn, Xoshiro(42)) for both libraries, so the point cloud is clustered. FINUFFT was built with nvc++ rather than GCC or Clang, and the CPU sides probably use different FFTW builds (locally built FINUFFT vs FFTW.jl), which would dominate the sparse-point CPU rows (not verified). The 'real data' gains solve a different (real-valued) problem. On AMD GPUs the default method scales badly. Only one GPU model (H100), one grid size and one tolerance (1e-6); Julia version not stated. Not a JIT-versus-AOT effect: the GPU gains come from a different shared-memory spreading design.",
+   "same_algorithm": false,
+   "why_faster": "Not language or JIT related. On the GPU the type-1 gain comes from NonuniformFFTs' own shared-memory spreading kernel, which per the docs 'completely avoid[s] atomic operations on shared memory' (a design difference from cuFINUFFT's SM method), plus different numerical parameters (sigma=1.5, width-8 kernel vs (Cu)FINUFFT defaults); at low density the gap is fixed overhead and FFT time. On the CPU the two are at parity, with sparse-point differences in FFT-dominated rows (probably different FFTW builds and oversampled grid sizes)."
+  },
+  "notes": "Downgrade A to C: Julia version and nvc++ version/flags are not stated, and the evidence is first-party. Real but narrow GPU win (type 1, non-default shared-memory method, density of about 1 and above: 2.7-4.3x over CuFINUFFT's best), CPU parity, type 2 slower at high density; the win is an implementation and parameter difference, not a Julia-vs-C++ codegen effect, so it fits runtime-jit-beats-aot poorly. Baseline FINUFFT is already listed (wave 8, https://github.com/flatironinstitute/finufft).",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/docs/src/benchmarks.md",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/README.md",
+   "https://github.com/jipolanco/NonuniformFFTs.jl",
+   "https://github.com/jipolanco/NonuniformFFTs.jl/commits/master",
+   "https://github.com/jipolanco/NonuniformFFTs.jl/tree/master/benchmark/CPU+CUDA",
+   "https://github.com/jipolanco/NonuniformFFTs.jl/commits/master/benchmark/CPU+CUDA/run_benchmarks.jl",
+   "https://github.com/jipolanco/NonuniformFFTs.jl/tree/master/benchmark/CPU+CUDA/results.H100_jean-zay",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/run_benchmarks.jl",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/Project.toml",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/README.md",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/plots/plot_benchmarks.jl",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/CuFINUFFT_256_ComplexF64_global_memory.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/CuFINUFFT_256_ComplexF64_shared_memory.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/FINUFFT_256_ComplexF64_CPU.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CPU.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CPU_atomics.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CUDABackend_global_memory.dat",
+   "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CUDABackend_shared_memory.dat"
+  ]
+ },
+ {
+  "id": "https://github.com/evovest/evotrees.jl",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "README Performance tables compare EvoTrees with XGBoost hist on CPU (Ryzen 5900X) and GPU (RTX A4000) with Julia 1.10.8 and package versions, but XGBoost is a prebuilt binary with unstated build flags and the current benchmarks/regressor.jl no longer contains the XGBoost harness, so the comparison is not reproducible from the public code; first-party numbers, C.",
+  "corrections": {
+   "workload": "Regression boosted trees (mse loss, mae eval metric on the training set each round) on uniformly random data, 200 rounds, nobs 100k/1M/10M, nfeats 10/100, EvoTrees max_depth 6/11 (XGBoost run with max_depth - 1, i.e. 5/10), 64 bins, eta 0.05, row and column subsample 0.5; training and inference wall time from a single @elapsed run per cell on CPU (12 threads) and GPU. The script generates Float32 data (T = Float32) although the README says Matrix{Float64}.",
+   "compiler_and_flags": "Julia 1.10.8; README header says EvoTrees v0.18.3 and XGBoost v3.1.2 (hist on CPU, tree_method 'gpu_hist' on GPU per the last public harness); XGBoost is the prebuilt binary from the Julia package (build flags not stated). The XGBoost harness lived in benchmarks/regressor.jl up to commit 6edfadb (2026-08-18; behind a run_xgb switch committed as false) and was removed in c038532 (2026-08-21); the current script times EvoTrees only.",
+   "caveats": "The README does not claim to beat XGBoost; the wins are read off its own tables and are regime-specific (CPU only at 10M rows x 10 features, 1.06-1.17x; GPU only at depth 11 with 100 features, 1.13-1.35x training). EvoTrees is slower in most rows, and CPU inference is slower in every row. The CPU table was re-measured in commit db96e75 (2026-09-04, 'Jdb/v20', package now v0.20.0) while the version header still says EvoTrees v0.18.3, and the XGBoost harness had already been removed from the public script on 2026-08-21, so the current CPU XGBoost column cannot be reproduced from the repository; the GPU table dates from 97840b9 (2025-12-24). The script generates Float32 data while the README says Float64. Models are trained on random data; model quality or equal tree structure is not compared, and the two libraries bin features differently. Each cell is one @elapsed run with a warm-up only for the first configuration; no variance reported. One machine.",
+   "why_faster": "Not stated by the project; the README gives no explanation for the few rows where EvoTrees is faster, and the comparison is library against library (separate implementations of histogram gradient boosting), not a Julia-vs-C++ codegen test."
+  },
+  "notes": "Confirm C. Numbers in claimed_speedup match the current README exactly. Key shortcomings: mostly slower than XGBoost, narrow wins only; the public script no longer runs XGBoost (removed 2026-08-21) although the CPU table with XGBoost columns was updated 2026-09-04 under a stale v0.18.3 label; Float32 data vs README's Float64. same_algorithm left null: same histogram-GBDT family with matched hyperparameters, but separate implementations and no equal-model check. Baseline XGBoost is already listed (wave 8, https://github.com/dmlc/xgboost). Metadata (Apache-2.0, 201 stars, last commit 2026-10-09) checked and correct.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/README.md",
+   "https://github.com/Evovest/EvoTrees.jl",
+   "https://github.com/Evovest/EvoTrees.jl/commits/main",
+   "https://github.com/Evovest/EvoTrees.jl/commits/main/README.md",
+   "https://github.com/Evovest/EvoTrees.jl/commits/main/benchmarks/regressor.jl",
+   "https://github.com/Evovest/EvoTrees.jl/tree/main/benchmarks",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/benchmarks/regressor.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/bece6ac/benchmarks/regressor.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/c038532/benchmarks/regressor.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/6edfadb/benchmarks/regressor.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/README.md",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/d1ffd16/README.md",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/db96e75/README.md",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/Project.toml",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-df.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-mlj.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-grps.jl",
+   "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/Project.toml"
+  ]
+ },
+ {
+  "id": "lang:julia/aaronang/stl-benchmark#parsestl",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "README shows C++ ParseStl 409.210 us (CPU time) and Julia 211.641 us with public code (cpp/main.cpp, cpp/CMakeLists.txt, julia/stl.jl) and build steps (clang, CMake Release, julia -O3), but no clang version, no CPU model (only '8 X 2300 MHz CPU s' for the C++ run) and no hardware for the Julia run, so not A; author's own single measurement, C.",
+  "corrections": {
+   "workload": "Parse the binary STL file nist.stl (80-byte header, uint32 triangle count, then 50-byte records of 12 float32 plus a 2-byte attribute count; about 7,400 triangles judging from Julia's 347.06 KiB allocation) into a vector of triangle structs, opening the file on every iteration. C++ (cpp/main.cpp): std::ifstream, reserve, then two read() calls per triangle (48 bytes plus a 2-byte dummy) and emplace_back; reported as Google Benchmark mean CPU time over 1729 iterations (real time 429.234 us). Julia (julia/stl.jl): open, skip(80), read UInt32, then map over triangles with read!(stl, Ref{Triangle}) plus skip(2); reported as BenchmarkTools @btime, which prints the minimum time.",
+   "compiler_and_flags": "C++: /usr/bin/clang++ (version not stated, probably Apple clang given the setup) via CMake -DCMAKE_BUILD_TYPE=Release (CMake's Release default for Clang is -O3 -DNDEBUG; not printed in the repo), C++11, no -march; Google Benchmark submodule at 9ffb8df. Julia v1.0 started with julia -O3 (BenchmarkTools 0.4.1 per Manifest.toml); Julia's JIT targets the host CPU.",
+   "caveats": "Author says 'I am neither a C++ nor Julia expert'. The Julia side was tuned by a Julia core contributor (PR #2 by SimonDanisch, which the linked blog credits with making the Julia code '4 times faster'), while the C++ side uses straightforward iostream reads. The two timings use different statistics (Google Benchmark mean CPU time vs BenchmarkTools minimum wall time) and the Julia run's hardware is not stated. The win is version dependent: in open PR #3 (2020) Chris Rackauckas reports the unchanged parser at 689.599 us on Julia 1.3+ because IOStream reads now take a lock (243.900 us with the lock disabled), i.e. slower than the README's C++ time (different machine, no C++ rerun). Open PR #4 (2021) rewrites both stl.jl and main.cpp and is unmerged. Explanatory blog post is on github.io (blocked here). Julia 1.0 from 2018.",
+   "same_algorithm": true,
+   "same_opt_level": true,
+   "why_faster": "Not explained in the repository; the code suggests I/O library overhead rather than codegen: C++ makes two std::ifstream::read calls per triangle through the istream sentry and streambuf layer, while Julia 1.0's read! copies a 48-byte isbits struct straight from IOStream's C buffer without locking (Julia 1.3 added per-call IOStream locks, which reversed the result in a 2020 rerun reported in PR #3)."
+  },
+  "notes": "Confirm C. README numbers match (C++ 409.210 us vs Julia 211.641 us, 1.93x derived; 2.03x using real time 429.234 us). Both sides do the same read pattern at -O3-level optimisation, so not a crippled baseline, but the gain is an I/O-library effect that disappeared on Julia 1.3+ (689.599 us in PR #3) and the Julia side was expert-tuned while the C++ side was not; record these as shortcomings. Metadata (MIT, 7 stars, last commit 2018-10-08, abandoned) checked and correct.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/README.md",
+   "https://github.com/aaronang/stl-benchmark",
+   "https://github.com/aaronang/stl-benchmark/commits/master",
+   "https://github.com/aaronang/stl-benchmark/tree/master/cpp",
+   "https://github.com/aaronang/stl-benchmark/tree/master/julia",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/CMakeLists.txt",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/main.cpp",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/stl.jl",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Manifest.toml",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Project.toml",
+   "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/python/benchmark.py",
+   "https://github.com/aaronang/stl-benchmark/pulls?q=is%3Apr",
+   "https://github.com/aaronang/stl-benchmark/pull/2",
+   "https://github.com/aaronang/stl-benchmark/pull/3",
+   "https://github.com/aaronang/stl-benchmark/pull/4"
+  ]
+ }
+]
