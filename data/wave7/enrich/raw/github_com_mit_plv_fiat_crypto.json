@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/mit-plv/fiat-crypto",
+  "one_liner": "Coq-proved generator of finite-field arithmetic in C, Rust, Go and Zig; matches hand-written Curve25519 field code in BoringSSL, not faster.",
+  "what_it_does": "Fiat Cryptography is a Coq development whose extracted compiler (fiat_crypto) takes a prime and a word size and emits straight-line field arithmetic (carry_mul, carry_square, add, sub, opp, selectznz, to_bytes, from_bytes and more) for strategies such as unsaturated-solinas (Curve25519 5x51 or 10x25.5 limbs), word-by-word-montgomery (P-256, secp256k1) and dettman-multiplication. Pre-generated files ship in fiat-c/src, fiat-rust (the fiat-crypto crate), fiat-go, fiat-zig and fiat-bedrock2. It supplies only the field layer: the host library still writes the scalar-multiplication ladder, precomputed tables and protocol code, so it is not a drop-in for an X25519 or ECDSA API.",
+  "how_it_is_fast": "It does not use a new algorithm; speed comes from emitting the same limb-scheduled, fully unrolled, branch-free multiply-and-reduce code an expert would write by hand (unsaturated Solinas reduction for 2^255-19, Montgomery word-by-word reduction for generic primes), with proven bounds that let it drop unnecessary carries. A value barrier (empty asm) keeps compilers from turning selectznz back into branches. Since 2023 BoringSSL also ships x86-64 ADX assembly that CryptOpt compiles from Fiat templates and checks with the translation validator in the Fiat repository.",
+  "when_to_use": [
+    "You maintain a crypto library and want Curve25519, P-256, P-384, P-521, secp256k1 or Poly1305 field arithmetic with a machine-checked correctness proof at the speed of good hand-written C.",
+    "You need constant-time field code for an unusual prime (the generator covers 80+ primes and arbitrary Solinas or Montgomery-friendly moduli) rather than writing and auditing your own.",
+    "Portable 32-bit targets: the 10-limb 32-bit Curve25519 code is what the Linux kernel's generic 32-bit Curve25519 uses.",
+    "Rust projects that already depend on it indirectly (curve25519-dalek tests the fiat backend; the crate has about 151 million crates.io downloads) and want the formally verified backend selected."
+  ],
+  "when_not_to_use": [
+    "You want a faster X25519 or Ed25519 than BoringSSL or OpenSSL: the only third-party runs show parity with BoringSSL's C and the old x86_64 assembly about 9% faster on arbitrary-point multiplication.",
+    "You need a complete protocol API (keygen, sign, verify, ECDH): Fiat stops at the field, so ladders, tables, encoding and side-channel hygiene of the rest are yours.",
+    "MSVC or other compilers without unsigned __int128 for the 64-bit unsaturated files; use the 32-bit variants there.",
+    "Regenerating code for new primes on a laptop: the toolchain needs Coq 9.0+ and OCaml 4.08+, a full build takes over an hour, and large primes can need a 1 GB stack and an hour per run.",
+    "The Java backend: the README marks it unmaintained and known buggy (issue #707)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the generated C (stdint.h only); generator needs Coq 9.0+ with Rocq stdlib 9.1+, OCaml 4.08+ and jq; Rust users take the fiat-crypto crate",
+    "min_toolchain": "C99-style C with GCC or clang for the 64-bit files (unsigned __int128 and __extension__); 32-bit files are plain C; Rust crate fiat-crypto 0.3.0 states no rust-version",
+    "platforms": "any two's-complement target (the files #error otherwise); 64-bit unsaturated code needs a compiler with 128-bit integers; the CryptOpt ADX assembly in BoringSSL is x86-64 with BMI2/ADX only",
+    "thread_safety": "Stateless pure functions on caller-provided limb arrays (no globals in fiat-c/src/curve25519_64.c), so safe to call concurrently on distinct outputs; not otherwise documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Proof scope: only the Bedrock2 backend has a proof that the emitted AST matches the internal semantics; the C, Rust, Go and Zig printers are unproven, the README says integer-size casts are not verified against what gcc or clang select, and it gives no quality guarantee for generated code.",
+    "Inputs must respect the typed bounds (loose versus tight field elements, e.g. call carry or carry_mul before feeding an add result to to_bytes); violating them voids the proofs and can overflow limbs silently.",
+    "The BoringSSL base-point speedup in commit 884086e (38817.1 versus 15095.3 ops/sec) comes from switching to the Ed25519 precomputed 30 kB table, not from faster field arithmetic; on arbitrary-point multiplication fiat64 was slower (13905.1 versus 15094.0 ops/sec).",
+    "Newer speed claims are for CryptOpt assembly, not the C: BoringSSL 43f8891 (2023, by fiat's lead author, reviewed by BoringSSL) reports +31.2% on Curve25519 arbitrary-point multiplication (28263.1 ops/sec) with no baseline row, CPU or compiler, and 20c9406 reports +63.5% P-256 ECDH on Cascade Lake but only under -DOPENSSL_SMALL=1 (against the small-footprint path, not nistz256), with no difference on Haswell."
+  ],
+  "pick_this_over_siblings_when": "Pick Fiat when correctness proofs and coverage of many primes matter more than peak speed; ENG25519 (AVX-512 IFMA) and the amd64-64-24k Ed25519 code are faster on their target CPUs but carry no machine-checked proofs, and libsecp256k1 remains the complete, faster choice for secp256k1 signing rather than Fiat's bare secp256k1 field code.",
+  "verified_claims_summary": "BoringSSL's bssl speed -filter 25519 runs show parity, not a speedup: in b2c312d (clang, 32-bit toolchain, Release, an unnamed Google Cloud Xeon with AVX2) the 32-bit fiat field code matched the previous C code on arbitrary-point and base-point multiplication and Ed25519 signing, with Ed25519 verify about 4% slower, and in 884086e (no CPU or compiler stated) fiat64 was about 9% slower than the old x86_64 assembly on arbitrary-point multiplication and won base-point multiplication only by using the Ed25519 table.",
+  "status_note": "Actively maintained (Zig backend rewrite merged 2026-10-09) under a choice of MIT, Apache-2.0 or BSD-1-Clause; the generated C files are self-contained and easy to vendor, and BoringSSL, the Linux kernel's 32-bit Curve25519 and curve25519-dalek's fiat backend already do.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mit-plv/fiat-crypto/HEAD/README.md",
+    "https://raw.githubusercontent.com/mit-plv/fiat-crypto/HEAD/fiat-c/src/curve25519_64.c",
+    "https://github.com/mit-plv/fiat-crypto/commits",
+    "https://github.com/mit-plv/fiat-crypto/issues?q=is%3Aissue%20label%3Abug",
+    "https://crates.io/api/v1/crates/fiat-crypto",
+    "https://github.com/google/boringssl/commit/884086e0e28aad7efe418d9ed7459912e6683fbb",
+    "https://github.com/google/boringssl/commit/b2c312d",
+    "https://github.com/google/boringssl/commits/main/third_party/fiat/asm",
+    "https://github.com/google/boringssl/commit/43f8891",
+    "https://github.com/google/boringssl/commit/20c9406",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/third_party/fiat/asm/fiat_curve25519_adx_mul.S",
+    "https://raw.githubusercontent.com/google/boringssl/HEAD/third_party/fiat/README.md",
+    "https://github.com/torvalds/linux/commit/0ed42a6f431e"
+  ],
+  "confidence": 0.6
+}
