@@ -1,0 +1,60 @@
+{
+  "id": "lang:mojo/iinoshirozheng/mojo-analyze#mandelbrot",
+  "one_liner": "Hand-vectorised Mojo Mandelbrot kernel (4 x Float64 lanes, escape mask) that runs 1.6x faster than scalar clang -O3 C.",
+  "what_it_does": "A standalone benchmark program (benchmarks/mandelbrot/mandelbrot.mojo, 104 lines) from a single-author Mojo research repo, not a library. compute(width, height, max_iter) walks an 800x600 grid over re [-2, 1], im [-1.5, 1.5] and returns the sum of every pixel's escape-iteration count as an Int64; it writes no image or pixel buffer. The program takes --width/--height/--max-iter and prints TIME_SECONDS and CHECKSUM lines that scripts/bench.py gates against the C, Rust, NumPy and Python versions.",
+  "how_it_is_fast": "Explicit SIMD with per-lane masking: four adjacent pixels go into SIMD[DType.float64, 4] vectors, z is advanced with active.select(new, old) so escaped lanes freeze, and the batch stops when a horizontal reduce of the mask reaches zero or max_iter is hit; a scalar loop handles width % 4. The win comes from running four independent iteration chains at once, where the C loop iterates one pixel at a time through a data-dependent while exit that clang does not vectorise, so it executes one serial dependency chain. On arm64 the 4-wide Float64 vector lowers to two 128-bit NEON registers; Mojo targets the host CPU by default (mojo build docs, search snippet), so on x86-64 it can use one 256-bit register, which fits the larger Linux x86_64 CI gap (2.7x) than arm64 (1.6x on M4 Pro, 1.18x on the CI arm64 runner).",
+  "when_to_use": [
+    "As a worked, MIT-licensed pattern for writing a masked escape-time loop with Mojo's built-in SIMD type instead of intrinsics: the compute function is about 60 lines.",
+    "When judging whether Mojo's SIMD ergonomics pay off for per-element-independent Float64 loops with a data-dependent exit, compared with C you have not vectorised by hand.",
+    "As a checksum-gated harness template: every variant prints TIME_SECONDS and CHECKSUM, and bench.py refuses to report timings unless all checksums agree, which makes it easy to add a C vector-extension variant and measure the fair comparison.",
+    "When you need Float64 on Apple Silicon: the repo's Metal GPU port is 7.9x faster at 800x600 but runs in Float32 and misses the checksum by 1,180."
+  ],
+  "when_not_to_use": [
+    "As evidence that Mojo generates faster code than C: the C baseline is scalar, and a C version using clang ext_vector_type or NEON/AVX intrinsics with the same 4-lane masking is the fair comparison; the repo has none.",
+    "Multi-core or GPU rendering: the kernel is single-threaded on a 14-core machine, and the repo's own GPU port is 7.9x (800x600) to 15.4x (4000x3000) faster in Float32.",
+    "Anything not shaped like independent SIMD-friendly arithmetic: in the same repo C beats Mojo on sieve (1.05x), word frequency (1.6x), CSV aggregation (2.3x) and JSON parsing (2.3x).",
+    "Production image generation: there is no image output and no callable API, and the repo has 0 stars, one author and no issue tracker activity.",
+    "Deeply zoomed or highly chaotic regions: each 4-pixel batch keeps iterating until its slowest lane escapes, so throughput drops when neighbouring pixels have very different escape counts (not measured in the repo)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Mojo standard library only (SIMD, std.sys.argv, std.time.perf_counter_ns); the repo builds through pixi with the MAX conda channel",
+    "min_toolchain": "Mojo 1.0.0 (pixi.lock pins mojo-1.0.0-release and max 26.5.0; pixi.toml allows mojo >=1.0.0,<2)",
+    "platforms": "osx-arm64, linux-64, linux-aarch64 (pixi.toml); Windows only through WSL2",
+    "thread_safety": "single-threaded program with no shared state; not documented otherwise",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build with --fp-mode contract=off (and clang -ffp-contract=off for C): the default contraction fuses zr*zr - zi*zi + re into FMA and drifts the checksum (Mojo by 10, clang -O3 from 42411634 to 42411589), because escape counts near the set boundary are sensitive to rounding. Both published timings use contraction off, so neither side benefits from FMA.",
+    "The record's caveat that the Linux CI has no C row is out of date: experiments/2026-09-04-linux-five-category-crosscheck.md pools 3 CI runs (9 trials each) and shows Mojo 0.0493 s vs C 0.1348 s on x86_64 (2.7x) and 0.0923 s vs 0.1093 s on arm64 (1.18x, ratios derived from page data). The gap tracks vector width and core type, consistent with hand vectorisation rather than code generation.",
+    "Mojo builds for the host CPU and its features by default (docs snippet), while clang without -march targets a generic baseline; a Mojo binary built on a newer machine may not run on an older one, and the two sides are not built for the same ISA level.",
+    "The kernel is untuned even as SIMD code: it reduces the active mask every iteration and squares the new z for the escape test, then squares it again on the next iteration. A tuned C or Mojo SIMD version could be faster, so 1.6x is neither an upper nor a lower bound on what explicit SIMD gives here."
+  ],
+  "pick_this_over_siblings_when": "Pick this over the Julia and Fortran userfunc_mandelbrot rows in JuliaLang/Microbenchmarks when you want an explicit-SIMD code pattern with an exact checksum gate; pick those rows for a scalar-against-scalar language comparison. The LangArena Mojo Nbody entry is the catalogue's same-algorithm Mojo-vs-C row, but it is a single-run 1.07x that appeared only with a toolchain change.",
+  "verified_claims_summary": "On an Apple M4 Pro under macOS 26.5.2, the Mojo 1.0.0 4-lane SIMD kernel averaged 0.0554 s over 7 runs (after 2 warm-ups) against 0.0904 s for one-pixel-at-a-time C built with Apple clang 21 -O3 -ffp-contract=off (1.63x) and 0.1114 s for scalar Rust, at 800x600 and 500 iterations with identical checksums (42411634). Pooled Linux CI runs on shared GitHub runners give 2.7x on x86_64 and 1.18x on arm64 (derived from page data).",
+  "status_note": "Active, MIT-licensed single-author research notebook (124 commits, last 2026-09-25, 0 stars, commits co-authored with Claude); the kernel is small enough to copy, but its 1.6x measures hand SIMD against scalar C, which is why it sits at tier D.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/README.md",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/ANALYSIS.md",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/pixi.toml",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/pixi.lock",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/c/mandelbrot.c",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/benchmarks/mandelbrot/mandelbrot.mojo",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/rust/src/bin/mandelbrot.rs",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/scripts/bench.py",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/results/results.json",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/.github/workflows/benchmark.yml",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/LICENSE",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/experiments/2026-09-04-linux-five-category-crosscheck.md",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/experiments/2026-09-08-shared-runner-estimator-sensitivity.md",
+    "https://github.com/iinoshirozheng/mojo-analyze",
+    "https://github.com/iinoshirozheng/mojo-analyze/tree/main/experiments",
+    "https://github.com/iinoshirozheng/mojo-analyze/issues?q=is%3Aissue",
+    "https://github.com/iinoshirozheng/mojo-analyze/commits/main",
+    "https://github.com/iinoshirozheng/mojo-analyze/commits/main/benchmarks/mandelbrot/mandelbrot.mojo",
+    "https://github.com/iinoshirozheng/mojo-analyze/commits/main/results/results.json",
+    "https://docs.modular.com/mojo/cli/build (WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}

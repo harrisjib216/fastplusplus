@@ -1,0 +1,68 @@
+{
+  "id": "lang:nim/edin/raytracer#render-500x500",
+  "one_liner": "Nim port of a toy 500x500 ray tracer, timed at 130 ms vs 160 ms for the repo's GCC-built C and C++ ports.",
+  "what_it_does": "A row from edin/raytracer, a 'performance comparison of various compilers' that ports one TypeScript sample ray tracer (a checkerboard plane, two shiny spheres, four lights, reflection depth 5) to about 25 languages; it is not a library. The Nim version (nim/RayTracer.nim, about 410 lines, rewritten in PR #4 'Copy cpp' in March 2021) renders the scene into a seq of BGRA pixels and writes a BMP. Using the result means writing your kernel in Nim; there is nothing to link into a C++ program.",
+  "how_it_is_fast": "Two of the three sources of the gap are not language features. First, approximate math behind compile switches: -d:quake replaces sqrt plus divide in norm() (every primary ray, sphere normal and light vector) with a bit-trick inverse square root (magic 0x5fe6eb50c7b537a9) and one Newton step, and -d:intpow replaces libm pow(specular, 250.0 or 150.0) with exponentiation by squaring; the PR's own commit is titled 'add unfair optimizations'. Second, build flags: Nim's generated C got -march=native and LTO, while C was built with g++ -x c -O3 and C++ with -O2. Third, a leaner program: the scene lives in fixed-size arrays of a generic Scene[T, L: static int] with a variant (case) object per shape, so there is no virtual dispatch (the C++ port calls virtual GetIntersection/GetNormal/GetSurface and copies std::optional<Intersection>), the shadow test returns only a distance (C copies a full Intersection with its Ray per hit), and surface properties and the normalized reflection direction are computed once per hit (C computes surface properties twice per hit and re-normalizes the reflection direction for every unshadowed light).",
+  "when_to_use": [
+    "As a template for fast scalar Nim code: compile-time-sized arrays, case objects instead of class hierarchies, and templates/macros for field-wise vector math compile to tight C with -d:danger.",
+    "As evidence that a naive C++ design (virtual calls per object, std::optional copies, -O2) leaves performance on the table: the PR #4 author measured the Nim rewrite without the math switches at 55 ms against 74 ms for the C++ port (hardware not stated).",
+    "Preview-quality rendering or geometry kernels where an inverse square root with about 0.2% error and integer-exponent pow are acceptable, if you copy the -d:quake and -d:intpow ideas consciously.",
+    "Small single-threaded CPU-bound programs where you already use Nim and want a reference point that its C backend is not a handicap."
+  ],
+  "when_not_to_use": [
+    "As proof that Nim beats C or C++ as a language: the programs differ in algorithm (approximate norm, integer pow), work per hit and build flags, and the rows were measured about a year apart.",
+    "When output must match a reference image: with -d:quake the spheres come out slightly smaller than in the original Nim, C++ and D outputs (reported in issue #11).",
+    "As a renderer: three objects, four lights, no acceleration structure, no threads or SIMD, no API; it is a benchmark sample.",
+    "When you need a like-for-like comparison: no C build with -march=native and LTO, and no C++ build at -O3 with a switch-based design, has been timed in this repo.",
+    "For current-hardware numbers: the table is from an AMD FX-8120 and has not been re-measured since the June 2026 move to projects.xml."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Nim standard library only (math, times, macros, os, strutils); Nim's C backend compiler (GCC in the measured setup)",
+    "min_toolchain": "Not documented; the code dates from March 2021 (Nim 1.4 era) and was updated in June 2026; -d:lto needs a backend C compiler with LTO",
+    "platforms": "Any Nim target in principle; -march=native ties the binary to the build CPU and the quake trick assumes IEEE-754 binary64 layout",
+    "thread_safety": "Not applicable: single-threaded program",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Cross-run comparison: the C (GCC) and C++ (GCC) 160 ms rows first appear in the README of 1 May 2020 (commit 1ca4ffb, when Nim was listed at 1500 ms); the Nim row was set on 22 March 2021 after PR #4 (150 ms in 67da4de, then 130 ms in 8ea9877 the same day). The rows were never re-run together, compiler versions are not given, each is a single run rounded to 10 ms, and the three programs use different timers (Nim cpuTime, C clock(), C++ high_resolution_clock), all including scene setup.",
+    "The 130 ms build used -d:quake and -d:intpow (approximate inverse square root, integer pow) plus -march=native and LTO; the PR author labelled these 'unfair optimizations', and the current projects.xml drops -d:quake but keeps -d:intpow, -march=native and LTO for Nim while C stays at plain -O3 and C++ at -O2.",
+    "Latent bug in the Nim intersections template: in the plane branch, the closeness test (dist < closest) runs before dist is assigned, so it compares the default 0.0 and accepts any plane hit; this is harmless only because the plane is the first object in the scene, and reordering the scene would make the plane occlude nearer spheres.",
+    "The baselines have their own defects: the C Legalize() casts to uint8 before clamping, so channels above 1.0 overflow (undefined conversion) instead of saturating, and the README remark that the C++ port does bounds checking is not borne out by its source (no .at() calls)."
+  ],
+  "pick_this_over_siblings_when": "Among systems-and-safety siblings, the benchLANG Nim binary-trees entry measures Nim against C and C++ with matched -O3 -march=native -flto flags and the same algorithm on a dated 2026 run, so it is the stronger Nim data point; mosdepth and the c-blake tools (cligen/dents, procs, dups) are usable Nim programs that beat C tools, whereas this entry only shows that a carefully restructured Nim toy with approximate math beats an unoptimized C++ class-hierarchy port.",
+  "verified_claims_summary": "The README table (single runs on an AMD FX-8120, apparently Windows with MinGW g++ given the run.bat scripts and MSVC rows) shows the 500x500 render at 130 ms for Nim built with -d:danger -d:lto -d:intpow -d:quake -march=native against 160 ms for C (g++ -x c -O3) and C++ (g++ -O2 -std=c++17), about 1.23x (derived from page data), with the C and C++ rows dating from May 2020 and the Nim row from March 2021. Third-party points in the repo agree on direction but not size: the PR #4 author measured 55 ms (no math switches) and 37 ms (with them) against 74 ms for C++ on unstated hardware, and jzakiya (issue #11) measured C/C++ at 75-78 ms against fast Nim at 42-45 ms on an i7-6700HQ.",
+  "status_note": "MIT-licensed, 61 stars, last commit 2026-06-18 (a new projects.xml-driven 'ray' wrapper), but the results table has not been refreshed since 2021 and the Nim file is a benchmark sample, not a maintained component.",
+  "sources_read": [
+    "https://github.com/edin/raytracer",
+    "https://raw.githubusercontent.com/edin/raytracer/HEAD/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/HEAD/projects.xml",
+    "https://raw.githubusercontent.com/edin/raytracer/HEAD/nim/RayTracer.nim",
+    "https://raw.githubusercontent.com/edin/raytracer/HEAD/c/RayTracer.c",
+    "https://raw.githubusercontent.com/edin/raytracer/HEAD/c++/RayTracer.cpp",
+    "https://raw.githubusercontent.com/edin/raytracer/80bb306/nim/run.bat",
+    "https://raw.githubusercontent.com/edin/raytracer/80bb306/nim/build.bat",
+    "https://raw.githubusercontent.com/edin/raytracer/80bb306/c/run.bat",
+    "https://raw.githubusercontent.com/edin/raytracer/80bb306/c/run.sh",
+    "https://raw.githubusercontent.com/edin/raytracer/80bb306/c++/run.bat",
+    "https://raw.githubusercontent.com/edin/raytracer/ce357dd/nim/RayTracer.nim",
+    "https://raw.githubusercontent.com/edin/raytracer/e8794d0/nim/RayTracer.nim",
+    "https://raw.githubusercontent.com/edin/raytracer/3c4a9b1/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/02fed97/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/1ca4ffb/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/67da4de/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/8ea9877/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/c30d417/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/2a2b53a/readme.md",
+    "https://raw.githubusercontent.com/edin/raytracer/b5b8044/readme.md",
+    "https://github.com/edin/raytracer/commits/master/readme.md",
+    "https://github.com/edin/raytracer/commits/master/nim/RayTracer.nim",
+    "https://github.com/edin/raytracer/commits/master/c/RayTracer.c",
+    "https://github.com/edin/raytracer/issues?q=is%3Aissue",
+    "https://github.com/edin/raytracer/issues/5",
+    "https://github.com/edin/raytracer/issues/11",
+    "https://github.com/edin/raytracer/issues/38",
+    "https://github.com/edin/raytracer/pull/4"
+  ],
+  "confidence": 0.2
+}

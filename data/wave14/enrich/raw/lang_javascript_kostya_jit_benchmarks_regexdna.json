@@ -1,0 +1,60 @@
+{
+  "id": "lang:javascript/kostya/jit-benchmarks#regexdna",
+  "one_liner": "Node.js 19 runs kostya's regex-dna 5.3x faster than a C program that leaves libpcre's JIT off: a regex-engine artifact.",
+  "what_it_does": "One test from kostya/jit-benchmarks (round 1, 2023-02-28): the retired Benchmarks Game regex-dna task on a generated FASTA of about 35M bases (helper.c with n=3,500,000), counting matches of nine case-insensitive alternation patterns and applying eleven IUB-code substitutions. The JavaScript program uses String.prototype.match with /.../ig literals and String.prototype.replace with /B/g-style literals; the C program is Mike Pall's PCRE1 version. It is evidence about regex-engine modes, not a library to adopt: the practical lesson is to turn on a JIT regex engine in C or C++, not to move code to Node.",
+  "how_it_is_fast": "The nine variant patterns go to V8's Irregexp, which in current V8 source compiles straight to native machine code when the subject exceeds 1,000 characters (kTierUpForSubjectLengthValue in src/objects/js-regexp.h). The eleven substitution patterns are single-letter, case-sensitive, non-sticky literals, which V8 classifies as ATOM regexps ('a simple string match', executed by AtomExec as an indexOf-style string search in src/regexp/regexp.cc), so they never run a regex engine at all. The C side compiles all twenty patterns with PCRE_CASELESS and calls pcre_study(re, 0, ...), so every pcre_exec call runs libpcre's interpretive backtracking matcher without JIT. The gap is native regex code plus literal string search against an interpreted matcher, not JavaScript code generation (the V8 behaviour was read in current V8 main, not in the V8 bundled with Node 19.7.0).",
+  "when_to_use": [
+    "Node.js text-processing scripts that run a handful of global regex scans or literal global replaces over multi-megabyte strings: Node took 1.06 s for twenty whole-string passes over about 35 MB, against 1.39 s for PHP 8.2.3 driving PCRE2 on the same caseless counts and case-sensitive substitutions.",
+    "Literal global replacements in V8 (/X/g with a string replacement and no i or y flag) take the ATOM string-search path, so there is no reason to hand-roll split/join for them.",
+    "As a reminder for C and C++ code on PCRE1 or PCRE2: request JIT (PCRE_STUDY_JIT_COMPILE with pcre_study, or pcre2_jit_compile). The 4x gap between the C row (5.6 s) and the PHP/PCRE2 rows (1.39-1.40 s) in this table points at JIT, though no JIT-enabled C build was measured."
+  ],
+  "when_not_to_use": [
+    "As evidence that JavaScript beats C: the C baseline runs PCRE in interpreter mode with caseless matching even for single-letter substitutions; PHP calling PCRE2 already runs in 1.39 s, and a C build with PCRE JIT and memchr-style literal replacement would likely land near or below Node (not measured).",
+    "Memory-constrained hosts: Node peaked at 622.4 MB against 86.7 MB for C (about 7.2x); test.js reads stdin line by line into one concatenated string and match() materialises an array of every match.",
+    "As a current figure: the numbers are one self-timed iteration from round 1 (Node 19.7.0, gcc 12.2.0) and were never rerun; the only later commit (2026-01-27) adds a README link.",
+    "As a regex benchmark at all: the Benchmarks Game retired regex-dna for regex-redux because programs used string substitution instead of regex (issue #13, opened by igouy on 2023-02-12, still open), and this JavaScript program is such a case through V8's ATOM path."
+  ],
+  "integration": {
+    "form": "module (application code: regexdna/test.js on Node's built-in RegExp and readline; nothing to vendor)",
+    "dependencies": "Node.js runtime only; the C baseline links libpcre3-dev from the Ubuntu 22.10 base image (version not pinned in the repo)",
+    "min_toolchain": "Node.js 19.7.0 as benchmarked, default flags (node test.js); C side gcc 12.2.0 -O3 -march=native -fomit-frame-pointer -funroll-loops -lpcre",
+    "platforms": "x86-64 Linux in Docker (Ubuntu 22.10) on an AMD Ryzen 7 3800X as measured; the README says the harness also runs on aarch64 (Apple M1), but published results are amd64 only",
+    "thread_safety": "Single-threaded benchmark; not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: the README's 'Best T,s' column is the program's own time(...) print (Runner#record_timings! stores the printed value and get_readme_rows shows its minimum), not the external wall clock from 'started' to exit that the record's workload describes. C reports CPU time from clock() rounded to 0.01 s, Node reports wall time from new Date(); both exclude reading input and stripping headers, and with args [1] each row is a single cold iteration, so Node's 1.06 s includes regex compilation.",
+    "Unequal work across rows that the md5 output check cannot catch: C compiles the eleven single-letter substitutions with PCRE_CASELESS while JavaScript (/B/g) and PHP (/B/S) are case-sensitive, and the Python and Crystal variant patterns are case-sensitive while C, JavaScript and PHP use caseless matching. The uppercase ALU section (7M of the 35M bases) contains no variant match (agent check of the 287-base repeat), so outputs agree while case-sensitive engines skip that section cheaply; CPython's 5.2 s against C's 5.6 s is therefore not a like-for-like win either.",
+    "The Crystal row (0.34 s, fastest in the table) times only its single gsub: test.cr starts its timer after the nine scan counts, so the counts are outside the measured region. Do not use it as a reference for what compiled code can reach.",
+    "Eleven of the twenty passes in the JavaScript version are literal string searches (V8 ATOM regexps), not Irregexp code, so the entry name overstates the role of the Irregexp JIT."
+  ],
+  "pick_this_over_siblings_when": "Cite this entry only to show that regex-engine mode (native-code Irregexp and literal search against interpreted PCRE1) dominates such comparisons. For evidence that JIT-compiled JavaScript beats C on the same algorithm, the Node.js fannkuch-redux entry from the same suite is cleaner, and the Bun LangArena and benchLANG binary-trees entries cover allocation-heavy code; like the LuaJIT k-nucleotide entry from this suite, it rests on one run against a weak C or C++ baseline.",
+  "verified_claims_summary": "In round 1 of kostya/jit-benchmarks (2023-02-28, AMD Ryzen 7 3800X, Docker on Ubuntu 22.10), Node.js 19.7.0 reported 1.06 s for the nine caseless variant counts and eleven substitutions on a roughly 35M-base FASTA, against 5.6 s of CPU time for Mike Pall's C program built with gcc 12.2.0 -O3 -march=native and linked to libpcre without JIT (about 5.3x, derived from page data). PHP 8.2.3 via PCRE2 took 1.39 s; every row is one self-timed iteration.",
+  "status_note": "The suite is dormant (no code change since March 2023; the 2026-01-27 commit only adds a README link, which keeps it 'active' under the 12-month rule), MIT-licensed with 105 stars; the numbers are a cautionary datapoint about leaving PCRE's JIT off, not reusable code.",
+  "sources_read": [
+    "https://github.com/kostya/jit-benchmarks",
+    "https://github.com/kostya/jit-benchmarks/commits/master",
+    "https://github.com/kostya/jit-benchmarks/issues?q=is%3Aissue",
+    "https://github.com/kostya/jit-benchmarks/issues/13",
+    "https://github.com/kostya/jit-benchmarks/issues/4",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/dc",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/cli.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/memory_profile.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/base",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/nodejs",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.c",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.js",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.php",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.cr",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.py",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/helper.c",
+    "https://raw.githubusercontent.com/v8/v8/main/src/objects/js-regexp.h",
+    "https://raw.githubusercontent.com/v8/v8/main/src/regexp/regexp.cc"
+  ],
+  "confidence": 0.75
+}

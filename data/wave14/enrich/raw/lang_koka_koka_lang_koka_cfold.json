@@ -1,0 +1,59 @@
+{
+  "id": "lang:koka/koka-lang/koka#cfold",
+  "one_liner": "Koka: functional language compiled to C with Perceus reference counting; cfold ran 3.3x faster than a never-freeing C++ port.",
+  "what_it_does": "Koka is a Microsoft Research functional language with effect types and handlers. It compiles to C and needs no garbage collector or runtime system. This entry is not a library. It is the cfold benchmark from the Perceus paper, which builds a symbolic sum with 2^20 leaves, re-associates it into a right-leaning list, constant-folds it and evaluates it. To get the result you write the program in Koka; nothing here drops into a C++ code base.",
+  "how_it_is_fast": "Perceus inserts precise reference-count operations at compile time and frees each node as soon as it dies. Reuse analysis (FBIP, 'functional but in-place') then turns a match on a uniquely owned constructor followed by an allocation of the same shape into an in-place update. In cfold, append_add rebuilds the spine of a list it owns, so optimized Koka rewrites those cells in place where the C++ port allocates a fresh node at every step. Koka also links a customized mimalloc with 8-byte alignment, while the paper notes that the C++ side's glibc allocations must be 16-byte aligned.",
+  "when_to_use": [
+    "Tree-rewriting code (compiler passes, symbolic algebra, term rewriting) written in a functional style that would otherwise copy nodes immutably: reuse analysis turns those copies into in-place updates without manual ownership code.",
+    "Allocation-heavy programs that need garbage-free memory behaviour without a tracing GC: Perceus frees each node as it dies, so peak working set stays close to the live data (the never-freeing C++ port peaked at 2.94x Koka's RSS).",
+    "Research or prototyping of functional algorithms that must call C: Koka emits C and can link C libraries directly.",
+    "Single-threaded work on x64 Linux, macOS (x64 and M1) or Windows, where binary installers exist."
+  ],
+  "when_not_to_use": [
+    "As evidence that Koka beats C++ you can write yourself: nobody tried an in-place C++ reassoc (the input tree is dead after reassoc in the C++ main too), an arena or pool, or mimalloc linked into the C++ binary. The paper calls Figure 9 'not a direct comparison of absolute performance between systems'.",
+    "Workloads that are not allocation-bound or that share structure heavily: in the same figure C++ wins rbtree (0.92) and nqueens (0.79), and Java beats Koka on deriv (0.86).",
+    "Production code: the README calls Koka v3 'a research language that is currently under development and not quite ready for production use', and its ecosystem is small.",
+    "Cyclic data: there is no cycle collector, so cycles built through mutable references leak.",
+    "Deep non-tail recursion over huge structures without stack tuning: the current bench README advises 'ulimit -s unlimited' for cfold, and current Koka builds the suite with --stack=128M."
+  ],
+  "integration": {
+    "form": "language and compiler (Koka source compiled to C, then by gcc, clang or MSVC); not a C++ library",
+    "dependencies": "Koka compiler (binary installer, or built from source with Haskell stack) plus a C compiler; the kklib runtime with bundled mimalloc is linked automatically; vcpkg optional for C libraries",
+    "min_toolchain": "Measured with Koka 2.0.3 and gcc 9.3.0; current release Koka v3.2.9 (2026-09-17)",
+    "platforms": "Binary installers for Windows x64, macOS x64 and Apple M1, and Linux x64; other platforms build from source. Benchmark run on Linux x86-64.",
+    "thread_safety": "Each object carries a thread-shared flag: reference counts stay non-atomic until an object is shared with another thread, then use atomic operations (Perceus TR section 2.7.2). The paper measured 5% to 59% slowdowns with always-atomic counts. The benchmark is single-threaded.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw, allocation volume differs by design (derived from the source, not measured): mk_expr(20,1) builds 2^21-1 nodes, and the C++ reassoc copies the whole left spine at every Add (append_add returns a new AddExpr per step), about 20 x 2^19 = 10.5M extra nodes that are never freed. Optimized Koka rewrites the same uniquely owned cells in place and allocates about one cell per internal node. So the 3.33x mostly measures copying without freeing against in-place reuse, not code generation. Even Koka 'no-opt' (1.54) frees and recycles through mimalloc, while C++ touches fresh memory for every node.",
+    "The two programs fold differently: the C++ const_folding inspects only the root (one rewrite, no recursion), while Koka's cfold folds the whole list bottom-up, and the C++ eval then walks the unfolded list of 2^20 leaves. The printed checksums match, but the timed phases do not correspond one-to-one (same_algorithm is false).",
+    "Measurement: run.kk at v2.0.3 times the whole process with /usr/bin/time -f '%e %M' (wall clock and peak RSS, including tree construction, the first eval and process exit), drops the single slowest run and averages the rest. The Perceus TR says 'median over 10 runs' and the README says 'averaged'. Java gets -Xss128m for cfold but C++ gets no stack setting, so the C++ run depends on the shell's stack ulimit, which the 2020 instructions do not document.",
+    "The numbers are first-party, from Koka 2.0.3 in November 2020. At HEAD the Koka benchmark has been reformatted and given a test() entry point, and the suite builds with a newer compiler, so the chart has not been re-measured on current Koka. C++ uses 64-bit long, while Koka's int is arbitrary precision with a small-int fast path, which costs Koka extra checks."
+  ],
+  "pick_this_over_siblings_when": "Most siblings are tools (fuc cpz/rmz, mosdepth, sambamba) or language entries with fairer harnesses (Nim ref-object binary trees against a C++ make_unique tree that frees its nodes; Rust and Zig sorts against std::sort). Pick Koka for functional tree rewriting, where in-place reuse of uniquely owned nodes replaces copying, and treat the sibling deriv row (same rewrite rules on both sides) as the more like-for-like Koka-versus-C++ number.",
+  "verified_claims_summary": "Perceus TR Figure 9 and the identical README chart: on a 6-core AMD Ryzen 5 3600XT running Ubuntu 20.04 (November 2020), the gcc 9.3.0 C++ port (CMake Release -O3, glibc malloc, never frees) took 3.33x the time and 2.94x the peak RSS of Koka 2.0.3 (generated C at -O2 -flto with bundled mimalloc). Koka with reuse optimizations off scored 1.54, which still makes it about 2.2x faster than C++ (derived from page data).",
+  "status_note": "Koka is actively developed at Microsoft Research (v3.2.9 released 2026-09-17, 4.1k stars, Apache-2.0) but calls itself a research language not ready for production. This is a 2020 first-party result against a C++ port the authors call a performance baseline that copies without freeing, so read 3.33x as evidence for Perceus reuse, not as a Koka-versus-C++ speed ratio.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/readme.md",
+    "https://github.com/koka-lang/koka",
+    "https://microsoft.com/en-us/research/uploads/prod/2020/11/perceus-tr-v4.pdf",
+    "https://github.com/koka-lang/koka/tree/v2.0.3/test/bench",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/run.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/README.md",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/README.md",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/cpp/cfold.cpp",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/cpp/cfold.cpp",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/koka/cfold.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/koka/cfold.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/koka/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/koka/CMakeLists.txt",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+benchmark",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+%22stack+overflow%22",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+label%3Aruntime-performance"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,64 @@
+{
+  "id": "lang:javascript/kostya/langarena#binarytrees-obj",
+  "one_liner": "Bun 1.4.2 builds and sums depth-20 object trees 2.2x faster than make_unique C++: an allocator and GC effect.",
+  "what_it_does": "A row from LangArena, a 50-task, 26-language benchmark suite, not a library. Binarytrees::Obj builds a complete depth-20 binary tree (2,097,151 nodes, one TreeNodeObj object per node with item, left and right fields), sums it recursively into a uint32 checksum and drops it, 30 times in the timed loop after 6 warm-up iterations. The TypeScript version (typescript/src/index.ts, run directly with 'bun run', so Bun transpiles it) and the plain JavaScript version (javascript/index.js) contain the same class; getting the speedup means writing the allocation-heavy part in JavaScript on Bun.",
+  "how_it_is_fast": "Allocation and reclamation, not JIT code quality. Bun runs JavaScriptCore, whose Riptide collector is non-moving, generational through sticky mark bits, and marks in parallel on up to eight logical CPUs, mostly concurrently with the program (WebKit's Riptide description, read through search snippets), so a dead tree is never traced; the C and C++ versions call malloc or operator new per node and walk the whole tree to free or delete it inside the timer. That works out to about 15.5 ns per node for TypeScript/Bun against 33.4 ns for the best C++ build and 39.5 ns for C/Clang (derived from page data over 62.9M timed nodes). The suite's own controls point at the native allocator rather than at JIT versus AOT: Node 26.10 and Deno run the same JavaScript in 3.21-3.36 s, slower than every C++ build, while the suite's Rust code compiled ahead of time to wasm32-wasip1 and run under Node takes 0.993 s, matching Bun and 2.4x faster than the best native Rust build (2.423 s); 32-bit wasm pointers and a linear-memory allocator versus glibc malloc with 64-bit pointers is the likely difference (agent inference, not measured).",
+  "when_to_use": [
+    "Bun services or scripts that build and discard large pointer-linked structures (ASTs, parse trees, document object graphs) per request and are judged on throughput: idiomatic class-per-node code beat idiomatic make_unique C++ by about 2.2x here.",
+    "Choosing a JavaScript runtime for allocation-heavy code: on this test Bun (0.973 s) is about 3.4x faster than Node 26.10 (3.355 s) and Deno (3.21-3.30 s) running the same source.",
+    "Hosts with idle cores and memory headroom, which JavaScriptCore's parallel, mostly concurrent marking and its roughly 650 MB peak heap can use.",
+    "Deciding whether to port such code to C or C++: this result says per-node new/delete through glibc malloc will likely be slower unless the port uses an arena or pool."
+  ],
+  "when_not_to_use": [
+    "As evidence that a JIT beats ahead-of-time compilation: AOT Rust compiled to WebAssembly (0.993 s), V/GCC/Perf (0.905 s), Nim/GCC/ARC (1.193 s) and Go/Opt (1.303 s) also beat every C and C++ build, while V8 runs the identical JavaScript at 3.35 s; the C/C++ rows lose to their per-node allocation, not to Bun's code generation.",
+    "Against arena-allocated C or C++: the suite's C index arena grown by realloc (C/Gcc/Fast 0.255 s, 27 MB) is about 3.8x faster than Bun's object tree, and the C++ std::vector arena (0.512-0.685 s) also beats it.",
+    "Memory-constrained deployments: peak RSS was 647.5 MB for TypeScript/Bun against 69.5 MB for C++/G++/Fast and 66.4 MB for C/Clang (about 9-10x).",
+    "Containers with a CPU quota of one core (agent inference): the measured runs had no CPU limit, so JavaScriptCore's GC helper threads could use the other cores of the 8-core CPU while the C/C++ programs ran on one; no single-threaded-GC Bun configuration was measured.",
+    "Other tree representations in JavaScript: Bun's 'arena' variant (an array of per-node objects) is slower, at 1.553 s and 1.28 GB."
+  ],
+  "integration": {
+    "form": "source-drop (the TreeNodeObj class in typescript/src/index.ts or javascript/index.js; nothing links into a C++ program)",
+    "dependencies": "Bun runtime only (1.4.2 as measured); the tree code uses no packages",
+    "min_toolchain": "Bun 1.4.2 as measured with default flags ('bun run /src/typescript/src/index.ts'); TypeScript/Bun/Compiled (bun build --target=bun) lands at 0.983 s; older Bun versions are not in this results file",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X, 78 GB RAM) inside Docker with a 16 GB memory limit and no CPU limit",
+    "thread_safety": "Not applicable: single-threaded workload; JavaScriptCore's GC threads run beside it",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Parallel GC work is in the wall time but not in the table: benchmarks.rb wraps every run in /usr/bin/time and parses user and system time, but the results file keeps only wall time and peak RSS per test, and docker-compose.yaml sets no CPU limit. Riptide marks on up to eight logical CPUs, so part of Bun's collection cost can run on other cores; for HotSpot the suite's single-threaded SerialGC row cut the margin over C++ from 4.4x to 2.4x, and Bun has no equivalent control row.",
+    "The record's caveat that the harness calls global.gc() after stopping the timer needs refining: Bun's CLI docs list --expose-gc as the flag that exposes gc() on the global object, and the Bun run command passes no flags, so the guarded call most likely does nothing. No explicit collection happens anywhere: warm-up garbage is not cleared before timing, and garbage from the last timed iterations is never collected inside the timer, while C and C++ free every node inside each timed iteration.",
+    "The record's arena comparison needs care: TypeScript's Binarytrees::Arena pushes one {item, left, right} object per node into a growing array, so its 1.553 s is not an arena result. Like for like, the C realloc arena (0.255 s) beats Bun's object tree (0.973 s) by about 3.8x.",
+    "One self-timed measurement per configuration (performance.now() around runAll in TypeScript, steady_clock in C++), with no repeats or variance; the test was selected because a Bun row beats every C/C++ row. Each language's checksum (75497436) is checked, and the C/C++ -O3, LTO, fast-math and PGO builds land between 2.098 and 2.548 s, so the baseline is not crippled by flags."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued Binarytrees::Obj rows, HotSpot (0.479 s, the Java entry) is about 2x faster than Bun, so pick Bun only when the code already lives in JavaScript. Against the benchLANG Bun entry (1.24x over C) and the alya-lang Bun entry (1.28x over gcc -O2), this is the strongest Bun binary-trees evidence because it beats 16 C/C++ build configurations and carries Node, Deno and Rust-to-WebAssembly controls on the same machine.",
+  "verified_claims_summary": "LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux, Docker) timed 30 depth-20 build-and-sum iterations at 0.973 s for TypeScript/Bun/JIT and 1.042 s for JS/Bun/JIT (Bun 1.4.2), against 2.101 s for C++/G++ (GCC 16.0.1 trunk, -O2 with hardening flags, std::make_unique nodes, glibc malloc), 2.098 s for the best C/C++ configuration (C++/G++/Fast, -O3 -march=native, thin LTO) and 2.482 s for C/Clang 22.1.8: about 2.2x and 2.0x faster (derived from page data).",
+  "status_note": "Actively maintained MIT suite (last commit 2026-10-08, monthly reruns, 41 stars) with public code, flags and per-configuration results; the tree class is trivial to copy, but the speedup is a property of Bun's runtime that depends on its version and on spare cores, and the author calls the suite subjective, with AI-assisted translations reviewed by hand.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena/commits/master",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue%20bun",
+    "https://github.com/kostya/LangArena/tree/master/typescript/src",
+    "https://github.com/kostya/LangArena/tree/master/javascript",
+    "https://github.com/kostya/LangArena/tree/master/rust/src",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/test.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/docker-compose.yaml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/typescript/src/index.ts",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/typescript/package.json",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/typescript/tsconfig.json",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/javascript/index.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/javascript/run",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/binarytrees.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/binarytrees.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/binarytrees.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://bun.com/docs/cli/run (WebSearch snippet only)",
+    "https://webkit.org/blog/7122/ (WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}

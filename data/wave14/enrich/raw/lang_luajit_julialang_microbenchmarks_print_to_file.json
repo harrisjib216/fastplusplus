@@ -1,0 +1,60 @@
+{
+  "id": "lang:luajit/julialang/microbenchmarks#print-to-file",
+  "one_liner": "LuaJIT 2.1 writes 100,000 formatted integer lines to /dev/null in 6.26 ms versus 8.02 ms for C fprintf, on separate CI runners.",
+  "what_it_does": "One row of the Julia project's cross-language microbenchmark suite: a Lua loop calls f:write(string.format('%d %d\\n', i, i+1)) 100,000 times on a file opened on /dev/null, while the C version calls fprintf(f, \"%ld %ld\\n\", i, i+1). The thing being catalogued is the LuaJIT runtime itself, not a library you link into C++; the result says LuaJIT's traced string.format plus io.write path formats small integers faster than glibc's printf family.",
+  "how_it_is_fast": "LuaJIT's trace recorder (recff_format in src/lj_ffrecord.c) guards on the constant format string, parses it once at record time, and emits a plain-%d shortcut (IR_TOSTR with IRTOSTR_INT) for each narrowed integer argument; the assembler (asm_bufput in src/lj_asm.c) fuses that into direct lj_strfmt_putint calls, which use the digit-pair routine lj_strfmt_wint, and the one-character literals become lj_buf_putchar calls. recff_io_write then calls fwrite on the FILE* straight from the trace. glibc's fprintf instead re-parses the format string through vfprintf on every call. So the win is LuaJIT's runtime formatter (written in C) against glibc printf, not JIT-generated user code beating gcc's codegen; this is inference from the sources, since the suite states no mechanism.",
+  "when_to_use": [
+    "You already run Lua code under LuaJIT and its hot loop emits many lines of integers through string.format and file:write: this shows that path is competitive with C stdio.",
+    "Logging or report generation from LuaJIT where the format string is a constant literal, so the recorder can specialise it.",
+    "As a data point that printf-family formatting in C is slow per call, before you blame the language: a specialised integer formatter beats glibc fprintf."
+  ],
+  "when_not_to_use": [
+    "As evidence that LuaJIT beats C in general: in the same table LuaJIT is slower than C on the other seven benchmarks (recursion_fibonacci 5.20x, userfunc_mandelbrot 2.54x, matrix_statistics 2.29x, recursion_quicksort 2.24x, parse_integers 1.21x, matrix_multiply 1.14x, iteration_pi_sum 1.07x).",
+    "As a C or C++ replacement for formatted output: Rust's BufWriter plus writeln! ran in 4.17 ms (0.52x of C) in the same table, and a C program that calls an integer-to-string routine and fwrite directly (as LuaJIT does internally) was not measured but would likely remove most of the gap.",
+    "Format strings that are built at run time, or arguments that are not narrowed integers: the recorder then falls back to generic lj_strfmt_putfnum_int, lj_strfmt_putfxint or lj_strfmt_putfnum calls, or aborts the trace (%p, non-string %s).",
+    "Workloads where per-line string allocation matters: each string.format result is still materialised as an interned Lua string (IR_BUFSTR) before fwrite, so there is GC pressure that the measurement on /dev/null does not expose."
+  ],
+  "integration": {
+    "form": "LuaJIT runtime: the luajit executable, or libluajit (static or shared) embedded through the Lua C API",
+    "dependencies": "none for this benchmark (the suite's perf.lua also requires the scilua 'sci' rock and OpenBLAS for its matrix rows)",
+    "min_toolchain": "LuaJIT 2.1 (measured with Ubuntu's luajit package, version 2.1.1703358377); building LuaJIT needs GCC, Clang or MSVC and GNU Make",
+    "platforms": "x86, x64, ARM, ARM64, PPC, MIPS32 and MIPS64 targets in src/lj_arch.h; Linux, macOS, BSD and Windows builds; measured on x86_64 GitHub Actions runners only",
+    "thread_safety": "not documented for this benchmark; a LuaJIT lua_State is single-threaded and the benchmark is serial",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: .github/workflows/benchmarks.yml runs C (job bench-c) and LuaJIT (job bench-lua) on separate ubuntu-latest runner VMs and only collects the CSVs afterwards, with no CPU model recorded, so the 6.26 ms vs 8.02 ms ratio crosses machines; a 1.28x gap is within the spread one can expect between shared runner VMs.",
+    "The two sides use different timers and inputs: c/perf.c times with gettimeofday (wall clock, microsecond resolution) while lua/perf.lua uses clock_gettime(CLOCK_MONOTONIC) through the FFI; C writes i = 0..99,999 and Lua writes i = 1..100,000. Rust's version writes \"i i\" rather than \"i i+1\". These differences are small next to the cross-runner problem.",
+    "The C baseline is built at -O2 (the Makefile copies benchmarks/c2.csv into c.csv), but the time is spent in glibc's vfprintf, so the optimisation level of perf.c barely matters here.",
+    "The %d shortcut depends on the trace narrowing the loop variable to an integer; the first of the five internal repetitions also includes trace recording, and the reported number is the best of up to 15 runs, so it reflects the compiled steady state only."
+  ],
+  "pick_this_over_siblings_when": "Among the LuaJIT siblings, the kostya/jit-benchmarks k-nucleotide row (A tier, 2.7x over an untuned std::unordered_map) and the dyu/ffi-overhead call-loop row (1.3x on FFI calls) are stronger evidence; cite this row only when the question is specifically formatted text output from LuaJIT, and treat it as directional.",
+  "verified_claims_summary": "On the JuliaLang/Microbenchmarks results page (generated 21 April 2026), print_to_file took 6.26 ms under LuaJIT 2.1.1703358377 against 8.02 ms for C fprintf built with gcc 13.3.0 -std=c99 -O2, both writing 100,000 lines to /dev/null and both reported as the minimum of 15 timed runs. C and LuaJIT ran in different GitHub Actions jobs on separate ubuntu-latest x86_64 runners with no CPU model given, so the ratio is a cross-machine comparison.",
+  "status_note": "The suite is active (last commits 2026-04-21, CI-dependency bumps; methodology standardised in PR #112 on 2026-03-02), MIT-licensed, and LuaJIT itself is MIT and maintained in rolling 2.1 releases; this row is a directional data point about LuaJIT's formatter, not a reusable component.",
+  "sources_read": [
+    "https://github.com/JuliaLang/Microbenchmarks",
+    "https://github.com/JuliaLang/Microbenchmarks/commits/master",
+    "https://github.com/JuliaLang/Microbenchmarks/issues?q=is%3Aissue+print_to_file+OR+printfd+OR+lua",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/README.md",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/Makefile",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/c/perf.c",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/lua/perf.lua",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/rust/src/main.rs",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/julia/perf.jl",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/bin/table.jl",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/bin/versions.sh",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/.github/workflows/benchmarks.yml",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/LICENSE.md",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks/index.html",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks.csv",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/notes/index.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/README",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/install.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lj_ffrecord.c",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lj_asm.c",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lj_strfmt.c",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lib_io.c",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lj_arch.h"
+  ],
+  "confidence": 0.7
+}

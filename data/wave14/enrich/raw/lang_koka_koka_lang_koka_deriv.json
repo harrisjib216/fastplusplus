@@ -1,0 +1,58 @@
+{
+  "id": "lang:koka/koka-lang/koka#deriv",
+  "one_liner": "Koka (functional language compiled to C with Perceus reference counting): deriv ran 1.33x faster than a never-freeing C++ port.",
+  "what_it_does": "Koka is a Microsoft Research functional language with effect types and handlers. It compiles to C and needs no garbage collector or runtime system. This entry is the deriv benchmark from the Perceus paper. Starting from x^x, it takes ten successive symbolic derivatives through simplifying smart constructors (add, mul, powr, ln) and prints each result's node count. Expressions grow to up to 10M nodes and share many subterms. Using it means writing the program in Koka; nothing drops into C++.",
+  "how_it_is_fast": "Perceus inserts precise reference-count operations at compile time and frees each node when its last reference dies. Each derivative's dead input is therefore reclaimed, and its memory is recycled by Koka's bundled mimalloc (8-byte alignment) instead of growing the heap. Reuse analysis barely matters here: the paper says heavy sharing sends most matches down the slow path, and Koka 'no-opt' is only 1.05x optimized Koka. The C++ port runs the same rewrite rules but allocates with glibc malloc (16-byte aligned, per the paper) and never frees, so the 1.33x gap most likely comes from memory management (allocator, reclamation, footprint), not code generation.",
+  "when_to_use": [
+    "Symbolic algebra, term rewriting or compiler passes over immutable trees with heavy subterm sharing, when memory should be reclaimed promptly without a tracing GC (the never-freeing C++ port peaked at 2.25x Koka's RSS).",
+    "Functional rewriting code you would otherwise write in OCaml, Haskell or Swift, when you want C output and direct linking with C libraries.",
+    "Long-running single-threaded symbolic work where peak working set matters as much as time.",
+    "x64 Linux, macOS (x64 and M1) or Windows, where binary installers exist."
+  ],
+  "when_not_to_use": [
+    "When a tuned tracing GC is an option: Java (HotSpot G1) beat Koka on this row (0.86 relative time), and the paper reports that OCaml used slightly less memory here.",
+    "As evidence that Koka beats C++ you can write yourself: nobody tried a C++ port with an arena, a node pool, reference counting or mimalloc linked in. The authors call Figure 9 'not a direct comparison of absolute performance between systems', and C++ wins rbtree (0.92) and nqueens (0.79) in the same figure.",
+    "Production code: the README calls Koka v3 'a research language that is currently under development and not quite ready for production use', and its ecosystem is small.",
+    "Cyclic data: there is no cycle collector, so cycles built through mutable references leak."
+  ],
+  "integration": {
+    "form": "language and compiler (Koka source compiled to C, then by gcc, clang or MSVC); not a C++ library",
+    "dependencies": "Koka compiler (binary installer, or built from source with Haskell stack) plus a C compiler; the kklib runtime with bundled mimalloc is linked automatically; vcpkg optional for C libraries",
+    "min_toolchain": "Measured with Koka 2.0.3 and gcc 9.3.0; current release Koka v3.2.9 (2026-09-17)",
+    "platforms": "Binary installers for Windows x64, macOS x64 and Apple M1, and Linux x64; other platforms build from source. Benchmark run on Linux x86-64.",
+    "thread_safety": "Each object carries a thread-shared flag: reference counts stay non-atomic until an object is shared with another thread, then use atomic operations (Perceus TR section 2.7.2). The paper measured 5% to 59% slowdowns with always-atomic counts. The benchmark is single-threaded.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Same algorithm, different memory management: deriv.cpp mirrors the Koka rewrite rules case for case but allocates every node with new and never deletes, while Koka frees and recycles. At the measured v2.0.3 tag, deriv.cpp's mul returned the existing zero node where Koka allocates Val(0); HEAD now allocates new ValExpr(0). That gave C++ slightly fewer allocations, so the published row slightly favours C++ on allocation count.",
+    "C++ pown mishandles negative exponents (pown(x,-1) returns x). The path is never reached, because every Pow base in this workload stays Var x, so powr never sees two constants and the printed counts are unaffected (derived from the source).",
+    "Measurement: run.kk at v2.0.3 times the whole process with /usr/bin/time -f '%e %M' (wall clock and peak RSS, including printing the per-level node counts and process exit), drops the single slowest run and averages the rest. The Perceus TR says 'median over 10 runs' and the README says 'averaged'.",
+    "The numbers are first-party, from Koka 2.0.3 in November 2020. At HEAD, deriv.kk's d borrows its argument (^e) and the suite builds with a newer compiler and --stack=128M, so the row has not been re-measured on current Koka. C++ uses 64-bit long, while Koka's int is arbitrary precision with a small-int fast path."
+  ],
+  "pick_this_over_siblings_when": "Of the two Koka rows, deriv is the more like-for-like (the same rewrite rules on both sides, unlike cfold's shallow C++ fold and copying reassoc), but its 1.33x margin is small and Java beats it. Among siblings, the Nim ref-object binary-trees entry is stronger evidence that managed memory can beat C++ allocation, because its C++ baseline frees its nodes; pick Koka when you want functional tree rewriting with prompt reclamation and C output.",
+  "verified_claims_summary": "Perceus TR Figure 9 and the identical README chart: on a 6-core AMD Ryzen 5 3600XT running Ubuntu 20.04 (November 2020), the gcc 9.3.0 C++ port (CMake Release -O3, glibc malloc, never frees) took 1.33x the time and 2.25x the peak RSS of Koka 2.0.3 (generated C at -O2 -flto with bundled mimalloc). On the same scale Koka without reuse optimizations scored 1.05 and Java 0.86.",
+  "status_note": "Koka is actively developed at Microsoft Research (v3.2.9 released 2026-09-17, 4.1k stars, Apache-2.0) but calls itself a research language not ready for production. This is a 2020 first-party result against a C++ port that never frees memory, so read the 1.33x as evidence that garbage-free reference counting is competitive, not as a general Koka-versus-C++ speed ratio.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/readme.md",
+    "https://github.com/koka-lang/koka",
+    "https://microsoft.com/en-us/research/uploads/prod/2020/11/perceus-tr-v4.pdf",
+    "https://github.com/koka-lang/koka/tree/v2.0.3/test/bench",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/run.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/README.md",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/README.md",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/cpp/deriv.cpp",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/cpp/deriv.cpp",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/koka/deriv.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/koka/deriv.kk",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/v2.0.3/test/bench/koka/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koka-lang/koka/HEAD/test/bench/koka/CMakeLists.txt",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+benchmark",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+%22stack+overflow%22",
+    "https://github.com/koka-lang/koka/issues?q=is%3Aissue+label%3Aruntime-performance"
+  ],
+  "confidence": 0.7
+}

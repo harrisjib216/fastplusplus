@@ -1,0 +1,58 @@
+{
+  "id": "lang:julia/zyth0s/bench_density_gradient_wfn#density-gradient",
+  "one_liner": "Four-language port of one electron-density-gradient kernel where Julia 1.6 lands within about 9% of an Eigen C++ build, both directions.",
+  "what_it_does": "A 2021 benchmark repo (MIT, 5 stars) that evaluates the gradient of the electron density at one point from a Gaussian-basis wavefunction (.wfn files for CH4, C2H4 and imidazol): loop over atoms, skip shells beyond a cutoff radius, evaluate Cartesian Gaussian primitives and their derivatives, accumulate molecular-orbital values and gradients, then contract with occupation numbers. bench.jl builds Fortran, C++ and Rust shared libraries, calls each through @ccall with the same 17 arguments, and times 10 calls per sample with BenchmarkTools @btime against a pure-Julia density_gradient!. It is a benchmark and a copyable 120-line kernel, not a library.",
+  "how_it_is_fast": "No special technique: every language runs the same loop nest. The Julia port gets to C++ parity with StaticArrays MVector scratch for the 3-component Gaussian factors, @views to avoid slice copies, @inbounds, and julia -O3 -C skylake --check-bounds=no. The README-only commit 5e99401, titled 'Added @inbounds', moved the Julia rows from 26.988/61.065/167.094 us to 20.021/41.737/112.843 us; since --check-bounds=no already removes bounds checks, part of that 1.35-1.48x change probably came from edits to the external ChemInt.jl code or run-to-run variation, which also shows how noisy a 9% margin is here. The C++ side reads every element through Eigen's checked operator() with assertions left on, which is the likeliest source of its small deficit; the effect was never measured.",
+  "when_to_use": [
+    "As a worked example of porting a Fortran quantum-chemistry inner loop to Julia and the idioms (StaticArrays, @views, @inbounds, --check-bounds=no) that close most of the gap to compiled ports.",
+    "As a ready-made harness for calling Fortran, C++ and Rust kernels from Julia with @ccall and timing them side by side on the same wavefunction data.",
+    "For small-molecule, single-point density-gradient evaluation where a Julia code base wants to avoid a compiled dependency and can accept parity with, not a lead over, C++ and about 1.7x behind gfortran."
+  ],
+  "when_not_to_use": [
+    "As evidence that Julia beats C++: the margins are about 9% faster on C2H4 and imidazol and about 2% slower on CH4, taken in runs five days apart, against a C++ build with Eigen range checks on.",
+    "When you need the fastest kernel: the gfortran 10.2 port is 1.68x faster than Julia on imidazol (66.975 vs 112.843 us) and Rust also beats Julia there (109.139 us).",
+    "For grid-scale or multithreaded density evaluation: the Julia kernel heap-allocates 2 + 2 x natm arrays per call (the orbital buffers plus two 3-vectors per atom), which adds GC pressure; issue #1 'Try with a larger system' was never done.",
+    "As a general wavefunction library: no package, no API beyond one function, a hard-coded 56-row nlm table (Cartesian powers up to 5), Hartree-Fock .wfn input only, one fixed point (1,1,1)."
+  ],
+  "integration": {
+    "form": "source-drop (julia/eval_gradrho.jl plus the AIMWFN struct defined in bench.jl)",
+    "dependencies": "Julia: StaticArrays (kernel); BenchmarkTools, Serialization and Libdl for the harness. Baselines: vendored Eigen 3.3.91 with its unsupported Tensor module (C++), ndarray 0.15 and mimalloc (Rust), gfortran (Fortran)",
+    "min_toolchain": "Julia 1.6.0 as measured (@ccall needs 1.5 or later); C++11 for the baseline",
+    "platforms": "any platform Julia runs on for the kernel; measured only on x86-64 macOS (i5-7360U)",
+    "thread_safety": "density_gradient! allocates its own scratch and writes only to the passed ∇ρ, so concurrent calls need separate output vectors; not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Crippled baseline, not noted by the verifier: cpp/Makefile passes no -DNDEBUG or -DEIGEN_NO_DEBUG and lib.cpp reads every Map, VectorXd and MatrixXd element through operator(), which in the vendored Eigen 3.3.91 runs eigen_assert(row >= 0 && row < rows() && ...) mapped to assert(); six checked accesses (coef, gun twice, gun1 three times) sit in the innermost orbital loop. Julia ran with --check-bounds=no plus @inbounds and Rust with unchecked uget (commit 3b3267a), so only the C++ side is bounds-checked, and that alone can plausibly cover a 9% gap.",
+    "Cross-run and unpublished Julia code: C++ numbers come from commit 0ebe405 (2021-05-17), Julia numbers from the README-only commit 5e99401 (2021-05-22), which timed ChemInt.jl's jl_density_gradient! (repo now 404); commit 302ee4b swapped in the in-repo julia/eval_gradrho.jl without re-timing. Its allocation pattern (2 + 2 x natm per call) reproduces the README counts exactly (122, 142, 202 for 5, 6 and 9 atoms x 10 calls plus 2 wrapper arrays), so the measured function was probably the same code, but that is inferred, not measured.",
+    "BenchmarkTools only counts Julia GC allocations: the '2 allocations: 224 bytes' on the C++, Rust and Fortran rows are the wrapper's point and ∇ρ arrays, while the C++ kernel also mallocs gun and gun1 through Eigen and the Rust kernel six ndarray buffers per call, so the record's 'C++ and Fortran allocate 2' tradeoff compares unlike counts.",
+    "The four ports are not equivalent and their outputs are never cross-checked in bench.jl: in fortran/eval_gradrho.f90 'if (dis2 > rcutte(ic,m)**2) continue' is a no-op (Fortran's loop skip is cycle), so the fastest entrant evaluates every shell, including those the C++, Rust and Julia ports skip; only the Rust crate has a CH4 unit test with expected values."
+  ],
+  "pick_this_over_siblings_when": "Pick this over the other Julia-versus-C++ ports in the category (aaronang/stl-benchmark ParseStl, jlapeyre/ranwalk-Julia-vs-Cxx) only for a floating-point scientific kernel with Fortran and Rust ports alongside; its result is parity, not a win, and for a reproducible same-run comparison the kostya/benchmarks Julia matmul row is better evidence.",
+  "verified_claims_summary": "On a 2.3 GHz Core i5-7360U MacBook, BenchmarkTools minima for 10 density-gradient evaluations at one point were 20.021 / 41.737 / 112.843 us for Julia 1.6.0 (ChemInt.jl function, -O3 -C skylake --check-bounds=no) against 19.656 / 45.770 / 123.619 us for the Eigen C++ port (Apple clang 11.0.3, -O3 -march=native, asserts on) on CH4 / C2H4 / imidazol, timed five days apart; gfortran 10.2 was fastest at 17.897 / 26.353 / 66.975 us.",
+  "status_note": "Abandoned since 2021-05-29 with 5 stars and an open TODO issue, MIT-licensed and small enough to copy, but its Julia-over-C++ margin rests on a cross-run, assert-enabled C++ baseline, hence tier D.",
+  "sources_read": [
+    "https://github.com/zyth0s/bench_density_gradient_wfn",
+    "https://github.com/zyth0s/bench_density_gradient_wfn/commits/main",
+    "https://github.com/zyth0s/bench_density_gradient_wfn/commit/5e99401",
+    "https://github.com/zyth0s/bench_density_gradient_wfn/commit/302ee4b",
+    "https://github.com/zyth0s/bench_density_gradient_wfn/tree/main/cpp",
+    "https://github.com/zyth0s/bench_density_gradient_wfn/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/README.md",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/bench.jl",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/LICENSE",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/lib.cpp",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/Makefile",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/test.cpp",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/Eigen/src/Core/DenseCoeffsBase.h",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/Eigen/src/Core/util/Macros.h",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/cpp/Eigen_unsupported/Eigen/CXX11/src/Tensor/TensorMap.h",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/julia/eval_gradrho.jl",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/fortran/eval_gradrho.f90",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/fortran/Makefile",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/zyth0s/bench_density_gradient_wfn/main/rust/Makefile"
+  ],
+  "confidence": 0.8
+}

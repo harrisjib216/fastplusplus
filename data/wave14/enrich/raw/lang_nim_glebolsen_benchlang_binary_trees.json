@@ -1,0 +1,54 @@
+{
+  "id": "lang:nim/glebolsen/benchlang#binary-trees",
+  "one_liner": "Nim 2.2.10 ref-object binary trees (default ORC) run 1.25x faster than malloc/free C and 1.42x faster than new/delete C++ under matched GCC flags.",
+  "what_it_does": "A row from benchLANG, a small 19-language benchmark, not a library. Its binary-trees workload (CLBG-style, depths 4 to 18: a stretch tree of depth 19, a long-lived tree and many short-lived trees, about 68.3 million nodes in all, derived from the loop bounds) builds complete trees of individually allocated nodes, sums them with a recursive checkTree and drops them. The Nim version uses a plain `ref object` Node with left, right and item fields; ORC destroys each tree when it goes out of scope, so freeing happens inside the timed region just as with the C free_tree. Getting this result means writing the allocation-heavy code in Nim; nothing links into a C++ program.",
+  "how_it_is_fast": "The gain comes from the allocation path, not from code generation: both sides run the same recursion and both free every node inside the timer (C and C++ walk the tree a second time with free_tree; Nim's ORC destructors walk it when the reference drops to zero). Nim takes nodes from its own runtime allocator (the build does not pass -d:useMalloc), while C and C++ call glibc malloc/free or operator new/delete for every 24-byte node. Per node that is about 11.8 ns for Nim against 14.8 ns for C and 16.8 ns for C++ (derived from page data over 68.3M nodes). The generated C is compiled at -O3 -fno-math-errno (gcc.options.speed in Nim 2.2.10's nim.cfg) with -flto=auto (the nim.cfg lto block) and -march=native, so the backend flags match the C row except -funroll-loops.",
+  "when_to_use": [
+    "You already write Nim and build many small tree or graph nodes as ref objects: with the default ORC memory manager and allocator they beat naive per-node malloc/free C under the same GCC flags.",
+    "Porting allocation-heavy C or C++ code to Nim and worried about the cost of ref objects: on this workload you do not need manual pooling to keep up.",
+    "You want deterministic freeing without tracing-GC pauses: ORC frees each tree at scope exit, unlike the Java (0.347 s) or Bun (0.816 s) rows, which collect when they like.",
+    "As evidence that per-node glibc malloc/free, not the language, sets the speed of a naive C or C++ tree builder."
+  ],
+  "when_not_to_use": [
+    "As evidence that Nim generates faster code than C: same algorithm and comparable flags, so the gap is the allocator; a C or C++ version with an arena (for example std::pmr::monotonic_buffer_resource) or a faster malloc would likely close or reverse it (inference; benchLANG has no such variant).",
+    "Memory-constrained deployments: whole-process peak RSS is 51.5 MiB for Nim against 33.3 MiB for C; scaled to the 1,048,575-node stretch tree that suggests about 48 bytes per Nim node against 32 for glibc (inference from page data).",
+    "If the margin matters to you: it is 0.2 s from one run, while C and C++ themselves differ by 0.137 s on identical logic.",
+    "String-heavy or whole-program comparisons: Nim loses strings (2.804 s vs 2.132 s for C) and the suite total (10.298 s vs 9.762 s).",
+    "Cyclic object graphs: these trees never form cycles, so the cost of ORC's cycle collector is not exercised here."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Nim standard library only (std/monotimes, std/strutils); the Nix dev shell from flake.nix, with nixpkgs-unstable pinned in flake.lock (rev e8be781, 2026-08-29)",
+    "min_toolchain": "Nim 2.2.10 as measured (default ORC memory management); backend C compiler taken from $CC in the dev shell, GCC 16.2.0 by inference since the runner does not print it",
+    "platforms": "Measured on x86-64 Linux only (flake.nix pins x86_64-linux); -march=native ties the binary to the build CPU",
+    "thread_safety": "Not applicable: single-threaded workload",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The C compiler behind the Nim row is not recorded: the nixpkgs Nim wrapper compiles the generated C with $CC and only falls back to its own build-time compiler when CC is unset. In the gcc16Stdenv dev shell that should be GCC 16.2.0, but the runner logs only `nim --version`. The -O3 and -flto=auto flags come from nim.cfg, not the command line, and -funroll-loops is not passed to Nim.",
+    "Single run per language (run_benchmarks.sh defaults to RUNS=1; --runs N exists but the README table does not use it), and the raw benchmark_results_*.txt files are gitignored, so the README table is the only record.",
+    "The .gitignore ignores every file except whitelisted extensions (.nim is tracked, but nim.cfg and config.nims are not), so a local Nim config that changed the allocator or memory manager would not show up in the repo; the published numbers can only be assumed to use the defaults.",
+    "A May 2026 commit titled 'Fixed nim unfair slowness moved to 32bit from 64bit' (68b9be5) changed only the Nim primes code to int32; the binary-trees code was not touched, but it shows the Nim file was tuned after earlier runs."
+  ],
+  "pick_this_over_siblings_when": "This is the cleaner Nim data point: same GCC 16.2.0 flags on both sides, checksums enforced, a dated 2026 run. The LangArena Nim Binarytrees::Obj sibling shows a larger margin (Nim/GCC/ARC 1.193 s vs C++ 2.098 s) but against std::make_unique. Among benchLANG's own binary-trees rows, Java (0.347 s) wins by far more but at 987.8 MiB peak RSS, and Bun (0.816 s) roughly ties Nim at 336.1 MiB, so pick Nim when you want a native binary with deterministic freeing.",
+  "verified_claims_summary": "benchLANG's 3 September 2026 run (one run per language; Ryzen 9 5900X locked at 3.5 GHz, Arch Linux, 48 GB DDR4-3600) timed binary trees at 0.809 s for Nim 2.2.10 (-d:danger -d:lto, default ORC and allocator, -march=native) against 1.010 s for C and 1.147 s for C++, both built with GCC 16.2.0 at -O3 -march=native -flto -funroll-loops -ffp-contract=off and allocating every node with malloc/free or new/delete. That makes Nim about 1.25x faster than C and 1.42x faster than C++ (derived from page data), and analyze_results.sh confirms all languages printed the same checksum.",
+  "status_note": "Small single-author MIT suite (8 stars, last commit 2026-09-03) with a Nix flake and flake.lock that make the toolchains reproducible; the Nim file is a benchmark sample, not a component to adopt.",
+  "sources_read": [
+    "https://github.com/GlebOlsen/benchLANG",
+    "https://github.com/GlebOlsen/benchLANG/commits",
+    "https://github.com/GlebOlsen/benchLANG/commit/68b9be5",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/README.md",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/languages/Nim/bench.nim",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/languages/C/bench.c",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/languages/C++/bench.cpp",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/analyze_results.sh",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/flake.lock",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/GlebOlsen/benchLANG/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/nim-lang/Nim/v2.2.10/config/nim.cfg",
+    "https://raw.githubusercontent.com/NixOS/nixpkgs/nixpkgs-unstable/pkgs/by-name/ni/nim/package.nix"
+  ],
+  "confidence": 0.4
+}

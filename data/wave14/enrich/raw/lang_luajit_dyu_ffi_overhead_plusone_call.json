@@ -1,0 +1,63 @@
+{
+  "id": "lang:luajit/dyu/ffi-overhead#plusone-call",
+  "one_liner": "LuaJIT FFI calls a shared-library C function about 1.3x faster than a dynamically linked C caller going through the PLT.",
+  "what_it_does": "dyu/ffi-overhead times 500 million calls of int plusone(int) living in libnewplus.so from each language's foreign-function interface. The LuaJIT row declares the prototype with ffi.cdef, opens the library with ffi.load('./newplus/libnewplus.so') and calls newplus.plusone(x) in a while loop; the C and C++ rows link the same .so with -lnewplus and call it normally. It is a call-overhead microbenchmark, not a library you adopt: the takeaway for C/C++ users is about how shared-library calls are linked.",
+  "how_it_is_fast": "LuaJIT's trace compiler specializes on the identity of the C library namespace and the indexing string, so newplus.plusone becomes a constant address resolved once by dlsym; lj_emit_x86.h (emit_call_) then emits a direct rel32 call when the target is within 2 GB of the trace code, else mov rax, imm64; call rax. The C executable instead calls plusone@PLT, which jumps through the GOT on every call, and that extra indirect jump is the whole margin (the nullprogram.com write-up of this exact result, seen as a search snippet, attributes it to the PLT).",
+  "when_to_use": [
+    "Lua scripting embedded in a C/C++ host where hot loops call many tiny C functions: compiled FFI calls cost about the same as, or less than, a dynamically linked C call (1.78 vs 2.36 ns per call on the i7-3630QM here).",
+    "Replacing hand-written Lua C API bindings with ffi.cdef declarations; the FFI path avoids the stack-based Lua C API (the lua-resty-core sibling is the production example).",
+    "As evidence when deciding whether PLT overhead matters for a C/C++ code base: if a 2018 JIT beats your C caller by 0.6 ns per call, static linking, a dlsym'd function pointer or -fno-plt is worth trying."
+  ],
+  "when_not_to_use": [
+    "As a reason to call C from Lua instead of linking C to C: a statically linked or LTO build lets the compiler inline plusone entirely, and nobody measured that row (issue #15 asking for a direct-call C/C++ row has been open since 2019-12-16).",
+    "Callees that do real work: the measured gap is about 0.6 ns per call and disappears against any non-trivial function body.",
+    "C code that calls back into Lua: the LuaJIT docs call callback overhead 'absolutely detrimental' and forbid a JIT-compiled FFI call whose C callee re-enters Lua.",
+    "Code paths LuaJIT does not compile (operations on the FFI docs' not-compiled list, or with the JIT turned off): those fall back to the interpreter, and this benchmark shows nothing about call overhead there.",
+    "Anyone needing current numbers: the table uses LuaJIT 2.0.4, gcc 5.4.1 and Ubuntu 14.04, and issue #16 asking for a rerun is open."
+  ],
+  "integration": {
+    "form": "runtime: the luajit executable or the LuaJIT library embedded in a C/C++ host; the ffi module is built in",
+    "dependencies": "none beyond LuaJIT (ffi is part of LuaJIT); the benchmark itself needs tup and gcc to build libnewplus.so",
+    "min_toolchain": "LuaJIT 2.0.4 as measured (an earlier run in prev.md used LuaJIT 2.0.2); LuaJIT 2.1 carries the same FFI",
+    "platforms": "x86-64 Linux measured; the advantage depends on ELF PLT linkage of the C baseline, other platforms not measured",
+    "thread_safety": "not documented on the pages read",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correction to the record's caveat: in skeeto/dynamic-function-benchmark the 1.01 ns 'jit' row is machine code that benchmark.c hand-assembles into an mmap'd page (a patched call rel32), not compiler-generated C; plain C calling through a dlsym function pointer measured 1.26 ns ('ind') against 1.76 ns through the PLT (i7-6700, -O3 -fpie). So ordinary C recovers most but not all of the gap without a JIT, and a truly direct call needs static linking.",
+    "Keep the namespace, not the function: per the LuaJIT FFI tutorial, caching local f = lib.plusone turns the call into an indirect call and 'generates bigger and slower machine code'; hello.lua uses newplus.plusone(x), which is the fast form.",
+    "Small harness asymmetries: hello.lua makes warm-up calls (newplus.current_timestamp() and newplus.plusone(0)) before starting the clock, while hello.c starts timing cold, so its first plusone call pays lazy symbol binding inside the timed region; both sides use a millisecond gettimeofday clock and only 2 runs, and loop overhead is included in every row (issue #13).",
+    "C++ exceptions do not cross a JIT-compiled FFI call (LuaJIT FFI semantics, 'Other missing features'), so wrapping C++ code for LuaJIT needs extern \"C\" shims that catch everything."
+  ],
+  "pick_this_over_siblings_when": "Against the Julia 0.6 ccall entry from the same table the margin is identical (891/905 vs 894/889 ms), so pick LuaJIT when you want a small embeddable scripting runtime inside a C/C++ host and Julia when the numeric code itself lives in Julia; lua-resty-core is the production example of the same FFI call path inside OpenResty.",
+  "verified_claims_summary": "On an Intel i7-3630QM laptop with Ubuntu 14.04, 500M calls of plusone() in libnewplus.so took 891 and 905 ms from LuaJIT 2.0.4 against 1182 ms (twice) for C and 1182/1183 ms for C++ built with gcc/g++ 5.4.1 -O2 -fPIC and linked via -lnewplus, i.e. about 1.78 vs 2.36 ns per call (derived from page data); the author's earlier run in prev.md (2B calls, gcc 4.7.3, LuaJIT 2.0.2) showed the same ratio, 3612/3616 vs 4839/4822 ms. What is measured is the cost of a PLT-routed dynamic call versus a JIT-resolved direct call, not code quality.",
+  "status_note": "Abandoned benchmark repo (last commit 2023-07-12, Apache-2.0, 698 stars) whose LuaJIT and C rows date from 2018 toolchains; LuaJIT itself remains usable, and the result is best read as a lesson about PLT overhead in dynamically linked C rather than as a reason to switch languages.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/README.md",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/Tuprules.tup",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/Tupfile",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.c",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.cpp",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.lua",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/run-all.sh",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/compile-all.sh",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/prev.md",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/plus.c",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/plus.h",
+    "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/Tupfile",
+    "https://github.com/dyu/ffi-overhead",
+    "https://github.com/dyu/ffi-overhead/commits/master",
+    "https://github.com/dyu/ffi-overhead/issues?q=is%3Aissue",
+    "https://github.com/dyu/ffi-overhead/issues/13",
+    "https://github.com/dyu/ffi-overhead/issues/15",
+    "https://github.com/dyu/ffi-overhead/issues/16",
+    "https://raw.githubusercontent.com/skeeto/dynamic-function-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/skeeto/dynamic-function-benchmark/master/Makefile",
+    "https://raw.githubusercontent.com/skeeto/dynamic-function-benchmark/master/benchmark.c",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.0/src/lj_emit_x86.h",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/ext_ffi_semantics.html",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/doc/ext_ffi_tutorial.html",
+    "https://nullprogram.com/blog/2018/05/27/ (search snippet only)"
+  ],
+  "confidence": 0.5
+}

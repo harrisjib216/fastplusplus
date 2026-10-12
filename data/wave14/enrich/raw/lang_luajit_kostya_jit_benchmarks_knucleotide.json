@@ -1,0 +1,63 @@
+{
+  "id": "lang:luajit/kostya/jit-benchmarks#knucleotide",
+  "one_liner": "LuaJIT (OpenResty luajit2 2.1-20230119) counts k-mers in 0.77 s versus 2.09 s for an idiomatic std::unordered_map<std::string,int> C++ program.",
+  "what_it_does": "One row of kostya's JIT benchmark suite: Mike Pall's Benchmarks Game k-nucleotide Lua program builds 1-mer and 2-mer frequency tables and counts five fragments up to 18 bases long over the THREE section of a 7,000,000-base FASTA file, keying a Lua table by string.sub substrings. The C++ comparison program (knucleotide/test.cpp, written for the suite) does the same counts with s.substr(i, k) keys in an unreserved std::unordered_map<std::string,int>. What is catalogued is the LuaJIT runtime, not a library you can link into C++.",
+  "how_it_is_fast": "LuaJIT interns every string: string.sub hashes the window and returns the existing string object if it is already in the string table, and the Lua table then looks the key up by object identity. The input generator (knucleotide/helper.c) uses the Benchmarks Game LCG with modulus 139,968, so the THREE section is periodic and has at most about 140,000 distinct k-mers; after the first period no new strings are allocated. The C++ program instead builds a std::string per window (a heap allocation and free for the 18-mer pass, beyond libstdc++'s 15-character small-string buffer), hashes all k bytes with std::hash, reduces modulo a prime bucket count, walks a node chain and compares bytes. The suite does not explain the gap; this mechanism is inferred from the two programs and the runtime sources.",
+  "when_to_use": [
+    "Lua code under LuaJIT that counts or deduplicates many short substrings drawn from a small key set (log tokens, k-mers, n-grams), where interning makes repeated keys cheap.",
+    "Scripts where you would otherwise write the naive C++ version (std::string keys, default std::hash, no reserve) and do not plan to tune it.",
+    "Embedding LuaJIT (or OpenResty, which ships this fork) for text-processing hot paths in a C or C++ host."
+  ],
+  "when_not_to_use": [
+    "As evidence that LuaJIT beats tuned C++: the Benchmarks Game's own C++ k-nucleotide programs pack bases into 2-bit integer keys and use custom hash tables; none of them was run here, and C++11 also rules out std::string_view keys.",
+    "As a general LuaJIT-beats-C claim: this is LuaJIT's only win in the suite; it is slower than C or C++ on all ten other benchmarks where it has a row (for example binarytrees 6.73 s vs C++ 0.44 s, revcomp 3.33 s vs C 0.54 s, regexdna 9.99 s vs 5.6 s, nbody 1.44 s vs 0.56 s, fasta 1.71 s vs 0.57 s).",
+    "Workloads with millions of distinct keys: the periodic input keeps every table at about 140,000 entries or fewer and peak RSS near 30 MB, so table growth, GC pressure from millions of new strings, and cache misses on large tables are not exercised.",
+    "Multi-threaded counting: the benchmark is single-threaded and a LuaJIT state cannot be shared across threads."
+  ],
+  "integration": {
+    "form": "LuaJIT runtime: the luajit executable, or libluajit (static or shared) embedded through the Lua C API",
+    "dependencies": "none for the counting itself; the benchmark script also requires luaposix (posix.unistd) only to print its PID for the harness",
+    "min_toolchain": "LuaJIT 2.1; measured with OpenResty luajit2 tag v2.1-20230119 built with its default make (CCOPT -O2 -fomit-frame-pointer, lj_str_hash.o with -msse4.2 on x64)",
+    "platforms": "x86, x64, ARM, ARM64, PPC and MIPS targets; the suite states it runs on x86_64 and aarch64; measured on x86_64 (AMD Ryzen 7 3800X)",
+    "thread_safety": "not documented for this benchmark; one lua_State per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 'Lua JIT' row is not upstream LuaJIT: docker-compose.yml builds the luajit container from OpenResty's luajit2 fork (docker/luajit downloads openresty/luajit2 tag v2.1-20230119). The README Versions table's '2.1.0-beta3' is only the LUAJIT_VERSION string that every 2.1 build printed before 2023. On x64 that fork replaces the string-interning hash with an SSE4.2 CRC32 hash (src/lj_str_hash.c), which sits on this benchmark's hot path, so upstream LuaJIT was not measured.",
+    "The 'Best T' column is the time each program reports about itself, not an external measurement: tools/cli.rb takes min_run_time from the time(...) line each program writes to stderr. Both sides use process CPU time (C++ clock(), Lua os.clock()), and the C++ value is printed with only two decimals. The harness's wall-clock full_time minus start_time agrees (about 2.07 s vs 0.75 s in results/amd64/round_1.yml).",
+    "Each row is a single run (args [1], Runs 1) from round 1 (2023-02-28), so there is no variance estimate and LuaJIT's trace compilation falls inside its one timed run. Input reading happens before the 'started' marker and is excluded for both sides.",
+    "Only the 18-mer pass makes the C++ program allocate per window; the 1-, 2-, 3-, 4-, 6- and 12-mer passes fit libstdc++'s small-string buffer, so the C++ cost there is the std::string copy, full-length std::hash, modulo-prime bucketing and chain walk rather than malloc."
+  ],
+  "pick_this_over_siblings_when": "Among the LuaJIT siblings this is the best-documented row (public code, flags, CPU and raw results), stronger than the spion word-count gist (single 2012 timing) and the JuliaLang print_to_file row (cross-runner, directional); against the HotSpot, .NET and Julia string-hashing siblings it is the case to cite when the runtime is LuaJIT or OpenResty and the C++ rival is naive std::string-keyed code.",
+  "verified_claims_summary": "In kostya/jit-benchmarks round 1 (README update 2023-02-28; raw data in results/amd64/round_1.yml), OpenResty luajit2 2.1-20230119 ran k-nucleotide on a 7,000,000-base input in 0.767 s of self-reported CPU time against 2.09 s for test.cpp built with g++ 12.2.0 -O3 -march=native -fomit-frame-pointer -funroll-loops -std=c++11 (std::unordered_map<std::string,int>, substr keys), one run each in Docker on Ubuntu 22.10 on an AMD Ryzen 7 3800X: about 2.7x (derived from page data). The C++ row is the only C or C++ row in the knucleotide table.",
+  "status_note": "The suite is MIT-licensed but effectively frozen since March 2023 (the only later commit, 2026-01-27, adds a LangArena link), so the numbers use 2023 toolchains; the result describes LuaJIT's string interning against naive C++, not a reusable component, and the measured runtime is OpenResty's fork.",
+  "sources_read": [
+    "https://github.com/kostya/jit-benchmarks",
+    "https://github.com/kostya/jit-benchmarks/commits/master",
+    "https://github.com/kostya/jit-benchmarks/issues?q=is%3Aissue",
+    "https://github.com/kostya/jit-benchmarks/tree/master/results/amd64",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/results/amd64/round_1.yml",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/cli.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/memory_profile.rb",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/dc",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker-compose.yml",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/luajit",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/docker/base",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/test.cpp",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/test.lua",
+    "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/helper.c",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/README.md",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/src/Makefile",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/src/lj_str.c",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/src/lj_str_hash.c",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/src/lj_arch.h",
+    "https://raw.githubusercontent.com/openresty/luajit2/v2.1-20230119/src/luajit.h",
+    "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/src/lj_arch.h"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,62 @@
+{
+  "id": "lang:mojo/kostya/langarena#nbody",
+  "one_liner": "Mojo version of the CLBG n-body loop in kostya's LangArena suite, 1.07x faster than gcc -O3 -march=native C, but only in one run.",
+  "what_it_does": "LangArena is a 50-task, 26-language benchmark suite with dated result files, all measured on one AMD Ryzen 7 3800X. mojo/nbody.mojo is its Mojo translation of the classic Computer Language Benchmarks Game n-body program: 5 planets, a pairwise velocity update and then a position update, Float64, checked by the system energy before and after. It is a benchmark program, not a library: an Nbody struct implements the suite's Benchmark trait (prepare, run, checksum) and is driven by mojo/main.mojo, which reads iteration counts and expected checksums from run.js through Mojo's Python interop.",
+  "how_it_is_fast": "It uses the same scalar algorithm as the C and C++ versions (pairwise loop, one sqrt and one division per pair, no SIMD); the maintainer rejected explicit SIMD for Mojo in PR #23 because the suite measures compilers on the same scalar code. Two source-level differences exist. The Mojo code copies each planet into a local value and writes it back, so the outer planet's velocities can stay in registers, while C and C++ update both bodies through pointers or references into one array that the compiler may have to treat as possibly aliasing. Mojo also builds for the host CPU by default (mojo build docs, search snippet), like the C Fast rows' -march=native. Neither difference explains the result: the unchanged source ran 1.493 s on the Mojo 1.1.0 nightly of 2026-09-02 and 1.146 s on the 1.1.0 release, so the gain comes from the release compiler's code generation, and no mechanism is established.",
+  "when_to_use": [
+    "As a data point on how the Mojo 1.1.0 release compiles a plain scalar Float64 loop compared with C, C++, Rust, Zig and Julia in one harness, at one fixed problem size.",
+    "As a readable, MIT-licensed, idiomatic Mojo n-body (value-semantics struct in a List, no SIMD, no unsafe pointers) to copy or port.",
+    "When you want a same-algorithm, same-harness comparison with published build commands, compiler versions and a checksum gate, and plan to follow it across the suite's later runs."
+  ],
+  "when_not_to_use": [
+    "As evidence that Mojo beats C on numeric code in general: one test in one run, and in the same run Mojo is 2.0x slower than C/Gcc on CLBG::Fannkuchredux (2.03 s vs 1.036 s) and 4x slower on Matmul::Single (20.26 s vs 5.02 s).",
+    "When you can build C or C++ with -ffast-math: C++/Clang++/Unsafe (1.137 s) and C/Clang/Unsafe (1.14 s) match or beat Mojo's 1.146 s.",
+    "When you need stable performance across compiler updates: the same source took 1.493 s, slower than every C -O3 row and even gcc -O2, in the two previous runs.",
+    "Memory-constrained deployments: the Mojo process peaks at 28.9 MB against 2.9 MB for C on this test.",
+    "Larger or production n-body work: the problem is fixed at 5 bodies, O(N^2), single-threaded, with no SIMD and no library API."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Mojo standard library (List, std.math.sqrt) plus the suite's Helper and Benchmark trait; the harness parses its config through Mojo's Python interop, so CPython must be available",
+    "min_toolchain": "Mojo 1.1.0 (mojo/pixi.toml pins mojo =1.1.0 from the max-nightly conda channel; earlier runs used 1.1.0.dev2026090205)",
+    "platforms": "osx-arm64 and linux-64 per mojo/pixi.toml; results published only for x86-64 Linux (AMD Ryzen 7 3800X)",
+    "thread_safety": "single-threaded; run() mutates the struct's own List of bodies; not documented otherwise",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The win comes from the toolchain. The C Nbody rows are identical to the millisecond in the 2026-09-18 and 2026-10-05 runs (C/Gcc/Fast 1.221 s, C/Clang/Unsafe 1.14 s), and the only commit to mojo/ in between (47cba6b, 2026-09-30, 'update deps') changed the pin from >=1.1.0.dev2026090205 to =1.1.0. With the same switch, 14 of 50 Mojo tests became more than 30% slower (Matmul::Single 8.44 to 20.26 s, Etc::Sieve 0.95 to 3.53 s, Hash::SHA256 1.04 to 3.58 s, Fannkuchredux 1.05 to 2.03 s). Only Nbody (1.493 to 1.146 s) and Binarytrees::Arena (1.39 to 0.78 s) became more than 15% faster, and Mojo's total rose from 128.9 s to 164.9 s, matching the maintainer's '128s to 163s' remark in PR #23. The next Mojo release may flip this row.",
+    "The suite's headline rows are C/Gcc 'prod' (-O2, -fstack-protector-strong, -fno-omit-frame-pointer, generic x86-64) against Mojo 'prod' (-O3 and, by default, the host CPU, so AVX2 and FMA on Zen 2). The 1.28x against prod therefore includes an ISA-level difference; compare against the Fast rows (-O3 -march=native, 1.07x).",
+    "The checksum is weak. It formats the energy before and after the run to 7 decimals, hashes each string (djb2) and combines them as (h_before << 5) & h_after. That catches a wrong step count or a broken kernel, but not small numeric differences, so FMA contraction or reassociation passes on either side.",
+    "Most of Mojo's 28.9 MB on this test is probably the harness rather than n-body: mojo/benchmark.mojo's Config loads run.js with Python.import_module(\"json\"), so the Mojo binary starts an embedded CPython, while the C harness parses its config natively."
+  ],
+  "pick_this_over_siblings_when": "Compared with the mojo-analyze Mandelbrot entry (hand-SIMD Mojo against scalar C, tier D), this is the catalogue's same-algorithm scalar Mojo-vs-C comparison, so it is the better read on Mojo code generation. Its margin (1.07x) is smaller and depends on one Mojo release; the LangArena Nim, V and Zig Fannkuchredux rows in the same harness are the comparable non-Mojo entries.",
+  "verified_claims_summary": "In LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (one measurement per row), CLBG::Nbody took 1.146 s for Mojo 1.1.0 (-O3, host CPU). C took 1.221 s with gcc 16.0.1 and 1.234 s with clang 22.1.8 at -O3 -march=native (1.07x), and 1.465 s with gcc -O2 prod. The work was 20,000 timed iterations of 1,000 steps after 4,000 warm-up iterations, checksum-gated. The -ffast-math C/C++ builds took 1.137-1.193 s, and Mojo took 1.493 s on the 2026-09-02 nightly in the two previous runs.",
+  "status_note": "Active suite (MIT, 41 stars, 16 forks, 622 commits, newest result file 2026-10-05, a pull request updated 2026-10-12) whose README calls Mojo performance 'still very raw'. The Mojo source is small and copyable, but its standing against C has moved with each Mojo build, so treat the row as a toolchain snapshot.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/LangArena/master/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/mojo/nbody.mojo",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/mojo/main.mojo",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/mojo/benchmark.mojo",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/mojo/helper.mojo",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/mojo/pixi.toml",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/nbody.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/benchmark.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/helper.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/nbody.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/test.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/LICENSE",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/results/2026-09-18-kostya-ms7c37.js",
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/commits/master/mojo",
+    "https://github.com/kostya/LangArena/commit/47cba6b",
+    "https://github.com/kostya/LangArena/issues?q=mojo",
+    "https://github.com/kostya/LangArena/pull/23",
+    "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/ANALYSIS.md",
+    "https://docs.modular.com/mojo/cli/build (WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}
