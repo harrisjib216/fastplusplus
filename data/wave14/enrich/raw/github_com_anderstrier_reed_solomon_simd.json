@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/anderstrier/reed-solomon-simd",
+  "one_liner": "Pure-Rust O(n log n) Leopard-RS erasure coder over GF(2^16) with runtime AVX2/SSSE3/Neon kernels; no measured C/C++ win.",
+  "what_it_does": "Reed-Solomon erasure coding (not error correction) for 1 to 32768 original plus 1 to 32768 recovery shards, up to 65535 on one side with limits, shard length any even number of bytes. Two one-shot functions, reed_solomon_simd::encode and decode, plus reusable ReedSolomonEncoder and ReedSolomonDecoder objects that take shards one at a time; a low-level rate module exposes high-rate and low-rate codecs over a chosen Engine. It is a different API and codeword layout from Leopard-RS (C++), ISA-L or reed-solomon-erasure, so it is not a drop-in replacement for any of them.",
+  "how_it_is_fast": "It implements the Leopard-RS scheme by Christopher Taylor: additive FFT and inverse FFT over GF(2^16) in the Lin-Chung-Han novel polynomial basis, which makes encode and decode O(n log n) in the shard count instead of the O(n*k) matrix multiply of classic Vandermonde/Cauchy coders, with a fast Walsh-Hadamard transform for the erasure-locator step in decoding. Each 64-byte block of a shard is stored as 32 low bytes then 32 high bytes, so the GF(2^16) multiply-add maps onto PSHUFB/VPSHUFB (or Neon TBL) nibble lookups; the DefaultEngine picks AVX2, SSSE3, Neon or a plain-Rust NoSimd engine at runtime via cpufeatures. Version 3.0.1 claims up to 20% more AVX2 encode throughput from kernel tuning.",
+  "when_to_use": [
+    "Rust services that need wide erasure codes (hundreds to tens of thousands of shards) where O(n*k) GF(2^8) coders slow down sharply, e.g. data availability sampling, distributed storage or FEC over many packets.",
+    "Single-core encode throughput matters: README reports 4.8 GiB/s at 1024:1024 and 10.2 GiB/s at 32:32 with 1024-byte shards on a Ryzen 5 3600 (counting original plus recovery bytes).",
+    "You need more than 256 total shards, which GF(2^8) coders such as reed-solomon-erasure's default ReedSolomon8 or leopard-codec's GF(2^8) mode cannot address.",
+    "x86-64 or AArch64 targets with runtime SIMD selection and a plain-Rust fallback elsewhere; no_std builds are supported since 3.1.0 by disabling the std feature."
+  ],
+  "when_not_to_use": [
+    "Small configurations with about 42 or fewer recovery shards when decode speed dominates: the README says other Rust crates decode faster there, and decode throughput at 32:32 is only about 254 MiB/s against 10 GiB/s encode.",
+    "Tiny payloads per process: a one-time table build (under 10 ms per the README) can outweigh the coding work.",
+    "You need errors (corrupted shards) corrected, not just erasures: the crate trusts every shard it is given, so add a per-shard hash (CRC32C, xxHash) yourself; erasure-and-error decoding is an open issue (#20).",
+    "You must interoperate with shards produced by Leopard-RS C++, ISA-L, Jerasure, Backblaze or reed-solomon-erasure: the codeword layout and field differ, and shards whose length is not a multiple of 64 bytes are only compatible from version 3.0.0 on.",
+    "You need a measured advantage over a C or C++ library: no head-to-head with Leopard-RS or ISA-L exists, and the maintainer only expects rough parity with klauspost/reedsolomon's Leopard GF16 mode (Go)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "fixedbitset, once_cell, and cpufeatures on x86, x86-64 and AArch64 (readme-rustdocifier at build time)",
+    "min_toolchain": "Rust 1.82 (rust-version in Cargo.toml for 3.1.0), edition 2021",
+    "platforms": "x86 and x86-64 (SSSE3 or AVX2 picked at runtime), AArch64 (Neon), any other target through the plain-Rust NoSimd engine; no AVX-512 or GFNI engine",
+    "thread_safety": "Encoder, decoder, DefaultEngine, results and Error are Send and Sync (asserted in the crate's tests); one encoder or decoder instance is used from one thread at a time through &mut methods.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "README throughput counts original plus recovery bytes (and missing shards for decode), following klauspost/reedsolomon's 'total shard size' convention, so 10.237 GiB/s at 32:32 is about 5.1 GiB/s of input data; halve the 1:1 rows before comparing with Leopard-RS's 'Input=' MB/s figures.",
+    "The 'fastest in all cases' claim comes from examples/quick-comparison.rs, which times each encode and decode once with Instant (no warm-up, no repetition, cold caches and page faults included), times reed-solomon-simd's table init separately and outside encode while leopard-codec's lazy table build falls inside its first timed encode, and runs reed-solomon-erasure GF(2^8) and leopard-codec only up to 128:128; no output of that run is published.",
+    "High-rate and low-rate codecs in the rate module are not interchangeable: data encoded with one must be decoded with the same rate (the crate's own algorithm.md notes they only appear compatible for a single chunk).",
+    "src/algorithm.md is stale: it still says shards must be a multiple of 64 bytes (relaxed to even lengths in 3.0.0) and its rate table (about 75-176 MiB/s) predates the SIMD engines; trust the README table instead."
+  ],
+  "pick_this_over_siblings_when": "No erasure-coding entry sits in this category (the siblings are BLAS, ODE, FFT and vector-search kernels); against the catalogued klauspost/reedsolomon (Go, GF(2^8) matrix codes plus a Leopard GF16 mode) pick this crate for a pure-Rust dependency with no Go or C toolchain and shard counts in the thousands, and pick klauspost or ISA-L when you need AVX-512/GFNI kernels or small k+m codes with fast decode.",
+  "verified_claims_summary": "First-party criterion benchmark (cargo bench main) on one core of an AMD Ryzen 5 3600 with AVX2, 1024-byte shards, rustc version and flags unstated: encode 10.237 GiB/s at 32:32 falling to 1.6049 GiB/s at 32768:32768, decode with 1% loss 254 MiB/s at 32:32 and 1.30 GiB/s at 1024:1024, all counting original plus recovery bytes. No C or C++ library (Leopard-RS, ISA-L) was measured, so there is no ratio against a C/C++ baseline; the Rust-only 'fastest' claim has no published numbers.",
+  "status_note": "Maintained at a slow pace (v3.1.0 on 2025-10-14, last commit that day, issues #71 and #77 open), MIT AND BSD-3-Clause, about 2.19M crates.io downloads; easy to adopt as a crate, but the catalogue entry stays at tier D because the only harness that names competitors is a single-shot timing run with uneven table-init accounting and no published numbers.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/benches/benchmarks.rs",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/examples/quick-comparison.rs",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/src/algorithm.md",
+    "https://raw.githubusercontent.com/AndersTrier/reed-solomon-simd/HEAD/src/engine.rs",
+    "https://github.com/AndersTrier/reed-solomon-simd/issues?q=is%3Aissue",
+    "https://github.com/AndersTrier/reed-solomon-simd/issues/57",
+    "https://github.com/AndersTrier/reed-solomon-simd/issues/14",
+    "https://github.com/AndersTrier/reed-solomon-simd/commits",
+    "https://crates.io/api/v1/crates/reed-solomon-simd"
+  ],
+  "confidence": 0.85
+}
