@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/pierre-terdiman/simd_triangleaabb",
+  "one_liner": "SSE version of Akenine-Moeller's triangle-vs-AABB SAT overlap test; about 2x on full tests, 20x with an added early exit.",
+  "what_it_does": "One function, OverlapTriangleBox_Optimized(boxcenter, extents, p0, p1, p2), with the same signature and boolean result as the scalar Akenine-Moeller tribox code, in a 144-line source file plus a small Point struct and a Win32 benchmark harness. It answers whether a triangle overlaps an axis-aligned box using the separating axis theorem: the 3 box axes, the triangle normal, and the 9 edge-cross-axis directions.",
+  "how_it_is_fast": "Each group of SAT axes is evaluated in one 128-bit SSE register: the triangle's AABB against the box on x, y, z at once (minps/maxps plus one movemask), the plane test with sign-masked extents, and the 9 'class III' edge axes as three calls that each test 3 axes for all three vertices. Data-dependent min/max swap branches of the scalar code become minps/maxps, while early exits are kept (cheap AABB and plane rejections first, edge axes last). An extra first exit returns 'overlap' when vertex v0 lies strictly inside the box (abs, subtract, sign-bit movemask), which accounts for the 20x best case.",
+  "when_to_use": [
+    "Mesh-vs-box queries in collision detection, BVH or octree builds and voxelization on x86 with SSE2, one triangle per call.",
+    "Workloads where many triangles have their first vertex inside the box (small triangles against larger boxes or cells), where the added exit costs about 15 rdtsc ticks per test against about 317 for the scalar code on the author's machine (derived from page data).",
+    "Vertex buffers you control and can pad so that 16 bytes are readable at every vertex, box centre and extents address.",
+    "As a known-good reference when writing or checking your own SIMD triangle-box test; its author notes that most other SIMD ports he benchmarked were slower than the scalar code."
+  ],
+  "when_not_to_use": [
+    "You need a licence: the repo has none (only a tip-jar link). The same routine ships, maintained and licensed, as Gu::intersectTriangleBox_Unsafe in NVIDIA PhysX (BSD-3 header in NVIDIAGameWorks/PhysX 4.x, SPDX Apache-2.0 in the current NVIDIA-Omniverse/PhysX source).",
+    "Tightly packed 12-byte vertices whose last element ends at the buffer end, or vertices followed by non-float data: every load reads 4 bytes past the Point.",
+    "Non-x86 targets: raw SSE intrinsics with no NEON or scalar fallback (PhysX's version goes through its portable aos vector layer).",
+    "Large batches where a structure-of-arrays kernel testing 4-16 triangles per instruction (ISPC, AVX2 or AVX-512) would use the lanes better: here the w lane is idle and only 3 axes are tested per vector op.",
+    "Exact boundary semantics: the early exit uses a strict inside test, and the benchmark was built with /fp:fast and flush-to-zero."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond <xmmintrin.h>/<emmintrin.h> and the repo's 12-byte Point struct (stdafx.h)",
+    "min_toolchain": "Kernel: any compiler with SSE intrinsics, but it uses MSVC-specific __forceinline and __declspec(align(16)), so GCC or Clang needs small macro shims. Harness: Visual Studio 2008 project (Version 9.00), Win32 only (inline __asm cpuid/rdtsc, __control87_2).",
+    "platforms": "x86 or x86-64 with SSE (SSE2 enabled in the project); benchmark harness 32-bit Windows only",
+    "thread_safety": "Reentrant from code reading: a pure function using only constant static tables; not documented.",
+    "drop_in_for_baseline": "partial: same arguments and result as the scalar Akenine-Moeller test (hit counts matched in all four scenarios), but needs 4 readable bytes after each Point argument, and the w lane must hold a finite float"
+  },
+  "gotchas": [
+    "Out-of-bounds read: LoadU is _mm_loadu_ps(&v.x) on a 12-byte Point, so every vertex, centre and extents load reads 4 extra bytes. The harness itself does this on the last vertex of gTris = new Point[16384*3], reading past the heap allocation. PhysX names its copy intersectTriangleBox_Unsafe and notes 'all params must be safe to V4LoadU'.",
+    "Latent correctness bug: DotV sums all four lanes, so the plane test includes the garbage w lanes. If those 4 bytes after a vertex or the centre hold NaN or Inf, or their products overflow, the dot products become NaN and the plane test silently never rejects, giving false 'overlap' results. PhysX's version uses a 3-lane V4Dot3 instead. Hit counts matched in the author's run, so the published numbers are not affected.",
+    "The added early exit fires when v0 alone is strictly inside the box, not 'when the box fully contains the triangle' as the README says. That is still a correct overlap answer, but only vertex slot 0 is checked; the 'worst case' generator places v0 outside on purpose. PhysX's version uses an inclusive (>=) comparison.",
+    "Harness: each scenario is one cpuid+rdtsc sample (Time/1024 over 16384 tests) with no warm-up or repetition, and all scalar runs come before the SIMD ones. The scalar best case costs 5072 units against 3773 for the worst case, although both follow the same no-early-exit path, which suggests vertex-order-dependent branch mispredictions in the baseline. The 1.99x worst-case row (about 236 vs 119 ticks per test, derived from page data) is the clean SIMD-only figure."
+  ],
+  "pick_this_over_siblings_when": "No sibling solves triangle-box overlap: the catalogued neighbours are general SIMD toolkits (EVE, Vector Class Library, ISPC) that you would use to write a batched, many-triangles-per-call version. Pick this for a ready single-call SSE SAT test, and take the PhysX copy (portable, 3-lane dot, licensed) for shipping code.",
+  "verified_claims_summary": "One rdtsc run per scenario by the author on an unnamed Windows PC (Visual Studio 2008 Win32 Release project with /O2 /arch:SSE2 /fp:fast; compiler version and CPU not stated), 16384 triangles per scenario, compared with his lightly edited copy of Akenine-Moeller's 'old' scalar tribox code. Results: 1.99x when every test runs (worst case), 2.90x on no-hit, 3.30x on the mixed set, and 20.6x in the best case, which comes from the added v0-inside-box exit rather than SIMD width. Against the 'new, faster' variant the ratios are 2.6-26.2x, because that variant ran slower on his machine.",
+  "status_note": "Abandoned upload (6 commits, all on 2021-09-08, of code first released on the author's codercorner blog), with no licence, so reference only. A maintained and licensed descendant with the w-lane dot fixed lives in NVIDIA PhysX as Gu::intersectTriangleBox_Unsafe.",
+  "sources_read": [
+    "https://github.com/Pierre-Terdiman/SIMD_TriangleAABB",
+    "https://github.com/Pierre-Terdiman/SIMD_TriangleAABB/tree/main/SIMD_TriangleAABB/SIMD_TriangleAABB",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/README.md",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/SIMD_TriangleAABB.cpp",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/TriBox_Optimized.cpp",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/TriBox_Default.cpp",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/TriBox.h",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/stdafx.h",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/stdafx.cpp",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/targetver.h",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/Random.h",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/Random.cpp",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/ReadMe.txt",
+    "https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/SIMD_TriangleAABB/SIMD_TriangleAABB/SIMD_TriangleAABB.vcproj",
+    "https://raw.githubusercontent.com/NVIDIA-Omniverse/PhysX/HEAD/physx/source/geomutils/src/intersection/GuIntersectionTriangleBox.cpp",
+    "https://raw.githubusercontent.com/NVIDIAGameWorks/PhysX/HEAD/physx/source/geomutils/src/intersection/GuIntersectionTriangleBox.cpp"
+  ],
+  "confidence": 0.75
+}

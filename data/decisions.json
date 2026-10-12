@@ -24161,10 +24161,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Downgraded C to D: the C baseline is built -O3 -fPIE with no -march, -mavx2 or -mfma, so it can only use SSE2 while the asm uses AVX2/FMA (crippled-baseline precedent); the README's claim that the C build auto-vectorizes with AVX cannot hold for those flags; no CPU model; 0 stars."
+      "Downgraded C to D: the C baseline is built -O3 -fPIE with no -march, -mavx2 or -mfma, so it can only use SSE2 while the asm uses AVX2/FMA (crippled-baseline precedent); the README's claim that the C build auto-vectorizes with AVX cannot hold for those flags; no CPU model; 0 stars.",
+      "The C baseline is built without -march, so GCC 12.2 emits SSE2 only and the 1.66x is mostly 4-wide FMA against 2-wide SSE2. The committed output_asm.bin is a stale non-FMA file, bit-identical to output_c.bin, while an FMA recompute differs in 13,999 of 40,000 elements (max 2.84e-14, matching the first README), so 'make verify' shows 0 diffs and the README's 1.42e-14 came from another random draw. Assembly bugs: a B matrix with fewer than 8 columns jumps past 'xor edx, edx', leaving the column counter uninitialised (wrong results or out-of-bounds writes); the asm timer uses clock id 0 (CLOCK_REALTIME) although its comments claim MONOTONIC; the Makefile ITERS is never used; libc calls run with the stack misaligned by 8 bytes; main overwrites r12-r15 without saving them."
     ],
     "measurements": [
-      "verifier batch-32 (wave 13)"
+      "verifier batch-32 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25370,10 +25372,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "\"Seems faster\" claims with no competitor numbers; against the snippet-derived Osvik FSE 2010 figure (about 1994 cycles/block) the flash encrypt (2111) is slower and the RAM variant (1951) about 2% faster. Abandoned 2020-12-18."
+      "\"Seems faster\" claims with no competitor numbers; against the snippet-derived Osvik FSE 2010 figure (about 1994 cycles/block) the flash encrypt (2111) is slower and the RAM variant (1951) about 2% faster. Abandoned 2020-12-18.",
+      "No timing or correctness bug found: the Timer1 harness is sound (cli, CLK/1, overflow check) and the xtime branches take the same cycles on both paths, so timing is constant. Main shortcoming: no competitor is ever timed. Cross-source (derived from page data): rweather's Crypto C++ docs give 33.28/63.18 us per byte on a 16 MHz Uno, about 8,520/16,174 cycles per block, so this library is about 3.8x/5.7x faster including the 140-cycle ABI cost; against Osvik (snippet only) the flash-S-box encrypt is 6% slower and decrypt 7-13% faster. Flash tables are read with plain lpm in .text with no ELPM, so they must sit in the first 64 KB on ATmega2560-class parts; r0/r1 hold state, which breaks naked ISRs; the README Flash example expands the key into xtest but encrypts with xkey."
     ],
     "measurements": [
-      "verifier batch-69 (wave 13)"
+      "verifier batch-69 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25940,10 +25944,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Wasm-against-wasm only (hash-wasm, itself listed at tier A, and libsodium.js), native Node crypto argon2 not compared; hash-wasm creates a new wasm instance per call; no CPU or Node version."
+      "Wasm-against-wasm only (hash-wasm, itself listed at tier A, and libsodium.js), native Node crypto argon2 not compared; hash-wasm creates a new wasm instance per call; no CPU or Node version.",
+      "Security bug: up to 0.5.28 non-ASCII passwords were hashed over a truncated UTF-8 prefix (tryHash and tryVerify passed the UTF-16 password.length as the byte count, issue #923); fixed in 0.6.0 (2026-09-29), and old hashes for such passwords no longer verify; the benchmark used ASCII passwords, so the numbers are unaffected. Harness flaw: the README output comes from the old bench file (vitest 3.1.4, 10 s per task, a 1 s warm-up for hash-wasm only), rewritten in d152440 (2026-09-08) without the README being re-run; hash-wasm is built without -msimd128 and re-instantiated with fresh 64 MiB memory on every call. Per 64 MiB pass (derived): @phi-ag/argon2 about 29-30 ms, libsodium.js about 39 ms, hash-wasm about 50 ms, so the 1.36x vs libsodium.js is the cleanest gain; native node:crypto argon2 was never timed."
     ],
     "measurements": [
-      "verifier batch-82 (wave 13)"
+      "verifier batch-82 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -26872,10 +26878,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "VS2008 flags (/O2 /arch:SSE2 /fp:fast /GL, Win32) with no CPU and single-shot rdtsc timing; the 20x best case comes from an extra early exit absent from the Moeller baseline; no licence (reference)."
+      "VS2008 flags (/O2 /arch:SSE2 /fp:fast /GL, Win32) with no CPU and single-shot rdtsc timing; the 20x best case comes from an extra early exit absent from the Moeller baseline; no licence (reference).",
+      "Latent correctness bug: LoadU is _mm_loadu_ps on a 12-byte Point, so every vertex load reads 4 bytes past the struct (the harness itself reads past the end of gTris), and the 4-lane DotV feeds that garbage w lane into the plane test, so a NaN or Inf there silently disables rejection and gives false overlaps; hit counts matched in the author's run, so the published numbers stand. Harness: one rdtsc sample per scenario with no warm-up, all scalar runs before the SIMD ones; the scalar best case costs 5072 vs 3773 for the worst case on the same code path, so the 1.99x worst-case row is the clean SIMD figure; the early exit checks v0 only, not 'triangle fully inside' as the README says. A licensed, maintained copy exists as NVIDIA PhysX Gu::intersectTriangleBox_Unsafe (GuIntersectionTriangleBox.cpp, V4Dot3; BSD-3 in NVIDIAGameWorks/PhysX, Apache-2.0 SPDX in NVIDIA-Omniverse/PhysX)."
     ],
     "measurements": [
-      "verifier batch-112 (wave 13)"
+      "verifier batch-112 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {

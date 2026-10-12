@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/rgrgrg/avr-aes-faster",
+  "one_liner": "Constant-time AES-128/192/256 block functions in AVR assembly, about 2,100 cycles per AES-128 block on ATmega328P.",
+  "what_it_does": "Hand-written avr-gcc assembly (.S files) for single-block AES encryption, decryption and key expansion on 8-bit AVR, with a C/C++ header (AVR-AES-Faster.h) declaring avr-gcc ABI entry points such as AES_ExpandKey128_F, AES_Encrypt128_F(in, out, xkey) and AES_Decrypt128_F. Three variants: Flash (S-box and inverse S-box read from flash, precomputed round keys), RAM (tables copied or generated into two 256-byte-aligned RAM arrays) and Tiny (AES-128 only, round keys computed on the fly in a 16-byte buffer that the call overwrites). It is a raw block primitive; modes, padding and authentication are left to the caller.",
+  "how_it_is_fast": "The whole 16-byte state lives in registers r0-r15 for all rounds, SubBytes and ShiftRows are fused into one pass of table lookups through Z (zh fixed to the 256-byte-aligned table, zl set to the state byte: 3-cycle lpm from flash or 2-cycle ld from RAM), and MixColumns uses the shared t = a0^a1^a2^a3 formulation with three xtime doublings per column. Decryption uses the straight Inverse Cipher rather than the Equivalent Inverse Cipher, so the same expanded key serves both directions with no InvMixColumns pass over the round keys.",
+  "when_to_use": [
+    "AES-128/192/256 on classic 8-bit AVR (ATmega328P class) where cycles per block matter: the author's counts are 2,111 cycles to encrypt an AES-128 block with the S-box in flash and 1,951 with it in RAM, plus about 140 cycles of C ABI overhead.",
+    "Flash-constrained builds: the RAM variant totals 1,236 bytes of flash for AES-128 encrypt, decrypt and key expansion (688 bytes of RAM), the Flash variant 1,610 bytes.",
+    "RAM-starved parts that still need AES-128: the Tiny variant needs only the 16-byte key buffer (2,949 cycles to encrypt, 3,538 to decrypt) at the cost of rolling the key back after each block.",
+    "Code that needs timing independent of key and data on AVR: there are no secret-indexed branches with unequal cycle counts and the table lookups take fixed time on these cacheless cores."
+  ],
+  "when_not_to_use": [
+    "Threats that include power or EM side-channel analysis: 'constant-time' covers timing only; the code has no masking or shuffling, and the xtime steps still branch on secret bits (balanced in cycles, not in instruction stream).",
+    "If you need a mode of operation (CTR, CBC, GCM, CCM) or AEAD out of the box: only single-block ECB primitives are provided, so a C++ library such as rweather's Arduino Crypto is easier to integrate, though about 4x slower per its own figures.",
+    "AVR parts with more than 64 KB of flash (ATmega1280/2560) unless you control placement: the flash tables sit in ordinary .text.AES_SBox_F/.text.AES_InvSBox_F sections and are read with plain lpm through Z, with no ELPM/RAMPZ handling, so they must be linked into the first 64 KB.",
+    "Reduced-core ATtiny (4/5/9/10/20/40) or pre-MOVW AVR cores: the code uses all of r0-r15, movw and lpm Rd,Z.",
+    "Projects that need maintenance or wider test coverage: last commit 2020-12-18, self-tests use only the four FIPS-197 Appendix B/C vectors (the 'test against more vectors' TODO is open), and the 'Nano' variant is unfinished."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (avr-libc headers only for the optional AES_BENCHMARK timing hooks)",
+    "min_toolchain": "avr-gcc with GNU as and the C preprocessor for .S files (exact version not documented); the test sketch builds in the Arduino IDE",
+    "platforms": "8-bit AVR enhanced cores with MOVW and LPM Rd,Z (tested on Arduino Uno, ATmega328P); flash tables must sit in the low 64 KB",
+    "thread_safety": "not documented; functions keep state in registers and caller buffers, so separate keys and blocks are reentrant, but the Tiny functions mutate the caller's key buffer and the RAM tables are shared globals",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The functions use r0 and r1 (avr-gcc's __zero_reg__) as state bytes and clear r1 only on return; ordinary avr-gcc ISRs re-zero r1 in their prologue, but a naked or hand-written assembly ISR that assumes r1 == 0 will misbehave if it fires mid-block.",
+    "RAM tables must be 256-byte aligned (`ldi zh, hi8(table)` then `mov zl, byte`): the README's example defines `uint8_t AES_SBox_R[256];` without the attribute, which only works because the header's extern declaration carries aligned(256), so define the tables in a translation unit that includes AVR-AES-Faster.h.",
+    "The README's Flash example expands the key into `xtest` but encrypts with `xkey`; copied literally it encrypts with uninitialised round keys. The Tiny functions leave the key buffer as the last (or first) round key, so each block needs a 16-byte copy or a roll-back call (405 or 423 cycles per the README table).",
+    "Published cycle counts exclude the call: they time only the inlined core with arguments already in registers (Timer1 at CLK/1 with interrupts disabled, eight cycles of probe overhead subtracted); add about 140 cycles per block through the C ABI. AES-256 key expansion goes through the generic AES_ExpandKey_F (2,044 cycles against 748 for the dedicated 128-bit routine)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when the target is 8-bit AVR: the closest catalogued AES sibling, aadomn/aes (fixsliced constant-time AES), covers only Cortex-M and RV32I, and the other assembly entries target x86, Arm or Go, so none of them runs on an ATmega.",
+  "verified_claims_summary": "The author's own Timer1 cycle counts on an Arduino Uno (ATmega328P) for the inlined core with no call overhead, per 16-byte block: AES-128 encryption 2,111 (flash S-box) / 1,951 (RAM S-box), decryption 2,687 / 2,527, key expansion 748 / 708; the repo never times any competitor, and its bundled C implementation is used only to check key expansion. Cross-source, derived from page data with different harnesses: rweather's C++ Arduino Crypto library lists AES128 on a 16 MHz Uno at 33.28 us/byte encryption and 63.18 us/byte decryption (about 8,520 and 16,174 cycles per block), so this library is about 3.8x and 5.7x faster even with its 140-cycle ABI overhead; against Osvik et al.'s 124.6 and 181.3 cycles/byte (search snippet only, about 1,994 and 2,901 cycles per block) it is about 6% slower at encryption with the flash S-box, 2% faster with the RAM S-box, and 7-13% faster at decryption, so 'faster than' the paper holds only for decryption and the RAM variant.",
+  "status_note": "Abandoned single-author project (23 commits between 2020-12-09 and 2020-12-18, 7 stars, no issues filed), MPL-2.0 per file, so modified .S files must stay open; small enough to vendor, but the speed claims against other AVR AES libraries remain unbenchmarked.",
+  "sources_read": [
+    "https://github.com/rgrgrg/AVR-AES-faster",
+    "https://github.com/rgrgrg/AVR-AES-faster/commits/main",
+    "https://github.com/rgrgrg/AVR-AES-faster/tree/main/pure_asm",
+    "https://github.com/rgrgrg/AVR-AES-faster/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/README.md",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AVR-AES-Faster.h",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AVR-AES-Faster-devel.h",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AVR-AES-Faster.ino",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_benchmark.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_Encrypt_F.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_Decrypt_F.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_Encrypt128_T.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_Decrypt128_T.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_ExpandKey_F.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_ExpandKey128_F.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_SBox_F.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_InitSBox_R.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/AES_InitInvBox_N.S",
+    "https://raw.githubusercontent.com/rgrgrg/AVR-AES-faster/HEAD/TestAES.h",
+    "https://raw.githubusercontent.com/rweather/arduinolibs/master/doc/crypto.dox",
+    "https://github.com/kildom/AVR-AES",
+    "https://raw.githubusercontent.com/kildom/AVR-AES/HEAD/README.md",
+    "https://github.com/Churro/avr-aes128-groestl256"
+  ],
+  "confidence": 0.75
+}

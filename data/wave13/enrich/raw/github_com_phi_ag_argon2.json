@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/phi-ag/argon2",
+  "one_liner": "Argon2 password hashing as a 48 KB npm package with a WebAssembly SIMD build; 1.4-2.1x faster than hash-wasm and libsodium.js.",
+  "what_it_does": "Packages the unmodified PHC reference Argon2 C code (phc-winner-argon2 submodule) as a single standalone WASI-style .wasm plus a small TypeScript wrapper, published on npm as @phi-ag/argon2 (ESM only). You call initialize() (Node/Deno/Bun via ./node, browsers via ./fetch, or new Argon2(instance) on Cloudflare Workers), then synchronous hash(password, options) returning a PHC-encoded string plus raw hash, and verify(encoded, password); tryHash/tryVerify return result objects instead of throwing. Defaults are argon2id, t=3, m=64 MiB, p=4, 32-byte hash, 16-byte salt from crypto.getRandomValues.",
+  "how_it_is_fast": "The speedup comes from the build, not new code. Emscripten compiles phc-winner-argon2's optimized opt.c with -msimd128 -mavx2 -D__AVX2__, so the AVX2 BlaMka round (__m256i rotations via _mm256_shuffle_epi8, _mm256_permute4x64_epi64 diagonalization) is lowered through Emscripten's emulation of 256-bit intrinsics onto pairs of WebAssembly SIMD128 operations; the baselines hash-wasm (scalar uint64 C, its Makefile leaves -msimd128 commented out) and libsodium.js run scalar wasm. The wrapper keeps one instantiated module and emmalloc heap alive across calls, while hash-wasm instantiates fresh argon2 and BLAKE2b instances and grows new linear memory on every call.",
+  "when_to_use": [
+    "Argon2id hashing or verification in browsers, Cloudflare Workers or other wasm-only runtimes with WebAssembly SIMD, where no native Argon2 is available.",
+    "You already ship hash-wasm or libsodium.js only for Argon2 and want roughly 1.4-1.7x lower latency at 64 MiB memory cost with a 48 KB package.",
+    "Client-side key derivation where blocking the calling thread for one hash (about 89 ms per hash at 64 MiB on the author's unnamed machine, derived from page data) is acceptable, or the work already runs in a Web Worker.",
+    "You need output that matches node:crypto argon2 bit-for-bit (tests compare every Argon2 type against argon2Sync) on 0.6.0 or later."
+  ],
+  "when_not_to_use": [
+    "Node.js or Bun servers: the README itself points to the native crypto.argon2 implementations, which offer async APIs and real lane parallelism; native speed was never compared.",
+    "Runtimes without WebAssembly SIMD128: there is no scalar fallback build (hash-wasm runs there).",
+    "Throughput-bound servers: hash and verify are synchronous and block the event loop, and parallelism > 1 is computed sequentially (ARGON2_NO_THREADS), so p=4 buys no speed.",
+    "Existing hashes of non-ASCII passwords created with 0.5.28 or earlier: they no longer verify on 0.6.x (issue #923 fix), and there is no byte-array password API to re-derive them yet.",
+    "You need other hash functions, keyed hashing (secret) or associated data: the API exposes only password, salt and the cost parameters."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (one bundled argon2.wasm); building it needs Emscripten (CI uses the emscripten/emsdk:6.0.12 docker image) and the phc-winner-argon2 git submodule pinned at f57e61e",
+    "min_toolchain": "ESM JavaScript runtime with WebAssembly SIMD128 and crypto.getRandomValues (minimum browser or Node versions not documented); e2e tests run on Chromium, Firefox and WebKit via Playwright; development uses Node 26.x and TypeScript 6",
+    "platforms": "any WebAssembly runtime with SIMD128: Node.js, Deno, Bun, browsers (Vite or vanilla), Cloudflare Workers",
+    "thread_safety": "not documented; one synchronous Argon2 instance per JS thread or Worker, single-threaded internally (ARGON2_NO_THREADS)",
+    "drop_in_for_baseline": "partial: produces standard PHC-encoded argon2 strings interoperable with hash-wasm, libsodium and node:crypto (on 0.6.0+), but the API is synchronous and differs from hash-wasm's async argon2id/argon2Verify and libsodium's crypto_pwhash_str"
+  },
+  "gotchas": [
+    "Security bug fixed only in 0.6.0 (2026-09-29, issue #923): from 0.0.1 to 0.5.28 tryHash and tryVerify passed the UTF-16 password.length as the byte count, so non-ASCII passwords were hashed over a truncated UTF-8 prefix (\"Zürich2026?\" verified against the hash of \"Zürich2026!\"); such hashes do not match other Argon2 implementations and stop verifying after upgrading. Benchmark passwords were ASCII, so the measured numbers are unaffected.",
+    "Harness flaw: the README example (vitest 3.1.4 output, about May 2025) came from the old bench file that ran 10 s per task and gave hash-wasm a 1 s warmup; commit d152440 (2026-09-08) rewrote it to vitest 5 bench.compare without those settings and the README was not re-run, and no CPU or Node version is given. The hash-wasm task also pays per-call WebAssembly instantiation of argon2 and BLAKE2b instances plus fresh 64 MiB memory growth, which @phi-ag/argon2 does once outside the timed loop.",
+    "Per-pass costs derived from page data (hash plus verify = two Argon2 runs per iteration): @phi-ag/argon2 about 29-30 ms per 64 MiB pass in both 'defaults' and 'libsodium' rows, libsodium.js about 39 ms, hash-wasm about 50 ms; the 1.36x libsodium.js row is the cleanest SIMD-versus-scalar-wasm figure, and hash-wasm's larger gaps include its per-call setup.",
+    "WebAssembly memory never shrinks: after one 64 MiB hash the instance keeps at least 64 MiB of linear memory (ALLOW_MEMORY_GROWTH with emmalloc) for its lifetime."
+  ],
+  "pick_this_over_siblings_when": "Pick it over hash-wasm when Argon2 is the only algorithm you need and every target runtime has wasm SIMD: it is 1.7x (64 MiB) to 2.1x (512 KiB) faster there and offers a synchronous API; stay with hash-wasm for its many other hashes, async API, or runtimes without SIMD128.",
+  "verified_claims_summary": "The author's vitest bench (hash then verify per iteration, argon2id, ASCII password) shows 5.61 vs 3.34 ops/s against hash-wasm (4.12.0 in today's package.json) at t=3, m=64 MiB, p=4 (1.68x), 330 vs 160 ops/s at t=8, m=512 KiB, p=1 (2.07x), and 4.31 vs 3.17 ops/s against libsodium-wrappers-sumo (0.8.4 today) at t=4, m=64 MiB, p=1 (1.36x); all are wasm-versus-wasm on an unnamed machine and Node version, printed by vitest 3.1.4 from a harness that has since been rewritten. Native Argon2 (node:crypto, OpenSSL, libargon2) was not measured.",
+  "status_note": "Actively maintained (release 0.6.1 on 2026-10-10, Renovate-driven dependency updates, 13 stars), MIT-licensed and copyable, but upgrade past 0.6.0 for the non-ASCII password truncation fix and rehash affected passwords.",
+  "sources_read": [
+    "https://github.com/phi-ag/argon2",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/README.md",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/build.sh",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/package.json",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/src/index.bench.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/src/node.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/src/fetch.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/src/index.test.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/vitest.config.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/playwright.config.ts",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/.github/workflows/bench.yml",
+    "https://raw.githubusercontent.com/phi-ag/argon2/HEAD/.github/actions/emscripten/action.yml",
+    "https://github.com/phi-ag/argon2/commits/main/src/index.bench.ts",
+    "https://github.com/phi-ag/argon2/commit/d152440",
+    "https://github.com/phi-ag/argon2/commits/main/build.sh",
+    "https://github.com/phi-ag/argon2/commit/9e87bf4",
+    "https://github.com/phi-ag/argon2/issues?q=is%3Aissue",
+    "https://github.com/phi-ag/argon2/issues/923",
+    "https://registry.npmjs.org/@phi-ag%2Fargon2/latest",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/lib/argon2.ts",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/lib/WASMInterface.ts",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/src/argon2.c",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/scripts/build.sh",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/scripts/Makefile-clang",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/P-H-C/phc-winner-argon2/f57e61e/src/opt.c",
+    "https://raw.githubusercontent.com/P-H-C/phc-winner-argon2/f57e61e/src/blake2/blamka-round-opt.h"
+  ],
+  "confidence": 0.75
+}
