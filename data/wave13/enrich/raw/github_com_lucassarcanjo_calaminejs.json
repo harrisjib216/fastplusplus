@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/lucassarcanjo/calaminejs",
+  "one_liner": "Unofficial WebAssembly binding of the Rust calamine reader for xlsx/xls/xlsb/ods; about 4-5x faster than SheetJS 0.18.5 on large sheets.",
+  "what_it_does": "Reads .xlsx, .xls, .xlsb and .ods workbooks from a Uint8Array (it never touches a filesystem) and returns the first or a named sheet as arrays of values, {t, v} tagged cells, header-keyed row objects, RFC 4180 CSV or a Markdown table. One 720 KB (370 KB gzipped) wasm binary ships behind five package entry points for Node, Bun, Deno, browsers and Cloudflare Workers, published on npm as `calamine` 0.1.0. It is not a drop-in for SheetJS: there is no workbook or worksheet object model and no writing, and dates default to offset-free ISO strings rather than serials or Date objects.",
+  "how_it_is_fast": "The parsing is tafia/calamine 0.36 (Rust, zip plus quick-xml), compiled with opt-level 3, fat LTO and one codegen unit, so the per-cell work happens in wasm linear memory and no JS object is created per cell during the parse. Output is serialized in Rust into one string (serde_json for cells, hand-written CSV and Markdown writers), so a single value crosses the JS/wasm boundary and the JSON variants then use V8's native JSON.parse. On the 1.8M-cell fixture the parse floor is 634 ms, and the boundary adds 35-55% on top of it. SheetJS instead builds a JS object for every cell, keyed by its A1 address, and with default read options it also generates formatted text (.w) for every cell.",
+  "when_to_use": [
+    "Server or edge code that ingests uploaded xlsx/xls/xlsb/ods sheets of 10^5-10^6+ cells and only needs the values: about 4x less wall time than SheetJS read + sheet_to_json on a 1.8M-cell sheet (one-process-per-library run: ~1.0 s vs ~4.0 s).",
+    "Converting a sheet straight to CSV, or to a JSON string you forward unparsed: toCsv and readCells skip per-cell JS objects (865 ms vs 4.57 s for SheetJS read + sheet_to_csv on the 23 MB fixture).",
+    "Imports where date and type fidelity matter: Excel's serial 60 (1900-02-29), [h]:mm:ss durations and civil dates come back exactly regardless of the host timezone, and tagged mode separates real date cells from look-alike text and keeps error values that sheet_to_json flattens to null.",
+    "One artifact for Node 18+, Bun, Deno, browsers and Workers, or a zero-dependency install that avoids the npm-audit findings on xlsx 0.18.5."
+  ],
+  "when_not_to_use": [
+    "Writing spreadsheets, or reading styles, formulas, merged cells, images or column widths: this binding surfaces none of them (use SheetJS or ExcelJS).",
+    "Very large files or memory-constrained hosts: a 23 MB workbook settles at ~153 MB of wasm memory (6.6x), wasm32 caps at 4 GB, memory is never returned to the OS, and there is no streaming reader; the real ceiling has not been measured.",
+    "Small files in a browser: the 370 KB gzipped wasm has to be downloaded and compiled before the first call, and on the 5k-cell fixture the gain is about 5 ms (2-3 ms vs 8 ms).",
+    "CSV, dbf, Numbers or HTML inputs (only four formats are read), or runtimes without WebAssembly.",
+    "Risk-averse production: version 0.1.0, one maintainer, 0 stars, 27 commits written between 2026-08-06 and 2026-08-12, and no issues filed yet."
+  ],
+  "integration": {
+    "form": "module (npm package `calamine`, ESM only, prebuilt wasm; five entry points chosen by exports conditions)",
+    "dependencies": "none at runtime (calamine 0.36 and about 50 other crates are statically linked into the wasm); building from source needs Rust 1.97.1 (rust-toolchain.toml), wasm-pack and binaryen 131+",
+    "min_toolchain": "Node 18+ (package.json engines), ESM; any runtime with WebAssembly",
+    "platforms": "any WebAssembly-capable JS runtime: Node, Bun, Deno, browsers (await ready() first), Cloudflare Workers (workerd entry not yet tested); Vercel Edge not handled",
+    "thread_safety": "not documented; one wasm instance per module and every call is synchronous; with panic = \"abort\" a parser panic kills the instance for the whole process",
+    "drop_in_for_baseline": "false — different API: bytes in, plain arrays, objects, CSV or Markdown out; no workbook object or .w formatted text, dates are ISO strings by default, and only the first sheet is read unless `sheet` is given"
+  },
+  "gotchas": [
+    "Harness flaw (in-process bias): bench/bench.mjs runs every strategy in one process, the wasm ones first and SheetJS last, taking the median of 3 iterations (cold first one included) on the large file. The author's own one-subprocess-per-library run (bench/compare/run.mjs) gives SheetJS ~4.0 s against 4.61 s in the shared process, so the README's 4.7-5.3x shrinks to about 4x (derived from page data). That child run is a single cold iteration per library, and it starts the timer before SheetJS's `await import(\"xlsx\")` while calamine's wasm has already been loaded by a static import.",
+    "Untuned baseline: both harnesses call XLSX.read with default options, which in 0.18.5 generate formatted text (.w, cellText: true) and rich-text HTML (cellHTML: true) that sheet_to_json with header: 1 (raw values by default) then discards. Leaner settings such as cellText: false were not tried, and the maintained SheetJS releases on cdn.sheetjs.com were not measured.",
+    "The fixtures are synthetic and written by SheetJS itself. Its writer emits strings as t=\"str\" inline values unless bookSST is set, and make-fixtures.mjs does not set it, so the benchmark files have no shared-string table, unlike workbooks saved by Excel. One cell in six is a hole, and the bench checks only row counts, not that the libraries return the same values.",
+    "panic = \"abort\" means any parser panic takes down the wasm instance for the whole process: read untrusted uploads in a worker or subprocess, with a file-size bound. Non-finite floats become null, the declared sheet dimension is ignored in favour of the cells actually present, and the default untagged output loses the difference between a date and text that reads like one."
+  ],
+  "pick_this_over_siblings_when": "It is the only spreadsheet reader among the wasm-for-JS siblings. It uses the same pattern as camaro (a native parser compiled to wasm that hands back one string instead of many JS objects), so pick calaminejs when the input is a workbook and camaro or VectorJSON when you only need XML or JSON parsing.",
+  "verified_claims_summary": "Author-run on macOS arm64 (CPU model not stated) with Node 22.18, on a synthetic 150,000 x 12 (1.8M cells, 23 MB) xlsx written by SheetJS. In one process, toCsv took 865 ms and readCells + JSON.parse 981 ms against 4.61 s for SheetJS 0.18.5 read + sheet_to_json(header: 1), medians of 3 (4.7-5.3x); a separate run with one subprocess per library reports ~1.0 s vs ~4.0 s, about 4x.",
+  "status_note": "Active but brand new: 27 commits between 2026-08-06 and 2026-08-12, npm `calamine` 0.1.0 published 2026-08-11 (the CHANGELOG still calls 0.1.0 unreleased), one maintainer, 0 stars and no issues. It is MIT-licensed with bundled third-party notices and copyable; the parsing quality rests on tafia/calamine, and the speed claim is first-party, from an in-process harness that reads about 15-20% better than the author's own subprocess run (derived from page data).",
+  "sources_read": [
+    "https://github.com/lucassarcanjo/calaminejs",
+    "https://github.com/lucassarcanjo/calaminejs/commits",
+    "https://github.com/lucassarcanjo/calaminejs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/README.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/docs/comparison.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/docs/roadmap.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/docs/testing.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/docs/packaging.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/package.json",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/src/output.rs",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/scripts/build.mjs",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/bench/bench.mjs",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/bench/compare/run.mjs",
+    "https://raw.githubusercontent.com/lucassarcanjo/calaminejs/HEAD/bench/make-fixtures.mjs",
+    "https://registry.npmjs.org/calamine",
+    "https://raw.githubusercontent.com/SheetJS/sheetjs/HEAD/README.md",
+    "https://raw.githubusercontent.com/SheetJS/sheetjs/v0.18.5/README.md",
+    "https://raw.githubusercontent.com/SheetJS/sheetjs/master/bits/67_wsxml.js",
+    "https://raw.githubusercontent.com/tafia/calamine/HEAD/README.md",
+    "https://raw.githubusercontent.com/tafia/calamine/HEAD/Cargo.toml"
+  ],
+  "confidence": 0.8
+}

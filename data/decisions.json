@@ -23757,10 +23757,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "One timed call per size, no hardware stated; README headlines (6x over JS, 4000x) exceed its own table (4.6x, about 2600x derived); StringSink is about 3x faster at 100 strings too."
+      "One timed call per size, no hardware stated; README headlines (6x over JS, 4000x) exceed its own table (4.6x, about 2600x derived); StringSink is about 3x faster at 100 strings too.",
+      "Harness flaws: one performance.now() call per size with warm-up at n = 100 only and Wasm tier state uncontrolled; the arms run in a fixed order in one shared instance, so StringSink always follows AS += with memory already grown and GC garbage left behind; the JS rope is never flattened; there is no AS Array<string>.join baseline although the stdlib join is also linear. Power-of-two growth aborts with E_ALLOCATION_TOO_LARGE once content passes 2^29 bytes; writeCodePoint produces garbage for invalid code points under --noAssert. No library bug found."
     ],
     "measurements": [
-      "verifier batch-19 (wave 13)"
+      "verifier batch-19 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -24954,10 +24956,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Wasm wins only with a loop-invariant divisor; single operations are slower on V8 (+19.6% to +33.4%), each single-op bench times one fixed operand pair, the loop workload is narrow with tiny quotients, and the native -92.8% row probably reflects a slow native __udivti3. No licence (reference); loose category fit."
+      "Wasm wins only with a loop-invariant divisor; single operations are slower on V8 (+19.6% to +33.4%), each single-op bench times one fixed operand pair, the loop workload is narrow with tiny quotients, and the native -92.8% row probably reflects a slow native __udivti3. No licence (reference); loose category fit.",
+      "Harness flaw behind the loop-invariant headline: the divisor is the dividend's own high word with the top bit cleared, and reproducing the seeded operands (rand 0.10.1 Xoshiro128PlusPlus, checked against rand's test vector) shows 3,144 of 5,000 iterations (62.9%) with quotient 0 that leave the reciprocal path through its Y > X shortcut with no multiply, and the other 1,856 with quotient 1; the Wasm builtin (compiler-builtins trifecta) also early-outs every iteration (d8 5.93 ns per iteration vs 18.27 ns for a single general op). So the -38.5% (d8) and -73.4% (wasmtime) rows compare libcall overhead on trivial quotients, the native -92.8% is 5,000 hardware DIVs (26.9 ns per iteration, the same as a single op) against a mostly-shortcut kernel, and the hoisting benefit for general quotients is unmeasured. Single-op benches use one operand pair (unsigned quotient 9, signed |quotient| 1); the 2-by-1 path is never benchmarked."
     ],
     "measurements": [
-      "verifier batch-52 (wave 13)"
+      "verifier batch-52 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25017,10 +25021,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Baseline is Abseil's scalar loop copied verbatim (abseil-cpp@7e706921) and compiled in the same file as the patch, not glibc strncasecmp or memcmp, so the ratios say nothing about libc; one machine (Apple M2) and one compiler (Apple clang 14); each benchmark re-runs one fixed cache-resident input pair in a hot loop."
+      "Baseline is Abseil's scalar loop copied verbatim (abseil-cpp@7e706921) and compiled in the same file as the patch, not glibc strncasecmp or memcmp, so the ratios say nothing about libc; one machine (Apple M2) and one compiler (Apple clang 14); each benchmark re-runs one fixed cache-resident input pair in a hot loop.",
+      "Patch code is correct and the harness is sound (cache-hot fixed inputs). Documentation flaws: FINDINGS.md claims the upstream prefix code 'already assumes' little-endian, but Abseil uses absl::little_endian::Load64, so the patches break on big-endian; optimized.h claims a NEON pre-scan for RemoveExtraAsciiWhitespace, contradicted by its own clean/4096 numbers (a scalar rate). Regressions of 0.44-0.84x on mismatching inputs. Abseil master still had the byte loops on 2026-10-12. Showcase repo, 2 days old, 0 stars."
     ],
     "measurements": [
-      "verifier batch-61 (wave 13), file only (agent killed by the spend limit before reporting)"
+      "verifier batch-61 (wave 13), file only (agent killed by the spend limit before reporting)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25052,10 +25058,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No CPU or .NET version; the published Exp N=64/100000 setup is not in the repo (the committed bench uses 3,200,000) and integer division makes inputs degenerate (Log N=64 all 1.0); the author's older table (commit 3d4c302) shows MKL 4.3x faster at N=65536 and 2.0x at 32M, and the \"10x vs MKL\" claim has no table. C#. Stale since 2024-03-28."
+      "No CPU or .NET version; the published Exp N=64/100000 setup is not in the repo (the committed bench uses 3,200,000) and integer division makes inputs degenerate (Log N=64 all 1.0); the author's older table (commit 3d4c302) shows MKL 4.3x faster at N=65536 and 2.0x at 32M, and the \"10x vs MKL\" claim has no table. C#. Stale since 2024-03-28.",
+      "Correctness bugs found by code reading plus Python emulation (not run on AVX-512 hardware); the timed numbers are unaffected: the AVX-512 Exp rounds to nearest even but VSCALEFPD floors x + 0.5, so ties double the result (Exp(0.5*ln 2) gives 2.828, not 1.414); AVX-512 Ln(Span<double>) with 5-7 elements leaves outputs 4..n-1 unwritten; AVX2 Ln(0) returns +Infinity (the NEGATIVE_INFINITY constant is built from PositiveInfinity); Exp error reaches about 220 ulp near |x| = 700. The README-recommended LitExpDoubleParallel slices Slice(i, n) instead of Slice(i*n, n), so most of the array is never computed."
     ],
     "measurements": [
-      "verifier batch-59 (wave 13)"
+      "verifier batch-59 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25251,10 +25259,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No CPU or OS and no licence (reference); the TypeScript float path allocates on every call and the C++ baseline is built -Oz and called through embind."
+      "No CPU or OS and no licence (reference); the TypeScript float path allocates on every call and the C++ baseline is built -Oz and called through embind.",
+      "Harness flaw: src/cpp/main.cpp never calls seed() (a local 'uint32_t seed = 44983921329;' shadows the function), so the global TinyMT stays all-zero, a fixed point of next_state, and every native u32() returns 0; the README's 'native C++ 2-4x faster than Wasm' rows time a degenerate generator, and the C++/Emscripten contender is the same build. The exported int() returns a signed i32; the TypeScript port keeps its state in a number[] while the winning AssemblyScript build uses four scalar globals (array-based AssemblyScript builds lose to TypeScript 3.7-5.1x); the committed C++ artifacts (12,350 and 25,519 bytes) do not match the size table."
     ],
     "measurements": [
-      "verifier batch-68 (wave 13)"
+      "verifier batch-68 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25332,10 +25342,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No CPU model and no LICENSE (reference); the utf8lib baseline is a vendored UTF8-CPP 2.3.4; a research artifact behind simdutf (already listed), kept as the lookup-algorithm evidence."
+      "No CPU model and no LICENSE (reference); the utf8lib baseline is a vendored UTF8-CPP 2.3.4; a research artifact behind simdutf (already listed), kept as the lookup-algorithm evidence.",
+      "The 36x/64x headline is against the plain Hoehrmann DFA; the best scalar validator in the same April 2026 run (fushia_ascii2) gives about 3.9x and 6.0x (derived from page data). The utf8lib baseline (UTF8-CPP 2.3.4) is build-sensitive: 22.9 instructions/byte and 0.51 GB/s in results/skylake.txt (old Makefile) vs 6.7 instructions/byte and 2.57 GB/s in the 2026 CMake build. The test oracle fidl_validate_string accepts the overlong F0 8F BF BF (code_point < 0xffff check); only AVX2 is timed and no CPU model is given. The README's lookup4/basic/range rows match the current real-file driver output (April 2026 rerun), so the earlier 'stale row names' caveat was wrong. The 'basic' kernel is the fastvalidate-utf-8 algorithm, 1.35-1.9x slower than lookup4."
     ],
     "measurements": [
-      "verifier batch-76 (wave 13)"
+      "verifier batch-76 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25343,10 +25355,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No bench driver, CPU, compiler or flags in the repo; the table predates the 2025-12-11 correctness fix (FastFind64 32-bit compare, 16-bit index vpbroadcastd, U8 min-index sentinel 127); the tie index differs from std::min_element."
+      "No bench driver, CPU, compiler or flags in the repo; the table predates the 2025-12-11 correctness fix (FastFind64 32-bit compare, 16-bit index vpbroadcastd, U8 min-index sentinel 127); the tie index differs from std::min_element.",
+      "Code bug in both the Linux .s and Windows .asm kernels: FastFindFloat/Double for n < 4 and FastContainsFloat/Double for n < 8 use vucomiss/vucomisd with je/sete/cmove and no parity check, so a NaN element or NaN query counts as a match (contains {NaN, 2, 3} query 5 returns true); the vector paths never match NaN. Empty float/double min/max return NaN, not the README's 'min/max representable value'; none of the 52 kernels executes vzeroupper; the Windows procs that adjust rsp have no unwind info; the Linux .s files are NASM syntax, not GAS. MSVC's STL already vectorizes find/min_element/max_element. The only third-party number is the fatihtsp/FastArrayOps Delphi wrapper (a duplicate): 10M int64 min 11 vs 13 ms, about 1.2x."
     ],
     "measurements": [
-      "verifier batch-76 (wave 13)"
+      "verifier batch-76 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25356,10 +25370,12 @@
     "category": "math-simd-linear-algebra",
     "domain": "stdlib-replacements",
     "shortcomings": [
-      "README says only \"about 30% faster\" than hardware division on Intel, with no bench code, CPU or compiler; scalar, filed under math-simd-linear-algebra with libdivide and fastmod. Abandoned since 2021-09-30."
+      "README says only \"about 30% faster\" than hardware division on Intel, with no bench code, CPU or compiler; scalar, filed under math-simd-linear-algebra with libdivide and fastmod. Abandoned since 2021-09-30.",
+      "A Python model of the asm path passed 660,231 quotient/remainder checks with 0 errors, so the algorithm is correct. Bugs: FastDivider::GetDivisor() returns the stored negated divisor (2^64 - 7 for 7); no LZCNT/BMI2 feature check; the MSVC path shifts by 2^64 - lzcnt (undefined behaviour). The 30% claim has no harness; DIV r64 costs about 14-18 cycles on Rocket Lake and Alder Lake and 9-17 on Zen 3 (search snippets) against about 12 serial multiplies here, so it is likely slower on those cores."
     ],
     "measurements": [
-      "verifier batch-77 (wave 13)"
+      "verifier batch-77 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25384,10 +25400,12 @@
     "category": "unicode-utf8",
     "domain": "parsing-and-text",
     "shortcomings": [
-      "README numbers (15.6x/24.5x) are against a Guava-derived scalar validator with no CPU model or GCC version; declared obsolete in 2022 and superseded by simdutf (its successor, already listed); kept as the predecessor record under unicode-utf8."
+      "README numbers (15.6x/24.5x) are against a Guava-derived scalar validator with no CPU model or GCC version; declared obsolete in 2022 and superseded by simdutf (its successor, already listed); kept as the predecessor record under unicode-utf8.",
+      "Harness flaw in the baseline: the scalar validate_utf8 in benchmarks/benchmark.c ports Guava's signed '> (byte)0xBF' test as an unsigned '> 0xBF', so it accepts ASCII bytes in continuation slots ('\\xC3\\x28' and '\\xF1AAA' return true; a Python model misclassifies 3,840 of 65,536 two-byte inputs), and tests/unit.c never exercises it; the timing on all-valid input is unaffected, but the baseline is not a real validator. Current harness defects: c0a5f7e removed populate's out-of-bounds write, but the DFA rows in demo() still read N + 1 bytes of a malloc(N) buffer; the PR #26 fix scales tv_sec by 1E6 instead of 1E9. Neither touches the README cycle counts."
     ],
     "measurements": [
-      "verifier batch-77 (wave 13)"
+      "verifier batch-77 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25500,10 +25518,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No CPU or Go version; the 40x is against a bounds-checked byte loop and only 1.2-5.8x against a word-wise loop; the SSE row was measured before the segfault fix 62a404d; the AVX path was gated on HasAVX until 2021 (issue #2); crypto/subtle.XORBytes (SSE2 assembly) was never compared."
+      "No CPU or Go version; the 40x is against a bounds-checked byte loop and only 1.2-5.8x against a word-wise loop; the SSE row was measured before the segfault fix 62a404d; the AVX path was gated on HasAVX until 2021 (issue #2); crypto/subtle.XORBytes (SSE2 assembly) was never compared.",
+      "Code bugs off the measured path: amd64 Block has no length check (out-of-bounds read and write on slices shorter than 16 bytes); 386 Block xors only 8 of 16 bytes; amd64 Byte panics on empty input; no VZEROUPPER, with a legacy-SSE tail after 256-bit ops. Harness flaws: BenchmarkBytes calls Bytes(buf, buf, buf) on one zeroed cache-resident buffer, so all operands alias; the 'about 6x' Block claim is cross-run (Block 1.18 ns from 2018-10-11, ab5bbce, vs Bytes/16 6.20 ns from 2018-07-06; the same-run ratio is 2.3x), and the unchanged byte-wise and word-wise rows shifted about 39% between the 2018-07-05 and 2018-07-06 tables. Issue #4 reports no gain at 64 B on a Core i5 with Go 1.16."
     ],
     "measurements": [
-      "verifier batch-70 (wave 13)"
+      "verifier batch-70 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -25557,10 +25577,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "README numbers date from 2020 with no Go version and a contradictory CPU label; the SIMD path starts at 2 KiB (identical 64 B and 1 KiB rows); the Split-Write fix landed 2025-05-08; the assembly is avo-generated, not hand-written. Go-only."
+      "README numbers date from 2020 with no Go version and a contradictory CPU label; the SIMD path starts at 2 KiB (identical 64 B and 1 KiB rows); the Split-Write fix landed 2025-05-08; the assembly is avo-generated, not hand-written. Go-only.",
+      "Record correction: the Write and XOF rows are not 1 KiB writes; BenchmarkWrite streams through io.CopyN in 32 KiB calls and the 2020 XOF read through ioutil.Discard's 8 KiB buffer, so ns/op is per KiB streamed; no flag or build tag selects AVX2 or pure Go, so those listings needed source edits, and the identical 64 B and 1 KiB rows were pasted. The current code is not the measured code: since v1.4.0 Write and Sum spawn goroutines with no cap (32,768 for a 512 MiB subtree), so re-runs measure multi-core throughput; v1.4.0 was retracted for wrong hashes on split writes (fixed in 83c0fac); the AVX2 numbers predate the April 2024 VZEROUPPER fix. A short key panics and a long key is silently truncated."
     ],
     "measurements": [
-      "verifier batch-71 (wave 13)"
+      "verifier batch-71 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -26209,10 +26231,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "README numbers match (10.11x creation, 2.29x solving vs Cassowary.js) but there is no hardware or Node version; plain TypeScript with no Wasm build, so a poor fit for the category; a continuation of IjzerenHein/kiwi.js. Stale since 2025-05-20."
+      "README numbers match (10.11x creation, 2.29x solving vs Cassowary.js) but there is no hardware or Node version; plain TypeScript with no Wasm build, so a poor fit for the category; a continuation of IjzerenHein/kiwi.js. Stale since 2025-05-20.",
+      "Harness asymmetry: bench/main.js leaves Cassowary.js 0.0.2 (an npm build from 2013-02-02) at its default autoSolve = true (confirmed in the npm build), so each of its 18 addConstraint/addEditVar calls also runs optimize and _setExternalVariables, while kiwi writes values once in updateVariables(); the 10x creation ratio partly measures that default. Tiny workload (18 variables, 16 constraints); README numbers added in 45fa466 (2023-10-23) with no hardware or Node version; no wasm build exists. maxIterations is 1000 (the doc comment says 10,000); npm 0.4.4 lacks the Variable.subscribe now on main."
     ],
     "measurements": [
-      "verifier batch-95 (wave 13)"
+      "verifier batch-95 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -26744,10 +26768,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "The README GeLU 6-10x is a projection (measured 1.02x vs erff); beats only a naive i-j-p scalar loop and loses to OpenBLAS everywhere (4-59%); README GEMM ratios differ from docs/BENCHMARKS.md (4.1/6.9/10.4x); CI virtual machine, no CPU model."
+      "The README GeLU 6-10x is a projection (measured 1.02x vs erff); beats only a naive i-j-p scalar loop and loses to OpenBLAS everywhere (4-59%); README GEMM ratios differ from docs/BENCHMARKS.md (4.1/6.9/10.4x); CI virtual machine, no CPU model.",
+      "Evidence flaw: the committed benchmarks/results/bench_results.json (an undated RDTSC run) shows simd_sgemm stuck near 29.3M cycles at 64-256, i.e. 213x slower than scalar at 64 and 5.5x slower at 128; the committed gemm_results.json (76.9/88.2 GFLOPS at 256/512) disagrees with docs/BENCHMARKS.md (64.1/73.3); the N <= 128 numbers predate commit acb42de (2026-08-07), which sends small matrices to the unpacked single-accumulator sgemm_direct_avx2, with no new numbers since. Each packed call memsets about 2.1 MB of buffers; OpenMP parallelises only the NC = 2048 loop; the build is -march=native -ffast-math. Slower than single-thread OpenBLAS at every size."
     ],
     "measurements": [
-      "verifier batch-110 (wave 13)"
+      "verifier batch-110 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {
@@ -27070,10 +27096,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "No CPU model (\"macOS arm64\"); the baseline is npm-frozen SheetJS 0.18.5 on synthetic script-made fixtures with only 3 iterations in one process; README \"up to 5x\" against its own comparison doc's about 4x."
+      "No CPU model (\"macOS arm64\"); the baseline is npm-frozen SheetJS 0.18.5 on synthetic script-made fixtures with only 3 iterations in one process; README \"up to 5x\" against its own comparison doc's about 4x.",
+      "Harness flaw: bench/bench.mjs runs all strategies in one process, wasm first and SheetJS last, with a median of 3 that includes the cold run; the author's own one-subprocess-per-library run (bench/compare/run.mjs) gives SheetJS about 4.0 s against 4.61 s in the shared process, so the README's 4.7-5.3x is really about 4x (derived), and that child run also times SheetJS's await import('xlsx'). The baseline is untuned: XLSX.read defaults cellText and cellHTML to true and sheet_to_json then discards that work. Fixtures are written by SheetJS without bookSST, so they have no shared-string table unlike Excel files; the bench checks row counts only, not output equality."
     ],
     "measurements": [
-      "verifier batch-117 (wave 13)"
+      "verifier batch-117 (wave 13)",
+      "enricher (wave 13 pass, 2026-10-12)"
     ]
   },
   {

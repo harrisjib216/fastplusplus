@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/maxgraey/as-string-sink",
+  "one_liner": "Growable UTF-16 string builder for AssemblyScript; replaces quadratic String += and beats V8 rope concat about 4x.",
+  "what_it_does": "StringSink is a single AssemblyScript class that accumulates text in a growable ArrayBuffer and produces a normal AssemblyScript string with toString(). It has write (whole string or a substring by start/end), writeLn, writeCodePoint, writeNumber<T> (integers and floats via the stdlib's itoa_buffered/dtoa_buffered), plus reserve, shrink, clear and withCapacity. It is a different interface, not a drop-in for +=, and it is usable only from AssemblyScript code: the maintainer says in issue #14 that classes cannot be exported across the Wasm boundary and that calling it from JavaScript would cost more in interop than it saves.",
+  "how_it_is_fast": "Amortised geometric growth: each write memory.copy's the UTF-16 bytes at the current offset and, when capacity runs out, __renew grows the buffer to the next power of two, so n appends cost O(n) total bytes copied. AssemblyScript's own String += allocates a fresh string and copies both operands on every append, which is O(n^2) in total, so the gap against it grows with n rather than being a constant factor. writeNumber formats digits directly into the buffer instead of allocating a temporary string per number.",
+  "when_to_use": [
+    "AssemblyScript code that builds a long string from many small pieces in a loop (serialisers, code or SVG generators, CSV/JSON writers) where += would go quadratic.",
+    "Mixing text, numbers and code points into one output without allocating a temporary string per piece (writeNumber, writeCodePoint).",
+    "Appending substrings by index range (write(src, start, end)) without materialising substring() copies.",
+    "Output sizes from a few KB up to hundreds of MB, with a reusable sink (clear/reserve) across iterations to avoid regrowth."
+  ],
+  "when_not_to_use": [
+    "Plain JavaScript or TypeScript projects: the npm package ships only AssemblyScript source, and the maintainer advises against driving it from JS (issue #14).",
+    "When you already have all pieces in a string[]: the AssemblyScript stdlib's Array<string>.join (joinStringArray) sums the lengths and copies once, which is also linear and was not benchmarked against StringSink.",
+    "UTF-8 output: the buffer is UTF-16 only; a UTF-8 writer is an open feature request (issue #6, open since 2021).",
+    "Outputs above 2^29 bytes (256 Mi UTF-16 code units): power-of-two growth then requests a 2^30-byte block, which exceeds the runtime's OBJECT_MAXSIZE and aborts with an allocation-too-large error, even though a string of that size could otherwise fit.",
+    "Memory-tight builds: capacity rounds up to a power of two and toString() copies, so peak memory can reach about 3x the final string until the sink is dropped or shrink() is called."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond the AssemblyScript stdlib and runtime (util/number, __new/__renew)",
+    "min_toolchain": "AssemblyScript asc 0.27 (package devDependency ^0.27.0; npm 0.5.3 published 2023-02-08); other asc versions not documented",
+    "platforms": "any WebAssembly host that runs AssemblyScript output (wasm32); tested in CI on ubuntu-latest with Node lts and latest",
+    "thread_safety": "not documented (single-threaded Wasm instance; no atomics used)",
+    "drop_in_for_baseline": "partial: replaces the += accumulation pattern inside AssemblyScript with write()/toString() calls; not usable from JavaScript, so not a replacement for V8's String +="
+  },
+  "gotchas": [
+    "Benchmark harness (benchmark/run.js): each size is timed by a single performance.now() call after 150 warm-ups at n = 100 only, Wasm tier-up state is not controlled, and the three arms run in a fixed order with both Wasm arms sharing one instance, so StringSink always runs right after the AS += arm has grown linear memory and left garbage for the incremental GC; noise and order effects are unquantified. The JS arm returns res.length of an unflattened V8 rope while StringSink's toString() builds a flat copy.",
+    "README headlines ('up to 4000x', 'up to 6x faster than JS concat') are larger than every row of its own table (best about 2,650x over AS += and about 4.6x over JS at 50,000 strings, derived from page data); the ratio against AS += is an O(n^2) vs O(n) gap, so it can be made any size by picking n.",
+    "writeCodePoint only rejects code points above 0x10FFFF with assert(); in builds with --noAssert (the benchmark's own flag) invalid values silently produce garbage surrogate pairs.",
+    "Building the package itself with asc 0.27.27 emits warning AS235 because a class cannot be a Wasm export (issue #15); import StringSink from other AssemblyScript files instead."
+  ],
+  "pick_this_over_siblings_when": "Pick it over as-str when the hot spot is accumulating output rather than individual String methods (as-str speeds up indexOf/split-style stdlib operations); json-as and as-proto are full serialisers, so use StringSink when you are writing your own text format in AssemblyScript.",
+  "verified_claims_summary": "First-party README table: appending alternating 4-character literals 200,000 times took 2.88 ms with StringSink in AssemblyScript (asc -O3 --noAssert) vs 11.93 ms for JavaScript String += in Node/V8 and 7,622.72 ms for AssemblyScript's naive String +=, about 4.1x and 2,650x (derived from page data); 50,000 strings gave 0.73 vs 3.34 vs 509.54 ms. Node.js version, CPU and OS are not stated and each figure is a single timed call.",
+  "status_note": "Stale since 2023-02-17 (npm 0.5.3, 29 stars, one open feature request), but it is one MIT-licensed 166-line file with an as-pect test suite, small enough to vendor (last known-good toolchain AssemblyScript 0.27); its benchmark is a single-call, fixed-order run with no Array.join baseline, so read the ratios as directional.",
+  "sources_read": [
+    "https://github.com/MaxGraey/as-string-sink",
+    "https://github.com/MaxGraey/as-string-sink/commits/main",
+    "https://github.com/MaxGraey/as-string-sink/issues?q=is%3Aissue",
+    "https://github.com/MaxGraey/as-string-sink/issues/3",
+    "https://github.com/MaxGraey/as-string-sink/issues/14",
+    "https://github.com/MaxGraey/as-string-sink/issues/15",
+    "https://github.com/MaxGraey/as-string-sink/tree/main/assembly/__tests__",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/README.md",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/package.json",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/asconfig.json",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/assembly/index.ts",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/assembly/__tests__/general.spec.ts",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/benchmark/index.ts",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/benchmark/run.js",
+    "https://raw.githubusercontent.com/MaxGraey/as-string-sink/HEAD/.github/workflows/test.yml",
+    "https://registry.npmjs.org/as-string-sink",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/rt/common.ts",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/rt/itcms.ts",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/util/number.ts",
+    "https://raw.githubusercontent.com/AssemblyScript/assemblyscript/main/std/assembly/util/string.ts"
+  ],
+  "confidence": 0.75
+}

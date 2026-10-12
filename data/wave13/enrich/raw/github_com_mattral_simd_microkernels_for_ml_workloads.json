@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/mattral/simd-microkernels-for-ml-workloads",
+  "one_liner": "Teaching-grade AVX2/AVX-512 SGEMM and activation kernels; beats a strided scalar triple loop, reaches 4-60% of single-thread OpenBLAS.",
+  "what_it_does": "IntrinsicML is a C++17 library of hand-written intrinsics kernels for ML primitives: single-precision GEMM (C = alpha*A*B + beta*C, row-major), GeLU, ReLU, SiLU, softmax and LayerNorm, plus FP16 and BF16 GEMM variants added in August 2026. The C++ entry points take a BLAS-like row-major signature without transpose flags; Python bindings (sk.sgemm, sk.gelu and others) take float32 C-contiguous NumPy arrays. It is positioned by its author as an explained middle ground between textbook loops and production BLAS, not a BLAS replacement.",
+  "how_it_is_fast": "GEMM follows the Goto/BLIS five-loop scheme: B is packed into KC=256-deep NR-wide panels and A into MC x KC panels, then an 8x8 AVX2 register-blocked micro-kernel (8 YMM accumulators, broadcast of A, FMA against one B row, unrolled by 4 with software prefetch) or an 8x16 AVX-512 kernel chosen at run time computes each tile; avx_matmul.cpp holds a second 6x16/6x32 kernel. Most of the headline speedup comes from the baseline: the scalar i-j-k loop walks B with a stride of N floats per step and falls from 7.6 to 1.6 GFLOPS between N=64 and N=256. GeLU uses the tanh approximation with tanh computed as (e^2y - 1)/(e^2y + 1) from a Cody-Waite range-reduced polynomial exp and an rcp plus Newton-step division, 8 lanes per AVX2 instruction.",
+  "when_to_use": [
+    "Learning or teaching how a packed BLIS-style SGEMM is built: every tiling constant and kernel choice is explained in comments and docs/DESIGN.md.",
+    "Vendoring a small Apache-2.0 AVX2 SGEMM or activation kernel into a project that cannot link OpenBLAS, MKL or BLIS and only needs one-core FP32 throughput in the tens of GFLOPS.",
+    "GeLU or SiLU on libc builds without vectorised erff/tanh (musl/Alpine, macOS), where the author expects 6-10x over the scalar loop; this is a projection, not a measurement.",
+    "Experimenting with AVX2 versus AVX-512 dispatch, or FP16/BF16-to-FP32 conversion GEMM, through a NumPy-callable module with an isa= override."
+  ],
+  "when_not_to_use": [
+    "Whenever OpenBLAS, MKL or BLIS is available: single-thread OpenBLAS was 1.7x (N=1024) to 26x (N=64) faster in the author's own run (165-124 vs 6.4-73.8 GFLOPS, derived from page data).",
+    "GeLU on glibc 2.22 or later: GCC vectorises the erff reference through SVML (_ZGVdN8v_erff), and the AVX2 tanh kernel measured within 2% of it (1,908,062 vs 1,939,830 cycles at n = 1M).",
+    "Non-x86 targets: the SIMD paths need AVX2 and FMA (the GEMM sources #error without AVX2); other CPUs get a scalar-only build.",
+    "Multi-threaded GEMM: OpenMP is off by default, and when enabled it parallelises only the NC=2048 column loop, so matrices with N <= 2048 still run on one thread.",
+    "Transposed, strided or non-float32 inputs: the Python sgemm accepts only float32 C-contiguous arrays with lda = K and no transpose flags, and the package is not on PyPI (build from source)."
+  ],
+  "integration": {
+    "form": "static lib + Python extension module (pybind11, built from source with scikit-build-core; not published on PyPI)",
+    "dependencies": "none for the C++ library; pybind11 >= 2.11 and NumPy >= 1.24 for Python; optional OpenMP (SIMD_ML_OPENMP) and OpenBLAS (benchmark baseline only)",
+    "min_toolchain": "C++17, GCC >= 12 or Clang >= 15, CMake >= 3.22, Python >= 3.9",
+    "platforms": "x86-64 with AVX2 + FMA (AVX-512F+DQ 8x16 kernel auto-dispatched; F16C for the FP16 GEMM); scalar-only build elsewhere",
+    "thread_safety": "Python bindings release the GIL during kernels and the ISA override is thread_local; no other thread-safety statement",
+    "drop_in_for_baseline": "partial: sgemm_packed and simd_sgemm take a row-major sgemm-like argument list (M, N, K, alpha, A, lda, B, ldb, beta, C, ldc) but no transpose flags, so they are not a cblas_sgemm or BLAS sgemm_ replacement; the scalar baseline is the repo's own loop, not a std facility"
+  },
+  "gotchas": [
+    "The committed result files contradict docs/BENCHMARKS.md: benchmarks/results/bench_results.json (an RDTSC run with older 'Scalar GeLU' labels, undated) shows simd_sgemm stuck near 29.3M cycles at 64, 128 and 256, so the SIMD GEMM is 213x slower than scalar at 64x64 (0.044 vs 9.32 GFLOPS) and 5.5x slower at 128, and only 1.7x faster at 256 (derived from file data). The regression baseline gemm_results.json shows 76.9 and 88.2 GFLOPS at 256 and 512, against 64.1 and 73.3 in the docs. Neither discrepancy is explained, so no published GEMM number is reproducible from the repo's own artifacts.",
+    "The published N=64 and N=128 figures predate the current code: since commit acb42de (2026-08-07), sgemm_packed sends max(M,N,K) <= 128 to sgemm_direct_avx2, an unpacked loop with one 8-wide accumulator per column strip (a serial FMA dependency chain over K), and no new numbers were captured. The README still describes the 0.7x-at-64 regression as an open roadmap item while ROADMAP.md marks it done.",
+    "Each packed call above the 128 threshold allocates and zero-fills about 2.1 MB of packing buffers (make_aligned_array memsets a fixed KC x NC B panel plus an MC x KC A panel) whatever the matrix size, a fixed cost per call that is not amortised for mid-size matrices.",
+    "Kernels are built with -march=native -ffast-math, so binaries are host-specific and NaN/Inf behaviour is undefined, while the precision tests use a separate non-fast-math build. The Python sgemm casts C to a float32 array before validating it, so a float64 C would be converted to a copy and the 'in-place' result would not reach the caller's array (from reading the binding, not run)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over marcelcases/simd, Vectis or UltraSIMD when you want a complete, documented packed SGEMM plus ML activations callable from NumPy rather than single-loop kernels; to write your own kernels portably, EVE or the Vector Class Library are the better base, and for production GEMM use a real BLAS.",
+  "verified_claims_summary": "On a virtualised CI runner (AVX2+FMA, about 2.1 GHz calibrated TSC, CPU model not stated, GCC 12 -O3 -march=native -mfma -ffast-math, Ubuntu 22.04), the avx_matmul 6x16 kernel beat the repo's strided scalar i-j-k loop 4.1x, 6.9x and 10.4x at N = 64, 128 and 256 (RDTSC, minimum of 10 runs). The packed kernel that Python calls reached 6.4-73.8 GFLOPS against 165-124 GFLOPS for single-thread OpenBLAS (4-60%), and the AVX2 GeLU matched glibc's SVML-vectorised erff (1.02x). The README's 10x/26x GEMM and 6-10x GeLU figures are not backed by any committed table.",
+  "status_note": "Active (125 commits, last on 2026-08-10, 15 stars, 5 forks, no issues or releases), Apache-2.0 and copyable as well-commented teaching code, but it is slower than OpenBLAS everywhere, and its documentation and committed baselines disagree with each other.",
+  "sources_read": [
+    "https://github.com/Mattral/SIMD-Microkernels-for-ML-Workloads",
+    "https://github.com/Mattral/SIMD-Microkernels-for-ML-Workloads/commits",
+    "https://github.com/Mattral/SIMD-Microkernels-for-ML-Workloads/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/README.md",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/docs/DESIGN.md",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/docs/ROADMAP.md",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/main_bench.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/bench_stat.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/avx_matmul.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/avx_matmul.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/gemm/naive_gemm.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/gemm/avx2_gemm_packed.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/gemm/avx2_gemm_packed.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/gemm/gemm_dispatcher.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/cache_alloc.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/intrinsic_gelu.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/intrinsic_gelu.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/simd_math.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/bindings/pybind_entry.cpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/dispatch/cpuid.hpp",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/benchmarks/results/bench_results.json",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/benchmarks/results/gemm_results.json",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/benchmarks/results/README.md",
+    "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/.github/workflows/bench.yml",
+    "https://pypi.org/pypi/simd-ml-microkernels/json"
+  ],
+  "confidence": 0.6
+}

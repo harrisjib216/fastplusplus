@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/marufzaber/optimization-detective",
+  "one_liner": "Three patch-sized rewrites of Abseil string helpers (SWAR memcasecmp, word-at-a-time common suffix, clean-input fast path), 1.3-6.9x over Abseil's byte loops.",
+  "what_it_does": "A showcase repo with standalone before/after pairs: each src/<name>/ directory holds original.h (the Abseil function copied from abseil-cpp@7e706921), optimized.h (the patch with the same signature), test.cc (randomized differential test against the original) and bench.cc. The three Abseil patches are strings_internal::memcasecmp (behind absl::EqualsIgnoreCase), FindLongestCommonSuffix and RemoveExtraAsciiWhitespace; they are meant to be pasted back into Abseil, not linked as a library. The same repo also holds nlohmann/json and cpp-httplib patches that are catalogued elsewhere.",
+  "how_it_is_fast": "memcasecmp loads 8 bytes per side, skips equal words outright, and otherwise lower-cases both words with a SWAR range test (mask to 7 bits, add 0x3F and 0x25, keep the bytes in 'A'..'Z', OR in 0x20) before locating the first differing byte with ctz on the XOR. FindLongestCommonSuffix mirrors Abseil's own FindLongestCommonPrefix: XOR of two 8-byte windows walked backward from the end, with clz/8 giving the number of matching tail bytes. RemoveExtraAsciiWhitespace adds a read-only scan that returns early when the string has no leading, trailing or adjacent whitespace, skipping the byte-by-byte rewrite; the scan itself is still a scalar table-lookup loop.",
+  "when_to_use": [
+    "You maintain an Abseil fork or vendored copy and profiles show absl::EqualsIgnoreCase / StartsWithIgnoreCase / EndsWithIgnoreCase on strings of 8 bytes or more (header names, config keys): 3.75-4.9x at 8-32 B and 4.9-6.3x at 256-4096 B in the author's runs.",
+    "Inputs where case-insensitive matches are the common outcome (equal or case-only-different strings), since that is where the SWAR loop replaces a byte loop for the whole length.",
+    "Code that calls FindLongestCommonSuffix on strings that share long tails (path or log-line dedup): 2.8-6.9x on full matches of 8 B or more (2.2x when only 4 of 8 tail bytes match).",
+    "RemoveExtraAsciiWhitespace on inputs that are usually already canonical: 1.27-1.46x by skipping the write-back.",
+    "As a template for small, testable string-primitive patches: each pair comes with a differential fuzz test against the original code."
+  ],
+  "when_not_to_use": [
+    "Inputs that usually differ in the first or last byte: memcasecmp is 0.44-0.47x at every size from 8 B up when byte 0 differs (0.90 to 1.91-2.04 ns), and FindLongestCommonSuffix is about 0.5x on random strings and on last-byte mismatches (0.55 to 1.03-1.10 ns). The suffix function's no_match rows, the likely case for unrelated strings, all regress.",
+    "RemoveExtraAsciiWhitespace inputs that do need rewriting: one internal double space costs 0.78-0.84x from 64 B up, because the pre-scan runs and the original rewrite then runs anyway.",
+    "Big-endian targets: the patches use raw memcpy loads with clz/ctz byte indexing, whereas upstream FindLongestCommonPrefix uses absl::little_endian::Load64, so the code as written returns wrong answers on big-endian machines.",
+    "When you want a maintained library: this is a two-day, 0-star showcase repo (12 commits, 2026-08-16/17) and none of the patches is in Abseil (upstream master still has the byte loops on 2026-10-12).",
+    "Non-ASCII case folding: like the original it only folds A-Z."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C++17 standard library only; benchmarks use the repo's bench/bench.h)",
+    "min_toolchain": "C++17; GCC or Clang (uses __builtin_clzll, __builtin_ctzll, __builtin_expect)",
+    "platforms": "little-endian 64-bit targets only; measured on Apple M2 (arm64) only",
+    "thread_safety": "pure functions on caller-owned buffers (RemoveExtraAsciiWhitespace mutates its std::string argument), same as the Abseil originals",
+    "drop_in_for_baseline": "partial — same signatures and verified-identical results for the Abseil internals, but you must patch them into your Abseil copy (absl::string_view, little_endian loads, ABSL_ macros) yourself; no upstream release ships them"
+  },
+  "gotchas": [
+    "FINDINGS.md says the little-endian assumption is safe because FindLongestCommonPrefix 'already assumes it', but upstream prefix code loads through absl::little_endian::Load64/Load16 and is endian-neutral; the patches' plain memcpy + clz/ctz byte indexing is not. Swap in absl::little_endian::Load64 before upstreaming.",
+    "optimized.h for RemoveExtraAsciiWhitespace claims clang emits NEON that scans 16 bytes per iteration, but the loop has an early exit and a table lookup, and the measured clean/4096 rate (about 1825 ns including the 4 KiB buffer copy, roughly 0.4 ns per byte) fits a scalar loop (derived from page data). A SWAR or vector pre-scan would likely gain more.",
+    "Benchmarks re-run one fixed input pair in a hot loop with an asm memory clobber, so ns/op is cache-resident throughput with perfectly predicted branches; the 0.55 ns early-exit rows are overlapped iterations, not single-call latency. The remove_ws timings include a buf.assign(tpl) copy on both sides, which slightly understates its ratio.",
+    "The headline 6.87x (FindLongestCommonSuffix) and 5.98x (memcasecmp) are each the best row of their table; FINDINGS.md tables and the checked-in results/*.txt are slightly different runs (for example eq_case/256 5.98x vs 6.29x, clean/4096 1.40x vs 1.38x)."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings offers a case-insensitive compare or a common-suffix routine; pick this when the bottleneck is Abseil's EqualsIgnoreCase family or FindLongestCommonSuffix in code already on Abseil, whereas memx-cdy or Arm Optimized Routines cover plain memcmp/memchr and simstr replaces the whole std::string idiom set.",
+  "verified_claims_summary": "On one Apple M2 with Apple clang 14 -std=c++17 -O3, the repo's own harness (median of 25 reps, autotuned inner loop) times each patch against the Abseil original compiled in the same file: memcasecmp 4.96x on equal 4096 B strings and 5.97-6.29x on case-flipped 256-4096 B strings, FindLongestCommonSuffix 6.4-6.9x on 256-4096 B shared tails, RemoveExtraAsciiWhitespace 1.27-1.46x on already-clean input; all three regress (about 0.45-0.84x) on early-mismatch or needs-rewrite inputs. The baseline is Abseil's scalar code, not libc strncasecmp or memcmp.",
+  "status_note": "A 0-star showcase repo written over 2026-08-16/17 (commit history includes LinkedIn post drafts and an 'llm' topic) and not touched since; the author's code is MIT and small enough to paste into an Abseil copy, but nothing has been upstreamed and the code is unmaintained.",
+  "sources_read": [
+    "https://github.com/marufzaber/optimization-detective",
+    "https://github.com/marufzaber/optimization-detective/commits",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/README.md",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/FINDINGS.md",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/bench/bench.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/run_all.sh",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_lcp_lcs/bench.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_lcp_lcs/optimized.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_lcp_lcs/original.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_lcp_lcs/test.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_memcasecmp/bench.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_memcasecmp/optimized.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_memcasecmp/original.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_memcasecmp/test.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_remove_ws/bench.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_remove_ws/optimized.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_remove_ws/original.h",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/src/absl_remove_ws/test.cc",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/results/absl_lcp_lcs_bench.txt",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/results/absl_memcasecmp_bench.txt",
+    "https://raw.githubusercontent.com/marufzaber/optimization-detective/HEAD/results/absl_remove_ws_bench.txt",
+    "https://raw.githubusercontent.com/abseil/abseil-cpp/master/absl/strings/internal/memutil.cc",
+    "https://raw.githubusercontent.com/abseil/abseil-cpp/master/absl/strings/match.cc",
+    "https://raw.githubusercontent.com/abseil/abseil-cpp/master/absl/strings/ascii.cc"
+  ],
+  "confidence": 0.75
+}

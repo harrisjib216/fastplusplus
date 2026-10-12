@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/komrad36/fastarrayops",
+  "one_liner": "Hand-written AVX2 assembly for find, contains, min/max and argmin/argmax over plain arrays; claims to beat scalar compiler loops.",
+  "what_it_does": "52 x86-64 AVX2 assembly routines (NASM-syntax files under Linux/ despite the .s extension, MASM files under Windows/) plus fast-array-ops.h, which declares them extern \"C\" and adds C++ overloads FastContains, FastFind, FastMin, FastMax, FastMinIdx and FastMaxIdx for signed and unsigned 8- to 64-bit integers, float and double. The API takes a pointer and a count, not iterators: find returns the lowest matching index or ~0ULL, contains returns bool, and the min/max and index routines take a uint32_t count, with the index routines returning uint32_t. The project was earlier named FastExtrema.",
+  "how_it_is_fast": "Large inputs run in 256-byte blocks: contains/find broadcast the query, OR together eight 32-byte vpcmpeq results and test once per block, and min/max keep eight independent vpmin/vminps accumulators; the tail is handled by re-running one overlapping final block rather than a scalar loop. Small inputs (below 32 to 256 elements depending on type) dispatch through a byte jump table to straight-line code for that size class. Argmin/argmax track per-lane best values plus a parallel index vector updated with vpcmpeq + vpblendvb, and the 8- and 16-bit versions nest 8/16/32-bit counters so narrow lanes do not overflow. The float/double min/max kernels reassociate the reduction, which compilers do only under -ffast-math, and that most likely explains the 28x and 14x rows.",
+  "when_to_use": [
+    "Hot linear scans over contiguous arrays of plain integers on x86-64 CPUs that are guaranteed to have AVX2, e.g. membership tests on arrays of tens to a few hundred elements instead of a hash set (the README's main argument).",
+    "argmin/argmax over uint8/int8/int16 data, where the README claims its largest gains (35x and 19x) and compilers emit scalar code.",
+    "float/double min/max of data known to be NaN-free when you cannot enable -ffast-math for the whole translation unit.",
+    "Small array-backed priority queues or decrease-key structures whose operations reduce to find/min/argmin, as the README suggests.",
+    "GCC or Clang builds where you have measured std::find or std::min_element as the bottleneck and want a drop-in C ABI routine."
+  ],
+  "when_not_to_use": [
+    "Data or queries that can be NaN: the float/double small-n find/contains paths report false matches and min/max/argmin results with NaN depend on element position.",
+    "Any target without AVX2 (no runtime dispatch or scalar fallback, so older x86 crashes with an illegal instruction), and AArch64 or other architectures; no macOS build either (symbols lack the leading underscore Mach-O expects).",
+    "MSVC builds: the MSVC STL already ships runtime-dispatched manual vectorization of find, min_element and max_element (including float and double) on x64/x86 by default, so measure std:: first; the README table is against scalar compiler output, not that.",
+    "Large DRAM-resident arrays, where the scan is memory-bound: a third-party Delphi wrapper timing 10M elements found the classical loop 'not so much different' (int64 min 13 ms vs 11 ms).",
+    "Arrays over 2^32 - 1 elements for the min/max/index routines (uint32_t count), or code that relies on std::min_element's first-index tie rule."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none at runtime; NASM to assemble the Linux/*.s files (NASM syntax: bits 64, yword, times db), ml64 (MASM) for Windows/*.asm",
+    "min_toolchain": "Any C++11 compiler for the header (<cstdint>, extern \"C\"); NASM or ml64 for the kernels; no build files, tests or CMake in the repo",
+    "platforms": "x86-64 only, AVX2 required (Haswell or later, Zen or later); System V (Linux) and Win64 ABIs",
+    "thread_safety": "Not documented; the routines only read caller memory and constant tables and keep no global state, so concurrent calls are safe by construction.",
+    "drop_in_for_baseline": "partial: pointer+count C API instead of iterators; find returns an index (~0ULL when absent) rather than an iterator; min/max index tie-breaking is unspecified (std::min_element returns the first); NaN and empty-array behavior differ"
+  },
+  "gotchas": [
+    "NaN false matches (code bug, both Linux and Windows): FastFindFloat/FastFindDouble for n < 4 and FastContainsFloat/FastContainsDouble for n < 8 compare with vucomiss/vucomisd followed by je/sete/cmove and never check the parity flag, so an unordered compare counts as equal; a NaN element or NaN query reports a match (FastContainsFloat on {NaN, 2, 3} for query 5 returns true; FastFindFloat on {NaN, 1, 2} for query 1 returns 0), while the vector paths for larger n (vcmpeqps, ordered) never match NaN.",
+    "FastMin/FastMax for float and double return an all-ones NaN bit pattern on empty arrays (the accumulator is seeded with vpcmpeqd), not the min/max representable value the README promises; the integer versions do return INT_MAX/INT_MIN-style sentinels.",
+    "None of the 52 kernels executes vzeroupper, so they return with dirty upper YMM state; non-VEX SSE code that runs next (callers built without -mavx/-mavx2) pays AVX-SSE transition or false-dependency penalties on Intel cores, which a microbenchmark loop would not show.",
+    "The Windows MASM procedures that adjust rsp (e.g. sub rsp,104 in FastMinIdxI32.asm) are plain PROCs without FRAME/unwind directives, so a fault inside them cannot be unwound by SEH; the Linux sources are NASM-only and 11 of them still use bare-CR line breaks in their header lines (the 2025-12-11 commit normalized only FastFind64.s)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over argminmax (Rust crate, SSE to AVX-512 and NEON with 3-20x claimed vs scalar) only when you call from C or C++ on AVX2 x86 and also want find/contains for every integer width; over vectorized_find (AVX2 find experiments against std::find) because it covers min/max and argmin/argmax too. On MSVC, try the STL's own vectorized std::find and std::min_element before either.",
+  "verified_claims_summary": "The only first-party numbers are the README's approximate large-n speedups over unnamed 'best compiler output' scalar loops (contains/find 7-22x, min/max element 1.1-28x, argmin/argmax 3.1-35x) with no CPU, compiler, flags, sizes or benchmark code, measured on code before the 2025-12-11 correctness fix. The one third-party data point (fatihtsp/FastArrayOps Delphi wrapper, 10M elements, CPU unstated) shows FastMin on an Int64 array at 11 ms versus a classical Delphi loop at 13 ms (about 1.2x, derived from page data).",
+  "status_note": "Dormant from 2021 until a single 2025-12-11 bugfix commit (FastFind64 32-bit compare, 16-bit idx broadcast, U8 min-index sentinel); MIT and copyable, but it ships no tests, benchmark or build files and its float/double small-n paths still mishandle NaN, so vendor it only behind your own tests.",
+  "sources_read": [
+    "https://github.com/komrad36/FastArrayOps",
+    "https://github.com/komrad36/FastArrayOps/commits",
+    "https://github.com/komrad36/FastArrayOps/commit/d326fd1",
+    "https://github.com/komrad36/FastArrayOps/tree/master/Linux",
+    "https://github.com/komrad36/FastArrayOps/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/komrad36/FastArrayOps/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/FastArrayOps/HEAD/fast-array-ops.h",
+    "https://raw.githubusercontent.com/komrad36/FastArrayOps/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/komrad36/FastArrayOps/HEAD/Linux/ (all 52 .s kernels, e.g. FastContainsFloat.s, FastFindFloat.s, FastFind64.s, FastContains16.s, FastMinFloat.s, FastMinIdxFloat.s, FastMinIdxU8.s)",
+    "https://raw.githubusercontent.com/komrad36/FastArrayOps/HEAD/Windows/ (all 52 .asm kernels, e.g. FastFindFloat.asm, FastContainsDouble.asm, FastMinIdxI32.asm)",
+    "https://github.com/fatihtsp/FastArrayOps",
+    "https://raw.githubusercontent.com/MicrosoftDocs/cpp-docs/main/docs/standard-library/vectorized-stl-algorithms.md"
+  ],
+  "confidence": 0.8
+}

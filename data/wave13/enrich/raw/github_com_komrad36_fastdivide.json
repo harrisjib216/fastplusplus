@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/komrad36/fastdivide",
+  "one_liner": "Branch-free 64-bit unsigned divide and modulo via a Newton-Raphson reciprocal; claims about 30% faster than hardware div on Intel.",
+  "what_it_does": "A single header, fast-divide.h, with FastDivide(N, D), FastModulo(N, D) and FastDivMod(N, D, rem) for arbitrary runtime uint64_t operands, plus a FastDivider class that precomputes a reciprocal once and then offers Divide, Modulo and DivMod for many numerators. These are function calls, not operator replacements; they cover only unsigned 64-bit values and leave division by zero undefined (no trap). GCC and Clang (including clang-cl) get hand-written AT&T inline assembly; MSVC gets an intrinsic-based C version (__umulh, _addcarry_u64, _lzcnt_u64).",
+  "how_it_is_fast": "It replaces the microcoded DIV with multiplies: lzcnt plus two BMI2 shifts (shlx/shrx) give a 2-bit-accurate first guess of floor(2^64/D) from a first-order expansion around the normalized divisor, five Newton-Raphson steps (M += umulh(M, -M*D)) double the correct bits up to 64, and a multiply-high by N gives a quotient at most 2 below the true one, corrected with add/cmov/adc instead of branches. There are no table lookups or branches, so the cost does not depend on the operands; FastDivider hoists the Newton steps out of the loop, so each later divide is one mul, one imul and a carry fix-up. The standalone path is a serial chain of about a dozen 64-bit multiplies, so it can only win where DIV r64 is slow (42-95 cycles latency on Skylake per Agner Fog's tables, as quoted in a search snippet).",
+  "when_to_use": [
+    "Latency-bound 64-bit unsigned division by divisors that change from call to call, on Intel cores of the Haswell-to-Skylake-derivative generation where DIV r64 is slow (the README hedges: 'at least on Intel').",
+    "Code that needs data-independent timing for 64-bit division (the README's crypto use case), built with GCC or Clang so the branch-free inline-asm path is used.",
+    "A divisor reused a handful of times, where FastDivider's setup (one Newton sequence, no branching on divisor class) is cheaper than heavier precomputation schemes.",
+    "Hot loops with spare registers: the asm pins N to rcx, D to rdx and the result to rax and needs two more scratch registers."
+  ],
+  "when_not_to_use": [
+    "Recent CPUs with fast dividers: search snippets give DIV r64 latency of about 14-18 cycles on Rocket Lake and Alder Lake-P (uops.info) and 9-17 cycles on Zen 3, well under this routine's chain of about a dozen serial multiplies, so it is probably slower there; benchmark before adopting.",
+    "Divisors known at compile time (the README itself says the compiler's multiply-shift codegen is better) or a divisor reused millions of times (libdivide or fastmod).",
+    "Register-starved inner loops: the README warns that spills caused by the extra registers can erase the gain.",
+    "Signed or 32-bit division, non-x86-64 targets, or x86 CPUs without LZCNT and BMI2 (pre-Haswell Intel, pre-Excavator AMD); no runtime CPU check exists.",
+    "Code that relies on a divide-by-zero trap: the result is simply undefined."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (<cstdint>, <immintrin.h>, <intrin.h> on MSVC)",
+    "min_toolchain": "C++11 (<cstdint>); GCC or Clang with LZCNT enabled for the _lzcnt_u64 intrinsic in FastDivider (e.g. -mlzcnt or -march=haswell or later; the author's own test in issue #1 used -march=skylake); MSVC x64 for the C fallback. No build files, tests or benchmark in the repo.",
+    "platforms": "x86-64 only; CPU must support LZCNT and BMI2 (Intel Haswell or later, AMD Excavator/Zen or later); any x86-64 OS with GCC, Clang or MSVC",
+    "thread_safety": "Not documented; the functions are pure and FastDivider is immutable after construction, so concurrent const use is safe by construction.",
+    "drop_in_for_baseline": "partial: FastDivide/FastModulo/FastDivMod calls replace N / D and N % D for uint64_t only; no operator overloads, no signed or 32-bit versions, and division by zero is undefined instead of trapping"
+  },
+  "gotchas": [
+    "FastDivider::GetDivisor() returns the stored member m_D, which the constructor sets to (uint64_t)-(int64_t)divisor, so FastDivider(7).GetDivisor() returns 2^64 - 7, not 7 (API bug in the current header; Divide/Modulo/DivMod are unaffected).",
+    "No CPU feature check: on CPUs without LZCNT the lzcnt encoding executes as bsr and silently yields a different count, after which the GCC/Clang asm path faults on shlx (no BMI2) and the MSVC path, which uses ordinary shifts unless built for AVX2, would return untrustworthy quotients instead of crashing.",
+    "The MSVC fallback computes E >>= C with C = 2^64 - lzcnt(D), a shift count of 64 or more that is undefined behavior in C++ and only works because x86 masks shift counts; the author's own comments call its codegen 'super dumb' (branches), so neither the speed nor the constant-time claim is assured on MSVC.",
+    "FastDivider::Modulo returned wrong results until the 2021-02-17 fix (cmovc %[D] changed to cmovc %[N]); the standalone functions were unaffected. Issue #1's wrong results came from the reporter's own C refactor (1 << t instead of 1ULL << t), not the library."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libdivide or fastmod when the divisor changes on nearly every call and you want a branch-free, constant-time 64-bit divide on an older Intel core; when one divisor is reused many times, libdivide (precomputed magic numbers, up to 10x claimed for 64-bit, SIMD variants) or fastmod (32-bit operands) fit better, and for 128-bit operands use the same author's FastDivide128.",
+  "verified_claims_summary": "The README asserts 'About 30% faster' than the hardware 64-bit div 'at least on Intel' with no benchmark code, CPU model, compiler version, operand distribution or latency-versus-throughput distinction; the only timings the author posted (issue #1: C path 0.310 vs inline-asm path 0.283, units and CPU unstated) compare the library with itself. Correctness, not speed, was checked here with a Python model of the GCC/Clang asm path: exact quotients and remainders for 660,231 (N, D) pairs over 191,217 divisors, including every divisor within 300 of a power of two, with the class's reciprocal equal to floor(2^64/D) (saturated at 2^64-1 for D = 1) in every case.",
+  "status_note": "Abandoned since a 2021-09-30 README edit (last code change 2021-02-17); MIT-licensed, a single 13 KB header that is easy to vendor, but benchmark it on your own CPU first, since the 30% claim predates the fast 64-bit dividers in Ice Lake-era Intel and Zen 3 and may well be reversed there.",
+  "sources_read": [
+    "https://github.com/komrad36/FastDivide",
+    "https://github.com/komrad36/FastDivide/commits",
+    "https://github.com/komrad36/FastDivide/commit/18fa261",
+    "https://github.com/komrad36/FastDivide/issues?q=is%3Aissue",
+    "https://github.com/komrad36/FastDivide/issues/1",
+    "https://raw.githubusercontent.com/komrad36/FastDivide/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/FastDivide/HEAD/fast-divide.h",
+    "https://raw.githubusercontent.com/komrad36/FastDivide/HEAD/LICENSE",
+    "WebSearch snippets: https://www.postgresql.org/message-id/CAFBsxsHgygbSn0fc%3DLQgsQyjaR%3DEkGFJMJ4-sR-Styjgjbc3RA%40mail.gmail.com (Agner Fog Skylake 64-bit div 42-95 cycles), https://uops.info/html-instr/DIV_R64.html (snippet only; page blocked here), https://lists.puremagic.com/pipermail/digitalmars-d/2021-May/316025.html"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/lukechampine/fastxor",
+  "one_liner": "Go package that xors byte slices with AVX2/SSE2 assembly; about 5x a word-wise Go loop, 40x a byte loop.",
+  "what_it_does": "fastxor exposes Bytes(dst, a, b) int, which writes a xor b into dst for the shortest of the three lengths and returns the count, Byte(dst, a, b byte) for xoring a slice with one byte, and Block(dst, a, b) for exactly 16-byte blocks (AES block size). It is aimed at stream-cipher and parity code that xors buffers in Go. The shape matches crypto/subtle.XORBytes, but the semantics differ: fastxor silently truncates to len(dst) and does no overlap check, while the standard library panics when dst is too short or partially overlaps an input.",
+  "how_it_is_fast": "On amd64, Bytes picks a hand-written Go assembly kernel at run time through golang.org/x/sys/cpu. The AVX2 kernel unrolls eight 32-byte VMOVDQU/VPXOR/VMOVDQU triples per 256-byte iteration and then steps down through 128-, 64- and 16-byte loops and a byte tail. The SSE2 kernel uses a 64-byte unrolled MOVOU/PXOR loop. The gain is plain SIMD width plus unrolling, because the gc compiler does not auto-vectorise. Block skips the assembly call, which Go can never inline: it casts the 16-byte slices to *[2]uintptr so the compiler inlines it as two 64-bit xors. 386, ppc64, ppc64le and s390x get a word-wise Go loop built from unsafe slice-header casts. Every other architecture, arm64 included, gets a plain byte loop.",
+  "when_to_use": [
+    "amd64 machines with AVX2 that xor cache-resident buffers of roughly 256 B to 64 KiB (keystream application, one-time pads, RAID-style parity), where about 2x over an SSE2 loop matters.",
+    "Code pinned to a Go toolchain older than 1.20, which has no exported crypto/subtle.XORBytes, that wants something faster than a hand-written loop.",
+    "Hot loops that xor exactly 16-byte blocks on amd64 (CBC/CTR-style block-cipher glue): Block inlines to two 64-bit xors with no call overhead.",
+    "As a small, readable MIT-licensed Go-assembly xor kernel to vendor and adapt (about 190 lines of assembly)."
+  ],
+  "when_not_to_use": [
+    "Go 1.20+ code by default: crypto/subtle.XORBytes is in the standard library. It has SSE2 assembly on amd64, a 64-byte NEON loop on arm64 and assembly for ppc64, panics on a short dst and rejects partial overlap. fastxor's AVX2 gain over it was never measured; inferred from fastxor's own SSE2 row, it is about 2x, and only at cache-resident sizes.",
+    "arm64 (Apple silicon, Graviton), riscv64, wasm and other non-x86 targets: fastxor falls back to a byte-wise Go loop there, slower than the standard library's NEON path.",
+    "Slices under about 64 bytes: the assembly call cannot be inlined and its cost dominates. The README's own 16-byte row is only 1.19x a word-wise Go loop, and issue #4 (Core i5, Go 1.16) reports no gain over an inlined word loop on 64-byte blocks.",
+    "Buffers far larger than cache: the benchmark stops at 64 KiB in cache, and at DRAM bandwidth vector width barely matters.",
+    "Projects that need upkeep: 12 commits, last change 2021-03-22, no go.mod, no purego build tag, and open issues #5 and #6 without a code change."
+  ],
+  "integration": {
+    "form": "module (single Go package without go.mod; also small enough to source-drop)",
+    "dependencies": "golang.org/x/sys/cpu (amd64 build only)",
+    "min_toolchain": "Go 1.7+ with the gc compiler for the amd64 assembly path (build tag go1.7). Under gccgo or appengine on amd64, the build constraints exclude every implementation file, so the package does not build.",
+    "platforms": "amd64 (AVX2 or SSE2 assembly chosen at run time; word-wise Go fallback without SSE2); 386, ppc64, ppc64le and s390x (word-wise Go); everything else, including arm64 (byte-wise Go)",
+    "thread_safety": "Not documented. The functions keep no state, so concurrent calls on distinct dst buffers are safe (inferred from the source).",
+    "drop_in_for_baseline": "partial: Bytes(dst, a, b) int has the same signature as crypto/subtle.XORBytes and replaces a hand-written loop, but it truncates to len(dst) where the stdlib panics and it does not check overlap. Byte and Block have no stdlib equivalent."
+  },
+  "gotchas": [
+    "Block is memory-unsafe or wrong off the happy path. On amd64 it casts &dst[0], &a[0] and &b[0] to *[2]uintptr without checking for 16 bytes, so shorter slices are read and written out of bounds silently (the generic xor.go version asserts dst[15]). On 386, the xor_unaligned.go Block xors two 4-byte uintptr words, so it processes only the first 8 of the 16 bytes. That is a correctness bug on GOARCH=386 that TestBlock would catch if it were ever run there.",
+    "Byte on amd64 evaluates dst[n-1] without an n == 0 guard, so an empty input panics with index out of range [-1]. Commit 07dbf56 added that guard to xor.go but not to xor_amd64.go, and the tests skip inputs shorter than 8 bytes.",
+    "The AVX2 kernel never issues VZEROUPPER. Its 16-byte tail also uses legacy-SSE MOVOU after 256-bit operations. Lengths of at least 64 that are not a multiple of 64 therefore run SSE code with dirty upper YMM state, and the dirty state leaks into the caller. That is a known transition or false-dependency penalty on many Intel cores. The benchmark sizes (16, 1024 and 65536 bytes) never take this path (inference from the code, not measured).",
+    "Harness flaws behind the README. BenchmarkBytes calls Bytes(buf, buf, buf) on one zeroed buffer of at most 64 KiB, so all three operands alias, the data stays in L1/L2, and MB/s counts one stream. The 'about 6 times faster' Block claim divides a Block run from 2018-10-11 (1.18 ns, commit ab5bbce) by a Bytes/16 run from 2018-07-06 (6.20 ns). In the same 2018-07-06 run, Block took 2.72 ns, a 2.3x gain (derived from page data). The unchanged byte-wise and word-wise rows also shifted about 39% between the 2018-07-05 and 2018-07-06 README tables, so ratios across runs are unreliable."
+  ],
+  "pick_this_over_siblings_when": "bwesterb/go-and also covers and, or, andn and popcount with AVX2 and arm64 NEON (README: Xor 82 GiB/s on an i9-13900, 58 GiB/s on an M2 Pro), so it is the better general choice. Pick fastxor only for amd64-only code that wants a tiny dependency with an inlinable 16-byte Block helper. Prefer the standard library's crypto/subtle.XORBytes over both unless a benchmark on your own hardware shows the AVX2 gain.",
+  "verified_claims_summary": "The README's go test benchmark ran in 2018 on an unnamed AVX2 x86-64 machine (GOMAXPROCS 4, Go version unstated). It xors one aliased, zeroed buffer in place. At 64 KiB, AVX2 ran at 67.2 GB/s against 13.2 GB/s for a word-wise Go loop (5.1x) and 1.7 GB/s for a byte loop that still had bounds checks (39.9x). At 16 bytes the gains fall to 1.19x and 2.04x. Go's crypto/subtle.XORBytes was not measured. fastxor's own SSE2 row (32.6 GB/s at 64 KiB) is the closest stand-in and implies about 2x for AVX2.",
+  "status_note": "Abandoned (12 commits, last 2021-03-22, no go.mod) but MIT-licensed and small enough to vendor. Before relying on it, fix the 386 Block bug, the empty-slice Byte panic and the missing VZEROUPPER, and benchmark crypto/subtle.XORBytes first.",
+  "sources_read": [
+    "https://github.com/lukechampine/fastxor",
+    "https://github.com/lukechampine/fastxor/commits/master",
+    "https://github.com/lukechampine/fastxor/issues?q=is%3Aissue",
+    "https://github.com/lukechampine/fastxor/issues/4",
+    "https://github.com/lukechampine/fastxor/issues/5",
+    "https://github.com/lukechampine/fastxor/issues/6",
+    "https://github.com/lukechampine/fastxor/commit/000cb37",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/README.md",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/xor.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/xor_amd64.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/xor_amd64.s",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/xor_test.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/HEAD/xor_unaligned.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/a04e125/README.md",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/a04e125/xor_amd64.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/a04e125/xor_test.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/a04e125/xor_amd64.s",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/000cb37/README.md",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/000cb37/xor_amd64.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/000cb37/xor_test.go",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/000cb37/xor_amd64.s",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/62a404d/README.md",
+    "https://raw.githubusercontent.com/lukechampine/fastxor/ab5bbce/README.md",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/internal/fips140/subtle/xor.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/internal/fips140/subtle/xor_amd64.s",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/internal/fips140/subtle/xor_arm64.s",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/internal/fips140/subtle/xor_asm.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/internal/fips140/subtle/xor_generic.go",
+    "https://github.com/bwesterb/go-and",
+    "https://github.com/templexxx/xorsimd"
+  ],
+  "confidence": 0.8
+}
