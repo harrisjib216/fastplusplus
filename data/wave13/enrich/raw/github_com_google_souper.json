@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/google/souper",
+  "one_liner": "SMT-backed superoptimizer for LLVM IR that finds peephole rewrites stock LLVM misses; its published win is code size, not speed.",
+  "what_it_does": "Souper harvests integer-typed expressions from LLVM IR, asks an SMT solver (Z3) whether a cheaper equivalent exists, and either prints the left-hand side with the synthesised replacement (the souper tool on a .bc file) or applies it automatically as an LLVM pass plugin registered at the peephole extension point. The sclang and sclang++ Perl wrappers drop into a build system as CC/CXX and add the plugin, a Redis query cache and per-query solver timeouts. It is mainly a tool for compiler developers: the README's RESULTS file and the paper describe LLVM commits and bug reports derived from its findings.",
+  "how_it_is_fast": "It does not speed up code by itself; it finds missing peephole optimisations. Candidate expressions (plus path conditions and LLVM's known-bits and demanded-bits facts) are translated to SMT queries, and a synthesiser (enumerative synthesis or CEGIS, with optional Alive2 verification) searches for a shorter refinement; the pass then rewrites the IR and cleans up with DCE. Results are cached in RAM or Redis so repeated expressions skip the solver.",
+  "when_to_use": [
+    "Compiler engineers hunting missed InstCombine-style rewrites in LLVM: harvest real code, let Souper propose shorter integer expressions, then implement the good ones by hand in LLVM.",
+    "Comparing LLVM's dataflow facts (known bits, demanded bits) against solver-derived ones; sclang exposes the harvesting switches.",
+    "Research on superoptimisation, where Souper is the reference baseline (Minotaur and the dataflow-pruning work build on it).",
+    "Experimental code-size reduction of a build already tied to LLVM 18 when a strong test suite can catch miscompiles."
+  ],
+  "when_not_to_use": [
+    "Production builds aimed at runtime speed: the only published headline number is binary size, and the same paper reports (per search snippet) that the Souper-built Clang is about 2% slower.",
+    "Any toolchain other than its pinned patched LLVM (regehr/llvm-project branch disable-peepholes-llvmorg-18.1.6): GCC, MSVC and newer LLVM releases are unsupported and the repository was archived on 2025-10-30.",
+    "Floating-point or SIMD-heavy code: candidate harvesting skips every instruction whose type is not an integer (lib/Extractor/Candidates.cpp), so vector and FP code is untouched; Minotaur targets that gap.",
+    "Large builds without a Redis cache: each candidate costs SMT queries, and sclang sets a 15-second solver timeout per query.",
+    "Code where a UB-related miscompile is unacceptable: issue #311 (select turned into logic that introduces UB) has been open since 2018."
+  ],
+  "integration": {
+    "form": "LLVM pass plugin (libsouperPass.so) plus standalone tools (souper, sclang/sclang++ wrappers) built from source",
+    "dependencies": "patched LLVM/Clang 18.1.6 fork (regehr/llvm-project, branch disable-peepholes-llvmorg-18.1.6), KLEE fork (klee-for-souper-17-2), Alive2 fork (manasij7479, tag v7), Z3 4.13.0, hiredis (plus a Redis server for the external cache), zstd; build_deps.sh fetches and builds all of them",
+    "min_toolchain": "C++20 (CMakeLists adds -std=c++20), CMake and Ninja; the README's GCC 4.9+ note predates that and is stale",
+    "platforms": "Linux and macOS hosts per the README; it rewrites target-independent LLVM IR, so output targets are whatever the bundled Clang supports",
+    "thread_safety": "not documented; Pass.cpp keeps the solver in a file-level global (std::unique_ptr<Solver> S), so it is built for one compile per process, which is how sclang uses it",
+    "drop_in_for_baseline": "partial — sclang/sclang++ replace CC/CXX in a configure/make build, but only as wrappers around Souper's own patched Clang 18, and they need Z3 and (by default) a running Redis"
+  },
+  "gotchas": [
+    "Known wrong-code and crash bugs were never fixed before archiving: #311 (Souper treats a select whose untaken arm has an undefined shift as a no-op, printing -128 where Clang and GCC print 0; Regehr called it likely a showstopper), #562 (a missing break in Pass.cpp getValue falls through to an out-of-bounds operand access), #166 (blockpc is unsound; blockpc exploitation is opt-in via SOUPER_EXPLOIT_BLOCKPCS). sclang ships a SOUPER_SKIP_FILES list 'for example because they trigger known bugs' and enables -souper-double-check by default.",
+    "Solver failures other than timeouts are printed as '[FIXME: Crash commented out] Unable to query solver' and skipped; the comment says this works around a protocol error seen once in SPEC 2017, so failed queries silently lose optimisations.",
+    "The Redis cache is unversioned: the README says to stop Redis and delete its dump file after every Souper upgrade, otherwise stale results from an older build can be reused.",
+    "The README's usage lines use the legacy pass manager ('-Xclang -load', 'opt -load ... -souper'); the current pass is a new-pass-manager plugin, and sclang passes both -Xclang -load and -fpass-plugin."
+  ],
+  "pick_this_over_siblings_when": "Pick Souper over Minotaur when the target is scalar integer LLVM IR peepholes and you want the mature harvesting, caching and sclang build integration; Minotaur is its successor for SIMD/vector code and is the one with published runtime speedups. STOKE works on x86-64 assembly and K2 on BPF, so choose those for their respective targets.",
+  "verified_claims_summary": "The only figure is from arXiv 1711.04422, seen through search snippets because arxiv.org and its mirrors are unreachable here: an automatic Souper pass produced a Clang 3.9 binary about 3 MB (4.4%, 64.3 versus 67.2 MB) smaller than the stock LLVM build. The same paper reportedly found that binary about 2% slower when compiling C++. No hardware, flags or SPEC runtime results were read, and the SPEC CPU 2017 figure in later work (2.32x) measures Souper's own speed after dataflow pruning, not faster output code.",
+  "status_note": "Archived by Google on 2025-10-30 (last commit 2024-08-28) and pinned to a patched LLVM 18.1.6, with several wrong-code, crash and unsoundness issues left open (#311, #562, #166, #631); Apache-2.0 and usable as a research and LLVM-development tool, not as a production optimiser.",
+  "sources_read": [
+    "https://github.com/google/souper",
+    "https://raw.githubusercontent.com/google/souper/HEAD/README.md",
+    "https://raw.githubusercontent.com/google/souper/HEAD/RESULTS",
+    "https://raw.githubusercontent.com/google/souper/HEAD/build_deps.sh",
+    "https://raw.githubusercontent.com/google/souper/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/google/souper/HEAD/lib/Pass/Pass.cpp",
+    "https://raw.githubusercontent.com/google/souper/HEAD/utils/sclang.in",
+    "https://raw.githubusercontent.com/google/souper/HEAD/tools/CMakeLists.txt (404)",
+    "https://raw.githubusercontent.com/google/souper/HEAD/include/souper/Inst/Inst.h",
+    "https://raw.githubusercontent.com/google/souper/HEAD/lib/Extractor/Candidates.cpp",
+    "https://github.com/google/souper/issues?q=is%3Aissue+miscompile+OR+unsound+OR+wrong+OR+incorrect",
+    "https://github.com/google/souper/issues?q=is%3Aissue+is%3Aopen+miscompile+OR+unsound+OR+incorrect",
+    "https://github.com/google/souper/issues/311",
+    "https://github.com/google/souper/issues/562",
+    "https://github.com/ebdemir/souper",
+    "https://web3.arxiv.org/abs/1711.04422v2 (EGRESS: ENOTFOUND)",
+    "https://repository.tudelft.nl/file/File_e075faad-d676-4f64-9b5e-4655e54ee4b8 (EGRESS: ENOTFOUND)",
+    "WebSearch: \"Souper: A Synthesizing Superoptimizer\" SPEC CPU speedup evaluation Clang binary 4.4% smaller",
+    "WebSearch: souper synthesizing superoptimizer pdf site:github.com"
+  ],
+  "confidence": 0.6
+}

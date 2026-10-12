@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/derekscottledbetter/space-pruner",
+  "one_liner": "Two table-free ARM NEON in-place whitespace strippers, built as alternatives to Lemire's scalar and lookup-table NEON despacers; no published timings.",
+  "what_it_does": "Removes every byte at or below 0x20 (space, LF, CR, tab, NUL and other control bytes) from a char buffer in place and returns the new length, with the same size_t f(char *bytes, size_t howmany) signature as Lemire's despace(). The repository is an iOS benchmark app: two kernels by Derek Ledbetter (neon_interleaved_despace in interleaved_despacer.c, neon_unzipping_despace in unzipping_despacer.c) sit next to copies of Lemire's scalar despace and AArch64 neontbl_despace in despacer.h. Results appear on the device screen when Run is tapped; none are recorded.",
+  "how_it_is_fast": "Both kernels de-interleave 64 bytes with vld4q_u8, compare against 0x20 and pack the keep flags into one byte per 8 input bytes, then turn each flag byte into an 8-lane shuffle index vector computed in registers, so the 1 MiB shufmask table that neontbl_despace indexes with a 16-bit movemask is gone. The interleaved kernel finds set bits by repeated lowest-set-bit isolation (x & (x-1) with vcntq_u8 on the trailing ones); the unzipping kernel splits alternating set bits with a carry-less multiply by all ones (vmulq_p8 prefix XOR) applied three times, reading the last two bit positions with vcntq_u8 and vclzq_u8. Each 8-byte group is then gathered with vtbl1_u8 (or vqtbl1q_u8 on AArch64) and stored with an overlapping 8-byte vst1_u8, advancing the output pointer by the popcount.",
+  "when_to_use": [
+    "In-place stripping of whitespace and control bytes from ASCII buffers on ARMv7 NEON or AArch64 (phones, Apple silicon, Graviton-class servers) when a 1 MiB lookup table is unwelcome.",
+    "As a reference for table-free NEON stream compaction (bit-isolation or polynomial-multiply index generation) to adapt to other byte filters.",
+    "Buffers of at least a few hundred bytes: the vector loops need 128 bytes (interleaved) or 256 bytes (unzipping) before they run; shorter inputs fall to the scalar tail.",
+    "Codebases that can take public-domain source drops and will run their own benchmark, since the repository gives no numbers."
+  ],
+  "when_not_to_use": [
+    "x86 or any non-NEON target: the functions are not even declared without __ARM_NEON; use lemire/despacer, which also has SSE/AVX variants and published cycle counts.",
+    "Non-ASCII (UTF-8) text on Apple platforms or any target where char is signed: the scalar tails delete bytes 0x80-0xFF while the vector body keeps them (see gotchas).",
+    "When only space, LF and CR should go: tabs, NUL and all other control bytes are removed too.",
+    "Anyone needing measured evidence or maintenance: no timings were ever published and the code has been untouched since 2017-07-20.",
+    "Out-of-place use without adaptation: the kernels are written for in-place operation and store 8 bytes at a time past the logical end of the output."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond arm_neon.h; the headers include the Apple SDK header <ConditionalMacros.h>, which must be removed to build outside Xcode",
+    "min_toolchain": "C99 with clang (Xcode 8 era); relies on clang-specific _Pragma(\"unroll\") (GCC ignores it with a warning) and on clang accepting a uint8x16_t initialiser for a poly8x16_t in the unzipping kernel; the benchmark harness folds a const-sized initialised array, a clang extension",
+    "platforms": "ARMv7 with NEON (vtbl1_u8 path) and AArch64 (vqtbl1q_u8 path in the interleaved kernel); no scalar fallback for other targets",
+    "thread_safety": "not documented; both kernels touch only the caller's buffer and no shared state, so concurrent calls on separate buffers should be safe",
+    "drop_in_for_baseline": "partial — same signature and in-place contract as despacer's despace(), but NEON-only, and on signed-char targets the tail handles bytes 0x80-0xFF differently from the vector body"
+  },
+  "gotchas": [
+    "Signed-char correctness bug, untested by the harness: the vector body keeps bytes 0x80-0xFF (unsigned vcgtq_u8 compare against 32), but the scalar tail of both kernels does 'const char c = *source++; if (c > space)', so on Apple arm64 and other signed-char targets any UTF-8 byte in the last 1-127 (interleaved) or 1-255 (unzipping) bytes is deleted. The scalar baseline despace() in despacer.h also uses signed char and deletes every non-ASCII byte there, while Lemire's neontbl_despace tail uses unsigned char. The benchmark cannot see this because fillwithtext() loops 'while (buffer[i] <= 32)', which rejects every negative char, so the test data on iOS is pure 7-bit ASCII.",
+    "Harness timer: gettimeofday with microsecond resolution over a 32 KiB buffer, best of 100 runs, printed under 'ns per operation' though the figure is nanoseconds per input byte; at sub-nanosecond-per-byte speeds one run lasts only tens of microseconds, so each figure carries several percent of quantisation.",
+    "The workload has only about 3% whitespace (1% each of space, LF and CR), far below prose; that keeps the baseline neontbl_despace's 1 MiB table mostly on a few hot entries, so the harness does not exercise the table-cache pressure the table-free kernels are designed to avoid.",
+    "Every vst1_u8 writes a full 8 bytes and advances by the popcount, so the output region needs 8 bytes of slack; in place this stays inside already-consumed input, but a copying variant must allocate extra room. The 2.87 MB bigtable.h defines a non-const, non-static 1 MiB global in a header, so despacer.h can be included in only one translation unit."
+  ],
+  "pick_this_over_siblings_when": "Pick lemire/despacer (Despacer) in nearly every case: it covers x86 and ARM, has published cycle-per-byte results and a maintained repository. Pick space-pruner only when you specifically want a table-free NEON compaction kernel to study or adapt, and test it yourself on non-ASCII input first.",
+  "verified_claims_summary": "Nothing was measured in public: the repository holds an iOS app that times scalar despace, Lemire's AArch64 neontbl_despace and the two new NEON kernels on a 32 KiB random ASCII buffer with about 3% whitespace, but no results, device, compiler flags or screenshots are committed, and the Lemire blog posts that discuss NEON despacing could not be opened here.",
+  "status_note": "Abandoned since 2017-07-20 after a two-week burst of 35 commits; the README declares the project public domain (no LICENSE file, no patent grant, copyright notices on the Lemire-derived code removed), and the two kernels are small enough to vendor once the Apple header and the signed-char tail are fixed.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/README.txt",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/despacebenchmark.c",
+    "https://github.com/DerekScottLedbetter/space-pruner/tree/master/SpacePruner",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/despacer.h",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/interleaved_despacer.c",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/interleaved_despacer.h",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/unzipping_despacer.c",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/unzipping_despacer.h",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/ViewController.m",
+    "https://raw.githubusercontent.com/DerekScottLedbetter/space-pruner/HEAD/SpacePruner/bigtable.h",
+    "https://github.com/DerekScottLedbetter/space-pruner/commits/master",
+    "https://raw.githubusercontent.com/lemire/Code-used-on-Daniel-Lemire-s-blog/master/2017/07/10/README.md"
+  ],
+  "confidence": 0.6
+}
