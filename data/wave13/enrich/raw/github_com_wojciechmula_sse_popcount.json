@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/wojciechmula/sse-popcount",
+  "one_liner": "Reference SIMD popcount kernels (Harley-Seal, PSHUFB lookup) that beat the POPCNT loop 1.8x to 3.6x on kilobyte buffers.",
+  "what_it_does": "Sample and benchmark programs behind Mula's popcount article and the Mula, Kurz and Lemire paper: about 35 procedures that count the set bits in a byte buffer (8-bit and 64-bit lookup tables, bit-parallel SWAR, scalar Harley-Seal, SSSE3/AVX2/AVX-512BW/VBMI PSHUFB lookups, SSE/AVX2/AVX-512 Harley-Seal, AVX-512 VPOPCNTDQ, NEON, AArch64 CNT, RISC-V Vector, plus Dan Luu's __builtin_popcountll variants). Each kernel is a free function uint64_t f(const uint8_t* data, size_t size) (the builtin ones take const uint64_t* and an int word count) returning the total; 'verify' checks them against the 8-bit table and 'speed' times them. It is not a library: kernels are selected at compile time with HAVE_* macros and there is no runtime dispatch, so you copy the one you need.",
+  "how_it_is_fast": "The Harley-Seal kernels treat 16 consecutive vectors as bit-sliced inputs to a tree of carry-save adders (CSA, built from AND/OR/XOR on AVX2 and from two vpternlogd per adder on AVX-512), so only one vector in 16 needs a real per-byte count (SWAR nibble arithmetic, then vpsadbw to sum bytes into 64-bit lanes); leftover ones/twos/fours/eights accumulators are counted once at the end. The PSHUFB kernels split each byte into nibbles and use pshufb as a 16-entry lookup table, summing with vpsadbw. Either way one short instruction sequence handles 32 or 64 bytes, while the scalar loop issues one POPCNT per 8-byte word.",
+  "when_to_use": [
+    "Bit counting over buffers of about 1 KB or more on x86 with AVX-512BW or AVX2 (bitset cardinality, bitmap indexes, Hamming or Jaccard similarity over fingerprints): AVX-512 Harley-Seal is 2.1x the POPCNT loop at 1 KB and 3.6x at 4 KB on Cascade Lake; AVX2 Harley-Seal is about 1.8x at 4 KB on Haswell and Cascade Lake.",
+    "Buffers around 512 B on AVX2 machines, where the unrolled PSHUFB kernel (avx2-lookup) was the fastest row on both Haswell and Cascade Lake: about 17% ahead of the POPCNT loop on Haswell (0.17204 s against 0.20636 s) but only about 3.5% on Cascade Lake (0.16273 s against 0.16864 s), derived from page data.",
+    "Reading or porting a reference implementation: each kernel is 50 to 100 lines of intrinsics under BSD-2-Clause.",
+    "Measuring popcount strategies on a new CPU: results/*/run.sh, speed --csv and scripts/report.py regenerate the published tables."
+  ],
+  "when_not_to_use": [
+    "Buffers under about 512 B: the POPCNT loop or an unrolled __builtin_popcountll with separate accumulators wins; AVX-512 Harley-Seal is 9.7x slower at 32 B (2.99407 s against 0.30912 s) and still slower at 512 B (0.25122 s against 0.16864 s).",
+    "When you want a packaged library with runtime CPU dispatch and a stable API: kimwalisch/libpopcnt (catalogued in wave 11) ships these algorithms that way.",
+    "CPUs with AVX-512 VPOPCNTDQ (the repo's avx512-vpopcnt kernel targets it): the repo publishes no numbers for that kernel, and its tail handling is wrong for sizes that are not multiples of 64 (see gotchas).",
+    "Data far larger than cache: the published tables re-count one L1-resident buffer of 32 B to 4 KB millions of times, so they say nothing about memory-bound streaming, where the gap to POPCNT should shrink."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond <immintrin.h>/<x86intrin.h> (or arm_neon.h, riscv_vector.h); tails use the lookup8bit table from popcnt-lookup.cpp and config.h's FORCE_INLINE",
+    "min_toolchain": "Current Makefile: -std=c++17 -O2 -mpopcnt -fabi-version=6 plus -mssse3, -mavx2, -mavx512bw, -mavx512vbmi or -mavx512bw -mavx512vpopcntdq per target (C++11 until the 2023-08-20 switch); published results were built with GCC 4.8.4 to 8.3.1 and Clang 3.8.0",
+    "platforms": "x86-64 (SSSE3, AVX, AVX2, AVX-512BW, AVX-512VBMI, AVX-512VPOPCNTDQ variants chosen at compile time), ARMv7 NEON, AArch64, RISC-V Vector (added 2024-04-01, tested under the Spike emulator)",
+    "thread_safety": "not documented; the kernels are pure functions over const input that only read global lookup tables, so concurrent calls on separate or shared read-only buffers are safe by code reading",
+    "drop_in_for_baseline": "partial — replaces a loop of _popcnt64/__builtin_popcountll over a buffer with one call f(const uint8_t*, size_t), but there is no runtime dispatch, so you must pick the kernel matching your build flags and keep a POPCNT path for short buffers"
+  },
+  "gotchas": [
+    "AVX-512 VPOPCNTDQ tail bug (code reading, not run): the masked tail added on 2024-03-26 (PR #22) builds an 8-lane uint64 mask from the remaining byte count, (__mmask8)_bzhi_u32(0xFFFFFFFF, end - ptr), so for any size that is not a multiple of 64 it loads and counts whole 8-byte lanes past the end of the buffer (all 8 lanes, 64 bytes, whenever 8 or more bytes remain): wrong totals plus an over-read. verify only tests one 1024-byte buffer, so it cannot catch this; none of the published result files include this kernel.",
+    "The AVX2 and AVX-512 Harley-Seal kernels cast the byte pointer to __m256i* or __m512i* and dereference it, which is an aligned-type access: give them 32- or 64-byte-aligned buffers (speed and verify allocate 64-byte-aligned memory); misaligned input is undefined behaviour and can fault if the compiler emits an aligned move.",
+    "Below 1024 B the 'avx512-harley-seal' row is not Harley-Seal: the carry-save loop needs 16 x 64 B, so smaller buffers go through a per-vector SWAR loop, and buffers under 64 B through the 8-bit lookup table, which explains its 32 B result; AVX2 Harley-Seal likewise needs 512 B.",
+    "results/cascadelake/run.sh times 3.2 GB per cell for 32 to 256 B (for example 32 B x 100,000,000 calls) but 5.12 GB per cell for 512 to 4096 B (512 B x 10,000,000), so times compare within a column but not across the 256/512 boundary; at 4096 B the cells work out to about 106 GB/s for avx512-harley-seal, 52.5 GB/s for avx2-harley-seal and 29.4 GB/s for the POPCNT loop (derived from page data)."
+  ],
+  "pick_this_over_siblings_when": "libalgebra packages similar AVX2/AVX-512 popcount and set-algebra kernels but reports speedups against an 8-bit-lookup scalar baseline with auto-vectorization disabled, and positional-popcount solves a different problem (per-bit-position counts over 16-bit words); pick sse-popcount when you want the original single-file kernels with an honest comparison against the hardware POPCNT loop, or libpopcnt (wave 11) when you want them packaged with dispatch.",
+  "verified_claims_summary": "In the authors' Cascade Lake file (Xeon Gold 6240, GCC 8.3.0 crosstool-NG, flags from the Makefile of the time -std=c++11 -O2 -mpopcnt -mavx512bw; run.sh pins core 0 with taskset and keeps the minimum of 5 runs of a std::chrono-timed loop over one 64-byte-aligned L1-resident buffer), avx512-harley-seal took 0.04826 s and avx2-harley-seal 0.09748 s against 0.17391 s for the 4x-unrolled _popcnt64 loop at 4096 B (3.6x and 1.8x, derived), and 0.09325 s against 0.19950 s at 1024 B (2.1x), while POPCNT-based rows win from 32 to 256 B and AVX-512 still loses at 512 B. The Haswell i7-4770 GCC 5.3.0 file shows 0.11145 s against 0.19857 s at 4096 B (1.8x); the paper abstract, seen only as a WebSearch snippet because arXiv is blocked here, claims up to twice the speed of POPCNT on recent Intel processors.",
+  "status_note": "Stale (last commit 2024-04-01 added a RISC-V Vector kernel; 2023 and 2024 changes came from outside pull requests), BSD-2-Clause sample code that is easy to vendor kernel by kernel; the catalogued numbers are sound (public run.sh, CSV and Makefile), but copy kernels with care because the aligned-pointer casts and the 2024 VPOPCNTDQ tail mask bug (byte count used as a lane mask, found in code reading) are outside verify's single 1024-byte test.",
+  "sources_read": [
+    "https://github.com/WojciechMula/sse-popcount",
+    "https://github.com/WojciechMula/sse-popcount/commits/master",
+    "https://github.com/WojciechMula/sse-popcount/commits/master/popcnt-avx512-vpopcnt.cpp",
+    "https://github.com/WojciechMula/sse-popcount/issues?q=is%3Aissue",
+    "https://github.com/WojciechMula/sse-popcount/tree/master/scripts",
+    "https://github.com/WojciechMula/sse-popcount/tree/master/results/cascadelake",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/README.rst",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/Makefile",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/speed.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/ba36276948036517beb593b01e55efc931bb960a/speed.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/verify.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/config.h",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-all.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/function_registry.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/sse_operators.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-lookup.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-cpu.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-builtin.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-harley-seal.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-avx2-harley-seal.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-avx512-harley-seal.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-avx2-lookup.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-sse-lookup.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/popcnt-avx512-vpopcnt.cpp",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/README.rst",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/cascadelake/cascadelake-Xeon-Gold-6240-gcc-8.3.0.rst",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/cascadelake/cascadelake-Xeon-Gold-6240-gcc-8.3.0.csv",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/cascadelake/cascadelake-Xeon-Gold-6240-gcc-8.3.0.metadata",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/cascadelake/run.sh",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/results/haswell/haswell-i7-4770-gcc5.3.0-avx2.rst",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/scripts/report.py",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/scripts/data.py",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/scripts/metadata.py",
+    "https://raw.githubusercontent.com/WojciechMula/sse-popcount/master/scripts/main-pattern.rst",
+    "WebSearch snippet: arXiv 1611.07612 abstract (Faster Population Counts Using AVX2 Instructions)"
+  ],
+  "confidence": 0.88
+}

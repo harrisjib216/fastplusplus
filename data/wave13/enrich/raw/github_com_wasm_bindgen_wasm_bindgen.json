@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/wasm-bindgen/wasm-bindgen",
+  "one_liner": "Rust-to-JavaScript binding generator; hand-written Rust DOM code built with it takes 0.58x React 19.2 hooks' time in js-framework-benchmark.",
+  "what_it_does": "wasm-bindgen is a proc-macro plus CLI post-processor that lets Rust compiled to wasm32 import JavaScript functions and export Rust functions and types to JavaScript, generating the JS glue and TypeScript definitions; web-sys and js-sys are its generated bindings to every Web API and to ECMAScript built-ins. It is not a UI framework and not a drop-in for React: the catalogued entry is the suite's own imperative Rust program that calls document.createElement, cloneNode, appendChild, insertBefore and setTextContent through web-sys, the Rust counterpart of vanillajs-keyed.",
+  "how_it_is_fast": "There is no virtual DOM, no reactive graph and no diff: the code keeps a Vec of rows holding the row element and its label text node, clones a pre-parsed <tr> template, mutates only the nodes it knows changed and uses one delegated click listener on #main. wasm-bindgen's 'only pay for what you use' glue keeps the bundle small (29.6 kB wasm plus 15.9 kB JS in the measured build, 14.5 kB compressed in the suite). The speed over React comes from doing the minimal DOM work by hand, not from Wasm compute; each DOM call still crosses a JS shim.",
+  "when_to_use": [
+    "You already have a Rust/Wasm app and want the cheapest possible DOM layer for a hot table or list: the hand-written web-sys version takes 0.58x React 19.2 hooks' time over nine benchmarks and is faster than every Rust framework in the suite (Leptos 0.7 takes 1.17x its time, Dioxus 0.7 1.20x, Yew 0.23 1.40x, derived from page data).",
+    "Reorder-heavy keyed lists where React is weak: swap rows 11.6 ms vs React's 89.7 ms; create 10,000 rows 234.7 vs 401.0 ms.",
+    "Startup- and size-sensitive Rust pages: first paint 73.9 ms vs 226.6 ms for React and 239.6 ms for Leptos; compressed bundle 14.5 vs React's 51.4 and Leptos's 48.8 (suite units).",
+    "As the substrate under any Rust web framework (Leptos, Yew, Dioxus, Sycamore, dominator and Silkenweb all sit on wasm-bindgen and web-sys); use it directly where a framework's reactivity costs too much."
+  ],
+  "when_not_to_use": [
+    "If JavaScript is acceptable and speed is the goal: vanillajs-keyed takes 0.939x this build's time and Solid 1.9.3 only 1.038x, with far smaller memory (ready memory 0.48 MB vanilla vs 1.72 MB here) (derived from page data).",
+    "Large UIs that need components, state management or SSR: this is imperative DOM code with no rendering model; you hand-write every update, as the 285-line benchmark program shows.",
+    "Workloads dominated by short strings and many small DOM calls: every web-sys call goes through a JS shim and strings are copied and transcoded UTF-8 to UTF-16 per call (maintainers in issue #1185); the uibench port there lost to vanilla innerHTML.",
+    "Pages behind a strict Content-Security-Policy: the suite flags this entry with note #1139 ('Implementation doesn't pass strict CSP').",
+    "Teams that need non-Rust toolchains or a stable build pipeline: the wasm-bindgen CLI and the crate must have exactly matching schema versions, so the CLI has to be pinned with the crate."
+  ],
+  "integration": {
+    "form": "crate (wasm-bindgen, web-sys, js-sys) plus the wasm-bindgen-cli post-processor, usually run by Trunk or wasm-pack",
+    "dependencies": "wasm-bindgen-macro and wasm-bindgen-shared (pulled in by the crate); web-sys with one cargo feature per Web API type used (the benchmark enables Document, DomTokenList, Element, Event, EventTarget, HtmlElement, Node, Window); js-sys for Math.random",
+    "min_toolchain": "Library MSRV Rust 1.81 and CLI MSRV 1.86 as of 0.2.129 (README MSRV table); the measured bundle was built with rustc 1.69.0-nightly (2023-02-03) and wasm-bindgen 0.2.84",
+    "platforms": "wasm32-unknown-unknown in browsers (Chrome, Firefox, Safari) and Node.js; experimental wasm32-unknown-emscripten support in 0.2.129",
+    "thread_safety": "JsValue and web-sys handles are !Send and !Sync and live on one JS thread; threads need the experimental atomics build with a shared WebAssembly.Memory (CHANGELOG)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured bundle is a 2023 artifact checked into the suite: its wasm producers section records rustc 1.69.0-nightly (658fad6c5 2023-02-03), wasm-bindgen 0.2.84 (cea8cc3d2) and walrus 0.19.0, so a nightly compiler, and its JS glue uses the old heap-array object table, not the externref glue that current toolchains emit by default (reference types on by default since Rust 1.82, per the guide). Current wasm-bindgen 0.2.129 output is unmeasured. The bundle does match the checked-in src/lib.rs (same label word lists, row template and the imported DOM calls the source uses).",
+    "Part of the 6% gap to vanillajs-keyed is implementation choice, not Wasm overhead: vanilla detaches the empty tbody before bulk-appending rows and stores the id as an expando property, while the Rust code appends into the live tbody and calls setAttribute('data-id') on every row and crosses into JS for Math.random three times per row.",
+    "The 1.71x geometric-mean win over React leans on React hooks' slow swap rows (89.7 ms, 8.2x vanilla); without swap the Rust code takes 0.706x React's time and create 1,000 rows is a near tie (22.4 vs 23.6 ms) (derived from page data).",
+    "wasm-bindgen-cli must match the crate's schema version exactly or it aborts with 'it looks like the Rust project used to create this Wasm file was linked against version of wasm-bindgen that uses a different bindgen format than this binary'; pin both together (Trunk and wasm-pack download a matching CLI)."
+  ],
+  "pick_this_over_siblings_when": "Pick raw wasm-bindgen plus web-sys over Leptos (1.171x its time), rust-dominator (1.166x), Dioxus (1.195x) or Yew (1.401x) when one hot view justifies hand-written DOM code; Silkenweb (1.065x) comes closest among the keyed Rust frameworks if you want a framework at near-raw speed (derived from page data). The non-keyed Kobold and Delorean entries post lower times but reuse DOM nodes, so they are not like-for-like.",
+  "verified_claims_summary": "In krausest/js-framework-benchmark's Chrome 154 snapshot on a MacBook Pro 14 (M4, 14/20 cores, 48 GB, macOS 26.6.2), the suite's hand-written wasm-bindgen 0.2.84 keyed implementation needs 0.584x the time of react-hooks-v19.2.0-keyed (unweighted geometric mean of the median total duration over nine benchmarks; swap rows 11.6 vs 89.7 ms) and 1.064x the time of vanillajs-keyed. The wasm-bindgen project itself makes no speed claim; these are the suite's numbers recomputed from results.ts.",
+  "status_note": "Very active (last commit 2026-10-10, release 0.2.129 on 2026-09-25, 9.2k stars, about 578 million crates.io downloads, now under the wasm-bindgen GitHub organisation after the rustwasm working group), dual Apache-2.0/MIT and the default Rust/JS binding layer; the benchmark number reflects a 2023 nightly-built bundle, not the current release.",
+  "sources_read": [
+    "https://github.com/wasm-bindgen/wasm-bindgen",
+    "https://github.com/wasm-bindgen/wasm-bindgen/commits/main",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/README.md",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/guide/src/reference/cli.md",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/guide/src/reference/reference-types.md",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/guide/src/web-sys/index.md",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/crates/cli-support/src/lib.rs",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/crates/cli-support/src/decode.rs",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/HEAD/crates/cli-support/src/wit/mod.rs",
+    "https://github.com/wasm-bindgen/wasm-bindgen/issues?q=is%3Aissue%20performance%20DOM%20slow",
+    "https://github.com/wasm-bindgen/wasm-bindgen/issues/1185",
+    "https://crates.io/api/v1/crates/wasm-bindgen",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/App.tsx",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/helpers/issues.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/README.md",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/Trunk.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/src/lib.rs",
+    "https://github.com/krausest/js-framework-benchmark/tree/master/frameworks/keyed/wasm-bindgen/bundled-dist",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/bundled-dist/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/bundled-dist/js-framework-benchmark-wasm-bindgen-c09c5ae7ae721ce5.js",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/wasm-bindgen/bundled-dist/js-framework-benchmark-wasm-bindgen-c09c5ae7ae721ce5_bg.wasm",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/vanillajs/src/Main.js"
+  ],
+  "confidence": 0.8
+}

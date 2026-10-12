@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/webassembly/bulk-memory-operations",
+  "one_liner": "WebAssembly memory.copy/memory.fill instructions; 2017 V8 prototype copied up to about 3-11x faster than Emscripten's wasm memcpy loop.",
+  "what_it_does": "The (finished, archived) proposal repository that added memory.copy, memory.fill, memory.init, data.drop and the table equivalents to WebAssembly; it is part of the core spec 2.0. memory.copy is a single instruction taking (dst, src, len) with memmove semantics (overlap allowed) and a bounds check before any byte is written. It is not a library: you get it by compiling C, C++ or Rust to Wasm with bulk memory enabled, so memcpy, memmove and memset lower to the instruction and the engine runs a native copy.",
+  "how_it_is_fast": "Instead of a wasm-compiled byte/word loop with a bounds check per access, the engine handles the whole range in one call to its native memmove (the prototype called V8's MemMove), which can use the host CPU's widest vector moves. The proposal's table shows the gain growing with size: a loss at 32 B, 1.2x at 64 B, 2.5x the best hand-unrolled i64 loop at 1 KiB and 3x at 128-512 KiB, against the Emscripten i32 loop 6.8x at 1 KiB and 10.7x at 128 KiB.",
+  "when_to_use": [
+    "Any Wasm build that copies or clears buffers larger than a few dozen bytes (image, audio and network buffers, Vec/std::vector growth, arena resets): make sure bulk memory is on so memcpy, memmove and memset become memory.copy and memory.fill.",
+    "Toolchains already default to it: Emscripten 4.0.0 (2025-01-14) enables BULK_MEMORY and implements memcpy and memmove as memory.copy; Rust 1.87+ with LLVM 20 enables bulk-memory on wasm32-unknown-unknown; wasi-libc's memcpy switches to it above 32 bytes.",
+    "Overlapping moves (memmove) in Wasm: the instruction defines overlap semantics, whereas the 2017 Emscripten memmove fell back to a backward byte loop for overlapping regions.",
+    "Passive data segments with memory.init plus data.drop for initialising shared memory once in threaded Wasm (the proposal's other half)."
+  ],
+  "when_not_to_use": [
+    "Tiny copies: at 32 B the prototype intrinsic did 1.382 GiB/s against 1.565 for the unrolled i64 loop; LLVM avoids memory.copy for short constant-length copies and wasi-libc only calls it above 32 bytes (issue #111 cites Firefox's out-of-line memcpy as up to 5x slower than a wasm-written one).",
+    "Targets that must run on pre-2.0 engines: modules containing the 0xfc-prefixed bulk instructions fail validation there; Rust's wasm32v1-none target and -mno-bulk-memory -mno-bulk-memory-opt in Emscripten exist for that.",
+    "As evidence about native performance: the comparison is native memmove against scalar 2017 wasm loops without SIMD, not against libc memcpy or a wasm simd128 loop.",
+    "Code that relies on non-overlap for speed: there is no non-overlapping variant (issue #121 stayed open), so engines always handle the memmove case."
+  ],
+  "integration": {
+    "form": "WebAssembly core instruction (spec 2.0), emitted by compilers; no library to link",
+    "dependencies": "none; an engine implementing bulk memory and a compiler flag (-mbulk-memory in clang, default in Emscripten 4.0.0+ and in Rust 1.87+/LLVM 20 for wasm32-unknown-unknown)",
+    "min_toolchain": "Emscripten 4.0.0 by default (earlier with -mbulk-memory); Rust 1.87.0 with LLVM 20 by default on wasm32-unknown-unknown; wasi-libc built with -mbulk-memory uses it for copies over BULK_MEMORY_THRESHOLD (32 bytes by default)",
+    "platforms": "Any WebAssembly 2.0 engine; Emscripten 6.0.9 (2026-09-01) raised its minimum Safari to 15.0 and now assumes bulk memory in every supported engine. Speed depends on each engine's native memmove and call path.",
+    "thread_safety": "not documented in the proposal text",
+    "drop_in_for_baseline": "partial — a compiler switch replaces the libc memcpy/memmove/memset bodies transparently, but it is an engine feature, not a function you can call from portable C++ outside Wasm"
+  },
+  "gotchas": [
+    "The intrinsic column cannot be reproduced from the public gist: the 'intrinsic' module's exported _memcpy body just returns 0 and was swapped for memory.copy only by the author's unpublished V8 hack, so running memcpy.js on a stock engine times empty calls; the gist's data initialisation and 'Value mismatch' verification are commented out and each cell is a single timed pass (one-tenth warm-up, no repeats).",
+    "Units are mislabelled: the table says 'Gib/s', but the gist computes (bytes copied x 1000) / (ms x 1024^3), so the numbers are gibibytes per second; the unexplained drop from 29.994 at 512 KiB to 11.760 at 1 MiB comes from one run on a machine with no CPU model, engine version or flags stated.",
+    "Every row only touches a 1 MiB source and 1 MiB destination window with aligned, non-overlapping offsets, so the Emscripten loop's misaligned byte path and the overlap path were never exercised.",
+    "Since 2019 (spec PR #123, after issue #111) memory.copy checks bounds before writing and traps on out-of-bounds even for zero length; Emscripten's memcpy and memmove therefore skip the instruction when n is 0."
+  ],
+  "pick_this_over_siblings_when": "Inside Wasm, use bulk memory for memcpy, memmove and memset and the opt-in wasi-libc simd128 string routines for memchr, strlen and strcmp-style scans; the native siblings (tinymembench kernels, Arm Optimized Routines, AOCL-LibMem) apply only to native builds, and memory.copy in browsers already ends in the host's native memmove.",
+  "verified_claims_summary": "Ben Smith's 2017 measurement in the proposal Overview copies 1 GiB per row (32 B to 1 MiB chunks) with a hacked V8 that runs memory.copy as a native MemMove call, against Emscripten's i32 memcpy loop and hand-unrolled i32/i64 loops, on an unnamed 2.9 GHz x86-64 machine: 17.902 vs 7.010 GiB/s (best loop) at 1 KiB, 29.728 vs 10.032 at 128 KiB, and a loss at 32 B (1.382 vs 1.565).",
+  "status_note": "Finished: merged into the WebAssembly core spec 2.0 (WG vote 2021-02-10) and the repository archived 2021-11-03; the instruction is now the default lowering of memcpy in Emscripten 4.0.0+ and Rust 1.87+, so it is reference material, not code to copy.",
+  "sources_read": [
+    "https://github.com/WebAssembly/bulk-memory-operations",
+    "https://raw.githubusercontent.com/WebAssembly/bulk-memory-operations/HEAD/proposals/bulk-memory-operations/Overview.md",
+    "https://raw.githubusercontent.com/WebAssembly/bulk-memory-operations/HEAD/README.md",
+    "https://raw.githubusercontent.com/WebAssembly/bulk-memory-operations/HEAD/LICENSE",
+    "https://github.com/WebAssembly/bulk-memory-operations/issues?q=is%3Aissue",
+    "https://github.com/WebAssembly/bulk-memory-operations/issues/111",
+    "https://github.com/WebAssembly/bulk-memory-operations/issues/121",
+    "https://raw.githubusercontent.com/WebAssembly/proposals/HEAD/finished-proposals.md",
+    "https://gist.github.com/binji/b8e8bc0c0121235d9f1668bc447c7f8c",
+    "https://gist.github.com/binji/c57dc945bba60985439ef8e5b574eee0",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/HEAD/system/lib/libc/emscripten_memcpy.c",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/HEAD/system/lib/libc/emscripten_memmove.c",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/HEAD/system/lib/libc/emscripten_memset.c",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/HEAD/ChangeLog.md",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/HEAD/libc-top-half/musl/src/string/memcpy.c",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/WebAssembly/wasi-libc/HEAD/libc-top-half/CMakeLists.txt",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/src/doc/rustc/src/platform-support/wasm32-unknown-unknown.md"
+  ],
+  "confidence": 0.7
+}

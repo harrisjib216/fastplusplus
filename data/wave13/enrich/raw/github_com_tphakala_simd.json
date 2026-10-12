@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/tphakala/simd",
+  "one_liner": "Go assembly SIMD kernels (AVX-512/AVX2/AVX/SSE2, NEON) for slice math and audio DSP; 2-16x over the library's own pure-Go loops.",
+  "what_it_does": "A cgo-free Go module (go get github.com/tphakala/simd, MIT, Go 1.25+) with per-type packages (f64, f32, f16, c128, c64, cint, i32, i16, i8, crc) of 150+ functions over caller-allocated slices. They cover elementwise arithmetic, reductions (Sum, DotProduct, Min/Max, MaxAbs), statistics, distances, activation functions (Sigmoid, ReLU, Tanh, Exp), transcendentals (Log, Pow), FIR convolution and decimation, LPC autocorrelation, FFT butterflies and an STFT plan, PCM conversions, stereo and N-channel interleave, Q15/Q31 fixed-point kernels and a FLAC CRC-16. The API is one function per operation (f64.DotProduct(a, b), f64.Add(dst, a, b)), not a vector type or a drop-in for any stdlib call. The author's BirdNET-Go project depends on it (v1.11.0 in its go.mod).",
+  "how_it_is_fast": "Hand-written Go-assembler kernels process 2-16 lanes per instruction and run several independent vector accumulators in the reductions, so DotProduct and Sum escape the one-add-at-a-time dependency chain of a scalar loop (Go's compiler does not auto-vectorize). At package init, CPU-feature detection selects function pointers per tier (AVX-512 F+VL, AVX2, AVX+FMA, AVX, SSE2, NEON, NEON+FP16, SDOT, AVX-VNNI, PCLMULQDQ/PMULL), and the SIMD_DISABLE environment variable can mask tiers. Activation and transcendental kernels swap math.Exp/math.Tanh for range reduction plus a degree-5 polynomial and 2^k reconstruction with integer shifts. Fused kernels (ConvolveDecimate, ConvolveValidMaxAbs, DotProductBatch's 4-row blocking, XCorr's 4-lag blocking) remove per-call dispatch and repeated loads.",
+  "when_to_use": [
+    "Go services doing numeric work on float32/float64 slices of a few hundred elements or more (dot products, sums, means, L2 distances, clamps) on amd64 or arm64, where cgo to a C SIMD library is unwanted.",
+    "Go audio and DSP pipelines: FIR filtering and decimation, LPC autocorrelation for FLAC-style encoders (byte-identical to the scalar reference), int16/int32 PCM conversion and interleave, CRC-16, STFT and power spectra.",
+    "Raspberry Pi 5 / Cortex-A76 and Apple Silicon deployments: NEON kernels throughout (README: f32 3.5-5.2x, f64 2.4-2.6x over pure Go on a Pi 5), with FP16 paths in f16.",
+    "Fixed-point codec inner loops (i16 DotProduct at 64-480 elements: 5.8-11.8x on AVX2; XCorr 27-33x), where the README documents bit-exact results.",
+    "Batch ML-style activations (Sigmoid, Exp, Tanh) on float32 where an absolute error around 1e-6 to 1e-7 is acceptable."
+  ],
+  "when_not_to_use": [
+    "Very short slices: i16 DotProduct at 8 elements is only 1.5x on AMD64 and 0.97x on the Pi 5, Min/Max/MaxAbs fall back to Go below 4 (f64) or 8 (f32) elements, and per-call dispatch dominates tiny inputs.",
+    "Code that needs results bit-identical to a scalar loop for float reductions (Sum, DotProduct, Variance): lanes reassociate the additions, and the repo's own bench:compare only checks agreement within a tolerance. Bit-exactness is documented only for Autocorrelate, ConvolveValidMaxAbs and the integer kernels.",
+    "Accuracy-sensitive transcendentals: Tanh, Sigmoid and Exp use approximations (Exp max relative error about 7e-6 for f32), and Tanh loses relative accuracy for inputs near zero (see gotchas). Use math.Tanh/math.Exp when relative error matters.",
+    "Other architectures (riscv64, ppc64le, s390x, wasm) get only the pure-Go fallback; SVE/SVE2 is detected but unused, so Graviton 3 runs NEON.",
+    "Projects needing broad adoption or a long track record: 26 stars, one main author, API still growing fast (functions added and removed in 2026, e.g. PolyphaseResampleCubic added then dropped in August)."
+  ],
+  "integration": {
+    "form": "Go module (pure Go plus Go assembler .s files; no cgo)",
+    "dependencies": "golang.org/x/sys and golang.org/x/arch (go.mod); stretchr/testify for tests only",
+    "min_toolchain": "Go 1.25 (go.mod); README numbers measured with Go 1.26",
+    "platforms": "amd64 (SSE2 minimum for f32/f64/c128; AVX2 for i8, i32 arithmetic and the activation kernels; AVX-512 F+VL used when present) and arm64 (NEON, optional FP16, SDOT); pure-Go fallback elsewhere",
+    "thread_safety": "README: all functions are safe for concurrent use (stateless kernels; dispatch fixed at package init). STFTPlan is a reusable plan object; its concurrent use is not documented here.",
+    "drop_in_for_baseline": "partial: replaces hand-written Go loops one call at a time with the same slice-in, slice-out semantics, but floating-point results can differ in the last bits (reassociation) or more (approximate activations)"
+  },
+  "gotchas": [
+    "The '73x' f32 Tanh headline rests on an inconsistent baseline row. tanh32Go is float32(math.Tanh(float64(x))), and BenchmarkTanh feeds both packages the same (i%100 + 0.5 - 50)/10 inputs. The f32 Go time (28,219 ns) is still 4.3x the f64 Go time (6,600 ns) for the same math.Tanh calls, while the Sigmoid and Exp Go rows agree across f32 and f64 within about 10%. At the f64 baseline the f32 kernel's 385 ns would be about 17x, not 73x (derived from page data); the row is probably from a different run or an older reference.",
+    "The f32 AVX2 Tanh kernel (tanhAVX) computes (1 - e^(-2x)) / (1 + e^(-2x)) with a truncated-Taylor exp, so relative error grows as |x| approaches 0 through cancellation in 1 - e^(-2x). By that arithmetic it exceeds the test's own 1e-5 bound below roughly |x| = 0.003 and returns 0 once e^(-2x) rounds to 1.0. TestTanh checks only 0, integers and 2.5 (analysis of the kernel code, not measured). The Tanh doc comments in f32.go and f64.go still describe an older 'x/(1+|x|) ... sign(x) for |x| >= 2.5' approximation, and the f64_go.go comment wrongly says tanh(2.5) saturates to 1 (it is 0.987).",
+    "The reduction baselines are latency-bound single-accumulator loops: dotProductGo chains math.FMA into one sum, and sumGo is 'sum += v'. The table's Go times match one FMA per about 4 cycles (887 ns per 1024 elements) and one add per about 2 cycles (427 ns) at the i7-1260P's turbo clock, so a 4-accumulator scalar loop would likely recover about 4x of DotProduct's 16.5x (estimate, not measured). Clamp's Go reference is an if/else branch chain costing about 4x Add's Go loop per element, so its 10.6x is mostly a branchy-baseline effect.",
+    "Benchmark inputs are a deterministic period-100 ramp (i%100 + 0.5), and the i7-1260P is a hybrid P/E-core part. Only the Variance/StdDev rows were pinned to one P-core (median of 9); the other rows are best-of-repeated-runs without stated pinning, and the f32 table mixes runs. The f64 ReLU row's 240 GB/s does not match its 79 ns (about 207 GB/s from 16 KB moved)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over kelindar/simd, vek or segmentio/asm when you need float64 and float32 coverage plus audio/DSP kernels (FIR, decimation, LPC autocorrelation, STFT, PCM conversion, CRC-16) with NEON tuned and measured on ARM64, in an actively developed module. Like those siblings, its speedups are measured only against its own pure-Go fallback.",
+  "verified_claims_summary": "The README's go test benchmarks (Go 1.26, performance governor, best of repeated runs) time each kernel against the library's own pure-Go reference at 1,024 elements. On an Intel Core i7-1260P (AVX+FMA, no AVX-512) the results are float64 DotProduct 54 vs 887 ns (16.5x), Sum 12.1x, Mean 12.7x, EuclideanDistance 15.4x, Clamp 10.6x, elementwise Add/Sub/Mul 2.4x, Div 2.0x and CumulativeSum 1.0x; float32 is 3.2-22.6x. On a Raspberry Pi 5 (Cortex-A76 NEON) f32 is 3.5-5.2x and f64 2.4-2.6x. Reduction gains are inflated by single-accumulator scalar baselines, and the 73x f32 Tanh row's Go figure is inconsistent with the f64 row for the same math.Tanh calls.",
+  "status_note": "Active (commits through 2026-10-05, 291 commits, issues closed within days) and MIT-licensed, so it is easy to adopt. It has 26 stars and its main known consumer is the author's own BirdNET-Go, and the README's headline multiples should be discounted for the self-written scalar baselines and the Tanh row.",
+  "sources_read": [
+    "https://github.com/tphakala/simd",
+    "https://github.com/tphakala/simd/tree/main/f64",
+    "https://github.com/tphakala/simd/tree/main/f32",
+    "https://github.com/tphakala/simd/commits/main/f32/f32_go.go",
+    "https://github.com/tphakala/simd/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/tphakala/simd/main/README.md",
+    "https://raw.githubusercontent.com/tphakala/simd/main/go.mod",
+    "https://raw.githubusercontent.com/tphakala/simd/main/Taskfile.yml",
+    "https://raw.githubusercontent.com/tphakala/simd/main/LICENSE",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/f64.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/f64_go.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/f64_amd64.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/f64_amd64.s",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/benchmark_test.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f64/f64_test.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/f32.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/f32_go.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/f32_amd64.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/f32_amd64.s",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/benchmark_test.go",
+    "https://raw.githubusercontent.com/tphakala/simd/main/f32/f32_test.go",
+    "https://raw.githubusercontent.com/tphakala/birdnet-go/main/go.mod"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/tuananh/camaro",
+  "one_liner": "Node.js XML-to-JSON extractor (pugixml in Wasm) using XPath templates; about 5x txml, 24-37x other JS parsers on 60 KB.",
+  "what_it_does": "camaro takes an XML string or UTF-8 bytes plus a template object whose values are XPath 1.0 expressions (with extras such as number(), boolean(), title-case(), string-join(), raw and '#constant'), and resolves a Promise with a JS object containing only the requested fields, renamed and typed as the template says. It also offers toJson(xml) for a whole-document conversion and prettyPrint(xml). The API is async and different from DOM/object parsers, so it is not a drop-in for txml, xml2js or fast-xml-parser.",
+  "how_it_is_fast": "The XML is encoded once with TextEncoder.encodeInto into a reused scratch buffer, copied into a reused Wasm heap buffer, and parsed in place by pugixml's single-pass DOM parser, so text is not copied into per-node strings (build: emcc -O3 -flto -msimd128, C++98 without exceptions or RTTI, emmalloc). Templates are compiled once and cached by id with their XPath queries, and simple paths are walked directly without the XPath engine. Only the selected values are written by a C++ JSON writer into one string, which JavaScript turns into objects with a single JSON.parse, so the hundreds of JS objects a full-tree parser allocates are never created.",
+  "when_to_use": [
+    "Node.js services that pull a few dozen fields out of large XML API responses (SOAP, travel/booking APIs, feeds) of tens of KB and up.",
+    "When you want output shaped and typed by a declarative XPath template (renames, number() and boolean() casts, string functions) instead of walking a parsed tree by hand.",
+    "Servers handling many XML documents concurrently: the first in-flight call runs on the main thread and further concurrent calls go to a worker_threads pool with SharedArrayBuffer IPC.",
+    "Deployments that cannot build native addons: the package ships a prebuilt dist/camaro.wasm and runs on any OS with Node.js 20+."
+  ],
+  "when_not_to_use": [
+    "Small XML strings: the README warns camaro will probably be slower than pure-JS parsers there, and the current harness only measures a 60 KB fixture.",
+    "When you need the whole tree or round-tripping: transform only returns templated fields, and toJson emits camaro's own JSON shape with no published speed numbers.",
+    "When malformed input must fail loudly: a parse failure makes the binding return an empty object (makeTransformValue in src/camaro_bindings.cpp), so transform resolves to {} instead of rejecting, and an invalid XPath yields '' (test/invalid-xpath.test.js).",
+    "Browsers or streaming: it is a Node.js package (process.env, path, worker_threads), and each document is copied whole into the 32-bit Wasm heap, with no SAX or streaming mode.",
+    "Templates generated per request: compiled templates are cached for the life of the process (see gotchas)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (a pugixml fork is compiled into dist/camaro.wasm); rebuilding needs Emscripten and napa to fetch tuananh/pugixml at a pinned commit",
+    "min_toolchain": "Node.js 20+ (package.json engines; CI tests Node 20.x-26.x); the Wasm is built with -msimd128, so the runtime needs Wasm SIMD; the dev shell in flake.nix uses nixpkgs-unstable emscripten and nodejs_26",
+    "platforms": "any OS and CPU that runs Node.js 20+ (WebAssembly, no native addon); Node.js only",
+    "thread_safety": "All calls are async. One in-flight call runs on the main thread and concurrent calls go to a worker_threads pool sized by CAMARO_POOL_SIZE; CAMARO_FORCE_SINGLE_THREAD=true keeps everything on the main thread; destroy() shuts the pool down.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Reporting flaw in the README benchmark: commit bd296c7 (2026-08-13) replaced only the camaro row and the summary ratios, leaving the txml, fast-xml-parser, xml2js and xml-js rows from the 2026-08-07 run (commit 2314fc6). The summary cannot come from one mitata run: mitata sorts summary lines by mean time, yet 25.78x (xml-js) is printed before 24.21x (fast-xml-parser). The table as printed gives 4.97x, 25.17x, 26.58x and 36.18x (derived from page data). Magnitudes are similar, but the headline numbers mix two runs, and none of the runs states the CPU, Node or emcc version.",
+    "Unequal work: the 60 KB fixture holds 681 elements and 405 attributes but only one HotelSummary with 12 rooms, so camaro's template returns about 64 values while the four JS parsers build the full tree as JS objects. The repo's like-for-like script (benchmark/to-json.js, npm run bench:to-json: camaro toJson against the same parsers) exists, but no results are published.",
+    "Every distinct template string is cached for the life of the process: worker.js keeps a Map from template JSON to id with no eviction, and the native context keeps each registered template and its compiled XPath queries. Templates built dynamically per request therefore grow memory without bound.",
+    "Releases 6.6.0 and 6.7.0 returned only the first parent's children for multi-parent paths such as players/group/player (issue #178, fixed in 6.7.1 on 2026-08-11); pin versions. pugixml runs with parse_cdata|parse_escapes only, so CRLF line ends and attribute whitespace are not normalised as the XML spec requires."
+  ],
+  "pick_this_over_siblings_when": "The catalogued Wasm siblings that beat pure-JS parsers (json-as for JSON, calaminejs for spreadsheets, markdown_yo for Markdown) do not handle XML; pick camaro when the input is XML and you need a subset of fields. Like markdown_yo it has a small-input crossover, so check your document sizes first.",
+  "verified_claims_summary": "In a first-party mitata run in Node.js (CPU, Node and emcc versions not stated), camaro's transform on a 60 KB Expedia hotel-list fixture averaged 98.94 us/iter. That covers UTF-8 encoding, the copy into the Wasm heap, a full pugixml parse, extraction of about 64 templated fields and JSON.parse of the result. Full-tree parses took 491.71 us (txml), 2.49 ms (xml-js), 2.63 ms (fast-xml-parser) and 3.58 ms (xml2js), but those rows come from an earlier run than camaro's row and the printed 5.27x/25.78x/24.21x/37.02x ratios; the table as printed gives about 5x, 25x, 27x and 36x (derived from page data).",
+  "status_note": "Actively maintained (last commit 2026-09-11, 769 commits, package 6.7.3, CI on Node 20-26), MIT-licensed with 581 stars and used by hexo's sitemap and feed generators; ship it as an npm dependency rather than vendoring, and pin the version given the 6.6-6.7 XPath regression.",
+  "sources_read": [
+    "https://github.com/tuananh/camaro",
+    "https://github.com/tuananh/camaro/commits/develop/README.md",
+    "https://github.com/tuananh/camaro/commit/bd296c7",
+    "https://github.com/tuananh/camaro/commit/2314fc6",
+    "https://github.com/tuananh/camaro/commit/1f06a2c",
+    "https://github.com/tuananh/camaro/issues?q=is%3Aissue",
+    "https://github.com/tuananh/camaro/issues/178",
+    "https://github.com/tuananh/camaro/tree/develop/test",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/README.md",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/API.md",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/build.sh",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/package.json",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/.github/workflows/ci.yaml",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/index.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/index.d.ts",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/worker.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/json-parse.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/src/camaro.cpp",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/src/camaro_bindings.cpp",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/src/pugiconfig.hpp",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/benchmark/transform.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/benchmark/baseline.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/benchmark/to-json.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/benchmark/fixtures/60kb.xml",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/test/input.test.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/test/invalid-xpath.test.js",
+    "https://raw.githubusercontent.com/tuananh/camaro/HEAD/test/template-cache.test.js",
+    "https://raw.githubusercontent.com/evanwashere/mitata/master/src/main.mjs"
+  ],
+  "confidence": 0.8
+}

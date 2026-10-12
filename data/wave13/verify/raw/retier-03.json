@@ -1656,5 +1656,136 @@
       "https://github.com/vusolapohvistr/kmeans-wasm/blob/main/benchmark/real-images.mjs",
       "https://github.com/vusolapohvistr/kmeans-wasm/commit/0f53d6a"
     ]
+  },
+  {
+    "id": "https://github.com/torch2424/wasmboy",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the first-party article predates fix PR #218, before which the JS core indexed typed arrays with non-integer offsets and read undefined audio samples, so the JS baseline did different work than the Wasm core (crippled baseline), there is no output-equality check, and the only other numbers are search snippets of a 2022 study. No valid measurement reachable: C to D.",
+    "corrections": {
+      "caveats": "No figures in the README; the benchmark app (wasmboy.app) and the 2019 Medium article are unreachable, and the only numbers seen are WebSearch snippets of the De Macedo et al. 2022 study (language factor 0.84 for Wasm vs 1 for JavaScript in a regression over six games, three browsers), with no CPU model or versions. Harness flaw behind the first-party numbers: the Medium article (linked from issue #214, opened 2018-12-20) predates fix PR #218 (commit 838af61, 2018-12-22); before it the JS core indexed its typed array with non-integer offsets such as 59853.5 from a division in channel3.ts (issue #216) because Wasm's integer division became a float division in JS, so the JS baseline read undefined audio samples and did different work, and SpiderMonkey hit a recompile loop; the maintainer admits a stale Closure build that night. The JS core's memory mock is a Uint8ClampedArray (stores saturate where Wasm's store8 wraps), equivalence rests on hand-placed i32Portable/u8Portable calls, and the benchmark never checks that the cores produce identical frames or audio. demo/benchmark times each executeFrame() with performance.now(), coarsened by browsers, over 1.4-2.7 ms frames, so min, max and mode rows are quantised; cores run one after another rather than interleaved; one config (audio batching, tile caching on, boot ROM off) applies to all cores and changes frame time by up to 1.7x. Issue #308 shows JS in Firefox at about half of Chrome. Toolchain is old (assemblyscript ^0.15.1)."
+    },
+    "urls_opened": [
+      "https://github.com/torch2424/wasmboy/pull/218",
+      "https://github.com/torch2424/wasmboy/issues/216",
+      "https://github.com/torch2424/wasmboy/issues/214",
+      "https://github.com/torch2424/wasmboy/blob/master/demo/benchmark/index.js"
+    ]
+  },
+  {
+    "id": "https://github.com/tphakala/simd",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: the '73x' f32 Tanh headline divides by an inconsistent Go row (28,219 ns against 6,600 ns for the same math.Tanh calls in the f64 row), so about 17x is the supportable figure, and the reduction baselines are latency-bound single-accumulator loops; the public harness, flags and CPU stand for the rest. A stays with the Tanh claim corrected.",
+    "corrections": {
+      "claimed_speedup": "README Performance Notes: 'Explicit SIMD ranges from roughly 2-6x on memory-bound elementwise operations up to 10-16x on reductions and fused kernels'. float64 on i7-1260P, 1024 elements: DotProduct 54 ns vs 887 ns (16.5x), EuclideanDistance 15.4x, Mean 12.7x, Sum 12.1x, Clamp 10.6x, Add 2.4x, Div 2.0x, CumulativeSum 1.0x. ARM64 NEON: float32 3.5x-5.2x, float64 2.4x-2.6x. Activation functions: Exp 19x for f32; the README's 'Tanh: 73x speedup for f32' rests on an inconsistent Go baseline row (tanh32Go is float32(math.Tanh(float64(x))) on the same inputs as the f64 row, yet 28,219 ns against the f64 row's 6,600 ns while the Sigmoid and Exp rows agree within about 10% across widths), so against the f64 baseline the f32 kernel's 385 ns is about 17x (derived from page data).",
+      "caveats": "Baseline is the library's own pure-Go loop (Go 1.26 toolchain, no auto-vectorization); the README notes newer toolchains shrink elementwise gains. The reduction references are latency-bound single-accumulator loops (dotProductGo chains math.FMA into one sum; sumGo is a plain 'sum += v' loop), so part of the 12-16x reduction speedups comes from breaking that dependency chain, and a 4-accumulator scalar loop would likely recover about 4x of DotProduct's 16.5x (estimate); Clamp's Go reference is branchy. The f32 Tanh row is inconsistent (see claim), and the f32 AVX2 tanh kernel computes (1 - e^-2x)/(1 + e^-2x) with a truncated-Taylor exp, so its relative error exceeds the test's own 1e-5 bound below roughly |x| = 0.003 and it returns 0 once e^-2x rounds to 1.0; TestTanh checks only 0, integers and 2.5, and the Tanh doc comments are stale. Benchmark inputs are a deterministic period-100 ramp on a hybrid P/E-core i7-1260P; only the Variance/StdDev rows were pinned to one P-core (median of 9), the other rows are best-of-repeated-runs without stated pinning, and the f32 table mixes runs. The f64 ReLU row's 240 GB/s does not match its 79 ns (about 207 GB/s from 16 KB moved, derived)."
+    },
+    "urls_opened": [
+      "https://github.com/tphakala/simd/blob/main/f32/f32_go.go",
+      "https://github.com/tphakala/simd/blob/main/f64/f64_go.go",
+      "https://github.com/tphakala/simd/blob/main/f32/tanh_amd64.go",
+      "https://github.com/tphakala/simd/blob/main/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/tttapa/arm-neon-compositor",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher read the committed aarch64 binaries: both builds link libgomp (OpenMP on, thread count unrecorded), the compiler is GCC 9.2.0 (crosstool-NG), and the no-simd kernel is pure scalar code rather than auto-vectorized; the 3.5x holds only while the images fit L2. First-party, C stays with corrections.",
+    "corrections": {
+      "compiler_and_flags": "GCC 9.2.0 (crosstool-NG, from the .comment section of the committed aarch64 .so files) at -O3 with OpenMP ('#pragma omp parallel for' in both paths, both binaries link libgomp and call GOMP_parallel; thread count not recorded); the no-simd build's Div255_Round stride kernel contains no vector instructions (ldrb/strb/mul/madd only), so GCC did not auto-vectorize the fallback.",
+      "caveats": "The baseline is the library's own non-NEON fallback (overlay_alpha_1 looped 8x under '#pragma GCC unroll 8' and 'ivdep'), not an external incumbent such as OpenCV, and by the committed binaries it is plain scalar code (no auto-vectorization). Both the NEON and the no-simd builds used for the CSVs (byte-identical at results commit a6c7d04 and HEAD) run with OpenMP on, with the thread count unrecorded, and timing runs from Python via ctypes with one run per size and no warm-up (the 200 px point is just 10 calls), so a fixed per-call overhead of about 20 us deflates the ratios below about 30 px (NEON is 0.93x at 1 px). The 3.5x headline holds only while bg, fg and out fit in the Pi 3B+'s 512 KB L2: NEON goes from 2.8 ns/px at 200 px to 5.8 ns/px at 250 px and about 7.4 ns/px beyond 300 px while scalar stays at 10-12 ns/px, so the ratio falls to 1.33-1.65x (derived from page data). perf_test.py uses np.int (removed in NumPy 1.24). Div255_Round_Approx differs by build (the NEON version is one too large for 127 of 65536 inputs); the tail path for widths not a multiple of 8 runs the 8-pixel kernel on partly uninitialised stack buffers; issue #1 (background alpha copied, not composited) is open; the library needs GTest to configure and builds with -Werror -pedantic-errors."
+    },
+    "urls_opened": [
+      "https://github.com/tttapa/arm-neon-compositor/tree/master/examples/perf_test/output",
+      "https://github.com/tttapa/arm-neon-compositor/blob/master/examples/perf_test/perf_test.py",
+      "https://github.com/tttapa/arm-neon-compositor/issues/1"
+    ]
+  },
+  {
+    "id": "https://github.com/tuananh/camaro",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the README table divides a camaro row re-measured on 2026-08-13 (commit bd296c7) by competitor rows kept from the 2026-08-07 run (commit 2314fc6), the summary ratios cannot come from one mitata run, and the work differs by design (about 64 extracted values against four full document trees); the like-for-like bench/to-json.js has no published results. Cross-run ratios on unequal work (PostgreSQL/MySQL cross-run precedent): C to D.",
+    "corrections": {
+      "claimed_speedup": "README table (Node, mitata; CPU, Node and emcc versions unstated): camaro v6 98.94 us/iter vs txml 491.71 us, xml-js 2.49 ms, fast-xml-parser 2.63 ms, xml2js 3.58 ms; the summary prints 5.27x, 25.78x, 24.21x and 37.02x while the table as printed gives 4.97x, 25.17x, 26.58x and 36.18x (derived from page data). The camaro row and the summary ratios were replaced by commit bd296c7 (2026-08-13) while the four competitor rows date from the 2026-08-07 run (commit 2314fc6), so the ratios are cross-run; the summary ordering (25.78x before 24.21x despite mitata sorting by mean) shows it was not one run. camaro extracts about 64 template values from a 60 KB fixture of 681 elements and 405 attributes while the four JS parsers build the full tree, which the README itself calls 'an unfair game for camaro'.",
+      "caveats": "The README itself says the comparison is unfair: camaro extracts only the template's fields while txml, fast-xml-parser, xml-js and xml2js build the full document tree, so the work is not like-for-like; the repo's like-for-like script (benchmark/to-json.js, npm run bench:to-json) exists but no results are published. Reporting flaw: the camaro row and summary ratios come from a different run (2026-08-13) than the competitor rows (2026-08-07), and the summary line order shows it was not a single mitata run. No CPU, Node.js or emcc version is stated (the AMD 4650G spec belongs to an older harness on master); a single 60 KB fixture; the README warns small XML strings will probably be slower than pure-JS parsers. Every distinct template string is cached for the life of the process with no eviction (worker.js Map plus native compiled XPath queries), so dynamic templates grow memory without bound; malformed XML resolves to {}; releases 6.6.0 and 6.7.0 returned only the first parent's children for multi-parent paths (issue #178, fixed in 6.7.1 on 2026-08-11); pugixml runs with parse_cdata|parse_escapes only, so CRLF and attribute whitespace are not normalised."
+    },
+    "urls_opened": [
+      "https://github.com/tuananh/camaro/commit/bd296c7",
+      "https://github.com/tuananh/camaro/commit/2314fc6",
+      "https://github.com/tuananh/camaro/blob/develop/benchmark/to-json.js",
+      "https://github.com/tuananh/camaro/blob/develop/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/verpeteren/rust-simd-noise",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: at HEAD the intrinsics entry points lack #[target_feature] and benches/benchmarks.rs calls them straight from Criterion closures with no RUSTFLAGS, so a default cargo bench likely times out-of-line SIMD op calls; the baseline is simdeez's 1-lane Scalar engine running the same generic code; the README table dates from commit 498bf3d (2019-03-05), not June 2018. First-party, C stays with corrections.",
+    "corrections": {
+      "compiler_and_flags": "Not stated (README names Criterion.rs only; rustc version and RUSTFLAGS absent, and the repo has no .cargo/config). Benchmark source is benches/benchmarks.rs; since the November 2024 simdeez v2 port the intrinsics::{sse41,avx2}::get_*_noise functions carry no #[target_feature], so a default cargo bench at HEAD likely times out-of-line AVX2/SSE4.1 op calls (not run).",
+      "caveats": "Baseline is the crate's own scalar fallback, simdeez's 1-lane Scalar engine running the same generic SIMD code (not a hand-written scalar generator or a third-party library such as FastNoise/FastNoiseSIMD or noise-rs); the superlinear 10.9x SSE2 gain on 4 lanes for 3D cellular noise points to emulation overhead in that path, so the claim shows the benefit of SIMD for this algorithm rather than a win over an independent incumbent. The README benchmark table first appears in commit 498bf3d (2019-03-05); earlier 2018 tables on the same i7-6700 showed only 3.6-6.7x for AVX2 FBM. Harness flaw at HEAD: since the November 2024 simdeez v2 port the intrinsics entry points have no #[target_feature] while simdeez 2.0.0-dev3 marks every AVX2/SSE4.1 op #[inline] #[target_feature], and benches/benchmarks.rs calls them straight from Criterion closures (the tests wrap the same calls in #[target_feature] functions) with no RUSTFLAGS or .cargo/config, so a default cargo bench likely times out-of-line op calls. Committed golden outputs show scalar and SIMD agree within 8.7e-5 (3D cellular) and 1.9e-6 (2D FBM), but the scalar-vs-SIMD consistency tests in src/lib.rs are commented out, test assets were regenerated on 2024-11-18 ('accept current implementation as-is') and four f64 SSE2 tests are ignored. Library bug: fbm_1d (f32 and f64) ignores the gain setting. The README's direct-call example uses pre-port signatures that do not compile against HEAD; the published crate is still 3.1.6 (simdeez ^1.0.3)."
+    },
+    "urls_opened": [
+      "https://github.com/verpeteren/rust-simd-noise/blob/master/benches/benchmarks.rs",
+      "https://github.com/verpeteren/rust-simd-noise/blob/master/src/intrinsics/avx2.rs",
+      "https://github.com/verpeteren/rust-simd-noise/commit/498bf3d",
+      "https://github.com/verpeteren/rust-simd-noise/blob/master/src/lib.rs"
+    ]
+  },
+  {
+    "id": "https://github.com/viterin/vek",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the Exp, Log, Pow and Sqrt rows draw inputs from NormFloat64()*100 so about half of the Log/Sqrt/Pow results are NaN and about 38% of the Exp inputs overflow or underflow (a regime the README calls undefined), the 139x And row compares a short-circuit && loop with a bitwise kernel, the 8x Maximum row is branch mispredictions, and the README's 1k column cannot be produced from the committed harness. First-party, C stays with the claim corrected.",
+    "corrections": {
+      "claimed_speedup": "README: 'Fast, average speedups of 10x for float32 vectors'. Table at 100k elements (CPU and Go version unstated): vek32.Sum 65,007 ns Go vs 3,191 ns SIMD (20x), vek32.Add 6x, vek.Add 2x, vek.MatMul 7x and vek32.MatMul 14x at m = n = p = 1k. The transcendental rows (vek32.Exp 1,120,300 vs 49,694 ns, 22x; vek32.Log 16x; Pow; Sqrt) were measured on inputs drawn from NormFloat64()*100, so about half of the Log, Sqrt and Pow results are NaN and about 38% of the Exp inputs have |x| > 88.7 (Inf, 0 or denormal), a regime the README itself calls undefined for the SIMD path; the vek.And 139x row compares a short-circuit 'x[i] = x[i] && y[i]' loop on random 50% booleans with a bitwise & kernel, and the vek.Maximum 8x row mostly measures branch mispredictions in the if/else baseline. The README's 1k column for Add, Mul, Abs, Round, Sqrt, Pow, Exp, Log, Maximum, Lt and And, and its MatMul p = 1 rows, cannot be produced by the committed go test command (those benchmarks loop over 10k and 100k only since ff9d7ac; MatMul uses p of 100 or 1000).",
+      "caveats": "CPU model, Go version and run count are not stated. Harness flaws: the transcendental benchmarks feed mostly invalid or out-of-range inputs (NaN and Inf regime), And_Go and Maximum_Go are branchy worst cases that a branchless Go loop would narrow, BenchmarkLogic clones the input under StopTimer on every iteration, the Go fallback Sum is a single-accumulator serial loop, and the 1k column and p = 1 MatMul rows have no producing command; the README does not say whether its MatMul rows are the serial or goroutine-parallel variant. Correctness tests cover lengths 1 to 200 only (size = 1 + i/5), so the unrolled main loops past 256 elements are exercised only by benchmarks that never check results, which is how the Any() bug (stale RAX returned for len > 256 with len % 32 > 0) survived from 2022 until commit 0ce8425 (August 2025); issue #11: Eq/Neq wrong on NaN, documented, not fixed. The AVX2 kernels are assembly generated from C++ (asm/_cpp with Agner Fog's VCL)."
+    },
+    "urls_opened": [
+      "https://github.com/viterin/vek/blob/main/internal/functions/functions_test.go",
+      "https://github.com/viterin/vek/blob/main/internal/functions/benchmark_test.go",
+      "https://github.com/viterin/vek/issues/11",
+      "https://github.com/viterin/vek/commit/0ce8425"
+    ]
+  },
+  {
+    "id": "https://github.com/vmt/udis86",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: the 2021 disas-bench decode-only rows are not like for like (bddisasm skips one byte after a failed decode while udis86 consumes the bytes read; no invalid count or cross-check), udis86 was built at -g -O2 without the LTO its competitors got, and optable.xml does carry VEX/AVX1; the public harness, compiler and CPU stand, as for iced and yaxpeax from the same run. A stays with corrections.",
+    "corrections": {
+      "caveats": "Loses to the incumbent: decode+format 12.02 MB/s is the slowest row of the table, below Capstone 14.02 (about 0.86x, derived from page data) and Zydis 22.24 MB/s; the win is decode-only against Zydis, bddisasm and XED, where Capstone cannot run, and against Zydis (min) the lead is about 1.32x, not 2.36x. Harness asymmetry: the bddisasm driver skips 1 byte after a failed decode while udis86 consumes every byte it has read so far and marks them invalid; no row counts invalid instructions or checks that the libraries walked xul.dll the same way, so the AVX2, FMA and BMI bytes udis86 cannot decode can change its path through the file, and ud_decode also returns less per instruction. Build handicap: make-all.sh runs udis86's ./configure with no CFLAGS (autoconf default -g -O2, no LTO) while XED, Capstone and bddisasm were built with -flto; each library ran once (bench.py, clock() CPU time, MB meaning MiB). The shootout was run once per library by the iced maintainers (a competitor) in 2021; udis86 was later dropped from upstream athre0z/disas-bench, so no newer run exists, and in that suite's 2025 runs bddisasm and Zydis (min) decode far faster. ISA coverage: master's docs/x86/optable.xml contains VEX and AVX1 forms (vbroadcastss, vinsertf128, vperm2f128, vzeroupper, vtestps) but lacks AVX2, FMA, BMI and AVX-512, although the README lists extensions only up to SSE4.2/AES. Building is fragile on current toolchains (#142, #144, #146); build from master, not the 1.7.2 tarball (#116)."
+    },
+    "urls_opened": [
+      "https://github.com/icedland/disas-bench/blob/master/bench/udis86/main.c",
+      "https://github.com/icedland/disas-bench/blob/master/make-all.sh",
+      "https://github.com/vmt/udis86/blob/master/docs/x86/optable.xml"
+    ]
+  },
+  {
+    "id": "https://github.com/wasm-bindgen/wasm-bindgen",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher read the producers section of the suite's checked-in bundle (rustc 1.69.0-nightly 2023-02-03, wasm-bindgen 0.2.84, walrus 0.19.0), filling the build record; the suite's App.tsx names the Chrome 154 snapshot hardware but labels it a development snapshot. Independent suite numbers reproduce, B stays.",
+    "corrections": {
+      "compiler_and_flags": "Checked-in suite bundle (producers section): rustc 1.69.0-nightly (658fad6c5 2023-02-03), wasm-bindgen 0.2.84 (cea8cc3d2), walrus 0.19.0; Rust release profile lto = true, panic = abort (no codegen-units = 1); trunk build --release; old heap-array object-table JS glue, no externref (reference types are on by default only since Rust 1.82). Current wasm-bindgen 0.2.129 output is unmeasured.",
+      "hardware": "MacBook Pro 14, Apple M4 (14/20 cores, 48 GB), OSX 26.6.2, Chrome 154.0.8037.98 arm64 (suite App.tsx for the Chrome 154 snapshot, which it labels a 'Development snapshot' that 'may mix browser versions or run counts')",
+      "caveats": "Independent public suite (krausest/js-framework-benchmark) whose App.tsx names the hardware but labels the run a development snapshot; the measured Wasm is a prebuilt 2023 bundle checked into the suite (build-prod is a no-op) built with a nightly rustc 1.69.0 and wasm-bindgen 0.2.84, so B not A. The measured code is the suite's own hand-written Rust using wasm-bindgen and web-sys directly (not a framework), matching src/lib.rs. Part of the 1.064x gap to vanillajs-keyed is implementation choice rather than Wasm overhead: vanilla detaches the empty tbody before bulk-appending rows and stores the id as an expando property, while the Rust code appends into the live tbody, calls setAttribute('data-id') on every row and crosses into JS for Math.random three times per row. The 1.71x geometric-mean win over React leans on React hooks' slow swap rows (89.7 ms); without swap the Rust code takes 0.706x React's time and create 1,000 rows is a near tie (22.4 vs 23.6 ms) (derived from page data). Silkenweb takes 1.065x, Leptos 1.171x and Yew 1.401x its time (derived). wasm-bindgen-cli must match the crate's schema version exactly or it aborts."
+    },
+    "urls_opened": [
+      "https://github.com/krausest/js-framework-benchmark/tree/master/frameworks/keyed/wasm-bindgen",
+      "https://github.com/krausest/js-framework-benchmark/blob/master/frameworks/keyed/wasm-bindgen/src/lib.rs",
+      "https://github.com/krausest/js-framework-benchmark/blob/master/webdriver-ts-results/src/App.tsx"
+    ]
+  },
+  {
+    "id": "https://github.com/wojciechmula/simd-sort",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the in-place sort harness bug (presorted data) is confirmed, an independent run in issue #3 (i5-4200U, g++ 5.4 -O3 -march=native, 20 sorts of 1e7 random keys) puts the repo's qs::avx2 at only about 1.04x std::sort and quadratic on few-distinct input, and the SIMD compares are signed while the scalar fallback is unsigned (keys at or above 2^31 misordered). Published numbers invalid and the valid independent runs show about parity: C stays with the claim corrected.",
+    "corrections": {
+      "claimed_speedup": "Repo results/ files (GCC 5.3.0, 2016) print AVX2 quicksort 1.91x vs std::sort at 1M 'random' uint32 on an i7-6700, but those runs sorted already-sorted data (harness bug: speed.cpp sorts input.pointer() in place; issues #7 and #8, open). Independent runs with a fixed harness on random input: issue #8 (bbqz007, 2022-01-22, Tiger Lake, CentOS 8, RDTSC cycles) measured the repo's qs::avx2::quicksort at 0.84x of std::sort at 1M, 0.91x at 10M and 0.92x at 20M (slower), with Daniel Lemire's 'AVX2 alt quicksort' in the same repo faster; issue #3 (simonlindholm, i5-4200U, g++ 5.4 -O3 -march=native, 20 sorts of 1e7) gives qs::avx2 19.476 s vs std::sort 20.209 s (about 1.04x), and rand() % 10 input takes over 10 minutes against 6.654 s (quadratic).",
+      "caveats": "Harness bug: PerformanceTest::run copies the input to tmp and then sorts input.pointer() in place, and all algorithms share one InputData, so after std::sort's first iteration every timed run sorted presorted data; the results/ 'random' and 'ascending' rows are the same within 1% for every algorithm (issues #7 and #8, open); the scalar 'quick sort' row is gated on -std-qsort. With the harness fixed, independent runs show the repo's AVX2 quicksort at about 0.84x-1.04x of std::sort on random uint32 and quadratic on few-distinct input; only Lemire's alt variant in the same repo is faster. Code-reading defects (not run): all SIMD compares are signed (_epi32) while partition.cpp's scalar fallback and the size-2 case compare as uint32_t, so qs::avx2 and the qs::avx512 sorts misorder arrays that mix keys below and above 2^31 (the Lemire and Nate wrappers return signed int32 order; tests use random() < 2^31 and cannot catch it); for partitions of 16 or fewer keys the AVX-512 sorts do unmasked 64-byte loadu/storeu, reading and rewriting up to 60 bytes past the caller's buffer; middle- or first-element pivots with no median-of-three, no depth limit and recursion on both sides, so adversarial, few-distinct or (for AVX-512) sorted inputs can be quadratic and exhaust the stack."
+    },
+    "urls_opened": [
+      "https://github.com/WojciechMula/simd-sort/issues/3",
+      "https://github.com/WojciechMula/simd-sort/issues/8",
+      "https://github.com/WojciechMula/simd-sort/blob/master/speed.cpp",
+      "https://github.com/WojciechMula/simd-sort/blob/master/partition.cpp"
+    ]
   }
 ]
