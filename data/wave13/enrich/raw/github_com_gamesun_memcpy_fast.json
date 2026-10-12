@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/gamesun/memcpy_fast",
+  "one_liner": "Plain-C Cortex-M4 memcpy with doubleword and unaligned-word loops; 1.3-5.3x faster than the toolchain memcpy on 10 KB copies.",
+  "what_it_does": "A single C file (memcpy_fast.c) exporting memcpy_fast(to, from, n) with memcpy's signature and return value, meant as a faster bulk copy on STM32-class Cortex-M4 parts. It is not a symbol-level replacement: callers must call memcpy_fast explicitly, and there is no memmove variant for overlapping buffers. The same file carries memcpy_test(), an STM32 Standard Peripheral Library timing routine that is compiled in by default (#define MEMCPY_TEST at the top of the file).",
+  "how_it_is_fast": "Alignment dispatch: when source and destination have the same address mod 8 and n >= 16, it copies the 1-7 head bytes to reach 8-byte alignment and then runs a long long loop intended to compile to LDRD/STRD (8 bytes per load/store pair). Otherwise it copies 32-bit words through possibly misaligned long pointers, relying on Cortex-M4 hardware support for unaligned LDR/STR, then a halfword and a byte for the tail. Most of the headline gain comes from the baseline, which falls back to byte copies whenever the two pointers are not both 4-byte aligned; memcpy_fast never copies bytewise for n >= 4.",
+  "when_to_use": [
+    "Cortex-M4 firmware whose libc memcpy shows the baseline's pattern (byte speed whenever either pointer is not 4-byte aligned) and copies kilobyte-sized buffers at arbitrary byte offsets, such as packet or frame buffers.",
+    "Bulk copies between buffers with the same misalignment (both at offset 1, 2, 3, 5, 6 or 7 mod 8): 121-122 us versus 640-641 us for 10 KB in the author's table, about 5.3x.",
+    "8-byte-aligned bulk copies where the toolchain memcpy only runs a word loop: 121 versus 213 us, 1.76x.",
+    "GPL-3.0-compatible projects that can take a 130-line C file, fix its includes and inspect the generated assembly."
+  ],
+  "when_not_to_use": [
+    "Toolchains whose memcpy is already tuned for Armv7-M (aligns the pointers and uses unaligned or multiple loads): the published gaps are against a memcpy that byte-copies any pair not both 4-aligned, and no comparison against a tuned memcpy exists.",
+    "Small copies: only 10240-10247-byte copies were timed; the cost of the dispatch, head and tail code for short copies is not documented.",
+    "Overlapping buffers: no memmove semantics (the unaligned path copies from the top word down, the aligned path from the bottom up).",
+    "Cores or configurations that trap unaligned word accesses (the code comment states the unaligned-access assumption for Cortex-M4 only), and 64-bit targets, since pointers are cast to u32; it cannot be unit-tested on a 64-bit PC unchanged.",
+    "Permissively licensed or proprietary firmware: GPL-3.0."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "types.h for the u8/u32 typedefs (not in the repository); memcpy_test() additionally needs the STM32 Standard Peripheral Library (RCC, TIM5), CMSIS __disable_irq/__enable_irq and printf unless MEMCPY_TEST is removed",
+    "min_toolchain": "C99 compiler targeting 32-bit Arm; the test uses GCC-style __attribute__((aligned(8))); the compiler, version and flags behind the published numbers are not documented",
+    "platforms": "32-bit Arm Cortex-M4 (STM32) with unaligned LDR/STR allowed; not 64-bit targets",
+    "thread_safety": "The copy functions are stateless and reentrant; memcpy_test() disables interrupts while it runs.",
+    "drop_in_for_baseline": "partial — same signature and return value as memcpy, but a different symbol name, no overlap handling, Cortex-M4-class targets only, and the file does not compile as shipped outside the author's project"
+  },
+  "gotchas": [
+    "Build-flag sensitive: memcpy_aligned8's forward `*dto++ = *dfrom++` loop is a plain copy loop, and GCC's -ftree-loop-distribute-patterns pass (enabled at -O3 in GCC 9 and at -O2 and higher from GCC 10, per the releases' invoke.texi; tree-loop-distribution.c emits memcpy or memmove calls for such loops) can replace it with a call to the library routine it is meant to beat. Build the file with -fno-tree-loop-distribute-patterns and check the disassembly for LDRD/STRD.",
+    "Relies on undefined behaviour: memcpy_unaligned4 dereferences misaligned long pointers and both paths access byte buffers through long and long long lvalues (strict aliasing). The commented-out forward loop is annotated 'LDM,STM not support unaligned access', i.e. the compiler merged the accesses into multiple-load instructions that fault on unaligned addresses; the shipped reverse-indexed loop avoids that only with the author's compiler, so another compiler or optimisation level can bring the UsageFault back.",
+    "Does not compile as shipped outside the author's project: memcpy_fast.c defines MEMCPY_TEST unconditionally (pulling in STM32 SPL timer calls), includes a types.h that is not in the repository, and memcpy_fast.h uses size_t without including <stddef.h>.",
+    "Benchmark harness: only memcpy_fast's output is checked (memcmp over the copied range, so a write past n would go unnoticed), each pair is timed once with a 1 us timer, and the 5.25-5.29x rows compare word copies against the baseline's byte copies for equally misaligned pointers, a case any alignment-aware memcpy handles at aligned speed."
+  ],
+  "pick_this_over_siblings_when": "Prefer mmemmove (AJ528), Cortex-M assembly with memmove semantics measured against newlib-nano, when buffers may overlap or when the instruction choice must not depend on compiler flags; pick memcpy_fast only when you want C source you can audit and rebuild for a Cortex-M4. The Arm siblings copies-and-fills, arm-mem and Arm Optimized Routines target Cortex-A class cores, not Cortex-M.",
+  "verified_claims_summary": "On an unnamed STM32 Cortex-M4 (clock, compiler, flags and libc not stated), copying 10240-10247 bytes between 8-aligned static buffers at offsets 0-7, memcpy_fast took 121-268 us against 213-641 us for the toolchain memcpy (TIM5 at 1 us, interrupts off): 1.32-1.33x for (4,0) and (0,4), 1.75-1.76x for (0,0) and (4,4), 2.39-3.41x for mismatched alignments and 5.25-5.29x for equal non-8-aligned offsets. The baseline runs at byte speed (640 us) for every pair that is not both 4-aligned, including equal misalignments such as (1,1), so it never aligns pointers before copying words and the top ratios measure word copies against byte copies (derived from page data).",
+  "status_note": "Abandoned: 11 commits on 12 and 25 August 2020, no issues or releases, 7 stars; GPL-3.0 and small enough to rewrite, but it needs a types.h, removal of the built-in STM32 test and a disassembly check of the copy loops before use.",
+  "sources_read": [
+    "https://github.com/gamesun/memcpy_fast",
+    "https://github.com/gamesun/memcpy_fast/commits",
+    "https://github.com/gamesun/memcpy_fast/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/README.md",
+    "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast.c",
+    "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast.h",
+    "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/gamesun/memcpy_fast/HEAD/memcpy_fast_vs_memcpy.png",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-9.1.0/gcc/doc/invoke.texi",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.1.0/gcc/doc/invoke.texi",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-10.1.0/gcc/tree-loop-distribution.c"
+  ],
+  "confidence": 0.6
+}
