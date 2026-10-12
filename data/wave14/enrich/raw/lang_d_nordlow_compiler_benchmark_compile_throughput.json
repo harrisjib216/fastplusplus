@@ -1,0 +1,48 @@
+{
+  "id": "lang:d/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "dmd, the reference D compiler: unoptimized builds of a 40,000-function synthetic file 7.6x faster than clang, 19-39x faster than gcc.",
+  "what_it_does": "dmd is the reference D compiler: the D front end (shared with LDC and GDC) on top of Digital Mars' own code generator, which writes ELF, Mach-O and COFF objects itself (elfobj.d, machobj.d, mscoffobj.d in the backend tree). This entry is a build-time claim: compiling the same generated arithmetic program in D with dmd takes much less time than compiling its C or C++ twin with gcc or clang. It is not a drop-in for those compilers; you get the speed by writing D.",
+  "how_it_is_fast": "The gap is in code generation, not parsing. On the same D source, the check-only step (-o-) costs 4.5 us/f with dmd, 5.8 with ldmd2 (LLVM backend) and 15.9 with gdc (GCC backend). The compile step costs 10.3, 73.7 and 497.1 us/f. dmd's backend does little optimization work at its default settings and goes straight to object code. Its front end is also cheap here: 4.5 us/f to type-check the D file against 11.9 to 13.5 for gcc and clang -fsyntax-only on the C file. The benchmark ran dmd with -betterC, which drops druntime, and linked through cc with lld.",
+  "when_to_use": [
+    "Edit-compile-run and debug-build loops for D code, where cold build latency matters more than how fast the generated code runs.",
+    "Large machine-generated D modules made of many small non-template functions, the shape this benchmark measures (200 chains x 200 depth in one file).",
+    "Clean rebuilds in CI or batch scripts with no resident compiler daemon. The README argues dmd's cold-compile speed matters most here.",
+    "Projects already in D, with dmd for development builds and LDC or GDC for release builds from the same front end."
+  ],
+  "when_not_to_use": [
+    "Optimized release builds: the benchmark ran dmd without -O and gcc/clang at default -O0, so it says nothing about -O2/-O3 build time or about how fast dmd's code runs compared with LDC or GDC.",
+    "Speeding up an existing C or C++ build: this is a cross-language comparison. For C, tcc compiled the same generated program faster than dmd did (Compile 2.0 vs 10.3 us/f, Total 4 vs 13), with cuik (76) and cproc (86) close behind.",
+    "Real projects dominated by imports, Phobos, templates or CTFE: the generated file has no imports and no standard library. Its templated variant already costs 1.7x more (Compile 17.9 vs 10.3 us/f), and the README says real builds are driven by headers, modules and stdlib footprint.",
+    "Non-x86 targets: the run was x86-64 Linux. The backend tree has x86/ and arm/ directories, but the README documents no platform list and the ARM backend's maturity was not checked. LDC and GDC are the usual cross-platform D compilers.",
+    "Quoting precise ratios: one run on one laptop CPU, with self-contradictory cells in the C/C++ rows."
+  ],
+  "integration": {
+    "form": "compiler toolchain (command-line compiler; build from source with `dub build dmd:compiler` per the README, or use a release binary)",
+    "dependencies": "a system C toolchain for linking (dmd links through cc; the benchmark passed -Xcc=-fuse-ld=lld); a D compiler plus dub to build dmd itself",
+    "min_toolchain": "dmd 2.113.0-95551bb as measured (a commit-tagged build)",
+    "platforms": "x86-64 code generation as measured on Arch Linux; the backend tree also has an arm/ directory, not documented in the README",
+    "thread_safety": "not applicable (command-line compiler)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: compiler tasks run at the same time in a multiprocessing pool, one worker pinned per logical CPU. The homogeneous path uses all logical CPUs minus two, and the frequency-based hybrid path in cpu_topology.py does not drop SMT sibling threads. The Ryzen AI 7 350 mixes 4 Zen 5 cores (up to 5.0 GHz) with 4 Zen 5c cores (up to 3.5 GHz, per AMD's spec in a search snippet), and the core each row ran on is not recorded. Rows may have shared a physical core or run at different clocks. The repetition count also differs: builds over 3 s keep the minimum of 2 runs (every gcc, g++, clang and clang++ build row, about 4.3 to 24 s at 40,000 functions), while dmd's 0.5 s build keeps the minimum of 10. Self-contradictory cells fit this: gcc-15's C Total (392) is twice its own Compile (193.8) while g++-15 on near-identical C++ adds 12%, and clang++'s templated Total (107) is below its Compile (128.7).",
+    "D's configuration is lighter than typical D: -betterC means no druntime, Phobos or ModuleInfo to build or link, and only the D rows get -Xcc=-fuse-ld=lld (gcc, clang and gdc use the default system linker). Both favour D in the Total=Build+Run column. Use the link-free Compile column: 7.6x faster than clang C, 8.0x than clang++, 18.8x than gcc-15, 26x than g++-15 and 36-39x than gcc/g++ 16.2.1 (derived from page data).",
+    "The README's '6x-38x' headline (rewritten 2026-10-12) compares dmd with the other D compilers (ldmd2, gdc), not with C. Its prose figures (dmd 11.5, ldmd2 70.3, gdc 433.2, clang 87 us/f) come from a different run than its tables.",
+    "Nothing checks the output: the harness times the compiler and the binary's run but ignores the run's exit code and result, and every compiler built unoptimized code."
+  ],
+  "pick_this_over_siblings_when": "Of the compile-throughput siblings measured in the same table, only dmd is clearly faster than clang. Its Total is 13 us/f, against Zig 110, Odin 147, C3 153 and rustc 187, which beat only the GCC rows. Pick dmd when the shortest cold build of a statically typed systems language is the goal. Zig's resident incremental build mode was not measured and may change that answer for inner-loop work. If you are staying in C, tcc (4 us/f) beats them all.",
+  "verified_claims_summary": "One run of nordlow/compiler-benchmark (AMD Ryzen AI 7 350, Arch Linux, tables dated 2026-09) generated 40,000 arithmetic call-chain functions per language in one file. dmd 2.113.0 (-betterC, no -O) compiled the D version to an object in 10.3 us per function and built and ran it in 13. For the same C and C++ at default -O0, clang 23.1.1 took 77.9 us/f (Total 118), clang++ 82.4 (236), gcc 15.3.0 193.8 (392), g++ 15.3.0 269.6 (303), gcc 16.2.1 400.1 (454) and g++ 16.2.1 372.3 (486). The link-free ratios run from 7.6x to 39x, derived from page data.",
+  "status_note": "dmd is actively maintained (commits on master through 2026-10-12, 3.3k stars, BSL-1.0); the evidence is a single-machine run by a D community developer using a public MIT harness whose README changed daily from 2026-10-09 to 2026-10-12, so re-run it before quoting ratios.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cpu_topology.py",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/process_timer.py",
+    "https://github.com/nordlow/compiler-benchmark/commits",
+    "https://github.com/dlang/dmd",
+    "https://github.com/dlang/dmd/commits/master",
+    "https://github.com/dlang/dmd/tree/master/compiler/src/dmd/backend",
+    "WebSearch snippet only: https://www.amd.com/en/products/processors/laptop/ryzen/ai-300-series/amd-ryzen-ai-7-350.html (4x Zen 5 up to 5 GHz, 4x Zen 5c up to 3.5 GHz)"
+  ],
+  "confidence": 0.6
+}

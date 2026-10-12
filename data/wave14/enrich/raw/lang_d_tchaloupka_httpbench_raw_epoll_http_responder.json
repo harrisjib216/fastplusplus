@@ -1,0 +1,50 @@
+{
+  "id": "lang:d/tchaloupka/httpbench#raw-epoll-http-responder",
+  "one_liner": "Single-file betterC D port of a C epoll 'Hello, World!' HTTP responder; matches the gcc -O3 original within 10%.",
+  "what_it_does": "A 190-line D program (dlang/epoll/app.d) built with LDC in betterC mode, using only libc and Linux epoll. It accepts keep-alive connections, counts \\r\\n\\r\\n terminators in each read and answers with that many copies of a fixed 192-byte response. It is a near line-by-line port of the suite's C server (c/epoll/http_epoll.c, itself adapted from frevib's epoll echo server). It exists as the theoretical ceiling that tchaloupka/httpbench measures D frameworks against. It is not a library: there is no parser, router or API.",
+  "how_it_is_fast": "It uses the same machinery as the C original. prefork.d launches one process per CPU, each with its own SO_REUSEPORT listener. Sockets are non-blocking, multiplexed with epoll (level- or edge-triggered) and set to TCP_NODELAY. A send buffer pre-filled with 512 copies of the response lets a pipelined batch of N requests go out in one send() of N x 192 bytes, with no allocation per request. betterC drops druntime and the GC, so the D binary is libc calls and syscalls, effectively the same program as the C version. The D port also keeps per-client buffers inline in an fd-indexed static array and takes up to 256 events per epoll_wait (C: 128).",
+  "when_to_use": [
+    "As a reference ceiling for epoll servers on your own machine: run it next to a framework to see how much the framework costs over raw syscalls.",
+    "As evidence that betterC D compiled with LDC runs syscall-bound event-loop code as fast as gcc -O3 C, with no GC or druntime.",
+    "As a starting point for a fixed-reply Linux endpoint (health check, load-balancer probe) where every request gets the same bytes.",
+    "To compare level-triggered and edge-triggered epoll: both variants come from one file via --d-version=EdgeTriggered."
+  ],
+  "when_not_to_use": [
+    "Any real HTTP service: it parses nothing, has no routing or request bodies, and aborts on a partial request.",
+    "Expecting D to beat C: the tables show parity (0.94x to 1.10x in single runs), with D behind at 64 connections and about 3% behind when pipelined.",
+    "Non-Linux platforms: it depends on epoll and accept4.",
+    "Processes with more than 511 open descriptors: clients live in a 512-slot array indexed by fd and the runner builds with --boundscheck=off, so a higher fd writes out of bounds.",
+    "Slow clients or large replies: send()'s return value is ignored, so a short write silently truncates the response stream."
+  ],
+  "integration": {
+    "form": "source-drop (one D file run as a dub single-file package: dub build --single app.d)",
+    "dependencies": "none beyond libc and Linux headers via druntime's core.sys bindings (betterC, no Phobos)",
+    "min_toolchain": "ldc2 1.29.0 as measured (uses ldc.intrinsics.llvm_expect under LDC, a no-op fallback otherwise); C baseline built with gcc -O3, version unstated",
+    "platforms": "Linux only (epoll, accept4); measured on x86-64 with --mcpu=native",
+    "thread_safety": "single-threaded process; scales by running one process per CPU (prefork.d) with SO_REUSEPORT",
+    "drop_in_for_baseline": "partial: same protocol behaviour and listen port as the C responder for well-formed keep-alive requests, but it hard-codes port 8080 instead of reading it from argv, and it aborts where the C version waits for the rest of a partial request"
+  },
+  "gotchas": [
+    "Harness flaw: the port differs from the C original on error paths. On any read that holds no complete request, or ends with a partial one, D hits assert(0), which kills that worker; C keeps buffering. D ignores send()'s return; C exits on a short send. D uses inline 2048-byte buffers in a 512-slot array; C mallocs 4096 bytes per accept (never freed) in a 2048-slot array. prefork.d does not restart dead workers, and runner.d parses only wrk's Non-2xx line, not 'Socket errors'. So a worker crash would show up only as lower RPS, never as an error count.",
+    "Harness flaw: each cell is one 30 s wrk run (no -b best-of option) after a 3 s warm-up, against a 2-vCPU KVM guest. With prefork, each process binds its own SO_REUSEPORT socket, so at 2 and 8 connections the kernel's hash decides how connections split across the two workers. That split can differ between the C and D runs, which is enough to explain the 2-client (1.10x) and 8-client (1.06x) leads. The stated test command covers only 8, 64, 128 and 256 connections; the 2-client table's command is not given.",
+    "Flags are unmatched: runner.d appends --release -O3 --boundscheck=off --ffast-math --mcpu=native to D's --betterC, while the C Makefile uses plain gcc -Wall -O3. The gcc version is not recorded: the Dockerfile uses unpinned debian:testing build-essential, and the measured service VM ran Ubuntu 22.04.",
+    "Toy request counter, shared with the C version (whose comment calls it 'unusable in real servers'): after a \\r that does not start \\r\\n\\r\\n it skips ahead 5 bytes. A final header line of one or two characters therefore hides the request terminator. That is harmless for wrk's fixed request and wrong for real clients."
+  ],
+  "pick_this_over_siblings_when": "The siblings are deployable servers (the HttpArena entries, nginx-class proxies) or the same author's during io_uring wrapper. This one is a measuring stick, not a server. In the same httpbench tables it edged during raw (PF) and the C io_uring raw server at every connection count (for example 276,433 vs 253,256 and 246,812 req/s at 256), so use it to bound what D on epoll can reach. Use bladebench's Rust and Zig raw-socket rows for the same kind of comparison in those languages.",
+  "verified_claims_summary": "In tchaloupka/httpbench (2022), wrk 4.1.0 ran in a 14-vCPU KVM guest and the servers in a 2-vCPU KVM guest on a Ryzen 7 3700X host. The LDC 1.29.0 betterC port served 43,752, 93,942, 176,532, 232,039 and 276,433 req/s level-triggered at 2, 8, 64, 128 and 256 connections, against 39,886, 88,906, 187,141, 226,433 and 261,440 for the gcc -O3 C original. With pipeline depth 10 it served 2,075,254 against 2,132,917. Both send identical 192-byte responses (BPS/RPS), and the ratios of 0.94x to 1.10x are parity within single-run noise.",
+  "status_note": "Abandoned since 2022-05-30 (19 stars, 4 forks, 89 commits, Unlicense, so copyable with no attribution); nothing has been re-measured since ldc2 1.29.0 and kernel 5.15, and it is a benchmark fixture rather than a maintained component.",
+  "sources_read": [
+    "https://github.com/tchaloupka/httpbench",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/epoll/app.d",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/epoll/meta.json",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/http_epoll.c",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/Makefile",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/meta.json",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/README.md",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/_suite/runner.d",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/_suite/prefork.d",
+    "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/_suite/Dockerfile"
+  ],
+  "confidence": 0.65
+}

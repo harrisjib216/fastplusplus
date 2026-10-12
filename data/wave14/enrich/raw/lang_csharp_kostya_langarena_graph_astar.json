@@ -1,0 +1,54 @@
+{
+  "id": "lang:csharp/kostya/langarena#graph-astar",
+  "one_liner": "C# on .NET 11 runs LangArena's Graph::AStar 1.38x faster than C++ std::priority_queue builds; per-search allocation, not JIT, likely explains it.",
+  "what_it_does": "One test from kostya's LangArena suite: a best-first search from vertex 0 to vertex 499,999 on a generated 500,000-vertex graph (chain edges plus 0-19 random jumps of up to 500 vertices per vertex), run 1,000 times after 200 untimed warm-ups. The C# version uses the base-library PriorityQueue<int,int> and two fresh int[] score arrays per search; the C++ version uses std::priority_queue<Node, std::vector<Node>, std::greater<Node>> and two std::vector<int>. It is evidence about the .NET runtime and base library, not a library to adopt; using it means writing the code in C#.",
+  "how_it_is_fast": "The search itself does little work: the heuristic target - v overestimates by orders of magnitude, so the search is greedy best-first with 1,173 pops and about 23,800 pushes per search, while every search allocates and fills two 500,000-int arrays (4 MB). glibc malloc probably serves those 2 MB arrays with mmap, or from a heap it trims back after each search under its dynamic mmap and trim thresholds, so each C++ search likely page-faults about 1,000 fresh 4 KB pages. The .NET GC instead keeps its large-object heap committed (peak RSS 354 MB against 85 MB for C++). This explanation is agent inference from the code and the results table, not a measurement. It fits the table: every tracing-GC runtime (C# 1.22-1.39 s, F# 1.381, Julia 1.458, D/LDC 1.471, Java 1.486, Crystal 1.554) beats every language that uses glibc malloc (C 1.77-2.06 s, C++ 1.91-2.20, Rust with its default system allocator 1.995, Swift 2.073).",
+  "when_to_use": [
+    "You already run .NET and do many independent graph searches over large vertex sets with fresh per-query score arrays: 1.38 ms per 500,000-vertex search on a Ryzen 7 3800X, against 2.06 ms for the idiomatic C++/Clang++ -O2 build.",
+    "Request-scoped code that allocates multi-megabyte scratch arrays on every call, where a GC heap that stays committed avoids the allocate, fault and release cycle of a default glibc malloc (inference from this test, not separately measured).",
+    "Any .NET deployment mode works: ReadyToRun 1.222 s, NativeAOT 1.321 s and JIT 1.384 s all beat every C and C++ row, so NativeAOT is fine where startup time or JIT warm-up matters."
+  ],
+  "when_not_to_use": [
+    "As evidence that a JIT beats ahead-of-time C++: the AOT and R2R C# builds win too, as do Java, Julia, D (LDC) and Crystal. The C++ code reallocates 4 MB per search; hoisting the two vectors and resetting them with assign(), or linking a caching allocator, would likely close the gap (not measured).",
+    "Graph traversal in general: on the same graph, Graph::BFS takes 2.013 s for C#/JIT against 1.346 s for C++/G++ and 1.143 s for C/Clang, Graph::DFS 1.343 s against 0.894 s for C/Gcc, and Maze::AStar 1.832 s against 1.188 s for C++/G++/Fast and 0.861 s for C/Gcc/Fast.",
+    "Memory-constrained hosts: C# peaked at 354 MB RSS on this test against 85 MB for C++ (about 4.2x), and Java at about 1.1 GB.",
+    "When you need true shortest paths: the benchmarked heuristic is inadmissible, so the code returns a 1,172-edge path where BFS on the same graph finds 1,050."
+  ],
+  "integration": {
+    "form": "module (application code on the .NET base library; nothing to vendor beyond csharp/GraphPath.cs)",
+    "dependencies": ".NET runtime only; PriorityQueue<TElement,TPriority> from System.Collections.Generic",
+    "min_toolchain": ".NET SDK 11.0.100-rc.1 as benchmarked (csproj targets net11.0, Release with Optimize=true, default tiered JIT)",
+    "platforms": "x86-64 Linux as measured (AMD Ryzen 7 3800X, Docker containers on an Arch Linux host); other .NET platforms not benchmarked",
+    "thread_safety": "Single-threaded benchmark; not documented in the suite",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The test is not really A*: heuristic(v) = target - v counts vertices, but one edge spans up to 500 vertices, so the heuristic overestimates and the search degenerates into greedy best-first. It returns 1,172 edges (checksum 1,406,400 over 1,000 timed plus 200 warm-up runs) while Graph::BFS on the identical graph returns 1,050 (checksum 50,400 over 48 runs; same config and RNG reset, derived from run.js). With 1,173 pops per search the heap is barely exercised, so the test times allocate, fill and walk, not priority-queue speed. The code is the same in every language, so the comparison stands, but the name misleads.",
+    "Harness effect, agent inference not measured: each test runs as its own process (benchmarks.rb launches one docker compose run per test), so glibc starts with its default 128 KB mmap threshold. After the first search frees its arrays the threshold rises to about 2 MB and the trim threshold to about 4 MB, and the roughly 4.3 MB freed at the end of every later search then exceeds the trim threshold, so the heap is probably trimmed and re-faulted on every search. The C# side runs GC.Collect() once before timing and then reuses its committed GC heap.",
+    "The C rows are not a valid baseline: priority_queue_pop in c/src/graph_path.c compares the children with the stale root, breaks at once and leaves the last element at the root without sifting it down. Read the C++ rows (1.908 s at best).",
+    "Each configuration has one self-timed run with no variance (benchmarks.rb records one run per test). The README says only JIT languages get a warm-up, but cpp/src/benchmark.cpp also warms up for 20 percent of the iterations, and every checksum includes those warm-up runs."
+  ],
+  "pick_this_over_siblings_when": "Like the benchLANG .NET 11 binary-trees entry and the LangArena Distance::NGram C# entry, this measures the .NET runtime's memory management and base library against naive C/C++ allocation rather than JIT code quality. Cite NGram for hash-map-heavy code and benchLANG for node-per-allocation trees; cite this entry only for loops that allocate large temporary arrays on every call.",
+  "verified_claims_summary": "LangArena results of 2026-10-05 on an AMD Ryzen 7 3800X: 1,000 timed searches on a 500,000-vertex graph after 200 warm-ups took 1.384 s for C#/JIT (.NET 11.0.100-rc.1). The C++ version (std::priority_queue and std::vector on libstdc++) took 2.064 s with Clang++ 22.1.8 -O2, 2.198 s with G++ 16.0.1 -O2 and 1.908 s at best with Clang++ -O3 -march=native -ffast-math, so C# is 1.38-1.59x faster (derived from page data). C# ReadyToRun (1.222 s) and NativeAOT (1.321 s) are faster still; each configuration ran once.",
+  "status_note": "LangArena is active (622 commits, last commit 2026-10-08, monthly result files), MIT-licensed and has 41 stars; the C# file is easy to copy, but the only reusable component is the base-library PriorityQueue, and the win is best read as an allocator effect in a suite the README calls subjective.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/commits/master",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/LICENSE",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/graph_path.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/graph_path.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/csharp/GraphPath.cs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/csharp/BenchmarkBase.cs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/csharp/Benchmark.csproj",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/graph_path.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/Cargo.toml"
+  ],
+  "confidence": 0.6
+}

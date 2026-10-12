@@ -1,0 +1,64 @@
+{
+  "id": "lang:csharp/mda2av/httparena#baseline-4096",
+  "one_liner": "Benchmark-only NativeAOT C# io_uring HTTP/1.1 server; ties libreactorng (C) and beats nginx 1.34x on HttpArena baseline-4096.",
+  "what_it_does": "minima-sync is an HttpArena engine entry, not a library: about 650 lines of C# (Program.cs) plus raw io_uring bindings (io_uring/Native.cs and Ring.cs) that answer HttpArena's fixed endpoints (/baseline11 sums the a and b query values plus the body, /pipeline returns ok, /json/{count} serializes dataset items). There is no router, middleware or handler API; to reuse it you copy the files and replace the hard-coded Respond() dispatch. It exists only inside the HttpArena repository (meta.json has an empty repo field) and was written by the suite owner.",
+  "how_it_is_fast": "Each allowed CPU gets one pinned reactor thread with its own SO_REUSEPORT listener and its own io_uring created with SINGLE_ISSUER | DEFER_TASKRUN through raw io_uring_setup/enter syscalls, with no liburing. It uses multishot accept and a single-shot recv into a per-connection native buffer; requests are parsed in place with span searches, and every response parsed from one read is written straight into a 16 KB native send buffer and flushed with one send, all inline on the reactor with no async machinery or hot-path allocation. Responses are minimal (status line, Content-Type and Content-Length, no Date or Server header): about 63 bytes each against libreactorng's 109 and nginx's 135 (derived from page data). That, together with the batched flush, is why the 16-deep pipelined profile reaches 57.1M req/s against libreactorng's 43.4M.",
+  "when_to_use": [
+    "As a reference design for a thread-per-core io_uring HTTP/1.1 server in .NET without a runtime: NativeAOT reached 4,386,544 req/s on baseline-4096, level with libreactorng (C, 4,377,377) and 1.34x nginx 1.31.4 (3,284,513), on a 64-core Threadripper PRO 3995WX.",
+    "Plain-text keep-alive or pipelined HTTP/1.1 microservices where every handler is CPU-only and short, so a synchronous reactor never blocks: pipelined-4096 57.1M req/s against libreactorng's 43.4M (1.32x) and nginx's 4.04M (14x).",
+    "Studying how far C# can go with raw syscalls, NativeMemory buffers and AllowUnsafeBlocks: it matched the C io_uring server on CPU per request at a fixed 1M req/s (18.97 us against libreactorng's 21.04 us)."
+  ],
+  "when_not_to_use": [
+    "Anything with blocking or slow handlers (database calls, file I/O): the README says the synchronous reactor blocks the core, and the entry does not run the async-db, crud or TLS profiles.",
+    "Tail-latency-sensitive services: at a fixed 1M req/s its p99.9 was 24,808 us against libreactorng's 687 us (about 36x worse), and at 10k req/s 1,012 us against 182 us; it also used 14% more CPU per request than libreactorng at 10k req/s (28.73 us against 25.21 us).",
+    "As proof that C# beats C: against the C server built the same way it is a tie (1.00x on baseline-4096 and limited-conn-4096), it trails libioma and mongoose on limited-conn, and the margin over nginx compares an io_uring reactor with minimal responses against an epoll server that sends about twice the bytes per response.",
+    "Production traffic: it is benchmark code with no Date header, no method check, a 200 answer with the a+b sum for any path outside /pipeline and /json/, an 8 KB request limit enforced by closing the connection without a 431, and no TLS or HTTP/2."
+  ],
+  "integration": {
+    "form": "source-drop (frameworks/minima-sync in the HttpArena repo: Program.cs, io_uring/Native.cs, io_uring/Ring.cs; no package)",
+    "dependencies": "none beyond the .NET base library and libc (io_uring through syscall(), not liburing); clang and zlib1g-dev at build time for the NativeAOT link",
+    "min_toolchain": ".NET SDK 10 with NativeAOT (csproj targets net10.0, PublishAot, AllowUnsafeBlocks; Docker build on mcr.microsoft.com/dotnet/sdk:10.0, runtime image debian:bookworm-slim)",
+    "platforms": "Linux x86-64 only (published for linux-x64 with no IlcInstructionSet, so generic x86-64 code). The kernel must accept IORING_SETUP_SINGLE_ISSUER | DEFER_TASKRUN and io_uring must be allowed by seccomp (HttpArena runs it with seccomp=unconfined). The entry states no minimum kernel; it was measured on 6.17.",
+    "thread_safety": "Shared-nothing: each reactor owns its ring, listener, connection slots, pool and native buffers, and handlers run synchronously on the reactor thread. Nothing is designed for cross-thread use; the only shared state is the read-only dataset.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Cross-run comparison: the code has not changed since PR #824 (2026-06-07), and the baseline-4096, pipelined-4096 and limited-conn-4096 rows were already present, unchanged, when results were split per framework on 2026-07-24 (commit 5698fa8). They were therefore measured between June 7 and July 24, about six weeks or more before the libreactorng row (2026-09-07) and before the August nginx rows it is compared with. That is earlier than the verifier's 'on or before 2026-08-29'. Kernel, harness and machine state in between are not documented (current.json is undated).",
+    "Error paths drop requests silently. If a pipelined batch overflows the 16 KB write buffer, Handle() returns -1 and the connection is closed after the buffered responses, so the remaining requests get no answer. A request whose headers exceed the 8 KB receive buffer is closed without a response. A chunked body longer than 256 bytes is silently truncated, so the computed sum is wrong. None of these triggers on HttpArena's small requests.",
+    "Smaller responses are part of the win: about 62.9 bytes per response on baseline-4096 against 108.7 for libreactorng and 135.4 for nginx (bandwidth divided by req/s, derived), consistent with omitting the Date and Server headers. HttpArena's validate.sh checks only status, body and Content-Type, so this is within the rules, but servers that send Date do more work per response.",
+    "The C# binary targets generic x86-64 while the C competitors are built with -O3 -march=native, and runs are best of 3 five-second runs (RUNS=3 in scripts/lib/common.sh), with gcannon pinned to CPUs 32-63,96-127 and the server to 0-31,64-95."
+  ],
+  "pick_this_over_siblings_when": "Pick minima-sync over ioxide (the same author's reusable .NET io_uring runtime, 4.11M req/s on baseline-4096) only to study the fastest synchronous design; ioxide has async handlers, TLS, h2 and h3 and is a NuGet package. Kestrel (1.32M) is the choice for real ASP.NET Core apps, and zeemo (Zig, 4.42M) or libreactorng (C) give the same architecture in a systems language.",
+  "verified_claims_summary": "HttpArena on an AMD Ryzen Threadripper PRO 3995WX (Ubuntu 24.04, kernel 6.17, Docker, loopback, gcannon with 4,096 connections, best of 3 five-second runs): the NativeAOT C# entry served 4,386,544 req/s on baseline-4096 against 4,377,377 for libreactorng (C, io_uring, gcc -O3 -march=native; 1.00x) and 3,284,513 for nginx 1.31.4 (custom module, -O3 -march=native; 1.34x); pipelined-4096 57.1M against 43.4M (1.32x); limited-conn-4096 2,687,059 against 2,685,717 (1.00x). The rows come from separate runs weeks apart, and the algorithms differ (hand-rolled parser and minimal responses against libreactor's parser, and against nginx on epoll); all ratios are derived from page data.",
+  "status_note": "The HttpArena repo is active (128 stars, MIT, last commit 2026-10-11), but this entry's code has not changed since 2026-06-07 and its H1 numbers predate 2026-07-24; it is copyable MIT benchmark code with no repository of its own, no API and no maintainers listed in meta.json, so treat it as a design reference rather than a dependency.",
+  "sources_read": [
+    "https://github.com/MDA2AV/HttpArena/tree/main/frameworks/libreactorng",
+    "https://github.com/MDA2AV/HttpArena/tree/main/scripts",
+    "https://github.com/MDA2AV/HttpArena/commits/main/frameworks/minima-sync",
+    "https://github.com/MDA2AV/HttpArena/commits/main/site/data/results/minima-sync.json",
+    "https://github.com/MDA2AV/HttpArena/commit/f3b6abb",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/minima-sync.csproj",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/Program.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/io_uring/Native.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/minima-sync/io_uring/Ring.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/frameworks/libreactorng/src/server.c",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/minima-sync.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/5698fa8/site/data/results/minima-sync.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/f78b367/site/data/results/minima-sync.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/8f6740e/site/data/results/minima-sync.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/libreactorng.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/current.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/scripts/validate.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/content/docs/add-framework/implementation-rules/_index.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/content/docs/add-framework/implementation-rules/engine.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/main/site/data/results/zerg.json"
+  ],
+  "confidence": 0.6
+}
