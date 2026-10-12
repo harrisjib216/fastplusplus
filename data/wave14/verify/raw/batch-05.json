@@ -1,0 +1,108 @@
+[
+  {
+    "id": "lang:csharp/kostya/benchmarks#brainfuck-bench.b-staged",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The measurement itself is reproducible (README bench.b table, brainfuck/bf-staged.cs vs brainfuck/bf.cpp, flags in common/commands.mk and Directory.Build.props, Xeon E-2324G), but the staged C# row runs a different algorithm (a run-time compiler) against the suite's C++ interpreter, so it cannot stand at A as a language-level win; capped at C like a tuned variant measured in place of the comparable program (Topaz precedent).",
+    "corrections": {
+      "claimed_speedup": "bench.b: C# (Staged)/.NET Core 0.373 s (36.62 + 0.25 MiB, 14.33 J) vs C++/g++ 1.097 s (3.38 MiB, 46.21 J), C/gcc 1.112 s, C/clang 1.136 s, C++/clang++ 1.167 s (about 2.9x vs g++, derived from page data). The non-staged C#/.NET Core interpreter takes 1.280 s, slower than C++/g++.",
+      "compiler_and_flags": "C++ baseline: g++ 16.1.0 -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 (common/commands.mk GCC_CPP_BUILD); clang++ 22.1.8 row uses the same flags plus -stdlib=libc++; C rows -std=c23. C# (Staged): .NET 10.0.100, dotnet build -c Release, root Directory.Build.props sets TieredCompilation=false (every method JIT-compiled once at full optimisation, no tier-0 or dynamic PGO), ServerGarbageCollection=true, ConcurrentGarbageCollection=true; RyuJIT targets the host CPU at run time.",
+      "baseline_stdlib": [
+        "libstdc++",
+        "libc++"
+      ],
+      "caveats": "Different algorithm: the C++ baseline (brainfuck/bf.cpp) interprets a vector<Op> AST instruction by instruction, as brainfuck/README.md requires of every implementation ('interprets all bf instructions, one by one, without any squash or other hacks'), while the staged C# variant compiles the Brainfuck program to native code at run time (type construction and JIT inside the timed region), so it is listed as a separate '(Staged)' row. No C++ counterpart that also specializes on the program (template staging, LLVM ORC or asmjit, a BF-to-C compiler) was benchmarked, so the result shows runtime specialization beating an interpreter, not the .NET runtime beating C++ at the same work. The plain C# interpreter in the same suite is slower than C++/g++. The staged tape is a byte array with != 0 loop tests, the C++ tape a vector<int> with > 0 tests (outputs agree by checksum). The staged variant was contributed by hez2010 in PR #511 (merged 2025-11-17). It uses about 11x the memory of the C++ row (36.9 vs 3.38 MiB). Results are medians from one suite run on one machine (Xeon E-2324G), timed between libnotify start and stop messages, so process start-up is excluded for every language.",
+      "why_faster": "Runtime specialization on the input program: Executable.Emit turns the Brainfuck source into one nested closed generic type (ref structs with static abstract IOp.Run methods, e.g. AddData<AddPointer<Loop<...>>>), and RyuJIT (tiered compilation off) compiles and inlines those direct static calls into native code, so the per-instruction dispatch of an interpreter disappears; type construction and JIT are inside the timed region. Derived from brainfuck/bf-staged.cs and Directory.Build.props; the README gives no explanation.",
+      "same_algorithm": false,
+      "same_opt_level": true,
+      "language_level_claim": true
+    },
+    "notes": "Numbers match the README row exactly; repo metadata (MIT, 2.9k stars, last commit 2026-07-19) checks out. Shortcoming: staged C# compiles the Brainfuck program at run time while the C++ baseline interprets it (the suite's brainfuck README requires interpretation), no C++ staged or JIT counterpart exists in the suite, and the plain C# interpreter is slower than C++ (1.280 vs 1.097 s); the win is runtime specialization, not the language. If the orchestrator reads the C++ interpreter as naive code against a tuned other-language version, the crippled-baseline precedent would put it at D.",
+    "urls_opened": [
+      "https://github.com/kostya/benchmarks",
+      "https://github.com/kostya/benchmarks/commits/master",
+      "https://github.com/kostya/benchmarks/pull/511",
+      "https://github.com/kostya/benchmarks/tree/master/brainfuck",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf-staged.cs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cpp",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/brainfuck-staged.csproj",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/Directory.Build.props",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "lang:csharp/kostya/benchmarks#brainfuck-mandel.b-staged",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Same reproducible setup as bench.b (README mandel.b table, brainfuck/bf-staged.cs vs brainfuck/bf.cpp, common/commands.mk, Directory.Build.props, Xeon E-2324G), but the staged row compiles the program at run time while the C++ baseline interprets it, so the language-level claim is capped at C.",
+    "corrections": {
+      "claimed_speedup": "mandel.b: C# (Staged)/.NET Core 2.917 s (36.75 + 3.25 MiB, 109.82 J) vs C++/g++ 10.143 s (3.50 + 0.62 MiB, 434.41 J), C/gcc 12.544 s, C++/clang++ 12.803 s, C/clang 13.120 s (about 3.5x vs g++, derived from page data). The non-staged C#/.NET Core interpreter takes 15.576 s, slower than C++/g++; Scala (Staged) 7.118 s also beats C++/g++, Racket (Staged) 15.722 s does not.",
+      "compiler_and_flags": "C++ baseline: g++ 16.1.0 -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c++23 (common/commands.mk GCC_CPP_BUILD); clang++ 22.1.8 row uses the same flags plus -stdlib=libc++; C rows -std=c23. C# (Staged): .NET 10.0.100, dotnet build -c Release, root Directory.Build.props sets TieredCompilation=false (every method JIT-compiled once at full optimisation, no tier-0 or dynamic PGO), ServerGarbageCollection=true, ConcurrentGarbageCollection=true; RyuJIT targets the host CPU at run time.",
+      "baseline_stdlib": [
+        "libstdc++",
+        "libc++"
+      ],
+      "caveats": "Different algorithm: the C++ baseline (brainfuck/bf.cpp) interprets a vector<Op> AST instruction by instruction, as brainfuck/README.md requires of every implementation ('interprets all bf instructions, one by one, without any squash or other hacks'), while the staged C# variant compiles the Brainfuck program to native code at run time (type construction and JIT inside the timed region), so it is listed as a separate '(Staged)' row. No C++ counterpart that also specializes on the program (template staging, LLVM ORC or asmjit, a BF-to-C compiler) was benchmarked, so the result shows runtime specialization beating an interpreter, not the .NET runtime beating C++ at the same work. The plain C# interpreter in the same suite is slower than C++/g++. The staged tape is a byte array with != 0 loop tests, the C++ tape a vector<int> with > 0 tests (outputs agree by checksum). The staged variant was contributed by hez2010 in PR #511 (merged 2025-11-17). It uses about 10x the memory of the C++ row (40.0 vs 4.12 MiB). Results are medians from one suite run on one machine (Xeon E-2324G), timed between libnotify start and stop messages, so process start-up is excluded for every language.",
+      "why_faster": "Runtime specialization on the input program: Executable.Emit turns the Brainfuck source into one nested closed generic type (ref structs with static abstract IOp.Run methods, e.g. AddData<AddPointer<Loop<...>>>), and RyuJIT (tiered compilation off) compiles and inlines those direct static calls into native code, so the per-instruction dispatch of an interpreter disappears; type construction and JIT are inside the timed region. Derived from brainfuck/bf-staged.cs and Directory.Build.props; the README gives no explanation.",
+      "same_algorithm": false,
+      "same_opt_level": true,
+      "language_level_claim": true
+    },
+    "notes": "Numbers match the README mandel.b row exactly. Same shortcoming as the bench.b record: run-time compilation of the Brainfuck program versus a C++ AST interpreter, no C++ staged counterpart, plain C# interpreter 1.5x slower than C++/g++ (15.576 vs 10.143 s). The two staged C# records share one implementation and could be folded into one entry with both rows.",
+    "urls_opened": [
+      "https://github.com/kostya/benchmarks",
+      "https://github.com/kostya/benchmarks/commits/master",
+      "https://github.com/kostya/benchmarks/pull/511",
+      "https://github.com/kostya/benchmarks/tree/master/brainfuck",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf-staged.cs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cpp",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/bf.cs",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/brainfuck/brainfuck-staged.csproj",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/Directory.Build.props",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/hfinkel/llvm-project-cxxjit",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party wiki by the author with code listings for the timed functions, flags (-march=native -ffast-math -O3) and CPU family, but no main(), Eigen version, ClangJIT commit, CPU generation (E5-2699 v3 or v4) or run count, so not A; the peer-reviewed paper (arXiv 1904.08555, SC19 P3HPC workshop) could not be opened and its snippets give no numbers. The wiki's own size-specialized AoT rows match the JIT, so the win holds only against dynamic-size code.",
+    "corrections": {
+      "claimed_speedup": "Runtime, double, 40,000,000 repeats, times reported by the code (JIT compile time excluded): size 3 JIT 1.0 s vs AoT dynamic-size 8.05 s vs AoT single fixed-size specialization 1.01 s; size 7 JIT 8.34 s vs AoT 20 s vs single specialization 8.45 s; size 16 JIT 35.3 s vs AoT 36.2 s vs single specialization 35.1 s (about 8x, 2.4x and 1.03x over dynamic-size AoT and parity with size-specialized AoT, derived from page data). Compile time (user): JIT only 3.5 s vs AoT double only 5.3 s and AoT float/double/long double with dispatch 9.7 s; one fixed-size specialization 2.95-4.95 s; includes and main only 2.58 s.",
+      "baseline": "The same Eigen expression (m = Ones + 0.00005*(m + m*m)) compiled ahead of time with runtime-sized Matrix<T,Dynamic,Dynamic> and float/double/long double dispatch, by the same Clang at -march=native -ffast-math -O3; the wiki also reports an AoT build specialized for one fixed size, which matches the JIT.",
+      "compiler_and_flags": "ClangJIT (Clang fork, -fjit, [[clang::jit]] attribute) with -march=native -ffast-math -O3 on both sides per the wiki; the Clang used was built with GCC 8.2.0 in CMake RelWithDebInfo mode. Eigen version, ClangJIT commit and the benchmark's main() are not given.",
+      "caveats": "The run-time win is over Eigen's dynamic-size code path; the wiki's 'single specialization' AoT rows (1.01 s, 8.45 s, 35.1 s) equal the JIT rows, so JIT code is no faster than AoT C++ -O3 code that knows the size; the real advantage is lower compile time than instantiating many sizes or types ahead of time. JIT compile time is excluded from the runtime rows. First-party wiki, single runs without variance, CPU generation of the Xeon E5-2699 not stated, Eigen version not stated, main() omitted from the listings. The SC19 P3HPC paper (arXiv 1904.08555) was not reachable (arxiv.org, open-std.org P1609R0 and deepai blocked), so only the wiki was checked. Clang fork, last commit 2019-12-30. It is C++ with a JIT extension rather than another language, so it could also sit beside Easy::jit in wave 12 jits.",
+      "why_faster": "Runtime values (matrix dimensions, scalar type) become template arguments instantiated at run time, so Eigen's fixed-size path is used instead of the dynamic-size path (runtime loop bounds and heap-allocated storage); the wiki gives only 'runtime-specialized code', the fixed-versus-dynamic path detail is the verifier's reading. AoT code specialized to the same size performs the same.",
+      "same_algorithm": true,
+      "same_opt_level": true,
+      "language_level_claim": true
+    },
+    "notes": "Numbers match the wiki exactly; license Apache-2.0 WITH LLVM-exception (llvm/LICENSE.TXT, legacy NCSA appended), 237 stars, 25 forks, last commit 2019-12-30 (abandoned) all check out. Shortcoming: the JIT beats only dynamic-size AoT Eigen; AoT code specialized to the same size ties it (1.01 vs 1.0 s, 8.45 vs 8.34 s, 35.1 vs 35.3 s), win shrinks to 1.03x at size 16, first-party wiki with partial methodology, paper unreachable. Not yet catalogued anywhere (wave 12 leads.md lists it as a lead); related to the wave 12 Easy::jit entry but not a duplicate.",
+    "urls_opened": [
+      "https://github.com/hfinkel/llvm-project-cxxjit/wiki",
+      "https://raw.githubusercontent.com/wiki/hfinkel/llvm-project-cxxjit/Home.md",
+      "https://github.com/hfinkel/llvm-project-cxxjit",
+      "https://github.com/hfinkel/llvm-project-cxxjit/commits/cxxjit",
+      "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/llvm/LICENSE.TXT",
+      "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/clang/LICENSE.TXT"
+    ]
+  }
+]
