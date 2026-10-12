@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/adamniederer/faster",
+  "one_liner": "Rust iterator-style explicit SIMD (simd_iter/simd_map/simd_reduce) with scalar polyfills; author's 2017-18 runs beat scalar iterators 1.15-8x.",
+  "what_it_does": "Wraps slices in SIMD iterators (simd_iter(default), simd_iter_mut, stride_two..stride_nine, zip) whose closures receive target-width vector types such as f32s or u8s, then gathers results with scalar_collect, scalar_fill or sum. Vector width is chosen at compile time from the target features, and operations missing on the target (ceil without SSE4.1, everything on non-x86) fall back to per-lane scalar polyfills. It is a different API from std iterators, not a drop-in: closures must be pure and width-independent, and uneven tails are padded with a caller-supplied default vector.",
+  "how_it_is_fast": "Static dispatch on compile-time target features to packed_simd_2 vector types plus hand-mapped x86 intrinsics through the vektor crate (_mm_rsqrt_ps, _mm_ceil_ps, _mm256_* on AVX2), with zero-allocation iteration and vector loads/stores. Much of the published map/reduce gain also comes from the kernel itself: the SIMD closure uses the approximate rsqrt instruction (2 exact sqrt + 1 rsqrt per element) where the scalar baseline does 3 exact sqrt plus a division.",
+  "when_to_use": [
+    "Reading or porting old (2017-2021) Rust code that already depends on faster's simd_iter/simd_map API.",
+    "Studying how to design an iterator-shaped SIMD API with tail padding and strided zips (stride_two..stride_nine, tuplify!).",
+    "A pinned old nightly toolchain (community report: nightly-2020-08-27 / Rust 1.46 still builds 0.5.2) for elementwise f32/i32/u8 maps and reductions on x86.",
+    "Kernels where an approximate rsqrt (error up to about 1e-3) is acceptable, which is where the published 8x rows come from."
+  ],
+  "when_not_to_use": [
+    "Any current toolchain: issue #68 (2021) reports 0.5.2 failing to build because vektor 0.2.2 calls the removed _mm_extract_pi16, with every nightly after 2020-08-27 failing; src/lib.rs also needs #![feature(stdsimd)].",
+    "Stable Rust or C++ projects: nightly-only crate, and from C++ it would need an FFI layer.",
+    "Wide float vectors on AVX-without-AVX2 CPUs (Sandy/Ivy Bridge): the current code maps f32s to f32x8 only when avx2 is enabled, so those CPUs get 128-bit f32x4.",
+    "SSE2-only builds that use ceil/floor/round: without SSE4.1 these fall back to per-lane scalar calls (issue #44).",
+    "Binaries that must adapt to the running CPU: there is no runtime feature detection (issue #2 open); width is fixed by -C target-cpu / target-feature at build time."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "vektor 0.2.1 (x86 intrinsic bindings), packed_simd_2 0.3.4 (renamed as packed_simd); optional std feature (default) and no_std mode",
+    "min_toolchain": "nightly Rust only (#![feature(stdsimd)], edition 2018); last toolchain reported to build 0.5.2 is nightly-2020-08-27 (Rust 1.46.0), per issue #68",
+    "platforms": "x86/x86-64 accelerated (SSE2 baseline, SSE4.1 for rounding, 256-bit float and integer vectors only with AVX2, AVX-512 types declared); other architectures use scalar polyfills; aarch64 and wasm build problems reported in issue #47",
+    "thread_safety": "not documented (iterators borrow slices; vector types are plain values)",
+    "drop_in_for_baseline": "partial — the closure body maps almost one-to-one from scalar iterator code, but the API (simd_iter with a default vector, simd_map, scalar_collect) and the vector types differ, and results can depend on vector width for impure or length-dependent closures"
+  },
+  "gotchas": [
+    "README numbers are stale: the bench output names a tests:: module and was last re-benched in Dec 2017 to Feb 2018 (README commits 'Re-bench', 'Update benches'), while benches/usage.rs was created on 2018-07-17 and the 0.5 releases moved to packed_simd; the maintainer said on 2018-01-28 (issue #16) that 256-bit float support had been dropped for AVX-only targets, so the ivybridge rows do not describe the current crate.",
+    "Independent run, issue #51 (2018-07-16, i7-5557U, rustc 1.29.0-nightly 2018-07-07): map_scalar 2,022 ns/iter versus map_simd 6,898 ns/iter, SIMD about 3.4x slower, because v.abs() silently resolved to std::simd's slower inherent abs instead of faster's trait method; without abs the rows were 558 vs 144 ns. The name clash was never resolved in the thread.",
+    "Unequal kernels in the headline map/reduce benchmarks: SIMD uses the approximate rsqrt (documented error past 1e-3) where scalar does sqrt().recip(), and the constant -123.456 input plus ceil() hides the approximation error.",
+    "zip_simd and zip_scalar compute different things: SIMD upcasts i32 to i64 and saturating-downcasts back to i32, the scalar path converts through f64 and returns f32, so their timings are not like for like."
+  ],
+  "pick_this_over_siblings_when": "Among Rust siblings, pick glam or ultraviolet for vector maths types, SIMDNoise, simd-adler32 or memchr for those specific kernels, and argminmax for min/max scans; faster only makes sense if you need its generic iterator-over-slices API on an old pinned nightly. C++ users should look at EVE or the Vector Class Library instead.",
+  "verified_claims_summary": "The author's cargo bench on an unnamed Ivy Bridge host (nightly rustc of late 2017 to early 2018, pre-0.5 code) timed a 1024-element constant f32 map at 6,963 ns scalar versus 879 ns SIMD for target-cpu=ivybridge (about 7.9x), 7,237 vs 1,879 ns for x86-64/SSE2 (about 3.9x) and 7,195 vs 6,271 ns for the pentium polyfill build (about 1.15x), with the SIMD closure using approximate rsqrt against an exact sqrt plus division; a third-party 2018 run on an i7-5557U found the SIMD map 3.4x slower than scalar.",
+  "status_note": "Abandoned since 2021-03-25 (0.5.2) and broken on toolchains after nightly-2020-08-27 per issue #68; MPL-2.0 and readable as a design reference, but not usable in new code without reviving vektor and the stdsimd-era APIs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/README.org",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/Cargo.toml",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/lib.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/benches/usage.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/intrin/rsqrt.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/arch/x86/intrin/rsqrt.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/arch/x86/vecs.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/arch/x86/intrin/round.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/arch/x86/intrin/abs.rs",
+    "https://raw.githubusercontent.com/AdamNiederer/faster/master/src/arch/mod.rs",
+    "https://crates.io/api/v1/crates/faster",
+    "https://github.com/AdamNiederer/faster/commits/master/README.org",
+    "https://github.com/AdamNiederer/faster/commits/master/benches/usage.rs",
+    "https://github.com/AdamNiederer/faster/issues",
+    "https://github.com/AdamNiederer/faster/issues/51",
+    "https://github.com/AdamNiederer/faster/issues/68",
+    "https://github.com/AdamNiederer/faster/issues/44",
+    "https://github.com/AdamNiederer/faster/issues/16"
+  ],
+  "confidence": 0.8
+}

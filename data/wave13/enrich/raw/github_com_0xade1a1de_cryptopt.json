@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/0xade1a1de/cryptopt",
+  "one_liner": "Randomized-search optimizer emitting formally verified x86-64 assembly for finite-field multiply/square; beats GCC 12 and Clang 15 on Fiat C.",
+  "what_it_does": "CryptOpt takes straight-line field arithmetic (Fiat Cryptography's IR by default, or libsecp256k1 or hand-supplied code through its bitcoin-core and manual bridges) and searches for a faster x86-64 implementation of the same function by timing candidates on the target CPU. For Fiat input it then runs a Coq-proved equivalence checker that shows the assembly computes the same outputs as the Fiat IR, giving end-to-end functional correctness. What most users consume is the output: NASM-syntax .asm files with the same symbol and System V signature as Fiat's C (for example fiat_p256_mul(out, a, b)), checked into generated/fiat-amd64 and Fiat Cryptography's fiat-amd64 directory, with a Curve25519 variant integrated into BoringSSL.",
+  "how_it_is_fast": "Genetic-improvement style random program search with a Bet-and-Run schedule (20 bets of 1,000 mutations, then 180,000 mutations on the best): mutations reorder independent operations and change instruction and register choices (including spill decisions over the whole function, not a peephole window), and every candidate is assembled in memory with AssemblyLine and timed against the incumbent with MeasureSuite (randomly interleaved batches calibrated to about 10,000 cycles, median of 31). Generated code leans on BMI2 mulx and the ADX dual carry chains adcx/adox, uses rbp as a general register and spills into the red zone, which compilers rarely schedule this well for multi-limb arithmetic. Gains are largest where register pressure forces spills (P-224/256/384, secp256k1, SIKEp434) and small for spill-free fields (Curve25519, Poly1305).",
+  "when_to_use": [
+    "You ship Fiat Cryptography C field arithmetic on x86-64 Linux and want 1.2-2.3x faster multiply/square without giving up machine-checked correctness: drop in the pre-generated fiat-amd64 .asm for P-224, P-256, P-384, secp256k1, SIKEp434 (p434), Curve25519 or Poly1305.",
+    "NIST P-256/P-384 or secp256k1 field ops dominate a verifier or signer on recent Intel cores, where the paper's Table 7 shows CryptOpt-based secp256k1 scalar multiplication 4-5% faster than libsecp256k1's own C and asm on 12th/13th-gen Core.",
+    "You maintain a cryptographic library and want per-microarchitecture tuned straight-line kernels without hand-writing assembly: run the optimizer (20-40 machine hours for 18 primitives) on the target CPU and keep the best of several seeds.",
+    "Research or evaluation of verified compilation and search-based superoptimization for code of hundreds of instructions, where STOKE failed in the paper's comparison."
+  ],
+  "when_not_to_use": [
+    "Curve448 and P-521: against the better of GCC and Clang the best CryptOpt multiply is only 1.01x and 1.00x (Table 6 'Final' geometric means in the full paper), and 5-8% slower on several machines.",
+    "Whole-protocol Curve25519 speed: in SUPERCOP scalar multiplication OpenSSL fe-64+CryptOpt (461k cycles geometric mean) is slightly slower than OpenSSL's hand fe-64 (455k) and HACL* fe-64 (452k), and sandy2x is fastest on Zen 3/4; on AMD the verified secp256k1 variant is 1-5% slower than libsecp256k1's portable C.",
+    "Targets without BMI2 and ADX (pre-Broadwell Intel, some low-end or virtualized CPUs; issue #143 'x86_64 without ADX' is open), Windows x64 ABI, AArch64 or any non-x86-64 platform.",
+    "Kernel or other no-red-zone contexts and code that needs unwind info: default output spills below rsp, treats rbp as a scratch register (framePointer omit) and emits no .cfi directives (issue #166 open); regenerate with --framePointer save or constant and --no-redzone if needed.",
+    "Teams wanting a maintained tool: last commit 2023-11-16, open bugs such as 'tried to spill OF' (#204) and runs that regress after a threshold (#211)."
+  ],
+  "integration": {
+    "form": "source-drop (generated NASM .asm files); the optimizer itself is a Node.js CLI",
+    "dependencies": "generated asm: none; optimizer: Linux x86-64, Node.js 20.5.1 (downloaded by the Makefile), the AssemblyLine and MeasureSuite C libraries, bundled Fiat Cryptography binaries, perf_event_paranoid=1 for PMC cycle counting (else RDTSCP); Docker image recommended",
+    "min_toolchain": "NASM-syntax assembler for the .asm files; CPU with BMI2 and ADX (Intel Broadwell/Skylake or later, AMD Zen or later)",
+    "platforms": "x86-64 only, Linux System V ABI (generated files say so); optimizer runs on Linux x86-64",
+    "thread_safety": "not documented; the generated functions are straight-line code that touch only their argument arrays and their own stack red zone, so they keep no shared state",
+    "drop_in_for_baseline": "partial: same symbol names and signatures as Fiat Cryptography's C for the listed fields, but x86-64 System V only, needs ADX/BMI2, and libsecp256k1-bridge output is not formally verified"
+  },
+  "gotchas": [
+    "Each speedup in Table 4 is code optimized on and for the machine it was timed on (best of three runs), measured with the same MeasureSuite harness that drove the search; in the independent SUPERCOP scalar-multiplication runs (Table 5) the gains shrink to about +1% to -1% for Curve25519 and +0.6% over libsecp256k1's C. Cross-platform runs (Table 6) show code tuned on one CPU can be beaten by code tuned on another, so pick files by the 10-machine geometric mean listed in generated/fiat-amd64/Readme.md, not by the 'ratio' in the file name, which is the optimizing machine's in-loop ratio against clang-15.",
+    "Record correction: the 1.04x over libsecp256k1's hand assembly comes from the formally verified Fiat path too. Table 5 gives libsecp256k1+CryptOpt (Fiat, verified) 527k and libsecp256k1+CryptOpt (Opt, unverified libsecp256k1-derived) 528k cycles against 547k for the hand asm, although the paper's prose says the Opt variant is faster. Both variants are under 1% faster than libsecp256k1's own C (530k) on average and slower than that C on all four AMD machines (Table 7).",
+    "The paper's text says CryptOpt-based Curve25519 is fastest on i7-11700KF, i9-12900KF and i9-13900KF, but its own Table 7 shows HACL* fe-64 faster on all three (426k, 367k, 366k against 446k, 387k, 392k cycles); the claim holds only with HACL* excluded.",
+    "Correctness proof covers functional equivalence to Fiat IR under calling-convention and memory-layout preconditions; constant-time behaviour is argued from straight-line code with no secret-dependent branches or addresses, not proved. Output built with the bitcoin-core or manual bridges runs with --no-proof by default."
+  ],
+  "pick_this_over_siblings_when": "Pick CryptOpt over Constantine's inline-asm field arithmetic or CRYPTOGAMS perlasm when you need machine-checked correctness of x86-64 field multiply/square for Fiat-supported primes (P-224/256/384, secp256k1, Curve25519, Poly1305, p434) and can tune per CPU; Constantine covers pairing-friendly curves with portable generated asm, and CRYPTOGAMS covers many architectures and symmetric primitives that CryptOpt does not.",
+  "verified_claims_summary": "PLDI 2023 paper (checked-in PDF and full version): on ten x86-64 machines (Zen 1 to Zen 4, Skylake-H to Raptor Lake P-cores, fixed frequency, no boost, Ubuntu 22.04.1), CryptOpt's per-machine-optimized multiply/square ran a mean 1.74x faster than GCC 12.1.0 and 1.40x faster than Clang 15.0.6 compiling Fiat's C at -O3 -march=native -mtune=native; against the better compiler per machine, multiply geometric means are 1.00x (P-521) to 2.26x (SIKEp434), with P-256 1.74x, secp256k1 1.83x and Curve25519 1.17x (Table 6 'Final', full version). In SUPERCOP scalar multiplication it ties OpenSSL's hand-written fe-51/fe-64 Curve25519 asm and is 1.04x faster than libsecp256k1's hand asm (547k vs 527k cycles geometric mean) but under 1% faster than libsecp256k1's C.",
+  "status_note": "Stale since 2023-11-16 (73 stars, 6 open issues) but Apache-2.0, and the useful part, the pre-generated verified .asm files, is a static source drop that also ships in Fiat Cryptography and BoringSSL, so maintenance of the optimizer matters only if you regenerate for new CPUs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/papers/KuepperEWGCSTCCGWY23-PLDI23.pdf",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/papers/KuepperEWGCSTCCGWY23-PLDI23-full.pdf",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/package.json",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/Makefile",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/First_Steps.md",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/generated/fiat-amd64/Readme.md",
+    "https://raw.githubusercontent.com/0xADE1A1DE/CryptOpt/HEAD/generated/fiat-amd64/fiat_p256_mul/seed0000000327800118_ratio16285.asm",
+    "https://github.com/0xADE1A1DE/CryptOpt/tree/main/generated/fiat-amd64",
+    "https://github.com/0xADE1A1DE/CryptOpt/issues?q=is%3Aissue",
+    "https://github.com/0xADE1A1DE/CryptOpt/issues/211",
+    "https://github.com/0xADE1A1DE/CryptOpt/issues/144"
+  ],
+  "confidence": 0.82
+}

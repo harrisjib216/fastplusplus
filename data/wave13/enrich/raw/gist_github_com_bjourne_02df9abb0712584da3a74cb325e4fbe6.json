@@ -1,0 +1,41 @@
+{
+  "id": "https://gist.github.com/bjourne/02df9abb0712584da3a74cb325e4fbe6",
+  "one_liner": "Benchmark-stunt strlen: finds an upper bound by deliberately faulting, then runs memchr on every core; 2.6x over single-threaded libc strlen.",
+  "what_it_does": "A single C file that times five strlen variants on a 2 GB buffer: a byte loop, aligned AVX2 and AVX-512 loops, threaded_strlen and libc strlen. threaded_strlen keeps the size_t(const char *) signature. Behind it, it installs a process-wide SIGSEGV handler, probes past the string until a read faults, and splits the range up to the faulting address into one memchr job per online CPU. It was written to speed up the owen.cafe '{n} times faster than C' benchmark, which the author found was limited by strlen.",
+  "how_it_is_fast": "A helper thread reads s[4 MB], s[8 MB] and so on in 4 MB steps until it hits unmapped memory. The SA_SIGINFO handler records si_addr and calls pthread_exit, which gives an upper bound on the length without scanning. That range is then cut into ceil(n/nproc) chunks, and sysconf(_SC_NPROCESSORS_ONLN) threads each run libc memchr for '\\0' on one chunk. The answer comes from the first chunk that found a zero. The speedup is aggregate memory bandwidth from many cores, not a faster per-core scan.",
+  "when_to_use": [
+    "Benchmark games such as the '{n} times faster than C' challenge, where strlen over one huge DRAM-resident buffer dominates the run time.",
+    "As a demonstration that a multi-gigabyte scan on one core tops out near the core's memory bandwidth (about 17 GB/s for every single-thread variant on the W-2245), and that splitting the scan across cores raises the total.",
+    "As a template for a parallel memchr fan-out when the buffer length is already known: keep the chunked memchr threads and drop the SIGSEGV probe.",
+    "Teaching material on SIGSEGV and si_addr probing tricks on Linux with glibc."
+  ],
+  "when_not_to_use": [
+    "Any production code. The author says it 'heavily relies on undefined behavior and shouldn't be used for anything other than beating benchmarks'.",
+    "Short or medium strings. Every call does two sigaction calls, creates one probe thread and nproc worker threads, and mallocs two arrays, and only a 2 GB string was measured.",
+    "Multithreaded programs or libraries. It swaps the process-wide SIGSEGV handler, writes a global fault address and occupies every online CPU while it runs.",
+    "Non-POSIX targets, or builds with -DNDEBUG (see gotchas).",
+    "When you want a single-thread speedup. The gist's own AVX2 (15.36 GB/s) and AVX-512 (16.36 GB/s) loops do not beat libc strlen (16.84 GB/s) on the W-2245."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "pthreads, POSIX sigaction with SA_SIGINFO, libc memchr; immintrin.h for the AVX2 and AVX-512 variants",
+    "min_toolchain": "GCC (tested with gcc 9.4.0 and 13.1.1, -O3 -march=native -lpthread); the author says clang optimizes away parts of the benchmark",
+    "platforms": "Linux x86-64 as tested (Xeon E5-2650 v4, Xeon W-2245); threaded_strlen needs POSIX signals with si_addr; strlen_avx2 and strlen_avx512 need those ISAs and 32- or 64-byte aligned input",
+    "thread_safety": "Not thread-safe: each call replaces the process-wide SIGSEGV handler and writes a global sigsegv_addr, so two concurrent calls, or a real crash in another thread during a call, interfere.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Side effects inside assert(). pthread_create and pthread_join in threaded_strlen, clock_gettime in nano_count, posix_memalign in main, and the nine repeated calls in benchmark() (assert(func(s) == cnt)) all sit inside assert(). A -DNDEBUG build, such as CMake's default Release flags, therefore drops the pthread_create, pthread_join, clock_gettime and posix_memalign calls themselves. It then spawns no threads, reads an uninitialised timer and buffer pointer, and times one call while dividing by 10 passes. The published numbers hold only for the stated command line without NDEBUG.",
+    "The probe overshoots by up to 4 MB past the NUL, so worker threads scan mapped memory after the string. Workers whose chunk runs into unmapped memory are killed by the handler through pthread_exit, which is not async-signal-safe. While a call is running, a genuine segfault in any other thread is swallowed the same way.",
+    "The comparison is all online CPUs against a single-threaded libc strlen, and no multithreaded baseline is timed. On the W-2245 the byte loop slow_strlen (16.87 GB/s) matches libc (16.84 GB/s) under gcc 13.1.1 but runs at 2.18 GB/s under gcc 9.4.0. That fits newer GCC rewriting the loop into a strlen call (inference).",
+    "The E5-2650 v4 block (34.09 vs 8.76 GB/s, 3.9x) came from code not in the gist. It reports '4.00GB' and length 4000007776, which is 7,777 bytes more than 4e9, so in that run the terminator was not the buffer's last byte, while both revisions allocate 2e9 bytes and write the NUL at N_BUF-1."
+  ],
+  "pick_this_over_siblings_when": "Only when one string of several gigabytes must be measured as fast as possible and taking every core is acceptable, as in the Carandiru0 memcpy_threaded gist, the other many-core-versus-one-core entry. For a real single-thread strlen speedup, WojciechMula/toys avx512-string (4.96x vs libc on one core) or the ImGui ImStrlen AVX2 code (1.41x vs the MSVC CRT) are safe to call on ordinary strings.",
+  "verified_claims_summary": "On a Xeon W-2245 with gcc 13.1.1 -O3 -march=native, ten strlen calls on a 64-byte-aligned 2 GB buffer of 'A' with the NUL at the last byte took 0.46 s with threaded_strlen and 1.19 s with libc strlen (43.56 vs 16.84 GB/s, about 2.6x, derived from page data). Every returned length was asserted equal. The libc version is not named, and the gain comes from using all online CPUs against one.",
+  "status_note": "Abandoned single-file gist (both revisions dated 2023-07-13) with no licence, so it is legally not copyable; useful only as a reference for the parallel-memchr idea, and the author calls it a benchmark stunt built on undefined behavior.",
+  "sources_read": [
+    "https://gist.github.com/bjourne/02df9abb0712584da3a74cb325e4fbe6",
+    "https://gist.github.com/bjourne/02df9abb0712584da3a74cb325e4fbe6/revisions"
+  ],
+  "confidence": 0.7
+}

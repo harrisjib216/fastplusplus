@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/0x6b/ttf2woff2-wasm",
+  "one_liner": "Pure-Rust TTF-to-WOFF2 converter compiled to WebAssembly for Node; 2.0-2.7x faster than the ttf2woff2 npm package at Brotli quality 11.",
+  "what_it_does": "Converts a TrueType font buffer to WOFF2 inside Node.js with no native build step: one synchronous function, ttf2woff2(Buffer | Uint8Array): Buffer, exported the same way as nfroidure/ttf2woff2 (module.exports, .default and .ttf2woff2), so swapping the require() line is the whole migration for TrueType input. It is a thin wasm-bindgen wrapper (src/lib.rs, about 15 lines) around the author's pure-Rust crate 0x6b/ttf2woff2, which applies the WOFF2 glyf/loca transform and compresses all tables in one Brotli stream in font mode at quality 11. The npm package installs at 968 KB against 11 MB for ttf2woff2 v8.",
+  "how_it_is_fast": "The work is the WOFF2 glyf/loca transform followed by Brotli quality-11 compression (BROTLI_MODE_FONT, default 22-bit window) done by the Rust brotli crate v9, a port of Google's modern C Brotli encoder, compiled to wasm32 with opt-level \"s\" and LTO through wasm-pack. The baseline it beats vendors a much older encoder: nfroidure/ttf2woff2's csrc/ holds a 2013-2015 snapshot of Google's woff2 plus the pre-C-rewrite C++ Brotli encoder (namespace brotli, BrotliCompressBuffer, encode_parallel.cc, streams.cc). Most of the measured gap is therefore a newer compressor implementation, not WebAssembly beating native code; the wasm build has no SIMD and no threads.",
+  "when_to_use": [
+    "Node.js build pipelines (font subsetting, icon-font generators, static-site builds) that call ttf2woff2 on TrueType fonts and suffer from node-gyp compile failures or the 11 MB install.",
+    "CI images or serverless bundles without a C++ toolchain, where the native ttf2woff2 path would silently fall back to its Emscripten -O2 build anyway.",
+    "Large CJK TrueType fonts at quality 11, where the author's run shows 9.8 s against 19.0 s for a 5.5 MB NotoSansJP.",
+    "Projects that want MIT OR Apache-2.0 licensing and a dependency-free npm package."
+  ],
+  "when_not_to_use": [
+    "CFF-flavoured OpenType (.otf, 'OTTO'), TrueType collections (.ttc) or Apple 'true' fonts: the Rust parser accepts only sfnt version 0x00010000 and returns UnsupportedFormat, while Google's woff2 in the baseline handles collections and non-glyf fonts.",
+    "Browsers, Deno or ESM-only bundles: the package is built with wasm-pack --target nodejs, which emits CommonJS that loads the .wasm file from disk.",
+    "When byte-identical output to Google's woff2 is required: the README warns output size differs and asks users to verify fonts before production; the core crate points to woofwoof or bodoni/woff for byte compatibility or decompression.",
+    "Large-font batch jobs where native code is allowed: the core crate's native CLI with -t 0 (multithreaded Brotli) encodes NotoSansJP at q11 in 0.96 s on an Apple M4 Pro, far faster than any single-threaded wasm call; multithreading is silently disabled on wasm.",
+    "Latency-sensitive servers calling it on the main thread: the call is synchronous and blocks the event loop for 0.5 s (269 KB font) to about 10 s (5.5 MB font) at quality 11."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (npm package ships the .wasm, wasm-bindgen glue and a CommonJS wrapper); building from source needs Rust, wasm-pack and the ttf2woff2 0.13 and brotli 9 crates",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85+) and wasm-pack to build; Node.js runtime with CommonJS require (minimum Node version not documented)",
+    "platforms": "Node.js on any OS/CPU (wasm32, no SIMD, single-threaded); not built for browsers",
+    "thread_safety": "not documented; synchronous single-threaded call, each worker_thread loads its own module instance",
+    "drop_in_for_baseline": "partial: same call signature and exports for TrueType input, but OTF/CFF, TTC and 'true'-flavoured fonts are rejected, output bytes and size differ, and it is CommonJS for Node only"
+  },
+  "gotchas": [
+    "Harness flaw in bench/benchmark.cjs: the 'native' row is whatever nfroidure/ttf2woff2 loaded. Its install script swallows node-gyp failures into builderror.log and src/index.ts silently falls back to the Emscripten build (debug-only log), and the benchmark sets no TTF2WOFF2_VERSION, so the row may not be native at all.",
+    "The baseline is not current Google woff2 plus Brotli 1.x: it vendors a 2013-2015 C++ Brotli encoder and woff2 snapshot, so the 2.0-2.7x says little about wasm versus a modern native build; the benchmark also never compares output sizes or validates output, so a faster but weaker or stronger compressor is not ruled out.",
+    "The README's '2.2x / 2.6x less memory' figures are process.memoryUsage().heapUsed deltas across the timed loop (tens of KB); they exclude wasm linear memory and native malloc and do not measure conversion memory.",
+    "Only TrueType-outline fonts are accepted (sfnt version 0x00010000); the README's migration snippet still names ttf2woff2 ^3.0.0 and @0x6b/ttf2woff2-wasm ^0.10.3, and js/package.json says 0.13.1 while Cargo.toml and npm are at 0.13.2."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued wasm libraries it is the only font converter; like libxml2-wasm it replaces a node-gyp native binding with a toolchain-free wasm package, and like zip.js's wasm zlib codec its speed comes from the compressor implementation, so pick it when the job is TrueType-to-WOFF2 in Node and native builds are a nuisance.",
+  "verified_claims_summary": "First-party bench/benchmark.cjs on an Apple M1 Max (Node, rustc and wasm-bindgen versions not stated): average of 10 synchronous calls after 3 warmups at Brotli quality 11, ttf2woff2-wasm took 500 ms versus 1331 ms for nfroidure ttf2woff2 v8.0.0 on a 269 KB font (2.7x) and 9756 ms versus 19039 ms on the 5.5 MB NotoSansJP-Medium (2.0x). The baseline's 'native' path is a node-gyp addon of a 2013-2015 woff2 and C++ Brotli snapshot that may have fallen back to Emscripten unreported, and output sizes were not compared.",
+  "status_note": "Active (20 commits, npm 0.13.2 published 2026-07-12, 1 star; the core crate has no issues filed), dual MIT/Apache-2.0 and small enough to vendor, but a one-author wrapper whose core crate was written with AI coding assistants and validated only against fonttools, so check output fonts before shipping.",
+  "sources_read": [
+    "https://github.com/0x6b/ttf2woff2-wasm",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/bench/benchmark.cjs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/js/index.js",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/js/index.d.ts",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/js/package.json",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2-wasm/HEAD/xtask/src/main.rs",
+    "https://registry.npmjs.org/@0x6b%2Fttf2woff2-wasm",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/README.md",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/woff2/mod.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/woff2/encoder.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/woff2/brotli_quality.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/woff2/sfnt.rs",
+    "https://raw.githubusercontent.com/0x6b/ttf2woff2/HEAD/src/error.rs",
+    "https://github.com/0x6b/ttf2woff2/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/README.md",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/package.json",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/binding.gyp",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/csrc/addon.cc",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/csrc/woff2/woff2_enc.cc",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/csrc/enc/encode.h",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/csrc/enc/backward_references.cc",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/install/try-build.js",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/jssrc/index.js",
+    "https://raw.githubusercontent.com/nfroidure/ttf2woff2/HEAD/CHANGELOG.md",
+    "https://registry.npmjs.org/ttf2woff2",
+    "https://github.com/nfroidure/ttf2woff2/issues?q=is%3Aissue+woff2+update",
+    "https://github.com/nfroidure/ttf2woff2/commits/master/csrc/enc"
+  ],
+  "confidence": 0.72
+}

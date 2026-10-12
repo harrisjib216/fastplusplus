@@ -1,0 +1,52 @@
+{
+  "id": "https://agner.org/optimize",
+  "one_liner": "Agner Fog's CPU-dispatched x86 assembly memcpy, memset, strlen and string routines; beat 2008-era glibc, MSVC and Intel CRTs.",
+  "what_it_does": "A prebuilt library of hand-written NASM routines for 32-bit and 64-bit x86 (A_memcpy, A_memmove, A_memset, A_memcmp, A_strlen, A_strcpy, A_strcat, A_strcmp, A_strstr, A_strspn and extras such as A_stricmp, A_substring and strcount_UTF8). It ships in ELF, COFF, OMF, Mach-O and DLL forms. Each format has a no-override build, where you call the A_-prefixed names, and an 'o' build (for example libaelf64o.a) that exports the standard names and replaces libc's memcpy, memset, strlen and similar functions when linked before the standard library. It also holds unrelated extras: integer division by constants, Mersenne twister, SFMT and CPU-detection functions.",
+  "how_it_is_fast": "Every function sets a function pointer on its first call, and later calls go straight through it. memcpy chooses an SSE2, SSSE3 (PALIGNR shift per source alignment), unaligned-load, 256-bit, AVX512F or AVX512BW path based on CPUID and on vendor, family and model tables. Copies and fills above half the last-level cache size use non-temporal (movnt) stores, and that cutoff can be changed with SetMemcpyCacheLimit and SetMemsetCacheLimit. strlen does aligned 16-byte SSE2 pcmpeqb and pmovmskb loads, masking off the misaligned head. strstr, strcmp and strspn use SSE4.2 string instructions.",
+  "when_to_use": [
+    "x86 programs built with older toolchains whose C runtime has no dispatched string routines (MSVC 2008-era, Borland/CodeGear, Watcom, Digital Mars OMF, glibc 2.7/2.8). These are the libraries the manual's table beat.",
+    "32-bit GCC builds where the compiler's inline builtin memcpy and strlen are used. The table shows 1.21 vs 0.12 cycles/byte for unaligned 16 kB memcpy and 4.5 vs 0.27 for 128-byte strlen on Core 2.",
+    "Large copies or fills where you want explicit control of the cache-bypass (non-temporal store) cutoff through SetMemcpyCacheLimit and SetMemsetCacheLimit.",
+    "Mixed Windows, Linux, BSD and Intel-macOS code bases that want one string and memory library with the same API across all object formats.",
+    "As a readable reference for per-microarchitecture CPU dispatch in assembly."
+  ],
+  "when_not_to_use": [
+    "Current glibc on x86-64. It already selects SSE2, AVX2 and EVEX variants through ifunc, asmlib's strlen64.asm is an SSE2 loop last modified in 2008, and no published measurement shows asmlib ahead of a modern libc.",
+    "AMD K8-class CPUs for strlen. The author's own table has asmlib at 1.19 cycles/byte against 0.6 for 64-bit glibc, and the unaligned memcpy result is a tie (0.28 vs 0.29).",
+    "Any non-x86 target (ARM, RISC-V, POWER), or 32-bit shared objects on Linux, BSD or macOS. Position-independent 32-bit builds were dropped in v2.50.",
+    "Closed-source products without a commercial licence. The library is GPL-3.0-or-later.",
+    "Code where you need vendor support or catchable faults. The manual says 'for experts only ... If you have problems using it, then don't', and the library has no structured exception handling."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time; NASM to rebuild from asmlibSrc.zip (YASM for the dropped 32-bit PIC builds)",
+    "min_toolchain": "Any C/C++ compiler that links ELF, COFF, OMF or Mach-O objects, or a Windows DLL (GCC, Clang, Intel C++, MSVC, Borland, Watcom, Digital Mars per the manual); NASM 2.x syntax since asmlib 2.20",
+    "platforms": "x86 and x86-64 only (Windows, Linux, BSD, Intel macOS); runtime paths from SSE2 up to AVX512BW",
+    "thread_safety": "Not documented for the memory and string functions. They keep no per-call state, but the first call writes a global dispatch pointer, and SetMemcpyCacheLimit changes a process-wide global. The random generators come in separate single-threaded and thread-safe variants.",
+    "drop_in_for_baseline": "partial — the 'o' libraries replace memcpy, memmove, memset, memcmp, strlen, strcpy and strcat at link time. This only works if they are linked before libc and built with -fno-builtin (/Oi- on MSVC), and the link can fail with duplicate symbols when libc keeps two functions in one module. strstr, strcmp, strspn and strcspn have no override build because they read past the string end."
+  },
+  "gotchas": [
+    "The table does not show asmlib winning everywhere. On Core 2 the Mac Darwin8 library ties it on aligned memcpy (0.11 vs 0.11) and beats it on unaligned memcpy (0.11 vs 0.12). The large gaps are against 32-bit glibc with GCC builtins and against MSVC and CodeGear.",
+    "Possible crash on some AVX-512 systems: InstructionSet in instrset64.asm (v2.51) only checks XCR0 bits 1-2 (SSE/AVX state) with XGETBV. It reports AVX512F and AVX512BW from CPUID leaf 7 alone, without checking that the OS has enabled the opmask and ZMM state (XCR0 bits 5-7). The memcpy, memset, memmove and memcmp dispatchers then jump to paths that use zmm16 and k1, which would fault with an illegal instruction on a kernel or hypervisor that leaves AVX-512 state disabled. This is a latent bug from reading the code; it does not affect the 2008 numbers, which used v2.10.",
+    "Dispatch heuristics are hard-coded by vendor, family and model, last edited 2013 (UnalignedIsFaster, Store256BitIsFaster). For any AMD family above 15h the code 'assumes future AMD families are faster', so paths on newer CPUs are assumed rather than measured.",
+    "strlen reads aligned 16-byte blocks before the start and after the end of the string, never past a 16-byte boundary. strstr, strcmp, strspn, strcspn, strtolower, strtoupper, strcount_UTF8 and strCountInSet can read up to 15 bytes past the end, and the manual's workaround is padding .bss and heap allocations. Expect sanitizer and debugger-watch hits. Copies above half the last-level cache bypass the cache, which slows a destination that is read right away."
+  ],
+  "pick_this_over_siblings_when": "Pick asmlib when you need one package covering memcpy, memmove, memset, memcmp, strlen, strcpy and strcat across Windows, Linux, BSD and Intel macOS object formats with a link-time override. For current x86-64 Linux, AOCL-LibMem (maintained, Zen-tuned, benchmarked against the host glibc) or a single-function sibling with recent glibc numbers such as fancy-memset or nadavrot/memset_benchmark is the better-evidenced choice.",
+  "verified_claims_summary": "Fog's manual table compares asmlib 2.10 with glibc 2.7/2.8 and 2008-era MSVC 9.0, CodeGear 5.5, Intel C++ 10.1 and Darwin8 libraries, in cycles per byte on unnamed Core 2 and Opteron K8 CPUs. On Core 2, unaligned 16 kB memcpy runs 0.12 vs 0.44 cycles/byte for 64-bit glibc with -fno-builtin (3.7x) and 128-byte strlen 0.27 vs 0.59 (2.2x). On K8, memcpy gains shrink to 0.22 vs 0.28 aligned and a tie unaligned, and asmlib's strlen is about 2x slower (1.19 vs 0.6; ratios derived from page data). No harness, compiler flags or exact CPU models are published; the shipped testmem.cpp only checks correctness.",
+  "status_note": "Maintenance unknown: agner.org failed DNS resolution from this session, and the newest copy read (v2.51, 2016-11-16, from the third-party tpn/agner mirror) has strlen code last modified in 2008. The library is GPL-3.0-or-later with commercial licences on request, and ships as prebuilt libraries plus NASM source, so it can be linked or vendored under copyleft terms but comes with no support.",
+  "sources_read": [
+    "https://github.com/tpn/agner",
+    "https://github.com/tpn/agner/tree/master/asmlib",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlib-instructions.pdf",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/license.txt",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlib.h",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/strlen64.asm",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/memcpy64.asm",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/memset64.asm",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/unalignedisfaster64.asm",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/instrset64.asm",
+    "https://raw.githubusercontent.com/tpn/agner/master/asmlib/asmlibSrc/testmem.cpp",
+    "https://raw.githubusercontent.com/tpn/agner/master/vectorclass/instrset_detect.cpp"
+  ],
+  "confidence": 0.6
+}
