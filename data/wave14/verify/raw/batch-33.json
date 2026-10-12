@@ -1,0 +1,106 @@
+[
+  {
+    "id": "https://github.com/tidwall/evio",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party raw logs benchmarks/out/redis{1,8,16}.txt from the public script benchmarks/bench-redis.sh show real Redis 4.0.2 and the evio clone (examples/redis-server/main.go) under the same redis-benchmark command, with every number in the record matching the final lines; the Go version, the Redis build and flags, and the CPU model (only 'ec2 c4.xlarge') are not stated, so not A, and no independent run exists, so not B.",
+    "corrections": {
+      "compiler_and_flags": "Not stated. Go version not recorded (2017 snapshot); bench-redis.sh builds the clone with plain 'go build' and starts both servers with GOMAXPROCS=1. Real Redis is whatever 'redis-server' was on PATH (Redis 4.0.2 per the log, commit=00000000), started with only '--port 6392' (no config file); its build flags are not stated. Redis 4.0.2's own src/Makefile defaults to OPTIMIZATION?=-O2 with jemalloc, so a default build was -O2, not -O3.",
+      "caveats": "The two servers do different amounts of work: the evio example is a tiny Redis-protocol clone (PING, ECHO, GET, SET, DEL, FLUSHDB, QUIT, SHUTDOWN, WAKE) over a Go map with a mutex, parsed by redcon.ReadNextCommand (so evio's clone reuses tidwall/redcon's parser), with no persistence, expiry, replication, statistics or full command table; PING is a string switch that appends +PONG. At pipeline depth 1 both are client-bound and equal (177,147.92 vs 176,991.14). Real Redis stays at about 878k-880k requests per second at depth 8 and 16 while the clone keeps climbing; the repo gives no explanation, and the most plausible one is Redis's per-command dispatch path rather than the language or event loop (verifier inference). Only PING_INLINE was benchmarked. One run per cell, no variance, and the redis-benchmark client shares the 4-vCPU instance with the server. Redis 4.0.2 is from 2017; its binary came from PATH with unstated build flags (Redis's Makefile default was -O2) and the log shows THP enabled and somaxconn 128 warnings. The README shows only chart PNGs for pipeline 1 and 8 and states the goal 'performs on par with Redis and Haproxy'; the depth-16 numbers come from benchmarks/out/redis16.txt. The clone at HEAD differs from the 2017 build that was measured (its 'redis server started' log line has since gained a loops field). Latest two commits are README edits (2026-05-12, 2026-05-19) and the one before is from 2022-05-14.",
+      "why_faster": "Not stated in the repo. Verifier inference: the clone answers PING with a string switch and an appended +PONG, while Redis 4.0.2 runs its full command dispatch for every command (command-table lookup and call() bookkeeping such as stats and slowlog), so at pipeline depth 8-16 Redis becomes CPU-bound on per-command work near 880k requests per second; this is different work per request, not a Go-over-C codegen or runtime win.",
+      "same_opt_level": null,
+      "same_algorithm": false,
+      "language_level_claim": false
+    },
+    "notes": "Numbers verified exactly in the raw logs; keep at C. Shortcomings: clone vs full Redis (different work per command), PING_INLINE only, single run, client on the same 4-vCPU box, Redis build unknown (default -O2), 2017 snapshot, no mechanism stated; the clone uses redcon's parser, so evio and redcon share code.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis1.txt",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis8.txt",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/out/redis16.txt",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/bench-redis.sh",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/benchmarks/README.md",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/README.md",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/examples/redis-server/main.go",
+      "https://raw.githubusercontent.com/tidwall/evio/HEAD/LICENSE",
+      "https://github.com/tidwall/evio",
+      "https://github.com/tidwall/evio/commits",
+      "https://raw.githubusercontent.com/redis/redis/4.0.2/src/Makefile"
+    ]
+  },
+  {
+    "id": "https://github.com/tidwall/redcon",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README Benchmarks section shows the exact redis-server and redis-benchmark commands and the SET/GET numbers for Redis, single-threaded Redcon and multi-threaded Redcon, all matching the record; the clone code (example/clone.go) is public but the Redis version and build flags are missing and the CPU is only '2.8 GHz Intel Core i7', so not A, and there is no independent run.",
+    "corrections": {
+      "workload": "redis-benchmark -t set,get -n 10000000 -q -P 512 -c 512 against real Redis ('redis-server --port 6379 --appendonly no') and against example/clone.go (Go map with an RWMutex; PING, QUIT, SET, GET, SETNX, DEL, PUBLISH, SUBSCRIBE/PSUBSCRIBE, DETACH and a blank CONFIG stub that exists only so redis-benchmark runs), Redcon run with GOMAXPROCS=1 and GOMAXPROCS=0. No -r flag is passed, so redis-benchmark uses one fixed key for every SET and GET with its default 3-byte value.",
+      "compiler_and_flags": "Go 1.7 via 'go run' (default flags); Redis version and build flags not stated (Redis's own Makefile defaulted to -O2, checked for 4.0.2).",
+      "caveats": "First-party README numbers from the Go 1.7 era (2016) with no Redis version, no compiler, no run count and no variance. The Redis command disables the append-only file but not RDB snapshots; because redis-benchmark ran without -r, the dataset is a single key, so any snapshot fork during the 10M-command SET run would be cheap and this is a minor concern. The Go clone implements a handful of commands over a bare map behind an RWMutex, while Redis runs its full command dispatch, so the two servers do different work per command and the gap is mostly per-command overhead, not language (verifier inference). Client, server and OS share one laptop; 512 connections and pipeline depth 512 favour batch throughput over latency. Multi-threaded Redcon SET (1,944,390.38) is slower than single-threaded (2,018,570.88), consistent with every SET taking the global mutex. No latency numbers. The README names no mechanism. The redcon parser has changed since the measurement (it copies each command's raw bytes, and a 2026-07-22 commit reworked number parsing), so the numbers predate the current code. Redis-vs-Go comparison, not a runtime-level language claim. evio's Redis example reuses redcon's parser.",
+      "why_faster": "Not stated in the README. Verifier inference: with one fixed key and pipeline depth 512, both servers spend their time on per-command overhead; the clone does a protocol parse, a lowercase switch and one map access per command, while Redis runs its full command lookup and call() bookkeeping (stats, slowlog, keyspace checks) per command, so the win is less work per request rather than Go codegen or runtime beating C.",
+      "same_opt_level": null,
+      "same_algorithm": false,
+      "language_level_claim": false
+    },
+    "notes": "README numbers verified exactly; keep at C. Shortcomings: tiny clone vs full Redis, Redis version and build unknown (Makefile default -O2), single laptop run from the Go 1.7 era, single fixed key, multi-threaded SET slower than single-threaded, no mechanism stated.",
+    "urls_opened": [
+      "https://github.com/tidwall/redcon",
+      "https://github.com/tidwall/redcon/commits",
+      "https://raw.githubusercontent.com/tidwall/redcon/HEAD/README.md",
+      "https://raw.githubusercontent.com/tidwall/redcon/HEAD/example/clone.go",
+      "https://raw.githubusercontent.com/tidwall/redcon/HEAD/redcon.go",
+      "https://raw.githubusercontent.com/tidwall/redcon/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/redis/redis/4.0.2/src/Makefile"
+    ]
+  },
+  {
+    "id": "https://github.com/scylladb/scylla-rust-driver",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Vendor (ScyllaDB) benchmark repo cvybhu/rust-driver-benchmarks: the cited config.py does hold 3734 vs 5510 ms, but it is the chart generator's input with the harness's default title and no provenance; the published chart (images/bench10to7-inserts.svg, matplotlib, 2021-06-20) shows the Rust driver at parity with the multi-threaded DataStax C++ driver, and its large lead only over the Scylla C++ driver that the harness then limited to one I/O thread. Harness code and flags are public (g++ -O3 -flto; cargo --release with lto) but the drivers are prebuilt .deb packages and no hardware is stated, so not A; first-party vendor numbers, so C.",
+    "corrections": {
+      "benchmark_url": "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/images/bench10to7-inserts.svg",
+      "baseline": "DataStax Cassandra C++ driver ('cpp-multi', v2.16.0 .deb per the current Dockerfile, run with I/O threads = hardware_concurrency), plus the Scylla C++ driver fork ('cpp'), which the harness ran with a single I/O thread until commit 'Bump Scylla cpp driver to 2.16.2, remove single thread limitation for it' (2022-08-01)",
+      "claimed_speedup": "Published chart images/bench10to7-inserts.svg (10,000,000 inserts, time in seconds; values read from the SVG bar geometry, derived from page data): concurrency 512/1024/2048/4096/8192: scylla-rust-driver 12.8/9.3/7.4/6.6/6.5 s; cpp-multi (DataStax C++ driver, multi-threaded) 13.4/9.9/7.7/6.7/6.3 s, so Rust is about 1.05x/1.07x/1.05x/1.02x faster and 0.97x (slower) at 8192, i.e. parity; cpp (Scylla C++ driver on one I/O thread) 54.9/53.0/56.5/53.8/64.1 s, about 4.3x-9.9x slower than Rust, but that baseline was single-threaded. The cited generate_chart/config.py (1,000,000 inserts, concurrency 1024: scylla-rust-driver 3734 ms vs cpp-driver 5510 ms, about 1.48x, derived from page data) is the chart generator's input file, matches the harness defaults, and does not correspond to any published chart. A ScyllaDB blog post (2021-07-13) reportedly says the Rust driver was 'generally either just as fast or even slightly faster' than cpp-multi (snippet only).",
+      "compiler_and_flags": "Benchmark harnesses: C++ main.cpp built with Ubuntu 18.04 g++ (7.x) as 'g++ main.cpp -std=c++17 -lcassandra -O3 -flto' against prebuilt driver .deb packages (DataStax 2.16.0; Scylla cpp-driver 2.16.2 at HEAD, earlier version at chart time; library build flags not stated); Rust built with 'cargo build --release', [profile.release] lto = true, latest rustup toolchain at image build time, scylla crate from the git main branch, tokio 1.x multi-threaded runtime (#[tokio::main]).",
+      "workload": "'Basic' benchmark, inserts workload: 10,000,000 prepared INSERTs (pk, 2*pk, 3*pk) into one local ScyllaDB node started by scylla.sh, with 512, 1024, 2048, 4096 and 8192 requests in flight; total wall time per driver, one run per cell. The harness default (and config.py title) is 1,000,000 tasks at concurrency 1024.",
+      "usability": "copyable",
+      "caveats": "Vendor benchmark (ScyllaDB). Against the fair multi-threaded C++ baseline (DataStax cpp-driver, 'cpp-multi') the published 2021-06-20 chart shows parity: Rust 2-7% faster at concurrency 512-4096 and about 3% slower at 8192. The large lead (4.3x-9.9x) is only over the Scylla C++ driver fork run on a single I/O thread, a limitation the harness removed on 2022-08-01 with no re-published chart, so that comparison is a crippled baseline. The cited config.py numbers (3734 vs 5510 ms) are the generator's input with the harness's default title and cannot be tied to a published run. The README itself says the chart 'is pretty old' and driver names changed. No hardware, no run count, no variance; values were read from SVG bar geometry, so they are approximate. The C++ driver libraries are prebuilt .deb packages whose build flags are not stated. A ScyllaDB 2021 blog post (scylladb.com, not reachable here) reportedly ran a 3-node Scylla 4.4 cluster on i3.4xlarge and found the Rust driver 'just as fast or even slightly faster' than cpp-multi; a later ScyllaDB write-up reportedly found it used about twice the CPU of the cassandra-cpp backend in a loopback test (snippets only). The scylla-rust-driver README makes no speed claim. The driver is Apache-2.0 OR MIT; the benchmark repo has no LICENSE file. A database driver rather than a general concurrency runtime, so the category fit is loose.",
+      "same_algorithm": true,
+      "same_opt_level": null,
+      "why_faster": "No language-level win at the fair baseline: both the Rust driver (Tokio multi-threaded runtime) and the DataStax C++ driver (libuv I/O threads, one per core) are async drivers issuing the same prepared inserts with the same in-flight limit, and they finish within a few percent of each other. The 4-10x lead over 'cpp' came from that driver being run with one I/O thread, i.e. threading configuration, not Rust codegen.",
+      "language_level_claim": false
+    },
+    "notes": "Downgrade of the claim, tier stays C: the fair C++ baseline in the published chart is at parity (flag as not faster), and the 1.48x figure is unprovenanced generator input while the big lead is over a single-threaded C++ driver (crippled baseline, since fixed in the harness). Usability corrected to copyable (driver is Apache-2.0 OR MIT).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/generate_chart/config.py",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/images/bench10to7-inserts.svg",
+      "https://github.com/cvybhu/rust-driver-benchmarks",
+      "https://github.com/cvybhu/rust-driver-benchmarks/tree/master/benchmarks/basic",
+      "https://github.com/cvybhu/rust-driver-benchmarks/commits/main",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/README.md",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/build_all_dockers.sh",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-cpp-driver/Dockerfile",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-cpp-driver/build.sh",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-cpp-driver/run.sh",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-cpp-driver/source/main.cpp",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/datastax-cpp-driver/Dockerfile",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/datastax-cpp-driver/source/main.cpp",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-rust-driver/Dockerfile",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-rust-driver/run.sh",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-rust-driver/source/src/main.rs",
+      "https://raw.githubusercontent.com/cvybhu/rust-driver-benchmarks/HEAD/benchmarks/basic/scylla-rust-driver/source/Cargo.toml",
+      "https://github.com/scylladb/scylla-rust-driver",
+      "https://github.com/scylladb/scylla-rust-driver/commits/main"
+    ]
+  }
+]
