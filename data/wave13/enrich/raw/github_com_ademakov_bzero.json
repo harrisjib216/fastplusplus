@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/ademakov/bzero",
+  "one_liner": "Public-domain x86-64 SSE and AVX assembly zero-fill routines that beat 2017-era libc memset on small buffers.",
+  "what_it_does": "An experiment repo of buffer-zeroing functions with the signature void bzero_X(char *s, size_t n): trivial and unrolled C versions, an SSE-intrinsics version, a rep stosb version, and hand-written GNU-as assembly in bzero6.S to bzero8.S (SSE, 2017) and bzero9.S to bzeroH.S (AVX, 2019). main.c is the timing and correctness harness that runs every variant against libc memset (bzero_0). It is not a library: you copy one .S file and call it instead of memset(p, 0, n) or bzero(p, n).",
+  "how_it_is_fast": "The SSE versions clear 64 bytes per loop iteration with four unaligned 16-byte movdqu stores, then finish the tail with a test-and-branch ladder on the size bits (32, 16, 8, 4, 2, 1) instead of a byte loop. The 2019 AVX versions (bzero_G, bzero_H) use 32-byte vmovdqu stores and the overlapping-store trick for small sizes and tails: two stores, one at the start and one ending exactly at s + n, cover any length in a size class (0-3, 4-7, 8-15, 16-31, 32-63) without a loop. Because the value is always zero, no byte broadcast is needed, and nothing aligns the destination.",
+  "when_to_use": [
+    "Hot paths that zero many small buffers (roughly 8 to 512 bytes) whose size is only known at run time, on x86-64 with SSE2 or AVX.",
+    "Projects that want a tiny, public-domain zeroing routine to read, vendor and benchmark on their own CPU and libc rather than a full mem* library.",
+    "Studying small-size memset techniques (bit-ladder tails versus overlapping stores) side by side with a ready harness that checks every byte and the padding around it."
+  ],
+  "when_not_to_use": [
+    "Buffers of about 1 KiB and up on the AVX laptop: libc memset won at 1024 B (149 vs 189 us) and 2048 B (241 vs 392 us), and nothing above 8 KiB was ever measured; there are no non-temporal stores, no rep stosb path and no destination alignment for large clears.",
+    "Constant small sizes: compilers already inline memset(p, 0, N) for fixed N into a few stores, which an out-of-line assembly call cannot beat, and the compiler can no longer elide or merge the clear.",
+    "Windows x64, 32-bit x86, ARM or any non-System-V ABI: the code takes its arguments in rdi and rsi and uses AT&T syntax for GNU as; only the Apple symbol prefix is handled.",
+    "Any setting that needs a modern baseline: the only tables are from 2017 on 2009 and 2013 CPUs with an unstated libc; current glibc memset (AVX2 and EVEX paths with overlapping small-size stores) uses the same tricks, and the 2019 AVX variants have no published numbers at all.",
+    "Code that needs a maintained, tested library: 1 star, no tests beyond the harness, inactive since May 2019."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (GNU as through the gcc or clang driver, C preprocessor for the .S files)",
+    "min_toolchain": "GNU as compatible assembler (gcc or clang driver for .S files); the harness needs a C99 compiler; not documented beyond that",
+    "platforms": "x86-64 System V ABI (Linux, BSD, macOS); bzero6.S to bzero8.S need SSE2, bzero9.S to bzeroH.S need AVX",
+    "thread_safety": "Reentrant by construction: each function touches only the destination buffer and caller-saved registers (rax, rdx, rsi, rdi, xmm0/ymm0) and keeps no global state; not documented by the author.",
+    "drop_in_for_baseline": "partial - zero-fill only, with no fill value and no return value, so it replaces bzero(p, n) or memset(p, 0, n) calls but not memset in general, and the compiler no longer treats the call as memset"
+  },
+  "gotchas": [
+    "Harness flaws behind the 2017 tables (main.c at commit 1db9138 produced them): the Makefile sets CC=gcc with no CFLAGS, so make builds at gcc's default -O0, and the trivial C loop's 2048 B time (49,821 us per 10,000 calls on the 2.27 GHz Xeon, about 5.5 cycles per byte, derived) is the speed of an unoptimised byte loop; at -O0 memset is also reached through an unoptimised bzero_0 wrapper plus a PLT jump that the assembly versions, called directly through the function pointer, do not pay, which inflates memset's small-size totals (23-86 us) where a few cycles per call matter. There is no warm-up: the first size of each series (0 B) is inflated (memset 112 vs 78 us at 1 B; bzero_5 230 on the Xeon), and the run is single-shot with gettimeofday (1 us resolution).",
+    "The destination is always data + 32 in a static array (at least 16-byte aligned), the same size is repeated 10,000 times (perfectly predicted branches) and the buffer is hot in L1, so misaligned destinations, mixed sizes and cold memory, where unaligned 32-byte stores split cache lines and libc's alignment and rep stosb paths pay off, were never measured.",
+    "The .S files have no .note.GNU-stack section, so GNU ld 2.39+ warns 'missing .note.GNU-stack section implies executable stack' and marks the stack executable unless you link with -z noexecstack or assemble with -Wa,--noexecstack; they also carry no CFI or .type/.size directives, so profilers and debuggers see bare symbols.",
+    "The AVX variants (bzero9.S to bzeroH.S) return after 256-bit vmovdqu stores without vzeroupper, which compilers and glibc's AVX2 memset emit to avoid AVX-SSE transition costs in following legacy-SSE code; the harness calls them back to back with no SSE code in between, so any such cost to the caller would not show. The i7-4850HQ is a MacBook Pro part and the files carry __APPLE__ guards, so the laptop table may be macOS libc memset and Apple clang invoked as gcc rather than glibc; the README does not say."
+  ],
+  "pick_this_over_siblings_when": "Pick it over asmlib (abiiranathan), which measures its memset against glibc 2.44 on a current CPU, only when you want a single public-domain zeroing routine of a few dozen lines to vendor and re-benchmark; FastMemcpy covers copies, not clears, and the Pico SDK pico_mem_ops and rt_memcpy_cm target Cortex-M rather than x86-64.",
+  "verified_claims_summary": "In 2017 single-run hot-cache loops of 10,000 calls (totals in microseconds, harness built with no -O flag), the SSE assembly bzero_7 took 23 us at 32 B against 86 us for libc memset (about 3.7x, derived) and 26 vs 70 us at 64 B on an i7-4850HQ, but memset won from 1 KiB up there (2048 B: 241 vs 392 us); on a Xeon E5520 without AVX the assembly led by smaller margins at most sizes (single-run outliers such as bzero_7 at 15 B, 149 vs 75 us, go the other way; 2048 B: bzero_7 552 and bzero_6 655 vs memset 664). Libc version and OS were not stated, and the 2019 AVX variants that the README calls faster than memset at every size have no published numbers.",
+  "status_note": "Inactive since May 2019 (1 star) but Unlicense public domain and each routine is one short file, so it is easy to vendor; re-benchmark against your current libc before adopting, and add a .note.GNU-stack section when linking with modern GNU ld.",
+  "sources_read": [
+    "https://github.com/ademakov/bzero",
+    "https://github.com/ademakov/bzero/commits/master",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/README.md",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/main.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzero.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzero6.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzero7.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzero8.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzero9.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroA.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroB.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroC.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroD.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroE.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroF.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroG.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/HEAD/bzeroH.S",
+    "https://raw.githubusercontent.com/ademakov/bzero/e807b1d/main.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/e807b1d/Makefile",
+    "https://raw.githubusercontent.com/ademakov/bzero/e807b1d/bzero.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/1db9138/main.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/1db9138/Makefile",
+    "https://raw.githubusercontent.com/ademakov/bzero/1db9138/bzero.c",
+    "https://raw.githubusercontent.com/ademakov/bzero/1db9138/README.md"
+  ],
+  "confidence": 0.75
+}

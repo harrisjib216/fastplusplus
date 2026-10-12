@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/aengelke/fadec",
+  "one_liner": "Small freestanding C table-driven x86-32/x86-64 decoder plus x86-64 encoder; claims, unmeasured, to beat Capstone, Zydis and libopcodes.",
+  "what_it_does": "A C11 library with three parts: fd_decode decodes one x86-32 or x86-64 instruction from a byte buffer into a 48-byte FdInstr struct read through FD_* accessor macros, fd_format prints it as Intel-syntax text, and an x86-64 encoder comes in two APIs (v1: one variadic fe_enc64(&cur, FE_ADD64rr, ...) entry point; v2: one typed function per instruction, fe64_ADD64rr(buf, flags, ...)). It needs no libc and no allocator, so it fits JITs, compiler back-ends and sandbox verifiers in freestanding code. It is not a drop-in for Capstone, Zydis or libopcodes: the API and the instruction model differ, and fd_format prints Intel syntax (for example 'xchg r8, rax').",
+  "how_it_is_fast": "parseinstrs.py turns the instruction list (instrs.txt) into compact generated uint16 lookup tables (about 37 KiB for 32- and 64-bit mode together) that fd_decode walks as a trie: prefix bytes, then opcode escape (0F, 0F38, 0F3A, VEX/EVEX map), opcode byte, mandatory prefix, ModRM reg/mod fields and VEX.W/L, ending in an 8-byte packed InstrDesc of bit fields. There is no per-instruction allocation, no operand-semantics or flags database and no high-level abstraction layer, and the decoder deliberately reports operand sizes that are not always exact to stay on the fast path. Encoder v2 generates one specialised function per mnemonic, which is where its internal 'about 3x faster than v1' comes from, at a cost of about 3 MiB of code.",
+  "when_to_use": [
+    "Embedding a decoder or encoder in freestanding or kernel-like code with no libc and no malloc (the author's stated reason for writing it).",
+    "Compiler back-ends and JITs that emit x86-64 machine code from C or C++ and want a small programmatic encoder without assembly text parsing; the TPDE back-end framework pulls it in as deps/fadec.",
+    "Binary scanners, verifiers and rewriters that only need instruction length, mnemonic and operands quickly, not full semantic information such as flags read and written.",
+    "Size-sensitive builds: decoder plus encoder are about 95 KiB, and Meson options drop 32-bit or 64-bit mode, the encoder or undocumented opcodes."
+  ],
+  "when_not_to_use": [
+    "When you need a measured speed advantage: there are no published numbers, no comparison harness and no disas-bench entry; Zydis, Intel XED, iced, yaxpeax-x86 and diStorm have public disas-bench MB/s figures, Fadec does not.",
+    "Code that must follow AMD64-specific behaviour (jump operand sizes, cr8 access with lock, f3 41 90 as xchg rather than pause) or needs XOP, FMA4, MPX, HLE prefixes or Xeon Phi MVEX; 16-bit mode is not supported either.",
+    "Analyses that need exact operand sizes, implicit operands, EFLAGS effects or CPUID feature tags straight from the decoder: Fadec omits that database and its sizes are not always exact (reconstructible, per the README).",
+    "Encoders that must reject invalid register combinations: register-uniqueness rules (VSIB, AMX tiles, AVX-512 FP16 complex multiply) are not enforced, so you can emit encodings the CPU faults on.",
+    "Projects that need Python or other language bindings; the README lists 'No Python API'."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time (no libc needed); Meson 0.49+ and Python 3.9+ at build time to generate the lookup tables from instrs.txt",
+    "min_toolchain": "C11 compiler (GCC, Clang or MSVC; the Meson file has MSVC warning settings), Meson 0.49+, Python 3.9+",
+    "platforms": "any host with a C11 compiler; decodes x86-32 and x86-64 (no 16-bit mode), encodes x86-64 only, Intel 64 semantics",
+    "thread_safety": "not documented; the decode, format and encode sources hold only static const tables and no mutable global state, so concurrent calls on separate output structs and buffers look safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No benchmark backs the headline claim: the only timing tool, decode-profile.c (added 2026-06-01), times Fadec alone in 64-bit mode over a raw file region, needs -l (the default length 0 decodes nothing and prints 0 MB/s) and does not check -s/-l against the file size, so it cannot reproduce 'significantly faster than libopcodes, Capstone, or Zydis'.",
+    "fd_decode may partially write out_instr even when it returns an error, an implicit fwait is decoded as a separate instruction (finit is FD_FWAIT then FD_FINIT), and the address parameter is deprecated: pass 0 and resolve FD_OT_OFF operands yourself.",
+    "Both encoders need at least 15 bytes of space left in the output buffer, and v2 may overwrite bytes past the returned instruction length; v2 is off by default (-Dwith_encode2=true) and is about 3 MiB of generated code with long compile times.",
+    "Tests are hand-written data (about 3,100 decode cases in decode-test.inc, extended in March 2026 to 'cover all branches') with no fuzzing harness in the repo, and a decoder bug ('Fix collision of 3e bit and broadcast size') was fixed as recently as 2026-06-01; the README still lists low test coverage as a known issue."
+  ],
+  "pick_this_over_siblings_when": "Pick Fadec over Zydis, Intel XED or bddisasm when you need a libc-free decoder and encoder of about 95 KiB that you can embed in a JIT or verifier; pick iced (256.69 MB/s decode in disas-bench), yaxpeax-x86 or diStorm3 when you need published decode throughput, and a heavier decoder such as Zydis, XED or iced when you need richer per-operand information than Fadec's compact FdInstr.",
+  "verified_claims_summary": "Only qualitative: the README says Fadec is 'significantly faster than libopcodes, Capstone, or Zydis due to the absence of high-level abstractions and the small lookup table', with no numbers, harness, compiler, flags or CPU, and the encoder v2 'about 3x faster than v1' is an internal comparison with no baseline library. Nothing in the repo or in disas-bench measures Fadec against another decoder.",
+  "status_note": "Actively maintained (commits through 2026-06-01, canonical CI on git.sr.ht/~aengelke/fadec), BSD-3-Clause and reused by the TPDE back-end and Android's external/lfi tree, so it is a credible small dependency, but its speed claim is unmeasured (tier D).",
+  "sources_read": [
+    "https://github.com/aengelke/fadec",
+    "https://github.com/aengelke/fadec/commits/master",
+    "https://github.com/aengelke/fadec/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/README.md",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/meson.build",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/.build.yml",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/decode-profile.c",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/fadec.h",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/fadec-enc.h",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/fadec-enc2.h",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/decode.c",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/format.c",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/encode.c",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/parseinstrs.py",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/instrs.txt",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/decode-test.c",
+    "https://raw.githubusercontent.com/aengelke/fadec/HEAD/decode-test.inc",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/README.md",
+    "https://raw.githubusercontent.com/tpde2/tpde/HEAD/.gitmodules"
+  ],
+  "confidence": 0.7
+}
