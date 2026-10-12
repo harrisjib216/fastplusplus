@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/whitfin/runiq",
+  "one_liner": "Rust tool and library that drops duplicate lines with one hashing pass, no sort; beats GNU sort -u and uniq.",
+  "what_it_does": "runiq prints each distinct line of its inputs (files or stdin) once, in first-seen order, like awk '!seen[$0]++'. The input does not need to be sorted, and the output is not sorted. Four filters trade speed, memory and accuracy: quick (the default), simple, sorted (adjacent duplicates only, like uniq) and compact (Bloom filter). Flags: -i prints the repeat occurrences instead, -s prints only totals (lines, uniques, duplicate rate). Built without default features, the crate exposes the filters as a library through a Filter trait with one method, detect(&mut self, &[u8]) -> bool.",
+  "how_it_is_fast": "The quick filter hashes each line with XXH3-64 (xxhash-rust xxh3_64) and stores only the u64 digest in a std HashSet (SwissTable) with an identity hasher. That is a single O(n) pass using about 15 bytes per distinct line (298.7 MB for 19.8M uniques in the README), where GNU sort -u does an O(n log n) external sort, with locale collation unless LC_ALL=C. Lines are read through bytelines, which calls BufReader::read_until('\\n') into one reused buffer, so reading a line does not allocate. compact inserts the digest into a scalable Bloom filter (growable-bloom-filter: 1M initial capacity, error ratio 1e-8, growth 2, tightening 0.5). sorted compares each line with the previous one, as uniq does. The likely reason it beats GNU uniq (24.9 s vs 10.3 s) is line reading: uniq's gnulib readlinebuffer_delim fetches one byte at a time with getc, while read_until searches for the newline with memchr. Both tools compare lines with memcmp.",
+  "when_to_use": [
+    "Deduplicating large unsorted log or JSONL streams where first-seen order is fine and you do not need sorted output, e.g. replacing sort -u or awk '!seen[$0]++' in a pipeline.",
+    "Inputs with millions to tens of millions of distinct lines that fit in RAM as 8-byte digests (about 300 MB per 20M distinct lines with -f quick).",
+    "Memory-constrained deduplication where a tiny false-drop rate is acceptable: -f compact used 162 MB for 19.8M uniques in the README, about half of quick, at 1.5x to 1.9x quick's time.",
+    "Already-sorted input: -f sorted streams with about 1.3 MB of memory and was 2.4x to 4.2x faster than GNU uniq in the author's tables.",
+    "Embedding duplicate detection in a Rust program (a log shipper, an ingestion filter) via the Filter trait without pulling in the CLI dependencies."
+  ],
+  "when_not_to_use": [
+    "When you need uniq's other modes: no -c counts per line, no -u (lines that occur once), no -d/-D, no field or character skipping, no case folding. Issue #13 (more uniqueness flags) and issue #6 (benchmark suite) have been open since 2021 and 2019.",
+    "Exact deduplication where even a 64-bit hash collision is unacceptable: quick and compact keep only XXH3 digests, so a colliding unique line is silently dropped. Use -f simple, which stores full lines (2.33 GB for 19.8M uniques).",
+    "Very high-cardinality inputs that do not fit in memory: there is no spill to disk, so sort -u (external merge) or a HyperLogLog estimate is the only option at that scale.",
+    "Counting distinct lines on very large files: in cuniq's independent 32 GiB test, runiq 2.0.0 -f quick | wc -l took 7m19s, against 6m05s for huniq and 1m57s for single-threaded cuniq (hash-only mode), and only 1.94x less than 8-thread GNU sort -u | wc -l (14m12s).",
+    "Multi-core throughput: runiq is single-threaded, reads its inputs one after another and does not memory-map files."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "library: growable-bloom-filter 2.1, identity-hash 0.1, strum and strum_macros 0.25, xxhash-rust 0.8; the cli feature (default) adds bytelines 2.5, bytesize 2.3, clap 4.4, cli-table 0.5, format_num 0.1",
+    "min_toolchain": "Rust edition 2018; no rust-version declared (the jen dev-dependency was updated in Aug 2024 so the crate builds with Rust 1.80); CI builds stable, beta and nightly",
+    "platforms": "any Rust target; CI runs on ubuntu-latest, macos-latest and windows-latest; no prebuilt binaries (issue #22 asks for a Windows x86_64 release)",
+    "thread_safety": "Filters take &mut self and have no internal locking; to share one across threads, wrap it in a Mutex or shard by hash. The CLI is single-threaded.",
+    "drop_in_for_baseline": "partial — runiq -f sorted replaces plain uniq on sorted input (same adjacent-line semantics, but no -c/-u/-d/-f/-s/-i options), and runiq replaces sort -u only when you do not need sorted output"
+  },
+  "gotchas": [
+    "Line endings are normalised. bytelines strips a trailing \\r before the \\n, so 'abc\\r\\n' and 'abc\\n' count as the same line, CRLF input comes out with LF endings, and a missing final newline is added. GNU uniq keeps lines byte-exact.",
+    "-i (invert) prints every repeat occurrence: a line seen 3 times is printed twice. That is neither uniq -d (one copy per duplicated group) nor uniq -D (all copies).",
+    "Output is a locked Stdout, not wrapped in a BufWriter. Rust's Stdout is line-buffered even when it is not a terminal (rust-lang/rust#60673, still open), so the CLI likely makes one write(2) per printed line (19.8M in the 25M-line test). GNU uniq and sort use fully buffered stdio there, so the README's /dev/null timings, if anything, understate runiq.",
+    "Small code-level issues. The quick and compact filters hash with xxh3_64 (XXH3), not XXH64, although runiq's Cargo.toml enables only xxhash-rust's 'xxh64' feature; it compiles because growable-bloom-filter 2.1.1 enables 'xxh3' through Cargo feature unification. CompactFilter's doc comment says a 1e-7 error rate where the code sets 1e-8. A missing input file panics through File::open().unwrap() instead of printing an error. SortedFilter allocates a fresh Vec for every distinct line instead of reusing its buffer."
+  ],
+  "pick_this_over_siblings_when": "huniq (koraa/huniq) uses the same hash-only approach, matches or beats runiq -f quick in runiq's own README (11.9 s vs 12.1 s) and in cuniq's 32 GiB test (6m05s vs 7m19s), and adds count mode, so prefer it for plain dedup or counts. cuniq is far faster for counting distinct lines. Pick runiq when you want the Bloom-filter compact mode for the lowest memory, a uniq-compatible sorted mode, or its filters as an embeddable Rust library.",
+  "verified_claims_summary": "First-party README tables (January 2024, runiq 2.0.0 era, before LTO was enabled; no CPU, rustc, coreutils version or locale stated) dedupe jen-generated JSONL to /dev/null. On 25M lines (1.9 GB, 20.67% duplicates), runiq -f quick took 12.1 s vs GNU sort -u 380.2 s on unsorted input, and runiq -f sorted 10.3 s vs uniq 24.9 s on sorted input; on 100M lines (7.7 GB), 34.7 s vs 2529.9 s and 24.9 s vs 105.8 s. An independent run (cuniq's PERFORMANCE.md: Ryzen 7 7800X3D, Windows 11, 32 GiB Wikipedia text at 1.3% cardinality) puts runiq 2.0.0 -f quick | wc -l at 7m19s vs GNU 8.32 sort -u | wc -l on 8 threads at 14m12s, only 1.94x faster (derived from page data).",
+  "status_note": "Maintained at a slow pace: v2.1.0 shipped on 2025-12-13 (dependency refresh and LTO), with 18.6k crates.io downloads in total. MIT-licensed and about 600 lines of Rust (tests included), so it is easy to vendor, but the 31x to 73x ratios over sort -u come from one undocumented machine and probably include locale-collation cost (issue #6 asks for LC_ALL=C runs). The independent cuniq run shows a 1.9x margin on a low-cardinality file.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/README.md",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/src/filters.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/src/options.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/src/statistics.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/templates/basic.tera",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/examples/basic.rs",
+    "https://raw.githubusercontent.com/whitfin/runiq/HEAD/.github/workflows/rust.yml",
+    "https://github.com/whitfin/runiq/commits/main",
+    "https://github.com/whitfin/runiq/issues?q=is%3Aissue",
+    "https://github.com/whitfin/runiq/issues/6",
+    "https://raw.githubusercontent.com/whitfin/bytelines/HEAD/src/std.rs",
+    "https://raw.githubusercontent.com/whitfin/bytelines/HEAD/src/util.rs",
+    "https://raw.githubusercontent.com/whitfin/bytelines/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/whitfin/bytelines/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/src/uniq.c",
+    "https://raw.githubusercontent.com/coreutils/gnulib/master/lib/linebuffer.c",
+    "https://crates.io/api/v1/crates/runiq",
+    "https://crates.io/api/v1/crates/growable-bloom-filter/2.1.1/dependencies",
+    "https://github.com/rust-lang/rust/issues/60673",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/README.md",
+    "https://whitfin.io/blog/filtering-unique-logs-using-rust/ (not reachable: ENOTFOUND)"
+  ],
+  "confidence": 0.75
+}

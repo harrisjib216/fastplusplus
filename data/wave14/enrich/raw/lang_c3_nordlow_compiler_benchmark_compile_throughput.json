@@ -1,0 +1,52 @@
+{
+  "id": "lang:c3/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "C3's c3c compiler at -O0 builds a 40,000-function generated file 1.8-3.7x faster than GCC compiles the C equivalent, but slower than clang.",
+  "what_it_does": "c3c is the reference compiler for C3, a C-like language with modules, generic modules, slices, defer and full C ABI compatibility. It compiles .c3 source to native objects and executables through LLVM (an optional TB backend exists) and links through the system cc by default. It is not a drop-in for gcc: it takes C3 source, not C, although C3 and C objects link together without glue. This entry is about compile speed only, not the speed of the generated code.",
+  "how_it_is_fast": "C3 has no preprocessor or headers, so the front end parses and checks a module once. Its semantic check alone (15.0 us/f) is slightly slower than gcc's -fsyntax-only (11.9 us/f), so the gain over GCC comes from code generation: c3c hands -O0 code to LLVM and writes object files directly, while GCC's -O0 path costs 182 us/f (gcc 15) to 388 us/f (gcc 16) beyond its syntax check (derived from page data). The suite itself does not explain any mechanism. By default c3c also emits each module as a separate compilation unit and spreads code generation over one thread per online CPU, but the harness pins each compiler to one core, so that parallelism did not count here.",
+  "when_to_use": [
+    "Fast debug-build turnaround in C-style code where the alternative toolchain is GCC: c3c's -O0 compile ran 1.8x faster than gcc 15.3.0 and 3.7x faster than gcc 16.2.1 on the same synthetic call chains.",
+    "Projects mixing C and C3 that want C ABI compatibility and modules without headers, where GCC's -O0 compile time is the bottleneck.",
+    "Large single files of plain, non-generic functions: untemplated C3 compiled 109.3 us/f against 256.6 us/f for the generic-module version.",
+    "Platforms c3c lists as native hosts: Windows x64 and Aarch64, macOS x64 and Aarch64, Linux x86, x64, Aarch64 and RISC-V, OpenBSD x64."
+  ],
+  "when_not_to_use": [
+    "If clang is an option: clang compiled the C version faster (Compile 77.9 vs 109.3 us/f, Total 118 vs 153), and clang++ beat C3 on templated code (Compile 128.7 vs 256.6, Total 107 vs 255).",
+    "If compile speed is the main reason: dmd (13 us/f), Zig (110), Odin (147) and the single-pass C compilers tcc (4), cuik (76) and cproc (86) built the same program faster in the same table.",
+    "Heavy use of generic modules: templated builds were 1.7x slower than untemplated, and issue #2383 showed layered generic modules pushing analysis of a trivial program from 71 ms to 7.6 s (closed as Invalid by the maintainer).",
+    "Very small builds: every c3c invocation also processes the standard library unless --use-stdlib=no is passed. In issue #2383 a one-line program took 729 ms to compile on master (August 2025, machine not stated), a fixed cost the 40,000-function benchmark spreads out.",
+    "If you need a stable language: the compiler is at 0.8.5 and the README says 0.8.6 will further refine the standard library."
+  ],
+  "integration": {
+    "form": "compiler toolchain (prebuilt binaries for Windows, Linux static, macOS and OpenBSD; or build from source)",
+    "dependencies": "LLVM (fetched by CMake with C3_FETCH_LLVM=ON, or system LLVM and LLD), CMake, a C compiler and libcurl to build from source; a system cc to link by default (--linker=cc)",
+    "min_toolchain": "c3c 0.8.5 as measured; building c3c needs CMake and LLVM (liblld-21 on Debian/Ubuntu per the README)",
+    "platforms": "Windows x64 and Aarch64, macOS x64 and Aarch64, Linux x86, x64, Aarch64, RISC-V 32 and 64, OpenBSD x64; Wasm32 and several freestanding ELF targets as cross targets",
+    "thread_safety": "not applicable (command-line compiler); c3c defaults to --threads equal to sysconf(_SC_NPROCESSORS_ONLN)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness: the GCC Total cells that give the headline 2.6x and 3.0x are unstable. gcc-15's Total (392 us/f) is double its own link-free Compile (193.8), which would mean about 8 s of linking for one object; clang++'s untemplated Total (236) is nearly three times its Compile (82.4), and its templated Total (107) is below its Compile (128.7). The link-free Compile column (C3 1.8x faster than gcc-15, 3.7x than gcc 16.2.1) is the more reliable comparison.",
+    "Harness: tasks run at the same time in a multiprocessing pool, one worker pinned per CPU, and the CPU each row ran on is not recorded. cpu_topology.py's frequency-based path does not filter out SMT sibling threads (the Intel and cpu_capacity paths do), and the Ryzen AI 7 350 mixes Zen 5 and Zen 5c cores. So two compilers may have shared one physical core, or run on cores of different speed. Builds over 3 s, which includes c3c and all GCC rows, were timed only twice (minimum of 2).",
+    "Unequal work against c3c: its -O0 is 'Safe, no optimizations, emit debug info' (help text), so it writes DWARF and runtime checks, while gcc and clang ran without -g; it also processes and emits the standard library on every build. Pinned to one core, its default 16 codegen threads time-share that core. All of these work against c3c, so its margin over GCC is not inflated by them.",
+    "Nothing checks the output: the harness ignores the built binary's exit code and result, and all compilers built unoptimised code (no -O flag for gcc and clang, -O0 for c3c). These numbers say nothing about -O2 or -O3 build times or run-time speed."
+  ],
+  "pick_this_over_siblings_when": "Among the nordlow/compiler-benchmark entries, dmd (13 us/f) is more than ten times faster, Zig (110/92) is faster and does not slow down on generics, and Odin (147/98) roughly matches C3. rustc (187/238) is slower untemplated but faster templated (238 vs 255). Pick C3 when you want C syntax and the C ABI with faster -O0 builds than GCC, not for the fastest compiler in the table.",
+  "verified_claims_summary": "One run of nordlow/compiler-benchmark on an AMD Ryzen AI 7 350 under Arch Linux (tables committed 2026-10-09) generated 200 x 200 arithmetic call-chain functions per language. c3c 0.8.5 at -O0 compiled the C3 version in 109.3 us per function (Total build+run 153), against gcc 15.3.0 at 193.8 (392) and gcc 16.2.1 at 400.1 (454) for the same C, both at default -O0 with -Wall -Wextra. clang 23.1.1 was faster than c3c at 77.9 (118).",
+  "status_note": "c3c is actively developed (last commits 2026-10-10, 4,830 commits, 5.9k stars, 145 open issues; MIT, with the compiler source under LGPL-3.0) but still pre-1.0 at 0.8.5; the benchmark is a single-machine run by an independent developer whose harness is public and MIT.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/benchmark",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/cpu_topology.py",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/master/process_timer.py",
+    "https://github.com/nordlow/compiler-benchmark/commits/master",
+    "https://github.com/c3lang/c3c",
+    "https://github.com/c3lang/c3c/commits/master",
+    "https://raw.githubusercontent.com/c3lang/c3c/master/README.md",
+    "https://raw.githubusercontent.com/c3lang/c3c/master/src/build/build_options.c",
+    "https://raw.githubusercontent.com/c3lang/c3c/master/src/utils/cpus.c",
+    "https://github.com/c3lang/c3c/issues?q=is%3Aissue+compile+time+slow",
+    "https://github.com/c3lang/c3c/issues/2383"
+  ],
+  "confidence": 0.7
+}

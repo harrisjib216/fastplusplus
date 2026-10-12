@@ -1,0 +1,54 @@
+{
+  "id": "lang:chapel/fourmilab/floating_point_benchmarks#fbench",
+  "one_liner": "Chapel 1.16 port of John Walker's trig-heavy fbench lens ray tracer, timed at 0.53x the run time of a GCC 5.4 -O3 C build on one laptop.",
+  "what_it_does": "fbench traces four rays (the D-line marginal and paraxial rays, and the C- and F-line marginal rays) through a four-surface achromatic telescope objective. It then computes spherical aberration, coma and chromatic aberration, checking the last iteration's output character for character against reference values. The Chapel version (src/chapel/fbench.chpl, about 490 lines) is a straight port of the C reference that uses records and procedures instead of C's global variables. Two compile-time switches add parallelism: partrace runs the four traces as cobegin tasks, and pariter=n splits the iteration loop over n coforall tasks. It is a benchmark program, not a library.",
+  "how_it_is_fast": "Nothing in the repository explains it: the author never examined the generated code and gives no mechanism. Both programs make the same glibc libm calls (sin, asin, tan, cos) per iteration. The documented differences are in the build: chpl --fast compiles the generated C at -O3 with -march=native (Chapel 1.16 GNU defaults), while the C Makefile uses plain -O3. The Chapel loop also discards each iteration's result except the last, while C stores into static globals. Which of these produces the 1.9x is not established.",
+  "when_to_use": [
+    "As one data point that Chapel's C backend can produce scalar double-precision code at least as fast as straightforward C when built with chpl --fast, for a trig-heavy kernel that cannot be vectorised.",
+    "Iteration-farm parallelism: the pariter=n build split 250,000,000 independent iterations over coforall tasks, 235.68 s serial to 48.57 s on 8 laptop threads, and 459.76 s to 17.17 s with 32 threads in the same pariter=32 build on the 64-core server Pallas.",
+    "As a portable, self-validating floating-point kernel for comparing compilers and libm builds across languages; the repository holds the same algorithm in about 30 languages."
+  ],
+  "when_not_to_use": [
+    "As evidence that Chapel beats C in general: the comparison is one laptop run with unequal flags, and the same Chapel code on one thread ran no faster than C on Pallas (see gotchas).",
+    "Fine-grained task parallelism: partrace=true, with four cobegin tasks per iteration, took 16.92 s on one thread against 9.49 s serial for 10,000,000 iterations, and 64.29 s on 8 threads.",
+    "Serial runs with the default runtime: Chapel 1.16 still started two threads (about 200% CPU, 170 s of system time per 250M iterations) until CHPL_RT_NUM_THREADS_PER_LOCALE=1 was set.",
+    "Current toolchains: the port was written for Chapel 1.16.0 (2017) and the repository has not changed since 2021; it has not been checked against current Chapel.",
+    "Reusing the code: CC BY-SA 4.0 is not an OSI software licence, and the flat-surface branch carries a latent port bug (below)."
+  ],
+  "integration": {
+    "form": "single Chapel source file (benchmark program), built with the chpl compiler",
+    "dependencies": "Chapel compiler and runtime (1.16.0 used, C back end with GCC), glibc libm",
+    "min_toolchain": "Chapel 1.16.0 as measured; newer releases not tested",
+    "platforms": "Linux (Xubuntu laptop and the 64-core Fourmilab server Pallas); CPU models not stated",
+    "thread_safety": "not applicable; the Chapel runtime starts worker threads even in a serial build unless CHPL_RT_NUM_THREADS_PER_LOCALE=1",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The author's own data contradicts the 1.9x. On Pallas, which by his check runs the C program at the laptop's speed (static C binary 301.43 and 300.92 s for 166,051,660 iterations, 1.81 us per iteration), the pariter=32 Chapel build on one thread took 459.76 s for 250,000,000 iterations, 1.84 us per iteration (derived from src/chapel/README). The same per-iteration work showed no Chapel advantage on the second machine.",
+    "The baseline is the likely outlier. The same GCC 5.4.0 C run (1.7858 us per iteration) is 2.7x slower than Firefox 55's JavaScript (0.372 on fbench.html), and the author wrote that a recent C maths library seemed to slow trig by up to a factor of two. GCC 5.4.0 is the Ubuntu 16.04 compiler, and glibc 2.23 there had a known 2-4x maths-function slowdown on AVX machines caused by _dl_runtime_resolve's AVX register saves (Launchpad 1663280, fixed in glibc 2.25; search snippet only). A -march=native build like Chapel's may avoid part of that penalty, but this was not tested.",
+    "Benchmark-code bug in the parallel path: runBenchmark's pariter branch only validates when n == iterations, which cannot happen when n counts to iterations/pariter, so the 0.0314 (64-thread) row was never checked against the reference output. Leftover iterations go to task i == 0, which does not exist in 1..pariter, so counts that are not a multiple of pariter silently drop work. The published 250,000,000 runs divide evenly by 8, 32 and 64.",
+    "Latent port bug: the marginal-ray flat-surface branch computes -(asin(n1/n2))*sin(a), where C has -asin((n1/n2)*sin(a)). It is dead code for the all-curved Wyld lens, so results still validate, but a design with a plane surface would trace wrong."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a trig-dominated scalar data point. For array or compute claims with reproducible harnesses, look at the gfortran plb2 matmul entry (about 6% over clang C) or the D matmul in kostya/benchmarks. The CBQN CRLF and Mojo Mandelbrot entries are SIMD wins with named compilers, while this entry rests on one laptop run on an unnamed CPU.",
+  "verified_claims_summary": "In October 2017 on an eight-core Dell laptop under Xubuntu (CPU not named), the serial Chapel 1.16.0 build (chpl --fast, one runtime thread) averaged 0.9427 us per iteration over five 250M-iteration runs. The C reference built with GCC 5.4.0 'gcc -Wall -O3 -lm' averaged 1.7858 us per iteration over five 166M-iteration runs, for a ratio of 0.528. The 0.0314 row is 64-thread Chapel on a different 64-core server against serial C.",
+  "status_note": "Abandoned reference material: last commit 2021-09-24 (5 commits, 6 stars), Chapel port and numbers from 2017, CC BY-SA 4.0; the C and Chapel sources are short enough to re-run, and a re-run with matched -march flags and a current glibc is needed before the 1.9x can be trusted.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/Web_pages/fbench.html",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/c/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/c/fbench.c",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/chapel/README",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/chapel/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/chapel/fbench.chpl",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/javascript/README",
+    "https://raw.githubusercontent.com/chapel-lang/chapel/release/1.16/man/chpl.rst",
+    "https://raw.githubusercontent.com/chapel-lang/chapel/release/1.16/make/compiler/Makefile.gnu",
+    "https://github.com/Fourmilab/floating_point_benchmarks",
+    "https://github.com/Fourmilab/floating_point_benchmarks/commits",
+    "https://lists.snapcraft.io/archives/foundations-bugs/2018-June/360669.html (WebSearch snippet only)",
+    "https://bugzilla.redhat.com/show_bug.cgi?id=1421121 (WebSearch snippet only)"
+  ],
+  "confidence": 0.65
+}

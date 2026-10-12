@@ -1,0 +1,53 @@
+{
+  "id": "lang:d/kostya/benchmarks#matmul",
+  "one_liner": "D matmul in kostya/benchmarks: Phobos dotProduct's two partial sums run about 2x faster than the suite's single-accumulator C loop.",
+  "what_it_does": "matmul/matmul.d allocates two 1500x1500 double matrices as GC-allocated jagged arrays, transposes the second, and fills each output cell with std.numeric.dotProduct(arow, crow); the C version (matmul/matmul.c) does the same transpose but computes each cell with a plain one-accumulator loop. The reusable piece is Phobos std.numeric.dotProduct, a standard-library function over two slices, not a D language feature or a matmul library.",
+  "how_it_is_fast": "dotProduct (std/numeric.d) walks the arrays through raw pointers in 16-element blocks, alternating products into two accumulators (sum0, sum1), then 4-element blocks, then a scalar tail, so the loop carries two independent floating-point add chains instead of one. The C, Rust, Zig and Nim loops keep a single accumulator under strict IEEE semantics (no -ffast-math), so the compiler can neither reassociate nor vectorize the reduction and every iteration waits on the previous add. Halving the dependency chain roughly halves the time: C at 3.034 s versus gdc at 1.505 s (derivation from the table, not stated by the suite).",
+  "when_to_use": [
+    "As a demonstration that multiple partial sums matter for strict-FP reductions: any dot-product or sum loop compiled without -ffast-math is latency-bound on one accumulator",
+    "D code that needs a portable, dependency-free dot product of double or float slices: std.numeric.dotProduct is already in Phobos and beats a hand-written single-accumulator loop",
+    "Small or medium vectors where linking BLAS is not worth it and a few-ulp change in summation order is acceptable"
+  ],
+  "when_not_to_use": [
+    "As evidence that D beats C: in attractivechaos/plb2, with the same i-k-j loop in both languages on Apple M1, D ldc2 1.35.0 takes 0.57 s versus C clang 15.0.0 0.54 s",
+    "Real matrix multiplication: in the same table the BLAS-backed D/ldc2 (lubeck) row runs in 0.042 s and C++ Eigen in 0.081 s, about 36x and 19x faster than D/gdc",
+    "When bit-for-bit agreement with a sequential reference sum is required: two partial sums change rounding",
+    "When the C side can be changed: two or more accumulators, or -ffast-math or -fassociative-math, in C give the same effect without switching language"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond Phobos and druntime (std.numeric); the benchmark program also uses the GC for its matrices",
+    "min_toolchain": "any current D compiler; measured with gdc 14.2.0, ldc2 1.41.0 and dmd v2.111.0",
+    "platforms": "any (portable scalar D, no intrinsics); measured on x86-64 Intel Xeon E-2324G",
+    "thread_safety": "not documented; the function reads two const slices and keeps only local state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Not like for like: the C, Rust, Zig and Nim versions that tie at about 3.03-3.12 s each use one accumulator, while the D program calls a hand-unrolled two-accumulator library kernel; the results therefore differ in the last bits, and the harness self-test only checks calc(101) within 0.1 of -18.67.",
+    "Flags favour C, not D: C gets -O3 -march=native -flto=auto from common/commands.mk, the D builds have no -march and no LTO, so the D lead is not a codegen advantage.",
+    "The D/gdc row reports a peak RSS increase of 4.00 MiB while D/ldc2 and D/dmd report 70.38 MiB for the same four 1500x1500 matrices (xtime.rb samples /proc/PID/statm every 10 ms); the suite gives no explanation, so treat the gdc memory column as unreliable.",
+    "The timed region (between the notify start and stop messages) includes matrix generation, GC allocation and the transpose, not only the multiply."
+  ],
+  "pick_this_over_siblings_when": "Unlike the Fortran plb2 sibling (same i-k-j loop as C, 0.51 s versus 0.54 s) this is not a language-level win, so pick it only as the two-accumulator lesson or when you are already writing D; for actual matrix products, BLAS wrappers and Julia packages in the category (Gaius.jl and the lubeck row) are far faster.",
+  "verified_claims_summary": "kostya/benchmarks (README updated 2026-07-19, Intel Xeon E-2324G, medians) times 1500x1500 double matmul at 1.505 s for D/gdc 14.2.0, 1.722 s for D/ldc2 1.41.0 and 1.880 s for D/dmd 2.111.0 versus 3.034 s for C/gcc 16.1.0 and 3.067 s for C/clang 22.1.8 (-O3 -march=native -flto=auto), so about 2.0x, 1.76x and 1.61x (derived from page data); the gap comes from Phobos dotProduct's two partial sums against a one-accumulator strict-FP C loop.",
+  "status_note": "kostya/benchmarks is active (2.9k stars, MIT, results refreshed 2026-07-19) and std.numeric.dotProduct ships with every D compiler, but the entry documents a kernel difference rather than a reusable D advantage.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.d",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/xtime.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.rs/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.zig",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.nim",
+    "https://raw.githubusercontent.com/kostya/benchmarks/master/matmul/matmul.cpp",
+    "https://github.com/kostya/benchmarks/tree/master/common",
+    "https://github.com/kostya/benchmarks/issues?q=matmul",
+    "https://raw.githubusercontent.com/dlang/phobos/master/std/numeric.d",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/README.md",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/d/matmul.d",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/d/Makefile"
+  ],
+  "confidence": 0.8
+}

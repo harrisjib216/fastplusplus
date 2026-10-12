@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/zkxs/cuniq",
+  "one_liner": "Rust CLI that counts distinct lines (or per-line occurrences) with a hash table instead of GNU sort -u / sort | uniq -c.",
+  "what_it_does": "cuniq reads newline-delimited files or stdin and prints either the number of distinct lines (the job of `sort -u | wc -l`) or, with -c, a uniq -c style report of each distinct line and its count (unsorted, or byte-order sorted with -s). Three modes: exact (stores every distinct line), near-exact (stores only 64-bit hashes) and estimate (HyperLogLog). It does not print the deduplicated lines themselves, so it replaces the counting pipelines, not `sort -u` as a filter. The counters are also published as the line_cardinality library crate.",
+  "how_it_is_fast": "It swaps the O(n log n) external merge sort for O(n) inserts into a hashbrown HashTable keyed by ahash, copying a line into the table only the first time it is seen (entry API with deferred clone). Files are memory-mapped and split on newlines with memchr; with more than one thread, workers hash 128 MiB newline-aligned chunks while a single thread does all table inserts, so exact mode barely scales (2m47s on 1 thread vs 2m49s on 16) while near-exact mode, which inserts only hashes, drops to 59 s. Estimate mode keeps one 64 KiB HyperLogLog sketch per thread and merges them by register max, so it is fully parallel (9 s on 32 GiB). Large tables are leaked at exit to skip destructor time.",
+  "when_to_use": [
+    "Counting distinct lines in multi-gigabyte logs or dumps where duplicates dominate (the author's file had 1.3% distinct lines); expect several times the speed of `sort -u | wc -l`.",
+    "Per-line occurrence counts (`uniq -c` style) when output order does not matter, or when sorting the deduplicated set afterwards with -cs is acceptable.",
+    "Approximate distinct counts on very large inputs with --mode=estimate: fixed 64 KiB of registers by default (tunable with --size), about 1% error, scales with cores until disk read is the limit.",
+    "Quick cardinality checks with --mode=near-exact when a 64-bit hash collision (undercount by one) is acceptable; the README says this is safe below roughly 10 million distinct lines.",
+    "Embedding the same counters in a GPL-compatible Rust program through the line_cardinality crate."
+  ],
+  "when_not_to_use": [
+    "You need the unique lines themselves (`sort -u` as a filter): cuniq only prints a count or a count report; the TODO file suggests piping `cuniq -cs` into awk.",
+    "Nearly every line is distinct and you want a sorted report: the README says `sort | uniq -c` wins there because cuniq builds the hash table and then sorts almost the whole input anyway.",
+    "The distinct set does not fit in RAM: exact mode keeps every distinct line in its own heap allocation and never spills to disk, unlike GNU sort; peak memory is not reported in the benchmark table.",
+    "You need sort's key, field, numeric, case-folding or locale-collation options: cuniq compares raw bytes and only splits on \\n.",
+    "Licensing or maturity matter: GPL-3.0-or-later, a single author, 4 stars and no external issue reports, so edge cases have had little outside testing."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "ahash, bstr, cfg-if, clap, memchr, line_cardinality (hashbrown, voracious_radix_sort); optional memmap2, crossbeam-channel and num_cpus (default features)",
+    "min_toolchain": "Rust 1.85 (edition 2024); the release workflow and the author's benchmark builds use nightly -Z build-std",
+    "platforms": "any platform with Rust std; release binaries for x86-64 Windows, x86-64 Linux (gnu), x86-64 and aarch64 macOS; AUR package",
+    "thread_safety": "Command-line tool; line_cardinality counters are single-owner structs, and only HyperLogLog supports merging per-thread copies",
+    "drop_in_for_baseline": "partial — the count output matches `sort -u | wc -l` and the -c report uses uniq -c's 7-wide count column, but -c output is unsorted unless -s, -s sorts by raw bytes (LC_ALL=C order, not locale collation), none of sort's or uniq's other flags exist, and the deduplicated lines are never printed"
+  },
+  "gotchas": [
+    "Empty-line edge case in the multithreaded path (found by reading cuniq/src/io/util.rs): ChunkIterator ends each chunk just before the first newline at or after the cut point, and the line splitter only emits a trailing piece when it is non-empty. When a cut lands exactly on the newline of an empty line, that empty line is dropped; a Python transcription of ChunkIterator and LineIterator turns 'a\\n\\nb\\n' into only 'a' and 'b' at chunk sizes 0 and 2. Estimate mode on a single file uses chunk size = file length / threads, so a file smaller than the thread count is split at size 0 and loses every empty line. The default on any multi-core machine is the multithreaded path, so `cuniq` can undercount the empty line by one and `cuniq -c` can under-report its count; the effect on the 32 GiB table (about 256 cuts of 128 MiB) is negligible.",
+    "Line endings depend on the input path: stdin and --no-memmap reads use bstr for_byte_line, which strips a trailing \\r before \\n, while memory-mapped and multithreaded file reads split on \\n only and keep the \\r. Files with mixed CRLF and LF endings, or stdin mixed with file arguments, can give different counts than the same data read another way and than GNU sort, which keeps the \\r.",
+    "With more than one thread (the default) every file argument is memory-mapped and --no-memmap is ignored, because parallel_process_input never checks it; on Unix the single-threaded default is memmap too. Pipes passed as file arguments (for example bash process substitution) therefore cannot be mapped and fail with 'failed to memmap file' unless you pipe through stdin or use --threads=1 --no-memmap, and a file modified while mapped is outside the code's safety contract.",
+    "ahash is built with compile-time-rng only, so the hash seed is fixed per binary and shared by everyone using a released binary; near-exact mode's collision undercount is therefore reproducible for crafted input. Released binaries are also built without -C target-cpu=native, which the README recommends for speed, so they may not match the benchmarked build."
+  ],
+  "pick_this_over_siblings_when": "Pick cuniq over huniq or runiq when you want a count or a count report, not the unique lines: the author's own run on the same 32 GiB file has huniq 2.7.0 at 6m05s (count) and 9m32s (-c) and runiq's quick filter at 7m19s against cuniq's 2m47s exact count and 3m08s report. Use huniq or runiq when you need deduplicated output, and hist-rs when you want the report ranked by frequency like `sort | uniq -c | sort -n`.",
+  "verified_claims_summary": "The author timed single bash `time` runs on Windows 11 (Ryzen 7 7800X3D, 16 threads) over a private 32 GiB Wikipedia dump with 6.03 billion lines, 78 million distinct: exact count 2m47s on 1 thread against Git for Windows GNU sort 8.32 `sort -u | wc -l` at 14m12s on 8 threads (about 5.1x), report `cuniq -c` 3m08s against `sort | uniq -c` 28m47s and gawk 5.3.2 25m03s, and the sorted report 3m27s (about 8.3x). The cuniq build flags and sort's locale are not stated, and the -c rows are listed as 1 thread although the shown command defaults to all 16 threads; the criterion benches on a 4-million-line file check the count but publish only plots.",
+  "status_note": "Single-author project: 2.0.0 released 2025-10-14, dependency and CI bumps through 2025-12-22, no issues filed; usable as a CLI today, but GPL-3.0-or-later limits copying the line_cardinality code into non-GPL projects.",
+  "sources_read": [
+    "https://github.com/zkxs/cuniq",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/README.md",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/PERFORMANCE.md",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/MAINTENANCE.md",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/Cargo.toml",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/build.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/main.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/hash.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/cli_args.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/mod.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/parallel.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/memmap.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/buf.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/read.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/src/io/util.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/cuniq/benches/benches.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/Cargo.toml",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/lib.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/count_unique_impl/mod.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/count_unique_impl/hashtable_lossless.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/count_unique_impl/hashtable_lossy.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/count_unique_impl/hyperloglog.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/line_cardinality/src/count_unique_impl/radixsort_lossy.rs",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/zkxs/cuniq/HEAD/.github/workflows/ci.yml",
+    "https://github.com/zkxs/cuniq/commits/master",
+    "https://github.com/zkxs/cuniq/issues?q=is%3Aissue",
+    "https://github.com/zkxs/cuniq/releases",
+    "https://crates.io/api/v1/crates/cuniq",
+    "https://crates.io/api/v1/crates/line_cardinality",
+    "https://raw.githubusercontent.com/BurntSushi/bstr/master/src/io.rs"
+  ],
+  "confidence": 0.72
+}

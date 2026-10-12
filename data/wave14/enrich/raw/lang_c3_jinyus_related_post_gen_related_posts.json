@@ -1,0 +1,57 @@
+{
+  "id": "lang:c3/jinyus/related_post_gen#related-posts",
+  "one_liner": "C3 entry of the related_post_gen benchmark: same top-5 related-posts algorithm as the C++ entry, about 1.23x faster single-core.",
+  "what_it_does": "A standalone C3 program (c3/related.c3, 124 lines, plus c3/json.c3, 116 lines) that reads posts.json, indexes posts by tag, counts shared tags for every pair and writes each post's top 5 related posts as JSON. It is a benchmark submission written by one contributor ('Followed the zig implementation', PR #531), not a library: there is no API to call, only code to read or copy. JSON parsing uses the C3 standard library's std::encoding::json; the output JSON is assembled by hand with string appends.",
+  "how_it_is_fast": "The algorithm is the same as the C++ entry: a tag-to-post-index map, a uint8 shared-tag counter per post that is zeroed and refilled for every post, a 64-byte-block 'any count above the current minimum' pre-check, and insertion into a fixed top-5 array. The difference is the build: c3c -O3 sets SAFETY_OFF in c3c 0.7.9's builder.c, so the counting and top-5 loops run without bounds checks, while the C++ entry indexes with std::vector::at() in the same loops. With 4-5 of 28 tags per post, the 60k run does about 2.6 billion counter increments (derived from gen_fake_posts.py parameters), so a compare-and-branch per increment is a plausible source of most of the gap; the C3 side actually does more hashing (has_key/set/get_ref while indexing and a map get per tag per post), which is negligible at this scale.",
+  "when_to_use": [
+    "As evidence that C3 compiled through LLVM reaches C++-class speed on a scalar, cache-resident counting loop, when you read it together with the safety-off caveat.",
+    "As a compact reference for porting the suite's tag-index, uint8 counter and blocked top-5 technique to C3 or C: under 250 lines, MIT-licensed.",
+    "When comparing C3 against other systems languages in the same suite and harness, single-threaded and with JSON excluded from the timed region."
+  ],
+  "when_not_to_use": [
+    "As proof that C3 beats C++ at equal safety: the C3 binary runs with runtime checks off, which the suite's own rules forbid, while the C++ baseline keeps them; no number exists for a rule-compliant C3 build (c3c -O1 keeps safety checks at the same LLVM optimisation level).",
+    "As a JSON writer for real data: titles, tags and ids are written without escaping, so any quote, backslash or control character produces invalid JSON.",
+    "Multi-core work: there is no concurrent C3 entry; the suite's multicore table is led by D and C++ concurrent versions.",
+    "As a margin at 5k posts: both programs report integer milliseconds, so 10.50 ms versus 12.20 ms is close to the timer's resolution."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "C3 standard library only (std::collections HashMap and List, std::encoding::json, std::io, std::time::clock)",
+    "min_toolchain": "c3c 0.7.x (code updated for 0.7.1 in May 2025; the suite's Dockerfile pins c3c 0.7.9)",
+    "platforms": "Linux x86-64 as benchmarked (c3-linux release tarball on an Arch Linux image); other platforms not documented for this program",
+    "thread_safety": "Single-threaded program; not applicable",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build flags break the suite's rules: run.sh compiles with `c3c compile related.c3 json.c3 -O3`, and in c3c 0.7.9 every level from -O2 up sets safety_level = SAFETY_OFF (no bounds or other runtime checks), while the rules list 'No: Disabling runtime checks (bounds etc)' and the C++ baseline keeps .at() checks in its hot loops. The 1.23x gap is therefore C3-without-checks against C++-with-checks, not a like-for-like language comparison.",
+    "The hand-written JSON output in json.c3 appends raw strings between quotes with no escaping; the suite's Faker-generated titles happen to contain no quotes or backslashes, so verify.py passes, but the 'Be production ready' rule is not met. Output writing is outside the timed region, so this does not change the reported numbers.",
+    "Timed region: both programs start the clock after JSON parsing and stop it before writing, so the README numbers exclude JSON entirely. Whole-process wall time in the raw files tells a different story at 60k posts: C3 1.76-1.79 s and 291 MB peak versus C++ 3.35-3.40 s and 460 MB, mostly nlohmann/json against a hand-rolled writer.",
+    "Both versions fill missing top-5 slots with post index 0 at score 0, so a post with fewer than five tag-sharing posts would list post 0, possibly itself; the generated data (4-5 of 28 tags per post) never triggers it."
+  ],
+  "pick_this_over_siblings_when": "In the same suite table the Rust entry (1.23 s total) and D (v2) (1.10 s) are faster than C3 (1.28 s) against the same C++ baseline; whether those builds keep runtime checks was not checked here, so treat all three as same-harness language rows and cite C3 only for C3-specific questions. The C3 compiler compile-throughput sibling is a different claim (build speed, not program speed).",
+  "verified_claims_summary": "The suite README's single-core table, from an AWS c7a.xlarge (4 vCPU, 8 GB, Ubuntu 24.04; CPU model not stated), gives C3 (c3c 0.7.9 -O3) mean processing times of 10.50 ms, 141.00 ms and 1.13 s for 5k, 20k and 60k posts against C++ (clang++ -O3 -std=c++20 from an unpinned Arch Linux image, nlohmann/json) at 12.20 ms, 164.33 ms and 1.39 s, totals 1.28 s and 1.57 s (about 1.23x). JSON is excluded from both timings; 10 runs at 5k and 3 runs each at 20k and 60k, and the C3 raw results (committed 2026-02-11) and C++ raw results come from separate runs.",
+  "status_note": "The suite is active (MIT, 500 stars, results refreshed February 2026), but the C3 solution is a one-off contributor submission last changed in May 2025 and built with safety checks off; it is copyable as example code, not a maintained library.",
+  "sources_read": [
+    "https://github.com/jinyus/related_post_gen",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/readme.md",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/setup.md",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/run.sh",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/extract_results.dart",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/verify.py",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/gen_fake_posts.py",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/c3/related.c3",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/c3/json.c3",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/cpp/main.cpp",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/dockerfiles/c3.Dockerfile",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/dockerfiles/base.Dockerfile",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/results/raw_results_c3.md",
+    "https://raw.githubusercontent.com/jinyus/related_post_gen/main/results/raw_results_cpp.md",
+    "https://github.com/jinyus/related_post_gen/commits/main/c3",
+    "https://github.com/jinyus/related_post_gen/commits/main/results/raw_results_c3.md",
+    "https://github.com/jinyus/related_post_gen/issues?q=c3",
+    "https://github.com/jinyus/related_post_gen/pulls?q=is%3Apr+c3",
+    "https://github.com/jinyus/related_post_gen/pull/531",
+    "https://raw.githubusercontent.com/c3lang/c3c/v0.7.9/src/build/builder.c"
+  ],
+  "confidence": 0.75
+}

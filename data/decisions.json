@@ -27277,7 +27277,8 @@
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
       "The 2x comes from Phobos dotProduct's two partial sums against a single-accumulator C loop, not the language; like for like (plb2) D ldc2 0.57 s is slower than C 0.54 s; D builds lack -march and -flto.",
-      "The JSON3.jl enricher found that kostya/benchmarks' 2026-07-19 update re-measured only the Primes table and the environment table: the Json table rows kept their 2025-08-17 values (gcc 14.2.0, clang 19.1.7), so the compiler versions recorded here (gcc 16.1.0, clang 22.1.8) describe the current environment table and may not be the toolchain behind this table's rows; whether this table was re-run on 2026-07-19 was not checked."
+      "The JSON3.jl enricher found that kostya/benchmarks' 2026-07-19 update re-measured only the Primes table and the environment table: the Json table rows kept their 2025-08-17 values (gcc 14.2.0, clang 19.1.7), so the compiler versions recorded here (gcc 16.1.0, clang 22.1.8) describe the current environment table and may not be the toolchain behind this table's rows; whether this table was re-run on 2026-07-19 was not checked.",
+      "Confirmed: Phobos dotProduct uses two partial sums while the C, Rust, Zig and Nim loops use one accumulator, and C 3.034 s vs gdc 1.505 s fits a halved add chain (derived). New anomaly: the D/gdc memory column shows +4.00 MiB against +70.38 MiB for ldc2 and dmd on the same matrices, cause not found, so the gdc memory column is unreliable."
     ],
     "measurements": [
       "verifier batch-02 (wave 14)",
@@ -28230,10 +28231,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "c3c 0.7.9 -O3 turns safety checks off while the C++ side keeps std::vector::at() bounds checks (same_opt_level false); the timed region excludes JSON on both sides; no mechanism given by the source."
+      "c3c 0.7.9 -O3 turns safety checks off while the C++ side keeps std::vector::at() bounds checks (same_opt_level false); the timed region excludes JSON on both sides; no mechanism given by the source.",
+      "Confirmed from c3c v0.7.9 builder.c: -O2 and up set SAFETY_OFF (runtime checks disabled) while -O1 keeps checks at the same LLVM level, which breaks the suite's rule against disabling runtime checks while the C++ baseline keeps .at() checks; derived from gen_fake_posts.py's parameters, about 2.6e9 counter increments at 60k posts, so a bounds check per increment plausibly explains most of the 1.23x gap. Second flaw: the hand-written JSON writer in json.c3 never escapes strings, failing the 'production ready' rule (outside the timed region, so the numbers are unchanged)."
     ],
     "measurements": [
-      "verifier batch-28 (wave 14)"
+      "verifier batch-28 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -28241,10 +28244,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "The win comes from implementation tricks (counter pointers dodging .at() checks, an 11-wide unroll, reset fused into the scan) rather than D; rows from separate runs with the CPU model and clang version unstated (ldc2 1.41.0 -O3, bounds checks on)."
+      "The win comes from implementation tricks (counter pointers dodging .at() checks, an 11-wide unroll, reset fused into the scan) rather than D; rows from separate runs with the CPU model and clang version unstated (ldc2 1.41.0 -O3, bounds checks on).",
+      "Harness flaw: the rules treated C++ and D differently. The C++ hot increment moved from a raw pointer to .at() in commit 6104965 (October 2023) and issue #350 rejected D .ptr indexing in the same loop, yet D v2 skips the per-increment bounds check anyway by storing GC-held SharedCount* pointers in @safe code; C++ could do the same, so the win is implementation, not language. The 20k and 60k posts.json are regenerated each run with unseeded random, so the C++ and D rows were timed on different datasets in separate runs; verify.py checks the 5k round only. The repo is now served as zupat/related_post_gen."
     ],
     "measurements": [
-      "verifier batch-28 (wave 14)"
+      "verifier batch-28 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -28779,10 +28784,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "TechEmpower tie at the 10 GbE cap (6,995,129 vs lithium 6,993,976; cinatra above); the event loop is the author's own C JNI library (EpollCore.c, gcc -Ofast); screenshot-only source; TFB master tags the test 'broken'."
+      "TechEmpower tie at the 10 GbE cap (6,995,129 vs lithium 6,993,976; cinatra above); the event loop is the author's own C JNI library (EpollCore.c, gcc -Ofast); screenshot-only source; TFB master tags the test 'broken'.",
+      "Harness flaw: the TFB app seeds its string cache with the methods plus 'HTTP/1.1' only and sets onlyCachedHeaders = true, so no request headers are stored (Connection and Content-Length ignored); in the current source an HTTP/1.0 request hits an NPE and returns 400; it is classified Realistic although the library default is false. The Server name is trimmed to 'W' (7 bytes less per response; the TFB rule wants the framework's normal header). The measured build is the 2020 release 0.4 on JDK 11.0.3; TFB marked it broken on 2026-02-10 (PR #10708); the macOS NIO fallback gives 58,623 vs 616,765 req/s (issue #10); the repo was renamed wizzardo/webery."
     ],
     "measurements": [
-      "verifier batch-44 (wave 14)"
+      "verifier batch-44 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -29332,10 +29339,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "First-party single bash-time runs on Windows (Git Bash GNU coreutils 8.32, flags and locale unknown); the 32 GiB input is private; hash vs sort comparison (sort -u on 8 threads vs cuniq on 1); the like-for-like sorted-report ratio is 8.3x; 4 stars."
+      "First-party single bash-time runs on Windows (Git Bash GNU coreutils 8.32, flags and locale unknown); the 32 GiB input is private; hash vs sort comparison (sort -u on 8 threads vs cuniq on 1); the like-for-like sorted-report ratio is 8.3x; 4 stars.",
+      "Edge-case bug by reading cuniq/src/io/util.rs ChunkIterator (the default multithreaded path): when a chunk cut lands on an empty line's newline, that empty line is dropped (a Python transcription turns 'a\\n\\nb\\n' into a, b), and in estimate mode a file smaller than the thread count is split with chunk size 0, so every empty line is lost; the effect on the 32 GiB table is negligible. CRLF handling depends on the input path (bstr strips \\r on stdin, memmap keeps it); --no-memmap is ignored when threads > 1, so pipes passed as file arguments fail with 'failed to memmap file'; the ahash seed is fixed at compile time; the README's 'PGO' is flamegraph profiling only; the table lists -c rows as 1 thread but the shown command defaults to 16. cuniq cannot print the unique lines themselves."
     ],
     "measurements": [
-      "verifier batch-62 (wave 14)"
+      "verifier batch-62 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -30108,10 +30117,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "The unsorted 31x/73x rows are hashing vs GNU sort -u (algorithmic); no hardware, versions or locale; tables date from January 2024; the only like-for-like rows (sorted runiq vs uniq, 2.4-4.2x) are unexplained."
+      "The unsorted 31x/73x rows are hashing vs GNU sort -u (algorithmic); no hardware, versions or locale; tables date from January 2024; the only like-for-like rows (sorted runiq vs uniq, 2.4-4.2x) are unexplained.",
+      "Independent run found in cuniq's PERFORMANCE.md (Ryzen 7 7800X3D, Windows 11, 32 GiB): runiq 2.0.0 -f quick | wc -l 7m19s against 8-thread GNU 8.32 sort -u | wc -l 14m12s, only 1.94x (derived), not the README's 31-73x; huniq was faster (6m05s). Corrections: the quick filter hashes with xxh3_64, not xxh64, and builds only because growable-bloom-filter enables xxh3 (feature unification); bytelines strips \\r, so CRLF and LF lines dedupe as equal; the likely cause of the uniq gap is gnulib's getc-per-byte reader against memchr; stdout is not a BufWriter, likely one write(2) per line, so the README timings understate runiq."
     ],
     "measurements": [
-      "verifier batch-82 (wave 14)"
+      "verifier batch-82 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -30137,10 +30148,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Baseline is GCC 5.4.0 -O3 (src/chapel/README shares the C run with the JavaScript notes), not 3.2.3; flags unequal since chpl --fast adds -march=native under Chapel 1.16 defaults; same glibc libm on both sides with the mechanism unexplained; CPU not named; the 64-thread row is not comparable. CC-BY-SA-4.0, reference usability."
+      "Baseline is GCC 5.4.0 -O3 (src/chapel/README shares the C run with the JavaScript notes), not 3.2.3; flags unequal since chpl --fast adds -march=native under Chapel 1.16 defaults; same glibc libm on both sides with the mechanism unexplained; CPU not named; the 64-thread row is not comparable. CC-BY-SA-4.0, reference usability.",
+      "The author's own data contradicts the 1.9x: on Pallas the pariter=32 build on 1 thread ran 1.84 us per iteration against static C's 1.81 (derived), so no Chapel edge; the C baseline is likely an outlier (Firefox JS runs at 0.372 of the same C run; a glibc 2.23 AVX slowdown, Launchpad 1663280, is a candidate, untested). Code bug in fbench.chpl's pariter path: validation never runs (n never reaches iterations), so the 0.0314 row is unvalidated, and extras go to a nonexistent task i==0 and are dropped; the flat-surface port bug is confirmed (dead code)."
     ],
     "measurements": [
-      "verifier batch-80 (wave 14)"
+      "verifier batch-80 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -30354,10 +30367,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Unoptimised compile throughput (gcc default -O0, c3c -O0): beats gcc/g++ only (Compile 109.3 vs 193.8/400.1 us per function), slower than clang (118 vs 153) and the templated clang++ row, and Check is slower than gcc; noisy cells, README prose from a different run; not a language-level claim."
+      "Unoptimised compile throughput (gcc default -O0, c3c -O0): beats gcc/g++ only (Compile 109.3 vs 193.8/400.1 us per function), slower than clang (118 vs 153) and the templated clang++ row, and Check is slower than gcc; noisy cells, README prose from a different run; not a language-level claim.",
+      "Harness flaws: gcc-15's Total of 392 is double its Compile of 193.8, so the headline 2.6x/3.0x is shaky and the Compile column (1.8x/3.7x) is more reliable; the concurrent pool does not record the core per row, cpu_topology.py's frequency path skips the SMT-sibling filter on the Zen 5 plus Zen 5c CPU, and builds over 3 s are timed twice. Unequal work against c3c: its -O0 is 'Safe, emit debug info', the stdlib is built every time, and 16 threads run on one pinned core. Clang is still faster."
     ],
     "measurements": [
-      "verifier batch-86 (wave 14)"
+      "verifier batch-86 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
