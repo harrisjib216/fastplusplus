@@ -1,0 +1,109 @@
+[
+  {
+    "id": "lang:julia/kostya/benchmarks#matmul-no-blas",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The measurement meets A methodology (matmul/matmul.jl vs matmul/matmul.c, flags in common/commands.mk and matmul/Makefile, gcc 16.1.0, Intel Xeon E-2324G) and the 1.113s vs 3.034s rows are on the README, but the two sides do not do the same work at the same optimisation level: the Julia loop is an axpy loop order with @fastmath, @simd ivdep and @inbounds, while the C loop is a strict-FP scalar dot-product reduction with no -ffast-math, so the language-level claim is capped at C (unequal-work precedent, as for the batch-06 staged brainfuck rows).",
+    "corrections": {
+      "claimed_speedup": "Matmul (MSIZE 1500): Julia (no BLAS) 1.113s (MAD 0.017) vs C/gcc 3.034s (MAD 0.001) and C/clang 3.067s (about 2.7x vs C/gcc, derived from page data); energy 49.41 J vs 113.24 J. The other plain-loop rows (Rust 3.067s, Zig 3.071s, Go 3.153s, Java 3.057s) cluster with C. Library-backed rows (C++/g++ Eigen 0.081s, Julia with OpenBLAS threads: 1 0.170s) are a different algorithm class and are not the claim.",
+      "baseline": "C/gcc matmul (matmul/matmul.c, Attractive Chaos): B is transposed, then a scalar dot-product triple loop (t += p[k] * r[k]) on double** rows; gcc 16.1.0 -O3 -march=native -flto=auto -std=c23, no -ffast-math and no restrict",
+      "baseline_stdlib": [],
+      "compiler_and_flags": "C baseline: gcc 16.1.0 -Wall -Wextra -pedantic -Wcast-align -O3 -march=native -flto=auto -Wa,-mbranches-within-32B-boundaries -std=c23 (common/commands.mk GCC_BUILD); the C/clang row uses clang 22.1.8 with the same flags (CLANG_BUILD). Julia run as julia --optimize=3 --check-bounds=no matmul.jl 1500 (common/commands.mk JULIA_RUN, matmul/Makefile run[matmul.jl]) with no -t flag; README Environment lists Julia v\"1.11.6\" while docker/Dockerfile at HEAD pins julia-1.12.6.",
+      "caveats": "Not an equal-work, equal-optimisation comparison. The C inner loop is a scalar floating-point reduction (t += p[k] * r[k]) that gcc and clang at -O3 may not reorder or vectorise without -ffast-math, so it runs as one serial dependency chain; the Julia inner loop uses the other loop order (c[m,n] += a[m,k] * b[k,n] down a column-major column), whose iterations are independent and vectorise without reassociation, plus @simd ivdep (no alias checks), @fastmath (FMA contraction and reassociation allowed) and @inbounds. The C file is built with -std=c23, an ISO mode in which GCC's documented default is -ffp-contract=off, so the gcc build does not even fuse multiply-adds. A C version with the same loop order or with -ffast-math would likely close most of the gap. The Julia file wraps the outer loop in Threads.@threads, but neither JULIA_RUN nor docker/Dockerfile sets -t or JULIA_NUM_THREADS, so Julia's default of one thread applies (inferred from the build files, not stated on the README). The timed region includes matrix generation and allocation on both sides; Julia is warmed by calc(101) before timing, so JIT compilation of mul is outside the timed region. The README's Julia version (1.11.6) disagrees with the Dockerfile at HEAD (1.12.6), so the version behind the published row is uncertain. Capped at C for the mismatched optimisation level and loop structure.",
+      "same_algorithm": false,
+      "same_opt_level": false,
+      "language_level_claim": true,
+      "why_faster": "Loop order and FP semantics, not the language: Julia's axpy loop over contiguous column-major columns has independent iterations that LLVM vectorises for the host CPU, helped by @simd ivdep and @fastmath, while the C dot-product loop is a strict-FP serial reduction that gcc -O3 without -ffast-math cannot vectorise and that runs at floating-point add latency (1500^3 = 3.375e9 dependent adds in 3.034s is about 1.1e9 adds/s, a rough estimate derived from page data). Derived from reading matmul/matmul.jl and matmul/matmul.c; the README states no mechanism."
+    },
+    "notes": "Numbers, flags, CPU and code check out; tier stays C because same_algorithm and same_opt_level are both false (axpy plus @fastmath/@simd ivdep in Julia vs strict-FP dot-product reduction in C). Corrected compiler_and_flags (the baseline is C built with gcc -std=c23, not g++ -std=c++23) and baseline_stdlib (C with glibc only, no libstdc++). D is arguable under the crippled-baseline precedent, but the C side is a release build (-O3 -march=native -flto) with a cache-friendly transpose, not a debug or naive build, so C matches batch-06.",
+    "urls_opened": [
+      "https://github.com/kostya/benchmarks",
+      "https://github.com/kostya/benchmarks/commits/master",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.jl",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.c",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/Makefile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul-native.jl",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+      "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb"
+    ]
+  },
+  {
+    "id": "lang:luajit/kostya/jit-benchmarks#knucleotide",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Upgraded C to A: the benchmark code is public (knucleotide/test.lua vs knucleotide/test.cpp, input from knucleotide/helper.c), the C++ build flags are in tools/languages.rb (-O3 -march=native -fomit-frame-pointer -funroll-loops -std=c++11), the README lists gcc 12.2.0 and LuaJIT 2.1.0-beta3, and the CPU is an AMD Ryzen 7 3800X; both sides count every k-mer in a string-keyed hash table at release settings (same_algorithm and same_opt_level true). The record's cap at C (README gives no mechanism) is not a tier criterion.",
+    "corrections": {
+      "claimed_speedup": "knucleotide: Lua JIT 0.77s vs C++ 2.09s (about 2.7x, derived from page data), one measured run per row (Runs 1); memory 27.1 MB vs 30.9 MB. The C++ row is the only C or C++ row in this table.",
+      "baseline": "C++ k-nucleotide (knucleotide/test.cpp, written for the suite) using std::unordered_map<std::string,int> without reserve and a std::string built by substr for every window, g++ (gcc 12.2.0 per the README Versions table) -O3 -march=native -fomit-frame-pointer -funroll-loops -std=c++11",
+      "compiler_and_flags": "C++: g++ -O3 -march=native -fomit-frame-pointer -funroll-loops -Wno-unused-result -std=c++11 (tools/languages.rb GCC_FLAGS and cpp build_cmd); the README Versions table lists 12.2.0 for c (gcc -dumpfullversion), and the C++ compiler comes from the same base container. LuaJIT 2.1.0-beta3 run as luajit test.lua with default JIT settings; nodejs 19.7.0 for other rows.",
+      "workload": "Benchmarks Game k-nucleotide on the THREE section of a fasta file generated by knucleotide/helper.c with n=1,400,000 (7,000,000 bases): 1-mer and 2-mer frequency tables plus counts of GGT, GGTA, GGTATT, GGTATTTTAATT and GGTATTTTAATTTATAGT, each built by hashing every k-mer of the sequence; single thread, one process run. Time is measured externally (tools/runner.rb, monotonic clock) from the program's 'started' message, printed after input reading, to process exit.",
+      "maintenance_status": "active",
+      "caveats": "Idiomatic code against idiomatic code, not tuned C++: the C++ program builds a std::string per window with substr (heap allocation for k=18, beyond libstdc++'s 15-character small-string buffer), hashes it with the default std::hash and inserts into a node-based std::unordered_map that is never reserved; -std=c++11 rules out std::string_view keys, and the Benchmarks Game's own C++ k-nucleotide programs use packed integer keys and custom hash tables that would be far faster. The LuaJIT program is Mike Pall's Benchmarks Game program (string.sub keys in a Lua table, frame-strided loop). Each row is a single measured run (Runs 1) with no variance reported. Numbers are from round 1 (README update 2023-02-28) with LuaJIT 2.1.0-beta3 and gcc 12.2.0 and were not rerun; the only 2026 commit (2026-01-27) adds a README link, so the code and results are effectively from 2023 although the last commit counts as active. In the same suite LuaJIT is slower than C on regexdna (9.99s vs 5.6s) and revcomp (3.33s vs 0.54s). The README states no reason for the difference.",
+      "same_algorithm": true,
+      "same_opt_level": true,
+      "language_level_claim": true,
+      "why_faster": "Not stated in the README; from reading the sources: LuaJIT interns every string, so string.sub on a k-mer already seen returns the existing interned string without allocating, and table lookups use that string's precomputed hash and pointer identity; the C++ side constructs a std::string per window, hashes the full key with std::hash, compares bytes on lookup and allocates a node per new key in an unreserved std::unordered_map (rehashing as it grows). Derived from knucleotide/test.lua and knucleotide/test.cpp; not measured."
+    },
+    "notes": "Numbers, flags, CPU and code check out; upgraded C to A because every A requirement is met and both sides do the same hash-table k-mer count at release settings. Main shortcoming: the C++ baseline is idiomatic but untuned (std::string per window, unreserved unordered_map, C++11 so no string_view), single run per row, 2023 numbers. maintenance_status corrected stale to active by the 12-month rule (last commit 2026-01-27, a README link only).",
+    "urls_opened": [
+      "https://github.com/kostya/jit-benchmarks",
+      "https://github.com/kostya/jit-benchmarks/commits/master",
+      "https://github.com/kostya/jit-benchmarks/tree/master/tools",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/test.cpp",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/test.lua",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/knucleotide/helper.c"
+    ]
+  },
+  {
+    "id": "lang:javascript/kostya/jit-benchmarks#regexdna",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "Code, compiler, flags and CPU are public (regexdna/test.js vs regexdna/test.c, tools/languages.rb, tools/benchmarks.rb build flag -lpcre, gcc 12.2.0, Ryzen 7 3800X) and the 1.06s vs 5.6s rows are on the README, but the C baseline runs PCRE in interpreter mode (pcre_study called with flags 0, no PCRE_STUDY_JIT_COMPILE) against V8's native-code Irregexp, a baseline crippled by a library default (AssemblyScript useDefineForClassFields precedent), so it goes to D; the measured gap is regex-engine mode, not language.",
+    "corrections": {
+      "claimed_speedup": "regexdna: Node 1.06s vs C 5.6s (about 5.3x, derived from page data), one measured run per row (Runs 1); memory 622.4 MB vs 86.7 MB. PHP (PCRE2 via preg_*) takes 1.39s (JIT) and 1.40s on the same nine caseless counts and eleven substitutions.",
+      "baseline": "C regex-dna (regexdna/test.c, Mike Pall's 2009-era Benchmarks Game program) using libpcre (PCRE1) with pcre_study(re, 0, ...), so PCRE's JIT is not enabled and every match runs in PCRE's interpreter; gcc 12.2.0 -O3 -march=native -fomit-frame-pointer -funroll-loops, linked with -lpcre",
+      "compiler_and_flags": "C: gcc -O3 -march=native -fomit-frame-pointer -funroll-loops -Wno-unused-result -Wno-implicit-function-declaration ... -lpcre (tools/languages.rb c build_cmd plus tools/benchmarks.rb build_flags for regexdna); gcc 12.2.0 per README Versions; libpcre version not stated. Node.js 19.7.0 run as node test.js with default flags.",
+      "workload": "Benchmarks Game regex-dna on a fasta file generated by regexdna/helper.c with n=3,500,000 (ONE 7M, TWO 10.5M and THREE 17.5M bases): nine case-insensitive variant-count regexes and eleven IUB-code substitutions after stripping headers and newlines; single thread, one process run, timed externally from the 'started' message (after input reading and line stripping) to process exit.",
+      "maintenance_status": "active",
+      "caveats": "Crippled baseline: the C program calls pcre_study with flags 0, so libpcre runs its interpreter, while V8's Irregexp compiles each regex to native code; the comparison measures regex-engine mode (interpreted PCRE1 vs compiled Irregexp), not JavaScript against C. The PHP rows, which drive PCRE2 through preg_* with the same nine caseless counts and eleven substitutions (PHP's pcre.jit setting defaults to on), take 1.39s and 1.40s, 4x faster than the C row, so a C build with PCRE or PCRE2 JIT would likely land near Node. The Crystal row (0.34s) is not the same work: its test.cr does all eleven substitutions in one gsub pass with an alternation and a hash, uses case-sensitive variant regexes and maps S to (c|t), so it is no evidence for what JIT-enabled C would reach. The C program dates from before PCRE gained a JIT (PCRE 8.20, 2011). Single measured run per row (Runs 1). Numbers are from round 1 (2023-02-28) with node 19.7.0 and were not rerun; the only 2026 commit adds a README link. The README states no mechanism. The win belongs to V8's Irregexp engine (C++), not the JavaScript language.",
+      "same_algorithm": false,
+      "same_opt_level": false,
+      "language_level_claim": true,
+      "why_faster": "Regex engine mode: V8's Irregexp compiles each regular expression to native machine code, while the C program runs libpcre's interpreter because pcre_study is called with flags 0 (no PCRE_STUDY_JIT_COMPILE). Derived from reading regexdna/test.c and regexdna/test.js; the README states no mechanism."
+    },
+    "notes": "Numbers and setup check out; downgraded C to D under the crippled-baseline precedent because the C side leaves PCRE's JIT off (interpreter) while Node's Irregexp emits native code, and PHP rows using PCRE2 on the same caseless workload run in 1.39s. Corrected the record's caveat that cited Crystal's 0.34s as PCRE-JIT evidence (Crystal does a different single-pass, case-sensitive workload) and set same_algorithm false. The win is V8 Irregexp's (v8/v8 already listed in wave 12) against interpreted PCRE1 (PCRE2 already listed in wave 1); a duplicate decision against v8/v8 is also defensible. maintenance_status corrected stale to active by the 12-month rule.",
+    "urls_opened": [
+      "https://github.com/kostya/jit-benchmarks",
+      "https://github.com/kostya/jit-benchmarks/commits/master",
+      "https://github.com/kostya/jit-benchmarks/tree/master/tools",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/README.md",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/languages.rb",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/benchmarks.rb",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/tools/runner.rb",
+      "https://github.com/kostya/jit-benchmarks/tree/master/regexdna",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.c",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.js",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.cr",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/test.php",
+      "https://raw.githubusercontent.com/kostya/jit-benchmarks/HEAD/regexdna/helper.c"
+    ]
+  }
+]
