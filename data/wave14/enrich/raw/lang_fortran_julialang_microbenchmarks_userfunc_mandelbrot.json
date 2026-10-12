@@ -1,0 +1,61 @@
+{
+  "id": "lang:fortran/julialang/microbenchmarks#userfunc_mandelbrot",
+  "one_liner": "gfortran complex(dp) Mandelbrot kernel, 1.42x faster than gcc C99 double complex in Julia's 2018 microbenchmarks; reversed in 2026 CI.",
+  "what_it_does": "A benchmark row, not a library. mandel(z) in perf.f90 counts escape-time iterations (at most 80) of z = z**2 + c, and mandelperf sums the counts over a 26 x 21 grid (real -2.0 to 0.5, imaginary -1.0 to 1.0, step 0.1). The checksum is 14791. The C twin in perf.c computes the same counts with C99 double complex and returns a malloc'd 546-int array. To use the result you would write the kernel in Fortran. The code has no bind(C) interface, so calling it from C or C++ means adding an iso_c_binding wrapper.",
+  "how_it_is_fast": "The suite gives no mechanism, and none is established. One candidate is complex-multiply semantics. In C99 mode gcc keeps the Annex G rescue for products that come out NaN + I*NaN (the libgcc __muldc3 path), while gfortran's Fortran rules skip that check. This rests on the GCC option text for -fcx-fortran-rules, quoted in a 2018 gcc-bugs message and seen as a search snippet only. In 2018, C (0.0767 ms) was the outlier: Julia 0.0527, Fortran 0.0538, Rust 0.0576 and Go 0.0597 ms were all faster. In the 2026 CI run, the same C source compiled with gcc 13.3.0 -std=c99 -O2 matches Julia, Go and Swift (about 0.045 ms), and Fortran is the slow one (0.0530 ms). So the rescue check does not explain the gap on current toolchains.",
+  "when_to_use": [
+    "You already keep scalar complex(dp) kernels in Fortran and want evidence that gfortran's complex arithmetic is not inherently slower than C99 double complex; on gcc/gfortran 7.3.1 it was faster.",
+    "Auditing a C codebase that does tight z*z + c complex recurrences under -std=c99 without -fcx-limited-range: this row is a hint to time a variant with manual re/im arithmetic or relaxed complex rules (inference; not measured by the suite).",
+    "You need a tiny reproducible cross-language reference kernel (about 40 lines, MIT, with a built-in checksum of 14791) for compiler or language comparisons.",
+    "You are reproducing or citing the dated julialang.org benchmark table and need its exact provenance (CSV at commit a963d28)."
+  ],
+  "when_not_to_use": [
+    "Picking Fortran over C for speed today: the suite's current run (2026-04-21, gcc and gfortran 13.3.0, both -O2) has Fortran at 0.05296 ms against C at 0.045061 ms, 1.18x slower.",
+    "Inside a C++ project: adopting it means switching language for a 40-line kernel. The C++-side alternatives, std::complex<double> or hand-written re/im arithmetic, were never measured here.",
+    "As evidence that Fortran is generally faster: in the same 2018 run Fortran was slower than C on most other rows (matrix_statistics 1.54x, recursion_quicksort 1.19x, parse_integers 6.88x, print_to_file 5.97x; derived from page data).",
+    "Judging differences of a few microseconds: since March 2026 each trial times one call of about 50 us (5 trials x 3 processes), and the C and Fortran jobs run on separate GitHub Actions VMs."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the kernel; the full perf.f90 links OpenBLAS (-fexternal-blas -lopenblas) for the matrix rows",
+    "min_toolchain": "Fortran 2003 (perf.f90 uses the volatile attribute); measured with gfortran 7.3.1 (2018) and gfortran 13.3.0 (2026)",
+    "platforms": "Measured only on x86-64 Linux (Intel i7-3960X in 2018, GitHub ubuntu-latest runners in 2026); the source is portable standard Fortran",
+    "thread_safety": "Not documented. The kernel is pure scalar code with no shared state, and the suite runs it serially with OMP/OPENBLAS threads set to 1.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the 2018 number. C timed 100 calls per trial, each mallocing, filling and freeing a 546-int array, plus a sum and assert on the first call. Fortran timed 1000 calls, each adding into a volatile integer. Issue #10 (May 2018) flagged the inconsistency; it was only fixed by PR #100 (March 2026), which moved every language to one call per trial with the C sum and assert outside the timer.",
+    "The Fortran harness gave no protection against hoisting. Issue #58 (March 2022) reported Fortran mandelbrot at 0.000066 ms against C 0.068 with a newer gfortran, which is about one call amortised over the 1000-call loop (0.053 / 1000). The 2018 figure (0.053836 ms, close to Julia's 0.052706) does not look like that artifact, but the constant-input loop could not rule it out (inference). PR #99 later added volatile guards against such elimination.",
+    "The 2026 reversal is also a small-sample result. C times a single ~45 us interval with gettimeofday converted to absolute double seconds, so its 0.045061 ms is exactly 189 x 2^-22 s, i.e. quantised to about 0.24 us on a 1 us clock (derived). Both sides take the minimum of only 15 single-call trials, on different runner VMs.",
+    "The 2018 build flags are only partly known. Each language kept its best of -O0..-O3, and the winning level is not published. Julia v1.0.0's Make.inc sets no CFLAGS and adds -march only when MARCH is set (cross builds), so both binaries were most likely baseline x86-64 SSE2 code (inference; a Make.user override would not be visible). C also linked Julia's static openlibm, which the mandel kernel does not call (cabs2 is hand-written)."
+  ],
+  "pick_this_over_siblings_when": "Against the Julia row of the same suite and run (0.052706 ms, 1.46x over C in 2018, 1.02x behind C in 2026), Fortran and Julia are a statistical tie, so pick whichever language your code already lives in. The Mojo explicit-SIMD Mandelbrot in mojo-analyze (1.6x over scalar C) and the plb2 Fortran matmul rest on code-shape or SIMD differences you can reason about, while this row's gap is a toolchain-era artifact.",
+  "verified_claims_summary": "The 2018 julialang.org run (Intel i7-3960X, openSUSE LEAP 15.0, gcc/gfortran 7.3.1, best of -O0..-O3 per language, single core) timed the gfortran Mandelbrot grid at 0.0538 ms against 0.0767 ms for the C99 double complex version, 1.42x (derived from page data). The suite's 2026-04-21 GitHub Actions run (gcc/gfortran 13.3.0, -O2, one call per trial) has Fortran 0.0530 ms against C 0.0451 ms, 1.18x slower.",
+  "status_note": "The suite is active (last commit 2026-04-21; methodology standardised in PRs #99, #100 and #112 in March 2026) and MIT-licensed, but the 2018 Fortran-over-C result is stale and toolchain-specific, its harness timed different side work per language, and there is nothing to adopt beyond a 40-line kernel.",
+  "sources_read": [
+    "https://github.com/JuliaLang/Microbenchmarks/commits/master",
+    "https://github.com/JuliaLang/Microbenchmarks/issues?q=is%3Aissue+mandelbrot",
+    "https://github.com/JuliaLang/Microbenchmarks/issues/10",
+    "https://github.com/JuliaLang/Microbenchmarks/issues/58",
+    "https://github.com/JuliaLang/Microbenchmarks/pull/99",
+    "https://github.com/JuliaLang/Microbenchmarks/pull/100",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/bin/benchmarks.csv",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/Makefile",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/perf.c",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/perf.f90",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/README.md",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/c/perf.c",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/fortran/perf.f90",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/Makefile",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/README.md",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/.github/workflows/benchmarks.yml",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/LICENSE.md",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks.csv",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks/index.html",
+    "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/notes/index.html",
+    "https://raw.githubusercontent.com/JuliaLang/www.julialang.org/main/benchmarks.md",
+    "https://raw.githubusercontent.com/JuliaLang/julia/v1.0.0/Make.inc",
+    "https://gcc.gnu.org/pipermail/gcc-bugs/2018-March/618414.html (WebSearch snippet only; gcc.gnu.org did not resolve)"
+  ],
+  "confidence": 0.6
+}

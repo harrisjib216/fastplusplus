@@ -1,0 +1,53 @@
+{
+  "id": "lang:java/kostya/langarena#binarytrees-obj",
+  "one_liner": "OpenJDK 27 (default G1, -Xmx2g) building and summing depth-20 object trees 4.4x faster than every make_unique C++ and malloc C build.",
+  "what_it_does": "A row from LangArena, a 50-task, 26-language benchmark suite, not a library. Binarytrees::Obj builds a complete depth-20 binary tree (2,097,151 nodes, one heap object per node with an int item and two child references), sums it recursively and drops it, 30 times in the timed loop after 6 warm-up iterations. The Java version is a static nested TreeNode class in java/src/main/java/benchmarks/Binarytrees.java, run as 'java -Xmx2g -jar' on Temurin OpenJDK 27+35 with the default G1 collector. Getting the speedup means writing the allocation-heavy part in Java; nothing links into a C++ program.",
+  "how_it_is_fast": "Allocation and reclamation, not better code generation. Likely mechanism (inference; the suite does not explain it): HotSpot allocates each 24-byte node by bumping a pointer in a thread-local allocation buffer and reclaims dead trees with generational copying collections whose cost depends on live data, not on the number of dead objects, while C++ calls operator new per node through std::make_unique and runs a recursive unique_ptr destructor that frees all 2.1 million nodes inside the timer (C does the same with malloc/free). That works out to about 7.6 ns per node for Java against 33.4 ns for the best C++ build and 39.5 ns for C/Clang (derived from page data over 62.9M timed nodes). The default G1 run also gets help from parallel GC worker threads: the same JVM limited to the single-threaded SerialGC and a 512 MB heap takes 0.886 s (14.1 ns per node).",
+  "when_to_use": [
+    "JVM services that build and discard large pointer-linked structures (ASTs, document trees, temporary graphs) and are judged on throughput: idiomatic object code with default G1 beat idiomatic make_unique C++ by about 4.4x here.",
+    "Deciding whether to rewrite such code in C++: unless the C++ version will use an arena or pool, this result says per-node new/delete will likely be slower.",
+    "Hosts with spare cores and memory headroom, which G1's parallel workers and a 2 GB heap exploit; even single-threaded SerialGC at 512 MB still beat every C and C++ build (0.886 s vs 2.098 s).",
+    "Other JVM languages: Kotlin/JVM (0.479 s default, 0.428 s with -Xms2g pre-touched G1) and Scala/JVM (0.48 s) share the result."
+  ],
+  "when_not_to_use": [
+    "As evidence that Java beats C with an arena: the suite's C index arena grown by realloc (C/Gcc/Fast 0.255 s, 27 MB) is about 1.9x faster than this Java row and uses about 33x less memory.",
+    "Memory-constrained deployments: peak RSS was 892 MB for Java against about 70 MB for C++ and 66 MB for C (about 13x); the -Xms2g Kotlin/JVM/Opt variant reached 2155 MB.",
+    "Latency-sensitive code: GC pauses are inside the 30-iteration total but are not reported separately, and the final collection is outside the timer.",
+    "Other managed runtimes on the same workload: C#/JIT 4.373 s and Julia 2.185 s are no faster than C++, so the win is HotSpot-specific, not a general GC property; GraalVM CE JIT is slower than HotSpot here (0.807 s).",
+    "Most other LangArena tests: rows were picked where a managed runtime beats every C/C++ row; on Binarytrees::Arena the same Java code style (ArrayList of objects) takes 1.086 s."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "A JDK (Temurin OpenJDK 27+35 as measured); the tree code itself uses only java.lang; the suite's harness is a Maven project (java-benchmarks-1.0-SNAPSHOT.jar) run in its langarena:java Docker image",
+    "min_toolchain": "OpenJDK 27+35 as measured (the previous LangArena run used OpenJDK 26.0.2); the tree class uses only basic Java features, but older JDKs were not measured in this results file",
+    "platforms": "Measured on x86-64 Linux (AMD Ryzen 7 3800X, 78 GB RAM) inside Docker with a 16 GB memory limit and no CPU limit",
+    "thread_safety": "Not applicable: single-threaded workload; the JVM's GC and JIT threads run beside it",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Parallel GC threads are in the Java timing but not in the table: benchmarks.rb records user and system time from /usr/bin/time for every run but saves only wall time and peak RSS, and the container has no CPU limit, so G1's parallel workers use the other cores of the 8-core CPU while C++ runs on one. The suite's own Java/OpenJDK/Serial row (-XX:+UseSerialGC -Xmx512m, 0.886 s) cuts the margin over the best C/C++ build from 4.4x to 2.4x, so about half of the headline comes from GC threads and heap size.",
+    "Timing asymmetry: the Java harness calls System.gc() after warm-up and again after the timer stops, so the timed loop starts with an empty heap and the last young generation's garbage is collected untimed, while the C and C++ programs free every node inside each timed iteration.",
+    "The record's arena comparison needs care: Java's Binarytrees::Arena is an ArrayList<TreeNode> that still allocates one object per node, so its 1.086 s is not an arena result. Comparing like with like, the realloc-grown C arena (0.255 s) beats Java's object tree (0.479 s), but the C++ std::vector arena, grown by emplace_back without reserve and rebuilt each iteration, does not (best C++/G++/Unsafe 0.512 s, prod C++/G++ 0.569 s, C++/Clang++ 0.685 s).",
+    "One in-process timing per configuration, no repeats or variance, and JIT warm-up excluded (6 untimed iterations); the C and C++ 'prod' headline rows are -O2 with hardening flags, though the -O3, fast-math and PGO builds land within 2.098 to 2.498 s, so the baseline is not crippled."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued Binarytrees::Obj rows, HotSpot (0.479 s) is about 2x faster than Bun's TypeScript/JS rows (0.973 s and 1.042 s), so pick it when you are on the JVM; compared with the benchLANG Java binary-trees entry, this one is stronger evidence because it measures 16 C/C++ build configurations, a single-threaded GC variant and an arena variant on the same machine.",
+  "verified_claims_summary": "LangArena's 2026-10-05 run on an AMD Ryzen 7 3800X (Linux, Docker) timed 30 depth-20 build-sum-free iterations at 0.479 s for Temurin OpenJDK 27+35 (-Xmx2g, default G1) against 2.098 s for the best C/C++ configuration (C++/G++/Fast, GCC 16.0.1 trunk, -O3 -march=native, std::make_unique nodes, glibc malloc) and 2.482 s for C/Clang 22.1.8; about 4.4x and 5.2x faster (derived from page data), with each language's checksum checked against the expected 75497436.",
+  "status_note": "Actively maintained MIT suite (41 stars, 622 commits, last commit 2026-10-08, monthly reruns) with public code, flags and per-configuration results; the per-test numbers are single runs and the author calls the suite subjective, with AI-assisted translations reviewed by hand.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://github.com/kostya/LangArena/commits/master",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue%20binarytrees",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/Binarytrees.java",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/Benchmark.java",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/binarytrees.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/binarytrees.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/binarytrees.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/docker-compose.yaml"
+  ],
+  "confidence": 0.8
+}

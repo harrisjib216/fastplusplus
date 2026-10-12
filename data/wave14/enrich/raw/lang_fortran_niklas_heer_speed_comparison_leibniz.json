@@ -1,0 +1,59 @@
+{
+  "id": "lang:fortran/niklas-heer/speed-comparison#leibniz",
+  "one_liner": "gfortran -Ofast Leibniz pi loop in speed-comparison: 1.11x faster than gcc-built C, level with clang-built C and C++.",
+  "what_it_does": "A benchmark program, not a library. src/leibniz.f90 (18 lines) reads the term count (1,000,000,000) from rounds.txt and sums the Leibniz series 1 - 1/3 + 1/5 - ... in a do loop unrolled by hand to four terms with fixed signs. It then prints 4*sum with format f14.12. The C and C++ twins (src/leibniz.c, src/leibniz.cpp) sum the same 1e9 + 1 terms in a one-term loop that derives each sign from the index parity. There is nothing to link; what carries over to other code is the loop shape and the compiler flags.",
+  "how_it_is_fast": "The suite states no mechanism, and the numbers point to a shared floor rather than a Fortran advantage. In the 2026-09-05 snapshot the fastest group sits within 3.4%: Rust SIMD 141.31, Fortran 141.67, Nim 142.43, Objective-C 142.95, C++ clang++ 143.32 and C clang 146.07 ms. Only the two gcc 15.2.0 builds of the one-term C/C++ loop, at 157.9 and 158.78 ms, sit about 11% above it (derived from page data). Every run performs 1e9 double divisions, which fits all well-vectorised builds hitting the same divide-throughput limit (inference; not profiled). gfortran reaches that floor with -Ofast -ffast-math, whose reassociation lets it vectorise the reduction, plus the four-term unroll that drops the C loop's per-term parity-sign arithmetic. clang reaches it from the unchanged one-term C source with only -fassociative-math -fno-signed-zeros -fno-trapping-math.",
+  "when_to_use": [
+    "You keep numerical code in Fortran and want evidence that gfortran -Ofast vectorises a simple division-heavy reduction as well as clang does for C and C++.",
+    "A gcc-built C or C++ reduction loop trails clang by about 10%: this pair shows the gap can come from gcc 15's code generation for that loop shape, so try clang or rewrite the loop with fixed-sign unrolled terms before blaming the language (inference).",
+    "You need a reproducible single-threaded floating-point reference: sources pinned at revision c71e4cd, exact compile commands, per-sample timings and the CPU model are all in docs/history/2026-09-05T193245/raw/*.json.",
+    "Comparing math-flag regimes (-Ofast -ffast-math against selective relaxed-math flags) on x86-64 with AVX-512 (EPYC Genoa, -march=native)."
+  ],
+  "when_not_to_use": [
+    "Choosing a language for speed: the lead over the best C/C++ build (clang++ 143.32 ms) is 1.2% and inside the three-sample ranges, and the project README says three samples cannot establish a reliable winner for small differences.",
+    "Code that needs strict IEEE results: -Ofast -ffast-math also enables finite-math-only and reciprocal math. The Fortran result is 1.4e-10 away from the exact 1e9-term partial sum, against under 5e-12 for the gcc and clang C builds (derived from the raw JSON).",
+    "Inside a C++ project: the clang++ build of the plain one-term C++ loop already runs at the same speed (143.32 ms), so a compiler or flag change gets the result without a language switch.",
+    "Term counts above about 1.07e9, or not a multiple of 4 (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the gfortran runtime",
+    "min_toolchain": "Fortran 2008 (open with newunit=, iso_fortran_env real64); measured with gfortran 14.3.0 (2026-09-05 snapshot) and 14.2.0 (2025-12-14 snapshot)",
+    "platforms": "Measured only on x86-64 (AMD EPYC-Genoa VM with AVX-512, -march=native); the source is portable standard Fortran",
+    "thread_safety": "Not applicable: single-threaded program with no shared state; the suite keeps its Fortran OpenMP variant outside the ranked comparison",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The loop is not the C loop. Fortran sums four terms per iteration with fixed signs and a default 32-bit signed counter, while C uses one term per iteration with a parity-derived sign in unsigned arithmetic. The term counts match only because 1e9 is a multiple of 4; for other counts the Fortran loop adds up to three extra terms (derived from source).",
+    "Latent overflow and unchecked input. 2*i+7 is computed in default 32-bit integer and overflows once i passes 1,073,741,820, so any rounds.txt value above about 1.07e9 gives a wrong sum; C's unsigned arithmetic holds to about 2.1e9 (derived from source). The read's iostat is never checked, so a missing rounds.txt leaves rounds undefined.",
+    "Accuracy is lower. Four times the exact 1e9-term partial sum is about pi + 1e-9 = 3.1415926545898. Against that, gcc C prints 3.1415926545850823 (-4.7e-12), clang C 3.1415926545907205 (+9.3e-13) and Fortran 3.141592654730 (+1.4e-10). The -Ofast summation is therefore 30-150x less accurate (derived), which the suite's accuracy column shows as 9.44 against 9.50. In the same snapshot Nim prints 2.0e-9 below gcc C (4/(2e9+1)), so it sums one term fewer; that is harmless for timing but means its row is not quite the same workload.",
+    "Historical protocol. The snapshot ran on a shared 4-thread Argo VM (runner homelab-argo) with two warm-ups, three measured executions and a separate output execution. Process start-up and the rounds.txt read fall inside the timer, which is negligible at about 140 ms. The README says this run predates the current one-warm-up, three-measurement runner, and no newer full run is published."
+  ],
+  "pick_this_over_siblings_when": "It is the cleanest of the Fortran-vs-C rows, the plb2 matmul (6% over clang C on an M1) and fortran-lang poisson2d, for showing that the gap is backend code generation (gfortran and clang against gcc 15) rather than the language, and its lead over gcc-built C repeated across two snapshots (1.06x in December 2025, 1.11x in September 2026). The JuliaLang/Microbenchmarks mandelbrot Fortran row, by contrast, reversed in its suite's later run.",
+  "verified_claims_summary": "In the published 2026-09-05 snapshot (AMD EPYC-Genoa VM, 1e9 terms, hyperfine median of three runs), gfortran 14.3.0 -Ofast -ffast-math -march=native took 141.67 ms. That is 1.11x faster than gcc 15.2.0 -O3 C with three relaxed-math flags (157.9 ms) and 1.01x faster than clang++ 21.1.2 (143.32 ms, inside the sample range). The December 2025 snapshot repeats the lead only over gcc-built C (238.94 vs 253.23 ms, 1.06x); clang++ and g++ C++ were faster than Fortran there.",
+  "status_note": "The suite is active (last commit 2026-09-20; Nix/Devbox pipeline publishing raw samples per snapshot) and MIT-licensed. The Fortran program is an 18-line source-drop contributed and tuned in PRs #36, #58, #63 and #67 (October 2022). The takeaway is compiler choice and math flags, not something to adopt.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/c71e4cd81464b238172605982806c5bf827a70a1/src/leibniz.f90",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/c71e4cd81464b238172605982806c5bf827a70a1/src/leibniz.c",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/c71e4cd81464b238172605982806c5bf827a70a1/src/leibniz.cpp",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/c71e4cd81464b238172605982806c5bf827a70a1/src/rounds.txt",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/combined_results.csv",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/fortran.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/c.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/c-clang.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/cpp.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/cpp-clang.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/nim.json",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/README.md",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2026-09-05T193245/raw/source-revision.txt",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/docs/history/2025-12-14T070941/combined_results.csv",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/README.md",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/src/leibniz.f90",
+    "https://raw.githubusercontent.com/niklas-heer/speed-comparison/master/src/leibniz.c",
+    "https://github.com/niklas-heer/speed-comparison/issues?q=is%3Aissue+fortran",
+    "https://github.com/niklas-heer/speed-comparison/pulls?q=is%3Apr+fortran",
+    "https://github.com/niklas-heer/speed-comparison/pull/63",
+    "https://github.com/niklas-heer/speed-comparison/pull/67"
+  ],
+  "confidence": 0.65
+}

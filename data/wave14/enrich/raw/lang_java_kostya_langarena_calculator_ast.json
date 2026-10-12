@@ -1,0 +1,62 @@
+{
+ "id": "lang:java/kostya/langarena#calculator-ast",
+ "one_liner": "Plain Java recursive-descent parser building a small-object AST on HotSpot 27, about 1.7x faster than the suite's C++ std::variant/unique_ptr parser.",
+ "what_it_does": "LangArena's Calculator::Ast test parses a generated 11,011-line arithmetic program (about 510 KB of text: assignments, + - * / %, parentheses, variables v0..v11009) into an AST with a hand-written recursive-descent parser and keeps the list of top-level expressions. The Java version (java/src/main/java/benchmarks/CalculatorAst.java) is ordinary code: an empty Node interface with four final classes (Number, Variable, BinaryOp, Assignment), String.substring for names and an ArrayList of expressions. It is a benchmark program, not a library; the entry documents what stock HotSpot delivers on allocation-heavy parsing against an idiomatic C++ port.",
+ "how_it_is_fast": "The gap is in memory management, not parsing logic: per parse the C++ version makes 65,041 heap allocations (54,030 BinaryOp and 11,011 Assignment via std::make_unique; numbers and SSO variable names sit inline in the 40-byte std::variant Node) and frees the previous iteration's whole tree node by node inside the timed loop, while HotSpot allocates by bumping a thread-local pointer and its copying young-generation collector never touches dead trees (counts from replaying the suite's generator and grammar; the mechanism is inferred, the suite gives no explanation). Java actually allocates more, about 130,000 node objects plus 44,727 substring Strings per parse, and still wins. Most garbage-collected JIT rows in the file also beat the best C++ row (GraalVM 0.249-0.294 s, Bun and Deno 0.32-0.348 s, Julia 0.44-0.459 s; C#/JIT at 1.327 s and the Scala/JVM rows do not), and so does one ahead-of-time row, Zig/Unchecked at 0.465 s, whose port uses a per-run ArenaAllocator.",
+ "when_to_use": [
+  "Choosing a runtime for parser, compiler-front-end or config-loader services that build many small immutable tree nodes per request: idiomatic Java on HotSpot parsed this program in 2.94 ms per pass against 4.87 ms for the best C++ build (0.294 s vs 0.487 s per 100 passes).",
+  "Long-running JVM processes where heap headroom is cheap: the default G1 run peaked at 369 MB RSS against 19 MB for C++, and that headroom is what lets dead trees cost nothing.",
+  "As a reference point when a C++ parser written with std::unique_ptr and std::variant nodes is a hotspot: the measured gap is a hint that per-node malloc/free dominates, before reaching for a different language.",
+  "GraalVM users: GraalVM CE 25 with SerialGC and -Xmx512m was the fastest row of the whole file at 0.249 s."
+ ],
+ "when_not_to_use": [
+  "Memory-capped processes: with -XX:+UseSerialGC -Xmx512m HotSpot needs 0.457 s, only about 1.07x faster than the best C++ row (0.487 s), and still uses 243 MB RSS (derived from page data).",
+  "Short-lived or cold-start tools: the timing excludes JVM startup and 20 untimed warm-up passes for every language, so C2 compilation cost is not in the number.",
+  "As evidence that the JIT generates better parsing code: the advantage tracks allocation strategy, the C version with two mallocs per binary node and strdup'd names is twice as slow as C++ (1.033-1.077 s), and an AOT-compiled arena port (Zig/Unchecked 0.465 s) also beats C++.",
+  "As a reason to rewrite a tuned C++ front end: no arena, pool or flat-array AST variant of the C++ code was measured, so the result says nothing about allocation-aware C++.",
+  "Latency-critical services that cannot tolerate GC pauses: the benchmark reports only total throughput for 100 passes, no pause or tail-latency data."
+ ],
+ "integration": {
+  "form": "runtime plus source snippet (one Java file in a Maven project, java/src/main/java/benchmarks/CalculatorAst.java)",
+  "dependencies": "none for the parser itself (java.util only); the suite's harness reads its config through a JSON library (getJSONObject calls in Benchmark.java)",
+  "min_toolchain": "measured on Temurin OpenJDK 27+35 and GraalVM CE 25.4.4.1.1; the code uses only long-standing java.util and String APIs, the Maven target level was not checked",
+  "platforms": "any JVM platform; measured on x86-64 Linux (AMD Ryzen 7 3800X)",
+  "thread_safety": "not documented; the parser is a single-threaded object with mutable position state, one per run",
+  "drop_in_for_baseline": false
+ },
+ "gotchas": [
+  "The lead depends on heap headroom and collector: default G1 with -Xmx2g gives 0.294 s, SerialGC with -Xmx512m 0.457 s, and the ParallelGC 'Opt' row (which also disables the harness's System.gc() before the timer via -XX:+DisableExplicitGC) 0.36 s.",
+  "The record's caveat that an arena AST in C++ 'would likely reverse the result' is not supported by the suite's nearest proxy: the Zig port allocates its AST from a per-run std.heap.ArenaAllocator and runs 0.465 s (Unchecked) and 0.632 s (safe), still 1.6-2.15x slower than Java/OpenJDK (derived from page data).",
+  "Stable across runs, but the code changed: the lead over the best C/C++ row was 1.55x (2026-07-14), 1.35x (08-14), 1.39x (09-03), 1.39x (09-18) and 1.66x (10-05); a 2026-09-07 commit ('Calculator::Ast unify code for all langs') rewrote both sides, and between the 09-03 and 09-18 runs C++/G++ went from 0.74 to 0.518 s and Java from 0.485 to 0.348 s (derived from the results files).",
+  "No harness defect found: replaying the generator (LCG seed 42) and grammar reproduces the suite's expected checksum 1670614456 exactly; the checksum covers only the expression count and the last variable name, but the tree escapes into a field, so it cannot be elided. One measurement per configuration, no variance."
+ ],
+ "pick_this_over_siblings_when": "Pick this over the LangArena Binarytrees::Obj and benchLANG binary-trees siblings (pure node allocation, Java 4.4x and 3.3x ahead) when you want a realistic parser workload: the margin is smaller (1.66x) but it comes from real lexing and recursive descent; the Calculator::Interpreter sibling, which evaluates the same AST, shows a much thinner and newer Java lead (1.33x, under 1.13x before JDK 27).",
+ "verified_claims_summary": "LangArena results of 2026-10-05 (AMD Ryzen 7 3800X, Linux) time 100 parses of the 11,011-line program after 20 warm-up parses: Java on Temurin OpenJDK 27 (java -Xmx2g, default G1) 0.294 s vs C++ with libstdc++ at -O2 (g++ 16.0.1 trunk) 0.534 s and the best of 16 Clang 22/GCC 16 C and C++ builds (G++ -O3 -march=native -ffast-math, 'Unsafe') 0.487 s, about 1.8x and 1.7x (derived from page data); Java used 369 MB RSS against 19 MB.",
+ "status_note": "LangArena is active (MIT, 41 stars, 622 commits, monthly result files, results up to 2026-10-05); the 300-line Java file (generator plus parser) is copyable, but the entry is a measurement of JVM allocation and GC against per-node malloc/free rather than a reusable component.",
+ "sources_read": [
+  "https://github.com/kostya/LangArena",
+  "https://github.com/kostya/LangArena/commits/master/cpp/src/calculator.cpp",
+  "https://github.com/kostya/LangArena/commits/master/java/src/main/java/benchmarks/CalculatorAst.java",
+  "https://github.com/kostya/LangArena/tree/master/results",
+  "https://github.com/kostya/LangArena/issues?q=is%3Aissue%20calculator",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/LICENSE",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.hpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/calculator.cpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/calculator.hpp",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/calculator.c",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/CalculatorAst.java",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/java/src/main/java/benchmarks/Benchmark.java",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/zig/src/calculator_ast.zig",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+  "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js"
+ ],
+ "confidence": 0.72
+}
