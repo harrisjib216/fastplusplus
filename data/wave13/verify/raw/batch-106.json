@@ -1,0 +1,81 @@
+[
+  {
+    "id": "https://github.com/boostorg/context",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "doc/performance.qbk gives 9 ns / 19 cycles (fcontext_t) versus 547 ns / 1130 cycles (ucontext_t) per switch, states gcc-6.3.1, b2 variant=release optimization=speed and dual Xeon E5-2620v4, and the harness is public (performance/callcc/performance.cpp with performance/callcc/Jamfile.v2, clock.hpp overhead correction, cycle_x86-64.hpp). Code, compiler, flags and CPU model are all present, so A holds.",
+    "corrections": {
+      "baseline": "glibc ucontext_t user-space context switch (::swapcontext/makecontext), as wrapped by Boost.Context's own continuation_ucontext.hpp backend (b2 context-impl=ucontext), run through the same callcc()/continuation benchmark",
+      "caveats": "Numbers come from the project's own doc table (about 2017, gcc-6.3.1, Broadwell-era Xeon) and were not re-run; the callcc()/continuation API they measure is now the older of Boost.Context's two APIs (fiber is the newer one). Compiler flags are given as b2 build properties (variant=release, optimization=speed, plus link=static, threading=multi, -DBOOST_DISABLE_ASSERTS in performance/callcc/Jamfile.v2), not literal -O flags. The page does not say how the ucontext_t column was built; the context-impl=ucontext recipe is inferred from build/Jamfile.v2. The Windows-Fiber column cannot have been measured on the Linux machine the page names, so the table mixes at least two setups without saying so. The ucontext baseline is Boost's wrapper around glibc ::swapcontext, which makes a signal-mask system call per swap on x86-64 Linux, so the ~61x gap mostly measures avoiding that call rather than hand-written assembly versus compiled code; a context switch cannot be written in portable C, so no -O3 C comparison exists. Other user-space switchers (libco, minicoro) are not compared. Per-switch figures are a round trip divided by two after subtracting measured clock overhead. The assembly is only part of the repo (src/asm/jump_*/make_*/ontop_* per platform)."
+    },
+    "notes": "Numbers match doc/performance.qbk exactly; 547/9 = 60.8x and 1130/19 = 59.5x (derived from page data). Main shortcomings: old single first-party run, Windows-Fiber column inconsistent with the stated Linux test machine, baseline cost dominated by glibc swapcontext's sigprocmask system call; the doc's 2.2 GHz clock also differs from the E5-2620 v4's usual 2.1 GHz base rating (not re-checked here). Not a duplicate: Boost.Fiber (wave 11) builds on it but is a separate library.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/doc/performance.qbk",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/performance/callcc/Jamfile.v2",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/performance/callcc/performance.cpp",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/performance/fcontext/performance.cpp",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/performance/clock.hpp",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/performance/cycle.hpp",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/build/Jamfile.v2",
+      "https://raw.githubusercontent.com/boostorg/context/HEAD/include/boost/context/continuation_ucontext.hpp",
+      "https://github.com/boostorg/context",
+      "https://github.com/boostorg/context/commits/develop"
+    ]
+  },
+  {
+    "id": "https://github.com/antonblanchard/crc32-vpmsum",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README Performance section shows slice_by_8_bench 122.220 s versus crc32_bench 2.937 s (32 kB x 5,000,000), 'just over 41x faster', on a 4.1 GHz POWER8; the benchmark code (crc32_bench.c, slice_by_8_bench.c) and Makefile flags are public, but the compiler and exact CPU model are not stated, so not A; first-party, so C.",
+    "corrections": {
+      "baseline": "slice-by-8 table-driven CRC32 in C (based on Linux kernel lib/crc32.c, shipped in the repo as slice_by_8_bench.c, linked into the same crc32_bench.c driver); it computes the big-endian, non-reflected 0x04C11DB7 CRC rather than the reflected CRC32C (0x1EDC6F41) the default vpmsum build computes",
+      "stars_or_usage": "33 stars; its crc32c-vpmsum code (Copyright 2015 Anton Blanchard, IBM) is in mainline Linux as lib/crc/powerpc/crc32c-vpmsum_asm.S",
+      "caveats": "First-party numbers from a loop of 5,000,000 calls on a 32 kB L1-resident buffer timed with shell 'time'; compiler version and exact POWER8 model unstated, so tier C although the benchmark source is public. The baseline is a table-driven C slice-by-8 for a different polynomial and bit order (big-endian 0x04C11DB7 versus reflected CRC32C), equivalent work per byte but not the same checksum; it runs at about 1.34 GB/s, roughly 0.33 bytes/cycle at 4.1 GHz (derived from page data), so it is a modest baseline. No compiler auto-vectorized or carry-less-multiply C version is timed against the assembly: the repo's own vec_crc32.c intrinsics version of the same algorithm has a vec_crc32_bench target but no published figure, so the win is not attributable to hand-written assembly versus C. The btrfs 3.8x figure is a kernel-side ramdisk test with no details. Hardware is old and the repo has not been updated since 2020-03-26."
+    },
+    "notes": "Numbers match the README (122.220/2.937 = 41.6x; 52 GiB/s and 13.6 bytes/cycle consistent with 32 kB x 5M in 2.937 s). Main shortcomings: compiler and CPU model unstated, baseline is a different CRC polynomial at modest speed, no comparison with the repo's own intrinsics C version. Not a duplicate of the wave 7 CRC entries (those are x86/ARM kernels).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/README.md",
+      "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/Makefile",
+      "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_bench.c",
+      "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/slice_by_8_bench.c",
+      "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/LICENSE.TXT",
+      "https://github.com/antonblanchard/crc32-vpmsum",
+      "https://github.com/antonblanchard/crc32-vpmsum/commits/master",
+      "https://raw.githubusercontent.com/torvalds/linux/master/lib/crc/powerpc/crc32c-vpmsum_asm.S"
+    ]
+  },
+  {
+    "id": "https://github.com/higan-emu/libco",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "doc/targets.md gives first-party switch-overhead multiples relative to a plain C function call (amd64 ~6x, x86 ~5x, ucontext ~300x, sjlj ~30x, Windows fibers ~15x) with no benchmark code, compiler, flags or hardware; the README's 10,000,000 switches per second is an assertion. Numbers without methodology are C.",
+    "corrections": {
+      "benchmark_url": "https://github.com/higan-emu/libco/blob/master/doc/targets.md",
+      "baseline": "POSIX ucontext context switch (libco's own ucontext.c backend), plus its setjmp/longjmp and Windows-fiber backends, each expressed as a multiple of an ordinary C function call; the README also contrasts kernel-scheduled preemptive threads",
+      "workload": "Cost of one co_switch between cooperative threads relative to an ordinary C function call, per backend (doc/targets.md); README asserts 10,000,000+ user-space switches per second versus kernel thread switching becoming the bottleneck above 100,000 per second.",
+      "claimed_speedup": "doc/targets.md switch overhead versus an ordinary C function call: libco.amd64 ~6x (~10x on Windows), libco.x86 ~5x, libco.ppc ~20x, versus libco.fiber (Windows fibers) ~15x, libco.sjlj (setjmp/longjmp) ~30x and libco.ucontext (POSIX ucontext) ~300x; about 50x lower switch overhead for the hand-assembled amd64 backend than the ucontext backend (derived from page data). README: 'libco can easily scale to 10,000,000 or more context switches per second' while applications needing '100,000 or more context switches per second' hit kernel overhead with preemptive threads (assertion, no measurement).",
+      "caveats": "The overhead figures are rough first-party multiples ('~6x', '~300x') with no benchmark code, methodology, compiler, hardware or date in the repo; the 10,000,000 switches per second README figure is an assertion. The ucontext backend's cost is dominated by the signal-mask system call glibc swapcontext makes, so the gap mostly reflects avoiding that call. Not compared against Boost.Context fcontext, minicoro or other user-space switchers. The amd64/x86 backends store the switch routine as hand-assembled machine-code bytes in a const array placed in the text section (or made executable with mprotect/VirtualProtect under LIBCO_MPROTECT), which hardened toolchains or W^X policies may object to. valgrind.h is under a BSD-style license; the rest is ISC. Last commit 2024-09-10."
+    },
+    "notes": "Found real (if rough) numbers in doc/targets.md that the search record missed; benchmark_url and claimed_speedup corrected, tier stays C. Main shortcomings: no benchmark code or methodology, multiples only, baseline cost dominated by swapcontext's system call. Not already listed (wave 11 has minicoro and libcopp, not libco; Tencent/libco is a different project of the same name).",
+    "urls_opened": [
+      "https://github.com/higan-emu/libco",
+      "https://github.com/higan-emu/libco/commits/master",
+      "https://github.com/higan-emu/libco/blob/master/doc/targets.md",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/README.md",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/targets.md",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/usage.md",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/amd64.c",
+      "https://raw.githubusercontent.com/higan-emu/libco/HEAD/settings.h"
+    ]
+  }
+]
