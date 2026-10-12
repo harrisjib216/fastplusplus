@@ -1,0 +1,49 @@
+{
+  "id": "lang:rust/nordlow/compiler-benchmark#compile-throughput",
+  "one_liner": "rustc at opt-level 0 builds a 40,000-function generated program 1.6-2.6x faster than GCC builds the C/C++ twin; clang beats it.",
+  "what_it_does": "rustc is the Rust compiler. This entry is a build-time claim, not a run-time one: in nordlow/compiler-benchmark, building the same generated arithmetic call chains as a Rust program with plain `rustc main.rs -o exe` takes less time per function than building the C or C++ version with gcc or g++ at their default -O0. It is not a drop-in for gcc; you only get it by writing Rust, and the generated program uses nothing but std::process::exit (and std::ops::Add in the generic variant).",
+  "how_it_is_fast": "Not in the front end: rustc's check (--emit=metadata: parse, type and borrow check) costs 86.3 us/f, against 11.9 for gcc -fsyntax-only and 13.5 for clang, so rustc's front end is about 7x slower than GCC's on this file. The lead comes after it. Build minus check is about 101 us/f for rustc (lowering, LLVM opt-level-0 code generation and linking) against about 380-442 us/f for gcc 15/16, whose -O0 code generation alone (Compile 193.8 and 400.1) is slower than clang's LLVM path (77.9); rustc uses the same LLVM backend family as clang (derived from page data). Since Rust 1.90 the official x86_64-unknown-linux-gnu toolchain also links with the bundled rust-lld by default, while the harness leaves gcc and clang on the system default linker. rustc's default 16 codegen units can run LLVM in parallel threads, but the harness pins each compiler to one core, so that parallelism did not count.",
+  "when_to_use": [
+    "Choosing a language for a project where unoptimised (debug) build latency of large, flat code matters and the C/C++ alternative would be built with GCC: rustc's full build ran 1.6x faster than g++ 15.3.0 and 2.4-2.6x faster than gcc/g++ 16.2.1 on 40,000 plain functions.",
+    "Machine-generated Rust with many small non-generic functions in one crate, the shape measured (200 chains x 200 depth in one file).",
+    "Generic code compared with GCC templates: templated rustc (238 us/f) beat g++ 15.3.0 (600) and g++ 16.2.1 (566) by about 2.4-2.5x, although the Rust generic source does less work (see gotchas).",
+    "x86-64 Linux with the official rustup toolchain, where rust-lld is the default linker and keeps link time small."
+  ],
+  "when_not_to_use": [
+    "If clang is the C/C++ compiler you would use: clang built the C version in 118 us/f (1.6x faster than rustc's 187) and clang++ built the templated C++ in 107 (2.2x faster than rustc's 238).",
+    "Fast type-check feedback: rustc's check costs 86.3 us/f (141.5 generic), 6-7x gcc's and clang's syntax-only checks, so editor or `cargo check` loops on large files stay slower than for C.",
+    "If compile speed is the main reason to pick a language: dmd (13 us/f), Zig (110), Odin (147) and C3 (153) all built the same program faster in the same table.",
+    "Optimised builds or real projects: every compiler ran unoptimised, and the generated file has no crates, macros, traits beyond Add, or module graph; the README says real builds are dominated by headers, module resolution and stdlib footprint, none of which is exercised.",
+    "Heavy generics: the generic variant costs 27% more per function than the plain one (238 vs 187 us/f), and its check 64% more (141.5 vs 86.3)."
+  ],
+  "integration": {
+    "form": "compiler toolchain (rustc, normally installed with rustup; prebuilt binaries per release channel)",
+    "dependencies": "a system C compiler driver (cc) for linking; on x86_64-unknown-linux-gnu the official builds bundle rust-lld and use it by default since 1.90",
+    "min_toolchain": "rustc 1.100.0-nightly as measured; rust-lld default linking needs Rust 1.90 or later on x86_64-unknown-linux-gnu",
+    "platforms": "measured on x86-64 Linux only (x86_64-unknown-linux-gnu is a Tier 1 target: kernel 3.2+, glibc 2.17+); rustc targets many other platforms, none measured here",
+    "thread_safety": "not applicable (command-line compiler)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw specific to Rust: bm_Rust loops over rustup channels ['stable', 'nightly'] and calls `rustup default <channel>` before each pass, with no lock, while the four Rust tasks (check and build, plain and generic) run in parallel pool workers through the rustup proxy `rustc`. An overlapping task can switch the global toolchain under another task's timed runs, and the result key (language, templated, executable) ignores the version, so the nightly pass silently overwrites the stable pass and the '1.100.0-nightly' label is whatever `rustc --version` printed at probe time. Running the suite also leaves the machine's rustup default changed.",
+    "No link-free number for Rust: the harness registers only check and build for Rust (Compile is N/A), so Rust's only timing is Total, which includes linking with rust-lld while the gcc and clang rows link with the system default linker. The untemplated C/C++ rows' Total-minus-Compile gaps (link plus noise) range from 33 to 198 us/f, as large as rustc's whole 116 us/f margin over g++-15, and the templated g++-15 and clang++ Totals are below their own Compile. The conservative comparison, rustc's full build against GCC's link-free compile, gives about 1.0x against gcc-15 C (187 vs 193.8), 1.4x against g++-15 (269.6), 2.1x against gcc 16.2.1 (400.1) and 2.0x against g++ 16.2.1 (372.3) (derived from page data).",
+    "Unequal work in both directions: rustc at opt-level 0 turns on debug assertions and overflow checks, so every `+` gets a checked add and panic path (against rustc; output 360 B/f vs gcc's 121 also includes statically linked std). But the generic Rust source drops the per-function constants that the generic C++ source keeps (leaf `x`, chain `x + prev(x)`), so the 2.4-2.5x templated ratio compares less code, and that source is byte-identical on every repetition despite the suite's per-run constant randomisation.",
+    "One run, one laptop: tasks run concurrently, one worker pinned per selected CPU on a Zen 5/Zen 5c part, builds over 3 s (rustc and every GCC row) keep the minimum of only 2 runs, nothing checks the program's output, and the README's own earlier run differs (rustc 183, GCC 418-455, clang 87). Its headline range '~450-486 us/f' for GCC quotes only the GCC 16 rows, which the README itself flags as a regression."
+  ],
+  "pick_this_over_siblings_when": "Among the nordlow/compiler-benchmark siblings rustc is the slowest untemplated (187 us/f vs Zig 110, Odin 147, C3 153, dmd 13) and beats only C3 on generics (238 vs 255); pick it when you want Rust's checked semantics and are comparing against a GCC-built C/C++ debug workflow, not for the fastest compiler in the table.",
+  "verified_claims_summary": "One run of nordlow/compiler-benchmark on an AMD Ryzen AI 7 350 under Arch Linux (tables committed 2026-10-09) built and ran 40,000 generated arithmetic functions per language. rustc 1.100.0-nightly with no flags (opt-level 0, overflow checks on) took 187 us/f plain and 238 generic, against gcc 15.3.0 at 392, gcc 16.2.1 at 454, g++ 15.3.0 at 303/600 and g++ 16.2.1 at 486/566, all at default -O0 with warning flags only; clang 23.1.1 (118) and templated clang++ (107) were faster than rustc.",
+  "status_note": "rustc is actively developed (rust-lang/rust: 343,164 commits, 119.7k stars, Apache-2.0 OR MIT); the evidence is a single-machine run by an independent developer whose public harness (nordlow/compiler-benchmark, commits through 2026-10-12) has a rustup channel race that makes the Rust row's toolchain label unreliable, so re-run with one pinned toolchain before quoting ratios.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cbench",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/cpu_topology.py",
+    "https://raw.githubusercontent.com/nordlow/compiler-benchmark/HEAD/process_timer.py",
+    "https://github.com/nordlow/compiler-benchmark/commits",
+    "https://github.com/rust-lang/rust",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/src/doc/rustc/src/codegen-options/index.md",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_gnu.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/compiler/rustc_target/src/spec/base/linux_gnu.rs",
+    "WebSearch snippet only: https://blog.rust-lang.org/2025/09/01/rust-lld-on-1.90.0-stable (rust-lld default linker on x86_64-unknown-linux-gnu from Rust 1.90.0)"
+  ],
+  "confidence": 0.6
+}

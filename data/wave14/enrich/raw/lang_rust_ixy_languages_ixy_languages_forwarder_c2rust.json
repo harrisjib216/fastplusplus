@@ -1,0 +1,64 @@
+{
+  "id": "lang:rust/ixy-languages/ixy-languages#forwarder-c2rust",
+  "one_liner": "C2Rust-transpiled, fully unsafe Rust build of the ixy user-space 10G NIC driver; 91 vs 94 cycles per packet against C.",
+  "what_it_does": "ixy is an educational user-space driver for Intel ixgbe NICs (82599ES/X520, X540, X550) that maps the device through sysfs or vfio-pci, sets up DMA rings in hugepages and receives and transmits packet batches without a kernel driver; the benchmark app forwards packets between two ports and increments one byte of each packet. This entry is not the idiomatic ixy.rs rewrite but a C2Rust transpilation of the C driver, mentioned in a five-line addendum to Rust-vs-C-performance.md (commit e543831, 'rust can be faster than C :)'). The transpiled code itself is not published in the ixy-languages organisation (13 repositories, none of them a C2Rust build), so there is nothing to integrate; the useful artefacts are the C driver (emmericp/ixy) and the safe Rust driver (ixy-languages/ixy.rs).",
+  "how_it_is_fast": "C2Rust turns the C into unsafe Rust that keeps raw pointers and has almost no bounds checks, so the hot loops match the C logic; the document reports 121 instead of 127 instructions per packet and gives no further mechanism. One plausible, untested source of those 6 instructions: the C build compiles ixgbe.c, memory.c and ixy-fwd.c separately with no -flto, so pkt_buf_alloc (called per received packet) and pkt_buf_free (per sent packet) are out-of-line cross-file calls, whereas rustc optimises a whole crate and can inline across its modules. The safe ixy.rs driver is a different story: it executes about 65% more instructions (bounds checks, wrapper objects) that the out-of-order core mostly hides (IPC 2.09 vs 1.35).",
+  "when_to_use": [
+    "Evidence when planning a C-to-Rust migration with C2Rust: the transpiled, unsafe stage of a packet-processing hot path need not be slower than the original C on the same LLVM.",
+    "Studying the cost of Rust safety in a driver: the same document quantifies bounds checks (6% more cycles at batch 32, 11% at batch 8) and integer overflow checks (0.8% throughput at batch 8).",
+    "Learning user-space NIC drivers on Linux x86-64 with an ixgbe-family card or virtio, using the published C driver or ixy.rs (about 1000 to 2000 lines each).",
+    "Reproducing per-packet counter methodology: perf stat with the ocperf wrapper on a forwarder under full bidirectional 64-byte load (issue #6)."
+  ],
+  "when_not_to_use": [
+    "As a library or driver to deploy: the C2Rust build is unpublished, and ixy.rs itself says it is not production-ready and that DMA may corrupt memory.",
+    "As proof that Rust codegen beats C: the gain is 3 cycles per packet (about 3%, derived) from one unreplicated run, with no variance, batch size, compiler versions or flags given.",
+    "Where you need safety: the faster variant is wholly unsafe transpiled code; the safe idiomatic driver is 6-11% slower in cycles per packet.",
+    "Non-Intel or non-x86 NICs and hosts: only ixgbe-family devices and virtio are supported, and the drivers need hugepages plus root or an IOMMU with vfio-pci."
+  ],
+  "integration": {
+    "form": "not published (transpiled driver); the related ixy.rs is a Cargo crate and ixy C is a CMake project",
+    "dependencies": "ixy.rs: libc, byteorder, log, lazy_static; ixy C: none beyond libc and Linux sysfs/vfio",
+    "min_toolchain": "not documented for the C2Rust build; ixy.rs uses edition 2018; the main counter table used gcc 6.3 for C and roughly Rust 1.36 nightly (issue #6)",
+    "platforms": "Linux x86-64 with an Intel 82599/X520, X540 or X550 NIC (ixgbe, ixgbevf in ixy.rs) or virtio; hugepages required",
+    "thread_safety": "not documented for the C2Rust build; the forwarder is single-threaded and the README recommends one process per RSS queue instead of shared threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness gaps: the C2Rust claim is two sentences added on 2019-10-30, after the ANCS 2019 paper (whose abstract, seen as a search snippet, reports only the safe driver: 63% more instructions, 4% slower); the transpiled source, rustc and clang versions, flags, batch size and number of runs are not given, and the clang comparison's own cycle count is not stated.",
+    "Baseline build: ixy C is compiled with -g -O2 -march=native -fomit-frame-pointer and no -flto (unchanged since the 2017 initial import), while Rust optimises a whole crate at opt-level 3; the maintainer reports -O3 was sometimes slightly slower than -O2 (issue #6), so -O2 is not a crippled baseline, but the missing LTO is an untested confound for the 6-instruction difference.",
+    "The safe-Rust rows are not a pure bounds-check measurement: ixy.rs prefetches every received packet with _mm_prefetch (T1) in rx_batch (commit c734821, May 2019, gated on target_feature sse, which x86_64 targets have by default), while ixy C has no prefetch, which matches the table's C-only L2 and L3 hits (1.1 and 0.9 per packet at batch 32).",
+    "Hardware differs across the repo: the counter table ran on a Xeon E3-1230 v3, the README throughput graphs on an E3-1230 v2 at 3.3 and 1.6 GHz, and the latency plots on a Xeon E5-2620 v3."
+  ],
+  "pick_this_over_siblings_when": "Unlike libbzip2-rs or fast_rsync, which ship Rust code you can link and measure against a C library, this is a measurement without an artefact; use it only as a data point that transpiled unsafe Rust can match C in a hot I/O path, and take the published ixy.rs if you need a working safe driver.",
+  "verified_claims_summary": "With perf stat counters on a Xeon E3-1230 v3 forwarding 64-byte packets between two ixgbe ports, C ixy (gcc 6.3, -O2 -march=native) used 94 cycles and 127 instructions per packet at batch 32 (108 and 139 at batch 8); the C2Rust transpilation used 91 cycles and 121 instructions (batch size not stated) and was reported faster than a clang build on the same LLVM as well. The idiomatic safe ixy.rs used 100 and 120 cycles (209 and 232 instructions) at batch 32 and 8.",
+  "status_note": "Finished: the summary repo's last change is PR #13 'typo in C2Rust name' (2022-12-14) and every driver is marked Finished, though ixy.rs still took a register-write fix on 2026-10-09; the summary repo is BSD-2-Clause and ixy.rs MIT, but the C2Rust driver behind the claim was never published, so only the C and safe Rust drivers can be reused.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ixy-languages/ixy-languages/HEAD/Rust-vs-C-performance.md",
+    "https://raw.githubusercontent.com/ixy-languages/ixy-languages/HEAD/README.md",
+    "https://github.com/ixy-languages/ixy-languages",
+    "https://github.com/orgs/ixy-languages/repositories",
+    "https://github.com/ixy-languages/ixy-languages/tree/master/slides",
+    "https://github.com/ixy-languages/ixy-languages/commit/e543831c2b75d085665bb3ed6771abe46533ff45",
+    "https://github.com/ixy-languages/ixy-languages/issues?q=is%3Aissue",
+    "https://github.com/ixy-languages/ixy-languages/issues/6",
+    "https://github.com/ixy-languages/ixy-languages/issues/12",
+    "https://github.com/ixy-languages/ixy-languages/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/ixy-languages/ixy.rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/ixy-languages/ixy.rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ixy-languages/ixy.rs/HEAD/examples/forwarder.rs",
+    "https://raw.githubusercontent.com/ixy-languages/ixy.rs/HEAD/src/ixgbe.rs",
+    "https://raw.githubusercontent.com/ixy-languages/ixy.rs/HEAD/src/memory.rs",
+    "https://github.com/ixy-languages/ixy.rs/commits/master",
+    "https://github.com/ixy-languages/ixy.rs/commits/master/src/memory.rs",
+    "https://raw.githubusercontent.com/emmericp/ixy/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/emmericp/ixy/69e9d8d/CMakeLists.txt",
+    "https://raw.githubusercontent.com/emmericp/ixy/cfdeb91/CMakeLists.txt",
+    "https://github.com/emmericp/ixy/commits/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/emmericp/ixy/HEAD/src/app/ixy-fwd.c",
+    "https://raw.githubusercontent.com/emmericp/ixy/HEAD/src/driver/ixgbe.c",
+    "https://raw.githubusercontent.com/emmericp/ixy/HEAD/src/driver/device.h",
+    "https://raw.githubusercontent.com/emmericp/ixy/HEAD/src/memory.c",
+    "WebSearch snippets for the ANCS 2019 paper (arXiv 1909.06344) and for ixy C2Rust; www.net.in.tum.de paper PDF (proxy 403) and mediatum.ub.tum.de (ENOTFOUND) blocked"
+  ],
+  "confidence": 0.55
+}

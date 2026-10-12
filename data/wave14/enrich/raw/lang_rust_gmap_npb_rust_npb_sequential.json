@@ -1,0 +1,67 @@
+{
+  "id": "lang:rust/gmap/npb-rust#npb-sequential",
+  "one_liner": "Rust port of the NAS Parallel Benchmarks; its paper reports the sequential suite 5.59% faster than C++ NPB-CPP.",
+  "what_it_does": "A translation of the group's NPB-CPP port of NAS Parallel Benchmarks 3.4.1 into Rust: five kernels (EP, CG, MG, IS, FT) and three pseudo-applications (BT, SP, LU), each a standalone binary that prints time, Mop/s and the standard NPB verification result. NPB-RUST is the sequential crate with no dependencies; NPB-RAYON parallelises the same loops with rayon 1.10 (thread count from the RAY_NUM_THREADS variable). The problem class is fixed at compile time with RUSTFLAGS='--cfg class=\"A\"', so this is a benchmark suite and porting reference, not a library with an API.",
+  "how_it_is_fast": "There is no new algorithm: the code follows NPB-CPP loop for loop. Hot loops are written as iterator chains over zipped slices (for example the CG sparse matrix-vector product) so LLVM can drop bounds checks, and in the default build (UNSAFE = true unless --cfg safe=\"true\" is passed) FT, IS and MG switch to get_unchecked inside unsafe blocks. The release profile in the April 2025 upload, the code closest to the February 2025 paper, set codegen-units = 1, lto = \"fat\" and panic = \"abort\" (removed in commit 2990a0b, September 2025), while the C++ baseline builds with g++ -O3 -mcmodel=medium and no LTO. The sequential CG also does about 4% less work than the C++ version (see gotchas).",
+  "when_to_use": [
+    "Comparing Rust toolchains, LLVM versions or CPUs on a standard HPC workload that carries its own correctness check (verification constants for classes S to E).",
+    "Porting Fortran- or C-style array code to Rust and wanting worked examples of iterator-based bounds-check elision and of where the authors fell back to get_unchecked (FT transposes, IS bucket counting, MG stencils).",
+    "Studying Rayon against OpenMP on identical kernels, including a pipelined LU wavefront built from raw pointers and AtomicBool flags.",
+    "Sequential numerical loops where a few percent either way against g++ -O3 is acceptable and memory safety (with the safe=\"true\" build) is worth having."
+  ],
+  "when_not_to_use": [
+    "As proof that Rust out-runs C++ on HPC code: the 5.59% aggregate is first-party, comes from a paper not reachable here, mixes in a CG that runs 24 instead of 25 inner iterations, and compares a fat-LTO, codegen-units=1, panic=abort Rust build with a non-LTO g++ build.",
+    "Parallel throughput: by the paper abstract the Rayon version is slower than both the C++ and Fortran OpenMP versions; there is no MPI version.",
+    "Class F or IS class E runs: the README lists classes up to F, but no benchmark defines F and IS stops at D (compile_error otherwise).",
+    "As a reusable library: each program is a single binary with compile-time constants and no public API.",
+    "Memory-safety guarantees out of the box: the default build has UNSAFE = true and unchecked indexing in FT, IS and MG (MG alone has 152 unsafe or get_unchecked occurrences)."
+  ],
+  "integration": {
+    "form": "source-drop (two Cargo binary crates, NPB-RUST and NPB-RAYON)",
+    "dependencies": "none for NPB-RUST; rayon 1.10 for NPB-RAYON",
+    "min_toolchain": "Rust 1.85 (edition 2024)",
+    "platforms": "any Rust target; no SIMD intrinsics, inline assembly or target_feature code in either crate",
+    "thread_safety": "Sequential binaries are single-threaded; NPB-RAYON shares raw pointers across threads through unsafe impl Sync wrappers (BT, LU) and synchronises LU's wavefront with AtomicBool flag arrays",
+    "drop_in_for_baseline": "partial: same benchmarks, classes, verification constants and output format as NPB-CPP and Fortran NPB, but built with cargo and RUSTFLAGS instead of make with CLASS= arguments, and with no MPI variant"
+  },
+  "gotchas": [
+    "Harness flaw in CG (both NPB-RUST and NPB-RAYON, present since the first upload cd8b36d and still at HEAD): conj_grad runs `for _ in 1..cgitmax` with cgitmax = 25, which is 24 CG iterations, while NPB-CPP runs `for(cgit = 1; cgit <= cgitmax; cgit++)`, 25 iterations as in Fortran NPB. Verification still passes: an independent Python port of NPB-CPP's CG run here gave zeta relative errors of 1.0e-15 (class S), 3.4e-16 (W) and 5.2e-14 (A) for both 24 and 25 iterations against the 1e-10 tolerance. Rust CG therefore does 25 instead of 26 sparse matrix-vector products per call (about 4% less work, derived) while its Mop/s formula still credits 25 iterations, so any CG Rust-vs-C++ row is biased in Rust's favour by roughly that much.",
+    "The code was uploaded on 2025-04-11 (commit cd8b36d), seven weeks after the arXiv paper (2025-02-21), so the measured code cannot be confirmed to match; the paper-era fat-LTO and panic=abort release profile was later deleted, so a fresh build of HEAD is not the configuration the paper timed.",
+    "The default build sets UNSAFE = true; pass RUSTFLAGS='--cfg class=\"A\" --cfg safe=\"true\"' for bounds-checked FT, IS and MG. The paper does not say (in what could be seen) which mode it timed.",
+    "Both NPB-RUST and NPB-CPP print one line per outer CG iteration inside the timed region, as Fortran NPB does, so console speed is part of every CG timing on both sides; the Rust timers use std::time::Instant and time only the benchmark loop, matching NPB-CPP's T_BENCH region."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the CMU 15-618 Rayon-vs-OpenMP project when you need the standard, self-verifying NPB kernels in both sequential Rust and Rayon form; that project covers Mandelbrot, matmul, sort and reduction and is where Rayon actually wins cases, whereas NPB-RAYON loses to OpenMP. None of the async-runtime siblings (Tokio, Embassy, ScyllaDB driver) measure numerical loops.",
+  "verified_claims_summary": "From the arXiv 2502.15536 abstract, seen only as search snippets: across the sequential suite NPB-RUST was 5.59% faster than NPB-CPP (g++ -O3 -mcmodel=medium per the repo's make.def) and 1.23% slower than Fortran NPB, and NPB-RAYON was slower than both OpenMP versions; hardware, compiler versions, classes and per-kernel numbers were not seen. CG's 24-iteration loop is worth about 4% on that kernel alone; its effect on the aggregate depends on how the paper aggregates (about 0.5 points if it is a mean over the eight programs).",
+  "status_note": "Active (8 commits; last on 2026-10-08 fixed LU's zero tolrsd constants), MIT-licensed, no issues filed and one closed pull request; usable as benchmark and porting reference, but the CG iteration-count bug is unfixed at HEAD, so CG timings are not like-for-like with NPB-CPP or Fortran NPB.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/README.md",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/Cargo.toml",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RAYON/Cargo.toml",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/src/{bt,cg,ep,ft,is,lu,mg,sp}.rs",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/src/common/{dcomplex,mod,print_results,randdp,timers}.rs",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RAYON/src/{bt,cg,ep,ft,is,lu,mg,sp}.rs",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RAYON/src/common/{dcomplex,mod,print_results,randdp,timers}.rs",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/cd8b36d/NPB-RUST/Cargo.toml",
+    "https://raw.githubusercontent.com/GMAP/NPB-Rust/cd8b36d/NPB-RUST/src/cg.rs",
+    "https://github.com/GMAP/NPB-Rust/tree/main/NPB-RUST/src",
+    "https://github.com/GMAP/NPB-Rust/tree/main/NPB-RUST/src/common",
+    "https://github.com/GMAP/NPB-Rust/issues",
+    "https://github.com/GMAP/NPB-Rust/issues?q=is%3Aissue",
+    "https://github.com/GMAP/NPB-Rust/pulls?q=is%3Apr",
+    "https://github.com/GMAP/NPB-Rust/commits/main",
+    "https://github.com/GMAP/NPB-Rust/commit/98cbea0",
+    "https://github.com/GMAP/NPB-Rust/commit/2990a0b",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/config/make.def",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/CG/cg.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/EP/ep.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/IS/is.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/BT/bt.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/SP/sp.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/LU/lu.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/MG/mg.cpp",
+    "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/FT/ft.cpp",
+    "WebSearch snippets for arXiv 2502.15536 (arxiv.org/html/2502.15536v1 and www.themoonlight.io review: ENOTFOUND, blocked here)"
+  ],
+  "confidence": 0.6
+}

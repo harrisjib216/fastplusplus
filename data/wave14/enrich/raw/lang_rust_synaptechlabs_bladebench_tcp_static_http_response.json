@@ -1,0 +1,53 @@
+{
+  "id": "lang:rust/synaptechlabs/bladebench#tcp-static-http-response",
+  "one_liner": "Toy Rust std::net TCP server measured 1.21x faster than identical C++ and 1.5x than C; invalid comparison.",
+  "what_it_does": "blade_core.rs is a single-threaded blocking TCP server built on std::net::TcpListener: accept a connection, do one read into a 1 KiB buffer, write_all a fixed 40-byte 'HTTP/1.1 200 OK' response, and drop (close) the stream. The repo has the same loop in C, C++ and Zig, plus a Makefile and a bench.sh that runs wrk against each port. It is not a library, router or usable server: it does not parse the request, route, handle errors (every I/O result is unwrap()ed) or serve more than one connection at a time.",
+  "how_it_is_fast": "Nothing in the code is faster: all four servers make the same accept/read/write/close syscalls per connection, so the time goes to kernel TCP setup and teardown on loopback and to the wrk client. Rust's TcpListener::bind also sets SO_REUSEADDR and uses the same listen backlog of 128 as the C and C++ servers, which affects rebinding, not throughput. The 1.21x and 1.5x gaps are run-to-run and run-order noise, not codegen (see gotchas).",
+  "when_to_use": [
+    "As a 15-line example of a blocking std::net accept loop, for teaching or for a quick loopback smoke test.",
+    "As a starting harness to redo the comparison properly: build with rustc -O (or cargo --release) and gcc/g++ -O3, add a 'Connection: close' header or read the full request, alternate the run order and repeat each run several times.",
+    "Not as evidence for choosing Rust over C or C++ for a server; use the HttpArena entries for that."
+  ],
+  "when_not_to_use": [
+    "Any production or benchmark use: one connection at a time, no request parsing, no keep-alive, no timeouts, and a panic (server exit) on any accept, read or write error because of unwrap().",
+    "Quoting the 49,388 vs 40,715 vs 32,976 req/s figures: the C and C++ servers are the same code yet differ by 23%, and the ranking follows the order bench.sh ran them in.",
+    "Comparing optimised code: the Makefile builds Rust with plain `rustc` (opt-level 0, debug assertions on) and Zig in Debug mode, against gcc and g++ at -O2.",
+    "Learning async or multi-threaded Rust networking: the summary recommends 'Rust with async' for production, but no async server is in the repo."
+  ],
+  "integration": {
+    "form": "source-drop (one .rs file, built with rustc directly; no Cargo project)",
+    "dependencies": "none (Rust std only)",
+    "min_toolchain": "not documented for Rust; README lists gcc, g++, rustc and zig 0.12.0+, and wrk for the benchmark",
+    "platforms": "Linux as run (C and C++ use netinet/in.h and unistd.h; the Rust version uses only std::net and is portable); hardware and kernel not documented",
+    "thread_safety": "single-threaded blocking loop; one client at a time",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Error column not from wrk: every server sends an HTTP/1.1 response with Content-Length and no 'Connection: close', so wrk keeps the connection alive, resets its parser and then sees the server's close as EOF at the start of the next response, which wrk.c counts as a read error (or a write error if its next request hits the reset first). The C, C++ and Rust runs should therefore each report roughly one socket error per request, yet performance_summary.md lists 0, 0 and ~0. The README promises 'detailed logs' there, but the file holds only a hand-made table, so the numbers cannot be checked against raw wrk output.",
+    "Run order: bench.sh runs one 10 s wrk test per server in the fixed order C, C++, Rust, Zig, and req/s rises in exactly that order (32,976, 40,715, 49,388, 80,700). With one run each, a warm-up or order effect cannot be separated from the language, and the identical C and C++ servers differ by 23%.",
+    "Zig row: the Zig server writes the response without ever reading the request and then closes, so the kernel resets connections with unread data; that, not a 'buffer overrun' as the summary says, fits the 701k write errors behind its 80,700 req/s. `zig build-exe blade_core.zig` outputs blade_core, not the blade_zig the README tells you to run, and the committed blade_core binary is that Zig server as a statically linked Debug build with debug info.",
+    "Asymmetries: the Rust server binds 127.0.0.1 while C and C++ bind INADDR_ANY, Rust uses write_all where C and C++ make one write call, and the Rust binary is an unoptimised debug build; none of these is plausibly the cause of a 21-50% throughput difference in a syscall-bound loop."
+  ],
+  "pick_this_over_siblings_when": "Never for performance: the HttpArena Rust tokio entry compares a real multi-core Rust HTTP/1.1 server against nginx and libreactorng built at -O3 on the same endpoints, while bladeBench is a single-threaded toy with an unoptimised Rust build.",
+  "verified_claims_summary": "One wrk run each (8 threads, 1000 connections, 10 s, loopback, hardware and compiler versions not stated) against single-threaded accept/read/write/close servers gave Rust (plain rustc, unoptimised) 49,388 req/s, C++ (g++ -O2) 40,715 and C (gcc -O2) 32,976. The ratios (1.21x and 1.5x, derived from page data) are within the noise shown by the identical C and C++ servers, and the published error counts do not match how wrk counts server-side closes.",
+  "status_note": "One commit ('Initial Commit', 2025-07-12), 0 stars, MIT; abandoned toy code with no tests or raw benchmark logs, copyable only as an example of a blocking std::net loop, not as evidence of Rust out-running C or C++.",
+  "sources_read": [
+    "https://github.com/Synaptechlabs/bladeBench",
+    "https://github.com/Synaptechlabs/bladeBench/commits",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/README.md",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/performance_summary.md",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/bench.sh",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/blade_core.c",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/blade_core.cpp",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/blade_core.rs",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/blade_core.zig",
+    "https://raw.githubusercontent.com/Synaptechlabs/bladeBench/HEAD/blade_core (committed binary, inspected with file and strings, not run)",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/sys/net/connection/socket/mod.rs",
+    "https://raw.githubusercontent.com/wg/wrk/master/src/wrk.c",
+    "https://raw.githubusercontent.com/wg/wrk/master/src/http_parser.c",
+    "https://raw.githubusercontent.com/wg/wrk/master/src/net.c"
+  ],
+  "confidence": 0.75
+}

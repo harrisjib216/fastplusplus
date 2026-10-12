@@ -1,0 +1,67 @@
+{
+  "id": "lang:rust/boostorg/redis#tcp-echo-direct",
+  "one_liner": "Tokio's docs-example TCP echo server on the single-threaded runtime; one 2022 run took 30.7 s against 43.6 s for the libuv docs example.",
+  "what_it_does": "Tokio is Rust's dominant async runtime: a task scheduler, an I/O reactor over the OS event queue (epoll, kqueue, IOCP) and async TCP/UDP sockets. The measured program (benchmarks/rust/echo_server_direct, 35 lines) is the README-style echo server: accept in a loop, tokio::spawn one task per connection, read into a 1 KiB stack array and write_all it back, under #[tokio::main(flavor = \"current_thread\")]. The Boost.Redis author wrote it as one of five echo servers driven by the same C++ Asio client. Using it from C++ means FFI or a separate Rust process; it is not a library you can link in place of libuv.",
+  "how_it_is_fast": "Each connection is an async fn compiled to a stackless state machine whose 1 KiB buffer lives inside the task, so an echo costs one read and one write syscall and no heap allocation. Sockets are registered once with mio, which uses edge-triggered epoll (EPOLLET), and a read that hits WouldBlock parks the task until the reactor wakes it. The current-thread scheduler runs every task on one thread, so there is no work-stealing or cross-thread wake-up; it polls the I/O driver every 61 scheduled tasks (event_interval default in runtime/builder.rs). The libuv baseline makes the same syscalls but, as the unmodified docs example, mallocs a 64 KiB read buffer on each read callback (libuv passes 64 * 1024 as suggested_size) plus a write request per echo and frees both; how much of the 13 s gap that explains was never measured.",
+  "when_to_use": [
+    "New network services in Rust with many concurrent, mostly idle connections exchanging small messages, where one task per connection is the simplest correct design.",
+    "Single-core or one-runtime-per-core deployments: the current_thread flavour is what produced the 30.7 s result; the default multi-thread runtime (tokio 0.2.25) took 42.2-43.2 s in the same harness.",
+    "When the C alternative under consideration is a straightforward libuv callback server written from the docs, without buffer pooling or request reuse.",
+    "As a sidecar or separate process next to C++ code when the team prefers Rust's ownership checks for network-facing parsing."
+  ],
+  "when_not_to_use": [
+    "When C++ is an option: the Boost.Asio C++20 coroutine echo server in the same chart took 29.5 s (October 2022) against Tokio's 30.7 s, and the July 2022 Asio run was 31.1 s, so the two are within noise of one single-run chart.",
+    "As proof that Rust or Tokio beats libuv: the libuv server allocates per message, was built with gcc -O2 against an unstated libuv, and was never revised, while the Tokio server was moved to a newer Tokio and the single-threaded runtime before its winning run.",
+    "Inside an existing C or C++ event loop: Tokio needs its own runtime thread and an FFI boundary; nothing in the benchmark covers that.",
+    "Handlers that block or burn CPU: on the current-thread scheduler every task shares one thread, so one blocking call stalls every connection, and in this harness the multi-thread runtime was slower, so moving off current_thread has a cost.",
+    "Latency-SLO work: only total wall time for 5,000,000 round trips exists, with no percentiles."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "tokio (the benchmark enables features = [\"full\"]); tokio itself depends on mio for the OS event queue",
+    "min_toolchain": "Rust 1.85 for current Tokio (README MSRV); the benchmark's Cargo.lock pins tokio 1.20.0 (edition 2021); the rustc version and cargo profile used for the run are not stated",
+    "platforms": "Linux (epoll), macOS and BSD (kqueue), Windows (IOCP) per the Tokio README; measured only on the author's unnamed localhost machine",
+    "thread_safety": "current_thread runtime: all tasks are created and executed on the calling thread (runtime/mod.rs); the default multi-thread runtime is a work-stealing scheduler (README)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The doc page's 'code used' link for Tokio points to commit 3fb018c, whose server is tokio 0.2.25 with the default multi-thread #[tokio::main] and scored 42.2 s (comment) and 43.2 s (chart), not the ab68e8a tokio 1.20.0 current_thread server behind the 30.7 s bar (2022-07-16, 'Updates to a more recent Tokio version and uses single thread.'). The version bump and the runtime switch happened together, so their effects cannot be separated.",
+    "The chart is a composite of single `time ./echo_server_client 1000 5000` runs from different dates: libuv 43.568 s by 2022-07-15, Tokio 2022-07-16, Go 2022-08-25, and Asio re-run at 29.5 s on 2022-10-07 after its server switched from io_context(1) to a typed executor with BOOST_ASIO_CONCURRENCY_HINT_UNSAFE_IO. On 2022-07-16 Tokio (30.7 s) was ahead of Asio (31.1 s); it was never re-run after Asio's tuning.",
+    "The single-threaded Asio client catches each session's exception, prints 'Error:' to stderr and carries on; it never checks that all 5,000,000 echoes completed or that the echoed bytes match, so a run with failed sessions would look faster. No logs of the runs are in the repository.",
+    "No hardware, OS, rustc version or cargo profile is given (the Cargo.toml has no [profile] section and no build command is documented), and the libuv build is gcc -O2 against a system libuv of unknown version; Tokio and Asio at about 30 s may both be capped by the single-threaded client on the same host (inferred, not measured)."
+  ],
+  "pick_this_over_siblings_when": "Against the Go net echo server from the same harness (35.6 s), Tokio took about 14% less wall time and gives explicit control of the runtime flavour, so pick it when you want Rust's ownership model and are fine with async code. The Tokio 1M-task peak-memory entry (214 MB against 606 MB for concurrencpp and 853 MB for Asio) is the stronger reason to choose Tokio over a C++ coroutine runtime; this echo result alone is directional.",
+  "verified_claims_summary": "One `time` run each of a single-threaded Boost.Asio client (1000 localhost connections x 5000 13-byte echoes) on the author's unnamed machine (localhost latency 0.07 ms) took 30.7 s against the Tokio 1.20.0 current_thread server and 43.6 s against the libuv docs example built with gcc -O2, about 1.42x less wall time (derived from page data). The Boost.Asio C++20 coroutine server took 29.5 s in a later run, Go 35.6 s and Node.js 74.2 s; no CPU, OS, rustc or libuv versions are given.",
+  "status_note": "Tokio is actively maintained (MIT, 33.4k stars, README install snippet shows 1.53.2) and the server is a copyable docs example, but the evidence is a 2022 single-run composite chart that the current doc page still shows and links to the older Tokio code, against an allocation-heavy C example, so it supports only a tier-D directional claim.",
+  "sources_read": [
+    "https://github.com/tokio-rs/tokio",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/runtime/builder.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/runtime/mod.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/net/tcp/stream.rs",
+    "https://raw.githubusercontent.com/tokio-rs/mio/master/src/sys/unix/selector/epoll.rs",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/doc/modules/ROOT/pages/benchmarks.adoc",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/rust/echo_server_direct/src/main.rs",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/rust/echo_server_direct/Cargo.toml",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/rust/echo_server_direct/Cargo.lock",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/c/libuv/echo_server_direct.c",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/c/libuv/README.md",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/cpp/asio/echo_server_direct.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/cpp/asio/echo_server_client.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/redis/develop/benchmarks/go/echo_server_direct.go",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/rust/echo_server_direct/src/main.rs",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/rust/echo_server_direct/Cargo.toml",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/rust/echo_server_direct/Cargo.lock",
+    "https://raw.githubusercontent.com/boostorg/redis/3fb018ccc6138d310ac8b73540391cdd8f2fdad6/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/boostorg/redis/ab68e8a31dd5f10a2b6ecfd6aec44bab71233aae/benchmarks/rust/echo_server_direct/Cargo.lock",
+    "https://raw.githubusercontent.com/boostorg/redis/ab68e8a31dd5f10a2b6ecfd6aec44bab71233aae/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/boostorg/redis/ab68e8a31dd5f10a2b6ecfd6aec44bab71233aae/benchmarks/cpp/asio/echo_server_direct.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/ba82c6cd8487eca9b3142f34c8ad7b2ff16548b1/benchmarks/cpp/asio/echo_server_direct.cpp",
+    "https://raw.githubusercontent.com/boostorg/redis/ba82c6cd8487eca9b3142f34c8ad7b2ff16548b1/benchmarks/benchmarks.tex",
+    "https://github.com/boostorg/redis/commits/develop/benchmarks/rust",
+    "https://github.com/boostorg/redis/commits/develop/benchmarks/benchmarks.tex",
+    "https://raw.githubusercontent.com/libuv/libuv/v1.x/src/unix/stream.c"
+  ],
+  "confidence": 0.6
+}

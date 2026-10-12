@@ -1,0 +1,62 @@
+{
+  "id": "lang:rust/mda2av/httparena#baseline-4096",
+  "one_liner": "Benchmark-only hand-rolled HTTP/1.1 server on raw tokio; 1.27x nginx on HttpArena baseline-4096 but 0.96x libreactorng (C).",
+  "what_it_does": "A single 346-line Rust file (frameworks/tokio/src/main.rs in the HttpArena repo) that answers HttpArena's fixed endpoints: /baseline11 returns a + b plus the POST body as an integer, /pipeline returns ok, /delay/{ms} waits and echoes ms, and any other path also gets the a + b answer. There is no router, handler API or crate; to reuse it you copy main.rs and replace respond(). Despite meta.json's repo field pointing at tokio-rs/tokio, the code was written for the suite by its owner (PR #820, 2026-06-06) and lists no maintainers; it shows what plain tokio can do, not what tokio, hyper or axum ship.",
+  "how_it_is_fast": "One OS thread per allowed CPU (available_parallelism, 64 under the 0-31,64-95 cpuset), each running its own tokio current_thread runtime with a private SO_REUSEPORT listener, so the kernel shards accepts and there is no work stealing, cross-thread wakeup or shared state; connections are tasks on the runtime that accepted them, on epoll through mio, with TCP_NODELAY. Each read parses every complete request in the buffer and appends all responses to one Vec flushed with a single write_all, so a 16-deep pipelined burst costs one syscall (pipelined-4096 54.8M req/s against libreactorng's 43.4M). Responses are minimal (status line, Content-Type, Content-Length; no Date or Server header), and the build is thin LTO, codegen-units 1, panic = abort, target-cpu=native, tokio with only rt/net/io-util/time. The design matches the C entries; nothing in it is a Rust-language mechanism.",
+  "when_to_use": [
+    "As a reference design for a thread-per-core tokio HTTP/1.1 server: plain epoll tokio reached 4,187,085 req/s at 4,096 connections on a 32-core/64-thread cpuset, about 4% behind libreactorng (C, io_uring) and 1.17x the HttpArena tokio-uring entry (3,565,878).",
+    "Throughput-bound keep-alive or pipelined HTTP/1.1 services with tiny CPU-only handlers, where batching all responses from one read into one write pays off.",
+    "When CPU per request at a fixed load matters: at a pinned 1M req/s it used 18.75 us of CPU per request against 21.04 us for libreactorng and 19.32 us for libioma (partly because its responses are smaller).",
+    "Connection-churn workloads (limited-conn, 10 requests per connection): 2,721,455 req/s, level with libioma 2,707,029 and libreactorng 2,685,717."
+  ],
+  "when_not_to_use": [
+    "Tail-latency-sensitive services: at a pinned 1M req/s its p99.9 was 25,128 us against libreactorng's 687 us (36.6x) and libioma's 1,147 us; at 10k req/s 2,979 us against 182 us (16x), although mean and p99 are close (p99 166 us against 171 us at 1M).",
+    "Production traffic: no Date header, no method check, a 200 with the a + b sum for any unknown path, no TLS or HTTP/2, a 1 MiB buffer cap that closes the connection without a status, and a remotely triggerable abort (see gotchas).",
+    "As proof that Rust beats C: it trails libreactorng (0.96x) and libioma (0.98x) on baseline-4096, ties on limited-conn, and the only clear win (pipelined, 1.26x) is a reference-only profile that tracks its smaller responses.",
+    "As a prediction for hyper, axum or actix: HttpArena's hyper entry made 3,003,360 req/s and actix-web 2,775,120 on the same profile.",
+    "Memory-tight hosts at high connection counts: each connection task holds a 16 KiB stack array plus two 16 KiB Vecs (about 48 KiB, derived from main.rs), consistent with 187 MiB at baseline-4096 (libreactorng 105 MiB, though libioma 1.2 GiB and nginx 3.5 GiB) and 426 MiB at limited-conn against 175 MiB."
+  ],
+  "integration": {
+    "form": "source-drop (frameworks/tokio/src/main.rs plus Cargo.toml in MDA2AV/HttpArena; no crate)",
+    "dependencies": "tokio 1 (default features off; io-util, net, rt, time) and socket2 0.5",
+    "min_toolchain": "not documented; built on the rust:1.95 Docker image, edition 2021",
+    "platforms": "Linux (relies on SO_REUSEPORT accept sharding; built with -C target-cpu=native); measured on x86-64 Zen 2 (Threadripper PRO 3995WX), kernel 6.17",
+    "thread_safety": "shared-nothing: one current_thread runtime and listener per OS thread, each connection a task on its accepting runtime; no state is shared between threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Remote crash found by reading the code (not executed): parse_usize accepts any Content-Length up to 18446744073709551615, body_start + cl then wraps in the release build, the 'buf.len() < body_start + cl' check passes, and &buf[body_start..body_start + cl] panics; Cargo.toml sets panic = \"abort\", so one such request kills the whole process (all 64 runtimes). decode_chunked has the same wrap for a chunk size of ffffffffffffffff. The bug is in the first commit (2f52740) and scripts/validate.sh does not test it; it does not affect the measured numbers.",
+    "Cross-run rows and code drift: the baseline-4096, pipelined-4096 and limited-conn-4096 rows are unchanged since at least 2026-07-24 (commit 5698fa8), so they were measured between 2026-06-06 and 2026-07-24 with the original main.rs (no time driver, no /delay branch); the current file adds enable_time() and a delay branch. The libreactorng rows quoted are a 2026-09-07 re-run; its July rows were 4,309,995, 42,807,713 and 2,662,214, against which tokio is 0.97x, 1.28x and 1.02x. Run-to-run drift of about 1.5% makes the 0.96-1.02x ratios ties.",
+    "Smaller responses carry part of the win: about 62.9 bytes per response at baseline-4096 against 108.7 for libreactorng and 135.4 for nginx, and 61.4 against 106.2 at pipelined-4096 (3.36 GB/s against 4.61 GB/s output), all derived from page data; HttpArena's validation does not require a Date header.",
+    "Parser shortcuts: a naive windows() search for the header end rescans the whole buffer on every fragmented read, malformed chunk framing is treated as incomplete until the 1 MiB cap closes the connection, and accept errors loop with continue (a busy loop when file descriptors run out)."
+  ],
+  "pick_this_over_siblings_when": "Among Rust siblings, read this as the ceiling of plain tokio: it beats the HttpArena tokio-uring entry (3.57M), hyper (3.00M), actix-web (2.78M) and ntex (2.17M) on baseline-4096, so pick actix-web or ntex when you need a framework and this design only for a custom engine. For a reusable thread-per-core engine at the same throughput, libxev (Zig, 4.38M) or zix and zeemo (Zig, 4.44M and 4.42M) are standalone projects, whereas this is a single benchmark file.",
+  "verified_claims_summary": "HttpArena on an AMD Ryzen Threadripper PRO 3995WX (server pinned to 32 cores / 64 threads, gcannon over loopback, 4,096 connections, best of 3 five-second runs): 4,187,085 req/s against nginx 1.31.4 3,284,513 (1.27x), h2o 3,641,609 (1.15x), libioma 4,255,834 (0.98x) and libreactorng 4,377,377 (0.96x); pipelined-4096 54,755,795 against libreactorng 43,424,448 (1.26x); limited-conn-4096 2,721,455 against libioma 2,707,029 (1.01x). The rows come from runs weeks apart and the servers send different response sizes; all ratios are derived from page data.",
+  "status_note": "HttpArena is active (MIT, 128 stars, last commit 2026-10-11) and the entry was last touched 2026-08-29, but it is MIT benchmark code with no API, no maintainers and a one-request abort on oversized Content-Length, so treat it as a design reference, not a dependency.",
+  "sources_read": [
+    "https://github.com/MDA2AV/HttpArena",
+    "https://github.com/MDA2AV/HttpArena/issues?q=tokio",
+    "https://github.com/MDA2AV/HttpArena/commits/main/frameworks/tokio",
+    "https://github.com/MDA2AV/HttpArena/commits/main/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/2f52740/frameworks/tokio/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/2f52740/frameworks/tokio/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/5698fa8/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/2773acb/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/f78b367/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/7c29cee/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/libreactorng.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/5698fa8/site/data/results/libreactorng.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/libioma.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/validate.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh"
+  ],
+  "confidence": 0.75
+}

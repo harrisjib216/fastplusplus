@@ -1,0 +1,63 @@
+{
+  "id": "lang:pony/ponylang/ponylang-website#message-ring-factorisation",
+  "one_liner": "Pony actor rings plus trial-division workers vs CAF 0.13 (2015 charts, 2-4x); Pony's program skips most repetitions.",
+  "what_it_does": "The 'mixed case' from the CAF benchmark suite: several rings of actors pass a token around many laps while, on each repetition, a worker factorises 86028157 x 329545133 by trial division (about 165 million 64-bit modulo steps). Pony's version is examples/mixed (identical in logic at tags 0.1.4, 0.1.5, 0.1.7 and today's examples/actors/mixed); CAF's is mixed_case.cpp in actor-framework/benchmarks. Pony is a separate actor language, so nothing here drops into C++.",
+  "how_it_is_fast": "In principle the same runtime properties as the mailbox entry: wait-free MPSC mailboxes (one atomic exchange per send), per-core scheduler threads with work stealing, and native LLVM code for the trial division, with the factorisation run as an ordinary actor instead of CAF's detached (own OS thread) worker. In practice most of the charted gap is explained by a bug in the Pony benchmark program that makes it run only the first of its repetitions (see gotchas), so no runtime technique can be credited from this chart.",
+  "when_to_use": [
+    "Do not use this entry as evidence; use it only as a pointer to the Pony runtime and to the CAF suite's mixed workload, which is a reasonable shape (messaging plus CPU-bound workers) for testing an actor runtime.",
+    "If you write a new service in Pony that mixes chatty actors with CPU-heavy tasks, Pony's work-stealing schedulers run both on the same threads without dedicated OS threads per worker.",
+    "If you are re-running the comparison: fix the Pony ring so the master always restarts (or choose laps with pass = 1 mod (size + 1)) and check the factorisation result, then compare against a current CAF 1.x."
+  ],
+  "when_not_to_use": [
+    "As a performance claim against CAF: the Pony program does a fraction of CAF's work under any arguments where the laps value is not 1 mod (ring size + 1).",
+    "From C++: ponyc removed library mode in 0.47.0 (2022), so Pony code can only run as its own process; Pony calls C, not the reverse.",
+    "As a guide to today's runtime: the chart used Pony 0.1.5, before generalized runtime backpressure (sender muting, 0.21.0 in 2017) and dynamic scheduler scaling (0.21.1), and CAF 0.13, a decade before CAF 1.x.",
+    "If you need a stable language: Pony is pre-1.0 and its README says it semi-regularly introduces breaking changes."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "ponyc toolchain (bundles a vendored LLVM, 23.1.3 as of 0.75.0); the net package needs OpenSSL 1.1.x/3.0.x/4.0.x or LibreSSL at build time",
+    "min_toolchain": "ponyc (0.75.0 current); building ponyc needs Clang >= 3.4 or GCC >= 4.7, CMake >= 3.25 and Python 3",
+    "platforms": "Linux amd64/arm64 (kernel 5.3+), macOS amd64/arm64, Windows 11 / Server 2022 amd64/arm64 released; FreeBSD, OpenBSD, DragonFly amd64 and Linux riscv64 tested from source",
+    "thread_safety": "Data-race freedom enforced at compile time by reference capabilities; actors share no mutable state and run one behaviour at a time.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness bug, Pony side: each Ring is a master plus 'size' neighbours (size + 1 actors). The master sends a token of value pass * size, every actor forwards value - 1, and the actor that receives 0 calls run(); only the master has repetitions left (neighbours are built with _repetitions = 0), so a neighbour that receives 0 does nothing and the token dies. The master receives the 0 only when pass = 1 mod (size + 1). With the program's own defaults (20 rings, 50 actors, 10,000 laps, 5 repetitions) and with the CAF suite's defaults (mixed_case=\"100 100 1000 4\") that does not hold, so each ring runs one repetition: one Worker (factorisation) instead of 5 or 4, and 500,001 or 100,001 token hops instead of about 2.5 million or 400,000. A step-by-step model of the code confirms this (1 of 5 and 1 of 4 repetitions; with pass = 102, size = 100 all 4 run). The program then ends by quiescence with no error. The code is unchanged at 0.1.4, 0.1.5 (the charted version), 0.1.7 and on main.",
+    "CAF's mixed_case.cpp always completes every repetition (the master decrements the token once per lap and builds a new ring on 0), rebuilds the ring each time, factorises in a detached worker and sends every result to a supervisor that counts 400 results plus 100 done messages at suite defaults. Pony also builds each ring only once and never uses its factorisation result.",
+    "The Pony launch arguments behind the chart are not published (Pony is not one of the suite's run labels), so a run with a laps value that happens to satisfy pass = 1 mod (size + 1) cannot be ruled out. But the about 4.4x Pony/CAF ratio at 1 core (about 2.2 vs 0.5) is close to the 4-5x work shortfall, while by operation count the dominant cost at suite defaults (400 trial divisions of about 165 million 64-bit modulo steps each, against about 40 million token hops) is native code in both systems (inference from the code, not a measurement).",
+    "The current CAF suite sets no CMAKE_BUILD_TYPE for its executables and compiles Charm++ objects with a bare 'charmc -c' (-O3 only on the link line); the 2015 build settings are not recoverable."
+  ],
+  "pick_this_over_siblings_when": "Do not pick this entry on its numbers; the Pony mailbox entry is the sounder Pony-vs-CAF data point, and Lingua Franca (C++ target, also measured against CAF on Savina) is the option usable from C++. Against the Erlang and Go thread-ring entries, this one carries a known work-shortfall bug.",
+  "verified_claims_summary": "The Pony authors' 2015 charts (also Figure 9 of the AGERE! 2015 paper; 100-run averages normalised to Erlang OTP 17 on 1 core; CPU, compilers and flags not stated) show Pony 0.1.5 at about 2.2 vs CAF 0.13 at about 0.5 on 1 core and about 48 vs 16 at 32 physical cores. Reading the Pony program shows it runs only the first repetition of each ring under its own and the suite's default arguments, so Pony likely did a quarter to a fifth of CAF's ring messages and factorisations; the ratios are not a valid like-for-like measurement.",
+  "status_note": "ponyc is actively maintained (0.75.0 released 2026-10-11, BSD-2-Clause, about 6.2k stars), but this 2015 measurement rests on a Pony benchmark program that skips all but its first repetition, so it should be treated as no valid measurement (candidate for tier D or reject under the fc_malloc and dp::thread_pool precedents) until rerun with a fixed ring.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ponylang/ponylang-website/main/docs/benchmarks_all.pdf",
+    "https://raw.githubusercontent.com/ponylang/ponylang-website/main/docs/media/papers/fast-cheap.pdf",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/README.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/BUILD.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/INSTALL.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/examples/actors/mixed/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.7/examples/mixed/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.5/examples/mixed/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.4/examples/mixed/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/actor/messageq.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.7/src/libponyrt/actor/messageq.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/actor/actor.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/sched/scheduler.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/sched/start.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyc/options/options.c",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/caf/mixed_case.cpp",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/configure",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/caf/CMakeLists.txt",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/scripts/activate_cores",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/scripts/run.in",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/scripts/caf_run_benchmarks.in",
+    "https://github.com/actor-framework/benchmarks/commits/master/src/scripts/caf_run_benchmarks.in",
+    "https://github.com/ponylang/ponyc/issues?q=is%3Aissue%20mailbox%20OR%20backpressure%20performance"
+  ],
+  "confidence": 0.2
+}

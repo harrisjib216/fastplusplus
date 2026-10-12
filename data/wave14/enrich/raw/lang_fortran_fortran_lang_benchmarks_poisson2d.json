@@ -1,0 +1,59 @@
+{
+  "id": "lang:fortran/fortran-lang/benchmarks#poisson2d",
+  "one_liner": "gfortran -Ofast Jacobi Poisson solver timed 4-9% faster than a C transliteration; the M=100 'win' came from a Fortran precision bug.",
+  "what_it_does": "A teaching benchmark, not a library: poisson2d/optimized.f90 solves a 2D Poisson equation for two oppositely charged squares on an MxM grid (M is a compile-time constant, 300 in the repo) by Jacobi iteration until the largest change in one sweep drops below 1e-6, then prints CPU time and the sweep count. optimized.c is the C transliteration, with malloc'd pointer-to-array buffers and out-of-line mmax and swap (copy) helpers; naive.* recompute the charge function in every sweep. There is nothing to link: what you would copy is the coding pattern (fixed-size arrays, whole-array maxval(abs(...)) and assignment).",
+  "how_it_is_fast": "The repo does not say. Both optimized programs precompute rho into an array and copy one grid per sweep; the Fortran side keeps fixed-size main-program arrays and uses array syntax that gfortran knows cannot alias, while the C side passes heap buffers to non-restrict helpers (a Discourse reply, seen only as a search snippet, says heap allocation cost C a few seconds). Normalised by sweep count from a numpy replay of the code, the timed Fortran was about 1.10x faster per sweep at M=200 and 1.05x at M=300, and about 2% slower at M=100, where the headline 2x came from doing half the sweeps (see gotchas).",
+  "when_to_use": [
+    "As a small example that a 5-point stencil written with Fortran fixed-size arrays and array syntax runs at C speed or slightly better under gfortran -Ofast on x86-64 (31-73 us per sweep on a 200x200 to 300x300 grid, Ryzen 5 3600).",
+    "Teaching Jacobi iteration and language overhead: the same directory has pure Python (276 s at M=100), Cython (229 s at M=300) and naive and optimized C and Fortran.",
+    "As a starting point for a fairer benchmark: open PR #26 (fixed sweep count, allocatable arrays on both sides, grids larger than L3) shows what needs changing."
+  ],
+  "when_not_to_use": [
+    "As evidence that Fortran beats C: the naive pair goes the other way (naive C about 1.8x faster per sweep at M=200 and 2.1x at M=300, derived from README times and replayed sweep counts), and the optimized margin is 5-10% from one run per cell.",
+    "For real Poisson solves: Jacobi needs O(M^2) sweeps (about 46,000 at M=100 and 427,000 at M=300 in the replay), so a multigrid, FFT or Krylov solver from a maintained library is the practical choice.",
+    "When the grid size is only known at run time: M is a PARAMETER in Fortran and a #define in C, so every size needs a rebuild.",
+    "When your C already uses restrict, static or stack arrays, or a single fused copy-and-max loop: that C variant was never timed, so the gap against it is unknown."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond a Fortran compiler and its runtime (gfortran in the README)",
+    "min_toolchain": "Fortran 90 (modules, kind(0.d0), array syntax); timed with gfortran -Ofast and gcc -Ofast of unstated versions (a June 2021 comment by the README author in PR #23 mentions gfortran-9.3.0)",
+    "platforms": "Timed only on x86-64 (AMD Ryzen 5 3600, WSL2 on Windows 10); portable source",
+    "thread_safety": "Not applicable; single-threaded programs with global fixed-size arrays",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the M=100 column: the timed Fortran used single-precision literals a=0.01 and y<0.8 (fixed by PR #30 on 2022-03-05, after the timings; issue #29 is still open). With a = 0.0099999998 both charge squares grow from 19x19 to 20x20 cells and sit exactly antisymmetric about the grid centre at M=100, so the charge has zero projection on the slowest Jacobi mode (computed). A numpy replay of the code then stops after 22,050 sweeps for the timed Fortran against 46,202 for C and 46,316 for the fixed Fortran. That is the README's unexplained 'C did nearly double the iterations': the 0.18 s against 0.37 s compares half the work, and per sweep C was about 2% faster (8.01 against 8.16 us).",
+    "At M=200 and 300 the replay gives the timed Fortran 201,586 and 428,538 sweeps against C's 199,514 and 426,685 (1.0% and 0.4% more work for Fortran, because its charge squares are 400 cells against 361), so the README's 1.09x and 1.04x become about 1.10x and 1.05x per sweep. After the fix, issue #29 (GCC 11.2.0 on Windows, -Ofast, M=100) got 46,337 Fortran and 46,213 C sweeps and 0.453 s against 0.473 s, about 1.05x per sweep, which matches the replay's counts to within 0.05%.",
+    "Even after the fix, the programs solve slightly different problems: C indexes rho(i*a) from a 0-based boundary and Fortran from a 1-based one, so the squares sit one cell closer to the grounded edge in Fortran (open PR #26 calls this an indexing error). The stopping test is an absolute 1e-6 on potentials of about 1.0e9 to 1.6e9, only about 4 to 8 units in the last place, so -Ofast reordering shifts sweep counts; PR #23 reported a refactored solver that converged at -O0/-O1 but not at -O2, -O3 or -Ofast with gfortran 9.3.0.",
+    "One run per cell, CPU time via clock() and cpu_time over the whole run including setup, and no compiler versions. The Fortran loops run i outer and j inner over column-major arrays (stride M), so its speed relies on GCC's -floop-interchange (on at -O3 and -Ofast) or the hardware prefetcher; this was not checked in assembly."
+  ],
+  "pick_this_over_siblings_when": "This is the only stencil or PDE data point among the catalogued Fortran rows, but its comparison is weaker than the plb2 Fortran matmul entry (same work verified, tier A, about 6%) and the JuliaLang Microbenchmarks userfunc_mandelbrot row (1.42x). Cite it only as 'at parity within about 10% per sweep', never for the M=100 2x.",
+  "verified_claims_summary": "The poisson2d README (June 2021, AMD Ryzen 5 3600 under WSL2, gfortran and gcc -Ofast of unstated versions, one run per cell) gives optimized Fortran 0.18 / 6.25 / 31.4 s against optimized C 0.37 / 6.80 / 32.8 s for M = 100 / 200 / 300. Divided by sweep counts from a numpy replay of the timed code, Fortran is about 2% slower per sweep at M=100 (it did half the sweeps because of a single-precision literal bug) and about 1.10x and 1.05x faster per sweep at M=200 and 300 (derived from page data).",
+  "status_note": "Abandoned: MIT-licensed, 26 stars, 9 commits, last change 2022-03-05 (the PR #30 precision fix); three PRs that rework poisson2d for fairness and verification (#23, #24, #26) have been open since mid-2021, and the README timings were never re-run after the fix.",
+  "sources_read": [
+    "https://github.com/fortran-lang/benchmarks",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/poisson2d/README.md",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/poisson2d/optimized.c",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/poisson2d/optimized.f90",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/poisson2d/naive.c",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/HEAD/poisson2d/naive.f90",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/b76fb4a/poisson2d/optimized.f90",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/b76fb4a/poisson2d/naive.f90",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/b76fb4a/poisson2d/optimized.c",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/b76fb4a/poisson2d/naive.c",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/b76fb4a/poisson2d/README.md",
+    "https://raw.githubusercontent.com/fortran-lang/benchmarks/385cb83/poisson2d/optimized.c",
+    "https://github.com/fortran-lang/benchmarks/commits/main/poisson2d",
+    "https://github.com/fortran-lang/benchmarks/issues",
+    "https://github.com/fortran-lang/benchmarks/issues/29",
+    "https://github.com/fortran-lang/benchmarks/pulls",
+    "https://github.com/fortran-lang/benchmarks/pull/23",
+    "https://github.com/fortran-lang/benchmarks/pull/24",
+    "https://github.com/fortran-lang/benchmarks/pull/26",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13/gcc/doc/invoke.texi",
+    "WebSearch snippets for fortran-lang.discourse.group/t/performance-c-vs-fortran/1461 (thread itself not opened)"
+  ],
+  "confidence": 0.75
+}

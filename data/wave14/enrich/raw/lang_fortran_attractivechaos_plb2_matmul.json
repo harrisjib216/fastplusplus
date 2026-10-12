@@ -1,0 +1,54 @@
+{
+  "id": "lang:fortran/attractivechaos/plb2#matmul",
+  "one_liner": "Naive 1500x1500 double matmul in Fortran (gfortran -O3): 0.51 s against clang-built C's 0.54 s on an Apple M1 in plb2.",
+  "what_it_does": "One row of the plb2 cross-language benchmark, not a library: src/fortran/matmul.F90 is a 70-line program whose module subroutine mat_mul multiplies two explicit-shape REAL64 arrays with a plain j-k-i triple loop (no MATMUL intrinsic, no BLAS) and prints one element of the product. The C counterpart (src/c/matmul.c) runs the same i-k-j loop over double** row pointers into one calloc block. To benefit, you would write your own dense loop kernels in Fortran (callable from C++ only if you add a BIND(C) interface, which plb2 does not have); nothing here links into a C++ program as-is.",
+  "how_it_is_fast": "The source gives no mechanism; in issue #33 the maintainer only says 'the difference might be related to compiler and CPU'. Both programs do the same 3.375e9 multiply-adds with unit-stride inner loops (about 6.6 G multiply-adds per second at 0.51 s, derived from page data). Plausible contributors, none verified: Fortran forbids aliasing between the INTENT(IN) and INTENT(OUT) dummy arrays, so gfortran can vectorize the inner loop with no runtime overlap check, while clang must assume c[i] and b[k] may overlap; and GCC's -O3 adds -floop-unroll-and-jam, -floop-interchange and -fpredictive-commoning with -ffp-contract=fast as the default (GCC 13 invoke.texi), so the gap may be the GCC backend rather than the language.",
+  "when_to_use": [
+    "Writing new dense loop nests over contiguous double arrays (matrix kernels, stencils) where you want alias-free vectorization without sprinkling restrict through C code.",
+    "Projects that already ship gfortran and Fortran numerics, where a hand-written kernel can stay in Fortran at C speed or slightly better.",
+    "As evidence that naive Fortran compiled by gfortran -O3 is at least at parity with clang -O3 C for a simple matmul loop nest on Apple M1 (0.51 s versus 0.54 s; Rust, Zig, Nim and Swift 0.56 s).",
+    "Teaching or comparing loop order: the program shows the column-major j-k-i order that matches C's row-major i-k-j."
+  ],
+  "when_not_to_use": [
+    "When you actually need fast matrix multiplication: plb2 deliberately excludes libraries, and a naive triple loop at about 13 GFLOP/s (derived) is not what a blocked BLAS dgemm (OpenBLAS, Accelerate, MKL, BLIS) or Fortran's MATMUL intrinsic is for; use those instead.",
+    "When you expect a dependable language-level win: the margin is about 6% from one machine, and on a contributor's laptop in issue #33 a flat-indexed C version (1.29 s) came within 7% of Fortran (1.21 s), while the as-shipped nested C took 1.58 s; compilers and CPU were not stated.",
+    "Inside a C++ codebase: you add gfortran and libgfortran to the build, need BIND(C) wrappers, and must transpose or swap indices because Fortran arrays are column-major.",
+    "When your C/C++ is built with GCC or uses a flat restrict-qualified buffer: no plb2 row measured gcc-built C, so the comparison against that baseline does not exist."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "gfortran and its runtime (libgfortran); no libraries",
+    "min_toolchain": "gfortran 13.2.0 as measured with FFLAGS=-O3; the code uses ISO_FORTRAN_ENV REAL64 and GET_COMMAND_ARGUMENT (Fortran 2003/2008) plus the GNU extension CALL EXIT",
+    "platforms": "Measured only on an Apple M1 MacBook Pro (macOS); portable Fortran otherwise",
+    "thread_safety": "Not applicable; single-threaded program, no shared state beyond its own arrays",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Compiler confound: the C row is built with $(CC) (clang 15.0.0 on the Mac, -O3 -fwrapv -flto) and the Fortran row with gfortran 13.2.0 -O3; there is no gcc-built C row and no flang-built Fortran row, so the 6% cannot be attributed to the language. GCC -O3 enables loop unroll-and-jam and interchange that clang's default pipeline does not mirror (inference).",
+    "Single figures from rows timed on different days: the Fortran row was added on 2024-01-04 (commit e21506c), with no variance shown; the maintainer's own hyperfine run in issue #33 gave the C program 540.9 +/- 2.9 ms. The timed matmul.F90 at e21506c differs from current master only in style (ALLOCATE/DEALLOCATE merged by PR #66, checked by diff).",
+    "The C baseline's double** layout is not the cost on the M1: the maintainer's flat-index variant was slower (557.0 +/- 2.5 ms versus 540.9 ms), and PR #53 (C99 version without the double indirection) showed 'no change in timing' on his machine before being closed; on other machines the layout did matter (issue #33 laptop: 1.58 s nested versus 1.29 s flat).",
+    "Both programs compute the same matrices and print the same element (Fortran 1-based (i-j)*(i+j-2) equals C 0-based (i-j)*(i+j)), so the comparison is like for like; elapsed time includes process start, matrix generation and the zeroing of c (calloc in C, an explicit array assignment in Fortran)."
+  ],
+  "pick_this_over_siblings_when": "Choose this row over the D matmul entry in kostya/benchmarks (D/gdc 1.505 s against C/gcc 3.034 s, but D calls std.numeric.dotProduct on a transposed matrix) when you want the cleanest same-algorithm, same-access-pattern language comparison at tier A, accepting a far smaller margin. It is a near-tie in the same spirit as the fortran-lang poisson2d entry (4-9%), and neither is a matmul you should deploy; for real speed look at a BLAS or Gaius.jl.",
+  "verified_claims_summary": "On an Apple M1 MacBook Pro, hyperfine elapsed time for a naive 1500x1500 double matmul was 0.51 s for gfortran 13.2.0 -O3 against 0.54 s for clang 15.0.0 -O3 -fwrapv -flto C using the same loop nest, about 6% faster (derived from page data); Fortran is the only language in the table ahead of C on this task, with Rust, Zig, Nim and Swift at 0.56 s.",
+  "status_note": "Stale but tiny: plb2 is CC0-1.0 (287 stars), last changed 2025-01-30, with PRs such as #77 (Chez Scheme), #79 (Chapel) and #82 (PDL matmul) open since 2024-2025; the Fortran file is a self-contained 70-line program to copy, not a maintained component.",
+  "sources_read": [
+    "https://github.com/attractivechaos/plb2",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/README.md",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/c/matmul.c",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/c/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/fortran/matmul.F90",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/master/src/fortran/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/e21506c/src/fortran/matmul.F90",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/e21506c/src/fortran/Makefile",
+    "https://raw.githubusercontent.com/attractivechaos/plb2/e21506c/README.md",
+    "https://github.com/attractivechaos/plb2/issues?q=matmul",
+    "https://github.com/attractivechaos/plb2/issues/33",
+    "https://github.com/attractivechaos/plb2/pull/53",
+    "https://github.com/attractivechaos/plb2/pull/66/files",
+    "https://github.com/attractivechaos/plb2/commits/master/src/fortran",
+    "https://github.com/attractivechaos/plb2/commits/master/src/c",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-13/gcc/doc/invoke.texi"
+  ],
+  "confidence": 0.6
+}

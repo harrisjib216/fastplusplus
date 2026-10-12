@@ -1,0 +1,60 @@
+{
+  "id": "lang:rust/kostya/langarena#sort-self",
+  "one_liner": "Rust's built-in slice::sort (driftsort) sorts 400k int32 about 2.4x faster than libstdc++ std::sort in LangArena Sort::Self.",
+  "what_it_does": "LangArena's Sort::Self test copies a 400,000-element int32 array and sorts the copy with each language's built-in sort, 50 times, after untimed warm-up iterations. The Rust program is let mut t = data.clone(); t.sort(); and the C++ program is a vector copy plus std::sort; the C program calls qsort with a comparison callback. The catalogued implementation is Rust's standard-library stable sort, not a separate crate: in Rust it is the default, and from C++ there is nothing to call without FFI.",
+  "how_it_is_fast": "Since Rust 1.81 slice::sort is driftsort (Orson Peters and Lukas Bergdoll): powersort-style merging of natural runs found lazily (minimum good run about sqrt(n)), with unsorted stretches handed to a stable quicksort that partitions branchlessly into a scratch buffer, uses an ancestor-pivot check to group equal keys (O(n log k) for k distinct values), and finishes small pieces with a small-sort. libstdc++ std::sort is a classic introsort whose branchy partition mispredicts heavily on random keys. The same suite's hand-written Sort::Quick (same algorithm in every language) is at parity (Rust 1.145 s, C/Gcc 1.15 s, C++/G++ 1.175 s), and even Rust compiled to WASM under Node (0.458 s) beats native std::sort, so the win is the library algorithm, not rustc code generation.",
+  "when_to_use": [
+    "In Rust, sorting large Vec<i32>/Vec<u64>-style primitive slices where stability matters or the input may hold presorted runs: plain .sort() is already driftsort, no crate needed.",
+    "As evidence when porting C++ code to Rust that the default sort will not be a regression: here it is 2.4x faster than std::sort on random 32-bit keys.",
+    "Inputs with partial order (presorted or reversed runs): driftsort detects natural runs and is linear on fully sorted or reversed input, per the slice::sort docs.",
+    "For a C++ project, read this row as a pointer that std::sort is a weak baseline on random integers; the like-for-like algorithms are catalogued in the sort-research-rs entry (ipnsort and driftsort)."
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust the language beats C++: same-algorithm rows in the same run say otherwise (Sort::Quick parity; Sort::Merge Rust 1.621 s vs C/Clang 1.09 s and C++/Clang++ 1.192 s).",
+    "Memory-constrained code: for this input driftsort allocates a scratch buffer of max(n - n/2, min(n, 8 MB / size_of T)) elements, which is the full 400,000 int32 (1.6 MB) on every call (derived from library/core/src/slice/sort/stable/mod.rs); sort_unstable (ipnsort) sorts in place.",
+    "When stability is not needed: Rust's own docs recommend sort_unstable as generally faster and allocation-free, so this row understates what Rust can do and is not the best Rust choice for plain integers.",
+    "As a C++ std::stable_sort comparison: the suite never measured std::stable_sort, which is the like-for-like stable C++ call."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Rust core/alloc slice::sort)",
+    "min_toolchain": "Rust 1.81 (driftsort replaced the old sorts in PR #124032, release-notes tracking issue #129661, milestone 1.81.0); the scratch-size abort fix (#136163) landed February 2025; measured on rustc 1.99.0",
+    "platforms": "any Rust target; 16-bit targets and optimize_for_size builds fall back to a small mergesort (cfg_select in stable/mod.rs); measured on x86-64 (AMD Ryzen 7 3800X, Linux)",
+    "thread_safety": "single-threaded in-place sort of a &mut [T]; the exclusive borrow rules out concurrent access to the same slice",
+    "drop_in_for_baseline": "partial — default in Rust code only; semantically it matches std::stable_sort (stable, allocates), not std::sort, and C++ cannot call it without FFI"
+  },
+  "gotchas": [
+    "Algorithm mismatch is the headline flaw: stable driftsort with a full-size scratch buffer against unstable in-place introsort; no std::stable_sort, pdqsort or Rust sort_unstable row was measured, so the 2.4x is a library-choice result, not a like-for-like comparison.",
+    "Input quirk (checked by re-running the generator): the data comes from the Benchmarks Game LCG (IM 139968, IA 3877, IC 29573, same in cpp/src/helper.hpp and rust/src/helper.rs), whose full period is 139,968, so the 400,000 keys are one sequence repeated about 2.86 times with at most 139,968 distinct values. It affects both sides equally; driftsort's O(n log k) equal-key handling may gain slightly from it. The checksum samples only one sorted element per iteration, which would not catch a partly wrong sort (not a concern for std sorts).",
+    "Since 1.81 slice::sort may panic if Ord is not a total order (documented in library/alloc/src/slice.rs); issue #136103 showed an abort (SIGILL) from an undersized scratch buffer with very large element types on odd lengths, fixed in PR #136163 (February 2025).",
+    "One measurement per configuration on one machine, no variance; the Rust row uses cargo release without LTO, and the -O3 -march=native, Unsafe and PGO C++ builds (0.995-1.027 s) are no faster than -O2 prod g++ (0.982 s)."
+  ],
+  "pick_this_over_siblings_when": "This row is an independent shootout data point for the ipnsort and driftsort entry (sort-research-rs), which has the controlled benchmarks and the stable-vs-stable comparison; cite that entry for engineering decisions and this one only as third-party confirmation. Against the Zig std.sort.pdq Sort::Self sibling (0.809 s, 1.2x) the Rust default sort is about 2x faster on the same data, though Zig's sort is unstable and allocation-free.",
+  "verified_claims_summary": "On an AMD Ryzen 7 3800X (LangArena results 2026-10-05, one run per configuration), 50 copy-and-sort iterations of a 400,000-element int32 array take 0.41 s with rustc 1.99.0 cargo release (Rust/WMO 0.403 s) against 0.982 s for g++ 16.0.1 trunk -O2 std::sort on libstdc++, the best of the 27 C and C++ configurations (clang++ 22.1.8 1.022 s; C qsort rows 1.957-2.207 s): about 2.4x (derived from page data).",
+  "status_note": "rust-lang/rust is active and dual-licensed MIT or Apache-2.0, and driftsort is the default since 1.81, so any current toolchain gets it; LangArena (MIT, 41 stars, monthly runs) calls itself a subjective benchmark and this row adds a third-party measurement of a standard-library algorithm win; no harness bug was found behind the numbers.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/sort.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/sort.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/helper.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/sort.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/helper.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/sort_self.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/sort_benchmark.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/alloc/src/slice.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/core/src/slice/sort/stable/mod.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/core/src/slice/sort/stable/drift.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/core/src/slice/sort/stable/quicksort.rs",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/core/src/slice/sort/shared/smallsort.rs",
+    "https://github.com/rust-lang/rust/issues?q=is%3Aissue+driftsort",
+    "https://github.com/rust-lang/rust/issues/136103"
+  ],
+  "confidence": 0.8
+}

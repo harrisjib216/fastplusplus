@@ -1,0 +1,68 @@
+{
+  "id": "lang:rust/kostya/langarena#etc-words",
+  "one_liner": "Rust split_whitespace with borrowed &str keys in std HashMap, 1.55x faster than the best C/C++ build in LangArena Etc::Words.",
+  "what_it_does": "A LangArena benchmark row, not a library: about 25 lines of Rust (rust/src/benchmarks/words.rs) that split a generated 325,090-byte text (50,000 words of 3 to 8 lowercase letters) with str::split_whitespace and count words in a HashMap<&str, i32> via entry().or_insert(0). The map is built fresh each run without pre-sizing, then the top word, its count and the vocabulary size go into a checksum. What you copy is the idiom (borrowed slices as map keys over a text that outlives the map), not an API.",
+  "how_it_is_fast": "Zero-copy tokenizing: split_whitespace yields slices of the original text, and the map stores those slices as keys, so counting never copies or allocates a word; the only allocations are the growth steps of hashbrown's flat SwissTable array. The C++ side extracts every token through std::istringstream operator>> into a std::string, then inserts into node-based std::unordered_map<std::string,int>, which allocates a node for each of the 18,623 distinct words per run (words of at most 8 characters fit libstdc++'s 15-character small-string buffer, so keys add no extra allocation). Rust still pays SipHash-1-3 on every word. Before 2026-09-06 the Rust test allocated an owned String for every one of the 50,000 tokens, more allocations than C++, and still led by 1.18-1.28x. That points at the istringstream tokenizer and the node map as the main C++ costs (inference; no profile published).",
+  "when_to_use": [
+    "Word or token frequency counts over an in-memory buffer that outlives the map, where borrowed keys remove all per-word allocation.",
+    "Whitespace-separated ASCII or UTF-8 text (split_whitespace also handles Unicode whitespace) with vocabularies in the tens of thousands; this test has 18,623 distinct words of 3-8 bytes.",
+    "Choosing between standard-library-only implementations of a text-counting tool, where Rust's defaults (slice tokenizer, flat map) beat the C++ defaults (istringstream, std::unordered_map).",
+    "Quick tools where you would otherwise write the C++ istringstream loop: the Rust idiom is just as short and about 1.6x faster here."
+  ],
+  "when_not_to_use": [
+    "If you are staying in C++: split manually into std::string_view and count in a flat map with heterogeneous lookup (absl::flat_hash_map, boost::unordered_flat_map or ankerl::unordered_dense, all in this catalogue's hash-maps-sets category). That probably closes the gap (inference; the suite allows only standard containers).",
+    "Streaming input or buffers freed before the counts are used: borrowed keys need the whole text alive. With owned String keys the Rust lead was only 1.18-1.28x in the June to early-September 2026 runs.",
+    "Very large vocabularies, long keys or untrusted input: the default SipHash-1-3 is the slow but HashDoS-resistant choice. A faster hasher is only safe on trusted input, and nothing beyond about 19k keys was measured.",
+    "As a language codegen claim: Crystal 0.88 s, Zig 0.91 s and Go 1.129 s also beat every C/C++ row. The C rows (1.96-2.04 s) strdup the whole text every run and malloc plus strdup each new word into uthash.",
+    "Close calls: one measurement per configuration, and C++/G++ prod drifted between 1.611 and 1.678 s across six monthly runs with unchanged cpp/src/words.cpp."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (Rust std: str::split_whitespace and std::collections::HashMap); the benchmark crate's serde_json and regex serve other tests and the harness",
+    "min_toolchain": "Rust edition 2021 (rust/Cargo.toml); measured with rustc 1.99.0 and the default release profile (opt-level 3, 16 codegen units, no LTO, no target-cpu)",
+    "platforms": "Measured only on x86-64 Linux (AMD Ryzen 7 3800X); the code is portable safe Rust with nothing platform-specific",
+    "thread_safety": "Not shared: the map is local to each run and borrows the text immutably, so the borrow checker prevents mutating the text while the map lives. The benchmark is single-threaded.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The current margin partly reflects less work on the Rust side. Commit 0d31537 (2026-09-06, 'rust: count Words with borrowed &str keys', AI co-authored) switched to borrowed keys; its message says 'C++ keys its unordered_map by owned std::string and Crystal's split allocates a String per word', so the change removes a cost the reference implementations still pay. The Rust lead over the best C/C++ row went from 1.18-1.28x (2026-06-16 to 2026-09-03) to 1.53-1.55x (2026-09-18, 2026-10-05), while cpp/src/words.cpp stayed unchanged since 2026-04-24. The C++ version was never given the equivalent string_view rewrite.",
+    "Harness check, no flaw found. My Python replay of the workload reproduces the expected checksum 1998586832 as 432 runs (72 untimed warm-up plus 360 timed) of 193,525,383. The fasta LCG's period of 139,968 makes the text repeat, so it holds 18,623 distinct words, and the top word ('tea', 9 times, next best 6) is unique: Rust's max_by_key over a randomly ordered map and C++'s first-maximum loop agree. benchmarks.rb records a runtime only on '<test>: OK in Xs' output and runs each test in its own process; neither side pre-sizes its map.",
+    "The C++ generator computes a word length as Helper::next_int(word_len) + Helper::next_int(3) + 3, whose operand evaluation order C++ leaves unspecified (Rust evaluates left to right). The matching checksums show that both G++ and Clang++ evaluated it left to right here, but another compiler could silently generate a different text.",
+    "Build settings barely matter for Rust here: Rust/WMO with codegen-units 1 is 0.998 s and Rust/PGO 0.898 s against 1.021 s for the headline row, so the time sits in tokenizing, hashing and memory rather than in missed inlining (inference). The C/C++ toolchain is GCC 16.0.1 '(experimental)' trunk and Clang 22.1.8; the Makefiles' -flto flags are link-only, so no LTO actually happens."
+  ],
+  "pick_this_over_siblings_when": "Crystal (0.88 s) and Zig (0.91 s, 4.2 MB) rows of the same test are faster, and Go (1.129 s, 11.3 MB) is close. Pick the Rust idiom when you want borrow-checked zero-copy keys with low memory (5.4 MB peak RSS) in a memory-safe default build. For a C++ codebase, the flat maps in hash-maps-sets plus string_view tokenizing are the direct fix.",
+  "verified_claims_summary": "In the 2026-10-05 LangArena run on an AMD Ryzen 7 3800X, the Rust test (rustc 1.99.0, default release profile, std HashMap<&str, i32>) took 1.021 s for 360 timed iterations. The best of 16 C/C++ builds, C++/G++ 16.0.1 PGO with std::istringstream and libstdc++ std::unordered_map<std::string,int>, took 1.587 s, and the -O2 prod builds took 1.638 s (G++) and 1.707 s (Clang++ 22.1.8), so Rust is 1.55x and 1.60x faster (derived from the results file). Peak RSS was 5.4 MB against 7.8 MB.",
+  "status_note": "LangArena is MIT-licensed and actively maintained, re-run about monthly (last commit 2026-10-08, 41 stars). This is a benchmark row rather than a library: copy the idiom (borrowed &str keys over a live buffer), and note that about half of today's margin dates from a September 2026 Rust-only change.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/helper.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/rust/src/benchmarks/words.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/words.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/benchmarks.rb",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-06-16-kostya-ms7c37.js",
+    "https://github.com/kostya/LangArena/tree/master/results",
+    "https://github.com/kostya/LangArena/commits/master/rust/src/benchmarks/words.rs",
+    "https://github.com/kostya/LangArena/commits/master/cpp/src/words.cpp",
+    "https://github.com/kostya/LangArena/commit/0d31537",
+    "https://github.com/kostya/LangArena/commit/0d31537.patch",
+    "https://github.com/kostya/LangArena/pull/11",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/rust-lang/rust/HEAD/library/std/src/collections/hash/map.rs",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/master/libstdc%2B%2B-v3/include/bits/basic_string.h"
+  ],
+  "confidence": 0.72
+}

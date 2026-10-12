@@ -1,0 +1,67 @@
+{
+  "id": "lang:pony/ponylang/ponylang-website#mailbox-performance",
+  "one_liner": "Pony's actor runtime on a 100-sender, one-receiver mailbox stress test, about 6-8x CAF 0.13 throughput in 2015 charts.",
+  "what_it_does": "Pony is an actor language compiled through LLVM, with a runtime (libponyrt, written in C) that schedules actors on one thread per core and passes messages through per-actor mailboxes. This entry is the 2015 'Mailbox performance' run from the CAF benchmark suite: N Mailer actors each call receiver.pong() M times (100 x 1,000,000 = 100,000,000 empty messages, matching the suite's default 'mailbox_performance=\"100 1000000\"'), and one Main actor counts them. It is not a drop-in for anything in C++: you write the program in Pony; Pony calls C through FFI, and ponyc removed its option to build Pony code as a C-callable library in 0.47.0 (2022).",
+  "how_it_is_fast": "Each actor mailbox is a Vyukov-style intrusive MPSC queue: a sender enqueues with one atomic exchange on the head (messageq_push, unchanged in shape from 0.1.7 to today), so producers never retry, and the single consumer pops from the tail with a plain acquire load, no read-modify-write. CAF 0.13's mailbox (detail/single_reader_queue.hpp) is a LIFO stack that every sender pushes onto with a compare_exchange_strong retry loop, and the reader swaps the whole stack out and reverses it; with many senders on one mailbox those CAS retries are the likely source of CAF's loss (the paper gives no profile). Pony messages come from the runtime's pool allocator, and an actor processes up to PONY_SCHED_BATCH (100) messages per scheduling.",
+  "when_to_use": [
+    "Writing a new service wholly in Pony where many actors fan in to one aggregator (counters, loggers, sinks) and you want a wait-free enqueue path.",
+    "Comparing actor-runtime designs: the Pony MPSC mailbox (messageq.c, about 200 lines of C11 atomics) is a compact reference for a contended N:1 mailbox in your own C or C++ runtime.",
+    "Workloads with payload-free or small messages where per-message overhead, not the handler, dominates."
+  ],
+  "when_not_to_use": [
+    "Inside an existing C++ code base: there is no in-process embedding (library mode was removed in ponyc 0.47.0 and the rest of its runtime surface in 0.67.0), so the only route is a separate Pony process.",
+    "Sustained fan-in under modern Pony: since 0.21.0 (2017) the runtime mutes senders to an overloaded actor, and issue #2980 (open since 2019) reports CPU dropping from about 48 busy cores to 1-2 for 10+ seconds on a fan-in pattern; the 2015 chart predates this backpressure.",
+    "Memory-bounded deployments of the 2015-era runtime: the same examples/mailbox program with 20 senders x 1,000,000 messages used more than 2 GB on a 2-core machine (issue #302), and 20 x 100,000,000 reached 17 GB RSS; the chart reports speed only.",
+    "If you need many cores to speed up a single receiver: every system in the chart, Pony included, gets slower with more cores (Pony about 3.7 at 1 core, about 1.8 at 4, about 1.6 at 32, relative to Erlang on 1 core).",
+    "If you need a stable language: Pony is pre-1.0 and its README says it semi-regularly introduces breaking changes."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "ponyc toolchain (bundles a vendored LLVM, 23.1.3 as of 0.75.0); the standard library's net package needs OpenSSL 1.1.x/3.0.x/4.0.x or LibreSSL at build time",
+    "min_toolchain": "ponyc (0.75.0 current); building ponyc needs Clang >= 3.4 or GCC >= 4.7, CMake >= 3.25 and Python 3",
+    "platforms": "Linux amd64/arm64 (kernel 5.3+), macOS amd64/arm64, Windows 11 / Server 2022 amd64/arm64 released; FreeBSD, OpenBSD, DragonFly amd64 and Linux riscv64 tested from source",
+    "thread_safety": "Data-race freedom enforced at compile time by reference capabilities; actors share no mutable state and run one behaviour at a time.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark parity looks fine: the Pony program (examples/mailbox, identical at tags 0.1.4, 0.1.5 and 0.1.7) and CAF's mailbox_performance.cpp both send N x M empty messages to one counting receiver. But the 2015 CAF source is not retrievable (the suite's history is not browsable on github.com), and the current CAF usage string still reads 'NUM_THREADS MSGS_PER_THREAD', so the 2015 CAF senders may have been OS threads rather than actors; Pony's senders were actors on one scheduler thread per core.",
+    "No backpressure in Pony 0.1.5: senders could enqueue all 100,000,000 messages faster than Main drained them, so part of the measured speed may come from deferring work into an unbounded queue; memory use was not reported for the chart (the CAF suite's caf_run_bench records memory, but Pony is not one of the suite's run labels, so Pony was launched by its authors' own scripts, which are not published).",
+    "Today's results will differ: generalized runtime backpressure (0.21.0, 2017) mutes senders whose target is overloaded, which this exact fan-in pattern triggers; no post-2015 mailbox run against CAF was found on reachable pages.",
+    "The current CAF suite does not fix an optimisation level for its own executables (no CMAKE_BUILD_TYPE; configure's --build-type is optional) and compiles Charm++ objects with a bare 'charmc -c' (-O3 only on the link line); whether the 2015 runs had the same gaps is unknown."
+  ],
+  "pick_this_over_siblings_when": "Pick Pony over the Lingua Franca entry (deterministic reactors with a C++ target, also measured against CAF) only if you are writing the whole system in Pony and want nondeterministic actors with compile-time data-race freedom; from C++, Lingua Franca or CAF 1.x is the practical choice. Against the Erlang and Go thread-ring entries, Pony is the native-code actor option with the cheapest contended enqueue, but its chart is a decade old.",
+  "verified_claims_summary": "In the Pony authors' 2015 charts (also Figure 8 of their AGERE! 2015 paper; average of 100 runs, normalised to Erlang OTP 17 on 1 core), Pony 0.1.5 delivered about 3.7 versus CAF 0.13 at about 0.56 on 1 core (about 6.6x) and about 1.6 versus 0.2 at 32 physical cores (about 8x), on 100 million empty messages from many senders to one receiver. CPU model, compilers, flags and the Pony launch parameters are not stated; CAF 0.13 was itself slower than Erlang at 1 core, so the baseline is weak.",
+  "status_note": "ponyc is actively maintained (0.75.0 released 2026-10-11, BSD-2-Clause, about 6.2k stars), but the measurement is from Pony 0.1.5 and CAF 0.13 in 2015, before Pony added sender-muting backpressure, so treat it as a historical data point about MPSC mailbox design rather than a current ratio.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ponylang/ponylang-website/main/docs/benchmarks_all.pdf",
+    "https://raw.githubusercontent.com/ponylang/ponylang-website/main/docs/media/papers/fast-cheap.pdf",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/README.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/BUILD.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/INSTALL.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/examples/actors/mailbox/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.7/examples/mailbox/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.5/examples/mailbox/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.4/examples/mailbox/main.pony",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/actor/messageq.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/0.1.7/src/libponyrt/actor/messageq.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/actor/actor.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/sched/scheduler.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyrt/sched/start.c",
+    "https://raw.githubusercontent.com/ponylang/ponyc/main/src/libponyc/options/options.c",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/caf/mailbox_performance.cpp",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/README.md",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/configure",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/caf/CMakeLists.txt",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/scripts/activate_cores",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/scripts/run.in",
+    "https://raw.githubusercontent.com/actor-framework/benchmarks/master/src/scripts/caf_run_benchmarks.in",
+    "https://raw.githubusercontent.com/actor-framework/actor-framework/0.13/libcaf_core/caf/detail/single_reader_queue.hpp",
+    "https://github.com/actor-framework/benchmarks/commits/master/src/scripts/caf_run_benchmarks.in",
+    "https://github.com/ponylang/ponyc/issues?q=is%3Aissue%20mailbox%20OR%20backpressure%20performance",
+    "https://github.com/ponylang/ponyc/issues/302",
+    "https://github.com/ponylang/ponyc/issues/2980"
+  ],
+  "confidence": 0.45
+}
