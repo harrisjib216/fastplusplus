@@ -1,0 +1,100 @@
+[
+  {
+    "id": "https://github.com/remade-with-rust/rusty_rtos_kernel",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The tick and scheduler-selection rows are reproducible from public code (kairos bench/tick-work/run.sh building unmodified FreeRTOS V11.3.1 plus firmware/riscv32-qemu-tick-work) with the compiler, flags (-O2 both arms, no LTO) and machine (QEMU virt -cpu rv32, -icount shift=0, minstret) stated, so the A tier holds for those rows. The verdict is a downgrade of the claim, not the tier: the record overstated the list row, the composite switch rows and same_algorithm.",
+    "corrections": {
+      "claimed_speedup": "Kairos umbrella README table (headed rv32), retired instructions unless stated: tick 9 vs 15 (0.60x, bench/tick-work, runtime minstret count); scheduler selection 45 vs 27 (1.67x against Kairos); whole cooperative switch 75 vs 110 (0.68x) and whole preemptive switch 119 vs 110 (1.08x against). Both switch rows add the measured selection row to a static llvm-objdump count of the register half from bench/switch-cost (Kairos 30 cooperative and 74 preemptive against FreeRTOS portASM.S 83; the 83/30/74 constants are typed into tick-work/run.sh). List operation 18.47 vs 22.32 instructions per op (0.83x) is not an rv32 row: it is bench/list-cost, callgrind on an x86-64 host, rustc opt-level 3 plus LTO against gcc 15.2 -O2 list.c. The ledger gives gcc -O3 at 21.82 (about 0.85x, derived from page data) and a 32-bit row of 23.75 vs 33.42, and its latest 64-bit Rust figure is 18.80; 18.47 appears only in the README. RAM per task 176 B vs 596 B (0.30x); the C figure includes a 512 B task stack that stackless Kairos tasks do not own. Flash 19,484 B vs 13,924 B (1.40x against); the scorecard says 19,746 B (1.42x) and the kernel README says 22,396 B by default or 17,860 B with the small feature. The kernel README adds Cortex-M3 PendSV 19 vs 19 (parity) and an RV32 preemptive register half of 74 vs 83.",
+      "compiler_and_flags": "tick-work (tick, selection): C arm clang -target riscv32-unknown-elf -march=rv32imac -mabi=ilp32 -O2 -ffreestanding -fno-builtin, compiled per translation unit and linked with ld.lld (bench/tick-work/run.sh). Rust arm firmware/riscv32-qemu-tick-work [profile.release] opt-level 2, lto false, codegen-units 1, panic abort, overflow-checks off. The script does not pin compiler versions. switch-cost (register half): static instruction counts with llvm-objdump; FreeRTOS portASM.S macros assembled by clang, so both sides of that half are hand-written assembly. list-cost: gcc -O2 and -O3 (gcc 15.2 per LEDGER.md) against Rust release opt-level 3, lto true, one codegen unit, counted under callgrind on an x86-64 WSL2 host.",
+      "hardware": "QEMU virt -cpu rv32 (rv32imac) with -icount shift=0 for the tick and selection rows (retired instructions read from minstret, deterministic, independent of the host). The register half is a static disassembly count. The list row ran under callgrind on an x86-64 WSL2 host whose CPU is not stated. ESP32-S3 cycle figures (tick 54, switch 166 cycles) are Kairos-only and predate kernel 0.2.1.",
+      "caveats": "The metric is retired instructions under an emulator, not wall-clock time or cycles. The project says these are work rows, not cycle rows, and its only silicon cycle figures have no C arm. Both arms of the tick-work rows are matched at -O2 with no LTO, not -O3. The list row breaks the matching: Rust at opt-level 3 with LTO against gcc -O2, measured on an x86-64 host but shown under an rv32 heading. Against gcc -O3 (21.82) it is still about 0.85x (derived from page data). The headline cooperative-switch win (75 vs 110) is a composite of a runtime count and a static count of hand-written assembly. Its gap is structural, not Rust codegen: FreeRTOS's RISC-V portYIELD() is an ecall trap that saves all 28 GPRs, while a Kairos yield happens at a call site and saves 14. The project's own Cortex-M3 control shows parity (19 vs 19). The RAM-per-task win compares stackless state-machine tasks with FreeRTOS tasks that own a 512 B stack. The tick win came from a cached current_priority (one arena resolve removed) and a 32-bit compare fix (LEDGER 2026-09-28); neither the ledger nor the scorecard explains why 9 ends up below C's 15. Mixed result: preemptive switch, scheduler selection and flash are worse than C. Numbers drift between documents. bench/tick-work/README.md still prints the older 56 vs 15 tick and 79 selection. Flash appears as 19,484, 19,746 and 22,396 B. The README says thirteen rows have a C arm with three against Kairos, the scorecard says eleven with one loss. The ledger records two corrected harness defects (a hand-rolled NoTrace that inflated the silicon and selection rows 305 to 79, and a broken work-parity anchor) and a list-cost bench that once could not run. First-party only, no independent measurement, near-zero adoption (0 stars on the kernel repo, 1 on the umbrella, 424 crates.io downloads). An RTOS scheduler is a loose fit for concurrency-runtimes.",
+      "same_algorithm": false,
+      "why_faster": "Design, not Rust codegen. The cooperative switch is cheaper because Kairos yields at a call site, where the ABI has already given up the caller-saved registers (14 saved), while FreeRTOS routes every yield through an ecall trap that saves 28 GPRs plus CSRs. The register halves are hand-written assembly on both sides. RAM per task is lower because Kairos tasks are stackless state machines in fixed arenas, so no per-task stack exists. The list uses index-linked arenas instead of pointer-linked nodes. The tick came down from 56 to 9 by caching current_priority instead of resolving the current task's handle and by letting LLVM emit a 32-bit compare (LEDGER 2026-09-28). The selection row loses (45 vs 27) to handle validation and stackless bookkeeping; its measured floor is 30."
+    },
+    "notes": "Tier A kept for bench/tick-work (tick 9 vs 15, selection 45 vs 27), which is public, deterministic and gated by PARITY and POISON checks against unmodified FreeRTOS V11.3.1 at matched -O2. Record shortcomings: the list row is mislabelled as rv32 and opt-mismatched, the switch rows are composites with typed-in register-half constants, the wins come from design (call-site yield vs ecall trap, stackless tasks, index arenas) rather than the language, the C baseline is -O2 rather than -O3, the result is mixed, and figures are stale across documents. Metadata checked: MIT OR Apache-2.0, 0 stars, 220 commits, last commit 2026-10-09, crate 424 downloads.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/README.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/switch-cost/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/list-cost/run.sh",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/list-cost/rs/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/c/FreeRTOSConfig.h",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/plans/freertos-scorecard.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/LEDGER.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/docs/LEDGER.md",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/firmware/riscv32-qemu-tick-work/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/LICENSE-MIT",
+      "https://github.com/Remade-With-Rust/rusty_rtos_kernel",
+      "https://github.com/Remade-With-Rust/rusty_rtos_kernel/commits/main",
+      "https://github.com/Remade-With-Rust/kairos",
+      "https://crates.io/api/v1/crates/rusty_rtos_kernel"
+    ]
+  },
+  {
+    "id": "https://github.com/venkat2811/myelon",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The harness and the C/C++ helpers are public (crates/competitive-bench with third_party/boost_pingpong/main.cpp and its Makefile, plus third_party/ompi_pingpong). The benchmark_url, however, is a PNG chart with no stated machine, no compiler versions and a single unlabelled run. The Ryzen 7 5800X in the README is stated for the perf-bench headline tables, not for this chart. First-party numbers with partial methodology are tier C.",
+    "corrections": {
+      "claimed_speedup": "Chart labels in assets/bench-pingpong-throughput-1kb.png (1 KB, 1p1c, msgs/sec, log scale): Myelon-Raw mmap 4.9M and shm 4.4M, plus the project's own Disruptor (disruptor-mp) baselines at 4.8M (mmap) and 4.6M (shm). Peers: Crossbeam 2.6M, Rusteron (Aeron) 2.6M, OpenMPI 2.0M, Iceoryx2 1.4M, Boost-MQ 164K, Shmipc 60K, ZeroMQ-IPC 25K, ZeroMQ-IPC-abs 20K, ZeroMQ-TCP 14K. Against Boost-MQ this is about 27x to 30x and against Open MPI about 2.2x to 2.5x (both derived from page data). Against Aeron IPC through rusteron it is about 1.7x to 1.9x (derived from page data).",
+      "compiler_and_flags": "Boost-MQ helper (crates/competitive-bench/third_party/boost_pingpong/Makefile): g++ -O3 -std=c++17 -pthread -march=native -flto -DNDEBUG on Linux. Open MPI helper (crates/competitive-bench/third_party/ompi_pingpong/Makefile, pingpong.c): mpicc -O3 -std=c11 -march=native -flto -DNDEBUG. Rust side: workspace profile 'competitive' with opt-level 3, fat LTO, codegen-units 1, panic abort, overflow-checks off and no target-cpu, so only the C/C++ helpers get -march=native. Compiler versions are not stated.",
+      "stars_or_usage": "20 stars, 1 fork; crates.io downloads: disruptor-mp about 358, myelon about 242",
+      "caveats": "The win over the C++ peer is a wait-strategy gap, not a language gap. The Boost helper (main.cpp) uses blocking boost::interprocess::message_queue send and receive, which wait on an interprocess mutex and condition variable, while Myelon busy-spins on atomics. The 27x to 30x therefore measures spinning against blocking, and same_algorithm is false. Comparisons against busy-polling peers are smaller: Open MPI's vader shared-memory path is about 2.2x to 2.5x behind, and Aeron IPC, whose rusteron crate is a Rust wrapper over the Aeron C client (not checked here), is about 1.7x to 1.9x behind. The numbers exist only as PNG chart labels; the repo has no results table. Single run, no variance, and the chart's machine, compiler versions and run date are not stated (the README's Ryzen 7 5800X belongs to the perf-bench headline tables). The C/C++ helpers are built with -march=native and the Rust side is not, so flags do not handicap the baseline. The harness is first party. This is an IPC transport rather than a general concurrency runtime, so the category fit is loose. Alpha release (0.1.0-alpha.2), last commit 2026-05-21, 106 commits.",
+      "same_opt_level": true
+    },
+    "notes": "Downgrade from A to C: the chart has no stated machine or compiler versions and is a single run. The headline 27-30x over Boost.Interprocess message_queue is busy-spin against a blocking mutex/condvar queue, so it is not a Rust-over-C++ result; the fairer C peers (Open MPI vader, Aeron C through rusteron) show about 1.7-2.5x. Metadata checked: MIT OR Apache-2.0, 20 stars, last commit 2026-05-21, not a fork.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/assets/bench-pingpong-throughput-1kb.png",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/README.md",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/LICENSE-MIT",
+      "https://github.com/Venkat2811/myelon/tree/main/crates/competitive-bench",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/README.md",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/Makefile",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/SETUP.md",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/boost_pingpong/Makefile",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/boost_pingpong/main.cpp",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/ompi_pingpong/Makefile",
+      "https://raw.githubusercontent.com/Venkat2811/myelon/HEAD/crates/competitive-bench/third_party/ompi_pingpong/pingpong.c",
+      "https://github.com/Venkat2811/myelon",
+      "https://github.com/Venkat2811/myelon/commits/main",
+      "https://crates.io/api/v1/crates/myelon",
+      "https://crates.io/api/v1/crates/disruptor-mp"
+    ]
+  },
+  {
+    "id": "https://github.com/zk2u/cynosure",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "BENCHMARKS.md does give 1.29 ns for Cynosure against 2.46 ns for rigtorp::SPSCQueue and 0.79 ns for a hand-rolled C11 ring on an Apple M4 Max. The C/C++ harness is not in the repository (benches/ holds only Rust criterion suites, and spsc_compare.rs and Cargo.toml mention neither rigtorp nor ringbuffer-spsc), and the C/C++ compiler and flags are not stated, so these are first-party numbers without reproducible methodology: tier C.",
+    "corrections": {
+      "claimed_speedup": "BENCHMARKS.md, 'How it compares to the absolute fastest (C / C++)', 1-thread push+pop latency: hand-rolled C11 ring 0.79 ns, Cynosure 1.29 ns, rigtorp::SPSCQueue 2.46 ns, ringbuffer-spsc (Rust) 2.03 ns. Cynosure is about 1.9x lower than rigtorp, and the C11 ring is about 1.6x lower than Cynosure (both derived from page data). The same file's criterion spsc_compare table gives 2.2 ns per push+pop for Cynosure and 2.5 ns for rtrb.",
+      "license": "MIT (declared in Cargo.toml and the README; the repository has no LICENSE file)",
+      "caveats": "The C++ and C11 comparison code is not in the repository. benches/ holds only Rust criterion suites, and spsc_compare.rs and Cargo.toml mention neither rigtorp nor ringbuffer-spsc. The C/C++ rows therefore cannot be reproduced, and the C++ compiler, version and flags are unstated, which keeps the entry at tier C. The project's own table refutes a language-level win: a bare C11 cached-index ring beats Cynosure by about 1.6x on the same path. The win over rigtorp is single-thread push+pop latency only (producer and consumer on one thread, not two cores), and why rigtorp reads 2.46 ns in that harness is not explained. The 1.29 ns figure comes from a different harness than the 2.2 ns criterion figure for the same operation. Single representative run on one Apple M4 Max; the file warns that a back-to-back cargo bench run throttles later benches by about 15% and that x86 results differ (a SeqCst store is a barrier there). The repository has no LICENSE file; MIT is declared in Cargo.toml and the README. Young project: first commits July 2025, 3 stars, one author, 42 commits. Found through a README claim, not an independent measurement."
+    },
+    "notes": "Confirmed at C: the numbers match BENCHMARKS.md, but the rigtorp and C11 harness is unpublished and its flags are unknown. same_algorithm and same_opt_level cannot be checked without that code, so the fields were left as recorded. The project's own C11 ring beating Cynosure by about 1.6x means the rigtorp win is not a Rust-over-C++ language result. Metadata checked: MIT (no LICENSE file), 3 stars, last commit 2026-10-09, crate about 59.6k downloads.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/zk2u/cynosure/HEAD/BENCHMARKS.md",
+      "https://raw.githubusercontent.com/zk2u/cynosure/HEAD/README.md",
+      "https://raw.githubusercontent.com/zk2u/cynosure/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/zk2u/cynosure/HEAD/benches/README.md",
+      "https://raw.githubusercontent.com/zk2u/cynosure/HEAD/benches/spsc_compare.rs",
+      "https://github.com/zk2u/cynosure",
+      "https://github.com/zk2u/cynosure/commits/main",
+      "https://crates.io/api/v1/crates/cynosure"
+    ]
+  }
+]
