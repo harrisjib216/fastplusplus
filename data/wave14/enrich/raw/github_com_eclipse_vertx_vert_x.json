@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/eclipse-vertx/vert.x",
+  "one_liner": "JVM event-loop HTTP toolkit on Netty; beats some C++ servers on HttpArena but trails nginx, h2o and mongoose on scored profiles.",
+  "what_it_does": "Vert.x core is a Java toolkit for non-blocking network applications: HTTP/1.1, HTTP/2, TCP, TLS, timers and file I/O on Netty event loops, with handlers registered as callbacks or Futures. vertx-web adds a Router with path and query parameters, body handling and JSON helpers. It is a library you embed in a JVM application (deployed as one 'verticle' instance per core), not a drop-in replacement for a C web server's configuration.",
+  "how_it_is_fast": "Each verticle instance is pinned to one Netty event loop and all instances share the listening port, so request handling is lock-free per connection and needs no thread per request; long waits (the /delay test) are event-loop timers, so 32,000 pending requests cost memory rather than threads. HTTP/1.1 parsing and encoding come from Netty's codec (netty-codec-http). The HotSpot JIT compiles the hot path after warm-up; the HttpArena entry also returns minimal 66-byte responses (status line, content-type, content-length, body, no Date or Server header; derived from 741.43 MiB/s divided by 11,782,768 req/s), which helps most on the pipelined test.",
+  "when_to_use": [
+    "JVM services that must hold tens of thousands of mostly idle or slow connections (long polls, delayed responses): HttpArena async-32000 shows 1.86M req/s against Drogon 143K and userver 409K.",
+    "Pipelined or high-request-rate HTTP/1.1 APIs on a many-core box where a Java stack is required and C/C++ is not an option.",
+    "Teams that want Netty-level throughput with routing, JSON and TLS already wired, instead of hand-writing Netty channel pipelines.",
+    "Gzip JSON APIs, where the json-comp-4096 row (256,544 req/s) is level with hical (0.98x) and proxygen (1.05x), behind userver (0.86x) and twice Drogon's."
+  ],
+  "when_not_to_use": [
+    "As a replacement for nginx, h2o or mongoose on plain HTTP/1.1, TLS or static files: 0.46x to 0.61x of them on baseline-4096 and json-tls-4096 and 0.27x of nginx on static-tls-1024.",
+    "Short-lived connections: limited-conn-4096 (reconnect every 10 requests) reaches 602,586 req/s vs 2.4M to 2.7M for nginx, h2o, mongoose, hical and libreactorng, while using only 3,255% CPU of the 64 threads (the others use 5,448% to 6,644%), which points to connection setup rather than request handling as the limit (inferred).",
+    "Memory- or CPU-constrained hosts: 2.4 GiB resident when nearly idle (latency-10k) vs 50 to 73 MiB for hical, mongoose, libreactorng and Drogon; 30.3 us CPU per request at a paced 1M req/s vs 21.0 to 22.5 us for libreactorng, mongoose and hical (Drogon 32.1 us); on 8 logical CPUs it held only 75% of a 500K req/s target (2.48 s average latency) where libreactorng held 99.8%.",
+    "Workloads that cannot tolerate JIT warm-up or GC pauses: HttpArena reports the best of three 5 s runs, so cold-start cost is not in the numbers.",
+    "HTTP/2-heavy services expecting the 5.0 fast path: open bug #6143 reports a 5-8% h2c regression in 5.1.0, and the maintainer plans to move HTTP/1.1 onto the same generic path, accepting possibly worse raw performance."
+  ],
+  "integration": {
+    "form": "Maven/Gradle jars (io.vertx:vertx-core, vertx-web)",
+    "dependencies": "Netty (common, buffer, transport, handler, codec-http/http2/http3, resolver) and jackson-core; jackson-databind and the native transports (epoll, io_uring, kqueue) are optional and must be added explicitly",
+    "min_toolchain": "Java 11 for Vert.x 5 (build toolchains JDK 11 and 21); the HttpArena entry uses JDK 21 (eclipse-temurin:21)",
+    "platforms": "any JVM platform; native epoll and io_uring on Linux, kqueue on BSD/macOS, JDK NIO elsewhere (the HttpArena entry ships no native transport jar, so it ran on NIO; inferred from its pom.xml)",
+    "thread_safety": "Each verticle's handlers run on its own event loop thread and must not block; a blocking call stalls every connection on that loop",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "HttpArena's pipelined win partly reflects response size: its /pipeline check only requires the body 'ok' and Content-Type text/plain, and the Vert.x entry sends 66-byte responses with no Date or Server header against about 142 bytes for nginx (derived from bandwidth divided by req/s); the profile is reference-only and libreactorng (C) is 3.7x faster there anyway.",
+    "Memory numbers are partly configuration: the Dockerfile runs G1 with -XX:+AlwaysPreTouch and no -Xms or -Xmx, so the resident size reflects pre-touched default-sized heap as much as working set (inferred); the reported 4.8 to 16.9 GiB rows should not be read as a minimum.",
+    "The measured release is 5.1.6; 5.1.10 and 5.2.1 were tagged on 2026-10-07, so current releases may differ, and the latency-500k-8cpu row (rate_ratio 0.75) is one the harness itself flags as not comparable on CPU because the offered rate was not held.",
+    "Cross-run comparison: the Vert.x, nginx and mongoose result files were written on different dates (2026-09-06, 2026-08-30, 2026-09-21 per the verifier), so small gaps (for example json-comp vs hical, 0.98x) are within run-to-run noise."
+  ],
+  "pick_this_over_siblings_when": "Pick Vert.x over raw Netty when you want routing, JSON and TLS without writing channel handlers, and over Quarkus (which runs on Vert.x) when you want the toolkit without a full framework on top; on the same HttpArena suite actix-web (2.78M), the tokio entry (4.19M) and every C entry post higher baseline-4096 numbers than its 1.99M, so choose Vert.x for the JVM ecosystem, not for raw speed.",
+  "verified_claims_summary": "HttpArena (Vert.x 5.1.6 with vertx-web on JDK 21 G1 vs nginx 1.31.4 -O3 -march=native with a custom C handler, plus h2o, mongoose, libreactorng and C++ entries; Threadripper PRO 3995WX, server on 32 cores / 64 threads, best of 3 x 5 s runs) shows Vert.x ahead of C only on the reference-only pipelined-4096 row (11.78M vs nginx 4.04M req/s, but 0.27x libreactorng) and ahead of most C++ entries on async-32000 (1.86M vs Drogon 0.14M), while it runs at 0.23x to 0.61x of nginx on the scored baseline, limited-conn, json-tls and static-tls rows.",
+  "status_note": "Very active (tags 5.2.1, 5.1.10 and 4.5.35 on 2026-10-07, 14.7k stars), dual EPL-2.0/Apache-2.0, and a mature production toolkit; its catalogue value is as a fast JVM option, not as a C/C++ replacement.",
+  "sources_read": [
+    "https://github.com/eclipse-vertx/vert.x",
+    "https://github.com/eclipse-vertx/vert.x/releases",
+    "https://github.com/eclipse-vertx/vert.x/tags",
+    "https://github.com/eclipse-vertx/vert.x/issues?q=is%3Aissue%20state%3Aopen%20performance",
+    "https://github.com/eclipse-vertx/vert.x/issues/6143",
+    "https://raw.githubusercontent.com/eclipse-vertx/vert.x/HEAD/README.md",
+    "https://raw.githubusercontent.com/eclipse-vertx/vert.x/HEAD/BENCHMARKING.md",
+    "https://raw.githubusercontent.com/eclipse-vertx/vert.x/HEAD/pom.xml",
+    "https://raw.githubusercontent.com/eclipse-vertx/vert.x/HEAD/vertx-core/pom.xml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/pom.xml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/src/main/java/httparena/Main.java",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vertx/src/main/java/httparena/ServerVerticle.java",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/vertx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/h2o.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/mongoose.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/libreactorng.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/hical.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/userver.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/validate.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/generate_dataset.py",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/data/dataset.json",
+    "https://github.com/MDA2AV/HttpArena/tree/main/scripts"
+  ],
+  "confidence": 0.8
+}

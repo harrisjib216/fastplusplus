@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/endlessconflict/bitdp",
+  "one_liner": "Zig compile-time generator of bit-parallel linear-gap alignment kernels; batched mode outpaces edlib, ksw2 and parasail on DNA pairs.",
+  "what_it_does": "Computes global (Needleman-Wunsch style) or semi-global search alignment costs with linear gaps for any integer cost scheme you pass at compile time: match/mismatch/gap, or a substitution function over a declared alphabet (transition/transversion, BLOSUM62). `bitdp.Kernel(scheme)` gives a no-allocation `distance` for patterns up to 62 characters, an `Aligner` for longer patterns, `distances` for many independent pairs (one pair per SIMD lane), a `Group` of up to `lanes` patterns against one shared text, and `scan`/`Packed` for every end position with cost at most k. It returns costs only: no traceback, CIGAR or alignment path, and it is a Zig module with no exported C API, so it is not a drop-in for edlib or parasail.",
+  "how_it_is_fast": "It reads each DP column as a finite-state machine over bounded score differences, writes the state in thermometer code and shows each threshold bit is a constant, a copy of another bit, or a carry chain that a single integer addition evaluates across 63 rows of a 64-bit word; the Zig compiler derives this program at comptime (Myers' 1999 bit-vector algorithm falls out as the one-chain case, 14 word operations per column vs 15). Wide score ranges use Batcher odd-even merging networks for unary addition, and tiny schemes try exhaustive truth-table synthesis. The headline speed over edlib comes from the batched mode, which runs one independent alignment per 64-bit lane of an AVX2 (4 lanes) or AVX-512 (8 lanes) vector.",
+  "when_to_use": [
+    "Verifying many independent short-to-medium DNA pairs at once (read-mapper candidate verification, 100 bp to 1 kbp) where only the cost is needed: batched AVX2 measured 35.2 GCUPS vs edlib 21.7 on 1 kbp pairs and about 15 % ahead of edlib on real 100 bp Illumina reads.",
+    "Scoring schemes no hand-derived bit-vector aligner covers, such as transition/transversion costs or other small integer substitution matrices with linear gaps (tstv 19.2 GCUPS batched AVX2 vs parasail scan16 5.2 and ksw2 0.94 on 1 kbp).",
+    "All-vs-all comparisons of equal-length sequences (the BGSA setting) when you want the same order of speed as BGSA from Zig with an MIT licence.",
+    "Scanning a genome for many short guides or primers (up to 63 nt) in search mode, where `Packed` fits three 20 nt guides per 64-bit lane word."
+  ],
+  "when_not_to_use": [
+    "One pair at a time: single-pair bitdp was slower than edlib on every DNA edit workload measured (18.07 vs 21.73 GCUPS on 1 kbp, 5.69 vs 6.19 on 150 bp, 4.33 vs 4.42 on real reads); the win needs enough independent pairs to fill the SIMD lanes.",
+    "Affine gap penalties, local (Smith-Waterman) alignment or anything needing the alignment path or CIGAR: only linear gaps, global and search modes, cost-only output.",
+    "Protein with BLOSUM62: 0.77-0.82 GCUPS vs parasail scan16 2.87, about 3.5x slower, and deriving the kernel takes about 15 s and 375 MB of compiler memory.",
+    "Production or long-lived C/C++ code bases: research code created over two days (15 commits on 2026-09-28/29), no releases or known users, pinned to Zig 0.16.0 and no C API.",
+    "Same-regime competition with hand-tuned kernels: it reaches only 0.73-0.93x of BGSA's Myers speed with AVX2 and trails BGSA's packed BitPAl (8.6 vs 13.0 and 11.7 vs 14.0 GCUPS)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Zig standard library only)",
+    "min_toolchain": "Zig 0.16.0 (build.zig.zon minimum_zig_version; uses the new std.Io API)",
+    "platforms": "Any target Zig supports via portable @Vector code; lane count is std.simd.suggestVectorLength(u64) at compile time, so speed depends on -Dcpu (8 lanes with znver4/AVX-512, 4 with x86_64_v3/AVX2, typically 2 on baseline x86-64 or NEON). Only x86-64 Zen 4 was benchmarked.",
+    "thread_safety": "not documented; the API is pure functions plus caller-owned Aligner/Group/Packed state and no globals, so separate instances per thread look safe, but no threaded use is shown",
+    "drop_in_for_baseline": "partial — computes the same NW edit distance as edlibAlign(EDLIB_MODE_NW, EDLIB_TASK_DISTANCE) and the same linear-gap global scores as parasail_nw_* with open = extend, but only from Zig, without traceback, affine gaps or local mode"
+  },
+  "gotchas": [
+    "Bytes outside the scheme's alphabet count as the costliest substitution and the default alphabet is uppercase \"ACGT\", so lowercase (soft-masked) or N bases are silently penalised unless you uppercase input; the bench scripts uppercase the genome and drop reads with N.",
+    "`Kernel.distance` asserts pattern length below 63 only via std.debug.assert, which ReleaseFast compiles out; longer patterns must go through `Aligner`.",
+    "Harness: bitdp's batched time is one wall-clock interval around `distances`, while edlib and parasail are timed per pair, and edlib 1.2.7 and parasail 2.6.2 are Ubuntu package builds (no AVX-512 kernels in that parasail) against a bitdp built for -Dcpu=znver4 or x86_64_v3; ksw2 extz2_sse and parasail are affine-gap engines run with gap open 0 or open = extend and full bands, so they do more work per cell than a linear-gap kernel. No correctness defect found: every tool's cost sum is cross-checked, and parasail's striped kernels were dropped because they returned non-optimal scores with open = extend.",
+    "AVX-512 does not help in batched pairwise mode (7.11 vs 7.75 GCUPS on 150 bp, 4.59 vs 5.09 on real reads, 34.89 vs 35.20 on 1 kbp) because each lane gathers its planes separately; the 0.30 s vs 13.3 s genome scan is forward strand only and is measured against the repo's plain scalar reference loop, not an optimised aligner."
+  ],
+  "pick_this_over_siblings_when": "The listed systems-and-safety siblings (ckmeans, zroar, zipir, fucina and others) do no sequence alignment; the closest catalogued alternatives are Sassy (SIMD approximate string matching, beats edlib for pattern search) and A*PA2 (exact global alignment of long, divergent pairs), so pick bitdp for many short independent pairs or custom linear-gap substitution schemes, Sassy for searching one pattern in a long text and A*PA2 for single long pairs.",
+  "verified_claims_summary": "On one core of a Ryzen 7 8840U under WSL2, bitdp (Zig 0.16.0 ReleaseFast) in batched AVX2 mode computed unit-cost NW distances for 5,000 random 1 kbp pairs at 15 % divergence at 35.2 GCUPS vs edlib 1.2.7 at 21.7, parasail 2.6.2 scan16 at 5.2 and ksw2 extz2_sse at 2.2 (C harnesses gcc 15.2.0 -O3 -march=native, edlib and parasail from Ubuntu packages), with all cost sums agreeing; on 193,660 real 100 bp E. coli reads the batched margin over edlib is 5.09 vs 4.42 GCUPS, and unbatched bitdp is slower than edlib on every DNA set.",
+  "status_note": "Brand-new research code (15 commits on 2026-09-28 and 2026-09-29, 0 stars, no releases, no issues), MIT-licensed and small (about 1,700 lines across src/root.zig, derive.zig, schemes.zig and reference.zig) so it is easy to vendor into a Zig project, but its API is declared unstable and it targets Zig 0.16.0 (minimum_zig_version) and its new std.Io API.",
+  "sources_read": [
+    "https://github.com/endlessconflict/bitdp",
+    "https://github.com/endlessconflict/bitdp/commits",
+    "https://github.com/endlessconflict/bitdp/issues?q=is%3Aissue",
+    "https://github.com/endlessconflict/bitdp/tree/main/src",
+    "https://github.com/endlessconflict/bitdp/tree/main/bench",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/README.md",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/REFERENCES.md",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/RESULTS.md",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/baselines.c",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/ksw2_baseline.c",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/gen.py",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/bench.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/scan.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/bench/reads.py",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/src/derive.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/src/schemes.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/src/reference.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/build.zig",
+    "https://raw.githubusercontent.com/endlessconflict/bitdp/HEAD/build.zig.zon",
+    "https://github.com/sdu-hpcl/BGSA"
+  ],
+  "confidence": 0.8
+}

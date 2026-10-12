@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/embassy-rs/embassy",
+  "one_liner": "Async Rust embedded framework whose cooperative executor replaces an RTOS; claimed smaller than FreeRTOS, latency win unproven.",
+  "what_it_does": "Embassy is a no_std embedded framework: an async executor (embassy-executor), a timer queue (embassy-time), and async HALs for STM32, nRF, RP2040/RP235x, MSPM0 and others, plus networking, USB, BLE and a bootloader. Tasks are `async fn`s marked `#[embassy_executor::task]` and spawned from an async `main`; they await interrupts, timers, DMA transfers and channels instead of blocking. It is a different programming model from FreeRTOS, not a drop-in: no threads, no preemption inside one executor, no C API.",
+  "how_it_is_fast": "The compiler turns each async task into a state machine stored in its own static, so tasks share one stack, need no per-task stack sizing and no heap, and switching between them is a function return plus a poll rather than a kernel context switch. A wake polls only the woken task; when nothing is ready the core sleeps (WFE/WFI) and interrupt handlers wake the executor through a 'pender' callback. Priorities come from running several executors, some in interrupt context (InterruptExecutor), so a higher-priority executor preempts a lower one via NVIC.",
+  "when_to_use": [
+    "New Rust firmware on Cortex-M, RISC-V or ESP32 where flash and static RAM are tight and tasks mostly wait on I/O, timers or interrupts.",
+    "Designs with many small concurrent activities (protocol state machines, sensor polling, USB plus networking) that would otherwise need many sized RTOS stacks.",
+    "Low-power devices: the executor sleeps the core whenever no task is ready, with no tick-driven busy loop.",
+    "Teams already on embassy-stm32/nrf/rp HALs who want DMA-driven async drivers instead of blocking HAL calls."
+  ],
+  "when_not_to_use": [
+    "Hard real-time paths where worst-case interrupt-to-task latency must be bounded and proven: tasks on one executor are cooperative, and the only public comparison (Tweede Golf, 2022) reportedly had FreeRTOS ahead on interrupt latency and measured spread, not worst case.",
+    "Code that runs long CPU-bound loops without awaiting: it blocks every other task on the same executor; move it to a higher-priority interrupt executor or split it.",
+    "Existing C/C++ firmware or vendor stacks built around FreeRTOS APIs (queues, semaphores, CMSIS-RTOS); there is no C or C++ interface, and porting is a rewrite in Rust.",
+    "Projects that need safety-certification artefacts for the scheduler: the Embassy and embassy-executor READMEs mention none, whereas FreeRTOS-based options are the usual route."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "embassy-executor plus a platform (feature platform-cortex-m, platform-riscv32, platform-aarch32, platform-spin, platform-std, or a HAL-provided one); embassy-time with a time driver; a chip HAL such as embassy-stm32",
+    "min_toolchain": "Latest stable Rust (README: guaranteed only on latest stable); embassy-executor 0.10.0 uses edition 2024, so Rust 1.85 or newer. Since 0.8.0 task pools are statically allocated on stable; the 2022 benchmark needed nightly (type_alias_impl_trait).",
+    "platforms": "Cortex-M (thumbv6m/v7em/v8m), Cortex-A/R (aarch32), RISC-V 32/64, Xtensa ESP32 via esp-hal, AVR (nightly), WASM, std hosts",
+    "thread_safety": "Executor is single-core and not Send; cross-executor or interrupt sharing goes through embassy-sync primitives parameterised by a RawMutex (NoopRawMutex, CriticalSectionRawMutex); multicore support is per HAL (embassy-rp, esp-rtos).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the only benchmark: the Rust firmware sets up PG0 as the 'button_interrupt' scope marker and calls core::mem::forget on it ('We're going to use this pin inside embassy'), but rust/Cargo.lock pins unmodified upstream embassy commit 59f909e, whose EXTI on_irq() never touches PG0; the C firmware (EXTI15_10_IRQHandler) and RTIC firmware (EXTI15_10 task) do toggle PG0. The interrupt-entry timing for Embassy therefore came from a local patch that is not published, so the latency row cannot be reproduced from the repo.",
+    "The C baseline does different work: it waits on two rising edges because its 'only react to falling edges' block repeats EXTI->RTSR |= pin; EXTI->FTSR &= ~pin, it sends UART bytes with blocking polled HAL_UART_Transmit while Embassy uses DMA, it formats with newlib snprintf (reentrant newlib on) versus core::fmt, and it goes through ST HAL callbacks plus the CMSIS-RTOS v2 wrapper with an untuned CubeMX FreeRTOSConfig.h (15360-byte heap, trace facility, timers, generic task selection).",
+    "Build settings are unequal: Rust release uses opt-level 3 with LTO and codegen-units = 1; the C Release config is -O3 without LTO, and which C configuration was flashed is not stated, so the size and RAM comparison favours Rust by construction.",
+    "A task that never awaits starves its executor; priority only exists between executors, so latency depends on how the application is partitioned across interrupt executors."
+  ],
+  "pick_this_over_siblings_when": "Pick Embassy over Kairos/rusty_rtos_kernel when you want async tasks with no per-task stacks and an integrated HAL ecosystem rather than a FreeRTOS-compatible preemptive kernel; Kairos has instruction-count numbers against FreeRTOS, Embassy has none that could be read. Tokio is the hosted counterpart for servers, not an option on a microcontroller.",
+  "verified_claims_summary": "The README links a 2022 Tweede Golf post that ran one toy firmware (LED blink, EXTI button, UART queue) in Embassy, RTIC and FreeRTOS via CMSIS-RTOS v2 on an STM32F446ZE at 180 MHz and compared interrupt latency, flash and static RAM; the post is unreachable, and secondary summaries say Embassy used less flash and RAM while FreeRTOS had better interrupt latency. No figure was readable, so 'faster' is unsupported and 'smaller' rests on an untuned, non-LTO C build.",
+  "status_note": "Very active (9.9k stars, 510 open issues, embassy-executor 0.10.0 released 2026-03-20, about 3.3M crate downloads), MIT or Apache-2.0 and copyable; the 2022 comparison predates four years of Embassy changes and is not a current benchmark.",
+  "sources_read": [
+    "https://github.com/embassy-rs/embassy",
+    "https://raw.githubusercontent.com/embassy-rs/embassy/HEAD/README.md",
+    "https://raw.githubusercontent.com/embassy-rs/embassy/HEAD/embassy-executor/README.md",
+    "https://raw.githubusercontent.com/embassy-rs/embassy/HEAD/embassy-executor/CHANGELOG.md",
+    "https://raw.githubusercontent.com/embassy-rs/embassy/HEAD/embassy-executor/Cargo.toml",
+    "https://raw.githubusercontent.com/embassy-rs/embassy/59f909e66533097b56093ec55fdd1341dbff6744/embassy-stm32/src/exti.rs",
+    "https://github.com/embassy-rs/embassy/issues?q=is%3Aissue+latency+OR+stack+overflow+OR+performance",
+    "https://crates.io/api/v1/crates/embassy-executor",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/README.md",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rust/Cargo.lock",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rust/.cargo/config.toml",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rust/src/main.rs",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/c/Core/Src/main.c",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/c/Core/Src/stm32f4xx_it.c",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/c/Core/Inc/main.h",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/c/Core/Inc/FreeRTOSConfig.h",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rtic/Cargo.toml",
+    "https://raw.githubusercontent.com/tweedegolf/async-rtos-showdown/HEAD/rtic/src/main.rs",
+    "https://tweedegolf.nl/en/blog/65/async-rust-vs-rtos-showdown (ENOTFOUND)",
+    "https://redlib.hbubli.cc/r/embedded/comments/she3u9/async_rust_vs_rtos_showdown (ENOTFOUND)",
+    "https://news.hada.io/topic?id=25698 (ENOTFOUND)",
+    "https://segmentfault.com/p/1210000046643521 (ENOTFOUND)"
+  ],
+  "confidence": 0.3
+}

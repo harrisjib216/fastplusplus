@@ -210,5 +210,427 @@
     "urls_opened": [
       "enricher record data/wave14/enrich/raw/github_com_cgbur_llama2_zig.json"
     ]
+  },
+  {
+    "id": "https://github.com/certik/fastgpt",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the timed regions differ (fastGPT's timer excludes its own tokenizer while pt.py times HF tokenization) and the README's own example sums to 0.378 s against PyTorch's 0.346 s, the fast_tanh rows cannot be rebuilt from the shipped code and change the output, and the PyTorch Accelerate row needed an unrecorded library symlink hack; no valid like-for-like measurement remains: C to D.",
+    "corrections": {
+      "caveats": "The timed regions differ: fastGPT's 'Running model' timer leaves out its own tokenizer while pt.py times HF tokenization, and the README's own example (0.074 s encode plus 0.304 s run = 0.378 s) is slower than PyTorch's 0.346 s. The fast_tanh rows (0.288 s, 0.401 s total) cannot be rebuilt from the shipped code (gelu() calls the intrinsic tanh) and issue #25 shows fast_tanh changes 9 of 100 tokens on 1558M. The PyTorch Accelerate row ran only after symlinking libcblas.3.dylib over libopenblas.0.dylib (issue #26), PyTorch version unrecorded. Non-Apple default builds link omp_dummy, whose omp_get_wtime returns 0 (printed time 0.000)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_certik_fastgpt.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dorjeduck/llm.mojo",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the Mojo port parallelises operators that the pinned llm.c revision runs single-threaded, so the 1.17x is parallel coverage rather than codegen.",
+    "corrections": {
+      "caveats": "Harness asymmetry: llm.c train_gpt2.c at 2d43e5b runs AdamW, GELU, layernorm, residual, encoder, attention backward and cross-entropy single-threaded while the Mojo port parallelises all of them (its matmul_forward splits over only B=4), so the 1.17x step-time edge likely comes from parallel coverage. Commit b28eb10 only relabelled the OMP thread count 64 to 10; the C time moved 8% between runs; the M2 core count is unstated (10 threads oversubscribe a base 8-core M2). test.md shows some logits and parameters differing from the reference, only losses match."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dorjeduck_llm_mojo.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dotnet/aspnetcore",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands (HttpArena); the json-comp rows compare brotli q1 against the C++ rows' own encoders, and the record's memory trade-off against nginx is corrected.",
+    "corrections": {
+      "caveats": "json-comp: HttpArena requests send 'Accept-Encoding: gzip, br', so Kestrel serves brotli q1 while the C++ rows use their own encoders; Kestrel's responses average 1,582 bytes against Drogon's 1,392 (about 14% more), so the 1.6-3.8x wins compare different compressors and outputs, and engines are not scored on compression profiles. The h2c win is partly HPACK dynamic-table use (25 vs nginx 60 bytes per response). Memory correction: nginx sits at 3.5-3.8 GiB on every profile while Kestrel uses 118-590 MiB on HTTP/1.1 and 3.9-8.1 GiB on HTTP/2. Baseline CPU 5,589% vs nginx 6,444% matches open issue dotnet/aspnetcore#68915 (idle cores under HTTP/1.1 load)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dotnet_aspnetcore.json"
+    ]
+  },
+  {
+    "id": "https://github.com/eneskemalergin/zipir",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the compression rows and the matched-ratio presets table were spliced from zipir-only runs on another core at an uncommitted working tree (the report's 'pinned to CPU 4' sentence is hard-coded), and the benchmarked -Dcpu=native build is not the release binary, so the compression side is cross-run and unreproducible; the decompression rows stand. First-party report with cross-run rows: A to C.",
+    "corrections": {
+      "caveats": "The report's 'every batch ran pinned to CPU 4' is hard-coded in bench/report.py; its Method section says zipir's compression rows came from zipir-only runs on CPU 13 at uncommitted tree 5f25547, spliced by bench/splice.py against peer rows timed on CPU 4, so the compression ratios and the matched-ratio presets table (ISA-L about 1.1x faster at matched ratio) are cross-run and cross-core (a control batch agreed within -2.1% to -0.7%). Decompression rows are matched (same batch, same core). Published numbers are -Dcpu=native builds; release binaries are -Dcpu=baseline and unmeasured. Every tool's stdout went to /dev/null (no pipe asymmetry)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_eneskemalergin_zipir.json"
+    ]
+  },
+  {
+    "id": "https://github.com/enghitalo/vanilla",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands for the scored HttpArena rows; the pipelined row is a benchmark-shaped handler (reference-only) and the server validates less per request than nginx, both recorded.",
+    "corrections": {
+      "caveats": "Benchmark-shaped handlers: /pipeline matches the raw prefix 'GET /pipeline ' and copies a constant response without parsing (the 43.7M req/s pipelined row, reference-only), json-tls renders item JSON prefixes at startup, and responses carry no Date header. The core framer reads only Content-Length and Transfer-Encoding; open #310 (Connection: close never honoured) and #311 (malformed field lines reach handlers, smuggling risk) mean vanilla does less validation per request than nginx; open #287: ServerConfig.certificates ignored, plaintext served silently."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_enghitalo_vanilla.json"
+    ]
+  },
+  {
+    "id": "https://github.com/embassy-rs/embassy",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the Rust firmware's PG0 latency marker is never toggled by the pinned upstream embassy, so the latency row came from an unpublished local patch.",
+    "corrections": {
+      "caveats": "Harness flaw in the only benchmark: the Rust firmware forgets the PG0 ISR-marker pin 'to use inside embassy', but rust/Cargo.lock pins unmodified upstream embassy 59f909e whose EXTI on_irq() never touches PG0 (the C and RTIC firmware do toggle it), so Embassy's latency instrumentation came from an unpublished local patch and that row cannot be reproduced. The C side waits on two rising edges, uses polled UART against DMA and has no LTO."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_embassy_rs_embassy.json"
+    ]
+  },
+  {
+    "id": "https://github.com/endel/routez",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (reference only, no licence); harness gates check status and body only.",
+    "corrections": {
+      "caveats": "Both sides use epoll (quic-zig picks libxev Epoll on Linux, not io_uring). bench.sh's gate compares status and body only, rate.sh checks status 200 only, and the held rate is 0.5x the slowest server's peak from a separate 4 s wrk pass. quic-zig's README says 'Not production-ready'."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_endel_routez.json"
+    ]
+  },
+  {
+    "id": "https://github.com/firenio/firenio",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: B stands (TechEmpower run); the lite codec is a benchmark parser, recorded.",
+    "corrections": {
+      "caveats": "The only difference between the two TFB dockerfiles is -Dlite and -Dcachedurl, so building header Strings costs about 20% throughput (lite 7,004,779 vs full 5,613,390). decode_lite never reads GET headers, matches 'Content-Length:' case-sensitively, has no chunked encoding and accepts only GET, POST and HEAD. Epoll falls back to NIO silently, the native library is built without -O, the bind is IPv6-only (issue #57), a JVM crash is open (#66), and it needs sun.misc.Unsafe and JDK internals."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_firenio_firenio.json"
+    ]
+  },
+  {
+    "id": "https://github.com/fkguo/nativeminuit.jl",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the gauss_ll rows include random data generation in the timed region and the table times the low-level kernel rather than the user-facing API.",
+    "corrections": {
+      "caveats": "The gauss_ll timed regions include random data generation with different generators on each side; a g++ 13.3 -O3 microbenchmark on a Xeon puts the C++ GaussNLLNDim(10,1000) constructor alone at 13.2 us and GaussNLL(100) at 1.9 us against README gaps of 12.7 and 2.55 us, so those rows may mostly time the RNG. The table times the low-level migrad kernel; CHANGELOG 0.7.1 puts the warm user-facing migrad! on the 4-parameter quadratic at about 11 us against C++ 5.50 us (different runs). The Julia runner is a time_ns loop, not BenchmarkTools, and the perf-config [blas] num_threads=1 is never read by run_perf.jl."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_fkguo_nativeminuit_jl.json"
+    ]
+  },
+  {
+    "id": "https://github.com/ebay/tsv-utils",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: B stands; 2018 study harness gaps recorded.",
+    "corrections": {
+      "caveats": "2018 study gaps: Linux mawk 1.3.3 against macOS 1.3.4, locale never stated, C tool flags unstated, Datamash fed through 'cat |', outputs never checked for equality; GNU cut also beats tsv-select on a 279 MB file in the 2017 study (0.99 vs 1.21 s). Source builds default to DMD without LTO or PGO (up to 2x slower); release builds use -boundscheck=off; tsv-filter aborts on short or blank lines (issue #355) and non-numeric fields; no ARM64 binaries (#357), v2.2.1 has no Linux binaries (#349)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_ebay_tsv_utils.json"
+    ]
+  },
+  {
+    "id": "https://github.com/eclipse-vertx/vert.x",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; response-size and memory caveats recorded.",
+    "corrections": {
+      "caveats": "HttpArena pipelined responses are exactly 66 bytes with no Date or Server header (validate.sh checks only body and Content-Type) against about 142 bytes for nginx. limited-conn uses only 3,255% CPU against 5,448-6,644% for the C entries (connection setup as the limit, inferred); latency-1m costs 30.3 us per request against 21.0-22.5 for libreactorng, mongoose and hical; latency-500k-8cpu held only rate_ratio 0.75, which the harness flags as not comparable. Memory figures are inflated by -XX:+AlwaysPreTouch with no -Xmx. Open bug #6143: 5-8% HTTP/2 slowdown in 5.1.0; measured 5.1.6, current 5.2.1."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_eclipse_vertx_vert_x.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dropbox/fast_rsync",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; block_size 0 denial of service and the MD4-call origin of the pathological 8x recorded.",
+    "corrections": {
+      "caveats": "Signature::deserialize and diff() never check block_size > 0, so an untrusted signature with block_size 0 makes diff() panic or loop forever (the fuzzer covers only apply_limited). The pathological 8x is 1,024 versus 12,289 MD4 calls (blacklist), not faster code; single-block MD4 ran about 0.67 GB/s against about 1.0 GB/s for librsync, so SIMD helps signatures only."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dropbox_fast_rsync.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dzaima/cbqn",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the >10x row needs the AVX-512 VBMI2 paths that only native builds (make o3n) enable.",
+    "corrections": {
+      "caveats": "The README says CBQN does not use AVX-512, yet slash.singeli has AVX-512 VBMI2 compress paths enabled only in native builds (make o3n); the >10x row depends on them, and default or has= builds (which accept only up to avx2) are likely below 5x (not measured). The BQN one-liner drops a trailing lone CR, but no tested prefix ends in CR, so outputs match."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dzaima_cbqn.json"
+    ]
+  },
+  {
+    "id": "https://github.com/evgenyigumnov/cblt",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the nginx latency fits accept-queue overflow at ab -c 1000 (backlog 511 vs tokio's 1024), and HEAD serves gzip bodies without a Content-Encoding header.",
+    "corrections": {
+      "caveats": "Harness flaw (inferred from source): tokio/mio listens with backlog 1024 while nginx's Linux default is 511, so at ab -c 1000 nginx's accept queue overflows and its about 1.2 s median fits the 1 s SYN retransmit rather than serving cost. Correctness bug at HEAD: when Accept-Encoding has gzip the file body is gzip-compressed but the Content-Encoding header line has been commented out since e5861b5 (2024-11-10) and Content-Length stays the uncompressed size. No timeouts, unbounded buffering. An older 5 MB run in article-en.md shows parity with nginx."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_evgenyigumnov_cblt.json"
+    ]
+  },
+  {
+    "id": "https://github.com/evovest/evotrees.jl",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the CPU table's XGBoost column was not re-measured with the EvoTrees column (the XGBoost harness was removed from benchmarks/regressor.jl before the September 2026 re-run) and moved up to 55% between runs, so the 1.06-1.17x CPU wins are cross-run and within the baseline's drift; the GPU table is a different run. Cross-run precedent: C to D.",
+    "corrections": {
+      "caveats": "Cross-run tables: the CPU table is a September 2026 v0.20.0 run (db96e75) under a stale v0.18.3 header, made after the XGBoost harness had been removed from benchmarks/regressor.jl (c038532, 2026-08-21); the GPU table dates from December 2025. The XGBoost CPU column moved up to 55% between runs with the same declared v3.1.2 while EvoTrees moved at most 3%, so the 1.06-1.17x CPU wins sit inside the baseline's drift; one @elapsed per cell. v0.20 changed the meaning of max_depth while the rows still say 6/11. Open bugs #368 (categorical predict silently wrong), #356, #350, #393, #374."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_evovest_evotrees_jl.json"
+    ]
+  },
+  {
+    "id": "https://github.com/endlessconflict/bitdp",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; claim corrected (unbatched bitdp is slower than edlib on every DNA set, so the win needs batching) and the category moved to string-and-text.",
+    "corrections": {
+      "claimed_speedup": "bench/RESULTS.md (medians of three runs, GCUPS, one core, Ryzen 7 8840U under WSL2): on 5,000 random 1 kbp pairs at 15% divergence, batched bitdp 35.20 (4 lanes AVX2) and 34.89 (8 lanes AVX-512) vs edlib 21.73, ksw2 extz2_sse 2.20, parasail scan16 5.19 and diag16 1.98 (1.62x edlib); unbatched bitdp is slower than edlib on every DNA set (18.07 vs 21.73 at 1 kbp, 5.69 vs 6.19 at 150 bp, 4.33 vs 4.42 on reads), so the win needs batching, and the AVX-512 batch is no faster than AVX2.",
+      "caveats": "Unbatched bitdp is slower than edlib on every DNA set, not only at 150 bp; the AVX-512 batch is no faster than AVX2. edlib and parasail are Ubuntu builds; ksw2 and parasail run as affine engines; the genome scan is forward strand only against a scalar loop. All tools' cost sums agree."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_endlessconflict_bitdp.json"
+    ]
+  },
+  {
+    "id": "https://github.com/eneskemalergin/z-fasta",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the GET ratios mostly measure process start-up and index load.",
+    "corrections": {
+      "caveats": "The GET ratios are mostly process start-up plus index load (genome gap a constant 5-6 ms; samtools about 0.30 s on the transcriptome at any N). 0.3.4 had a whitespace wrong-length bug fixed in 0.3.5; the README numbers are post-fix (issue #34: 10-40% slower). emit-fai writes a spool file then /dev/null. CLI only, no library API (#35)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_eneskemalergin_z_fasta.json"
+    ]
+  },
+  {
+    "id": "https://github.com/freaky/cw",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the -lL rows timed a fast path with a line-length bug present in the benchmarked v0.5.0, and the -L and -m rows measure different work from GNU wc; claim corrected.",
+    "corrections": {
+      "claimed_speedup": "README hyperfine ratios (cw faster by) vs FreeBSD wc / GNU wc 8.30 on the 341,152,640-byte Pickwick Papers XML: -l 3.44x / 4.17x; default counts 1.45x / 2.05x; -m 70.36x / 30.21x; -mLlw 3.15x / 1.35x; on test-utf-8.html -m 84.74x / 124.21x. The -lL (1.73x / 15.07x) and -mlL (9.05x / 3.88x; 9.42x / 18.95x) rows time a LinesLongest fast path with a line-length bug and count characters where GNU wc -L counts display width, so they are struck.",
+      "caveats": "Correctness bug in the -lL fast path (src/count.rs LinesLongest, same code in benchmarked v0.5.0 and HEAD): the line-length carry is overwritten when a 32 KiB read holds no newline (47,231 for an 80,000-byte line), the first line of each file is counted one byte short, a leading empty line underflows (release prints 18446744073709551615), all -L paths skip an unterminated last line. gwc -L counts display width (tabs, wcwidth), so the -L rows measure different work; -m rows count continuation bytes with no validation against an mbrtowc loop; locale not stated. CHANGELOG 0.8.0 was never tagged or published (crates.io latest 0.7.0, 2019)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_freaky_cw.json"
+    ]
+  },
+  {
+    "id": "https://github.com/funnyboy-roks/hexdump-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; output regressions from the benchmarked commit recorded (none on a fast path for the benchmarked files, so the timings stand).",
+    "corrections": {
+      "caveats": "Output regressions introduced by the same commit (085158f) as the about 40x screenshots: '!' and '~' print as '.'; a final 9-15-byte line shows stale bytes in the hex column; a single repeated line is dropped without '*'; -n is ignored; offsets wrap at 4 GiB; -s allocates a skip-sized Vec; exit status always 0. hyperfine discards output and nothing checks it. The gap comes from util-linux's printf-per-conversion format interpreter against a hard-coded layout."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_funnyboy_roks_hexdump_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/chmln/sd",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands with the 11.93x regex row struck (hyperfine's sh -c expanded \"$1$1\" to nothing, so sd deleted words while sed doubled them); an independent 2019 run with correct quoting gives about 3x.",
+    "corrections": {
+      "claimed_speedup": "README, hyperfine means: simple replacement on about 1.5 GB JSON: sed -E 2.338 s, sed 2.365 s, sd 0.997 s (about 2.35x). The regex row (sed 11.3 s vs sd 0.942 s, 11.93x) is struck: the quoted \"$1$1\" expanded to an empty string under sh -c, so sd deleted every word while sed doubled every word (issue #52). An independent 2019 run with correct quoting: sd -p 12.6 s vs GNU sed 37.5-39.3 s on 120 MB (MacBook Pro 2015 i5), about 3x. 1M lines (about 36 MB): sd -A 'foo' 125.6 ms vs sed 316.4 ms; default line-by-line sd 357.0 ms (slower than sed), a stale row from c79546a whose follow-up commit cites 106 ms vs sed 120 ms from a different run.",
+      "caveats": "The 11.93x regex row is invalid as printed (sh -c expanded \"$1$1\" to an empty string: sd deleted every word, sed doubled every word; issue #52 open since 2019). The benchmarked 2018 code (324fd1c) ran the unescape crate over the whole output, decoding JSON escapes, so its output differed from sed's (fixed in 0.4.2). The line-by-line table row (357.0 ms) is stale, measured before fcdb8b3 in the same PR. Default mode does one write(2) per line; -n applies per line; -f w drops earlier flags; master's in-place path drops the owner; crates.io and distributions ship 1.0.0 (2023) without -A."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_chmln_sd.json"
+    ]
+  },
+  {
+    "id": "https://github.com/gelbpunkt/tokio-websockets",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the pipelined losses come from the HttpArena server's per-frame flush and the non-pipelined margin over mongoose is a cross-run tie.",
+    "corrections": {
+      "caveats": "The HttpArena server (contributed by the wtx author) echoes with ws_stream.send(msg), one flush per frame, while the crate batches queued frames into one vectored write via SinkExt::feed since 0.12.0, so the 0.30-0.42x pipelined rows reflect the bench code. Non-pipelined rows use about 5-7-byte messages with servers busy on 53-66 of 64 threads, syscall-bound (14.8 us CPU per message vs mongoose 16.4 and ringzero-ws 14.2); the 2-6% margin over mongoose is cross-run and effectively a tie. Issue #128 (poll_close hang with split) is open; no permessage-deflate."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_gelbpunkt_tokio_websockets.json"
+    ]
+  },
+  {
+    "id": "https://github.com/grpc/grpc-dotnet",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: B stands; the .NET bench server is maintained by grpc-dotnet's author with a DI-scope bypass and the C++ baseline is the stock helloworld pattern on unpinned Debian libgrpc++.",
+    "corrections": {
+      "caveats": "The .NET bench server has been maintained by grpc-dotnet's author (JamesNK) and uses ServiceProvidersMiddleware to skip per-request DI scopes (unsafe to copy into apps with scoped services); the C++ servers are the stock helloworld async completion-queue pattern with one pre-posted request per queue, linking libgrpc++ from Debian trixie (probably 1.51.1, late 2022; version from search snippets only). The memory column likely includes the resident dotnet run SDK process; the 3-4 CPU rows are likely client-capped (.NET at 256-279% CPU). In #547 cpp_grpc_mt used 14.4 us CPU per request against .NET's 32.4 at 1 CPU. Open issue #2033: throughput falls from 494 to 116 kops/s when handlers fault."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_grpc_grpc_dotnet.json"
+    ]
+  },
+  {
+    "id": "https://github.com/diku-dk/futhark",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the futhark-pldi17 harness includes OpenCL context creation, kernel build and feature upload inside the K-means reference timer (which the paper says were excluded) and raises Rodinia NN's -r 5 to -r 100, growing the sequential CPU work behind the 16x headline 20x; unequal-work precedent (SHOGUN): B to C.",
+    "corrections": {
+      "caveats": "Harness flaws in futhark-pldi17 (code reading): the K-means Rodinia timer wraps cluster(), whose allocate() in the yuhc/gpu-rodinia copy creates a new OpenCL context, builds kmeans.cl and uploads the features on every run although the paper says those were excluded (W8100 reference runs: first 1876.9 ms, rest 1128.7-1154.6 ms; the GTX 2.79x has no per-run data); the NN patch raises Rodinia's -r 5 to -r 100, growing the sequential CPU top-k work 20x, so the 16x headline rests on that parameter. lavaMD sleeps 3 s between timed reference runs; Myocyte is a CUDA reference against Futhark OpenCL."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_diku_dk_futhark.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dkorunic/minifind",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the bench checks neither exit status nor output equality.",
+    "corrections": {
+      "caveats": "benches/walk.rs ignores exit status and never compares outputs; wall time only, 7 walkers against single-threaded find. The code drops unreadable directories silently with exit 0, ignores write errors, and idle workers spin instead of parking. Numbers are from the 2026-06-19 walker, not re-run for 0.9.0-0.10.2."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dkorunic_minifind.json"
+    ]
+  },
+  {
+    "id": "https://github.com/daac-tools/vibrato",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; speed depends on remapped connection ids and dictionary load is untimed.",
+    "corrections": {
+      "caveats": "Runs were not pinned to a core on the hybrid i9-12900K; the headline depends on dictionaries whose connection ids were remapped with BCCWJ CORE statistics (v0.5.0), so self-compiled dictionaries are slower until the map step runs. The benchmark corpus has only 47 ASCII spaces, so the non-compatible default mode barely matters. Dictionary load is untimed (issue #150: 14 s and about 1 GB for UniDic against MeCab's 28 ms). The benchmark calls read_unchecked, removed in 0.5.2; the paper result is from a search snippet only."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_daac_tools_vibrato.json"
+    ]
+  },
+  {
+    "id": "https://github.com/dbrgn/stepreduce-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (claim already superseded: the C++ version is now about 4% faster); correctness bugs recorded.",
+    "corrections": {
+      "caveats": "parse.rs breaks on the first non-UTF-8 line, so a Latin-1 byte silently truncates DATA plus the footer with no error; the CLI can overwrite its input; remap_references panics on '#' plus digits beyond u32, including inside quoted strings. The benchmarked 2026-02-14 builds predate two geometry-loss fixes (CDSR root 2026-02-15, SHAPE_REPRESENTATION_RELATIONSHIP root 2026-03-01); C++ had the same bugs. LibrePCB #1693: C++ is now about 4% faster, and output now diverges from C++ master."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_dbrgn_stepreduce_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/cododev-technology/cpeak",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; rank and tuned-mode context recorded.",
+    "corrections": {
+      "caveats": "'tuned' mode was forced by the HttpArena maintainer for sonic-rs (PR #1547); the json-comp win runs gzip level 6 through libdeflate (C) with the mimalloc (C) allocator. latency-500k-8cpu held only 0.767 of the target rate (p99 5.6 s), Drogon level, behind mongoose, hical and actix; RSS 384 MiB against Drogon's 147 at baseline; actix-web is ahead on baseline, pipelined and raw json-comp; HTTP/1.1 only. Rust code public only since 2026-10-11 (crate 54 downloads)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_cododev_technology_cpeak.json"
+    ]
+  },
+  {
+    "id": "https://github.com/daac-tools/vaporetto",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; a public harness (legalforce-research/tokenizer-speed-bench, author's commits) loads models outside the timer and builds KyTea -O3, but no CPU model or results file accompanies the wiki table and the charwise 8.7x row is not in the harness at the matching commit.",
+    "corrections": {
+      "caveats": "Public harness: legalforce-research/tokenizer-speed-bench (author's commits) loads the KyTea and Vaporetto models outside the timer, preloads lines and times segmentation only, with the KyTea library built -O3 through its own configure. Word counts were never cross-checked, and the charwise 8.7x row is not in the harness at matching commit 84383b2 (Vaporetto rev a8308cd, no charwise)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_daac_tools_vaporetto.json"
+    ]
+  },
+  {
+    "id": "https://github.com/chrispenner/wc",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the benchmarked byte-mode counters split UTF-8 words (0xA0 treated as space) and the README was never re-measured after the partial fix.",
+    "corrections": {
+      "caveats": "Correctness bug behind the numbers: byte mode (multicore-wc, streaming-wc) uses bytestring's isSpaceChar8, which counts 0xA0 as space, so UTF-8 words split (issue #4; enwik8: 13,306,747 words vs wc's 13,303,065); fix b89af48 (2019-10-18) touched only the UTF-8 counter, the README (last edited 2019-10-16) still shows pre-fix code, and HEAD has no CLI mode matching the multicore-wc row. An empty file crashes and test/Spec.hs does not compile. The win is 4 threads against 1."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_chrispenner_wc.json"
+    ]
+  },
+  {
+    "id": "https://github.com/cloudwego/monolake",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the d02397f run drove the two proxies at different wrk2 -R target rates (HTTPS tiny 160k vs 150k; HTTP large 100k vs 10k) with nginx proxy_buffering off for HTTPS only and the large rows link-bound, so the first-party charts are not like-for-like; the TLS stack is rustls, not native-tls as recorded. No valid like-for-like measurement: C to D.",
+    "corrections": {
+      "caveats": "Record correction: the TLS stack defaults to rustls (TlsStack #[default] Rustls at d02397f and HEAD) and the benchmark config sets no stack, so the HTTPS rows are rustls 0.21 against the distribution's OpenSSL nginx. Harness flaws in the d02397f run: the wrk2 -R targets differ per proxy (HTTPS tiny 160k vs 150k; HTTP large 100k vs 10k, Monolake 618 timeouts vs nginx 22); nginx proxy_buffering is off for HTTPS only; the large rows are link-bound at about 10-12 Gbit/s. monoio-rustls is built with unsafe_io; upstream DNS is not cached (#114, open)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_cloudwego_monolake.json"
+    ]
+  },
+  {
+    "id": "https://github.com/halide/halide",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the claim is corrected from the team's CVPR 2015 slides (the paper table), with the GPU-vs-CPU rows flagged and the record's mis-attributed 5.9x and unmatched 2.1x fixed.",
+    "corrections": {
+      "claimed_speedup": "PLDI 2013 table as reproduced in the team's CVPR 2015 tutorial slides (halide/halide.github.com, assets/lectures/Halide_CVPR_intro.pdf), Halide over hand-tuned expert implementations: x86 blur 1.2x, bilateral grid 4.4x, camera pipeline 3.4x, healing brush 1.7x, local Laplacian 1.7x; ARM camera pipeline 1.1x; GPU bilateral grid 2.3x, and GPU healing brush 5.9x and local Laplacian 9x against CPU expert code (asterisked, GPU-vs-CPU). Abstract: up to 5x faster than hand-tuned C, intrinsics and CUDA.",
+      "caveats": "The record's earlier 5.9x was mis-attributed to bilateral grid (it is GPU healing brush, against CPU expert code) and its 2.1x is unmatched (the slides say 1.7x in the table and '2x vs Adobe' in the narrative). The asterisked GPU rows compare Halide's GPU schedule with CPU expert code (GPU-vs-CPU asymmetry). Repo harness flaw: apps/blur/test.cpp's naive baseline is single-threaded and the Makefile adds -fopenmp only for non-clang, so on clang the SSE baseline is single-threaded against Halide's .parallel(y); the paper baselines are absent from the repo."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_halide_halide.json"
+    ]
+  },
+  {
+    "id": "https://github.com/hdresearch/ziggit",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the library status row times a no-op (isLightningFastClean marks a fresh repo clean without reading the worktree, MQF precedent) and cloneBare hardlinks the source's HEAD, refs and config so the 34.3x 'clone' shares and mutates the source repository, while the macOS CLI gains are git's process start-up; no valid like-for-like row remains: C to D.",
+    "corrections": {
+      "caveats": "Library benchmark shortcut: isLightningFastClean() marks a freshly opened repo clean without reading the worktree ('BENCHMARK OPTIMIZATION ... aggressively assume clean'), so the lib_benchmark.zig status row times a no-op and statusPorcelain()/isClean() miss edits. On Linux cloneBare hardlinks all .git files (HEAD, refs, config) and updateHead rewrites refs in place with truncate, so a library commit or checkout in the clone moves the source's refs, which explains the 34.3x. The macOS 7-8 ms git floor is not fork+exec: the ziggit process itself runs in 1.0-1.4 ms under the same hyperfine."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_hdresearch_ziggit.json"
+    ]
+  },
+  {
+    "id": "https://github.com/grpc/grpc-go",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: B stands; the C++ baseline is the untuned helloworld server on unpinned Debian libgrpc++ and the 2-4 CPU win measures its scaling.",
+    "corrections": {
+      "caveats": "The C++ baseline is the untuned helloworld async server (one completion-queue thread per CPU, one pre-posted request per queue) on unpinned Debian libgrpc++, most likely the 1.51.1 series; its per-CPU throughput falls from 55,600 to 21,100 req/s between 1 and 4 CPUs (Go 55,200 to 35,100), so the 2-4 CPU win measures C++ scaling. docker --cpus is a quota, not a cpuset: Go matches it via automaxprocs while C++ sees 16 cores. v1.79.3 predates the 2026 advisories GHSA-hrxh-6v49-42gf, GHSA-vp52-pcj8-j9qc (CVE-2026-84304) and GHSA-2v4p-qf9q-27wj; tonic, Thruster and grpc-dotnet beat go_grpc at every CPU count in #559."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_grpc_grpc_go.json"
+    ]
+  },
+  {
+    "id": "https://github.com/guzba/supersnappy",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; out-of-bounds read on truncated input and unchecked allocation recorded.",
+    "corrections": {
+      "caveats": "uncompress calls read32 before checking the trailer bytes (checks off in release), so truncated input reads up to 4 bytes out of bounds and can decode instead of failing (issue #7, open); an untrusted varint prefix allocates up to 4 GiB first (issue #8). The fuzzer flips single bytes only; the runtime path is little-endian only; the bench never checks output; the Google path pays an extra validate pass, and Supersnappy allocates a 32 KiB table per compress, so the snappy-c init_env caveat cuts both ways. Table dates from 2022-06-12."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_guzba_supersnappy.json"
+    ]
+  },
+  {
+    "id": "https://github.com/ferronweb/ferron",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the website harness builds nginx at -O1 from unpinned master against an LTO Ferron and its compression scenario sends no Accept-Encoding.",
+    "corrections": {
+      "caveats": "Website harness (ferronweb/benchmarking, 2026-09-02): nginx built from unpinned master with its default -O (-O1) -g while Ferron gets LTO and codegen-units=1; benchmark.py runs h2load with no Accept-Encoding header, so the 'Zstd compression' scenario does no compression; no results, hardware or versions committed. Issue #185: nginx was left off the charts because of the maintainer's own misconfiguration. Seven GHSA advisories on 2026-09-25 (one critical); 3.x still rc.9."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_ferronweb_ferron.json"
+    ]
+  },
+  {
+    "id": "https://github.com/fg-labs/mako",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; default output compression level 1 against samtools' level 6 behind the unpublished 1.9x.",
+    "corrections": {
+      "caveats": "mako/fgumi write output at BGZF level 1 while samtools sort defaults to level 6, so the unpublished 1.9x command may credit cheaper compression to the sorter. The default --order is template-coordinate with lexicographic queryname, so it is not a CLI drop-in. fgumi PR #577 gates correctness against samtools only, with no timings."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_fg_labs_mako.json"
+    ]
+  },
+  {
+    "id": "https://github.com/ericlbuehler/mistral.rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the benchmarked bench.rs truncates step times to milliseconds and llama-bench ran the default ubatch.",
+    "corrections": {
+      "caveats": "The benchmarked bench.rs (8b49f963) divides prompt tokens by a step time truncated with Duration::as_millis, so short prompts are overstated (B200 E4B Q8 128-token 7,529.4 tok/s is exactly 128/17 ms; the 1.259x could be 1.19x); decode counts 256 tokens over 255 steps. llama-bench ran the default ubatch and llama.cpp's prefill is flat after 512 tokens while mistral.rs climbs, so the 2x+ long-prompt gap fits an untuned baseline batch size. The quantized GEMMs (mmq_gguf) are adapted from llama.cpp's own ggml-cuda MMQ kernels; --quant 4 is uniform Q4K against mixed Q4_K_M. Issue #2093: RTX 5080 paged-attention decode 25 vs 128 tok/s."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_ericlbuehler_mistral_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/errantmind/faf",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; remotely triggerable stack buffer overflow in the pipelined response path recorded (keep-and-document, security bug).",
+    "corrections": {
+      "caveats": "Security bug (code reading, src/epoll.rs): pipelined responses are appended to a 4,096-byte stack buffer with no bound check and the callback gets no remaining length, so 33 or more short pipelined requests in one packet overflow the stack (about 27 KB per 4 KB packet); the TFB load never hits it. No request-buffer compaction, a len -= i underflow reads past the received bytes, racy static mut Date and counter, partial sendto resets the connection, request bodies not consumed."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_errantmind_faf.json"
+    ]
   }
 ]

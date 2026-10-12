@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/dropbox/fast_rsync",
+  "one_liner": "Rust librsync-compatible signature, delta and patch library; SIMD multi-buffer MD4 makes signatures about 5.5x faster than librsync.",
+  "what_it_does": "Implements the rsync/librsync algorithm on in-memory buffers: Signature::calculate hashes blocks of the old data, diff() takes an indexed signature plus the new data and writes a delta, and apply()/apply_limited() rebuild the new data from the old data and the delta. Signatures and deltas use librsync's legacy MD4 wire format, and the tests check that signatures are byte-identical to librsync's and that deltas apply in both directions. The API is three plain functions over &[u8] with a generic Write for output, not librsync's streaming job API.",
+  "how_it_is_fast": "Signature generation hashes many independent blocks at once with multi-buffer SIMD MD4 (md4_many: SSE2 and AVX2 on x86 and NEON on aarch64, picked at run time by feature detection). The rsync rolling checksum (the Adler-style rollsum with a 31 offset) is rewritten as a weighted sum so the compiler can vectorise it, and it is compiled once per feature level. diff() indexes the signature in a two-level map: a std HashMap keyed by the rollsum with an xxhash-style avalanche hasher, holding a single-entry map of truncated MD4 to block index. After 1024 failed strong-hash checks on one rollsum value it stops checking that value, so inputs with many weak-sum collisions do not degrade.",
+  "when_to_use": [
+    "Computing rsync signatures of large in-memory buffers on x86-64 with AVX2 (about 5.5x over librsync in the README) or SSE2-only and aarch64 machines (README: about 3-4x with SSE2)",
+    "A sync service or client in Rust that must interoperate with librsync peers using MD4 signatures (rdiff-style signature, delta, patch)",
+    "Servers that receive deltas from untrusted parties: apply_limited caps output size and rejects out-of-bounds or zero-length copies, and the apply path is fuzzed against librsync",
+    "Inputs where many windows share one weak checksum (runs of constant bytes, repetitive data), where librsync recomputes MD4 at every offset"
+  ],
+  "when_not_to_use": [
+    "You need BLAKE2 signatures (README calls MD4 the legacy format) or any collision-resistant matching: MD4 is broken, so every reconstructed file must be checked with a separate strong hash",
+    "Files that do not fit in memory: input must be a &[u8]; issue #29 (open) asks for BufReader input and there is no streaming input API",
+    "You only need delta or patch speed: the README's realistic delta rows are 6% and 12% faster and apply is 1.4x, measured against a 2017-era librsync snapshot that later releases sped up",
+    "Diffing against signatures from untrusted peers without validating them first (see gotchas: block_size 0 is not rejected)",
+    "You want maintained software or tuning guidance: last commit 2024-04-18, no default SignatureOptions (issue #28 open)"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "arrayref (runtime); librsync-rs, criterion, quickcheck and rand only for tests and benches",
+    "min_toolchain": "Rust edition 2018; no rust-version declared; the repo pins Rust 1.76.0 for development and CI; stable Rust since v0.1.4 (2022) dropped packed_simd",
+    "platforms": "any Rust target; SIMD paths on x86 and x86-64 (SSE2, AVX2, runtime detection, no target-cpu needed) and aarch64 (NEON); scalar fallback elsewhere; CI runs i686 and emulated aarch64",
+    "thread_safety": "not documented; the API is pure functions over borrowed slices with no global mutable state other than CPU feature detection",
+    "drop_in_for_baseline": "partial: wire-compatible with librsync MD4 signatures and deltas, but a different Rust API (whole in-memory buffers, no streaming jobs, no BLAKE2, no rdiff CLI)"
+  },
+  "gotchas": [
+    "Signature::deserialize and diff() never check block_size > 0 (only Signature::calculate asserts it). Reading src/diff.rs, a deserialized signature with block_size 0 makes diff() panic on a usize underflow or slice index, and a crafted one (a weak sum of 0 with crypto_hash_size 0) loops forever. The honggfuzz target (fuzz/src/bin/fuzz.rs) fuzzes only apply_limited, so diff on untrusted signatures is unfuzzed. Validate block_size and crypto_hash_size before calling diff (found by reading the code, not run).",
+    "crypto_hash_size may be 0 to 16, and only the truncated MD4 decides a match. Small values or a hostile peer can produce deltas that apply cleanly but rebuild the wrong data. apply() without a limit can expand a tiny delta into a huge output, so use apply_limited.",
+    "The pathological 8x row measures different work, not faster code. 4096 bytes of 0x00 and of 0x80 have equal rollsums, so all 12,289 offsets of the 16 KiB input collide. fast_rsync computes MD4 for 1024 of them before blacklisting the weak sum, while librsync computes it for all 12,289. Both deltas are all-literal here, but on real data the blacklist can miss a genuine match that appears after 1024 false hits on the same weak sum, which makes the delta larger.",
+    "Harness notes: in the 2020 rows (derived from page data, assuming MD4 dominates both pathological runs), fast_rsync's single-block MD4 ran at about 0.67 GB/s against about 1.0 GB/s for librsync, so SIMD helps only signatures. The signature benchmark drops the fast_rsync result without black_box, whereas the librsync closure returns its output. The 3.65 GiB/s figure is plausible for 8-lane MD4, so nothing suggests the work was optimised away."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling does rsync-style delta transfer. cpz (FUC) and crabz speed up local copying and compression, whereas fast_rsync is for when the receiver already holds an older copy and transfer size or signature throughput is the bottleneck.",
+  "verified_claims_summary": "Dropbox's criterion benchmark (benches/rsync_bench.rs, random data, 4 MiB, block 4096, 8-byte MD4) on a noisy i7-6820HQ laptop in 2020: signature 1.07 ms vs 5.85 ms for librsync, a pre-2.0.1 snapshot called through librsync-rs (about 5.5x, AVX2). Delta 7.06 vs 7.46 ms with a 64 KiB edit and 38.3 vs 42.8 ms on fully random data. The pathological 16 KiB delta is 6.26 vs 50.2 ms and apply is 284 vs 400 us. The Rust toolchain was nightly-2020-01-31, and the C compiler and flags are not stated.",
+  "status_note": "Stale (last commit 2024-04-18, 0.2.0 released 2023-03-31) but Apache-2.0, small, tested for librsync interoperability and widely pulled (about 634k crates.io downloads in the last 90 days); the README numbers predate the 2021-2022 hashmap and SIMD-intrinsics rewrites and were never re-run against librsync 2.3.x. Code reading shows diff() does not validate block_size from a deserialized signature (panic or hang), and that path is not fuzzed.",
+  "sources_read": [
+    "https://github.com/dropbox/fast_rsync",
+    "https://github.com/dropbox/fast_rsync/commits/master",
+    "https://github.com/dropbox/fast_rsync/issues?q=is%3Aissue",
+    "https://github.com/dropbox/fast_rsync/tree/master/fuzz/src/bin",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/README.md",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/Cargo.toml",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/rust-toolchain",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/benches/rsync_bench.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/lib.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/diff.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/signature.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/patch.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/crc.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/md4/mod.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/hasher.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/hashmap_variant.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/src/tests.rs",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/fuzz/Cargo.toml",
+    "https://raw.githubusercontent.com/dropbox/fast_rsync/master/fuzz/src/bin/fuzz.rs",
+    "https://crates.io/api/v1/crates/fast_rsync",
+    "https://crates.io/api/v1/crates/fast_rsync/reverse_dependencies"
+  ],
+  "confidence": 0.8
+}

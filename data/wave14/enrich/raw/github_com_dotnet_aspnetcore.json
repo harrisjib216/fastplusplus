@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/dotnet/aspnetcore",
+  "one_liner": "ASP.NET Core's managed HTTP server; in HttpArena it beats nginx on pipelined and cleartext HTTP/2 but loses on plain HTTP/1.1, TLS and HTTP/3.",
+  "what_it_does": "Kestrel is the cross-platform HTTP/1.1, HTTP/2 and HTTP/3 server inside ASP.NET Core (dotnet/aspnetcore, src/Servers/Kestrel). The HttpArena entry uses it with nothing above it: one RequestDelegate passed to app.Run dispatches on the path, with no routing, MVC or model binding. It is an application server you program in C#, not a configurable proxy or static server like nginx, so it replaces nginx only when you would otherwise write a C handler module.",
+  "how_it_is_fast": "Kestrel parses HTTP/1.1 straight out of System.IO.Pipelines buffers with SequenceReader and vectorized IndexOfAny searches for CR, LF, space and '?', stack-allocating small header lines, and writes responses into pooled pipe memory. The socket transport spreads completions over IOQueue workers sized from the processor count. Its HTTP/2 encoder indexes response headers in an HPACK dynamic table (DynamicHPackEncoder): on baseline-h2c-256 Kestrel sent about 25 bytes per response against nginx's 60 (derived from page data), which helps it pass nginx there. HttpArena states no mechanism, and the pipelined gain over nginx comes from the 16-deep pipelined batches rather than per-request speed.",
+  "when_to_use": [
+    "You are already on .NET and need an in-process HTTP server: Kestrel with a raw RequestDelegate measured 1.32M req/s on HttpArena baseline-4096 and 2.88M req/s on cleartext HTTP/2 with 256 connections, without a reverse proxy.",
+    "Internal cleartext HTTP/2 (h2c) service traffic with many streams per connection, where it edged nginx 1.17x on baseline-h2c-256 once the entry raised MaxStreamsPerConnection to 256 and the flow-control windows to 1-2 MiB.",
+    "Clients that pipeline HTTP/1.1 requests in bulk (7.44M req/s at 16-deep pipelining, 1.84x nginx), though browsers and proxies no longer pipeline.",
+    "Gzip or brotli JSON APIs where you compare against C++ frameworks rather than nginx: 478k req/s on json-comp-4096 vs userver 297k and Drogon 127k, with brotli quality 1 from .NET's native encoder."
+  ],
+  "when_not_to_use": [
+    "As a faster nginx for plain HTTP/1.1 keep-alive traffic: baseline-4096 1.32M req/s is 0.40x nginx (3.28M) and 0.36x h2o (3.64M), and 0.65x Drogon.",
+    "Connection-churn heavy loads: limited-conn-4096 (reconnect every 10 requests) 456k req/s is 0.17x nginx; the entry leaves the socket Backlog at its 512 default.",
+    "TLS termination and HTTP/3: json-tls-4096 0.47x nginx, baseline-h2-256 0.69x nginx and 0.15x h2o (16.1M), baseline-h3-64 0.14x nginx.",
+    "Memory-tight hosts on HTTP/2: the entry's h2c footprint grows from 941 MiB at 256 connections to 8.1 GiB at 4,096 (server GC on), against 117-279 MiB for h2o on its HTTP/2 profiles.",
+    "Startup-sensitive or tiny deployments: the entry runs on the JIT with tiered compilation (no NativeAOT), so peak numbers assume a warmed process."
+  ],
+  "integration": {
+    "form": "module (part of the Microsoft.AspNetCore.App shared framework; Microsoft.NET.Sdk.Web project)",
+    "dependencies": ".NET runtime and ASP.NET Core shared framework; libmsquic for HTTP/3 on Linux (installed in the entry's Dockerfile)",
+    "min_toolchain": ".NET 10 SDK as benchmarked (net10.0, mcr.microsoft.com/dotnet/sdk:10.0); Kestrel ships with every ASP.NET Core release",
+    "platforms": "Windows, Linux and macOS per the repository description; benchmarked on Linux x86-64 (Zen 2) in Docker",
+    "thread_safety": "not documented in the sources read (the server handles concurrency; handlers run on the .NET thread pool)",
+    "drop_in_for_baseline": "partial — it replaces a hand-written nginx or C++ handler only if you rewrite the handler in C#; it has no nginx-style config, proxying or static-file module beyond what you code or add as middleware"
+  },
+  "gotchas": [
+    "Harness flaw on json-comp: HttpArena's requests send 'Accept-Encoding: gzip, br', so Kestrel answers with brotli quality 1 while the C++ rows use their own encoders; Kestrel's responses average 1,582 bytes against Drogon's 1,392 (derived from page data), so it ships about 14% more bytes per response and the 1.6-3.8x wins compare different compressors and outputs. Engines are not scored on compression profiles, and pipelined is reference-only, so the profiles Kestrel wins mostly do not count on its own board.",
+    "The record's memory tradeoff is only half right: on the HTTP/1.1 throughput profiles Kestrel used 118-590 MiB (1.5 GiB on async-32000) while nginx used 3.5-3.8 GiB in every profile, but h2o used 69-308 MiB and Kestrel's HTTP/2 memory climbs to 3.9-8.1 GiB at 1,024-4,096 connections.",
+    "Kestrel does not saturate the box on plain HTTP/1.1: on baseline-4096 it used 5,589% CPU of a 64-thread cpuset vs nginx's 6,444% (derived from page data), matching open issue dotnet/aspnetcore#68915 (2026-08-31: about 20% of a 24-core host idle under high-concurrency HTTP/1.1, reproduced on .NET 8, 10 and 11; IOQueueCount and socket thread-count tweaks did not fix it).",
+    "The HttpArena entry is maintained by the suite owner, not the ASP.NET team; its README still says JSON is serialized once at startup while Dataset.cs serializes per request, and rows for Kestrel and the C/C++ servers come from separate runs days apart."
+  ],
+  "pick_this_over_siblings_when": "Pick Kestrel over the HttpArena C# NativeAOT minima-sync entry, nilo or Helidon SE when you need a supported, full-protocol server (TLS, HTTP/2, HTTP/3) inside an ASP.NET Core app rather than the fastest number: minima-sync beats nginx 1.34x on baseline-4096 where Kestrel reaches 0.40x, and nilo reaches 3.67x nginx on baseline-h2c-256 against Kestrel's 1.17x.",
+  "verified_claims_summary": "In HttpArena on a Threadripper PRO 3995WX (server on 64 logical CPUs, load generator on the other 64, loopback, best of 3 runs of 5 s), Kestrel on .NET 10 with a single RequestDelegate served 7.44M req/s pipelined (16 deep) vs nginx 1.31.4's 4.04M (1.84x), 2.88M vs 2.46M req/s on cleartext HTTP/2 with 256 connections (1.17x) and 478k req/s on gzip/brotli JSON vs userver 297k (1.61x), but only 0.40x nginx on plain HTTP/1.1 keep-alive, 0.47x on JSON over TLS and 0.14x on HTTP/3 (all ratios derived from page data).",
+  "status_note": "Actively developed by Microsoft (38.5k stars, 3.8k open issues, last commit 2026-10-09) and MIT-licensed; the speed claim is narrow, since Kestrel is a strong managed server that beats nginx only on the pipelined and h2c profiles, and its json-comp lead rests on a different compressor and larger responses.",
+  "sources_read": [
+    "https://github.com/dotnet/aspnetcore",
+    "https://github.com/dotnet/aspnetcore/issues?q=is%3Aissue%20state%3Aopen%20label%3Aarea-networking%20perf%20HTTP%2F2",
+    "https://github.com/dotnet/aspnetcore/issues/68915",
+    "https://raw.githubusercontent.com/dotnet/aspnetcore/main/src/Servers/Kestrel/Core/src/Internal/Http/HttpParser.cs",
+    "https://raw.githubusercontent.com/dotnet/aspnetcore/main/src/Servers/Kestrel/Transport.Sockets/src/SocketTransportOptions.cs",
+    "https://raw.githubusercontent.com/dotnet/aspnetcore/main/src/Servers/Kestrel/Core/src/KestrelServerLimits.cs",
+    "https://raw.githubusercontent.com/dotnet/aspnetcore/main/src/Shared/Hpack/DynamicHPackEncoder.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/Program.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/Dataset.cs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/kestrel.csproj",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/kestrel/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/kestrel.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/h2o.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/current.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/content/docs/scoring/composite-score.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/framework.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://github.com/MDA2AV/HttpArena/tree/main/requests",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/requests/json-gzip-1.raw",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/requests/json-gzip-50.raw",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/requests/pipeline.raw",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/requests/get.raw"
+  ],
+  "confidence": 0.5
+}

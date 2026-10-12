@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/evgenyigumnov/cblt",
+  "one_liner": "Small Rust (tokio) static file server and reverse proxy whose '10x faster than nginx' small-file claim does not survive a harness check.",
+  "what_it_does": "A single binary (cargo install cblt, or the ievkz/cblt Docker image) configured by a KDL 'Cbltfile' of host blocks with root/file_server, reverse_proxy (round-robin or IP-hash load balancing with lb_timeout/lb_retries), redir, redirifnotcookie and tls (rustls) directives. It can also build its proxy table from Docker Swarm service labels (MODE=docker, reads /var/run/docker.sock) and reloads its config when 'cblt --reload' drops a 'reload' file that the server polls every 5 s. It is not a drop-in for nginx: different config language and a much smaller feature set (no keep-alive, no HTTP/2, no caching, no access-log format, no timeouts).",
+  "how_it_is_fast": "Nothing structurally faster than nginx: a tokio multi-thread runtime with one worker per CPU, httparse request parsing, one request per connection then close, and file bodies streamed with tokio::io::copy from tokio::fs::File (thread-pool reads, no sendfile). The README gap is best explained by the listen backlog: tokio's TcpListener::bind goes through mio, which calls listen(fd, 1024), while nginx's Linux default is NGX_LISTEN_BACKLOG 511; with 'ab -c 1000' nginx's accept queue overflows and the dropped connections wait for the 1 s TCP SYN retransmit, which matches nginx's ~1.2 s median against cblt's 200 ms maximum (inferred from source, not reproduced). With 'listen 80 backlog=1024' in nginx the comparison would likely change.",
+  "when_to_use": [
+    "A hobby or internal deployment that wants one small Rust binary with a readable KDL config for a few static sites plus a reverse proxy.",
+    "Docker Swarm setups where backends announce host, path, port and load-balancing policy through service labels and a tiny label-driven proxy is enough.",
+    "Serving downloads to non-browser clients (curl, scripts) that need range requests and send no Accept-Encoding header.",
+    "Reading a compact (~2k lines) tokio HTTP/1.1 server as a learning reference."
+  ],
+  "when_not_to_use": [
+    "Browser-facing static sites: browsers send Accept-Encoding: gzip, which triggers an undeclared gzip body with the wrong Content-Length (see gotchas).",
+    "Internet-facing servers: no read or idle timeouts, unbounded header and body buffering, and a 10,000-permit connection semaphore make slowloris-style exhaustion easy.",
+    "High request-rate small-file serving where keep-alive, HTTP/2, sendfile or caching matter; every request opens and closes its own TCP connection.",
+    "Several TLS domains on one port: there is no SNI certificate selection, the last host's cert/key on a port wins.",
+    "Anything needing an active upstream: last commit 2025-06-04, crate 0.6.2 from December 2024, 8 open issues."
+  ],
+  "integration": {
+    "form": "binary crate (cargo install cblt) or Docker image ievkz/cblt",
+    "dependencies": "tokio (full), httparse, http, bytes, kdl 4.6, rustls 0.23 + tokio-rustls, async-compression (gzip), bollard (Docker API), clap, fdlimit, mime_guess, env_logger/tracing",
+    "min_toolchain": "Rust 2021 edition; no rust-version declared in Cargo.toml or on crates.io",
+    "platforms": "any tokio target; Docker label mode needs the Docker socket; README and Dockerfile target Linux/Alpine",
+    "thread_safety": "not applicable (standalone server); config swaps go through a tokio RwLock<Arc<ServerSettings>> per port",
+    "drop_in_for_baseline": "false: different config language, HTTP/1.1 only, no keep-alive, and no equivalents for most nginx directives"
+  },
+  "gotchas": [
+    "Correctness bug at HEAD (src/response.rs send_response_file, unchanged since the 'Gzip (#3)' commit e5861b5 on 10 Nov 2024): when the request's Accept-Encoding contains 'gzip' the file body is gzip-compressed but the 'Content-Encoding: gzip' header write is commented out and Content-Length stays the uncompressed file size, so browsers get an undeclared gzip stream with a mismatched length (already-compressed PNG/JPEG are gzipped too). ab sends no Accept-Encoding, so the benchmark never exercised this path.",
+    "Harness flaw behind the README table: tokio/mio bind with backlog 1024 versus nginx's Linux default of 511, under 'ab -c 1000', so nginx's ~1.2 s median looks like accept-queue overflow plus the 1 s SYN retransmit rather than serving cost; in addition the repo's benchmark/cblt Cbltfile defines only host 'example.com', and cblt answers a Host '127.0.0.1' request with a 9-byte 403 when no '*' host exists, and no raw ab output (Document Length, Non-2xx) was published to rule that out.",
+    "Host routing: without a '*' host, the raw Host header (including any ':port') must equal a configured key exactly, else 403; build_servers stores the first host on a port without its port suffix and later ones with it, so the first named host on a non-default port never matches a client's 'host:port' Host header and gets 403. With a '*' host present, it captures every request on that port.",
+    "No timeouts and unbounded buffering: socket_to_request grows its BytesMut until headers parse and the body is read fully up to Content-Length; a suffix range 'bytes=-N' with N above the file size underflows a u64 (wraps in release) and returns Content-Length N with no body; every request is logged at info level."
+  ],
+  "pick_this_over_siblings_when": "Only when a tiny Rust proxy driven by Docker Swarm labels is the point; for measured static or proxy throughput, statico, kawipiko or routez publish their harnesses, and for a full-featured server Caddy (Go) or Ferron (Rust) are maintained alternatives.",
+  "verified_claims_summary": "The author ran 'ab -c 1000 -n 3000 http://127.0.0.1/logo.png' (23,911-byte PNG) against cblt 0.1.x and the default nginx:latest Docker image, both in Docker on a Windows laptop (the earlier run's MINGW64 'lenovo' shell; CPU not stated), and reported p50/p75/p100 of 179/194/200 ms versus 1209/1655/2146 ms, with no raw output or status counts. The same author's earlier 5 MB run, with full ab output in article-en.md, had cblt at 1956 ms median against nginx 1.27.2 at 1941 ms and Caddy at 1768 ms, so no verified win exists.",
+  "status_note": "Stale since June 2025 (crate 0.6.2, December 2024), MIT-licensed hobby project that article-en.md describes as a Rust learning exercise; fine to read or run internally, but not a browser-facing nginx replacement until the gzip header bug is fixed.",
+  "sources_read": [
+    "https://github.com/evgenyigumnov/cblt",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/README.md",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/Cbltfile",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/article-en.md",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/benchmark/ab.md",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/benchmark/cblt/Cbltfile",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/benchmark/cblt/Dockerfile",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/benchmark/nginx/Dockerfile",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/server.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/directive.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/file_server.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/request.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/HEAD/src/reverse_proxy.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/e5861b5/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/824b8b8/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/3fb9fa5/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/dd34582/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/ce5f4a9/src/response.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/3fb9fa5/src/file_server.rs",
+    "https://raw.githubusercontent.com/evgenyigumnov/cblt/3fb9fa5/src/main.rs",
+    "https://github.com/evgenyigumnov/cblt/issues?q=is%3Aissue",
+    "https://github.com/evgenyigumnov/cblt/commits/main/src/response.rs",
+    "https://raw.githubusercontent.com/tokio-rs/mio/v1.0.2/src/net/tcp/listener.rs",
+    "https://raw.githubusercontent.com/tokio-rs/mio/v0.8.11/src/net/tcp/listener.rs",
+    "https://raw.githubusercontent.com/tokio-rs/mio/v1.0.2/src/sys/unix/tcp.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/tokio-1.41.0/tokio/src/net/tcp/listener.rs",
+    "https://raw.githubusercontent.com/nginx/nginx/master/src/os/unix/ngx_linux_config.h",
+    "https://raw.githubusercontent.com/nginx/nginx/master/src/os/unix/ngx_freebsd_config.h",
+    "https://crates.io/api/v1/crates/cblt",
+    "WebSearch: cblt Rust web server nginx benchmark (snippets: lib.rs, habr.com/en/articles/857306; no independent benchmark found)"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/evovest/evotrees.jl",
+  "one_liner": "Pure-Julia histogram gradient-boosted trees (CPU and GPU); edges out XGBoost hist only in narrow table rows.",
+  "what_it_does": "EvoTrees trains gradient-boosted decision trees for regression, classification, count, quantile, credibility and maximum-likelihood (Gaussian, logistic) objectives, including multi-target regression with shared trees since v0.20. The API is Julia-native: build a learner (EvoTreeRegressor, EvoTreeClassifier, EvoTreeCount, EvoTreeMLE), call fit on a matrix or a Tables.jl/DataFrame source, then call the model as a function to predict; it also plugs into MLJ and ships Linear TreeShap, feature importance, Makie tree plots and BSON save/load. It is not a drop-in for XGBoost: different parameter names, no XGBoost model format and no C ABI.",
+  "how_it_is_fast": "Features are quantile-binned once into an observation-major UInt8 matrix (edges from a 1000*nbins-row sample, at most 255 bins), and trees grow level-wise from gradient histograms. Histograms are built only for one child per split and the sibling is derived by the subtraction trick (h[child] = h[parent] - h[sibling]); the build threads over node x feature tiles with software prefetch through llvm.prefetch and a loop unrolled per loss width via Val(NK), which Julia's JIT specializes per objective. GPU training (v0.18+) uses KernelAbstractions kernels with Atomix atomics, so the same code targets CUDA, ROCm and Metal.",
+  "when_to_use": [
+    "A Julia codebase or MLJ pipeline that wants GBDT without shipping a C++ library, with performance in the same range as XGBoost hist.",
+    "Distributional or multi-target regression: :gaussian_mle and :logistic_mle (Fisher-information Newton steps) and joint multi-target fits with one tree structure, which XGBoost does not offer in the same form.",
+    "GPU training of deep trees on wide data: in the README GPU table (RTX A4000) at depth 10 in XGBoost terms with 100 features, training is 1.13-1.35x faster than XGBoost gpu_hist from 100k to 10M rows.",
+    "Very tall, narrow CPU data (about 10M rows x 10 features), where CPU training roughly matches or slightly beats XGBoost (1.06-1.17x in the latest table).",
+    "AMD (ROCm) or Apple (Metal) GPUs through the v0.20 KernelAbstractions extensions."
+  ],
+  "when_not_to_use": [
+    "CPU inference throughput: slower than XGBoost in every README CPU row, about 2.5-2.7x slower in the 100-feature depth-6 rows (for example 6.44 s vs 2.56 s at 10M x 100).",
+    "CPU training with many features or deep trees: 192.58 s vs 111.69 s at 10M x 100 depth 11 (1.72x slower) and 0.36 s vs 0.21 s at 100k x 10 depth 6.",
+    "Shallow trees or few features on GPU: XGBoost trains about 2x faster (1.37 s vs 0.58 s at 1M x 10 depth 6; 7.53 s vs 3.83 s at 10M x 10 depth 6).",
+    "Categorical features scored in small batches, or early stopping, until open issues #368 and #356 are fixed (see gotchas).",
+    "Interop with Python/R/C++ model tooling: models are saved as BSON for Julia only, and the layout changed in v0.20 (a loader shim reads pre-v0.20 files)."
+  ],
+  "integration": {
+    "form": "module (Julia package in the General registry)",
+    "dependencies": "BSON, CategoricalArrays, Distributions, MLJModelInterface, StatsBase, Tables; optional weak deps CUDA (5 - 6.3), AMDGPU, Metal, KernelAbstractions + Atomix for GPU, Makie for plots",
+    "min_toolchain": "Julia 1.9 (Project.toml compat); README benchmarks on Julia 1.10.8",
+    "platforms": "any Julia CPU platform; GPU on NVIDIA CUDA, AMD ROCm and Apple Metal via package extensions (v0.20)",
+    "thread_safety": "training is multithreaded with Base.Threads (@threads over nodes and feature tiles), so start Julia with -t N; concurrent fits on shared objects are not documented",
+    "drop_in_for_baseline": "false: different API and parameter names (eta, nbins, rowsample, colsample, max_depth), Julia-only BSON model files, no XGBoost model import"
+  },
+  "gotchas": [
+    "Harness flaw behind the table: the CPU and GPU tables come from different runs. The GPU table has been unchanged since 97840b9 (2025-12-24, EvoTrees 0.18.3), while the CPU table was re-measured in db96e75 (2026-09-04, package 0.20.0) under the stale 'EvoTrees v0.18.3' header, after the XGBoost harness had been removed from benchmarks/regressor.jl (c038532, 2026-08-21). Between the two CPU tables, with the same declared XGBoost 3.1.2 and machine, the XGBoost column moved by up to 55% (2.37 s to 3.67 s at 100k x 100 depth 11; 10.08 s to 13.40 s at 1M x 100 depth 11) while EvoTrees moved at most about 3%. Each cell is a single @elapsed with warm-up only for the first configuration, so the 1.06-1.17x CPU wins sit inside the baseline's run-to-run drift.",
+    "max_depth changed meaning in v0.20.0 (NEWS: now the number of splits on a leaf path, as in XGBoost). The README rows still say 6/11, the pre-v0.20 convention under which XGBoost was given max_depth - 1 = 5/10, while the current script uses 5/10; v0.20 users who set max_depth=6 get trees one level deeper than the table measured.",
+    "Open issue #368 (PR #379 pending): at predict time categorical columns are re-encoded against the scoring batch's own level pool instead of the training levels, so single-row or partial-batch scoring returns silently wrong predictions (every category maps to the first training level when scored alone); the workaround is to pass the full training levels on the scoring column.",
+    "Other open correctness reports: #356 early stopping records best_iter but the returned model keeps every later tree (use ntree_limit); #350 table columns typed Union{Missing,Float64} are silently dropped when feature_names is not given; #393 bin edges ignore w_train; #374 offset_name corrupts the scale parameter for EvoTreeGaussian/EvoTreeMLE."
+  ],
+  "pick_this_over_siblings_when": "The other Julia library entries in this category (NonuniformFFTs.jl vs FINUFFT, Ripserer.jl vs Ripser, NativeMinuit.jl vs Minuit2) show clearer wins over their C++ incumbents; pick EvoTrees for Julia-native GBDT with MLE or multi-target losses or non-CUDA GPUs, and keep XGBoost (catalogued in wave 8) when raw CPU training or inference speed is the goal.",
+  "verified_claims_summary": "On a Ryzen 5900X (12 Julia threads) and an RTX A4000 with Julia 1.10.8, against XGBoost 3.1.2 hist/gpu_hist called through XGBoost.jl (prebuilt binary), 200 rounds of mse regression on uniform random Float32 data (64 bins, eta 0.05, row and column subsample 0.5, train-set MAE evaluated each round, one timed run per cell): CPU training is faster only at 10M x 10 (26.45 vs 30.99 s and 51.88 vs 55.20 s), GPU training only in the deep 100-feature rows (2.17 vs 2.92 s, 5.07 vs 6.80 s, 37.25 vs 41.98 s), and EvoTrees is slower in every other training row and every CPU inference row. In the October 2025 table (EvoTrees 0.17.1 vs XGBoost 2.5.1) EvoTrees CPU training was up to 3.2x faster (25.31 vs 80.07 s at 10M x 10 depth 6); XGBoost 3.x erased most of that gap.",
+  "status_note": "Actively maintained (v0.20.0, last commit 2026-10-09, 19 open issues and 10 open PRs including several fresh correctness reports), Apache-2.0 and installable from the Julia General registry; choose it for Julia integration and its loss functions, not for speed over XGBoost.",
+  "sources_read": [
+    "https://github.com/Evovest/EvoTrees.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/README.md",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/Project.toml",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/NEWS.md",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/Project.toml",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/EvoTrees.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/learners.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/fit.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/fit-utils.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/split.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/init.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/src/structs.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/6edfadb/benchmarks/regressor.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/benchmarks/regressor.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/c038532/benchmarks/regressor.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/db96e75/benchmarks/regressor.jl",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/README.md",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/d1ffd16/README.md",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/db96e75/README.md",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/Project.toml",
+    "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/db96e75/Project.toml",
+    "https://github.com/Evovest/EvoTrees.jl/commits/main/README.md",
+    "https://github.com/Evovest/EvoTrees.jl/issues?q=is%3Aissue",
+    "https://github.com/Evovest/EvoTrees.jl/issues/368",
+    "https://github.com/Evovest/EvoTrees.jl/issues/356",
+    "https://github.com/Evovest/EvoTrees.jl/issues/350"
+  ],
+  "confidence": 0.75
+}

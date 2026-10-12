@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/ebay/tsv-utils",
+  "one_liner": "D toolkit of single-purpose TSV tools (filter, select, join, summarize) that outruns awk, cut and datamash on multi-GB files.",
+  "what_it_does": "Twelve standalone Unix-style executables for tab-delimited data: tsv-filter (numeric, string and regex tests per field), tsv-select (cut with named fields, reordering and exclusion), tsv-join, tsv-summarize, tsv-uniq, tsv-sample, tsv-split, tsv-append, tsv-pretty, csv2tsv, number-lines and keep-header. Each reads files or stdin and writes stdout, is header-aware (-H) and addresses fields by number or name. It replaces awk one-liners, cut and datamash with dedicated flags rather than a scripting language.",
+  "how_it_is_fast": "Input goes through bufferedByLine, which rawReads 128 KB blocks and hands out line slices in place instead of copying each line; output goes through BufferedOutputRange, which batches writes into about 10 KB chunks before touching stdout (the author says output buffering gave the biggest gain on the narrow-line test). tsv-filter splits only up to the highest field a test references and runs a precompiled list of test closures; tsv-select uses InputFieldReordering plus template specialisation to drop branches from the inner loop. Prebuilt binaries are LDC builds with -O3 -boundscheck=off plus PGO and LTO extended into druntime and Phobos; the 2018 page lists LTO/PGO, output buffering and compiler improvements as the sources of the 7-64% gain over 2017. Everything is single-threaded.",
+  "when_to_use": [
+    "Repeated filtering, column selection, joins or per-column statistics over plain TSV files in the hundreds of MB to tens of GB on one machine, where awk or datamash pipelines are the bottleneck.",
+    "Pipelines where field names in the header are easier to maintain than awk field numbers ($4, $16).",
+    "Numeric row filters and summary statistics, where the 2018 Linux run shows about 2x over mawk 1.3.3, 7.8x over GNU awk and 3.1x over GNU Datamash.",
+    "Converting messy CSV once (csv2tsv) and then working in escape-free TSV with the rest of the toolkit.",
+    "x86-64 Linux or macOS hosts where the prebuilt LTO+PGO binaries can be dropped onto PATH."
+  ],
+  "when_not_to_use": [
+    "Short lines or small files: GNU cut beat tsv-select on the 86M-line narrow test on Linux (5.60 vs 8.26 s) and on a 279 MB file in the 2017 study (0.99 vs 1.21 s).",
+    "Pure column cutting where a newer specialist is available: hck (1.198 s) and tuc are faster than tsv-select (1.702 s) in hck's own run on the same file.",
+    "Regex filtering, where xsv (Rust) was faster on both platforms in 2018 (7.97 vs 8.80 s Linux, 7.03 vs 8.28 s macOS).",
+    "Real CSV with quoted delimiters or embedded newlines in every step: only csv2tsv understands CSV escapes; the other tools split blindly on the delimiter.",
+    "Arbitrary per-row logic (computed columns, conditionals across many fields): there is no expression language, so awk or Miller remain necessary."
+  ],
+  "integration": {
+    "form": "standalone executables (prebuilt tarballs, make, or dub)",
+    "dependencies": "none at run time (prebuilt Linux binaries statically link the C runtime); building needs a D compiler (DMD 2.088.1+ or LDC 1.18.0+; LDC 1.9.0+ for LTO/PGO)",
+    "min_toolchain": "LDC 1.18.0 or DMD 2.088.1 (prebuilt v2.2.0 uses LDC 1.24.0); builds with current compilers are not documented",
+    "platforms": "Linux and macOS, x86-64 prebuilt only; no ARM64 assets (issue #357), v2.2.1 has no Linux assets (issue #349); Windows only via WSL or Docker (issue #317)",
+    "thread_safety": "not applicable (single-threaded processes)",
+    "drop_in_for_baseline": "partial — new command-line syntax (tsv-filter --gt 4:0.3, tsv-select -f 1,8,19); tsv-select covers cut -f usage, the others replace specific awk or datamash idioms rather than accepting their scripts"
+  },
+  "gotchas": [
+    "Stricter than awk: tsv-filter aborts with 'Not enough fields in line' on short or blank lines (open issue #355 was trailing blank lines), throws when a numeric test hits a non-numeric field instead of treating it as 0, and the tools reject CRLF line endings.",
+    "Speed depends on the build: source builds default to DMD without LTO/PGO, and the 2017 study shows DMD up to 2x slower than LDC (tsv-join 41.23 vs 20.78 s, csv2tsv 56.08 vs 27.41 s); use make DCOMPILER=ldc2 LDC_LTO_RUNTIME=1 LDC_PGO=2 or the prebuilt binaries.",
+    "Release builds use -release -boundscheck=off, so D's array bounds checks and asserts are off in the shipped binaries.",
+    "Benchmark harness gaps: the Linux mawk baseline is 1.3.3 while macOS used 1.3.4, locale is not stated (it affects GNU awk regex and field handling but not cut), C tools come from package managers with unstated flags, Datamash was fed through 'cat |', and no output-equivalence check is described."
+  ],
+  "pick_this_over_siblings_when": "Pick tsv-utils over hck or tuc when you need filtering, joins, sampling and statistics in one consistent header-aware toolkit, not only column cutting, where hck and tuc are faster; pick it over Miller 6 or awkrs when the job is a fixed filter or summary on large TSV and a scripting language is not needed.",
+  "verified_claims_summary": "In the April 2018 first-party study (v1.1.19 LTO+PGO binaries vs package-manager C tools, 10th percentile of 35 runs on a 16-CPU Haswell 2095 MHz Ubuntu 16.04 cloud VM), tsv-filter took 5.48 s vs mawk 1.3.3 11.31 s and GNU awk 4.2.1 42.80 s on a 4.8 GB numeric filter, tsv-select 4.79 s vs GNU cut 8.25 14.46 s, and tsv-summarize 15.78 s vs Datamash 1.3 48.51 s, while GNU cut won the narrow-line test and xsv the regex test. An independent hyperfine run in the hck README (Ryzen 9 3950X, Ubuntu 20) measured tsv-select v2.2.0 at 1.702 s vs GNU cut 8.30 at 7.541 s (min 6.827 s) and awk at 4.993 s on the 7M-line HEPMASS CSV.",
+  "status_note": "Effectively unmaintained since the v2.2.1 tag of 2021-06-13 (21 open issues, unanswered requests for Linux and ARM64 binaries) but BSL-1.0, not archived, and the x86-64 v2.2.0 binaries still work as standalone executables.",
+  "sources_read": [
+    "https://github.com/eBay/tsv-utils",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/README.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/docs/comparative-benchmarks-2018.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/docs/comparative-benchmarks-2017.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/docs/Performance.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/docs/AboutTheCode.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/docs/BuildingWithLTO.md",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/makedefs.mk",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/dub.json",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/common/src/tsv_utils/common/utils.d",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/tsv-filter/src/tsv_utils/tsv-filter.d",
+    "https://raw.githubusercontent.com/eBay/tsv-utils/HEAD/tsv-select/src/tsv_utils/tsv-select.d",
+    "https://github.com/eBay/tsv-utils/issues",
+    "https://github.com/eBay/tsv-utils/issues/359",
+    "https://github.com/eBay/tsv-utils/issues/349",
+    "https://github.com/eBay/tsv-utils/issues/355",
+    "https://github.com/eBay/tsv-utils/releases",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

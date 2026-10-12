@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/cododev-technology/cpeak",
+  "one_liner": "Express-style Rust HTTP/1.1 framework on hyper that outruns Drogon, Cutelyst and userver in HttpArena, not nginx or h2o.",
+  "what_it_does": "Cpeak for Rust is the Rust port of the Cpeak Node.js framework: server.route(\"get\", path, async |req, res| ...), before_each middleware, req.params/req.query/req.chunk(), res.json()/res.end(), plus built-in compression, static files, cookies, CORS, auth tokens and HTTPS. It is a full application framework, not a drop-in for any C++ library; you write a plain fn main and Cpeak starts its own event loops. The crate is 0.3.0 (published 2026-10-11) and the Rust code entered the public repo in a single commit the same day.",
+  "how_it_is_fast": "Thread-per-core: one current-thread Tokio runtime per core, each with its own SO_REUSEPORT listener on Linux (an acceptor thread hands out connections elsewhere), so nothing is shared between workers. A custom AsyncFd socket registers only for readable events (writable interest only when a write would block), responses from pipelined requests are held back and flushed in one write per hyper turn (up to 64 KB), and a background 10 s timer keeps hyper's per-request header timers from forcing an epoll re-arm syscall. JSON is serialized with sonic-rs (SIMD), in-memory bodies are gzip-compressed with libdeflate (a C library) at level 6, the allocator is mimalloc and TLS is rustls on ring.",
+  "when_to_use": [
+    "A new Rust HTTP/1.1 JSON API where an Express/Node-style API matters and Drogon-class throughput (about 1.3x Drogon on HttpArena baseline-4096) is enough",
+    "Compressed JSON responses: on HttpArena json-comp-4096 it served 493,187 req/s vs userver 297,311, hical 261,955 and Drogon 127,466 with similar bytes per response",
+    "HTTPS JSON serving on many cores: json-tls-4096 1,284,103 req/s, level with nginx (1,313,755) and h2o (1,229,462)",
+    "Apps that pair a Node.js and a Rust service and want the same routing, cookie-signing and token formats on both sides"
+  ],
+  "when_not_to_use": [
+    "Maximum plain HTTP/1.1 throughput: at baseline-4096 it is 0.79x nginx and behind h2o, mongoose, hical (3,228,043) and even actix-web (2,775,120) and the raw Tokio entry (4,187,085)",
+    "HTTP/2, HTTP/3 or WebSocket: the crate enables only hyper's http1 feature and has no h2, QUIC or WebSocket rows",
+    "Memory-constrained hosts: HttpArena RSS is 384 MiB at baseline-4096 vs Drogon 147 MiB and h2o 75 MiB, and 1.6 GiB in the 32,000-connection async profile",
+    "CPU-limited deployments: on the 8-CPU latency-500k profile it held only 76.7% of the target rate (383,482 req/s, p99 5.6 s), about Drogon's level and behind mongoose (474,223), hical (429,185) and actix-web (421,612)",
+    "Production systems that need a stable API: the README says 0.x releases are not recommended for production, and the crate has 54 downloads in total"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "tokio, hyper 1 (http1), hyper-util, socket2, serde/serde_json, sonic-rs, memchr, flate2 (zlib-rs), brotli, libdeflater (C), rustls 0.23 on ring, mimalloc (C, default feature), sha2, hmac, pbkdf2, getrandom, httpdate, regex, libc on unix",
+    "min_toolchain": "Rust 1.85 (async closures); HttpArena built it with rust 1.94 and -C target-cpu=native",
+    "platforms": "Linux gets one SO_REUSEPORT listener per worker; other unix and non-unix targets fall back to a single acceptor thread; Windows support is not documented",
+    "thread_safety": "Route and middleware closures are shared by all worker threads, so captured state must be thread-safe (Arc<Mutex<...>> or a pool); per-request state stays on one worker thread; panics in handlers are routed to handle_err",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The '#1 of 95' rank is HttpArena's H/1.1 framework board (flagship and emerging types, tuned entries shown); nginx, h2o and the C engines (mongoose, libreactorng, libioma) are on separate infrastructure and engine boards, and hical is experimental, so the rank beats only Drogon, Cutelyst and userver among C/C++ entries. The entry is 'tuned' because the HttpArena maintainer required that mode for sonic-rs, which is not Rust's standard serializer (PR #1547).",
+    "The json-comp lead over the C++ frameworks runs through libdeflate, a C library, at gzip level 6; mimalloc (C) is the global allocator and ring's AES-GCM is BoringSSL-derived assembly, so the json-comp and json-tls wins are not pure-Rust code paths.",
+    "Harness check: the HttpArena /async-db handler answers 200 with an empty item list whenever the Postgres pool, prepare or query fails, which would count failures as 2xx; the saved row averages 1,872 bytes per response vs 1,907-1,928 for userver, hical and actix-web, consistent with Cpeak's roughly 40-byte smaller headers, so the 320,543 req/s row does not look inflated (and async-db is reference-only in the composite).",
+    "Cpeak makes mimalloc the program's #[global_allocator] by default; an app that sets its own allocator must use default-features = false or it will not compile."
+  ],
+  "pick_this_over_siblings_when": "Pick it over actix-web when TLS JSON, connection churn (limited-conn-4096 2,118,981 vs 1,135,157 req/s) or an Express-style API matters; actix-web is ahead on plain baseline, pipelined and raw json-comp rps, supports HTTP/2 and WebSocket, and is far more mature. The raw Tokio and C# minima-sync HttpArena entries are faster but are hand-written servers, not frameworks.",
+  "verified_claims_summary": "HttpArena on a 64-core Threadripper PRO 3995WX (server on 32 cores/64 threads, load generator on the rest over loopback), best of 3 runs of 5 s: baseline-4096 2,586,588 req/s vs Drogon 2,022,710 (1.28x) and nginx 3,284,513 (0.79x); json-comp-4096 493,187 vs userver 297,311 (1.66x) and Drogon 127,466 (3.87x); json-tls-4096 1,284,103 vs nginx 1,313,755 (0.98x). Cpeak's rows were saved 2026-10-11 by its author in PR #1547 (a first run 3% higher was not saved) while the C/C++ rows come from runs between 2026-08-30 and 2026-09-11; nginx runs a custom C handler module built -O3 -march=native and Drogon an unpinned drogon:latest image.",
+  "status_note": "Very new and active (Rust port public since 2026-10-11, crate 0.3.0, MIT, 211 stars on a repo shared with the Node.js package); copyable, but 0.x with an explicit not-for-production notice, HTTP/1.1 only, and no independent users yet beyond Cododev's own products.",
+  "sources_read": [
+    "https://github.com/Cododev-Technology/cpeak",
+    "https://github.com/Cododev-Technology/cpeak/commits/main",
+    "https://github.com/Cododev-Technology/cpeak/issues?q=is%3Aissue",
+    "https://github.com/Cododev-Technology/cpeak/tree/main/rust/src/internal",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/README.md",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/README.md",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/server.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/socket.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/json.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/compression.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/tls.rs",
+    "https://raw.githubusercontent.com/Cododev-Technology/cpeak/HEAD/rust/src/internal/router.rs",
+    "https://crates.io/api/v1/crates/cpeak",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/cpeak/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/cpeak/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/cpeak/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/cpeak/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/cpeak/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/cpeak.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/userver.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/hical.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/h2o.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/cutelyst.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/mongoose.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/actix.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/content/docs/scoring/composite-score.md",
+    "https://github.com/MDA2AV/HttpArena/commits/main/frameworks/cpeak",
+    "https://github.com/MDA2AV/HttpArena/pull/1547"
+  ],
+  "confidence": 0.8
+}

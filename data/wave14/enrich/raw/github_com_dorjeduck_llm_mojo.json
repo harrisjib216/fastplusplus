@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/dorjeduck/llm.mojo",
+  "one_liner": "Single-file Mojo port of llm.c's GPT-2 CPU training loop; about 1.17x faster per step than the May-2024 train_gpt2.c with OpenMP on one M2 MacBook Pro.",
+  "what_it_does": "train_gpt2.mojo is a line-by-line Mojo port of karpathy/llm.c train_gpt2.c at commit 2d43e5b: it loads the GPT-2 124M checkpoint, trains it in fp32 on tiny_shakespeare or TinyStories (B=4, T=64, 41 steps, AdamW), evaluates validation loss and samples text. It is a standalone program, not a library: you run 'mojo train_gpt2.mojo' after preparing data and weights with llm.c's Python scripts. A test_gpt2.mojo port checks losses against the PyTorch reference, and variants/ holds two copies that swap the hand-written matmuls for MAX's linalg.matmul.",
+  "how_it_is_fast": "Every layer loop is written with Mojo's vectorize (SIMD width 4x the native fp32 width on Apple silicon, 2x elsewhere, unroll factor 4) and parallelize. The port parallelizes kernels that llm.c at 2d43e5b runs serially: encoder, layernorm, GELU, residual, attention backward, cross-entropy and the AdamW update over all 124M parameters (8 fixed chunks), while llm.c's OpenMP covers only matmul, attention forward and softmax and compiles gelu_backward in precise mode with scalar tanhf and coshf. Matmul uses the same naive loop nest as llm.c, but matmul_forward is split only over B=4 batch rows, where C's OpenMP spreads B*T=256 rows. The win is therefore plausibly more parallel coverage of the cheap layers than better matmul code; the README gives no profile.",
+  "when_to_use": [
+    "You want a readable, C-style reference of a full GPT-2 forward, backward and AdamW step in Mojo with raw pointers and manual memory management.",
+    "Studying how Mojo's vectorize and parallelize compare with C plus OpenMP on the same loop nests (Apple silicon or Linux x86-64 and aarch64).",
+    "Small-batch fp32 CPU training experiments at B=4, T=64 on GPT-2 124M where you control the Mojo toolchain version.",
+    "As a starting point for MAX-kernel experiments: variants.md reports the same program at 232 ms per step (7.44x) once forward and backward matmuls go through linalg.matmul."
+  ],
+  "when_not_to_use": [
+    "Real CPU training throughput: the naive matmul loops leave most of the speed on the table (the repo's own linalg V2 variant is 7.4x faster), and upstream llm.c has since added register tiling to matmul_forward.",
+    "GPU training: CPU only; the README points to ulmentflam/llm.mojo for CUDA and Metal kernels.",
+    "When you need bitwise agreement with llm.c or PyTorch: test.md says some logits and parameter tensors differ because vectorization reorders float sums; only the losses match within tolerance.",
+    "Long-lived production code: the author says there are no concrete plans to develop it further, it pins one exact Mojo release, and changelog.md shows a source migration at each Mojo release (24.3 through 1.0.0).",
+    "Batch size or sequence length other than the compile-time B=4, T=64 without editing the source; matmul_forward parallelism scales with B only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Mojo 1.0.0 and max 26.5.0 (for parallelize) via pixi; Python with torch, transformers, tiktoken, numpy and tqdm to produce gpt2_124M.bin, the tokenizer file and the token datasets",
+    "min_toolchain": "Mojo 1.0.0 (pinned exactly; benchmark measured on Mojo 1.0.0b2)",
+    "platforms": "osx-arm64, linux-64, linux-aarch64 (pixi.toml); CPU only",
+    "thread_safety": "not documented (single-process training program; parallelism is internal)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the comparison is not like-for-like in parallel coverage. llm.c train_gpt2.c at 2d43e5b runs AdamW, GELU, layernorm, residual, encoder, attention backward and cross-entropy backward single-threaded, while the Mojo port parallelizes all of them; the 1.17x step-time edge can come from that rather than from Mojo codegen, and Mojo's own matmul_forward uses only 4 workers.",
+    "The reported margin is unstable: the earlier README run read 1721 ms vs 1836 ms (1.07x); commit b28eb10 says it 'corrected' the OpenMP thread count label from 64 to 10, and between the two runs the C time moved 8% while the Mojo time moved 1%. One run, no repetitions, and the C compiler, flags and average method are not stated.",
+    "The M2 variant and core count are not named; OMP_NUM_THREADS=10 oversubscribes a base 8-core M2, and an even OpenMP split over mixed performance and efficiency cores can slow the C build, so the thread setting alone may explain part of the gap.",
+    "Elementwise kernels split N into N // 8 chunks and drop any remainder; harmless for GPT-2 widths (multiples of 8) but wrong for shapes where B*T*C is not a multiple of 8."
+  ],
+  "pick_this_over_siblings_when": "Pick llm.mojo over llama2.mojo, fastGPT or llama2.zig when you need the training side (backward pass and AdamW) rather than inference; those siblings only run generation and have stronger, repeatable inference comparisons against llama2.c or PyTorch.",
+  "verified_claims_summary": "On an unspecified M2 MacBook Pro, the average time of a GPT-2 124M fp32 training step (B=4, T=64, 41 steps) was 1704 ms for train_gpt2.mojo on Mojo 1.0.0b2 versus 1987 ms for llm.c's May-2024 train_gpt2.c with OpenMP at 10 threads (about 1.17x, derived from page data) and 7405 ms without OpenMP; compiler, flags and run count for the C build are not given and the author calls the figures a general comparison.",
+  "status_note": "Maintained in tracking mode (last commit 2026-10-04 fixed TinyStories shard order; Mojo 1.0.0 migration 2026-08-13 also fixed a use-after-free in checkpoint loading), MIT-licensed and small enough to copy, but the author has no plans to extend it and the benchmark numbers predate the Mojo 1.0.0 migration and rest on a baseline whose serial non-matmul kernels inflate the gap.",
+  "sources_read": [
+    "https://github.com/dorjeduck/llm.mojo",
+    "https://github.com/dorjeduck/llm.mojo/commits",
+    "https://github.com/dorjeduck/llm.mojo/issues?q=is%3Aissue",
+    "https://github.com/dorjeduck/llm.mojo/pulls?q=is%3Apr",
+    "https://github.com/dorjeduck/llm.mojo/commit/b28eb109f7512eb90566e7dd8fbdbbe37d1b5464",
+    "https://github.com/dorjeduck/llm.mojo/commit/95674f6",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/README.md",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/train_gpt2.mojo",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/variants.md",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/changelog.md",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/usage_instructions.md",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/test.md",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/pixi.toml",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/dorjeduck/llm.mojo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/karpathy/llm.c/2d43e5b/train_gpt2.c",
+    "https://raw.githubusercontent.com/karpathy/llm.c/2d43e5b/Makefile",
+    "https://raw.githubusercontent.com/karpathy/llm.c/master/train_gpt2.c"
+  ],
+  "confidence": 0.35
+}

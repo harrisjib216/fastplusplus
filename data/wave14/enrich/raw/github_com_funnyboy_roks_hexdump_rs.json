@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/funnyboy-roks/hexdump-rs",
+  "one_liner": "Single-file Rust re-implementation of hexdump -C only; about 40x faster than the system hexdump on non-repeating input.",
+  "what_it_does": "A command-line tool that prints the canonical hex+ASCII layout of hexdump -C (8-digit offset, two groups of eight hex bytes, |ASCII| column, '*' for squeezed repeats) for a file or stdin. It accepts -C (ignored, always on), -s/--skip, -n/--length and -v/--no-squeeze, and none of hexdump's other formats or its -e format-string language. It is meant as a drop-in for hexdump -C, but its output differs in several cases (see gotchas).",
+  "how_it_is_fast": "It hard-codes the one -C layout: each 16-byte block is formatted into a reused 79-byte Vec with a 16-entry hex nibble lookup table, an unrolled 8-nibble offset writer and a range check for printable bytes, then written through a BufWriter. util-linux hexdump (the likely baseline; the README does not name it) instead walks a parsed format-unit list and calls printf once per conversion (one per hex byte, one per ASCII byte via %_p, one for the address), which is what dominates its 600-700 ms on 8-10 MB inputs. The commit that moved from the README's 14x to about 40x ('Mostly remove branching') removed per-byte branches and unwrap calls from render_bytes and render_ascii.",
+  "when_to_use": [
+    "Dumping large regular files with hexdump -C layout when the system hexdump is too slow, for example tens of MB to GB of binary data piped to less or grep.",
+    "As a reference for how much a specialised formatter gains over a format-string interpreter (about 40x on random data, under 2x when nearly everything is squeezed).",
+    "Files under 4 GiB whose length is a multiple of 16 or whose tail you do not care about, where '!' and '~' showing as '.' is acceptable."
+  ],
+  "when_not_to_use": [
+    "Anywhere byte-exact hexdump -C output matters (diffs, golden files, scripts): the ASCII column, squeeze markers, offsets past 4 GiB and short final lines all differ from util-linux hexdump.",
+    "When you need -n/--length: it is silently ignored, so the whole input is dumped.",
+    "Streaming stdin from a pipe whose writes are not 16-byte aligned: each line is filled by a single read() call, so a short read prints a short line and shifts every later offset (inference from print_canonical; not tested in the repo).",
+    "Any other hexdump mode (-b, -c, -d, -o, -x, -e format strings): not implemented.",
+    "Production use: 3 commits, 0 stars, no releases or crates.io package, last commit 2023-08-15, and errors exit with status 0."
+  ],
+  "integration": {
+    "form": "crate (binary only, build from source with cargo; not published)",
+    "dependencies": "clap 4.3 (derive)",
+    "min_toolchain": "Rust 2021 edition; minimum rustc not documented",
+    "platforms": "any std target; no platform-specific code",
+    "thread_safety": "single-threaded CLI; not applicable",
+    "drop_in_for_baseline": "partial — same invocation and layout as hexdump -C for regular files under 4 GiB, but '!' and '~' print as '.', a single repeated line is dropped without the '*' marker, a final line of 9-15 bytes shows stale bytes in the hex column, offsets wrap at 4 GiB, and -n is ignored"
+  },
+  "gotchas": [
+    "Output bugs introduced by the same commit (085158f, 2023-08-15) that produced the ~40x screenshots, all absent from the initial commit: render_ascii's range b'\"'..=b'}' prints '!' (0x21) and '~' (0x7e) as '.'; the second render_bytes call passes read_count instead of read_count - 8, so a final partial line of 9-15 bytes prints the previous line's sanitised bytes (for example '2e 2e 2e 2e') where hexdump pads with spaces; the new three-state squeeze drops a single repeated line without printing '*'; and end = (i + length).max(usize::MAX) ignores -n. A Python transcription of print_canonical reproduces each case. None of these adds a fast path for the benchmarked files (full 16-byte lines are formatted the same way), so the timings stand, but no output check was run: hyperfine discards both tools' output and the tests compare only two tiny inputs.",
+    "The offset writer emits only the low 32 bits (8 nibbles), so offsets wrap to 00000000 at 4 GiB; util-linux hexdump prints the address as a long long with %08.8 (a minimum width) and keeps counting. The hex_fn test only covers values below u32::MAX.",
+    "-s/--skip allocates a zeroed Vec of the skip size and does one read() into it instead of seeking, so a large skip costs that much memory and a short read skips less than asked.",
+    "main() prints errors (missing file, broken pipe) to stderr but always exits with status 0. The README's hyperfine command names ./target/release/hexdump while the screenshots ran ./target/release/hexdump-rs, and the README text still says 14x while the description and screenshots say about 40x."
+  ],
+  "pick_this_over_siblings_when": "No other hex dumper is catalogued in this category; unlike packaged siblings such as fd or neosmart's tac, hexdump-rs is a three-commit hobby project, so treat it as a small, Apache-2.0 code sample for a fast canonical dump loop rather than a tool to install.",
+  "verified_claims_summary": "Hyperfine screenshots (-m 100, 5 warm-ups, output discarded, machine, OS and hexdump implementation not stated) show the system hexdump -C against a release build of commit 085158f: 708.6 vs 16.9 ms on 10 MB from /dev/random (42.00x), 617.1 vs 16.0 ms on a 7.8 MB semi-random .mca file (38.62x), 646.3 vs 17.1 ms on the 8.5 MiB no-squeeze.bin from test-files/filegen.py (37.86x) and 658.2 vs 338.5 ms on 1 GiB of zeros where both tools squeeze (1.94x). The gap comes from replacing a printf-per-conversion format interpreter with hard-coded formatting, not from the language.",
+  "status_note": "Abandoned hobby repo (last commit 2023-08-15, 0 stars, no release) under Apache-2.0 and small enough to read in one sitting, but its fastest version has unfixed output bugs ('!' and '~' masked, stale bytes on short final lines, missing '*' for single repeats, -n ignored, 32-bit offsets), so it is not a safe drop-in for hexdump -C.",
+  "sources_read": [
+    "https://github.com/funnyboy-roks/hexdump-rs",
+    "https://github.com/funnyboy-roks/hexdump-rs/commits",
+    "https://github.com/funnyboy-roks/hexdump-rs/commit/085158fa840388049d35d1a7d2aaa1feb8d76a99",
+    "https://github.com/funnyboy-roks/hexdump-rs/tree/main/test-files",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/Cargo.lock",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/src/cli.rs",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/src/test.rs",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/test-files/filegen.py",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/test-files/.gitignore",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/b7aad38ad7290e0ad6f0c2947effd1c381c3bdac/src/main.rs",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/img/dev-random.png",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/img/test.mca.png",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/img/no-squeeze.bin.png",
+    "https://raw.githubusercontent.com/funnyboy-roks/hexdump-rs/HEAD/img/zeros.bin.png",
+    "https://raw.githubusercontent.com/util-linux/util-linux/master/text-utils/hexdump.c",
+    "https://raw.githubusercontent.com/util-linux/util-linux/master/text-utils/hexdump-display.c",
+    "https://raw.githubusercontent.com/util-linux/util-linux/master/text-utils/hexdump-parse.c"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/enghitalo/vanilla",
+  "one_liner": "V-language HTTP/1.1 and h2c server engine on raw io_uring/epoll; about 1.31x nginx on HttpArena baseline, level with libreactorng.",
+  "what_it_does": "A V library for building HTTP servers: you register one handler that receives the raw request bytes and appends a complete raw HTTP response to a reused output buffer, returning done, close or suspend (to park on any fd, such as a Postgres socket, and resume later). It ships epoll, io_uring, poll, kqueue and IOCP backends, TLS on the epoll backend (Mbed TLS 4 with kTLS offload), HTTP/2 cleartext and WebSocket via connection takeover, zero-allocation routers, static assets with sendfile, and a native pipelining Postgres client (pg_async). It is a toolkit for writing the server in V, not a configurable server like nginx.",
+  "how_it_is_fast": "One worker per CPU, each with its own event loop and lock-free per-worker state (the epoll backend still hands accepted fds out from one central accept thread); the io_uring backend drives the ring through raw syscalls with SINGLE_ISSUER|DEFER_TASKRUN, one submit_and_wait per batch, multishot accept and recv-at-offset framing, and both backends batch pipelined responses into a single send. Requests are framed by scanning only Content-Length and Transfer-Encoding, routing reads the request line as zero-copy slices, and handlers append precomputed byte literals plus in-place integer formatting so the hot path does no heap allocation (the author's PERF_GAP_ANALYSIS.md attributes the big HttpArena gains to removing per-request allocation under V's GC).",
+  "when_to_use": [
+    "You write V and need a Linux HTTP/1.1 server near the top of HttpArena: the io_uring entry served 4,307,987 req/s at baseline-4096 (nginx with a custom C module 3,284,513; libreactorng 4,377,377; libioma 4,255,834).",
+    "Prior-knowledge h2c serving: the epoll build reached 15,623,717 req/s at baseline-h2c-256 against agensio (C++) 15,185,367, proxygen 5,881,888 and nginx 2,456,329.",
+    "Handlers that must wait on other sockets without blocking a worker, e.g. Postgres via pg_async with cross-request pipelining or upstream HTTPS calls via http1_1.upstream.",
+    "Local services that talk over unix domain sockets, with SO_PEERCRED identity checks."
+  ],
+  "when_not_to_use": [
+    "You need request validation out of the box: the core framer passes malformed field lines (obs-fold, space before colon, empty names) to every handler and never honours a client's Connection: close or HTTP/1.0 close default (open issues #311 and #310); only the conformance example validates.",
+    "TLS on io_uring, kqueue or IOCP, or HTTP/2 over TLS: TLS exists only on the epoll backend and ALPN h2 is open (#142); kqueue does not enforce timeouts or max_connections (#154).",
+    "Memory-constrained hosts: the HttpArena vanilla entries ran at about 640-990 MiB RSS versus about 100 MiB for the C entries, and a -gc none build never frees anything a handler allocates.",
+    "You need a stable toolchain: it builds against pinned V master commits, has no tagged release (v.mod 0.0.1), and HttpArena disabled its V entries on 2026-08-24 when they stopped building.",
+    "Raw scored-profile throughput is the only criterion: zix, zeemo, minima-sync, libxev and libreactorng all edge it at baseline-4096."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none on Linux for plain HTTP (raw io_uring syscalls, no liburing; links only libc and libm per the README); Mbed TLS 4.x when built with -d vanilla_tls",
+    "min_toolchain": "Recent V master (HttpArena pins V b99970bd; the README cites a pinned V master build for its upstream fixes); no tagged V version documented",
+    "platforms": "Linux (epoll, io_uring, poll), macOS (kqueue, with timeout and limit gaps), Windows (IOCP, no TLS or suspend reactor yet)",
+    "thread_safety": "One worker thread per CPU; each handler call gets its worker's own state and output buffer, so per-worker data needs no locks; state shared across workers must be synchronised by the application (the HttpArena entry guards its shared caches with a mutex)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Several HttpArena rows lean on benchmark-shaped handlers: /pipeline matches the raw prefix 'GET /pipeline ' and copies a constant response without parsing the request (the 43.7M req/s pipelined row, a reference-only profile), json-comp replays cached gzip responses per (count, m) (invalid evidence), json-tls renders item JSON prefixes once at startup, and responses carry no Date header (nginx sends one).",
+    "Part of the gap to nginx is less work per request: vanilla's framer checks only framing headers and leaves field-line validation and Connection handling to handlers (#310, #311), whereas nginx parses and validates every header.",
+    "VANILLA_WORKERS defaults to the host's online CPU count and ignores a container cpuset (the HttpArena Dockerfile overrides it with nproc); with -gc none every per-request allocation is a permanent leak, so handlers must stay allocation-free.",
+    "ServerConfig.certificates is never read, so setting it silently serves plaintext (open issue #287); use tls_config on the epoll backend."
+  ],
+  "pick_this_over_siblings_when": "Among HttpArena siblings, zix (4.44M), zeemo (4.42M), minima-sync (4.39M) and libxev (4.38M) beat vanilla's 4.31M at baseline-4096 while the raw tokio entry (4.19M) and ioxide (4.11M) trail it; pick vanilla when your code is in V and you want a batteries-included engine (kTLS, h2c, WebSocket, async Postgres) whose h2c row leads nilo (9.0M) and agensio (15.2M).",
+  "verified_claims_summary": "In HttpArena on a Threadripper PRO 3995WX with the server limited to 32 cores / 64 threads (best of three 5 s runs, load generator on the other half), vanilla's io_uring entry (V master b99970bd, -prod, so gcc -O3 -flto without -march=native) served 4.31M req/s at baseline-4096 against 3.28M for nginx 1.31.4 with a custom C module at -O3 -march=native (1.31x), 1.17x nginx on JSON over TLS, but 0.98x libreactorng and 0.89x agensio on those profiles; its json-comp lead is invalid because responses are cached.",
+  "status_note": "Very active single-maintainer MIT project (967 commits, last commit 2026-10-12, 41 stars, 71 open issues, many filed in the past week, no tagged release); the maintainer also maintains its HttpArena entries, so treat it as a fast-moving library rather than a stable dependency.",
+  "sources_read": [
+    "https://github.com/enghitalo/vanilla",
+    "https://github.com/enghitalo/vanilla/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/enghitalo/vanilla/issues/310",
+    "https://github.com/enghitalo/vanilla/issues/311",
+    "https://raw.githubusercontent.com/enghitalo/vanilla/HEAD/README.md",
+    "https://raw.githubusercontent.com/enghitalo/vanilla/HEAD/docs/PERF_GAP_ANALYSIS.md",
+    "https://raw.githubusercontent.com/enghitalo/vanilla/HEAD/v.mod",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-io_uring/main.v",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-io_uring/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-io_uring/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-io_uring/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-epoll/main.v",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/vanilla-epoll/Dockerfile",
+    "https://github.com/MDA2AV/HttpArena/commits/main/frameworks/vanilla-io_uring"
+  ],
+  "confidence": 0.66
+}

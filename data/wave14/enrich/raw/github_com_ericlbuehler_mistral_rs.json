@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/ericlbuehler/mistral.rs",
+  "one_liner": "Rust LLM inference engine on Candle whose CUDA build out-runs llama.cpp's CUDA backend on Gemma 4 prefill and decode.",
+  "what_it_does": "A full LLM inference engine written in Rust on top of Hugging Face Candle. It loads Hugging Face safetensors, GGUF files and its own prequantized UQFF files, and runs text, vision, audio and video models on CUDA, Metal or CPU. You use it through the `mistralrs` CLI (`run`, `serve`, `bench`, `tune`), an OpenAI- and Anthropic-compatible HTTP server, the `mistralrs` Python package or the Rust crate. It is a different interface from llama.cpp: it can load a GGUF file and serve an OpenAI-style API like llama-server, but it has no llama.cpp C API.",
+  "how_it_is_fast": "The GPU work runs in nvcc-compiled CUDA kernels. Attention uses a paged KV cache with FlashInfer-backed paged decode and prefill kernels, plus FlashAttention v2/v3 as Cargo features. Single-token decode steps are replayed as CUDA graphs: the benchmarked commit was on the `cuda_graphs_v1` branch, and the HEAD docs say graphs are on by default. Quantized matmuls go through `mistralrs-quant/kernels/mmq_gguf` and `mmvq_gguf`, which are adapted from llama.cpp's own ggml-cuda MMQ code (`ggml_cuda_mma` namespace, `ggml_type` enums, `MMQ_ITER_K`). MoE layers use dedicated kernels (cutlass_moe, moe_grouped, indexed_moe and a cuTile grouped GEMM). Rust is only the host and scheduling language, and the project claims no Rust-specific mechanism for the speedup.",
+  "when_to_use": [
+    "Single-request NVIDIA GPU inference of dense Gemma 4 E4B with long prompts. In the v0.8.2 report, Q8 prefill at 2,048-16,384 tokens runs 2.3-2.8x llama.cpp on B200 and H100 SXM, and decode runs about 1.2x at every depth.",
+    "DGX Spark (GB10) local inference of Gemma 4 E4B: prefill 1.38-2.11x and decode 1.09-1.10x llama.cpp at Q8 (1.10-1.11x decode at Q4).",
+    "Rust or Python applications that want an in-process engine (Python `Runner`, Rust `ModelBuilder`) or one binary that serves OpenAI and Anthropic Messages endpoints with paged attention, prefix caching and continuous batching.",
+    "Multimodal Gemma 4 (image, video and audio input) or tool-calling and agent loops, where llama.cpp would need extra glue."
+  ],
+  "when_not_to_use": [
+    "BF16 MoE serving. For Gemma 4 26B-A4B in BF16, mistral.rs prefill is 0.075-0.413x vLLM on GB10, B200 and H100 (for example 592 vs 3,879 tok/s mean on GB10), and B200 decode is 0.65-0.88x vLLM.",
+    "Short-prompt MoE prefill. 26B-A4B at 128 tokens on B200 runs at 0.771x (Q4_K_M) and 0.788x (Q8_0) of llama.cpp, H100 Q4 is a tie or a loss at the edges (0.996x prefill at 128, 0.984x decode at depth 16,384), and GB10 Q8 decode is 1.000-1.017x.",
+    "Consumer Blackwell (RTX 50, compute capability 12.0) with paged attention. Issue #2093 (open, triaged) reports Gemma 4 E4B q8_0 UQFF decoding at about 25 tok/s with paged attention vs about 128 without on an RTX 5080 under v0.8.1; the benchmark command forces `--paged-attn on`.",
+    "AMD GPUs: there is no ROCm backend, and feature request #431 has been open since 2024.",
+    "As evidence that Rust beats C++. Both sides run CUDA C++ kernels, and mistral.rs's quantized GEMMs are adapted from llama.cpp's MMQ kernels, so the gap comes from attention kernels, CUDA graphs, scheduling and harness settings, not from the language."
+  ],
+  "integration": {
+    "form": "crate workspace (git; crates.io `mistralrs` stops at 0.8.1), CLI binary with prebuilt per-GPU builds, Python package `mistralrs` 0.9.4 on PyPI",
+    "dependencies": "candle-core/candle-nn pinned to a git revision, tokio, tokenizers, hf-hub, axum, llguidance and many more; CUDA builds need the CUDA toolkit and nvcc; optional cuDNN, flash-attn, NCCL and cuTile (NVIDIA `tileiras`)",
+    "min_toolchain": "Rust 1.94 (workspace rust-version at 0.9.4; crates.io 0.8.1 declares 1.88); flash-attn needs compute capability 8.0+, flash-attn-v3 needs Hopper",
+    "platforms": "Linux CUDA (prebuilt per-GPU binaries), macOS Metal, CPU on x86-64 and aarch64, Windows CPU binaries; no ROCm",
+    "thread_safety": "The engine runs as its own loop that takes requests over a channel; the `Arc<MistralRs>` handle is shared, and concurrent requests are continuously batched",
+    "drop_in_for_baseline": "partial — it loads GGUF files and serves an OpenAI-compatible HTTP API like llama-server, but it has no llama.cpp C API, uses different CLI flags, and its benchmarked fast path uses UQFF/ISQ artifacts"
+  },
+  "gotchas": [
+    "Harness flaw found in the benchmarked bench.rs (commit 8b49f963). Prefill tok/s is the prompt length divided by the step time truncated to whole milliseconds (`Duration::as_millis`), so short prompts are overstated. The B200 E4B Q8 128-token value of 7,529.4 tok/s is exactly 128 / 17 ms, so the true figure lies between 7,111 and 7,529, and the 1.259x ratio vs llama.cpp could be as low as 1.19x. Several other rows are also exact integer-millisecond quotients (2048/58 ms, 4096/107 ms, 4096/125 ms). Decode counts 256 tokens over 255 decode steps (+0.4%), and a single 32-token warmup covers every case. HEAD has since rewritten bench.rs to use streaming TTFT measured with Instant and per-case warmups, so reruns will not match these numbers.",
+    "llama.cpp was run with only `-ngl 99 -fa 1`, which leaves llama-bench's default micro-batch in place. Its prefill flattens after 512 tokens (B200 Q8: 12,092 tok/s at 512, then 13,515-13,705 at 2,048-8,192), while mistral.rs keeps climbing to 38,280 at 4,096. The headline 2x+ long-prompt prefill gap is therefore consistent with an untuned baseline batch size and was not tested with a larger -ub. The llama.cpp rows were also copied from the 2026-05-31 sweep rather than rerun.",
+    "Quantization: on CUDA, `--quant 8` resolves to the `q8_0` UQFF shard, which uses the same Q8_0 block format as the GGUF it is compared with. `--quant 4` resolves to uniform Q4K (`IsqBits::Four`), compared against llama.cpp's mixed Q4_K_M recipe, so the Q4 rows do not compare identical weight layouts.",
+    "`cargo add mistralrs` gets 0.8.1 (2026-04-02), which predates the v0.8.2 CUDA work, because the workspace now pins Candle by git revision. Use a git dependency, the prebuilt binary or the PyPI wheel (0.9.4) for current code."
+  ],
+  "pick_this_over_siblings_when": "Pick mistral.rs over Fucina (the Zig engine that beats llama.cpp's CPU backend) when you serve on NVIDIA GPUs and want paged attention, multimodal Gemma 4 and an OpenAI-compatible server; pick Fucina for CPU-only inference from the same GGUF file. The other siblings (sorts, compilers, file tools) solve unrelated problems.",
+  "verified_claims_summary": "The first-party v0.8.2 report covers Gemma 4 E4B at Q8, mistral.rs UQFF q8_0 against llama.cpp GGUF Q8_0 (commit 751ebd17, llama-bench -ngl 99 -fa 1, CUDA). mistral.rs prefill is 1.38-2.11x on GB10 and 1.25-2.79x on B200, and decode is 1.09x and 1.21-1.26x, over 128-16,384 tokens, with each value the mean of 3 runs after 1 warmup. The llama.cpp and vLLM rows come from a sweep run a day earlier. The appendix shows mixed 26B-A4B results and mistral.rs far behind vLLM on BF16 26B-A4B prefill.",
+  "status_note": "Very active (release v0.9.4 on 2026-09-24, last commit 2026-10-01, 7.7k stars, MIT) and easy to try through prebuilt binaries or the PyPI wheel. However, the measured v0.8.2 numbers come from a side branch and a benchmark harness that has since been rewritten, so treat the speedups as first-party and approximate.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/releases/v0.8.2/report.md",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/mistralrs-cli/src/commands/bench.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-cli/src/commands/bench.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-core/src/engine/mod.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-core/src/sequence.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-cli/src/commands/serve.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-cli/src/commands/quant.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-core/src/pipeline/isq.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/8b49f96392a767ea25a08af27669999a20e8a59e/mistralrs-quant/src/lib.rs",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/mistralrs-quant/kernels/mmq_gguf/mmq_gguf.cuh",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/docs/src/content/docs/guides/perf/paged-attention.mdx",
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/HEAD/docs/src/content/docs/reference/environment-variables.md",
+    "https://github.com/EricLBuehler/mistral.rs",
+    "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-cli/src",
+    "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-quant/kernels",
+    "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-quant/kernels/mmq_gguf",
+    "https://github.com/EricLBuehler/mistral.rs/tree/master/mistralrs-paged-attn/src/cuda",
+    "https://github.com/EricLBuehler/mistral.rs/tree/master/docs",
+    "https://github.com/EricLBuehler/mistral.rs/releases",
+    "https://github.com/EricLBuehler/mistral.rs/issues?q=is%3Aissue+gemma+4+slow",
+    "https://github.com/EricLBuehler/mistral.rs/issues?q=is%3Aissue+llama.cpp+slower",
+    "https://github.com/EricLBuehler/mistral.rs/issues/2093",
+    "https://crates.io/api/v1/crates/mistralrs",
+    "https://pypi.org/pypi/mistralrs/json",
+    "https://pypi.org/pypi/mistralrs-cuda/json"
+  ],
+  "confidence": 0.72
+}

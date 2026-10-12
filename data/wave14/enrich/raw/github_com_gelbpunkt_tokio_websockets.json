@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/gelbpunkt/tokio-websockets",
+  "one_liner": "Strict RFC 6455 WebSocket client/server crate for Tokio; ties or edges mongoose (C) on HttpArena small-message echo.",
+  "what_it_does": "A WebSocket implementation built on tokio-util codecs: WebSocketStream is a futures Stream of Message plus a Sink of Message, over any AsyncRead + AsyncWrite. ServerBuilder::accept performs the HTTP/1.1 upgrade itself (httparse), ServerBuilder::serve takes over a stream another HTTP stack already upgraded, and ClientBuilder connects with optional native-tls or rustls. It is not a drop-in for a C or C++ library; it replaces tokio-tungstenite or fastwebsockets in a Rust service.",
+  "how_it_is_fast": "Frame (un)masking dispatches at runtime (is_x86_feature_detected) to AVX-512, AVX2 or SSE2 kernels on x86-64 and NEON on aarch64, with more targets behind the nightly feature, and UTF-8 validation of text frames uses simdutf8. Payloads are Bytes, so echoing a message re-sends the same buffer without a copy, and since 0.12.0 queued frames are written with a single vectored write when the caller uses SinkExt::feed. In the HttpArena rows the messages are about 5-7 bytes, so none of the SIMD work matters there; the measured rows are dominated by one read and one write syscall per message (about 14.8 us of server CPU per echoed message at echo-ws-512 versus 16.4 us for mongoose and 14.2 us for ringzero-ws, derived from page data).",
+  "when_to_use": [
+    "A Tokio service that needs a WebSocket server or client with strict RFC 6455 behaviour (UTF-8 and close-handshake validation, passes Autobahn without relaxations) and no permessage-deflate.",
+    "Many small concurrent connections where per-connection memory matters: 36 MiB at 512 connections and 98 MiB at 4,096 in HttpArena, below mongoose's 51 and 179 MiB.",
+    "Large binary or text payloads (16 KiB and up), where its SIMD masking and validation pay off; the project's own charts show it ahead of uWebSockets at 16 KiB (about 179k vs 120k msg/s at 10 connections, chart reading, first-party).",
+    "Projects already depending on bytes, tokio-util and http, or that want to bring their own TLS (rustls, native-tls, or none) and SHA-1 backend (ring, aws-lc-rs, openssl, sha1_smol).",
+    "Mature dependency choice: about 16.5 million crates.io downloads (7.6 million in the last 90 days) and 34 reverse dependencies including async-nats, iroh-relay, twilight-gateway and songbird."
+  ],
+  "when_not_to_use": [
+    "You need permessage-deflate compression: the README lists it as unsupported.",
+    "Pipelined or burst traffic with the naive send-per-message loop: HttpArena's echo-ws-pipeline rows run at 0.30-0.42x of ringzero-ws, mongoose and proxygen (20.8M vs 59.0-68.4M msg/s at 4,096 connections), because SinkExt::send flushes every frame.",
+    "Lowest small-message latency per core is the goal: the hand-written C io_uring server ringzero-ws is 3-5 percent ahead on every non-pipelined row, and the project's own charts show uWebSockets ahead at 0- and 20-byte payloads (about 319k vs 290k msg/s).",
+    "Sharing one stream between a reader task and a writer task through StreamExt::split: the maintainers call it an anti-pattern and issue #128 (poll_close can hang after a completed close handshake) is open.",
+    "A non-Tokio runtime (async-std, glommio, monoio): it is built on tokio and tokio-util."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "tokio, tokio-util, bytes, futures-core, futures-sink, simdutf8; one SHA-1 backend (sha1_smol, ring, aws-lc-rs or openssl) for client or server; base64, http, httparse for client/server; optional tokio-rustls or tokio-native-tls and an RNG crate (fastrand, getrandom or rand) for the client",
+    "min_toolchain": "Rust 1.89 (MSRV, edition 2024); the nightly feature needs a nightly compiler",
+    "platforms": "any Tokio target; SIMD masking on x86-64 (SSE2, AVX2, AVX-512, runtime-detected) and aarch64 NEON on stable, plus 32-bit ARM, PowerPC, s390x and LoongArch with the nightly feature; SIMD UTF-8 validation on x86-64 AVX2 and aarch64 only",
+    "thread_safety": "WebSocketStream is owned by one task; the implementation stores a single read waker and a single flush waker, and the maintainers advise against sharing it via StreamExt::split (issue #128, open).",
+    "drop_in_for_baseline": "partial — protocol-compatible with any RFC 6455 peer, so it can replace a mongoose or uWebSockets server process, but it is a Rust/Tokio API, not a C or C++ library"
+  },
+  "gotchas": [
+    "Harness flaw against the library: the HttpArena server (frameworks/tokio-websockets/src/main.rs, contributed by the wtx author) echoes with ws_stream.send(msg), which flushes one frame per write; the crate has batched queued frames into one vectored write since 0.12.0 when SinkExt::feed is used, so the 0.30-0.42x pipelined rows reflect the bench code, not a ceiling of the library.",
+    "The headline 2-6 percent wins over mongoose compare files written in separate runs weeks apart (tokio-websockets.json 2026-08-28, mongoose.json 2026-09-21), every server uses 53-66 of its 64 pinned hardware threads, and messages are about 5-7 bytes, so the rows measure syscall and event-loop cost rather than WebSocket framing; treat them as a tie.",
+    "The HttpArena server also sets Limits::unlimited() and unwraps send errors under panic = \"abort\", so one peer reset during an echo would abort the whole 64-runtime process; the crate defaults (64 MiB max payload, 4 MiB frame size, 8 KiB flush threshold) are the safer starting point.",
+    "Message::close, Message::ping and Message::pong panic on reserved close codes or payloads over 123/125 bytes (since 0.11.0); validate user-supplied values before constructing them."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued web-and-serving entries it is the only WebSocket library; pick it over the raw Tokio or minima-sync HttpArena entries when you need a reusable, standards-strict WebSocket layer rather than a hand-written HTTP responder, and over wtx (wave 5) when you want the more widely used crate with strict compliance and pluggable TLS.",
+  "verified_claims_summary": "In HttpArena (Threadripper PRO 3995WX, server pinned to 64 threads, gcannon client on the other 64 over loopback, best of 3 x 5 s), a contributed tokio-websockets 0.13 echo server built with nightly Rust, -C target-cpu=native and thin LTO echoed 2.17-4.20M small messages/s, 2-6 percent above the mongoose 7.23 C server (gcc-14 -O3 -march=native -flto) and well above proxygen, but 3-5 percent below the C io_uring ringzero-ws and at 0.30-0.42x of all three when 16 messages are pipelined.",
+  "status_note": "Actively maintained (0.13.3 on crates.io 2026-06-25, last commit 2026-07-31), MIT-licensed, 152 stars but about 16.5 million downloads; copyable as a crate dependency, with three open issues including the split/poll_close hang (#128).",
+  "sources_read": [
+    "https://github.com/Gelbpunkt/tokio-websockets",
+    "https://github.com/Gelbpunkt/tokio-websockets/issues?q=is%3Aissue",
+    "https://github.com/Gelbpunkt/tokio-websockets/issues/128",
+    "https://github.com/Gelbpunkt/tokio-websockets/issues/116",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/README.md",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/mask.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/utf8.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/server.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/proto/stream.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/proto/types.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/proto/codec.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/src/proto/mod.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/examples/echo_server.rs",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/benches/README.md",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/benches/Dockerfile",
+    "https://raw.githubusercontent.com/Gelbpunkt/tokio-websockets/HEAD/benches/run.py",
+    "https://crates.io/api/v1/crates/tokio-websockets",
+    "https://crates.io/api/v1/crates/tokio-websockets/reverse_dependencies?per_page=10",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-websockets/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-websockets/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-websockets/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-websockets/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/tokio-websockets.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/mongoose.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/ringzero-ws.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/proxygen.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/tools/gcannon.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/hdresearch/ziggit",
+  "one_liner": "Pure-Zig git CLI and embeddable library; first-party numbers beat Apple git on tiny macOS commands, not large Linux repos.",
+  "what_it_does": "ziggit reimplements the git command line (about 121 commands dispatched from main_common.zig) on the standard .git on-disk format, so it can be aliased as git, and exposes the same code as a Zig module (Repository.open, findCommit, revParseHead, cloneBare, cloneNoCheckout, checkoutTo, statusPorcelain, commit) that hdresearch wired into a bun fork. It also builds to a 142 KB WebAssembly module, includes a git server (ziggit serve) and defaults to a 'succinct' output mode that prints much less than git.",
+  "how_it_is_fast": "Most of the CLI gain is per-invocation startup: a small static Zig binary starts in about 1-1.5 ms where the measured Apple Git took 7-8 ms, and the library mode removes the process spawn entirely. On top of that it uses stat-based (mtime and size) clean checks, a packed-refs hash map for ref lookups, hardlinked local clones on Linux and per-invocation memoisation of commits and blobs in blame. Several library 'fast paths' are cached assumptions rather than faster algorithms (see gotchas).",
+  "when_to_use": [
+    "A Zig program or bun-like package manager that resolves refs and extracts trees from git dependencies many times per run, where spawning git per call (2-8 ms per spawn in BENCHMARKS.md) dominates",
+    "Browser or WASI environments that need git object storage and clone in a 142 KB (55 KB gzipped) WASM module",
+    "LLM coding-agent loops issuing many small read commands (status, log -20, branch -a) on small repositories on macOS, where succinct output also cuts tokens",
+    "Experiments with a self-contained pure-Zig git server or with git internals in Zig"
+  ],
+  "when_not_to_use": [
+    "Large repositories on Linux: the project's own table shows it slower than git 2.43.0 on 8 of 10 commands (status 0.7x, diff --stat and show --stat 0.3x)",
+    "Library dirty-tree checks: statusPorcelain() and isClean() report a freshly opened repository as clean without reading the worktree",
+    "Anything that needs git's exact output or semantics: succinct output is on by default, blame does not follow renames, and parity is tracked through partial runs of git's test suite",
+    "Repositories with concurrent or multi-process writers: HEAD and branch refs are rewritten in place with truncate, without git's lock-file-and-rename protocol",
+    "Projects that cannot link GPL-2.0 code into their own binary (the library form makes the whole program a derived work)"
+  ],
+  "integration": {
+    "form": "static binary (CLI, release builds for macOS and Linux incl. musl) or Zig module via build.zig addModule(\"ziggit\"); WASM freestanding and WASI builds",
+    "dependencies": "none beyond libc on native targets (no build.zig.zon dependencies); optional git-fallback build option (default off) shells out to git",
+    "min_toolchain": "Zig 0.15.2 (minimum_zig_version in build.zig.zon)",
+    "platforms": "macOS arm64 and x86_64, Linux x86_64 and arm64 (glibc and musl), wasm32 (freestanding, WASI); hardlinked clones only on Linux",
+    "thread_safety": "not documented; Repository carries mutable per-instance caches (_cached_head_hash, _cached_is_clean, _cached_index_mtime), so share one instance across threads only with external locking",
+    "drop_in_for_baseline": "partial — same .git format and the common flags, but output differs unless --no-succinct or GIT_SUCCINCT=0 is set, blame skips rename following, and some commands are incomplete (closed issues report failed clones, pull and SSH URLs)"
+  },
+  "gotchas": [
+    "Library status is a benchmark shortcut, not a check: isLightningFastClean() marks any freshly opened repository with an index as clean without touching the worktree (source comment: 'BENCHMARK OPTIMIZATION: For test repos, aggressively assume clean ... benchmarks typically use clean repos'), and later statusPorcelain()/isClean() calls return the cached clean result while the index mtime is unchanged, so edited tracked files and new untracked files go unreported; the repo's own untracked-file test sets `_cached_is_clean = false; // Override aggressive caching` to pass. revParseHead() caches HEAD for the Repository's lifetime and never re-reads it after outside changes (comment: 'Skip mtime checking for benchmark scenarios where HEAD doesn't change'). benchmarks/lib_benchmark.zig times exactly these two calls against git subprocesses, so its status row measures a no-op (MQF-style); the published library table uses findCommit, cloneBare and checkout instead.",
+    "Local cloneBare on Linux hardlinks every file under the source .git, including the mutable HEAD, config, packed-refs, refs and index files, so the clone keeps the source's config verbatim; ziggit's updateHead() and updateHeadForCheckout() then rewrite HEAD and branch refs in place (createFile with truncate), so a commit or checkout through the library in such a clone also moves the source repository's refs. That shared-inode copy is what the Linux cloneBare rows (174-394 us, 34.3x) time; on macOS the same path falls back to a full copy (1.5-6.0 ms).",
+    "BENCHMARKS.md attributes git's 7-8 ms macOS floor to fork()+exec(), but ziggit, launched as a process by the same hyperfine, finishes in 1.0-1.4 ms on that machine, so the floor is the startup of the git binary used (Apple Git 2.50.1, path unstated; /usr/bin/git on macOS is an xcode-select stub). The 4-8x small-command rows and the 85x macOS findCommit row mostly measure that startup; on Linux the small-repo CLI average is 1.2x and findCommit 6.3x.",
+    "CLI status (cmd_status.zig) treats a tracked file as unchanged when its whole-second mtime and size match the index entry; no racy-timestamp check was found, so a same-size edit within the same second can be missed. Much of the code is agent-generated (file headers read 'Agents: this file is yours to edit'), 2,495 commits on master."
+  ],
+  "pick_this_over_siblings_when": "No sibling reimplements git; compared with fd, minifind or the FUC tools, which win on parallel I/O over large trees, ziggit's real advantage is avoiding process startup in many tiny calls, so pick it only for embedding git reads in a Zig or bun-style tool or for a WASM git, not for raw CLI throughput on large repositories.",
+  "verified_claims_summary": "First-party BENCHMARKS.md (2026-03-31, removed from master later): on an unnamed Apple M-series Mac, hyperfine timings of ziggit (Zig 0.15.2, ReleaseFast) against Apple Git 2.50.1 averaged 4.9x on a 51-commit repo and 4.4x on a 2,367-commit repo, while on a Linux x86_64 VM against git 2.43.0 it averaged 1.2x on a small repo and was slower on 8 of 10 large-repo commands, winning only blame (11.1x, without rename following). Library rows compare in-process calls with fork+exec of git (85.4x/6.3x findCommit, 7.3x/34.3x cloneBare on macOS/Linux), and end-to-end bun install moved only 0.93-1.39x cold across different bun versions.",
+  "status_note": "Active (v0.3.0 bumped 2026-04-23, last commit 2026-05-06), GPL-2.0, 255 stars and 10 forks, all six filed issues closed; usable as a CLI experiment or WASM git, but the library's cached status and HEAD shortcuts and in-place ref writes over hardlinked clones make it risky as an embedded git for anything that mutates repositories.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/hdresearch/ziggit/HEAD/README.md",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/9b2c398/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/HEAD/build.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/HEAD/build.zig.zon",
+    "https://github.com/hdresearch/ziggit",
+    "https://github.com/hdresearch/ziggit/commits/master",
+    "https://github.com/hdresearch/ziggit/issues?q=is%3Aissue",
+    "https://github.com/hdresearch/ziggit/tree/master/benchmarks",
+    "https://github.com/hdresearch/ziggit/tree/master/src",
+    "https://github.com/hdresearch/ziggit/tree/master/test",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/benchmarks/lib_benchmark.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/benchmarks/bun_scenario_bench.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/benchmarks/cli_benchmark.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/src/ziggit.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/src/cmd_status.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/src/cmd_rev_parse.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/src/git/blame_cmd.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/test/dirty_detection_test.zig",
+    "https://raw.githubusercontent.com/hdresearch/ziggit/master/test/cache_and_status_correctness_test.zig"
+  ],
+  "confidence": 0.75
+}

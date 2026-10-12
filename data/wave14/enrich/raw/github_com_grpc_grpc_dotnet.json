@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/grpc/grpc-dotnet",
+  "one_liner": "Managed gRPC for ASP.NET Core; outran stock gRPC C++ async servers 1.48-1.67x on grpc_bench's 2026 unary test.",
+  "what_it_does": "The official gRPC implementation for .NET: Grpc.AspNetCore hosts gRPC services on ASP.NET Core's Kestrel HTTP/2 server with ASP.NET Core logging, DI and auth, and Grpc.Net.Client is a client built on HttpClient; Grpc.Tools generates C# stubs from .proto files. It replaced Grpc.Core (the C# wrapper over the native gRPC C core), which has been in maintenance mode since May 2021. It is wire-compatible with gRPC C++ peers, but it is not a drop-in for a C++ library: using it means writing the service in C#.",
+  "how_it_is_fast": "The whole stack is managed code with no native gRPC core: Kestrel's HTTP/2 implementation over System.IO.Pipelines with pooled buffers; the unary handler deserializes the request straight from the request body's PipeReader and, when the message length is known and compression is off, Google.Protobuf serializes the reply straight into the response PipeWriter after writing the 5-byte gRPC frame header (HttpContextSerializationContext's direct-serialization path) instead of an intermediate array. The .NET tiered JIT recompiles the hot path after the 30 s warm-up (grpc_bench set DOTNET_TieredPGO=1 for .NET 6 in Dec 2021; the 2026 .NET 9 image sets no runtime flags and builds without ReadyToRun or Native AOT). The benchmark server adds two tuning steps of its own, a singleton service and a middleware that skips per-request DI scope creation, while the C++ baseline is the untuned helloworld async completion-queue server on Debian's prebuilt libgrpc++.",
+  "when_to_use": [
+    "A .NET service exposing unary gRPC APIs where a C++ gRPC server was considered for throughput: at 1-4 server CPUs it served 84,809-136,452 req/s versus 56,669-85,485 for the three C++ servers in grpc_bench #559.",
+    "Small CPU-limited containers (1-2 CPUs) where requests per core matter more than resident memory: about 12.0 us of server CPU per request at 1 CPU versus 18.0 us for cpp_grpc_mt, and 20.5 us versus 47.4 us at 4 CPUs (derived from page data).",
+    "Teams already on ASP.NET Core that want gRPC to share its middleware, DI, authentication, logging and Kestrel configuration.",
+    "Replacing the deprecated Grpc.Core package; Grpc.Net.Client also targets net462, netstandard2.0 and netstandard2.1, so older clients can talk to the same services."
+  ],
+  "when_not_to_use": [
+    "Memory-tight deployments: 122-135 MiB per server in #559 versus 9-32 MiB for the C++ servers and 13-15 MiB for tonic and Thruster (part of that is probably the dotnet run host process, see gotchas).",
+    "Strict tail-latency budgets on one core: p99 at 1 CPU was 54.20 ms versus 21.81 ms for cpp_grpc_mt.",
+    "You want the fastest gRPC server regardless of language: in the same run rust_tonic_st (102,754), java_vertx_grpc (100,308) and rust_thruster_st (98,464) beat it at 1 CPU, and Vert.x, thruster_mt and tonic_mt at 2 CPUs.",
+    "Handlers that fail often: issue #2033 (open since Feb 2023) measured grpc-dotnet falling from 494 to 116 kops/s when unary handlers fault, below the old Grpc.Core server's 223 kops/s failure case (.NET 7).",
+    "Hosting a server outside ASP.NET Core or on .NET Framework: Grpc.AspNetCore.Server targets only net8.0, net9.0 and net10.0, and a standalone non-ASP.NET server is still an open request (#2543)."
+  ],
+  "integration": {
+    "form": "module (NuGet packages: Grpc.AspNetCore for servers, Grpc.Net.Client and Grpc.Net.ClientFactory for clients)",
+    "dependencies": "ASP.NET Core (Kestrel) for the server, Google.Protobuf, Grpc.Tools for build-time code generation from .proto files",
+    "min_toolchain": "Server: .NET 8 (Grpc.AspNetCore.Server targets net8.0, net9.0, net10.0); client: .NET Framework 4.6.2 or netstandard2.0; the repo itself builds with .NET SDK 10.0.100",
+    "platforms": "wherever ASP.NET Core runs; the README lists no platform restrictions",
+    "thread_safety": "Not documented in the README; calls are handled concurrently, so a service registered as a singleton (as the benchmark does) must be thread-safe.",
+    "drop_in_for_baseline": "partial — speaks the same gRPC wire protocol and .proto contracts as gRPC C++, so it can replace a C++ server process, but the service must be rewritten in C# and run on the .NET runtime"
+  },
+  "gotchas": [
+    "Harness asymmetry: the .NET server in grpc_bench has been maintained by grpc-dotnet's own author (JamesNK, commits 2020-2026) and uses ServiceProvidersMiddleware to bypass per-request DI scopes. Copied into an app with scoped services (an EF Core DbContext, for example), that resolves them from the root provider and shares them across concurrent calls. The C++ servers are the stock helloworld async example with one pre-posted request per completion queue on the older async API, not the callback API.",
+    "Baseline age: the C++ servers link the libgrpc++-dev of the gcc:15.2.0 image, which is Debian trixie; packages.debian.org lists 1.51.1 in bookworm and sid (search snippets only, trixie page not reachable), so the 2026 run probably compared .NET 9 with Grpc.AspNetCore 2.66.0 (2024) against a late-2022 gRPC C++ core built with distro flags.",
+    "The memory column comes from docker stats, and the image's ENTRYPOINT is 'dotnet run -c Release -p GreeterServer --no-build', which likely keeps the SDK CLI process resident next to the server, so the 122-135 MiB probably overstates the server itself.",
+    "At 3-4 CPUs the .NET server used only 256-279 percent CPU while the top seven servers cluster at 136-153k req/s, which suggests the 11-CPU ghz client caps those rows, whereas the C++ servers saturate 306-406 percent. In the client-bound third-party run (#547, 1 CPU) cpp_grpc_mt needed 14.4 us of CPU per request versus 32.4 us for dotnet_grpc (derived from page data), so the CPU-efficiency lead flips between runs."
+  ],
+  "pick_this_over_siblings_when": "Pick it over tonic or Thruster (Rust), which are faster at 1 CPU and use about a tenth of the memory, when the codebase is already .NET; it beats grpc-go at every CPU count in #559 (84,809 vs 55,667 req/s at 1 CPU, 135,948 vs 117,082 at 4). The Kestrel sibling entry is the HTTP/2 server it runs on, so much of the measured advantage belongs to Kestrel.",
+  "verified_claims_summary": "In grpc_bench run #559 (posted by the maintainer on 2026-04-22, Xeon Gold 6548N, server Docker-limited to 1-4 CPUs and 4 GiB, ghz client on 11 CPUs, 50 connections x 1000 concurrent unary complex_proto calls, 120 s after 30 s warm-up, one run per setting), the .NET 9 / Grpc.AspNetCore 2.66.0 server served 1.48-1.67x the req/s of the cpp_grpc_mt, cpp_grpc_st and cpp_asio_grpc servers, built with g++ -O3 -flto against Debian's prebuilt libgrpc++. The 2022 wiki run (.NET 6, Xeon E5-1650 v3) led only at 1 CPU and trailed by 2-4 percent at 2-3 CPUs, and a client-bound third-party run (#547, Ryzen 9 5900X) was a tie.",
+  "status_note": "Actively maintained by the gRPC project and Microsoft (Grpc.AspNetCore 2.84.0 on NuGet 2026-09-21, last commit 2026-09-17), Apache-2.0, and the recommended C# gRPC implementation; copyable as NuGet packages, with the grpc_bench image already moved to .NET 10 (PR #560) after the measured run.",
+  "sources_read": [
+    "https://github.com/grpc/grpc-dotnet",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/README.md",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/src/Grpc.AspNetCore.Server/Internal/HttpContextSerializationContext.cs",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/src/Grpc.AspNetCore.Server/Internal/PipeExtensions.cs",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/src/Grpc.AspNetCore.Server/Internal/CallHandlers/UnaryServerCallHandler.cs",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/src/Grpc.AspNetCore.Server/Grpc.AspNetCore.Server.csproj",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/src/Grpc.Net.Client/Grpc.Net.Client.csproj",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/Directory.Build.props",
+    "https://raw.githubusercontent.com/grpc/grpc-dotnet/HEAD/global.json",
+    "https://github.com/grpc/grpc-dotnet/issues?q=is%3Aissue+is%3Aopen+performance",
+    "https://github.com/grpc/grpc-dotnet/issues/2033",
+    "https://api.nuget.org/v3/registration5-semver1/grpc.aspnetcore/index.json",
+    "https://github.com/LesnyRumcajs/grpc_bench/discussions/559",
+    "https://github.com/LesnyRumcajs/grpc_bench/discussions/547",
+    "https://github.com/LesnyRumcajs/grpc_bench/commits/master/dotnet_grpc_bench",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/README.md",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/bench.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/build.sh",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/dotnet_grpc_bench/Dockerfile",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/dotnet_grpc_bench/GreeterServer/GreeterServer.csproj",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/dotnet_grpc_bench/GreeterServer/Program.cs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/dotnet_grpc_bench/GreeterServer/Services/GreeterService.cs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/dotnet_grpc_bench/GreeterServer/ServiceProvidersMiddleware.cs",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_mt_bench/main.cpp",
+    "https://raw.githubusercontent.com/LesnyRumcajs/grpc_bench/c4c93b3/cpp_grpc_mt_bench/Dockerfile",
+    "https://raw.githubusercontent.com/docker-library/gcc/master/15/Dockerfile",
+    "WebSearch: Debian trixie libgrpc++-dev package version grpc 1.51.1 (snippets of packages.debian.org bookworm and sid pages)"
+  ],
+  "confidence": 0.7
+}

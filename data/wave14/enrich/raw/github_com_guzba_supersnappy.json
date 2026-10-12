@@ -1,0 +1,56 @@
+{
+ "id": "https://github.com/guzba/supersnappy",
+ "one_liner": "Pure-Nim raw Snappy codec; its 2022 README table beats snappy-c everywhere and a libsnappy build on text, loses three files.",
+ "what_it_does": "Supersnappy implements Google's Snappy raw block format in about 360 lines of dependency-free Nim: compress and uncompress on string or seq[uint8], plus overloads that write into a caller-owned var string so buffers can be reused. The same code runs in the Nim VM, so data can be compressed at compile time and embedded in an executable (examples/compiletime.nim). It has no framing format (no streaming, no CRC32C) and no C ABI; it is for Nim programs, built with nim c, nim cpp, --cc:vcc or, since 2.1.4, emscripten.",
+ "how_it_is_fast": "It is a port of Andi Kleen's snappy-c: a multiplicative hash (0x1e35a7bd) of 4-byte windows into a uint16 table sized to the fragment (256 to 16,384 entries over 64 KiB fragments), Snappy's skip heuristic that hashes less often in incompressible runs, match extension with 64-bit XOR plus count-trailing-zeros, and literals and copies of up to 16 bytes done as two unaligned 8-byte moves. The decoder uses a 256-entry uint16 tag lookup table and an incremental 8-byte pattern copy for overlapping matches. Release builds turn off Nim's bounds and overflow checks for the whole module. Nim compiles to C, so any margin over snappy-c comes from code and wrapper differences, not the language; the README does not explain the margin.",
+ "when_to_use": [
+  "Nim programs that need raw Snappy without a C library or DLL: one MIT-licensed nimble package with no dependencies beyond std/bitops.",
+  "Baking compressed assets into a Nim executable at compile time (const x = compress(readFile(...))), which C/C++ Snappy bindings cannot do.",
+  "Text-like payloads such as the corpus's alice29, lcet10, plrabn12 and urls.10K, where the 2022 table showed round trips 1.16-1.18x shorter than the nimsnappy/libsnappy path and 1.10-1.21x shorter than snappy-c.",
+  "Hot loops that can reuse output buffers through compress(dst, src) and uncompress(dst, src); the benchmark did not use this path, so its benefit is unmeasured."
+ ],
+ "when_not_to_use": [
+  "Untrusted compressed input without your own checks: open issue #7 (2026-03-10) reports out-of-bounds reads on truncated tag trailers, and issue #8 (an attacker-chosen size prefix forces up to a 4 GiB allocation before validation) was closed by the maintainer with 'Not concerned about this.'",
+  "Incompressible or binary-heavy data: in its own table it is slower than the libsnappy path on fireworks.jpg (0.015 vs 0.011 ms), geo.protodata (0.106 vs 0.101) and paper-100k.pdf (0.041 vs 0.017, 2.4x slower), and slower than status-im/nim-snappy on fireworks.jpg and paper-100k.pdf.",
+  "If you need the Snappy framing format, streaming or CRC32C: only the raw block API exists; status-im/nim-snappy has framed and faststreams APIs, and C/C++ code should call google/snappy directly.",
+  "If you expect to beat current Google Snappy: never measured. The baseline was a prebuilt libsnappy.dll of unknown version (the nimsnappy wrapper tracks 1.1.3), and status-im/nim-snappy's README, on the same corpus, shows current C++ Snappy decompressing 1.4-2.0x faster than nim-snappy, which supersnappy beat by only 1.15-1.27x on compressible files in 2022."
+ ],
+ "integration": {
+  "form": "module (nimble package supersnappy, source only)",
+  "dependencies": "none (Nim standard library bitops)",
+  "min_toolchain": "Nim 1.0.0 per supersnappy.nimble; README lists --gc:arc, --gc:orc and the default GC; an 'update for 2.0' commit (Aug 2023) covers Nim 2.0",
+  "platforms": "any Nim backend target (C, C++, VCC; 32-bit fixed in issue #1; emscripten in 2.1.4), but the run-time path assumes little-endian byte order (not documented)",
+  "thread_safety": "not documented; compress and uncompress are funcs with no global mutable state and compress allocates its own hash table, so concurrent calls on separate buffers should be safe",
+  "drop_in_for_baseline": "partial: it writes and reads the standard raw Snappy format (tests/validate.nim round-trips against snappy-c and nim-snappy; the Google C++ check is commented out because it needs libsnappy.dll), but it is a Nim API, not a C/C++ library"
+ },
+ "gotchas": [
+  "Benchmark harness: tests/bench.nim times compress plus uncompress through each wrapper's allocating string API and never checks the output (round trips are checked only in tests/test.nim). The Google Snappy path (nimsnappy) runs snappy_validate_compressed_buffer and snappy_uncompressed_length before every uncompress, an extra pass the others skip. The snappy-c path (nimsnappyc) calls snappy_init_env/snappy_free_env on every compress, but supersnappy also allocates and zero-fills a 16,384-entry uint16 table (32 KiB) on every compress, so that cost is on both sides. One unstated machine and C compiler; the last 'update benchmarks' commit is 2022-06-12; the README still cites tests/benchmark.nim and '100 compress-uncompress cycles', while the file is tests/bench.nim and the table shows x1000 samples.",
+  "Out-of-bounds read on truncated input (issue #7, open since 2026-03-10, confirmed in src/supersnappy.nim): for long literals (len >= 61) and for COPY tags, uncompress calls read32 before checking that the 1-4 trailer bytes exist (the copy path checks only ip + 1 < srcLen), and release builds run with checks off. A truncated stream therefore reads up to 4 bytes past the input, and the reporter's truncated 5-byte input decoded to 'AA' instead of failing. tests/fuzz.nim flips one byte per run, 10,000 times, never truncates and runs without a sanitizer, so it cannot catch this.",
+  "Unbounded allocation (issue #8, closed as 'Not concerned about this.'): uncompress does dst.setLen(uncompressedLen) from the varint header (up to 4 GiB - 1) before validating the body. Check the declared length against your own limit before calling it on untrusted data.",
+  "Endianness: outside the compile-time (nimvm) branch, read32/read64 and the 2-byte copy offset use copyMem in native byte order, and trailers are masked as little-endian values, so on a big-endian host the output would not be standard Snappy. The README does not mention byte order."
+ ],
+ "pick_this_over_siblings_when": "No Snappy codec is among the catalogued siblings (zipir is a Zig DEFLATE codec for a different format). Pick supersnappy only inside Nim code that wants dependency-free raw Snappy, possibly at compile time. snap (BurntSushi/rust-snappy, filed in this category in the same wave) is the Rust counterpart and adds the frame format, and C/C++ code should call google/snappy (wave 9) directly.",
+ "verified_claims_summary": "First-party README table: nim c --gc:arc -d:release on an unstated Windows machine and C compiler, last updated in June 2022, mean compress-plus-uncompress round trip per file of the 11-file Snappy corpus over 1,000 benchy samples. Supersnappy beat snappy-c (built by the same backend compiler through nimsnappyc) on all 11 files by 1.10-1.42x. Against Google Snappy, called through nimsnappy and a prebuilt libsnappy.dll of unknown version, it won by 1.05-1.20x on 7 files, tied on html and lost on fireworks.jpg, geo.protodata and paper-100k.pdf (2.4x slower), so the README's 'better in all cases' does not hold (ratios derived from page data).",
+ "status_note": "Low-activity single-maintainer project (version 2.1.4 and the last commit on 2025-12-15, earlier commits in 2023, 94 stars, MIT) that is small enough to vendor. The open truncated-input out-of-bounds read (#7) and the size-prefix allocation the maintainer declined to fix (#8) make it unsafe for untrusted input without a wrapper, and its speed claim rests on a 2022 first-party table against an unknown libsnappy build.",
+ "sources_read": [
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/README.md",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/src/supersnappy.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/src/supersnappy/internal.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/tests/bench.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/tests/validate.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/tests/test.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/tests/fuzz.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/examples/compiletime.nim",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/supersnappy.nimble",
+  "https://raw.githubusercontent.com/guzba/supersnappy/HEAD/LICENSE",
+  "https://github.com/guzba/supersnappy/commits/master",
+  "https://github.com/guzba/supersnappy/issues?q=is%3Aissue",
+  "https://github.com/guzba/supersnappy/issues/7",
+  "https://github.com/guzba/supersnappy/issues/8",
+  "https://raw.githubusercontent.com/dfdeshom/nimsnappy/HEAD/snappy.nim",
+  "https://raw.githubusercontent.com/NimCompression/nimsnappyc/HEAD/nimsnappyc.nim",
+  "https://raw.githubusercontent.com/NimCompression/nimsnappyc/HEAD/nimsnappyc/snappyc.nim",
+  "https://raw.githubusercontent.com/status-im/nim-snappy/HEAD/README.md"
+ ],
+ "confidence": 0.75
+}

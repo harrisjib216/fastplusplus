@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/errantmind/faf",
+  "one_liner": "Minimal Linux epoll HTTP/1.1 server in unsafe Rust that tied lithium and cinatra (C++) on TechEmpower Round 22 plaintext.",
+  "what_it_does": "A roughly 200-line epoll event loop (src/epoll.rs) that you drive by calling `faf::epoll::go(port, cb)`. faf calls your callback once per parsed request with raw pointers to the method and path, a pointer into a shared response buffer and the cached Date header. The callback writes the full HTTP response bytes itself and returns the length. Request headers are skipped and bodies are not read, so it is a building block for serving fixed GET responses, not a framework and not a drop-in for lithium, cinatra or nginx.",
+  "how_it_is_fast": "It runs one thread per logical CPU, each pinned with sched_setaffinity, with its own SO_REUSEPORT listener and epoll instance. A classic-BPF SO_ATTACH_REUSEPORT_CBPF program (added April 2024) steers each connection to the listener on the CPU that received it, and each thread calls unshare(CLONE_FILES) to keep fd numbers small. All syscalls are raw inline-asm `syscall` instructions on fixed per-fd request buffers, using recvfrom/sendto with TCP_NODELAY. An SSE4.2 `_mm_cmpestri` scan finds the end of each pipelined request, and all responses for one read go out in a single sendto. epoll_wait switches to a zero timeout while events keep arriving. The TechEmpower entry adds nightly -Zbuild-std, thin LTO, codegen-units=1, panic=abort and target-cpu=native, and its handler copies a precomputed status line and header block.",
+  "when_to_use": [
+    "Studying how far a syscall-level epoll design can go: at the TechEmpower Round 22 plaintext ceiling (Xeon Gold 5120, 10 GbE) it sits in the same 0.3% band as lithium, cinatra and libreactor.",
+    "Serving one or a few fixed, small GET responses (health checks, canned pages) on dedicated Linux x86-64 boxes where you control every client and can audit about 1,000 lines of unsafe code.",
+    "As reference code for SO_REUSEPORT plus CBPF CPU steering, per-core pinned workers and batched pipelined responses that you can port into your own server."
+  ],
+  "when_not_to_use": [
+    "Anything that faces untrusted clients. See the response-buffer overflow under gotchas.",
+    "Requests with bodies, headers you need to read, TLS, HTTP/2, chunked encoding or keep-alive control: the callback only gets method and path, and the parser jumps straight to the blank line, so a POST body is parsed as the next request.",
+    "Responses larger than RES_BUFF_SIZE (4,096 bytes) or slow clients. A partial or EAGAIN sendto closes the connection with SO_LINGER 0 (a reset) instead of buffering the remainder.",
+    "Non-Linux, non-x86-64, or stable-Rust builds. It needs nightly (core_intrinsics), x86-64 Linux syscall numbers and SSE4.2, and it has not been touched since 2024-04-14.",
+    "As evidence that Rust beats C++: the plaintext top band is network-bound, and TechEmpower reclassified faf as Stripped in January 2026 (PR #10608) for hard-coding its headers, while lithium and cinatra run real frameworks."
+  ],
+  "integration": {
+    "form": "crate via git dependency only (the `faf` name on crates.io is an unrelated MIT project, Wolfe-Jam/faf 0.3.0)",
+    "dependencies": "none (libc symbols memcmp, sysconf, sched_*affinity and clock_gettime via extern \"C\"; std threads)",
+    "min_toolchain": "nightly Rust (feature core_intrinsics; the TechEmpower entry also builds std with -Zbuild-std); rustc version not pinned, no rust-toolchain file",
+    "platforms": "Linux x86-64 only (raw syscall numbers, inline asm), SSE4.2 required by the request parser",
+    "thread_safety": "One worker thread per logical CPU with no shared connection state. Shared globals are `static mut` with no synchronization: the main thread rewrites the Date buffer every second while workers copy it, and workers bump a startup counter non-atomically.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Remotely triggerable stack buffer overflow, found by reading src/epoll.rs. For each pipelined request in one recvfrom (up to 4,096 bytes), the callback receives `resbuf + response_buffer_filled_total` but no remaining-length argument, and nothing checks the running total against RES_BUFF_SIZE (4,096, a stack local). The TechEmpower callback writes 126 bytes per `GET /plaintext`, and the parser accepts a 19-byte request (`GET /plaintext \\r\\n\\r\\n`). One packet of about 215 such requests therefore writes about 27 KB into the 4 KB buffer, and any client pipelining 33 or more short requests overflows it. The README's advice that callbacks can simply avoid writing past RES_BUFF_SIZE cannot be followed under pipelining. TechEmpower's 16-deep pipelines of full-header requests stay under the limit, so the benchmark never hits it.",
+    "Request-buffer handling: a partial request is kept in place and the next read is appended after it, with no compaction. If reads keep ending mid-request, the per-connection 4,096-byte slot fills, recvfrom is called with length 0, and the connection is closed. The method scan always reads 9 bytes, and `len -= i` can underflow on a fragment shorter than the method, so the parser reads past the received bytes. Commit history shows earlier fixes in this area ('Fix rare bug related to MTU + HTTP 1.1 pipelining', 'residual fix', October 2022).",
+    "Data races by design: HTTP_DATE and NUM_WORKERS_INITED are `static mut` and shared across threads without atomics, so a Date header can be torn at a second boundary. The code comment admits that without a sleep the counter 'will never be rechecked', which is the compiler legally hoisting a racy load.",
+    "The TechEmpower entry builds faf from git HEAD (unpinned), on a personal base image errantmind/debian-faf:v3 with an unstated nightly, so the measured code depends on the run date. The CBPF steering commit (2024-04-14) post-dates Round 22."
+  ],
+  "pick_this_over_siblings_when": "Pick faf only as a reference design. For a real server, ntex or actix-web (same plaintext band or the HttpArena C++-beating rows, full HTTP and safe APIs) or a raw tokio or libxev server from the HttpArena siblings do the same job without unbounded writes. firenio and wizzardo-http share faf's 0.2% tie with lithium and cinatra on the same Round 22 screenshot.",
+  "verified_claims_summary": "In the TechEmpower Round 22 plaintext test (pipelined HTTP/1.1 over 10 GbE, Dell R440 with Xeon Gold 5120), faf placed 2nd of 486 at 7,010,014 responses/s, against cinatra (C++) at 6,998,076 (+0.17%), lithium (C++, clang -O3 -march=native with PGO) at 6,993,976 (+0.23%) and libreactor (C) at 6,971,119 (+0.56%). This is a tie at the network ceiling, measured with a handler that writes a precomputed response; the figures were read from a third-party screenshot.",
+  "status_note": "Stale since 2024-04-14 (37 commits, 186 stars, AGPL-3.0, unsolicited PRs not reviewed), and it has an unchecked response-buffer overflow, so it is copyable only as study material, not as a deployable server.",
+  "sources_read": [
+    "https://github.com/errantmind/faf",
+    "https://github.com/errantmind/faf/commits/master",
+    "https://github.com/errantmind/faf/issues?q=is%3Aissue",
+    "https://github.com/errantmind/faf/issues/1",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/README.md",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/REF.md",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/epoll.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/net.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/http_request_path.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/const_config.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/const_http.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/util.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/syscall.rs",
+    "https://raw.githubusercontent.com/errantmind/faf/HEAD/src/http_date.rs",
+    "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/HEAD/frameworks/Rust/faf/src/main.rs",
+    "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/HEAD/frameworks/Rust/faf/faf.dockerfile",
+    "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/HEAD/frameworks/Rust/faf/Cargo.toml",
+    "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/HEAD/frameworks/Rust/faf/benchmark_config.json",
+    "https://raw.githubusercontent.com/TechEmpower/FrameworkBenchmarks/HEAD/frameworks/Rust/faf/README.md",
+    "https://github.com/TechEmpower/FrameworkBenchmarks/pull/10608",
+    "https://crates.io/api/v1/crates/faf",
+    "https://crates.io/api/v1/crates/faf-syscall"
+  ],
+  "confidence": 0.76
+}

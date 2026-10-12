@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/chrispenner/wc",
+  "one_liner": "Haskell wc clone that beats single-threaded macOS wc only by splitting the file across 4 cores.",
+  "what_it_does": "A blog-post repository (the README is the article) holding about 16 successive Haskell implementations of wc's line, word and character counts, from a naive String version to multi-threaded and Streamly-based ones. It builds one executable, wc-exe, whose first argument picks the implementation (lazy, split, handle-utf, streaming, streaming-utf and others) followed by file names; it prints 'lines words chars name' like wc but has none of wc's -l/-w/-c/-m flags. It is a worked tutorial on high-performance Haskell, not a packaged library.",
+  "how_it_is_fast": "Word counting is made associative with a 'flux' monoid (leftmost char type, word count, rightmost char type; joining two chunks that meet mid-word subtracts one), so the file can be cut at arbitrary byte offsets. The fast modes fold each chunk on its own thread, either with one handle per capability seeked to disjoint offsets (forConcurrently) or with Streamly aheadly over about 1 MB arrays capped at numCapabilities threads, then mappend the chunk results. The per-byte fold uses strict, UNPACKed fields and INLINE pragmas with -O2 -funbox-strict-fields -fspec-constr-recursive=10; UTF-8 characters are counted as bytes that are not 10xxxxxx continuation bytes, with no decoding. There is no SIMD or memchr: each core is slower than wc, and the win is parallelism.",
+  "when_to_use": [
+    "Learning or teaching how to turn a sequential fold (word counting) into an associative monoid that can be split across threads or chunks.",
+    "Counting very large files already in the page cache, or on NVMe, on an otherwise idle multicore machine where wall time matters more than CPU time.",
+    "ASCII text, where byte mode and wc agree on lines, words and bytes.",
+    "As a template for a chunked parallel byte scan in Haskell with Streamly or async."
+  ],
+  "when_not_to_use": [
+    "Non-ASCII UTF-8 text in byte mode: byte 0xA0 is treated as whitespace, so word counts drift from wc (issue #4: 13,306,747 vs 13,303,065 words on enwik8); Unicode whitespace beyond ASCII is never a separator in either mode.",
+    "Single core, busy machines or CPU-budgeted jobs: single-threaded Haskell lost to macOS wc (2.73 s vs 2.06 s on 543 MB) and the 4-thread run used 4.22 s of user time, about twice wc's CPU.",
+    "Pipes and stdin: the CLI only takes file names and has no flags to pick a subset of counts, so it is not a wc drop-in.",
+    "Production use or a modern toolchain: pinned to Stack lts-14.1 and a 2019 Streamly git commit whose Streamly.Internal.* modules were later renamed; GNU wc -l and Rust tools such as cw are faster per core."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "base, bytestring, async, parallel, mtl, unix, unix-bytestring, streamly (git commit 0e98baf, internal modules); tests add hedgehog and hedgehog-classes",
+    "min_toolchain": "Stack resolver lts-14.1 (GHC 8.6 era, 2019); newer GHC/Streamly not tested",
+    "platforms": "POSIX only (System.Posix file status, fdPread); measured on macOS, issue #4 shows it running on Linux",
+    "thread_safety": "not applicable (standalone CLI); internally uses -threaded RTS with -N",
+    "drop_in_for_baseline": "partial — counts match wc on ASCII files and print in wc's order (lines, words, chars, name), but the CLI needs a mode word first, has no -l/-w/-c/-m flags or stdin, and the split modes print 'Using available cores: N' to stdout"
+  },
+  "gotchas": [
+    "Correctness fix after the numbers: byte-mode word counting (lazy, split, streaming, and the article's multicore-wc and streaming-wc) classifies bytes with bytestring's isSpaceChar8, which includes 0xA0, so UTF-8 continuation bytes such as the A0 in 'à' (C3 A0) split words (issue #4, enwik8: lazy 13,306,747 words vs wc 13,303,065). The 2019-10-18 fix (b89af48) only made countByteUTF8 skip continuation bytes; byte mode still has the bug, and the README (last edited 2019-10-16) still shows the pre-fix UTF-8 counter and was not re-measured.",
+    "Repo and article diverge: at HEAD no CLI mode matches the article's non-UTF multicore-wc row (handle-utf uses the UTF-8 counter; split/split-utf read each quarter of the file into a strict ByteString with fdPread, so peak memory is roughly the file size, not the 7 MB reported), and StreamingUTF.hs and the streaming-utf command were committed on 2019-10-18, two days after the streaming tables were published, the same day Streaming.hs switched from countByteUTF8 to countByte.",
+    "Empty input crashes: getFlux has no case for the Unknown identity, so an empty file (or an empty stream) ends in a non-exhaustive pattern error instead of printing 0 0 0.",
+    "test/Spec.hs cannot compile (uses T.pack, the rx quasiquoter and lens operators without imports or dependencies) and would only compare the String-based Simple path on short ASCII strings; the parallel and streaming modes are not tested against wc. Timings are warm-cache averages of a few runs (open issue #5 asks for hyperfine)."
+  ],
+  "pick_this_over_siblings_when": "Pick it to read a short, clear parallel monoid design in Haskell; as a tool, cw (Rust, hyperfine against FreeBSD and GNU wc) or wz is the better wc replacement, hwc shows single-threaded Haskell beating GNU wc 4-6x, and wc.apl is the same challenge against the same macOS wc.",
+  "verified_claims_summary": "On a 4-core 2013 MacBook Pro with SSD and warm disk cache (a few runs averaged, no CPU model or GHC version stated), macOS's BSD-derived wc (text_cmds-68, build unknown) took 2.07 s on a 543 MB text file versus 1.23 s for a 4-thread file-split Haskell version and 1.07 s for a Streamly version (about 1.7x and 1.9x, derived from page data); with UTF-8 counting, wc -mwl took 5.56 s versus 3.07 s and 2.67 s. Single-threaded Haskell lost (2.73 s vs 2.06 s), so the speedup is 4 threads against 1.",
+  "status_note": "Code untouched since October 2019 (the 2021 commit only added talks) and abandoned; BSD-3-Clause and small enough to vendor, but it needs porting to current Streamly and GHC, has a known word-count bug on non-ASCII text in byte mode, and is best read as a tutorial rather than used as a tool.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/README.md",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/package.yaml",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/stack.yaml",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/app/Main.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/test/Spec.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Types.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/FileSplit.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/FileSplitUTF.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/HandleSplitUTF.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Streaming.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/StreamingUTF.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Parallel.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/InlinedMonoidBSFold.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Lazy.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/LazyUTFAgnostic.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Strict.hs",
+    "https://raw.githubusercontent.com/ChrisPenner/wc/HEAD/src/Simple.hs",
+    "https://raw.githubusercontent.com/haskell/bytestring/0.10.8.2/Data/ByteString/Internal.hs",
+    "https://github.com/ChrisPenner/wc",
+    "https://github.com/ChrisPenner/wc/tree/master/src",
+    "https://github.com/ChrisPenner/wc/commits/master",
+    "https://github.com/ChrisPenner/wc/commits/master/README.md",
+    "https://github.com/ChrisPenner/wc/commit/b89af48",
+    "https://github.com/ChrisPenner/wc/commit/7a77329",
+    "https://github.com/ChrisPenner/wc/commit/22cfbb9",
+    "https://github.com/ChrisPenner/wc/issues?q=is%3Aissue",
+    "https://github.com/ChrisPenner/wc/issues/4",
+    "https://github.com/ChrisPenner/wc/issues/5",
+    "https://github.com/ChrisPenner/wc/pulls?q=is%3Apr",
+    "https://github.com/hugodro/fudd-1brc"
+  ],
+  "confidence": 0.8
+}

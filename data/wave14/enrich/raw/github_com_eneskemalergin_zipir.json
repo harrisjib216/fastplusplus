@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/eneskemalergin/zipir",
+  "one_liner": "Pure-Zig streaming gzip/zlib/raw-DEFLATE/BGZF codec in fixed memory; decodes zlib and raw DEFLATE about 1.24x faster than zlib-ng.",
+  "what_it_does": "A dependency-free Zig 0.16 library and `zipir` command for gzip, zlib, raw DEFLATE and BGZF (with .gzi indexes and seeking), plus tar listing and creation over any of them. Every decompressor is a `std.Io.Reader` and every compressor a `std.Io.Writer` over a caller-owned workspace (about 172 KB per decompressor, 429 KB per compressor, 7.7 KB for the in-memory `SliceDecoder`); nothing is allocated and no threads are started during codec work. It is not a zlib API drop-in: there are three presets (fast, even, dense, aliased to levels 1/5/9) instead of levels 0-9, and no preset dictionaries.",
+  "how_it_is_fast": "Decoding uses libdeflate-style tricks: a 64-bit bit buffer refilled branchlessly from an 8-byte little-endian load (`count |= 56`), a 10-bit (literal/length) and 9-bit (distance) first-level Huffman table with pre-decoded base and extra-bit fields and small overflow tables, and match copies done in 32-byte vector chunks for distances of 32 or more with a 289-byte output margin so the hot loop never bounds-checks per byte. Encoding uses hash chains over a 64K-entry head table with a 5-byte hash for `even`, a capped chain budget (12 probes for even, 160 for dense) with lazy matching, 32-byte SIMD match-length comparison, an entropy check that skips match search on incompressible windows, and dynamic Huffman blocks even at the fast preset. CRC-32 uses a PCLMUL fold and Adler-32 an AVX2 kernel, both chosen at run time.",
+  "when_to_use": [
+    "Zig projects that read or write gzip, zlib or raw DEFLATE and want to drop a C zlib/zlib-ng dependency without losing speed: zlib and raw DEFLATE decode measured 1.17-1.28x faster than zlib-ng 2.3.3 on 1.2-212 MB files.",
+    "Many concurrent streams under a tight memory budget: whole-process peak RSS 0.55-0.62 MiB versus 1.6-5.0 MiB for the C tools, with one fixed workspace per stream and no hidden allocation.",
+    "Bioinformatics pipelines that need BGZF with line-aligned blocks matching bgzip 1.24, .gzi indexes and virtual-offset seeking from Zig, at roughly bgzip + libdeflate speed (within about 7% on decode, 2-4% on levels 1 and 5 compression).",
+    "Decoding many small zlib or raw DEFLATE arrays held in memory (mzML-style) through `SliceDecoder`, which writes straight into your buffer with a 7.7 KB workspace.",
+    "When you want zlib-level-9-class output size at about twice zlib-ng level 9's speed (zipir dense was 1.20-3.87x faster than zlib-ng 9 with 2% smaller output in the report)."
+  ],
+  "when_not_to_use": [
+    "Maximum gzip compression throughput: ISA-L igzip beat zipir at every gzip lane (0.83x, 0.28x and 0.13x of zipir's time, with 15-22% larger output), and at a matched ratio ISA-L level 2 is about 1.1x faster than zipir fast.",
+    "Whole buffers in memory where libdeflate's one-shot API is an option: libdeflate was not timed against zipir's streaming decoders, bgzip + libdeflate decodes BGZF about 1.07x faster, and libdeflate level 7 compresses faster than zipir dense at the same ratio (54 vs 37.5 MB/s, from a separate run).",
+    "Windows targets (unsupported), or ARM64 where speed matters: only the CRC-32 kernel is accelerated there and no ARM64 or macOS speed was measured.",
+    "Code that needs the zlib C API, levels 0-9, preset dictionaries, multithreaded compression, or tar extraction; none of these exist.",
+    "Projects that need a mature, widely used codec: 0 stars, first public release 0.2.0 on 2026-09-28, one author, pre-1.0 API that changed between 0.1.2 and 0.2.0."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon)",
+    "platforms": "Linux and macOS on x86-64 and ARM64 (CI on all four); x86-64 picks PCLMUL CRC-32 and AVX2 Adler-32 at run time; Windows unsupported",
+    "thread_safety": "No shared state and no threads; one workspace per stream, each usable on its own thread; a workspace must not move while in use",
+    "drop_in_for_baseline": "partial — produces and reads standard gzip, zlib, raw DEFLATE and BGZF bytes interchangeably with zlib-ng, libdeflate and bgzip, but the API is Zig std.Io readers and writers, not the zlib C API, and compressed bytes differ from zlib-ng at the same nominal level"
+  },
+  "gotchas": [
+    "The report says every batch ran pinned to CPU 4, but that sentence is hard-coded in bench/report.py; its own Method section says zipir's compression rows came from separate zipir-only runs on CPU 13 at a working tree with uncommitted changes, spliced against peer rows timed on CPU 4 (bench/splice.py). Different Zen 2 cores boost differently under schedutil, so the compression ratios are cross-run and cross-core; a later 10-round control batch agreed within -2.1% to -0.7%. The decompression rows are matched (same batch, same core).",
+    "The 'Presets against every peer level' table, which gives the matched-ratio comparison (zipir fast 332.8 MB/s vs ISA-L level 2 371 MB/s), is also cross-run: peer levels come from separate all-level runs, zipir from the report run.",
+    "Published numbers are -Dcpu=native (AVX2) builds; release binaries are built with -Dcpu=baseline, where only the checksum kernels are dispatched at run time and the engine's 32-byte vector copies and match-length compares compile to baseline SSE2, so release-binary speed is not measured.",
+    "gzip, zlib and raw DEFLATE hand out decoded bytes before the trailer check; treat them as unverified until the reader reports end of stream (BGZF withholds a block until its CRC passes). Decoder fix b16996a (2026-09-30, stored-block and slow-path output-full handling) postdates the benchmark."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued compression siblings, crabz is a multithreaded pigz-style Rust gzip CLI and libbzip2-rs, bzip2z, snap and Supersnappy cover other formats; pick zipir when you need single-threaded DEFLATE-family streaming (including BGZF) inside a Zig program with fixed, small memory and no C dependency, and pick crabz or ISA-L when raw gzip compression throughput on many cores matters more.",
+  "verified_claims_summary": "On one Ryzen 9 3950X (Zen 2, AVX2), whole-command single-threaded runs (25 interleaved rounds, medians) of zipir built with Zig 0.16.0 ReleaseFast -Dcpu=native decoded zlib and raw DEFLATE about 1.24x faster than zlib-ng 2.3.3 (GCC 16.2.1, -O3 -march=native, native-API C adapter), tied ISA-L igzip 2.32.1 on gzip decode, and lost to bgzip + libdeflate 1.26 on BGZF decode by about 1.07x. Compression against zlib-ng at the same nominal level was 1.35x (level 1, zlib-ng output 34% larger), 1.08x (level 5) and 2.01x (level 9) faster with smaller output, but ISA-L igzip was faster at every gzip lane.",
+  "status_note": "Active single-author project (128 commits, last commit 2026-09-30, release 0.2.1), MIT-licensed, no dependencies and small enough to vendor, but 0 stars, no issues filed yet and a pre-1.0 API; the benchmark report predates 0.2.1, whose author-measured compression is a few percent slower and decompression faster.",
+  "sources_read": [
+    "https://github.com/eneskemalergin/zipir",
+    "https://github.com/eneskemalergin/zipir/commits/main",
+    "https://github.com/eneskemalergin/zipir/issues?q=is%3Aissue",
+    "https://github.com/eneskemalergin/zipir/tree/main/src",
+    "https://github.com/eneskemalergin/zipir/tree/main/src/engine",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/README.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/bench/linux-x86-avx2/README.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/bench/report.py",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/bench/splice.py",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/README.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/bench.sh",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/install.sh",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/common.sh",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/peers.tsv",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/c/zlib_adapter.c",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/zig/zipir.zig",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/src/engine/decode.zig",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/src/engine/encode.zig",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/wiki/Library-Guide.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/wiki/Formats-and-Limits.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/wiki/Platforms-and-Acceleration.md",
+    "https://github.com/eneskemalergin/zebrac",
+    "https://raw.githubusercontent.com/eneskemalergin/zebrac/HEAD/README.md",
+    "https://raw.githubusercontent.com/eneskemalergin/zebrac/HEAD/src/main.zig"
+  ],
+  "confidence": 0.72
+}

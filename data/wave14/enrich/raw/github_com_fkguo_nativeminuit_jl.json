@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/fkguo/nativeminuit.jl",
+  "one_liner": "Pure-Julia port of CERN's Minuit2 minimizer (MIGRAD, HESSE, MINOS) whose low-level MIGRAD kernel beats C++ Minuit2 6.24.0 on microsecond toy fits.",
+  "what_it_does": "NativeMinuit.jl reimplements C++ Minuit2's MIGRAD (variable-metric DFP with a numerical gradient), HESSE, MINOS, MnContours, Simplex and Scan in Julia, including bounds, fixed parameters and Strategy 0/1/2. The user-facing API copies iminuit (Minuit(fcn, x0; names, errors, limits), migrad!, hesse!, minos!, m.values) and is a drop-in for IMinuit.jl; a lower-level migrad(CostFunction(f), x0, errs) call is what the C++ comparison times. It adds Julia-only extras: ForwardDiff gradients, a threaded numerical gradient, Monte-Carlo confidence regions, MCMC and Bayesian posterior sampling, bootstrap/jackknife and multi-modal detection.",
+  "how_it_is_fast": "CostFunction{F,T} is parametric on the user function's type, so Julia compiles a specialised MIGRAD loop with the FCN call inlined, while the C++ benchmark's FCN is called through the virtual FCNBase::operator() on a std::vector<double>; the README also blames Minuit2's shared_ptr ref-counting and ABObj expression-template dispatch. The kernels work on preallocated buffers (the CHANGELOG reports the per-FCN kernels verified allocation-free), so on 2 to 10 parameter fits costing nanoseconds per call the optimizer's own overhead, which is what differs, dominates the wall time. On expensive FCNs the advantage vanishes: the README's 57-parameter fit needs 7562 vs 7446 calls, so wall time is set by the shared FCN.",
+  "when_to_use": [
+    "Julia code that fits χ² or likelihood models with Minuit semantics and wants MINOS errors and contours without a Python or ROOT dependency.",
+    "Many small fits (2 to 10 parameters, cheap FCN) in a loop, such as toy Monte Carlo studies, where per-fit optimizer overhead matters.",
+    "Fits whose FCN is generic Julia code, so ForwardDiff gradients (README: 1.6x faster migrad+HESSE than iminuit on a 3-parameter X(3872) fit) or the threaded gradient can be used.",
+    "Replacing IMinuit.jl (PyCall into iminuit) in existing Julia scripts, since Fit/ArrayFit/chisq/Data are exported aliases."
+  ],
+  "when_not_to_use": [
+    "C++ or Python callers: it needs the Julia runtime and is not callable as a C++ library; use Minuit2 or iminuit directly.",
+    "Expecting the README's 0.15x to 0.89x ratios from the iminuit-style front end: the table times the low-level migrad(cf, x0, errs) kernel, while CHANGELOG 0.7.1 puts a warm 4-parameter quadratic fit through migrad! at about 11 μs (13 or 51 μs before that fix), against 5.50 μs for C++ MnMigrad in the same README table (different runs; strategy and machine of the 11 μs figure not stated).",
+    "Expensive FCNs (milliseconds or more per call): the optimizer overhead it saves is negligible and call counts match C++ Minuit2 to about 1.6%.",
+    "Proprietary code that cannot accept LGPL-2.1-or-later obligations (it is a derivative work of Minuit2).",
+    "Short-lived processes: first-call JIT compilation is not part of the measured numbers, and CHANGELOG 0.7.1 documents a 4x build-to-build swing in warm fit time on Julia 1.12 precompile images before the fix."
+  ],
+  "integration": {
+    "form": "module (Julia package in the General registry, Pkg.add(\"NativeMinuit\"))",
+    "dependencies": "LinearAlgebra, Logging, PrecompileTools, Printf, Random, RecipesBase, Statistics; optional package extensions for ForwardDiff, Optim, AdvancedHMC (with LogDensityProblems, LogDensityProblemsAD, TransformVariables), Plots, DataFrames and Clustering",
+    "min_toolchain": "Julia 1.11 (Project.toml compat); benchmarks and the 0.7.x fixes target Julia 1.12",
+    "platforms": "any platform Julia supports (pure Julia, no compiled dependencies); published numbers are from an Apple M3",
+    "thread_safety": "NativeMinuit's own buffers are per-thread; threaded_gradient=true requires a thread-safe user FCN and checks it on first call (ThreadSafetyError); CostFunction's nfcn counters are non-atomic Refs, so one CostFunction must not be called from several threads outside the library's threaded-gradient path",
+    "drop_in_for_baseline": "partial — drop-in for IMinuit.jl and close to iminuit's API; not a replacement for C++ Minuit2 callers"
+  },
+  "gotchas": [
+    "Harness flaw: both benchmark drivers generate the gauss_ll random data inside the timed region with different generators (C++ std::mt19937_64 seeded per run plus std::normal_distribution; Julia randn on the global RNG). Measured in this session on a 2.1 GHz Xeon with g++ 13.3 -O3 and libstdc++, the C++ GaussNLLNDim(10,1000) constructor alone takes 13.2 μs median and GaussNLL(100) 1.9 μs, the same order as the README gaps (44.96 - 32.26 = 12.7 μs and 22.71 - 20.16 = 2.55 μs), so the two gauss_ll rows may mostly time random-number generation, not MIGRAD; the M3/libc++ cost was not measured.",
+    "The Julia numbers do not come from BenchmarkTools: scripts/run_perf.jl times a hand loop with time_ns, averaging 1000 back-to-back calls per sample when a probe call takes under 1 μs (quad_4d) and 10 calls up to 1 ms, after 10 discarded probe calls that absorb JIT compilation; the C++ side takes 50 single-shot std::chrono samples. The [blas] num_threads = 1 setting in perf-config.toml is never read by run_perf.jl, so 'single-threaded BLAS on both sides' is not enforced by the runner (C++ Minuit2 uses no BLAS).",
+    "The C++ timed region also builds MnUserParameters with std::string names per run, while the Julia region builds only a CostFunction; nfcn per fit is printed by the C++ driver but not recorded on the Julia side, so equal work per fit is shown only by the CHANGELOG's oracle-parity claims (Quad-4D fval to 1e-15; Rosenbrock within Strategy(0) cross-implementation variance).",
+    "The comparison is pinned to Minuit2 6.24.0 (2021) in docs/UPSTREAM.md and the table matches the 2026-05-25 0.1.0-alpha gate (max ratio 0.887x, mean 0.47x); no rerun for 0.7.x or against current ROOT Minuit2 is published."
+  ],
+  "pick_this_over_siblings_when": "No other minimizer is catalogued in this category; the Julia siblings (NonuniformFFTs.jl, Ripserer.jl, EvoTrees.jl, SymbolicUtils.jl) solve unrelated problems. Pick NativeMinuit when the job is Minuit-style fitting with MINOS errors inside Julia; for fits driven from C++ or Python, C++ Minuit2 or iminuit remain the direct choice.",
+  "verified_claims_summary": "First-party README table on an Apple M3 with Julia 1.12: one full MIGRAD at Strategy(0) through the low-level Julia migrad kernel took 0.81, 9.50, 58.11, 32.26 and 20.16 μs vs C++ Minuit2 6.24.0 MnMigrad (CMake Release, compiler unnamed) 5.50, 37.62, 156.62, 44.96 and 22.71 μs on quad_4d, rosenbrock_2d, rosenbrock_10d, gauss_ll_10_1000 and gauss_ll_2_100, about 1.1x to 6.8x faster (derived from page data); the timed regions include FCN construction and, on the gauss_ll rows, random data generation with different generators.",
+  "status_note": "Actively developed (v0.7.4 in the CHANGELOG dated 2026-10-08, 310 commits, all 7 filed issues closed, 4,400+ tests per the README) and LGPL-2.1-or-later; usable as a Julia dependency today, with the caveat that the speed claim covers the low-level kernel on tiny fits and the README notes AI coding agents helped draft the port.",
+  "sources_read": [
+    "https://github.com/fkguo/NativeMinuit.jl",
+    "https://github.com/fkguo/NativeMinuit.jl/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/README.md",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/Project.toml",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/LICENSE",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/docs/UPSTREAM.md",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/benchmark/compare_cpp.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/benchmark/bench_migrad_suite.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/benchmark/perf-config.toml",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/benchmark/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/benchmark/cpp/cpp_bench.cxx",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/scripts/run_gate.sh",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/scripts/run_perf.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/src/fcn.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/src/migrad.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/src/NativeMinuit.jl",
+    "https://raw.githubusercontent.com/fkguo/NativeMinuit.jl/main/BenchmarkExamples/RESULTS.md"
+  ],
+  "confidence": 0.7
+}
