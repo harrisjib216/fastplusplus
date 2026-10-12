@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/pyrogram/tgcrypto",
+  "one_liner": "Archived C extension for Python giving Pyrogram AES-256-IGE/CTR/CBC; replaces pure-Python pyaes, does not beat OpenSSL.",
+  "what_it_does": "A CPython/PyPy extension module with six functions (ige256_encrypt/decrypt, ctr256_encrypt/decrypt, cbc256_encrypt/decrypt) that take bytes-like data, a 32-byte key and an IV and return new bytes. It covers the three AES-256 modes Telegram uses: IGE for MTProto 2.0, CTR for CDN files and CBC for Passport credentials. The caller pads IGE and CBC input to 16 bytes, and the CTR functions keep a resumable stream position in a caller-supplied 1-byte state plus the IV buffer. Pyrogram imports it automatically when installed and otherwise falls back to pyaes, which its own warning calls 'much slower'.",
+  "how_it_is_fast": "It moves AES out of Python into C: a portable 32-bit T-table AES (Te0-Te3/Td0-Td3 lookups, rounds written out inline) with the mode loops (IGE chaining, CTR counter increment, CBC) also in C. It releases the GIL around each call. There is no AES-NI, ARMv8 Crypto or bitsliced path, so the gain is only over interpreted Python, not over OpenSSL's hardware AES.",
+  "when_to_use": [
+    "Maintaining an existing Pyrogram (or Pyrogram-fork) Telegram client on Python 3.7-3.11, where installing it replaces the pyaes fallback for MTProto IGE traffic and file transfers.",
+    "You need AES-256-IGE as a single call from Python and accept LGPL-3.0-or-later linking terms.",
+    "Platforms where prebuilt wheels exist for release 1.2.5 (Linux x86_64/i686, Windows, macOS x86_64/arm64/universal2, PyPy 3.7-3.9) and no compiler is available."
+  ],
+  "when_not_to_use": [
+    "New projects: the repository was archived on 2024-12-23 and the README says it is no longer maintained or supported; the last PyPI release is 1.2.5 from 2022-11-11 with no cp312+ or Linux aarch64 wheels.",
+    "Anything where side channels matter: T-table AES leaks key-dependent cache accesses, and the README says the implementations are 'for educational purposes only'.",
+    "Bulk AES-CTR or AES-CBC: an AES-NI backed library will be faster; the third-party aesige package (Apache-2.0, AES-NI and ARM Crypto Extensions) reports tgcrypto 2-3.2x slower than itself on 1 KB IGE calls.",
+    "Inputs of 4 GiB or more, or code that passes immutable or shared bytes objects as the CTR/CBC IV or state (see gotchas).",
+    "Big-endian hosts: the block load/store macros byte-swap unconditionally with no endianness check, and CI only builds and tests little-endian targets."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (CPython or PyPy C API); building from the sdist needs setuptools, wheel and a C compiler",
+    "min_toolchain": "Python 3.7+ (python_requires ~=3.7); wheels for CPython 3.7-3.11 and PyPy 3.7-3.9; no extra compiler flags are set in setup.py",
+    "platforms": "Little-endian targets (x86, x86-64, arm64); wheels for Linux x86_64/i686, Windows win32/amd64 and macOS x86_64/arm64/universal2; other platforms build from source",
+    "thread_safety": "Each call expands its own key on the stack and releases the GIL during the C work, so concurrent calls with separate buffers are safe; CTR and CBC calls write into the IV (and CTR state) buffers you pass, so those must not be shared between threads.",
+    "drop_in_for_baseline": "partial — it is a drop-in only for Pyrogram's own crypto layer (replacing pyaes); it is not an OpenSSL or pyca/cryptography API replacement, has no padding or AEAD, and supports only AES-256."
+  },
+  "gotchas": [
+    "Inputs of 4 GiB or more misbehave: the bindings pass the Py_ssize_t length to C functions that take uint32_t, so the C side allocates and processes length mod 2^32 bytes, while Py_BuildValue('y#', buf, data.len) then copies the full original length out of that smaller heap buffer (heap over-read or crash). malloc results are never checked for NULL either.",
+    "CTR and CBC write the updated counter, stream position and chaining IV back into the caller's buffers through read-only 'y*' views, including immutable bytes objects: the README and tests pass bytes(1) as the CTR state and rely on it being changed in place, so reusing a bytes constant as IV or state silently changes it.",
+    "Py_buffer leaks: every argument-validation error path returns without PyBuffer_Release, and ctr256_encrypt/decrypt never release the state buffer even on success, so a bytearray passed there stays export-locked (resizing it raises BufferError) and its reference is leaked.",
+    "Block input and output go through type-punned uint32_t loads and stores (GET/PUT) with an unconditional byte swap, so the code assumes a little-endian host and unaligned-access tolerance; the key is re-expanded on every call, so per-call cost dominates small messages."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued aead-and-ciphers siblings (libaegis, chacha20poly1305-simd, Mbed TLS, Botan, intel-ipsec-mb) provide AES-IGE to Python; pick TgCrypto only when you are tied to Pyrogram's IGE/CTR/CBC API, and otherwise prefer an AES-NI backed library such as Botan or Mbed TLS for the same modes.",
+  "verified_claims_summary": "Nothing was measured: the repository, README, tests and commit history contain no timings and no OpenSSL or pyaes comparison. The only numbers are the third-party aesige PyPI README (no CPU named, x86_64, 1 KB per call): tgcrypto 14.8 us decrypt and 24.3 us encrypt against aesige's AES-NI IGE at 7.4 and 7.7 us, i.e. tgcrypto is 2-3.2x slower than hardware AES; aesige's GitHub homepage now returns 404.",
+  "status_note": "Archived 2024-12-23 and declared unmaintained, LGPL-3.0-or-later, with NIST and pyca vectors for CBC and CTR run by CI on Linux and macOS (tests skipped on Windows); usable as a legacy Pyrogram accelerator, but it carries an unfixed 4 GiB length-truncation over-read, in-place mutation of immutable IV/state buffers and buffer leaks, so it should not be adopted for new code.",
+  "sources_read": [
+    "https://github.com/pyrogram/tgcrypto",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/README.md",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/setup.py",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tox.ini",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/tgcrypto.c",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/aes256.c",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/aes256.h",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/ige256.c",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/ctr256.c",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tgcrypto/cbc256.c",
+    "https://github.com/pyrogram/tgcrypto/tree/master/.github/workflows",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/.github/workflows/wheels.yml",
+    "https://github.com/pyrogram/tgcrypto/tree/master/tests",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tests/ige/test_ige.py",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tests/ctr/test_ctr.py",
+    "https://raw.githubusercontent.com/pyrogram/tgcrypto/HEAD/tests/cbc/test_cbc.py",
+    "https://github.com/pyrogram/tgcrypto/issues?q=is%3Aissue",
+    "https://pypi.org/pypi/TgCrypto/json",
+    "https://pypi.org/pypi/aesige/json",
+    "https://github.com/xGaDinc/aesige",
+    "WebSearch: tgcrypto pyaes speed benchmark Pyrogram (snippets from docs.pyrogram.org/topics/speedups and Pyrogram's crypto/aes.py fallback warning)"
+  ],
+  "confidence": 0.75
+}

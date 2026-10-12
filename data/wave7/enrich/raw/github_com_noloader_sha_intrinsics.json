@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/noloader/sha-intrinsics",
+  "one_liner": "Public-domain SHA-1/SHA-256 block functions on Intel SHA-NI and ARMv8 crypto intrinsics, plus POWER8 SHA-256/512; no measured baseline.",
+  "what_it_does": "Single-file C sources that implement only the SHA compression step: sha256_process_x86(state, data, length) and the ARM, POWER8 and SHA-1 equivalents walk whole 64-byte blocks and update a caller-owned state array. The caller sets the initial vector (SHA-224 is the same function with a different IV) and pads the final block; there is no init/update/final API. It is meant to be pasted into an existing hash implementation to replace its software block function.",
+  "how_it_is_fast": "The x86 files drive the Intel SHA extensions (_mm_sha256rnds2_epu32 and _mm_sha256msg1/msg2, two rounds per instruction) with the state kept in ABEF/CDGH register order, following Intel's and Sean Gulley's miTLS layout. The ARM files use the ARMv8 crypto instructions (vsha256hq_u32 and friends, four rounds per instruction) after a vrev32q_u8 byte swap. The POWER8 files only accelerate the sigma functions with __builtin_crypto_vshasigmaw/d and still run the rounds in vector code, which is why the README calls the POWER8 result flat.",
+  "when_to_use": [
+    "You maintain your own SHA-1 or SHA-256 (hashing loop, padding, API) and want to swap in a hardware block function for CPUs with SHA-NI (AMD Zen, Intel Goldmont and later Atoms, newer Intel Core) or ARMv8 crypto extensions.",
+    "You need public-domain code that can be vendored without a licence notice and without a build system: one .c file per algorithm and architecture.",
+    "Embedded or bootloader code on AArch64 (Cortex-A53 class) where pulling in OpenSSL or Botan is too heavy; the README's Botan run on a Cortex-A53 at 1.2 GHz reports about 599 MiB/s for SHA-256 on 1 KiB buffers.",
+    "As a readable reference for how SHA-NI and ARMv8 SHA intrinsics are sequenced when writing or reviewing your own implementation."
+  ],
+  "when_not_to_use": [
+    "You want a complete hash API: OpenSSL, Botan, Crypto++ or libsodium already ship these same code paths with runtime CPU dispatch, padding and test vectors.",
+    "SHA-384/SHA-512 on x86 or ARM: there is no hardware path here (only sha512.c in portable C and sha512-p8.cxx for POWER8); the x86 and ARM SHA-384/512 rows in the README are Botan's software code.",
+    "POWER8: the README calls its own numbers 'not that impressive' (SHA-256 250 MiB/s at 12.95 cycles/byte) and issue #5 on load/store overhead is still open.",
+    "Many messages at once (Merkle trees, proof-of-work, batch verification): multi-buffer AVX2/AVX-512 hashers process several independent messages in parallel and are not covered here.",
+    "Any CPU without the extension: the code has no fallback and executes illegal instructions there; issue #9 shows an Intel i7-10510U lacking SHA-NI."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (compiler intrinsic headers only: x86intrin.h/immintrin.h, arm_neon.h/arm_acle.h, altivec.h)",
+    "min_toolchain": "Not documented as a minimum; README results use GCC 7.3.1 and Clang 5.0.1 (x86), GCC 4.9.2 (ARM), GCC 7.2.0 (POWER8); source comments mention Visual Studio 2015 for the x86 SHA intrinsics, IBM XL C/C++ for POWER8, and g++ being needed for the ARM intrinsics with GCC 4.8.5. Flags: -msse4.1 -msha (x86), -march=armv8-a+crc+crypto (ARM), -mcpu=power8 (POWER8).",
+    "platforms": "x86 / x86-64 with SHA extensions (SHA-1, SHA-224, SHA-256); ARMv8 AArch32/AArch64 with crypto extensions, little-endian (SHA-1, SHA-224, SHA-256); POWER8 or later (SHA-256, SHA-512); portable C reference for SHA-256 and SHA-512.",
+    "thread_safety": "Not documented; the functions touch only the caller's state and input plus constant round tables (from reading the code), so separate states can be hashed concurrently.",
+    "drop_in_for_baseline": "partial — it replaces only the block function inside an existing SHA implementation; padding, length encoding, the IV, output serialization and CPU feature detection are the caller's job."
+  },
+  "gotchas": [
+    "Only whole 64-byte blocks are processed: a trailing partial block is silently ignored, and length is a uint32_t, so inputs over 4 GiB must be chunked by the caller.",
+    "No runtime dispatch: cpuid.c is a stand-alone sample that tests CPUID leaf 7 EBX bit 29; you must wire the check in yourself or the binary faults on CPUs without SHA-NI.",
+    "The built-in tests are thin: the sha256-x86.c test main hashes one padded empty block and checks only the first 8 bytes of the digest (e3b0c44298fc1c14); there are no multi-block or NIST known-answer vectors, and issue #12 asked whether SHA-1 padding is missing (closed without an answer).",
+    "The ARM code always byte-swaps with vrev32q_u8 ('Reverse for little endian'), so big-endian AArch64 is not handled; the README numbers come from Botan's adaptations (Botan's sha2_32_armv8.cpp is 'Contributed by Jeffrey Walton', its x86 file credits Sean Gulley's code), not from timing these files directly."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sha2-with-c-intrinsic (AWS) when you want public-domain single files with an ARMv8 path and no build system; pick AWS's code when you need measured numbers against OpenSSL or AVX/AVX2 SHA-512. For many independent messages, Intel ISA-L Crypto multi-buffer or hashtree are the better fit.",
+  "verified_claims_summary": "The README only quotes Botan 'speed --msec=3000' runs on 1024-byte buffers with Botan using these code paths: SHA-256 at 445.7 MiB/s (3.64 cycles/byte, GCC 7.3.1) and 447.7 MiB/s (Clang 5.0.1) on a Celeron J3455 (Goldmont), 599.5 MiB/s on a Kirin 620 Cortex-A53 at 1.2 GHz (GCC 4.9.2), and 250.4 MiB/s (12.95 cycles/byte) on POWER8 at 3.4 GHz (GCC 7.2.0). No portable-C, OpenSSL or software-Botan row was measured, so no speedup can be stated.",
+  "status_note": "Effectively frozen since April 2018 (the January 2026 commits merged and then reverted a variable rename), with 2 open issues and 1 open PR; it is small, dependency-free and public domain by file-header dedication (no LICENSE file, no patent grant, derived from Intel, miTLS, ARM and mbedTLS code), so it is easy to vendor but you own the testing.",
+  "sources_read": [
+    "https://github.com/noloader/SHA-Intrinsics",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/README.md",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha256-x86.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha256-arm.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha256.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha256-p8.cxx",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha1-x86.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha1-arm.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/cpuid.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha512-x86.c",
+    "https://raw.githubusercontent.com/noloader/SHA-Intrinsics/HEAD/sha512-arm.c",
+    "https://github.com/noloader/SHA-Intrinsics/issues?q=is%3Aissue",
+    "https://github.com/noloader/SHA-Intrinsics/issues/5",
+    "https://github.com/noloader/SHA-Intrinsics/issues/6",
+    "https://github.com/noloader/SHA-Intrinsics/issues/9",
+    "https://github.com/noloader/SHA-Intrinsics/issues/12",
+    "https://raw.githubusercontent.com/randombit/botan/release-2/src/lib/hash/sha2_32/sha2_32_x86/sha2_32_x86.cpp",
+    "https://raw.githubusercontent.com/randombit/botan/release-2/src/lib/hash/sha2_32/sha2_32_armv8/sha2_32_armv8.cpp"
+  ],
+  "confidence": 0.75
+}
