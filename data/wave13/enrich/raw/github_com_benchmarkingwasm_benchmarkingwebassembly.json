@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/benchmarkingwasm/benchmarkingwebassembly",
+  "one_liner": "IMC 2021 study artifact timing Cheerp-compiled WebAssembly against Cheerp-compiled JavaScript on PolyBenchC and CHStone in three browsers.",
+  "what_it_does": "A measurement study, not a library: it ships PolyBenchC 4.2.1 and CHStone sources patched for Cheerp 2.0, the Cheerp-generated .js files and .wasm modules plus loaders for five input sizes and five optimization levels, Python scripts that print the compile commands, a Selenium driver (auto.py) and the result CSVs behind the paper's figures. Each benchmark is run by pointing a one-line test.html at either the .js file or the WebAssembly loader and reading a time from the browser console. There is no API to adopt; the reusable parts are the Cheerp-compatible benchmark sources and the dataset tables.",
+  "how_it_is_fast": "Nothing in the repo is a speed technique; the WebAssembly-over-JavaScript gap it reports comes from the engines. WebAssembly modules are compiled ahead of execution (Liftoff/TurboFan in Chrome, Baseline/Ion in Firefox) and use typed linear memory, while the Cheerp JavaScript output starts in the engine's interpreter and must warm up its JIT in a single cold run, which dominates the extra-small and small inputs where the 26.99x and 8.22x averages come from. At medium and larger inputs the warm-up share vanishes and the two converge or JavaScript wins (18 of 41 benchmarks at medium; gemm LARGE in input_size.csv is 1,499 ms JS vs 4,789 ms WASM).",
+  "when_to_use": [
+    "Citing evidence that WebAssembly's lead over JavaScript depends heavily on input size and is largest for short, cold, run-once kernels.",
+    "Needing PolyBenchC or CHStone sources already patched to compile under Cheerp (malloc instead of posix_memalign, calloc-free timer init) as a starting point for your own browser benchmarks.",
+    "Comparing browser engines' relative WebAssembly vs JavaScript behaviour circa Chrome 79, Firefox 71 and Edge 79, desktop and mobile, from the raw CSVs.",
+    "Looking for input-size tables (input_size.md) mapping PolyBench MINI..EXTRALARGE and CHStone sizes to concrete dimensions."
+  ],
+  "when_not_to_use": [
+    "Choosing a WebAssembly library for production: there is nothing to link, and the repo has no license, so the patched sources cannot be reused legally.",
+    "Judging hand-written or modern JavaScript: the baseline is Cheerp 2.0's machine-generated JS, and the engines are from late 2019.",
+    "Reproducing the published numbers from compiled_benchmarks as shipped: the WebAssembly loaders stop the timer before the module even runs (see gotchas).",
+    "Drawing peak-memory conclusions: the memory columns are post-run heap snapshots, not peak usage.",
+    "Expecting maintenance: last commit 2021-05-28, 3 stars, 24 commits, no releases."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Cheerp 2.0 toolchain (/opt/cheerp/bin/clang), Python 2.7 for the compile scripts and SimpleHTTPServer; for auto.py Python 3.7+, Selenium, a matching chromedriver and the Windows-only wmi module",
+    "min_toolchain": "Cheerp 2.0; Chrome 79, Firefox 71, Edge 79 as tested",
+    "platforms": "any browser with WebAssembly; auto.py runs only on Windows with Chrome",
+    "thread_safety": "not applicable (single-threaded benchmark programs)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the shipped artifact: every compiled_benchmarks/*_load.js (File Ver 200531 2200; checked 3mm and covariance at all five sizes and CHStone dfsin XXXL) starts t0, calls fetchBuffer(...).then(WebAssembly.instantiate).then(... i.exports.bX()), then takes t1 = performance.now() synchronously and logs (t1-t0)/1000. The fetch, compilation, instantiation and the benchmark's main all run in later promise callbacks, so the logged WebAssembly time excludes the benchmark entirely, while the .js files call main synchronously before t1. The repo's CSVs scale with kernel cost (gesummv medium 0.0005 s vs 3mm 0.15 s), so the published data were not produced by these loaders, and the repo does not document what scope the published WebAssembly times covered.",
+    "Asymmetric scope even in the best case: the JavaScript time covers the whole script from its first statement in one cold page load per run (init_array, interpreter and JIT warm-up, kernel), and the PolyBench C timer calls (polybench_start/stop_instruments) are commented out in the modified sources although the README still compiles with -DPOLYBENCH_TIME. The 26.99x extra-small average is mostly JavaScript warm-up on microsecond kernels (gesummv MINI: 0.229 ms JS vs 0.008 ms WASM).",
+    "Memory figures are heap snapshots taken after the program finished: JavaScript reads 877-889 KB at every size, including covariance EXTRALARGE whose arrays alone exceed 100 MB, because the typed arrays were already garbage-collected, while WebAssembly linear memory never shrinks. The '3.39-6.20x more memory' claim compares retained memory after the run, not peak use.",
+    "auto.py counts failed runs: a ReferenceError run is stored as -1 and included in the average (sum over non-zero entries divided by their count), it sleeps a fixed 1 s and parses only the first console message, and it is hard-wired to the MEDIUM -O2 files and to Windows process killing via wmi."
+  ],
+  "pick_this_over_siblings_when": "Pick this when you need a cross-browser, input-size-swept study of WebAssembly versus compiler-generated JavaScript rather than a component; for a usable component with a JS-backend comparison the TensorFlow.js WebAssembly backend is the catalogued choice, and iswasmfast is the smaller hands-on micro-benchmark that also includes a native N-API addon.",
+  "verified_claims_summary": "The README (abstract of the IMC 2021 paper, DOI 10.1145/3487552.3487827) reports Cheerp 2.0 WebAssembly averaging 26.99x and 8.22x faster than Cheerp's JavaScript output on 41 PolyBenchC and CHStone programs at extra-small and small inputs, with 18 of 41 slower at medium input, in Chrome 79, Firefox 71 and Edge 79 on unstated desktop and mobile hardware, 5 cold runs averaged; the small-input gap is dominated by JavaScript warm-up, and the shipped WebAssembly loaders cannot reproduce the timings because they stop the clock before the module runs.",
+  "status_note": "Abandoned study artifact (last commit 2021-05-28, 3 stars) with no license, so reference only; its data and figures are useful context, but treat the speedups as cold-start, compiler-generated-JS results and do not reuse the shipped loaders for timing.",
+  "sources_read": [
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly",
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly/commits/master",
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly/tree/master/test_results",
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly/tree/master/modified_benchmarks",
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly/tree/master/compiled_benchmarks",
+    "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly/tree/master/other_benchmarks",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/README.md",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/input_size.md",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/auto.py",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/test_results/input_size.csv",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/test_results/browser_desktop.csv",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/test_results/opt_level_JS_WASM.csv",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/3mm_-DMINI_DATASET_O2.js",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/3mm_-DMINI_DATASET_O2_load.js",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/3mm_-DLARGE_DATASET_O2_load.js",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/covariance_-DEXTRALARGE_DATASET_O2_load.js",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/dfsin_-DXXXL_DATASET_O2_load.js",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compiled_benchmarks/server.py",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/modified_benchmarks/polybench-c-4.2.1-beta/utilities/polybench.c",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/modified_benchmarks/polybench-c-4.2.1-beta/utilities/polybench.h",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/modified_benchmarks/polybench-c-4.2.1-beta/linear-algebra/kernels/3mm/3mm.c",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/modified_benchmarks/polybench-c-4.2.1-beta/datamining/covariance/covariance.c",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compilation_scripts/poly.py",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compilation_scripts/poly2.py",
+    "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/compilation_scripts/chs.py"
+  ],
+  "confidence": 0.75
+}

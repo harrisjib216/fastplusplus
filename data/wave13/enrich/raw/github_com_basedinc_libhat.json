@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/basedinc/libhat",
+  "one_liner": "C++20 SIMD byte-signature scanner (IDA-style wildcards and bitmasks) that outruns std::search over masked pattern elements.",
+  "what_it_does": "Finds IDA-style byte signatures such as \"48 8D 05 ? ? ? ? E8\" (whole-byte wildcards and per-nibble or per-bit masks) in a contiguous std::byte range, a span, or a named section of a loaded module. The API is hat::find_pattern / hat::find_all_pattern returning a scan_result with read/rel helpers for RIP-relative operands; signatures are parsed at compile time (compile_signature, _sig UDL) or at run time (parse_signature). It also ships game-hacking helpers (module and section lookup, RAII memory_protector, member_at) and C, Java, Python and C# bindings. It is not a drop-in for std::search: it takes a signature object instead of a needle iterator pair.",
+  "how_it_is_fast": "The SIMD paths (SSE4.1, AVX2, AVX-512BW, Neon, picked at run time via cpuid unless compiled in) choose an anchor pair of two adjacent fully masked bytes, compare each aligned 32-byte block against both broadcast anchor bytes with vpcmpeqb, AND the two movemasks (shifted by one), and only then verify each candidate with a single unaligned 32-byte load, XOR and vptest against the signature's value and mask vectors (patterns of at most 32 bytes for AVX2; longer ones verify with std::equal). The anchor pair is chosen to avoid bytes repeated in the pattern, or, with scan_hint::x86_64 or aarch64, from a 512-entry pair-frequency table so that rare opcode pairs gate the expensive verify step; scan_alignment::X4/X16 masks out candidates at unaligned offsets. This is the generic 'SIMD-friendly substring search' anchor-filter idea applied to masked byte patterns.",
+  "when_to_use": [
+    "Locating functions or data in a loaded executable or DLL by byte signature with wildcards (game modding, instrumentation, hooking), where the pattern has at least two consecutive fully specified bytes.",
+    "Scanning hundreds of MiB of x86-64 or AArch64 machine code: pass scan_hint::x86_64/aarch64 and, for function starts, scan_alignment::X16 (README Chromium table: 6.09 GiB/s unhinted vs 18.6-22.9 GiB/s hinted or aligned).",
+    "Replacing hand-rolled UnknownCheats-style scanners (the csgosimple and learn_more rows run at 0.96-2.3 GiB/s in the same harness) or a std::search over a masked element type.",
+    "C++20 projects on Windows, Linux, macOS or Android that can link a small static library (or use the C bindings for dynamic linking)."
+  ],
+  "when_not_to_use": [
+    "Plain substring search without wildcards: memchr/memmem or a vectorised std::find + compare is already fast; libhat's own std::find + std::equal row reached 20.6 GiB/s at 4 MiB and 13.2 GiB/s at 256 MiB in the July 2026 README, so the margin there is about 2.8x and 1.75x, not 19x.",
+    "Patterns with no fully specified byte: they fall back to the scalar Single path, and the README warns of 'significant performance degradation'; patterns without two adjacent full bytes lose the pair filter.",
+    "Machine code with common anchor bytes and no scan hint: candidate verification dominates and throughput fell to 6.09 GiB/s on chrome.dll in the README's (older) table.",
+    "Pre-C++20 toolchains or projects that need a header-only drop-in: libhat is a CMake static library (CMake 3.23+, cxx_std_20).",
+    "Code where anti-cheat or licence terms of the target program forbid memory scanning: the library's purpose is user-space game hacking."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time (Google Benchmark and a test framework only for the optional tests/benchmarks); C bindings can be built as static or shared libhat_c",
+    "min_toolchain": "C++20, CMake 3.23+; README benchmark used clang-cl 22.1.1 with MSVC 14.51; optional C++20 module target",
+    "platforms": "Windows, Linux, macOS, Android; x86 and x86-64 (SSE4.1/AVX2 runtime-detected, AVX-512BW on x86-64), ARM/AArch64 (Neon); portable scalar fallback elsewhere",
+    "thread_safety": "not documented; from source, find_pattern builds a fresh scan_context per call (the Single mode's self-reordering anchor list lives in that per-call context), so concurrent scans of read-only memory share no mutable state",
+    "drop_in_for_baseline": "partial: replaces std::search over a byte range for signature lookups, but takes a hat::signature/signature_view instead of a needle iterator pair and returns a scan_result rather than an iterator (nullptr when absent)"
+  },
+  "gotchas": [
+    "Baseline selection in the README: the headline table compares against libhat's scan_mode::Search fallback, std::search over hat::signature_element whose operator== does (byte & mask) == value, so no vectorised or memcmp-style STL path can apply. The README before PR #46 (commit bf17bf1, July 2026) also published BM_Throughput_std_find_std_equal (libhat's Single mode: MSVC std::find with std::execution::unseq on the anchor byte plus std::equal) at 20.6418 GiB/s at 4 MiB and 13.1721 GiB/s at 256 MiB against libhat 58.2888 and 22.9961 GiB/s (about 2.8x and 1.75x, derived from page data); PR #46 dropped that row, keeping only the 2.9 GiB/s std::search row.",
+    "README labels do not match the current harness: test/benchmark/Compare.cpp now registers every libhat X1 unhinted mode (Auto, Search, Single, SSE, AVX2; AVX-512 and Neon skip on an i7-14700K) as libhat+<Mode>+X1, so a run prints Auto, Single and SSE rows the README omits and names the two published rows libhat+AVX2+X1 and libhat+Search+X1. The Chromium table (BM_find, BM_UC1 ...) was not re-run in PR #46: its names and its 18-byte DllMain pattern come from the older Chromium.cpp, while the current file scans a 20-byte pattern through the scanner registry.",
+    "Throughput in the Chromium benchmark counts only the bytes before the first match (result - buf.data()), and the synthetic benchmark's random buffer makes an anchor-pair hit a 1-in-65536 event, so both tables show the filter at its best; dense candidate streams cost a 32-byte verify each.",
+    "find_pattern is noexcept but the Single fallback allocates its anchor list with make_unique per call; an allocation failure there terminates. Declarations in detail or experimental namespaces (scan_mode, scan_context, find_vtable) are outside the semver guarantee."
+  ],
+  "pick_this_over_siblings_when": "Pick libhat over memchr (Rust crate) or vectorized_find when the needle has wildcards or bitmasked bytes and you are in C++ scanning loaded modules; for exact-byte substring or single-value search those siblings (or a vectorised std::find) are the simpler choice and libhat's advantage shrinks.",
+  "verified_claims_summary": "README table (PR #46, 2026-10-10): clang-cl 22.1.1 with the MSVC 14.51.36231 toolchain at /O2, i7-14700K with DDR5-6000, Google Benchmark real time, one thread, a 9-byte pattern that never matches in a seeded random buffer: libhat AVX2 55.11 GiB/s at 4 MiB and 23.34 GiB/s at 256 MiB versus libhat's own std::search fallback over masked signature elements at 2.90 GiB/s (about 19x and 8.1x, derived from page data). Against the STL-built std::find + std::equal path the July 2026 README showed about 2.8x (4 MiB) and 1.75x (256 MiB).",
+  "status_note": "Actively developed (468 commits, PR #46 merged 2026-10-10, v0.11.1 in README, vcpkg and xmake packages), MIT-licensed and easy to link; the headline 19x is against a deliberately generic masked std::search, and the README no longer shows the faster std::find + std::equal row it published in July 2026 (about 2.8x and 1.75x behind libhat), so expect single-digit gains over a vectorised STL anchor search.",
+  "sources_read": [
+    "https://github.com/BasedInc/libhat",
+    "https://github.com/BasedInc/libhat/tree/master/src",
+    "https://github.com/BasedInc/libhat/tree/master/src/scanner",
+    "https://github.com/BasedInc/libhat/pull/46",
+    "https://github.com/BasedInc/libhat/commits/master/README.md",
+    "https://github.com/BasedInc/libhat/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/README.md",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/Compare.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/Chromium.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/scanner/scanner.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/test/benchmark/scanner/libhat.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/include/libhat/scanner.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/include/libhat/signature.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/include/libhat/defines.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/scanner/avx2.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/scanner/simd.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/scanner/single.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/scanner/scanner.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/scanner/scan_context.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/utils.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/src/utils.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/BasedInc/libhat/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/BasedInc/libhat/bf17bf1/README.md",
+    "https://raw.githubusercontent.com/BasedInc/libhat/bf17bf1/test/benchmark/Compare.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/bf17bf1/test/benchmark/Chromium.cpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/bf17bf1/include/libhat/scanner.hpp",
+    "https://raw.githubusercontent.com/BasedInc/libhat/bf17bf1/src/Scanner.cpp"
+  ],
+  "confidence": 0.85
+}

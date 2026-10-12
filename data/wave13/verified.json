@@ -8230,7 +8230,7 @@
     "stars_or_usage": "2.1k stars; widely imported Go module",
     "has_code": true,
     "tradeoffs": "Assembly only on amd64 and arm64 (purego fallback elsewhere); XXH64 only, no XXH3.",
-    "caveats": "Baseline is the package's own pure-Go code (purego build tag), not C xxHash or any Go standard-library hash. The assembly is slower for 4-byte inputs (1.2 vs 1.3 GB/s) and the gain is about 1.2x at 16-100 B and 1.4x at 4 KB and above (derived from page data). Only amd64 numbers are published (Xeon Platinum 8252C); the arm64 assembly has no numbers. The README claim 'much faster than anything in the Go standard library' has no figures. Table last refreshed in the 2022-12-04 commit 'Update README for arm64 asm; latest benchmarks' with Go 1.19.2; newer Go compilers may narrow the gap. The benchmark discards Sum64's result, which is safe here because the assembly call cannot be eliminated and the pure-Go Sum64 is too large to inline.",
+    "caveats": "Baseline is the package's own pure-Go code (purego build tag), not C xxHash or any Go standard-library hash. The assembly is slower for 4-byte inputs (1.2 vs 1.3 GB/s) and the gain is about 1.2x at 16-100 B and 1.4x at 4 KB and above (derived from page data). Only amd64 numbers are published (Xeon Platinum 8252C); the arm64 assembly has no numbers. The README claim 'much faster than anything in the Go standard library' has no figures. Table last refreshed in the 2022-12-04 commit 'Update README for arm64 asm; latest benchmarks' with Go 1.19.2; newer Go compilers may narrow the gap. The benchmark discards Sum64's result, which is safe here because the assembly call cannot be eliminated and the pure-Go Sum64 is too large to inline. [retier] Fixed-size fixed-content inputs; gain shrinks to about 1.1x on Go 1.22 per issue #44; maintainer considering removal of the amd64 asm; AVX-512 PR #79 unmerged",
     "found_via": [
       "Independent benchmark suites and blogs (shootouts): recall of Go packages shipping hand-written assembly with purego comparison; opened github.com/cespare/xxhash README (raw.githubusercontent.com), xxhash_amd64.s and commits page",
       "Not from a paper search: Go assembly projects with a stdlib or pure-Go baseline, checked on github.com (README read) after the paper searches yielded few C/C++ artifacts"
@@ -11326,7 +11326,7 @@
     "baseline_in_list": true,
     "metric": "throughput",
     "workload": "Single-threaded search for a 9-byte pattern (01 02 .. 09) that never matches in a seeded random buffer of 4 MiB to 256 MiB, Google Benchmark, real time, 4 s minimum per run, libhat AVX2 scanner without scan hints.",
-    "claimed_speedup": "libhat+AVX2 55.1129 GiB/s at 4 MiB and 23.3351 GiB/s at 256 MiB versus std::search 2.89578 GiB/s and 2.89598 GiB/s (about 19x and about 8.1x, derived from page data); the two other pattern scanners in the table reach 2.29 GiB/s (csgosimple) and about 0.96 GiB/s (learn_more).",
+    "claimed_speedup": "libhat+AVX2 55.1129 GiB/s at 4 MiB and 23.3351 GiB/s at 256 MiB versus the README's std::search row (libhat's own scalar masked fallback, 2.89578 GiB/s); against the MSVC std::find(unseq) plus std::equal row shown before PR #46 (20.6418 and 13.1721 GiB/s) the gain is about 2.8x and 1.75x (derived from page data)",
     "evidence_tier": "A",
     "benchmark_url": "https://github.com/BasedInc/libhat#benchmarks",
     "baseline_stdlib": [
@@ -11343,7 +11343,7 @@
     "stars_or_usage": "148 stars; vcpkg port 'libhat' in the vcpkg ports list",
     "has_code": true,
     "tradeoffs": "Scanner needs SSE4.1 or AVX2 (x86), AVX-512 (x86-64) or NEON (ARM) for the vector paths, with runtime cpuid validation; patterns are IDA-style byte signatures with wildcards, not general string search. Optional x86_64/aarch64 scan hints trade a small data table for faster scans of machine code. C++20; bindings for C, Java, Python and C#. Aimed at game hacking in user space (signature scanning, memory protection helpers).",
-    "caveats": "First-party benchmark on one CPU and one compiler. The std::search row is libhat's scan_mode::Search fallback (include/libhat/scanner.hpp, find_pattern_search<X1>): std::search with a heterogeneous needle type (hat::signature_element with a bitmask, compared to std::byte via a masked operator==), so no memcmp-style or vectorised STL search path can apply; its flat 2.9 GiB/s is a scalar search, and a plain-byte search (memmem, a vectorised std::search or std::boyer_moore_horspool_searcher on bytes) without wildcard support would narrow the 8x to 19x gap. The README row labels (libhat+AVX2, std::search) differ from the names the current Compare.cpp prints (libhat+AVX2+X1, libhat+Search+X1), so the table was relabelled by hand; both files were last changed in the same commit (Adaptive anchors, #46, 2026-10-10). 4 MiB to 16 MiB buffers fit in the i7-14700K's L3 and run at 50-55 GiB/s; 32 MiB and above drop to 23-31 GiB/s. The needle has no wildcards and never matches (full-buffer scan). On real machine code (chrome.dll, test/benchmark/Chromium.cpp) unhinted, unaligned libhat falls to 6.09 GiB/s, and that table has no std::search row. AVX2 is selected at runtime; the build uses default release flags without /arch:AVX2.",
+    "caveats": "First-party benchmark on one CPU and one compiler. The std::search row is libhat's scan_mode::Search fallback (include/libhat/scanner.hpp, find_pattern_search<X1>): std::search with a heterogeneous needle type (hat::signature_element with a bitmask, compared to std::byte via a masked operator==), so no memcmp-style or vectorised STL search path can apply; its flat 2.9 GiB/s is a scalar search, and a plain-byte search (memmem, a vectorised std::search or std::boyer_moore_horspool_searcher on bytes) without wildcard support would narrow the 8x to 19x gap. The README row labels (libhat+AVX2, std::search) differ from the names the current Compare.cpp prints (libhat+AVX2+X1, libhat+Search+X1), so the table was relabelled by hand; both files were last changed in the same commit (Adaptive anchors, #46, 2026-10-10). 4 MiB to 16 MiB buffers fit in the i7-14700K's L3 and run at 50-55 GiB/s; 32 MiB and above drop to 23-31 GiB/s. The needle has no wildcards and never matches (full-buffer scan). On real machine code (chrome.dll, test/benchmark/Chromium.cpp) unhinted, unaligned libhat falls to 6.09 GiB/s, and that table has no std::search row. AVX2 is selected at runtime; the build uses default release flags without /arch:AVX2. [retier] Headline baseline is libhat's own scalar fallback; the STL-built path row was dropped in PR #46; README labels do not match the current Compare.cpp; Chromium table stale",
     "found_via": [
       "vcpkg ports list (raw.githubusercontent.com/microsoft/vcpkg/master/versions/baseline.json) showed port 'libhat'; its README Benchmarks section was then read"
     ],
@@ -11381,7 +11381,8 @@
     },
     "corrected_fields": {
       "baseline": "std::search (MSVC STL; byte-pattern search in a random buffer)",
-      "caveats": "First-party benchmark. The baseline is std::search on the MSVC STL; its flat 2.9 GiB/s at every size looks like a scalar path, but the README does not say how std::search was invoked or whether any vectorised STL path applied, so the 8x to 19x gap may shrink against a tuned memchr-style search. 4 MiB to 16 MiB sizes fit in cache and drop from 55 to 23 GiB/s once the buffer leaves L2/L3. The needle has no wildcards and never matches (worst case for the scan). Only one CPU and one compiler were used."
+      "caveats": "First-party benchmark. The baseline is std::search on the MSVC STL; its flat 2.9 GiB/s at every size looks like a scalar path, but the README does not say how std::search was invoked or whether any vectorised STL path applied, so the 8x to 19x gap may shrink against a tuned memchr-style search. 4 MiB to 16 MiB sizes fit in cache and drop from 55 to 23 GiB/s once the buffer leaves L2/L3. The needle has no wildcards and never matches (worst case for the scan). Only one CPU and one compiler were used.",
+      "claimed_speedup": "libhat+AVX2 55.1129 GiB/s at 4 MiB and 23.3351 GiB/s at 256 MiB versus std::search 2.89578 GiB/s and 2.89598 GiB/s (about 19x and about 8.1x, derived from page data); the two other pattern scanners in the table reach 2.29 GiB/s (csgosimple) and about 0.96 GiB/s (learn_more)."
     }
   },
   {
@@ -16418,7 +16419,7 @@
     "metric": "latency",
     "workload": "41 PolyBenchC and CHStone benchmarks plus other subjects at extra-small, small and medium input sizes, WASM vs JS execution time in Chrome 79, Firefox 71 and Edge 79, desktop and mobile.",
     "claimed_speedup": "README RQ1: with extra-small and small inputs WebAssembly is faster than JavaScript in almost all benchmarks (97.6% and 95.1%), averaging 26.99x (extra-small) and 8.22x (small); with medium inputs 18 of 41 benchmarks become slower in WebAssembly (average slowdown 1.71x) and the remaining 23 average 6.70x faster. Example: 3mm is 47.71x, 10.54x and 1.12x faster in WebAssembly for extra-small, small and medium inputs. WebAssembly also uses 3.39-6.20x more memory than JavaScript across browsers.",
-    "evidence_tier": "B",
+    "evidence_tier": "C",
     "benchmark_url": "https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly",
     "compiler_and_flags": "Cheerp 2.0, tested at -O1, -O2, -Ofast and -Oz (README); Chrome 79, Firefox 71, Edge 79",
     "hardware": null,
@@ -16428,7 +16429,7 @@
     "maintenance_status": "abandoned",
     "stars_or_usage": "3 stars",
     "tradeoffs": "A study, not a library: the JS baseline is machine-generated by Cheerp rather than idiomatic hand-written JavaScript, and WASM's advantage shrinks or reverses as input grows; repo has no license, so the code is reference only.",
-    "caveats": "A measurement study (IMC 2021 artifact) rather than a reusable library: the 'project' is Cheerp 2.0's WebAssembly output, and the JavaScript baseline is Cheerp's own JS output from the same C sources, not hand-written JS. Mixed outcome: the WebAssembly lead shrinks with input size and reverses for 18 of 41 benchmarks at medium inputs; WebAssembly uses 3.4-6.2x more memory. Browsers are from 2019-2020 (Chrome 79, Firefox 71, Edge 79), hardware is not stated in the README, and timings are copied manually from the browser console. Peer review confirmed only from a search-result snippet of the OpenAlex record (DOI 10.1145/3487552.3487827); the paper itself was not reachable. No license file, so reference only.",
+    "caveats": "A measurement study (IMC 2021 artifact) rather than a reusable library: the 'project' is Cheerp 2.0's WebAssembly output, and the JavaScript baseline is Cheerp's own JS output from the same C sources, not hand-written JS. Mixed outcome: the WebAssembly lead shrinks with input size and reverses for 18 of 41 benchmarks at medium inputs; WebAssembly uses 3.4-6.2x more memory. Browsers are from 2019-2020 (Chrome 79, Firefox 71, Edge 79), hardware is not stated in the README, and timings are copied manually from the browser console. Peer review confirmed only from a search-result snippet of the OpenAlex record (DOI 10.1145/3487552.3487827); the paper itself was not reachable. No license file, so reference only. [retier] Shipped loaders time nothing for WASM; CSV provenance undocumented; JS single cold run; memory is retained heap after GC, not peak; C timers commented out; auto.py averages ReferenceError runs as -1; no licence",
     "found_via": [
       "WebSearch '\"compiled to WebAssembly\" \"times faster than\" JavaScript library benchmark README' (github.com results) listed BenchmarkingWasm/BenchmarkingWebAssembly"
     ],
@@ -16449,7 +16450,15 @@
         "https://raw.githubusercontent.com/BenchmarkingWasm/BenchmarkingWebAssembly/HEAD/README.md"
       ],
       "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
+      "numbers_found_on_page": true,
+      "retier": {
+        "from": "B",
+        "to": "C",
+        "reason": "Enricher (2026-10-12): the published numbers cannot be reproduced from the shipped artifacts. Every shipped *_load.js reads its start time right after launching fetch() while the WASM compile, instantiate and kernel run later in promise callbacks, so the artifact times nothing on the WASM side; the published CSVs scale with kernel cost and so came from undocumented loaders; JS times are single cold runs (small-input ratios are JIT warm-up) and memory is a post-run retained-heap snapshot, not peak. Harness-flaw precedent; peer-reviewed status no longer carries B.",
+        "urls_opened": [
+          "https://github.com/benchmarkingwasm/BenchmarkingWebAssembly"
+        ]
+      }
     },
     "corrected_fields": {
       "claimed_speedup": "README: with extra-small and small inputs WebAssembly is faster than JavaScript in almost all benchmarks (97.6% and 95.1%), with average speedups of 26.99x (extra-small) and 8.22x (small); with medium inputs 18 benchmarks become slower in WebAssembly (average slowdown 1.71x). Example: 3mm is 47.71x, 10.54x and 1.12x faster in WebAssembly for extra-small, small and medium inputs.",
@@ -18726,7 +18735,7 @@
     "baseline_in_list": true,
     "metric": "latency",
     "workload": "Heap sort (bench/heapsort.lua): one timed call that sorts 2,000 random numbers ten times and asserts the order, including parsing the Lua source; harness bench/comparisons.js times a single cold run of each VM with console.time (fengari first, then wasmoon) in one Node process.",
-    "claimed_speedup": "README: wasmoon 15.267 ms vs fengari 389.923 ms for the whole ten-iteration heap sort call (about 25.5x, derived from page data); README text says wasmoon runs Lua much faster than Fengari unless there is a lot of JS to Lua interop.",
+    "claimed_speedup": "README: wasmoon 15.267 ms vs fengari 389.923 ms (about 25x, one cold run each); the project's newer harness on the 2.0 branches (5 warm-up, 100 iterations) gives 13.41 vs 137.36 ms, about 10x",
     "evidence_tier": "C",
     "benchmark_url": "https://github.com/ceifa/wasmoon",
     "compiler_and_flags": "emcc -O3 with emmalloc, WASM_BIGINT, ALLOW_MEMORY_GROWTH (build.sh release path); the README does not say which build produced the table, and its local build instructions use the -O0 dev build",

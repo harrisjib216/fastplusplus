@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/cespare/xxhash",
+  "one_liner": "Go XXH64 with scalar amd64/arm64 assembly; about 1.2-1.4x its own pure-Go build from 16 B up, slower at 4 B.",
+  "what_it_does": "Implements the 64-bit xxHash (XXH64) for Go: Sum64([]byte), Sum64String(string) without a copy, and a streaming Digest that implements hash.Hash64, with NewWithSeed/ResetWithSeed (since v2.3.0) and MarshalBinary/UnmarshalBinary for checkpointing. Output is bit-identical to reference XXH64 (hard-coded test vectors in xxhash_test.go). The assembly is selected automatically on amd64 and arm64 with the gc compiler; the purego build tag (the baseline here) swaps in the Go code behind the same API.",
+  "how_it_is_fast": "No SIMD: XXH64's four independent 64-bit lanes are already instruction-level parallel, and the assembly simply keeps the four accumulators, the input pointer and the prime constants in registers across the 32-byte block loop with no bounds checks (amd64: IMULQ/ROLQ; arm64: LDP paired loads, fused MADD multiply-add, ROR). The gain over Go compiler output comes from register allocation and instruction selection, so it shrinks as the compiler improves; a non-inlinable assembly call costs more than it saves on 4-byte inputs.",
+  "when_to_use": [
+    "Go services hashing byte slices or strings of 16 B and up on amd64 or arm64: cache keys, sharding and consistent hashing, Bloom filters, deduplication, content checksums (it is the hash behind Prometheus, InfluxDB, VictoriaMetrics, Badger, Ristretto and FreeCache per the README).",
+    "You need XXH64 values that match other languages' xxHash (C Cyan4973/xxhash, zstd frame checksums), not a process-local hash.",
+    "Bulk throughput on KB-to-MB buffers, where the README shows 16.7-17.3 GB/s against 11.7-12.0 GB/s for the pure-Go build on a Xeon Platinum 8252C.",
+    "Streaming input or resumable hashing: Digest accepts incremental Writes and serialises its state with MarshalBinary."
+  ],
+  "when_not_to_use": [
+    "Tiny keys of about 4 B: the assembly is slower (README 1.2 vs 1.3 GB/s; a 2024 third-party run in issue #44 measured 2.95 vs 2.70 ns per Sum64 call).",
+    "You want XXH3, XXH128 or XXH32: only XXH64 exists here (XXH3 requests #52, #60 and #73 and the XXH32 request #83 are closed without adding them).",
+    "Adversarial keys (hash flooding) or security uses: XXH64 is non-cryptographic and Sum64 always uses seed 0; use a seeded hash (hash/maphash, or a NewWithSeed Digest) or a cryptographic hash.",
+    "Process-local hash tables where any good hash will do: Go's hash/maphash is the natural stdlib alternative, and the README's claim of being much faster than anything in the standard library comes with no numbers.",
+    "Other architectures (386, arm, riscv64, wasm, etc.) or -tags purego builds: you get the pure-Go code, which is the baseline itself."
+  ],
+  "integration": {
+    "form": "module (Go module github.com/cespare/xxhash/v2; small enough to vendor as source)",
+    "dependencies": "none",
+    "min_toolchain": "go.mod says go 1.11 (README: Go 1.9.7+/1.10.3+ with minimal module compatibility, or Go 1.11+); CI tests Go 1.21.x and 1.22.x",
+    "platforms": "amd64 and arm64 assembly using baseline instructions only (no CPU feature detection or AVX); pure Go elsewhere, with CI on Linux, macOS and Windows plus 386/arm/arm64 under QEMU",
+    "thread_safety": "not documented; Sum64 and Sum64String are pure functions of their input, while a Digest holds mutable state and needs one instance per goroutine or external locking",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "The asm advantage has narrowed with newer Go releases and differs by CPU: maintainer issue #44 (open, v3 milestone) proposes deleting the amd64 assembly if it stops winning. Third-party numbers there: Ryzen 7 6800HS with Go 1.22.3 (single runs, not benchstat), pure Go vs asm, 10 MB 15.78 vs 17.65 GB/s (1.12x), 4 KB 15.41 vs 17.42 (1.13x), 100 B 7.18 vs 9.14 (1.27x), 16 B 2.76 vs 4.42 (1.60x), 4 B 1.48 vs 1.36 (asm slower); with Go 1.19 (CPU unstated) +46% at 4 KB and +38% at 10 MB. The README's 1.4x is from Go 1.19.2 on one Xeon (derived from page data).",
+    "Benchmark shape: each sub-benchmark hashes one fixed-size, fixed-content buffer in a tight loop (bench_test.go), so branch prediction, cache residency and the tail loops are ideal; mixed-length key streams are not measured. Discarding the result with `_ =` is harmless here because the assembly call cannot be eliminated and the pure-Go Sum64 is too large to inline.",
+    "A zero-valued Digest is not ready for writes: call New or Reset first (open issue #65; PRs #89 and #92 to auto-initialise are unmerged). Sum64 has no seed argument; seeds exist only on Digest, and the seed API is under reconsideration for v3 (#78).",
+    "Slices built with unsafe whose capacity is smaller than their length panic in the pure-Go path's three-index slicing (issue #76: 'slice bounds out of range [::40] with capacity 0', traced to a data race and unsafe conversion in the caller), while the assembly path does not check."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued Go-assembly siblings, lukechampine/blake3, zeebo/blake3 and minio/md5-simd are cryptographic hashes with SIMD and larger gains over their pure-Go fallbacks; pick cespare/xxhash when you need a fast non-cryptographic 64-bit hash that matches the XXH64 spec (C reference: Cyan4973/xxhash), and a BLAKE3 sibling when collision resistance against an attacker matters.",
+  "verified_claims_summary": "Sum64 throughput from the README, measured with go test -benchtime 500ms -count 15 summarised by benchstat, Go 1.19.2, Ubuntu 20.04, Intel Xeon Platinum 8252C, assembly vs the same package with -tags purego: 1.2 vs 1.3 GB/s at 4 B, 3.5 vs 2.9 at 16 B, 8.1 vs 6.9 at 100 B, 16.7 vs 11.7 at 4 KB and 17.3 vs 12.0 GB/s at 10 MB. A 2024 third-party run with Go 1.22.3 on a Ryzen 7 6800HS (issue #44) shows a smaller 1.12-1.13x at 4 KB and 10 MB.",
+  "status_note": "Quiet since the 2024-07-03 commit (last tag v2.3.0, 2024-04-04) with seven open PRs, including an unmerged AVX-512 path (#79) that the maintainer will not take at the cost of small-input or non-AVX-512 speed; MIT-licensed, dependency-free, small and widely used, so it is safe to depend on or vendor as is.",
+  "sources_read": [
+    "https://github.com/cespare/xxhash",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/README.md",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/bench_test.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_amd64.s",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_arm64.s",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_asm.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_other.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_safe.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_unsafe.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/xxhash_test.go",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/go.mod",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/cespare/xxhash/HEAD/.github/workflows/test.yml",
+    "https://github.com/cespare/xxhash/commits",
+    "https://github.com/cespare/xxhash/tags",
+    "https://github.com/cespare/xxhash/issues?q=is%3Aissue",
+    "https://github.com/cespare/xxhash/issues/44",
+    "https://github.com/cespare/xxhash/issues/76",
+    "https://github.com/cespare/xxhash/pulls",
+    "https://github.com/cespare/xxhash/pull/79",
+    "https://github.com/cespare/xxhash/pull/85"
+  ],
+  "confidence": 0.85
+}

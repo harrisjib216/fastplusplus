@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/bavison/arm-mem",
+  "one_liner": "Hand-written 32-bit ARM assembly memcpy, memmove, memset, memcmp and strlen for Raspberry Pi cores; preloaded over glibc by Raspberry Pi OS, but never benchmarked against it.",
+  "what_it_does": "Provides drop-in replacements for memcpy, memmove, mempcpy/__mempcpy, memset and memcmp (ARMv6 and ARMv7 builds) plus strlen (ARMv7 only) with the standard C signatures, built as libarmmem-v6l and libarmmem-v7l shared and static libraries. It is normally used by preloading: Raspberry Pi OS's raspi-copies-and-fills package appends /usr/lib/arm-linux-gnueabihf/libarmmem-${PLATFORM}.so to /etc/ld.so.preload, so the dynamic linker picks the v6l or v7l variant for every process. It can also be linked statically into a single program.",
+  "how_it_is_fast": "The ARMv6 routines (for the ARM1176JZF-S) move data in 32-byte ldmia/stmia bursts of eight registers aligned to the destination, issue pld preloads a fixed number of cache lines ahead (prefetch_distance 3 for memcpy, 2 for memcmp), and handle a misaligned source by shifting and merging whole words instead of byte copies. The ARMv7 routines use NEON: memset fills with 2x32-byte vst1 stores per iteration on 16-byte-aligned addresses, memcmp compares 32-byte blocks after a short scalar head (the source notes that most differences occur in the first few bytes), and strlen tests 16 bytes per iteration with vceq and falls back to bytes only when the next load would cross a 4 KiB page. The memcpy loops were tuned per core (2013 ARM1176, 2015 Cortex-A7; NEON strlen and memcmp tuned for Cortex-A53 in 2019).",
+  "when_to_use": [
+    "32-bit Raspberry Pi OS (armhf) on Pi 1/Zero (ARMv6) or Pi 2/3 (Cortex-A7/A53 in AArch32), where it is already installed and preloaded; keep it unless a measurement on your board says otherwise.",
+    "Embedded 32-bit little-endian ARM Linux images based on an ARM1176 or Cortex-A7/A53 core where you can LD_PRELOAD or statically link a BSD-licensed string library and will measure the result yourself.",
+    "Bulk copies, fills and compares of hundreds of bytes and up, where the burst and preload tuning matters more than call overhead.",
+    "As readable reference assembly for pld-prefetched ARMv6 copy loops and NEON memset/memcmp/strlen on ARMv7."
+  ],
+  "when_not_to_use": [
+    "AArch64 (64-bit) userlands: there is no ARMv8/AArch64 build (issue #10 'v8 aarch64 version' closed); the package only symlinks the v7 library to the v8 and aarch64 platform names for 32-bit processes on such hosts.",
+    "Other ARM cores without your own measurement: the maintainer answered issue #2 ('memcpy slower than libc on Allwinner A20') that the library 'was really only ever targeted at the Raspberry Pi' and that an optimal routine for one ARM core is often not for another.",
+    "Anywhere you need published evidence of a speedup over glibc: none exists in the repo, its issues, or its commit history (only self-relative 5%, 2% and 3-5% commit titles).",
+    "Valgrind- or sanitizer-checked builds: the NEON strlen's in-page overread triggers Memcheck 'Invalid read of size 8' reports (open issues #13 and #14), and Valgrind could not redirect libarmmem symbols before the 2024 function-size commit, which Raspberry Pi OS has not packaged (issue #11).",
+    "Big-endian ARM or Thumb-only (ARMv7-M) targets: the code is ARM-state assembly and 'Operate only in little endian' (2017)."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none (GNU assembler via gcc and make to build; static libarmmem-v6l.a / libarmmem-v7l.a also built)",
+    "min_toolchain": "GCC/binutils for 32-bit ARM (ARM-state, .altmacro, .fpu neon for v7l); exact minimum version not documented; Makefile supports CROSS_COMPILE=arm-linux-gnueabihf-",
+    "platforms": "32-bit little-endian ARM Linux only: ARMv6 (ARM1176JZF-S) and ARMv7 with NEON (Cortex-A7, Cortex-A53 in AArch32); strlen only in the v7l build",
+    "thread_safety": "not documented; the routines are leaf functions working in registers and the stack with no global state, so they are reentrant like the libc versions",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Harness flaw: the shipped test program cannot produce a library-versus-glibc number by itself. The Makefile links test from test.o alone, so it times whichever memcpy/memset/memcmp the dynamic linker resolves (glibc unless libarmmem is preloaded); the routine is chosen by editing an #if chain (strlen is not an option); the correctness checks sit under '#if 0' and, if enabled, '#define mymemcpy memcpy' makes them compare the routine with itself until edited; cache sizes are hard-coded (L1 16 KiB, L2 128 KiB); timing is gettimeofday with a no-op control subtracted, and each bench loop makes times+1 calls but counts times x len bytes. Test-strlen likewise checks the page-boundary safety of whatever strlen is linked.",
+    "The ARMv7 strlen reads up to 15 bytes past the terminator inside the same 4 KiB page by design (it drops to byte loads before a load could cross a page), which is safe on Linux but reported by Valgrind Memcheck as invalid reads (issues #13 on a Pi 3B+ with Raspbian 12, and #14, both open).",
+    "Correctness history: memset failed for negative byte values (#1) and for n > 255 (fixed May 2015), a unified Cortex-A7 object crashed a Pi 1 when preloaded (#3, 2015), the NEON strlen shipped in raspi-copies-and-fills 0.8 needed 'ARMv7 strlen: fix stupid bug' (0.12), ARMv7 memcmp now returns exactly -1/0/+1 (b48ea15, 0.13), and the April 2019 Cortex-A53 memcpy rewrite was reverted eleven days later (the 0.13 package built from the reverted tree).",
+    "No LICENSE file: every .S file and arm-mem.h carries BSD-3-Clause text (Raspberry Pi Foundation and RISC OS Open Ltd), but test.c and test-strlen.c have no licence header."
+  ],
+  "pick_this_over_siblings_when": "It is the only catalogued string/memory routine set for 32-bit ARM and the only one deployed by default in a mainstream distribution (Raspberry Pi OS); rvv-bench covers RISC-V vectors and memx-cdy and the gist entries target x86 glibc, each with actual measurements, so prefer them on their platforms and treat arm-mem as a Pi-specific default whose gain you must measure.",
+  "verified_claims_summary": "Nothing was measured against glibc: the README, test harness and commits publish no comparison, and the only figures are self-relative commit titles ('Improve L1 and L2 results by around 5% and 2%' for ARM1176 memcpy in January 2013, 'Extra 3-5% speed boost for Cortex-A7 memcpy' in February 2015). Search snippets found an Arch Linux ARM forum thread saying it is faster than its predecessor libcofi, also without numbers (snippet only; the forum host is unreachable here).",
+  "status_note": "Stale: last code change April 2019 (memcmp return values), last commit March 2024 (Paul Floyd's ELF function type and size directives for Valgrind, not in the Raspberry Pi OS package, whose packaging branch stops at 0.13 in April 2019); BSD-3-Clause in the source headers, so copyable, and still preloaded on 32-bit Raspberry Pi OS. The shipped test program measures only the routine the dynamic linker resolves, so there is no harness-backed speed evidence.",
+  "sources_read": [
+    "https://github.com/bavison/arm-mem/commits/master",
+    "https://github.com/bavison/arm-mem/issues?q=is%3Aissue",
+    "https://github.com/bavison/arm-mem/issues/2",
+    "https://github.com/bavison/arm-mem/issues/13",
+    "https://github.com/bavison/arm-mem/issues/14",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/README.md",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/test.c",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/test-strlen.c",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/arm-mem.h",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcpymove-v6l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcpymove-v7l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcmp-v6l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memcmp-v7l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memset-v6l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/memset-v7l.S",
+    "https://raw.githubusercontent.com/bavison/arm-mem/HEAD/strlen-v7l.S",
+    "https://github.com/RPi-Distro/arm-mem/commits/master",
+    "https://github.com/RPi-Distro/arm-mem/commits/debian",
+    "https://github.com/RPi-Distro/arm-mem/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/RPi-Distro/arm-mem/debian/debian/changelog",
+    "https://raw.githubusercontent.com/RPi-Distro/arm-mem/debian/debian/postinst",
+    "https://raw.githubusercontent.com/RPi-Distro/arm-mem/debian/debian/control",
+    "https://raw.githubusercontent.com/RPi-Distro/arm-mem/debian/debian/rules"
+  ],
+  "confidence": 0.6
+}
