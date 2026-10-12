@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/ibireme/c_numconv_benchmark",
+  "one_liner": "yy_itoa: a 200-byte-table ANSI C integer-to-decimal routine (yyjson's) that formats u32/u64/i32/i64 about 1.7-2.5x faster than fmt's compiled format_to.",
+  "what_it_does": "Four C functions (itoa_u32_yy, itoa_i32_yy, itoa_u64_yy, itoa_i64_yy in src/itoa/itoa_yy.c) write the decimal digits of an integer into a caller buffer and return a pointer one past the last digit. There is no header or library target: the file is one benchmark contestant in a repo that also times about 20 other itoa routines, so you copy the static functions into your code. The interface is like std::to_chars without the range check or error code: no NUL terminator, no buffer-length argument.",
+  "how_it_is_fast": "It branches once on value magnitude (1-2, 3-4, 5-6, 7-8, 9-10 digits for 32-bit; 1-8, 9-16, 17-20 for 64-bit, splitting into 8-digit chunks) so the digit count is known before writing, then emits two digits at a time from a 200-byte 00-99 lookup table with 2-byte memcpy stores. Division by 100 and 10000 is replaced by hand-picked reciprocal multiply-and-shift constants (val*5243>>19, val*429497>>32, val*109951163>>40, val*3518437209>>45), which let several digit pairs be computed in parallel instead of in a serial divide-by-10 chain. An odd leading digit is handled branchlessly by copying from table offset +1 and moving the output pointer back one byte.",
+  "when_to_use": [
+    "Serializers (JSON, CSV, logs, metrics) that emit many integers into a buffer they already size, where an 8-20 byte write without bounds checks is acceptable.",
+    "Mixed-magnitude or full-range 32-bit and 64-bit values: on the GCC 13.2 / i5-13600KF random-length chart it took 20.7 cycles (u32) and 33.5 cycles (u64) per call against fmt's 40.4 and 56.9.",
+    "Signed integers in particular: i32 random length 21.3 vs 53.6 cycles for fmt, second only to the 50 KB-table yy_largelut variant in that chart.",
+    "C codebases or freestanding builds that cannot pull in {fmt} or C++17 <charconv>; the code is plain ANSI C with stdint.h, stddef.h and string.h only.",
+    "Code that must stay small in cache: one 200-byte table, no SIMD and no 128-bit integers."
+  ],
+  "when_not_to_use": [
+    "When you need the fastest possible routine on these charts: yy_largelut (50 KB tables), an and jeaiii beat yy in several random-length columns (GCC u64: yy_largelut 22.0, an 29.4, jeaiii 33.3, yy 33.5 cycles; GCC u32: an 20.6 vs yy 20.7).",
+    "Mostly 1-4 digit values: in a third-party run (simditoa/benchmarks) fmt::format_int beat itoa_i64_yy on 1-digit (983.9M vs 522.4M ints/s) and 4-digit (454.1M vs 399.0M ints/s) numbers.",
+    "When you need bounds checking, an error code, other bases, padding or locale handling; it is decimal only and trusts the buffer size.",
+    "When you want a maintained, packaged API: it lives as a benchmark contestant file with no header, versioning or tests beyond the harness's spot checks.",
+    "32-bit targets: the u64 path divides 64-bit values by 1e8, and no 32-bit run is published."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (stdint.h, stddef.h, string.h)",
+    "min_toolchain": "ANSI C / C99 (repo builds as C11 and C++17 with CMake 3.14+); force_inline and table_align macros cover GCC, Clang and MSVC",
+    "platforms": "any; published runs on x86-64 Linux (GCC 13.2, Clang 18.1), x86-64 Windows (MSVC 1940) and Apple M1 (Apple Clang 15)",
+    "thread_safety": "reentrant pure functions (read-only static table, no global state), from reading the source; not documented",
+    "drop_in_for_baseline": "partial — same job as fmt::format_to(buf, FMT_COMPILE(\"{}\"), v) or std::to_chars(first, last, v) with a pointer-returning signature, but no last pointer, no error code and no NUL terminator; callers must reserve 10 (u32), 11 (i32) or 20 (u64, i64) bytes"
+  },
+  "gotchas": [
+    "Output is not NUL-terminated, and the function writes scratch bytes outside the returned string: a 1-digit result still stores two bytes (the byte after the returned end is clobbered), and the signed variants always store '-' at buf[0] before writing digits. Never pass a buffer that ends exactly at the digits.",
+    "Harness flaw (does not affect the headline random-length numbers): fill_rand_i32_len and fill_rand_i64_len in src/itoa/benchmark.c fill the negative half of each fixed-length signed sweep with min + i*step for i from count/2 to count, which runs past max, so those samples have one more digit than the chart's x-axis label; at the top length (10-digit i32, 19-digit i64) the out-of-range double-to-integer cast is undefined behaviour and on x86-64 collapses about half the samples to the single value INT32_MIN or INT64_MIN. The fixed-length i32 and i64 charts therefore mix two digit counts per point.",
+    "The harness checks each contestant against sprintf only on boundary values and powers of 2-10, not on random samples; the reciprocal constants themselves hold over their documented ranges (each satisfies m*d - 2^k below 2^(k - input bits), checked by hand this session).",
+    "Cycle counts are tick counts scaled by a frequency measured at startup and include call-through-pointer loop overhead (null group 5.66 cycles on GCC u32, about 4.0 elsewhere); subtracting it widens the gap (GCC random length, derived from page data: u32 2.31x, u64 1.79x, i32 2.86x, i64 2.09x). The run apparently had turbo on (5090 MHz) although the README says to disable it."
+  ],
+  "pick_this_over_siblings_when": "Pick yy over jeaiii/itoa when you need plain C rather than C++ templates (the two are within 1 percent on GCC u64 random length), and over {fmt} or Boost.Charconv when you want a dependency-free 100-line function; pick simditoa if you can use SIMD and want the largest margin over std::to_chars, and fmt::format_int if your integers are mostly 1-4 digits.",
+  "verified_claims_summary": "The author's own harness (10000 samples, best of 32 runs, average CPU cycles per call through a function pointer) on a Core i5-13600KF with GCC 13.2 Release builds measured random-length conversion at 20.69 vs 40.37 cycles (u32), 33.55 vs 56.88 (u64), 21.33 vs 53.62 (i32) and 33.47 vs 65.65 (i64) against fmt::format_to with FMT_COMPILE(\"{}\") from a vendored fmt commit; Clang 18.1, MSVC 1940 and Apple M1 runs show the same direction. std::to_chars is not in the repo; a rival project's third-party run on a Xeon 8481C (compiler unstated) put itoa_i64_yy at 2.18x std::to_chars and 1.64x fmt::format_int by geometric mean.",
+  "status_note": "Active benchmark repo (last commit 2025-12-05, MIT, 75 stars) whose yy routine is used inside yyjson; small enough to vendor, but it is a benchmark file rather than a packaged library, so you own the copy.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/src/itoa/itoa_yy.c",
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/src/itoa/itoa_fmtlib.cpp",
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/src/itoa/benchmark.c",
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ibireme/c_numconv_benchmark/HEAD/docs/reports/gcc_intel_i5_13600/itoa.html",
+    "https://github.com/ibireme/c_numconv_benchmark/tree/master/src/itoa",
+    "https://github.com/ibireme/c_numconv_benchmark/issues",
+    "https://github.com/fmtlib/fmt/commit/0379bf3"
+  ],
+  "confidence": 0.8
+}
