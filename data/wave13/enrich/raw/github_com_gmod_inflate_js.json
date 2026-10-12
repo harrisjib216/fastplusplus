@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/gmod/inflate-js",
+  "one_liner": "libdeflate compiled to WebAssembly for JS, inflating many raw-deflate blocks per call; about 2-3x faster than pako on BigWig blocks.",
+  "what_it_does": "An npm package (@gmod/inflate) that ships a Rust wrapper around libdeflate's decompressor as a wasm module inlined as base64 in one JS bundle. It exposes three async functions: inflateRaw(input, outputSize) for one raw deflate stream of known size, inflateRawUnknownSize(input), which doubles a guess until the output fits, and inflateRawBatch(buffer, offsets, lengths, maxBlockSize), which inflates a whole run of zlib blocks and returns { data, offsets }. It is not a pako drop-in: the API is different and Promise-based, it only decompresses, and it handles raw deflate only, with no zlib or gzip wrapper parsing or checksum.",
+  "how_it_is_fast": "libdeflate is a whole-buffer, non-streaming DEFLATE decoder that writes straight into an output buffer sized from the index, with no growth loop and no streaming state machine. The batch entry point crosses the JS-wasm boundary once for the whole group of blocks and reuses one Decompressor and one scratch buffer across them, so the per-call overhead is paid once. It is built with opt-level 3, LTO and codegen-units=1, but it runs libdeflate's portable C path: the x86 and ARM-specific code does not apply on wasm32, and the build has no wasm SIMD target feature and no wasm-opt pass.",
+  "when_to_use": [
+    "Genomics or other container formats in the browser or Node that store hundreds of separately zlib-compressed blocks with known uncompressed sizes (BigWig/BigBed, .hic, bgzf-style records), decoded in one batch per query.",
+    "Replacing pako's per-block inflateRaw loop when inflate shows up in profiles: on BigWig fixtures of 49-489 blocks it took 1.9-31 ms against 6.0-86 ms for pako.",
+    "Replacing a per-block DecompressionStream loop: the bbi-js doc measured 220-410 microseconds of fixed overhead per call in Node, which made it 4-11x slower than the batch call.",
+    "Libraries that must not ask consumers to host a separate .wasm asset or configure a bundler: the module is base64-inlined and instantiated lazily on first call."
+  ],
+  "when_not_to_use": [
+    "One large stream or concatenated gzip members: DecompressionStream needs one call and lands within about 2x of wasm there (bgzf case in the README table), and you avoid about 60 KB of base64.",
+    "Whole-query speedups: the gain is the inflate step only, and bbi-js reports that an older whole-genome parseBigWig comparison was only about 5% apart end to end.",
+    "Data that needs integrity checking: raw deflate skips zlib's adler32, and the package's own test pins that a flipped byte decodes silently to wrong output.",
+    "Compression, streaming or incremental output, synchronous call sites (every function returns a Promise), or outputs over 256 MB per call (a hard cap in the crate).",
+    "Pages with a strict Content-Security-Policy that blocks fetch() of data: URLs or wasm compilation: the loader fetches the inlined wasm as a data: URL and calls WebAssembly.instantiate."
+  ],
+  "integration": {
+    "form": "npm module (ESM and CommonJS builds) with the wasm inlined as base64; Rust crate source included for rebuilding",
+    "dependencies": "none at runtime (npm metadata lists no dependencies); rebuilding needs Rust with the wasm32-unknown-unknown target, wasm-bindgen-cli at the Cargo.lock version, webpack, and a clang that can target wasm (Apple clang cannot)",
+    "min_toolchain": "not documented for consumers; the runtime needs WebAssembly plus a global fetch() that accepts data: URLs",
+    "platforms": "any JavaScript runtime with WebAssembly (Node, browsers, bundlers)",
+    "thread_safety": "One wasm instance per module realm, created on first call and shared; concurrent first calls share one in-flight init promise. Workers each instantiate their own copy, and a bundle that reaches both the ESM and CJS entry points instantiates twice.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The header handling differs between functions: inflateRaw wants bare raw deflate (strip the 0x78 zlib header yourself), while inflateRawBatch expects every block to keep its 2-byte zlib header and skips two bytes without checking them, so gzip members or headerless blocks decode wrongly or fail.",
+    "inflateRawBatch reserves num_blocks x maxBlockSize up front in grow-only wasm linear memory and refuses the call when that product exceeds 256 MB, even when the real output is far smaller; the memory is never returned to the host.",
+    "Harness and evidence: the README's 'roughly 4x faster than pako' has no table behind it, and the bbi-js doc's two tables disagree. The best-of-three means give cow.bw 3.07x and variable_step_large.bw 2.14x, outside the same doc's per-fixture ranges of 2.3-2.7x and 2.7-3.0x, so they come from different runs. The numbers were measured on bbi-js's copy of the crate (without inflate-js's bounds checks), with Node version and CPU not stated.",
+    "In the same benchmark, the DecompressionStream arm is fed whole zlib blocks with format 'deflate', so it also parses the header and verifies adler32. Its output is only length-checked. Both contradict the harness comment and the doc ('every arm does the same work', 'the same byte-identical assertion'), but this affects only the DecompressionStream column, not the pako comparison, which is byte-checked."
+  ],
+  "pick_this_over_siblings_when": "No other inflate implementation is catalogued in this category. It follows the same pattern as tape-sha256 and berith (native code compiled to wasm to replace a pure-JS library in V8), and is the one to pick when the hot path is many small deflate blocks rather than hashing or curve arithmetic.",
+  "verified_claims_summary": "bbi-js's benchmarks/inflate.bench.ts ran under vitest bench in Node, with version and CPU not stated, and reports the best of three runs. Inflating every block of four BigWig fixtures (49-489 blocks, 139 KB to 3.3 MB compressed) took 1.9, 5.4, 31 and 29 ms through the wasm libdeflate batch call, against 6.0, 16.6, 86 and 62 ms for pako 3 inflateRaw called once per block with a chunkSize hint, about 2.1-3.2x (derived from page data). Outputs were asserted byte-identical before timing, and neither arm checked adler32.",
+  "status_note": "A 5-commit extraction from bbi-js published as 1.0.0 on 2026-08-17; later commits only edit the README (last on 2026-10-11). It has 0 stars and no dependents among the GMOD parsers checked (@gmod/bbi, bgzf-filehandle, bam, tabix, cram and twobit keep their own copies or use pako-esm2). It is MIT-licensed and about 150 lines of Rust, so it is easy to vendor but has little external use behind it yet.",
+  "sources_read": [
+    "https://github.com/GMOD/inflate-js",
+    "https://github.com/GMOD/inflate-js/commits/main",
+    "https://github.com/GMOD/inflate-js/tree/main/test",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/README.md",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/package.json",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/Cargo.toml",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/src/lib.rs",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/build-wasm.sh",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/src/wrapper.ts",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/package.json",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/crate/webpack.config.js",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/GMOD/inflate-js/HEAD/test/inflate.test.ts",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/docs/wasm.md",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/benchmarks/inflate.bench.ts",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/crate/Cargo.toml",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/crate/src/lib.rs",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/src/unzip.ts",
+    "https://raw.githubusercontent.com/GMOD/bbi-js/HEAD/package.json",
+    "https://raw.githubusercontent.com/ebiggers/libdeflate/HEAD/README.md",
+    "https://registry.npmjs.org/@gmod/inflate",
+    "https://registry.npmjs.org/@gmod/bbi",
+    "https://registry.npmjs.org/@gmod/bgzf-filehandle",
+    "https://registry.npmjs.org/hic-straw",
+    "https://registry.npmjs.org/@gmod/cram",
+    "https://registry.npmjs.org/@gmod/bam",
+    "https://registry.npmjs.org/@gmod/tabix",
+    "https://registry.npmjs.org/@gmod/twobit"
+  ],
+  "confidence": 0.8
+}

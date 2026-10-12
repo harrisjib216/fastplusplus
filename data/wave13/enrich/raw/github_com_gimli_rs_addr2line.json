@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/gimli-rs/addr2line",
+  "one_liner": "Rust DWARF symbolication library plus addr2line-style CLI; first-party chart shows it beating binutils, elfutils and llvm-addr2line.",
+  "what_it_does": "Maps code addresses to file, line, function name and the inline call stack using DWARF debug info. The library API is Loader::new(path) then find_location / find_frames / find_symbol, or a lower-level Context built from gimli::Dwarf when you manage the bytes yourself. A CLI (cargo feature 'bin') accepts a subset of GNU addr2line flags (-e, -f, -i, -a, -p, -s, -C, -j, --sup, --all, plus --llvm output style). It is also the symbolizer inside Rust's standard-library backtraces (rustc-dep-of-std feature) and the backtrace, wasmtime and blazesym crates.",
+  "how_it_is_fast": "Lazy, cached parsing: a Context first builds a sorted table of unit address ranges (DW_AT_ranges, .debug_aranges, low/high pc) and binary-searches it per probe; a unit's line program, function DIEs and inlined-function tree are parsed only on first hit and memoised in OnceCell, so later lookups in the same unit are cheap. Loader memory-maps the file and borrows sections zero-copy (only compressed sections are decompressed into an arena). Abbreviation tables shared by many small units are cached (PR #318), which the maintainer reported roughly doubled speed on the PostgreSQL input, where gimli had been 2.12x slower than llvm-addr2line before the fix.",
+  "when_to_use": [
+    "Long-lived processes that symbolize many addresses against the same binary (profilers, crash reporters, tracing tools): the parse cost is paid once per unit and amortised.",
+    "Batch symbolization of hundreds to thousands of addresses from large C/C++/Rust debug files (hundreds of MB), where the chart shows 2.6-16x over binutils addr2line.",
+    "Rust projects that need in-process symbolization without shelling out to binutils or llvm-symbolizer, including no_std + alloc targets (the Context API) and wasm (feature 'wasm').",
+    "Split DWARF (DWO/DWP), Mach-O dSYM bundles next to the executable, and DWARF supplementary files (--sup) on any platform the object crate parses."
+  ],
+  "when_not_to_use": [
+    "Memory-constrained hosts: the README says it 'optimizes for speed over memory by caching parsed information', the benchmark measures time only, and issue #212 (2021, an older version) measured 2.6 GB RSS on a 470 MB libxul.debug against 1.3 GB for binutils.",
+    "One-off lookups of a handful of addresses: every CLI invocation reloads DWARF, and on the 38 MB postgres input it is only about 1.2x ahead of llvm-addr2line.",
+    "Scripts that rely on GNU addr2line's full option set or debug-file discovery: the CLI has no -b target, no demangling-style selection, and the Loader does not follow .gnu_debuglink or .gnu_debugaltlink (a TODO in src/loader.rs), so you must point -e at the .debug file and pass --sup yourself.",
+    "C or C++ codebases that want a C API: it is a Rust crate with no C bindings in this repo.",
+    "Binaries without DWARF (stripped, or PDB-only Windows builds): it falls back to the symbol table for function names only."
+  ],
+  "integration": {
+    "form": "crate (library) plus optional CLI binary via the 'bin' feature",
+    "dependencies": "gimli 0.34 (read); optional object 0.40, memmap2, typed-arena (loader feature), rustc-demangle, cpp_demangle, smallvec, fallible-iterator, clap (bin)",
+    "min_toolchain": "Rust 1.88 (rust-version in Cargo.toml), edition 2018",
+    "platforms": "any: no_std + alloc for Context; std and mmap for Loader; object files are parsed by the object crate (ELF, Mach-O with dSYM lookup, wasm behind the 'wasm' feature)",
+    "thread_safety": "Context is Send (asserted by a unit test) but not Sync, because lazy caches use core::cell::OnceCell; use one Context per thread or guard it with a lock.",
+    "drop_in_for_baseline": "partial: the CLI accepts the common GNU addr2line flags and stdin address streams, but lacks -b, demangle-style selection and debuglink discovery, and output equivalence with binutils is not tested by the benchmark"
+  },
+  "gotchas": [
+    "Harness scope: the chart times whole CLI runs of '-af' only (no -i inlines, no -C demangling) and never compares outputs across tools; the address sample is drawn from gimli addr2line's own --all listing, and hyperfine --min-runs=1 means eu-addr2line and binutils are timed only once or twice per input (PR #315's sample output shows elfutils as a single run).",
+    "The chart is a one-off from 2024-08-06 (PR #325, around 0.24.x, Matplotlib metadata) and has never been regenerated for 0.25-0.27; tool versions come from an unpinned openSUSE Tumbleweed image whose Dockerfile names clang18 and postgresql16 debuginfo packages, so the image may not build as written today. No CPU, no RSS.",
+    "The speedups depend on fixes merged during the benchmarking work: PR #315's first sample had gimli at 391 ms vs llvm-addr2line 398 ms on clangd-18 (1.02x), and PR #318 notes gimli was 2.12x slower than llvm-addr2line on postgres before the abbreviation cache.",
+    "Maintainer stance on panics: issue #363 (0.25.1, unwrap on None in function.rs:205) was closed 'not planned' without a reproducer; malformed DWARF is otherwise returned as gimli::Error."
+  ],
+  "pick_this_over_siblings_when": "No symbolizer siblings are catalogued; the nearest entries (iced, Zydis, bddisasm, Intel XED) decode instruction bytes, not debug info. Pick addr2line when you need address-to-source-line and inline-frame resolution, typically alongside one of those disassemblers.",
+  "verified_claims_summary": "Hyperfine mean wall time of 'addr2line -af -e <file>' over fixed-seed random address samples on four openSUSE Tumbleweed debuginfo files, chart read approximately: libxul.so 0.10 s vs binutils 1.15 s (about 11x), llvm-addr2line 0.48 s, eu-addr2line 3.25 s; clangd-18 0.18 s vs 2.92 s (about 16x); mold 0.14 s vs 1.19 s; postgres 0.067 s vs 0.176 s (about 2.6x) and llvm 0.079 s (about 1.2x). Rust stable from rustup in Docker, baseline tool versions and CPU not stated, chart dated 2024-08-06.",
+  "status_note": "Actively maintained in the gimli-rs organisation (0.27.1, 2026-08-01; about 541M crates.io downloads, 77 reverse dependencies including backtrace and wasmtime) and dual Apache-2.0/MIT, so it is safe to depend on; the published speed chart is two years and three minor versions old.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/README.md",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/benchmark-time.svg",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/scripts/benchmark-addr2line.sh",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/scripts/benchmark-addr2line-docker.sh",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/scripts/benchmark-plot.py",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/scripts/docker/Dockerfile-opensuse",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/src/bin/addr2line.rs",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/src/loader.rs",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/src/unit.rs",
+    "https://raw.githubusercontent.com/gimli-rs/addr2line/HEAD/benches/bench.rs",
+    "https://github.com/gimli-rs/addr2line/commits/master/benchmark-time.svg",
+    "https://github.com/gimli-rs/addr2line/commits/main/benchmark-time.svg",
+    "https://github.com/gimli-rs/addr2line/pull/315",
+    "https://github.com/gimli-rs/addr2line/pull/318",
+    "https://github.com/gimli-rs/addr2line/pull/325",
+    "https://github.com/gimli-rs/addr2line/issues?q=is%3Aissue%20memory%20OR%20slow%20OR%20performance",
+    "https://github.com/gimli-rs/addr2line/issues/212",
+    "https://github.com/gimli-rs/addr2line/issues/363",
+    "https://crates.io/api/v1/crates/addr2line",
+    "https://crates.io/api/v1/crates/addr2line/reverse_dependencies?per_page=10"
+  ],
+  "confidence": 0.8
+}
