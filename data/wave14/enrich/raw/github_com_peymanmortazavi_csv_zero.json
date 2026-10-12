@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/peymanmortazavi/csv-zero",
+  "one_liner": "Zig zero-allocation SIMD CSV field iterator; counts fields 1.4-2.6x faster than zsv (C) and 1.1-2.9x faster than lazycsv (C++) in its author's harness.",
+  "what_it_does": "Iterates over a CSV stream one field at a time from a std.Io.Reader, returning each field as a slice into the reader's buffer plus a last_column flag that marks the row boundary. It never allocates; unescaping of \"\" is lazy and done in place on request. It is a low-level primitive, not a record parser: there are no rows, headers, type conversion or struct binding. The dialect (quote, delimiter, SIMD width) is fixed at compile time, and a C API (csvz_iter_from_file, csvz_iter_next, ...) wraps it for C and C++ callers.",
+  "how_it_is_fast": "nextDelimPos loads 64-byte blocks (on AVX2 or AVX-512 targets) as a @Vector, compares them against quote, delimiter and newline splats, and caches the resulting 64-bit mask. Successive fields pop the lowest set bit (count-trailing-zeros plus clear-lowest-bit) without rescanning, and a 256-entry lookup table handles tails shorter than one vector. Inside quoted fields it walks the same mask from quote to quote rather than building a prefix-XOR quote mask. There is no per-field allocation or copying, the buffer is a fixed 64 KB, and statically linked Zig binaries start fast, which matters on the small files in the benchmark.",
+  "when_to_use": [
+    "Zig programs that stream large CSV or TSV files and only need to locate fields (counting, filtering, projecting columns) before doing their own conversion.",
+    "Mostly unquoted data with long fields: its largest margin is on the 3.2 GB 52-column unquoted file, 603 ms (about 5.3 GB/s) against 1.32 s for zsv and 1.65 s for lazycsv (derived from page data).",
+    "Memory-constrained scans: peak RSS stays around 820 KB at any input size, while lazycsv memory-maps the input (10.6 GB peak RSS on the 9.9 GB file).",
+    "C or C++ code that wants a small static library for field scanning and accepts the C API's slower path, which the README says still beats the other csv-race parsers."
+  ],
+  "when_not_to_use": [
+    "Untrusted or messy CSV where malformed quoting must be rejected: the strict RFC 4180 checks the README promises are not reliable for a quote inside an unquoted field (see gotchas).",
+    "Fields longer than the reader buffer: such a field fails with error.FieldTooLong, and the allocating fallback is only an open proposal (issue #8).",
+    "Record- or struct-oriented code: there is no row type, header handling or type conversion, so for a whole-task parser use zsv, simd-csv or the Rust csv crate.",
+    "Projects pinned to an older Zig: HEAD requires Zig 0.17.0 (build.zig.zon), the benchmark was taken on 0.15.2, and std.Io churn has forced two upgrades in 2026. There are no tagged releases.",
+    "Dense, short, heavily quoted fields: on game.csv, after subtracting each parser's ~1 KB start-up time, lazycsv (about 1.94 ms) beats csv-zero (about 2.43 ms) (derived from page data)."
+  ],
+  "integration": {
+    "form": "module (Zig package via zig fetch; static or shared C library via zig build)",
+    "dependencies": "none (Zig standard library only)",
+    "min_toolchain": "Zig 0.17.0 at HEAD (minimum_zig_version); csv-race's pinned commit 733f2a0 needs Zig 0.16; benchmark taken with Zig 0.15.2",
+    "platforms": "any Zig target; the SIMD width is chosen at comptime from the build target (64 bytes on AVX2, AVX-512 and SVE, 32 on SSE and NEON aarch64, 16 on 32-bit ARM NEON and wasm simd128), with a scalar fallback when vector_length is null",
+    "thread_safety": "not documented; the iterator mutates its reader and cached bitmask, so use one iterator per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness hole in strict mode, found by reading src/iterator.zig and replaying its next()/findQuotedRegion()/nextDelimPos() logic in a Python transcription (not run under Zig). next() sends any quote byte, even one in the middle of an unquoted field, to nextQuotedRegion(), which tosses one byte from the field start. As a result 5'10\",x silently yields the field '10 (the 5 and the quote are lost) instead of InvalidQuotes. When the cached 64-byte SIMD mask still holds the next special character, the scan jumps past the stray quote: in id,height\\n1,5'10\"\\n2,6'1\"\\n the field '10\"\\n2,6'1 swallows a row boundary. The repo's own bad_quote_in_unquoted_region.csv fixture returns 'nquoted region ... closed' without error once the SIMD path is active.",
+    "The test suite cannot catch this on AVX2 machines: most cases use a 64-byte read buffer, and the SIMD loop only runs when i + 64 < end, so with the 64-byte vectors that suggestVectorLength() picks on AVX2 and AVX-512 the iterator tests exercise only the scalar path. The comment on the 34-byte cases ('enough for vectorization in x86') dates from a 32-byte width. There is no fuzzing or differential test against another parser.",
+    "Field slices are valid only until the next next() call (unless the reader is fixed), and field.unescaped() rewrites the buffer in place.",
+    "The benchmark harness counts fields without unescaping or checking that the parsers agree on counts. game.csv, which the csv-race README calls real-world, is one 26-byte row (hello,\",\",\" \",world,1,\"!\") repeated 100,000 times. The other three real-world files are 0.7-1.4 MB samples where the ~0.4-1.2 ms process start-up is a large share of wall time. The generated 'Mix Quotes' files come from csv-zero's own Emitter and contain no embedded newlines."
+  ],
+  "pick_this_over_siblings_when": "The sibling 'Zig (csv-zero): LangArena CSV::Parse' is the same library measured independently on a whole parse-and-strtod task (Zig 0.974 s vs C/Clang 2.223 s), so treat it as corroboration, not an alternative. Over the CLI siblings (hck, tsv-utils, cw) pick csv-zero only when you are embedding field scanning in Zig or C code rather than running a command.",
+  "verified_claims_summary": "The author's csv-race harness (Ryzen 5 PRO 5650U laptop, Linux 6.17, poop for 10 s per command, results from December 2025) counted fields with a 64 KB buffer. Zig 0.15.2 ReleaseFast native csv-zero was fastest of five parsers on all 10 files: 1.36-2.61x faster than zsv (cc -O3 harness against a libzsv of unstated build flags) and 1.08-2.85x faster than lazycsv (g++ -O3 -march=native, mmap). Inputs were almost certainly served from the page cache (30 GB RAM, repeated runs).",
+  "status_note": "MIT, single author, 39 stars, no tagged releases; active (last commit 2026-07-29, a Zig 0.17 upgrade) but young (first commit 2025-12-19), with the strict-validation hole above unreported in its 6 open issues, so validate untrusted input elsewhere or use the scalar path (vector_length = null) until it is fixed.",
+  "sources_read": [
+    "https://github.com/peymanmortazavi/csv-zero",
+    "https://github.com/peymanmortazavi/csv-zero/commits/main",
+    "https://github.com/peymanmortazavi/csv-zero/tree/main/src",
+    "https://github.com/peymanmortazavi/csv-zero/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/README.md",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/build.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/iterator.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/simd.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/c_api.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/emitter.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/src/tests.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/test/bad_quote_in_unquoted_region.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-zero/HEAD/test/bad_unescaped_quotes.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/README.md",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/Makefile",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/result-all.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/generate_charts.py",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/c/zsv/build.sh",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/c/zsv/main.c",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/cpp/lazycsv/build.sh",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/cpp/lazycsv/main.cpp",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/zig/build.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/zig/build.zig.zon",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/zig/src/csv_zero.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/src/zig/src/data_gen.zig",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/data/nfl.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/data/worldcitiespop.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/data/gtfs-mbta-stop-times.csv",
+    "https://raw.githubusercontent.com/peymanmortazavi/csv-race/HEAD/data/game.csv",
+    "WebSearch: csv-zero Zig CSV parser SIMD benchmark zsv simd-csv (ziggit.dev thread found; host unreachable)"
+  ],
+  "confidence": 0.75
+}

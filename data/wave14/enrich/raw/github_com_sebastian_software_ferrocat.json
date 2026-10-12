@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/sebastian-software/ferrocat",
+  "one_liner": "Rust Gettext PO parser and catalog merge/update engine; first-party runs merge a 10k-message catalog about 56x faster than GNU msgmerge.",
+  "what_it_does": "A Rust library (ferrocat umbrella crate over ferrocat-po and ferrocat-icu) that parses, serialises, merges, combines, audits and compiles translation catalogs in Gettext PO, ICU MessageFormat v1 and its own line-per-entry FCL format. For the msgmerge job it offers two entry points: the low-level merge_catalog(existing_po: &str, extracted: &[MergeMessageInput]) -> String, and the higher-level update_catalog / update_catalog_file, which also does ICU analysis, collated ordering and atomic file replacement. It is a library API, not a msgmerge-compatible command: the ferrocat-cli binary documents only an audit gate, and the caller has to parse the POT template into MergeMessageInput values (the benchmark does this with parse_po_borrowed).",
+  "how_it_is_fast": "The parser scans bytes, not characters. It finds structural bytes with memchr, memchr2 and memchr3 (SIMD in the memchr crate) and has a hand-written NEON path on aarch64 for finding escapable bytes. A borrowed parser hands out Cow<str> slices of the input, so unescaped fields are never copied. The merge moves message payloads instead of cloning them and avoids throwaway sets and buffers; most of these were allocation-cutting commits in 3.1.0, including c3caa27 itself. GNU msgmerge, by contrast, reads both files through its general multibyte-aware PO lexer in a fresh process. The speed-up comes from the design of the parser and merge, not from the choice of Rust.",
+  "when_to_use": [
+    "Build or CI steps that merge freshly extracted messages into many large UTF-8 PO catalogs and currently shell out to msgmerge once per locale, and that can call a Rust API (or wrap one in a small tool).",
+    "Exact-identity updates (msgctxt + msgid) where you already run msgmerge with --no-fuzzy-matching or do not want fuzzy guesses.",
+    "Rust or Palamedes (JS/TS via its palamedes-node bridge) i18n pipelines that also need ICU MessageFormat checks, coverage or audit reports and runtime artifacts from the same catalog model.",
+    "Teams that want git-merge-friendly catalog storage (FCL, one entry per line) next to PO."
+  ],
+  "when_not_to_use": [
+    "You rely on msgmerge's fuzzy matching (its default) to carry translations over to changed msgids: Ferrocat merges by exact identity only, by design.",
+    "Catalogs in legacy charsets (ISO-8859-x, EUC, etc.): inputs are Rust &str, so they must be UTF-8 already. msgmerge converts charsets through iconv.",
+    "You need a command-line drop-in for msgmerge or msgcat in shell scripts or Makefiles: there is no documented merge subcommand, and the GNU options (--previous, --compendium, --backup, wrapping) have no direct equivalents.",
+    "Versions before 3.1.0 (PR #276) on hand-edited catalogs: the catalog-layer update dropped #, flags such as fuzzy and no-wrap and rewrote translator comments as extracted comments.",
+    "Risk-averse production use: 0 stars, a single vendor, about 7.7k crates.io downloads, and frequent breaking changes even in minor releases (a yanked 3.0.0; Unreleased already has breaking changes)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "ferrocat-po: memchr, smallvec, rustc-hash; the default 'catalog' feature adds ferrocat-icu, icu_locale, icu_plurals, serde, serde_json, sha2 and tempfile. Use default-features = false for the parser, serializer and merge_catalog only.",
+    "min_toolchain": "Rust 1.94.0 (MSRV), edition 2024; the benchmark was built with rustc 1.95.0-nightly, fat LTO, codegen-units = 1",
+    "platforms": "any Rust target; the explicit NEON scan path is aarch64-only and other targets fall back to memchr; the prebuilt CLI archive is x86_64-unknown-linux-musl only",
+    "thread_safety": "not documented (the merge and parse functions are free functions over borrowed strings and return owned output)",
+    "drop_in_for_baseline": "partial: it does the same exact-identity merge as 'msgmerge --no-fuzzy-matching' and its output passes the same message digest, but it is a Rust API rather than a CLI, handles UTF-8 only, has no fuzzy matching, and orders and formats the output its own way (merge output was about 7% larger than msgmerge's)."
+  },
+  "gotchas": [
+    "Harness flaw behind the 'Full catalog update' row (150 MiB/s, 11.85 ms vs msgmerge 392.9 ms adjusted, about 33x, the README's 'roughly 31x'): at the measured commit c3caa27, CanonicalMessage had no flags field. import_message_from_po ignored item.flags and folded translator (#) comments into the extracted-comment list, and export wrote them back as #. lines. So every #, fuzzy and #, c-format flag in the fixture's existing.po was dropped (each of the 10,000 entries carries one or the other), and fuzzy translations came out as active ones; msgmerge keeps them. This was fixed after the measurement in d057d1d (issue #271, PR #276, released in 3.1.0), and the published numbers were not re-measured.",
+    "The benchmark's 'same semantic digest' check (PoSemanticSummary) compares only headers, msgctxt, msgid, msgid_plural, msgstr and the obsolete bit, with items sorted. Flags, translator or extracted comments, references and output order are not checked, which is why the dropped flags passed. The low-level merge_catalog row (6.94 ms vs 391.6 ms, about 56x) is not affected: merge.rs at c3caa27 keeps translator comments and writes a merged flags line.",
+    "The fixture is synthetic, generated by crates/ferrocat-bench/src/fixtures.rs: an ASCII-leaning German UI catalog with 10,000 entries; every fifth active message is missing from the template (so it becomes obsolete) and 1,000 new messages are added. The ferrocat side is timed on in-memory strings in a loop of 20-35 iterations; msgmerge is timed as one fresh process per sample (5 samples) that reads two files and writes to a pipe, and a 7 ms empty-run time is subtracted.",
+    "The reports label the build 'ferrocat@2.2.0', but commit c3caa27 is post-3.0.1 3.1.0 development code. The MiB/s figures count output bytes, so implementations that write more output score higher at the same speed."
+  ],
+  "pick_this_over_siblings_when": "No other Gettext/PO tool is catalogued in string-and-text, so the choice is Ferrocat versus GNU gettext itself. Ferroni (the same vendor's Oniguruma port) and the text-processing CLIs listed there solve different problems; pick Ferrocat when the job is catalog merging, auditing or compiling.",
+  "verified_claims_summary": "First-party ferrocat-bench reports at commit c3caa27 (Apple M1 Ultra, macOS, rustc 1.95.0-nightly with fat LTO; GNU gettext-tools 1.0 msgmerge from the host with unknown build flags; 2 warm-up and 5 measured samples) on a synthetic 10,000-message PO update. merge_catalog took 6.94 ms per merge against 391.6 ms for 'msgmerge --no-wrap --quiet --no-fuzzy-matching' after subtracting a 7 ms process start-up baseline (about 56x). The higher-level update_catalog_file took 11.85 ms against 392.9 ms (about 33x), but that build dropped PO flags and translator comments, which the harness did not check.",
+  "status_note": "Active (last commit 2026-10-05, crate 3.4.2 from 2026-08-06, MIT OR Apache-2.0) and easy to adopt as a crate, but it has 0 stars and a single vendor, and the published msgmerge numbers predate the 3.1.0 fix that made the high-level update keep fuzzy and other flags. Treat the 56x merge figure as the credible one and the 31x full-update figure as unverified for the current code.",
+  "sources_read": [
+    "https://github.com/sebastian-software/ferrocat",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/README.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/benchmark/published-numbers.json",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/benchmark/results/gettext-workflows-ecosystem-v1-c3caa27.json",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/benchmark/results/catalog-order-default-v1-c3caa27.json",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat-bench/src/compare/operations.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat-bench/src/compare.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat-bench/src/compare/semantic_digest.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat-bench/src/fixtures.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat-po/Cargo.toml",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/HEAD/crates/ferrocat/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src/api/catalog.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src/api/export.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src/merge.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src/scan.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferrocat/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src/lib.rs",
+    "https://github.com/sebastian-software/ferrocat/tree/c3caa274664a992410d654fc0ac072c042af9e6d/crates/ferrocat-po/src",
+    "https://github.com/sebastian-software/ferrocat/commit/c3caa274664a992410d654fc0ac072c042af9e6d",
+    "https://github.com/sebastian-software/ferrocat/commit/d057d1d82d64cbf07ca752d18f623e4b28f23ddb",
+    "https://github.com/sebastian-software/ferrocat/commits/c3caa274664a992410d654fc0ac072c042af9e6d",
+    "https://github.com/sebastian-software/ferrocat/issues/271",
+    "https://github.com/sebastian-software/ferrocat/issues?q=is%3Aissue",
+    "https://crates.io/api/v1/crates/ferrocat"
+  ],
+  "confidence": 0.8
+}

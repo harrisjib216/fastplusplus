@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/sebastian-software/ferroni",
+  "one_liner": "Pure-Rust port of the Oniguruma regex engine and the vscode-oniguruma scanner; about 2.2x faster than C Oniguruma on everyday searches and 12x on TextMate highlighting replays.",
+  "what_it_does": "Ferroni is a line-by-line Rust port of Oniguruma's parser, compiler, optimizer and backtracking VM. It covers the full Oniguruma syntax (look-around, backreferences, conditionals, absent expressions, subexpression calls, 12 syntax modes, Unicode 18.0) for ASCII and UTF-8 subjects. It exposes two APIs: an idiomatic one (Regex, Captures, match iterators, plus a Scanner with vscode-oniguruma's multi-pattern find_next_match and UTF-16 offsets), and the original C entry points under their C names (onig_new, onig_search, onig_regset_*). So existing Oniguruma call sites port nearly one to one, but it is a Rust crate, not a C-ABI drop-in library.",
+  "how_it_is_fast": "The structure of C Oniguruma is kept, and Rust-only search additions are layered on top (ADR-007, ADR-008). Literal prefix scans use memchr, memchr2, memchr3 and a memmem Finder. Alternations of plain literals become literal tries, and RegSet fallback entries are filtered by required literals (Aho-Corasick for several of them). Leading class runs are skipped, which the project credits with 22-31x on email-like scans, and leading checks let the search jump ahead. Unicode classes use a binary range lookup and adjacent ASCII class runs are batched. Scanner searches use a first-byte dispatch table, rejects on the first instruction, and a lazy-DFA pre-filter built on regex-automata (the default 'dfa-prefilter' feature) plus result and pattern caches. The large highlighting margin comes mostly from these RegSet additions measured against vscode-oniguruma's onig_regset_search(ONIG_REGSET_POSITION_LEAD), not from Rust codegen.",
+  "when_to_use": [
+    "TextMate-grammar syntax highlighting or tokenizing in Rust (a Shiki or vscode-textmate equivalent): the scanner replays of real Shiki calls for the C, Java and PHP grammars ran 8.5-17.6x faster than the vscode-oniguruma C scanner.",
+    "Replacing a C Oniguruma dependency (via the onig crate or FFI) to drop the C toolchain and C memory-safety exposure, when your subjects are UTF-8 or ASCII.",
+    "Patterns the regex crate cannot express (look-behind, backreferences, possessive and atomic groups, \\G, recursion, absent operator) on search and extraction work over kilobyte-to-megabyte documents.",
+    "Untrusted or hostile patterns and input, where per-search time, retry and stack limits plus the compile-time catastrophic-backtracking check matter."
+  ],
+  "when_not_to_use": [
+    "Patterns that fit the regex crate: regex was 1.5x faster on the everyday set and guarantees linear time; PCRE2 JIT was 2.1x faster on everyday and 3.5x faster on advanced patterns among the tasks it could run.",
+    "Workloads dominated by compiling patterns, such as one-shot highlighting of a short snippet: C Oniguruma compiled some grammars 2-3x faster (ts_279_compile 0.53, rust_81_compile 0.35 on EPYC), and some single tasks still favour C (rfc5322_emails 0.67, ipv6_addresses 0.64 on EPYC).",
+    "Non-UTF-8 encodings (27 of Oniguruma's 29 are not ported, e.g. PHP mbregex with EUC-JP or Shift_JIS) or code that needs the POSIX/GNU regcomp/regexec APIs.",
+    "Exact error parity on runaway patterns: where a Rust-only filter leaves out an attempt that would have exhausted the retry limit, C reports ONIGERR_RETRY_LIMIT_IN_MATCH_OVER and Ferroni returns the next match or no match (ADR-008). Ferroni also accepts \\x{140000}-\\x{1FFFFF}, which C rejects.",
+    "Conservative production use: 9 stars and very fast churn (2.0.0 with breaking changes on 2026-10-09, 2.1.0 and 2.1.1 within two days). It also had recent parity bugs on malformed UTF-8 (#257, #259, #261) and a stack overflow on deeply nested patterns (#285), all fixed by 2026-10-08."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "aho-corasick, bitflags, memchr, smallvec; with the default 'dfa-prefilter' feature also regex-automata and regex-syntax. A C compiler is needed only for the 'ffi'/'onigmo' benchmark features.",
+    "min_toolchain": "Rust 1.94 (MSRV), edition 2024",
+    "platforms": "any Rust target; memchr's SIMD paths are used where available (SSE2/AVX2 on x86-64, NEON on aarch64); measured on Linux x86-64 and macOS arm64",
+    "thread_safety": "Regex is Send + Sync and cheap to Clone (clones share one compiled program); Scanner is Send + Sync but its search takes &mut self, so each thread needs its own scanner. Limits can be set process-wide or per search.",
+    "drop_in_for_baseline": "partial: it keeps the Oniguruma C API names and semantics (all 2,974 upstream UTF-8 test cases pass) and a vscode-oniguruma-shaped Scanner, but only as a Rust crate (no C ABI), for UTF-8 and ASCII only, without the POSIX/GNU APIs, and with small documented differences in retry-limit errors."
+  },
+  "gotchas": [
+    "The speed-up does not come from Rust codegen. The everyday and advanced figures depend on Rust-only search filters, and the 12x highlighting figure depends on the RegSet dispatch, required-literal and DFA pre-filter additions against the vscode-oniguruma C scanner's ONIG_REGSET_POSITION_LEAD search. Disabling the default 'dfa-prefilter' feature gives up part of the scanner gain.",
+    "The harness is symmetric where it matters. Ferroni and C both go through onig_search with a reused region (benches/general_regex.rs, regex_tasks.rs). In the replays both get fresh string-cache identities every iteration (corpus.strings() vs CReplay::fresh_ids()), and the C side converts UTF-16 starts to byte offsets outside the timing. One residual asymmetry: each side's scanners persist across Criterion iterations, so Ferroni's lazy DFA pre-filter is always warm, and its build cost is not in the replay timing.",
+    "The pre-filter can backfire. In the earlier run 37989957431 the flat CSS scanner regressed to 11-16 ms (C 4.8x faster) until PR #324 retired the pre-filter on sets whose DFA cache thrashes. Issue #327 (warm JSON and Astro regressions in Ferriki under 2.0.0) was fixed in 2.1.0 by building the pre-filter only after a warm-up. The published textmate set covers only the C, C++, Java, PHP and SCSS replays and the three battle_bench grammars (TypeScript, CSS, Rust); the JSON and Astro replays that regressed are not in it.",
+    "The default nesting limit dropped to 256 units (128 groups) in 2.0.0, so deeply nested patterns now fail with ParseDepthLimitOver unless onig_set_parse_depth_limit and onig_set_ast_node_limit are both raised."
+  ],
+  "pick_this_over_siblings_when": "Pick Ferroni over the regex crate only when you need Oniguruma syntax (look-around, backreferences, TextMate grammars) or the vscode-oniguruma scanner; for plain search, regex is faster and linear-time. mojo-regex targets Python re and Rust regex syntax in Mojo, not Oniguruma.",
+  "verified_claims_summary": "Author-run Criterion means (30 samples) on Blacksmith CI runners on 2026-10-09: an Apple M4 Pro (virtual, macOS 26.3) and an unnamed AMD EPYC with AVX-512 (Ubuntu 24.04). Ferroni was built with rustc 1.99.0 and thin LTO; C Oniguruma (pinned commit f95747b) was built at -O3 by GCC 13.3.0 or Apple clang 21.0.0, and the vscode-oniguruma C scanner was used for the replays. Every engine was validated against C's matches before timing. Geomean over both hosts: 2.2x faster than C on 32 everyday tasks (2.12x EPYC, 2.39x M4 Pro), 1.4x on 17 advanced tasks, and about 12x on the C, Java and PHP Shiki replays (8.5-17.6x per document).",
+  "status_note": "Active (2.1.1 released 2026-10-11, about 6.5k crates.io downloads), BSD-2-Clause like upstream, and declared feature-complete with maintenance-only plans now that C Oniguruma ended in April 2025. The benchmark evidence is unusually complete (raw measurements.json, SHA256SUMS, ADRs), but the project is young, single-vendor and has 9 stars.",
+  "sources_read": [
+    "https://github.com/sebastian-software/ferroni",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/README.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/build.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/src/ffi.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/battle_bench.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/general_regex.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/regex_tasks.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/engines.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/shiki_scanner_bench.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/java_scanner_bench.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/cpp_scanner/mod.rs",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/vscode_scanner_native.c",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/scripts/compare-engines.py",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/results/blacksmith-2026-10-09-37989957431/README.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/results/blacksmith-2026-10-09-37989957431/summary.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/benches/results/blacksmith-2026-10-09-37999607702/summary.md",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/docs/app/routes/adr/007-simd-accelerated-search.mdx",
+    "https://raw.githubusercontent.com/sebastian-software/ferroni/HEAD/docs/app/routes/adr/008-rust-only-optimizations.mdx",
+    "https://github.com/sebastian-software/ferroni/issues?q=is%3Aissue",
+    "https://crates.io/api/v1/crates/ferroni",
+    "https://raw.githubusercontent.com/sebastian-software/ferromark/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

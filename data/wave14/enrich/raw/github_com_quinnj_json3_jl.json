@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/quinnj/json3.jl",
+  "one_liner": "Deprecated Julia JSON reader built on a lazy tape; beats nlohmann/json, json-c and Boost.PropertyTree in kostya/benchmarks, loses to every fast C/C++ parser.",
+  "what_it_does": "JSON3.jl reads JSON into read-only views: JSON3.read(str) returns a JSON3.Object (an AbstractDict{Symbol,Any}) or JSON3.Array (an AbstractVector) backed by the input bytes and a flat tape, and JSON3.read(str, T) maps JSON onto Julia structs registered with StructTypes.jl. It also writes JSON (JSON3.write, JSON3.pretty) and can generate struct definitions from a sample (@generatetypes). It is a Julia package, not a C++ library, so it competes with the C++ baselines only inside a cross-language benchmark.",
+  "how_it_is_fast": "One recursive-descent pass over the bytes writes two UInt64 words per value into a preallocated Vector{UInt64} tape (sized at input length / 10, grown on demand): a type/length word and a payload. Numbers are parsed eagerly with Parsers.jl (Float64, demoted to Int64 when integral); strings and keys are stored only as offset, length and an escape bit into the input buffer, so nothing is copied, unescaped or UTF-8 validated during parsing; containers record their tape span so skipping a subtree is O(1). Object and Array views are built lazily when accessed (a Dict{Symbol,Int} key index per object, a Vector{Int} of offsets per array), whereas the nlohmann and Boost.PropertyTree drivers build an owning DOM and destroy it inside the timed call.",
+  "when_to_use": [
+    "Existing Julia code that already uses JSON3, especially the @generatetypes struct-generation feature, which the README says JSON.jl v1 does not fully replace yet.",
+    "Reading large JSON documents in Julia and touching only some fields: unused strings and subtrees stay as tape entries and are never materialised.",
+    "Typed decoding in Julia with JSON3.read(json, T) and StructTypes mappings instead of a generic Dict tree.",
+    "Read-only access through the standard AbstractDict and AbstractVector interfaces; copy() turns a view into mutable Dict and Vector values when needed."
+  ],
+  "when_not_to_use": [
+    "New projects: the README marks the package deprecated and points to JSON.jl v1; recent commits are compatibility fixes only (Julia 1.13 memhash, 2026-09-17).",
+    "C or C++ code: in the same table simdjson On-Demand (0.060 s), yyjson (0.131 s), RapidJSON (0.154 s), yajl (0.362 s) and Boost.JSON (0.374 s) are 1.9-11.7x faster than JSON3's 0.700 s (derived from page data).",
+    "Untrusted input through JSON3.read(string): short strings that name an existing file are read as that file, validation is lax, and every object key is interned as a Julia Symbol.",
+    "Memory-tight processes: the suite reports 631.76 MiB base RSS for the Julia process (runtime, Pkg and the input text) against about 113 MiB for the C++ drivers; the peak increase (332.81 MiB) is lower than nlohmann's 359.88-447.88 MiB.",
+    "Short-lived scripts that care about first-call latency: JIT compilation adds latency outside the measured window, and issue #33 reports extreme compile times for read(data, Vector{CustomType})."
+  ],
+  "integration": {
+    "form": "module (registered Julia package, installed with Pkg.add(\"JSON3\"))",
+    "dependencies": "Parsers, StructTypes, PrecompileTools, plus Julia stdlibs Dates, Mmap and UUIDs; optional ArrowTypes package extension",
+    "min_toolchain": "Julia 1.6 (Project.toml compat); version 1.14.3; the 2026-09-17 commit fixes Julia 1.13+",
+    "platforms": "any platform Julia supports; the read path is plain Julia with no architecture-specific code",
+    "thread_safety": "not documented (Object and Array are immutable read-only views)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the Json table is a cross-run patchwork. The C++ rows date from the 2025-08-17 maintenance run (README then listed gcc 14.2.0, clang 19.1.7, Debian trixie/sid); the Julia test had been commented out of the runner, and commit 14ae218 ('Restored Julia JSON test', 2025-08-19) re-enabled it and inserted the single JSON3 row from a separate run. The 2026-07-19 update left the Json table byte-for-byte unchanged, so the record's g++ 16.1.0 and clang++ 22.1.8 do not apply to these numbers. Julia at measurement time was v1.11.6; JSON3 was presumably 1.14.3, the latest release then.",
+    "JSON3.read(json::AbstractString) treats any string shorter than 255 bytes that names an existing file as a path and mmaps that file (read_json_str); use JSON3.parse for strings and JSON3.parsefile for files (both added in December 2024, #302).",
+    "Lax validation: string values are scanned only for quotes, backslashes and control characters, keys not even for control characters, with no UTF-8 validation; escapes are decoded only when a string is materialised; parse returns after the root value without checking for trailing bytes.",
+    "The per-coordinate work in the benchmark is not free: each Object accessed in the loop allocates a new Dict{Symbol,Int} of its 5 keys and interns each key through jl_symbol_n, so iterating 524,288 objects allocates 524,288 Dicts inside the timed window. Interned symbols are never freed, which matters for documents with many distinct keys."
+  ],
+  "pick_this_over_siblings_when": "Pick it only inside Julia. DSL-JSON (Java), from the same kostya Json table, is faster (0.571 s vs 0.700 s) and beats the same three C/C++ baselines. The other Julia siblings (built-in sort, NonuniformFFTs.jl, no-BLAS matmul) are not JSON libraries.",
+  "verified_claims_summary": "kostya/benchmarks Json test on an Intel Xeon E-2324G: parse a pretty-printed 524,288-object file from generate_json.rb and average x, y and z. Julia 1.11.6 with JSON3 took 0.700 s (median) vs nlohmann/json 1.182 s (clang++) and 1.266 s (g++), json-c 1.185 s and 1.187 s, and Boost.PropertyTree 2.589 s and 2.907 s, all built with -O3 -march=native -flto=auto -std=c++23: about 1.7-1.8x and 3.7-4.2x (derived from page data). The C++ rows were measured on 2025-08-17 with gcc 14.2.0 and clang 19.1.7, and the JSON3 row two days later in a separate run.",
+  "status_note": "Deprecated in favour of JSON.jl v1 (README notice 2025-10-10) and maintained only for compatibility (last commit 2026-09-17); MIT-licensed. Its benchmark win compares a separate 2025-08-19 Julia run against C++ rows from 2025-08-17, and it rests on slow DOM baselines.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/src/JSON3.jl",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/src/read.jl",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/src/utils.jl",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/src/structs.jl",
+    "https://raw.githubusercontent.com/quinnj/JSON3.jl/HEAD/src/write.jl",
+    "https://github.com/quinnj/JSON3.jl",
+    "https://github.com/quinnj/JSON3.jl/commits",
+    "https://github.com/quinnj/JSON3.jl/issues?q=is%3Aissue+performance",
+    "https://github.com/quinnj/JSON3.jl/issues/289",
+    "https://github.com/JuliaIO/JSON.jl",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/test.jl",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/test_nlohmann_json.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/test_libjson.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/test_boost_ptree.cpp",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/generate_json.rb",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/json/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+    "https://github.com/kostya/benchmarks/commits/master/README.md",
+    "https://github.com/kostya/benchmarks/commit/14ae218",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/14ae218/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/4d4ac9a/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/199aa74/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/63ffa65/common/commands.mk"
+  ],
+  "confidence": 0.6
+}
