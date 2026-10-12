@@ -228,6 +228,10 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   stamps every applied verdict with it, so a bump restamped all 235 wave 6 verification dates. Keep each wave's
   original `today` (render the seed prompts with it too); the new verdicts carry the old date, which matches earlier
   backfill rounds.
+- Public-release pass (2026-10-12): `render_lists.py` now writes `catalog/` (pages per domain, category and
+  entry, JSONL and CSV) and the README's marked blocks; CI fails if a fresh render differs from the commit, so
+  re-render before every data commit. Auto mode refuses force-pushes, so an amend after a bad `git add` (a
+  pathspec error aborts the whole add) has to be a follow-up commit instead.
 
 ## Status
 
