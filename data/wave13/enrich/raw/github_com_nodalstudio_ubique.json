@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/nodalstudio/ubique",
+  "one_liner": "MATLAB-style TypeScript math library with nalgebra-in-WebAssembly kernels; first-party runs show 4.6-26x faster than math.js.",
+  "what_it_does": "Ubique 1.0 is a rewrite of maxto/ubique: MATLAB-named functions (mtimes, plus, transpose, det, inv, linsolve, std, varc, corrcoef) plus time-series, regression, probability-distribution and quant-finance helpers, all taking plain numbers, number[] and number[][] arrays. It ships on JSR (@nodalstudio/ubique) and npm (ubique 1.0.2, ESM and CommonJS builds) with the wasm inlined in the JavaScript, so there is no separate .wasm file to serve. It is not a math.js drop-in: the function names differ (mtimes vs multiply, plus vs add, varc vs variance) and the lib directories show no expression parser, unit system or math.js-style Matrix objects.",
+  "how_it_is_fast": "Matrix multiply, determinant, inverse (only for n > 10), mean, std, variance, z-score, covariance and LU call into a Rust cdylib (rs_lib/src/lib.rs) that uses nalgebra 0.33 DMatrix routines (dense product, LU determinant, try_inverse), exported through wasm-bindgen; inputs are flattened into a Float64Array, copied into wasm linear memory and the result is reshaped into nested arrays on return. Transpose and matrix add, two of the six README highlights, are plain TypeScript Array.map loops (lib/matarrs/transpose.ts, lib/elemop/plus.ts), so their 4.63x and 6.61x compare nested-array loops with math.js's generic transpose and add, not wasm. The wasm is built for size (opt-level \"z\", LTO, codegen-units 1) with no SIMD target feature set in the repo's Cargo files.",
+  "when_to_use": [
+    "JavaScript or TypeScript code (Deno, Node.js or browser) that does dense float64 linear algebra on plain nested arrays and where math.js multiply, det or inv on 20x20 to 500x500 matrices is the bottleneck.",
+    "Repeated determinants and inverses of medium matrices (20x20 to 50x50), where the first-party gains are largest (7.5x to 26x).",
+    "You want MATLAB-like names plus statistics and quant-finance helpers in one MIT package whose only runtime dependency is dayjs.",
+    "You want wasm-accelerated kernels without bundler configuration for a .wasm asset (the module is inlined)."
+  ],
+  "when_not_to_use": [
+    "You need math.js's wider feature set (BigNumber, fractions, units, sparse matrices, expression parsing); Ubique works on plain float64 numbers and arrays.",
+    "Large matrices or throughput-critical numerics: the wasm is size-optimised, single-threaded and built without SIMD, and every call copies inputs in and outputs out; a SIMD or multithreaded wasm backend or native BLAS will be faster.",
+    "Data with small-magnitude entries: det returns exactly 0 whenever |det| < 1e-15 (absolute threshold in both detwasm and the JS fallback), so for example 0.01 times the 10x10 identity (det 1e-20) is reported as singular.",
+    "Small inverses (n <= 10) take the JavaScript linsolve path, not wasm, and the suite's 10x10 inverse row is not reported in the README, so no speedup is shown for that size.",
+    "You need a widely used, battle-tested library: 5 stars, no GitHub issues filed, two maintainers, and the recent commits (May 2026) are benchmark-page work."
+  ],
+  "integration": {
+    "form": "module (JSR @nodalstudio/ubique and npm ubique 1.0.2, ESM and CommonJS builds, wasm inlined in the JavaScript)",
+    "dependencies": "dayjs; rebuilding the wasm needs Rust with nalgebra 0.33.2 and wasm-bindgen 0.2.106 plus deno wasmbuild (the built rs_lib/pkg output is committed)",
+    "min_toolchain": "Node.js 20.6+ for the jsr: specifier route (README); otherwise not documented. Any runtime with WebAssembly support",
+    "platforms": "any JavaScript runtime with WebAssembly (Deno, Node.js, browsers via esm.sh); wasm32 without SIMD",
+    "thread_safety": "not documented; synchronous single-threaded functions",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "det uses an absolute cutoff: results with |det| < 1e-15 are returned as 0 (rs_lib/src/lib.rs detwasm and lib/linalgebra/det.ts), so well-conditioned matrices with small entries look singular; math.js returns the actual value.",
+    "Two of the six README highlights (Transpose 100x100 4.63x, Matrix Add 100x100 6.61x) do not use wasm or nalgebra at all, although the README attributes the gains to nalgebra compiled to WebAssembly; inv only uses wasm above 10x10.",
+    "Harness flaws in scripts/benchmark.ts: one timed loop per test with no warmup (5 iterations for the 500x500 multiply), Ubique always timed first, math.js imported unversioned (npm:mathjs), runtime versions not recorded; the README shows 6 of the suite's 17 rows, and README_NPM says 'up to 20x' while its table shows 26.04x. The interactive browser benchmark the README links (scripts/assets/benchmark.html) pins mathjs@13.2.2 but loads '@bemayer/rubique@1.0.2' from JSR, a pre-rename package whose versions are all yanked (published 2025-10-12), so it does not measure the published @nodalstudio/ubique.",
+    "Every wasm call flattens nested arrays into a Float64Array, copies them into wasm memory and rebuilds nested arrays from the result; this cost is included in the benchmark but dominates for tiny matrices, even though the code comments say wasm is used 'even for 2x2'."
+  ],
+  "pick_this_over_siblings_when": "No sibling in this category is a general linear-algebra library: pick Ubique for MATLAB-style dense matrix and statistics functions on plain JS arrays, and the TensorFlow.js wasm backend when your data already lives in tensors or you need ML operators; kmeans-wasm and hash-wasm cover single kernels only.",
+  "verified_claims_summary": "First-party README numbers on a Mac mini M1 against math.js (version unpinned in the CLI harness): 500x500 multiply 13.05x, 50x50 determinant 26.04x, 20x20 determinant 12.27x and 20x20 inverse 7.53x faster, all through nalgebra compiled to wasm at opt-level z, plus 100x100 add 6.61x and transpose 4.63x, which are plain TypeScript loops; the Deno and rustc versions and the run that produced the table are not stated.",
+  "status_note": "Active but small (5 stars, 260 commits, last commit 2026-05-18, JSR and npm 1.0.2 published November 2025), MIT-licensed and easy to install; treat the speedups as first-party, re-measure at your sizes, and watch the det zero cutoff.",
+  "sources_read": [
+    "https://github.com/NodalStudio/Ubique",
+    "https://github.com/NodalStudio/Ubique/commits/main",
+    "https://github.com/NodalStudio/Ubique/issues?q=is%3Aissue",
+    "https://github.com/NodalStudio/Ubique/tree/main/rs_lib/src",
+    "https://github.com/NodalStudio/Ubique/tree/main/lib",
+    "https://github.com/NodalStudio/Ubique/tree/main/lib/linalgebra",
+    "https://github.com/NodalStudio/Ubique/tree/main/lib/matarrs",
+    "https://github.com/NodalStudio/Ubique/tree/main/lib/elemop",
+    "https://github.com/NodalStudio/Ubique/tree/main/scripts/assets",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/README.md",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/README_NPM.md",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/deno.json",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/rs_lib/Cargo.toml",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/rs_lib/src/lib.rs",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/index.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/scripts/benchmark.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/scripts/assets/benchmark.html",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/scripts/assets/landing_script.js",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/lib/matarrs/transpose.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/lib/elemop/plus.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/lib/elemop/mtimes.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/lib/linalgebra/det.ts",
+    "https://raw.githubusercontent.com/NodalStudio/Ubique/HEAD/lib/linalgebra/inv.ts",
+    "https://jsr.io/@nodalstudio/ubique/meta.json",
+    "https://jsr.io/@bemayer/rubique/meta.json",
+    "https://registry.npmjs.org/ubique"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/mozilla/source-map",
+  "one_liner": "Mozilla's source-map library with its mappings parser in Rust compiled to WebAssembly; beats the library's own 0.6 JavaScript parser.",
+  "what_it_does": "Parses and queries JavaScript source maps (SourceMapConsumer: originalPositionFor, generatedPositionFor, allGeneratedPositionsFor, eachMapping) and generates them (SourceMapGenerator, SourceNode). Since 0.7.0 the 'mappings' string is parsed and indexed by a Rust crate (source-map-mappings) compiled to lib/mappings.wasm, while the public API stays the 0.6 consumer API. The differences are that the constructor returns a Promise, browsers must call SourceMapConsumer.initialize() with the URL or ArrayBuffer of mappings.wasm, and each consumer must be freed with destroy() or scoped with SourceMapConsumer.with().",
+  "how_it_is_fast": "JavaScript copies the mappings string byte by byte into wasm linear memory. Rust then decodes the base64 VLQ segments into flat Mapping structs, which avoids allocating one JS object per mapping. The generated-order array only sorts the tail of each generated line, because the encoding is already ordered by line. Original-order lookups use per-source buckets that are sorted lazily on first use, and queries are binary searches over these arrays. The parse is lazy: it runs on the first query, not in the constructor. Nick Fitzgerald's follow-up posts say part of the gain is algorithmic: mraleph tuned the plain JS version to roughly match, and the Rust code then adopted the same ideas (seen in search snippets only).",
+  "when_to_use": [
+    "Node.js tooling that symbolicates many stack frames or profiler samples against large maps through the mozilla API (originalPositionFor, allGeneratedPositionsFor, eachMapping) and can await consumer construction.",
+    "Existing source-map 0.6 users who want faster lookups and can afford the async constructor and the explicit destroy() calls.",
+    "Short-lived consumers wrapped in SourceMapConsumer.with(), so the wasm memory is freed automatically.",
+    "Random-access lookups on very large maps: in trace-mapping's own benchmark (babel.min.js.map, 347,793 segments) source-map 0.8.0-beta.0 reached 84,002 ops/s against 60,761 for encoded trace-mapping (derived from page data).",
+    "Cases where you need the consumer, SourceMapGenerator and SourceNode from one zero-dependency package."
+  ],
+  "when_not_to_use": [
+    "Long-running services that cache many consumers. All consumers in a realm share one wasm instance and one linear memory, and issue #476 (open since Feb 2023) reports RuntimeError: unreachable after about 100 cached consumers, with no catchable out-of-memory error.",
+    "Code paths that must stay synchronous. The 0.7.0 constructor returns a Promise, which is why much tooling stayed on 0.6.1 or moved to other parsers.",
+    "Pure-JS deployments, browser ESM or single-bundle builds. 0.8.0 ships no browser bundle (dist/ was removed in #362; #408 and #527 are open), ESM in the browser is reported broken (#496), and mappings.wasm must be served or passed as an ArrayBuffer.",
+    "Workloads where @jridgewell/trace-mapping (pure JS, no wasm, no destroy) is enough. Its README (node v20.10.0) has it beating source-map 0.8.0-beta.0 on ascending lookups (196,695 vs 51,427 ops/s on amp.js.map, 3.8x) and on random lookups in amp.js.map (37,995 vs 28,198); all figures derived from page data.",
+    "Builds that must compile the wasm from source with current Rust. Building wasm-mappings fails on Rust 1.96+ with 'rust-lld: error: undefined symbol: mapping_callback' (#530, open since Jul 2026)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (npm package with a prebuilt lib/mappings.wasm); rebuilding the wasm needs Rust targeting wasm32-unknown-unknown (1.95 or older per #530) plus wasm-nm, wasm-gc, wasm-snip and wasm-opt (build.py)",
+    "min_toolchain": "Node.js >= 12 (package.json engines); browsers need WebAssembly and fetch, or an ArrayBuffer passed to initialize()",
+    "platforms": "any JavaScript engine with WebAssembly (wasm32; 4 GiB linear-memory ceiling shared by all consumers in a realm)",
+    "thread_safety": "not documented; one cached wasm instance per JS realm, shared by every consumer through a callback stack; each worker instantiates its own",
+    "drop_in_for_baseline": "partial: same query and generator API as 0.6, but construction is async (Promise), browsers must call SourceMapConsumer.initialize(), and consumers must be destroy()ed"
+  },
+  "gotchas": [
+    "Wasm memory is never garbage collected and never shrinks. parse_mappings preallocates the generated-order vector at input.len()/2 Mapping structs and never shrinks it. By my reading of the struct layout that is about 36 bytes per Mapping, so roughly 18 bytes of wasm memory reserved per byte of mappings text. Per-source copies are added on the first original-order query. This fits the out-of-memory 'unreachable' traps in #476: release builds call process::abort() instead of returning an error.",
+    "destroy() only frees the parsed data and resets the pointer to 0. Querying the consumer again silently re-parses the retained mappings string (_getMappingsPtr), allocating fresh wasm memory that must be destroyed again; use after destroy is not an error.",
+    "Parsing is lazy, so the constructor does not validate the mappings. Bad VLQ data throws 'Error parsing mappings (code N)' at the first query, and the first query pays the whole parse cost.",
+    "The README's 'Use on the Web' snippet still loads unpkg source-map@0.7.3/dist/source-map.js, because 0.7.5 and 0.8.0 ship no dist bundle. The in-repo benchmark (bench/bench.html) likewise needs a bundle built with bench/webpack.config.js on webpack ^4.9.1 and webpack-cli ^3.1, and the repo records no results, hardware or browser versions."
+  ],
+  "pick_this_over_siblings_when": "No sibling parses source maps. The closest pattern is Automerge 2.x (Rust core compiled to wasm replacing the same project's earlier JS), and like there, the gain is over the project's own older JS with a manual-free/async API cost. Pick this for the mozilla consumer API; for lookups alone, check pure-JS @jridgewell/trace-mapping first.",
+  "verified_claims_summary": "First-party: the January 2018 Mozilla Hacks post (seen only through search snippets; hacks.mozilla.org and fitzgen.com fail to resolve here) says the Rust/wasm parser was up to 5.89x faster than the 0.6 JS parser on bench/bench.html with real-world maps, and an editor's note gives up to 10.9x after later algorithmic work; no hardware or browser versions are recorded in the repo, and the per-browser 5.3x/10.8x/9.4x split could not be confirmed this session. Independent: trace-mapping's README (node v20.10.0, hardware not stated) has source-map 0.8.0-beta.0 at 1.8-4.8x the originalPositionFor throughput of 0.6.1 on amp.js.map, babel.min.js.map and preact.js.map (for example 28,198 vs 8,057 ops/s random on amp.js.map; derived from page data); its init-speed table omits the async 0.8 consumer, so parse cost is not compared.",
+  "status_note": "Active Mozilla project (0.8.0 published to npm 2026-07-20 after a three-year gap, last commit 2026-07-21), BSD-3-Clause and copyable. The 2018 speedup is over the library's own untuned JS, which mraleph showed could be tuned to roughly match, and the open issues on wasm memory exhaustion (#476), browser bundling (#408, #527, #496) and Rust 1.96+ builds (#530) are the main risks.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/README.md",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/package.json",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/lib/source-map-consumer.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/lib/wasm.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/lib/read-wasm.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/lib/read-wasm-browser.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/bench.html",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/bench.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/bench-dom-bindings.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/package.json",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/bench/webpack.config.js",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/Cargo.toml",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/README.md",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/src/lib.rs",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/source-map-mappings-wasm-api/Cargo.toml",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/source-map-mappings-wasm-api/src/lib.rs",
+    "https://raw.githubusercontent.com/mozilla/source-map/HEAD/wasm-mappings/source-map-mappings-wasm-api/build.py",
+    "https://github.com/mozilla/source-map/tree/master/bench",
+    "https://github.com/mozilla/source-map/issues?q=is%3Aissue+wasm",
+    "https://github.com/mozilla/source-map/issues/476",
+    "https://github.com/mozilla/source-map/issues/530",
+    "https://registry.npmjs.org/source-map",
+    "https://raw.githubusercontent.com/jridgewell/sourcemaps/HEAD/packages/trace-mapping/README.md",
+    "https://hacks.mozilla.org/2018/01/oxidizing-source-maps-with-rust-and-webassembly/ (ENOTFOUND; search snippets only)",
+    "https://fitzgen.com/2018/02/26/speed-without-wizardry.html (ENOTFOUND; search snippets only)"
+  ],
+  "confidence": 0.72
+}

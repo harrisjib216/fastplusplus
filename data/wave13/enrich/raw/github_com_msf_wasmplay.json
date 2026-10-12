@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/msf/wasmplay",
+  "one_liner": "Zig-vs-C++-vs-Go benchmark repo: Zig ReleaseFast wasm32-wasi edges Emscripten -O2 C++ on one integer matmul loop.",
+  "what_it_does": "A benchmark playground, not a library: three equivalent single-file programs (benchmark.zig, benchmark.cpp, benchmark.go) run 10,000 chained rounds of a 64x64 u64 matrix multiply followed by an FNV-1a hash of the product, then print the final hash, elapsed time and ops/sec. A Makefile builds each program natively and to WebAssembly (zig -target wasm32-wasi, em++ to a standalone .wasm, GOOS=wasip1) and runs it pinned to CPU 0 with taskset under Wasmer (Cranelift and LLVM), Wasmtime and WasmEdge. There is no API; the 'contender' is the Zig compiler's wasm32-wasi output, which you adopt by writing the module in Zig.",
+  "how_it_is_fast": "No special technique: all three sources are the same naive i-j-k triple loop over stack arrays with wrapping 64-bit multiplies. The Zig build is ReleaseFast (LLVM at full optimisation, safety checks off) while the Emscripten build is -O2, and neither enables wasm SIMD (no -msimd128, no simd128 CPU feature), so both emit scalar i64 code and the 1.29x gap more plausibly reflects the optimisation level than the language. Zig wasm under WasmEdge's LLVM-based JIT (15,305 ops/sec) lands on Zig native ReleaseFast (15,386), so for this scalar loop the runtime recovers native code quality.",
+  "when_to_use": [
+    "As a template for comparing standalone WASI runtimes on a scalar 64-bit integer kernel: make bench-wasm-runtimes loops the Go, C++ and Zig modules over Wasmer Cranelift, Wasmer LLVM, Wasmtime and WasmEdge JIT.",
+    "To sanity-check that Zig's wasm32-wasi output keeps up with Emscripten's for a CPU-bound, non-SIMD integer loop running outside a browser (WASI command modules).",
+    "When choosing between Zig and Go for WASI modules: Go's wasip1 build ran 3,230 vs Zig's 15,305 ops/sec on WasmEdge (4.7x, derived from page data).",
+    "To see how much the runtime matters: the same C++ module ran 11,855 ops/sec on WasmEdge and 6,911 on Wasmer Cranelift (1.7x, derived from page data)."
+  ],
+  "when_not_to_use": [
+    "As evidence that Zig beats C++ for wasm: the baseline is em++ -O2 rather than -O3, and the Zig wasm row exists only for WasmEdge; rebuild the C++ module at -O3 before concluding anything.",
+    "For browser, Node.js or V8 workloads: nothing runs in a JavaScript engine and there are no JavaScript or TypeScript rows.",
+    "For SIMD-heavy or floating-point kernels: neither wasm build enables simd128, and the only workload is a 64x64 u64 matmul plus FNV-1a hash.",
+    "As reusable code: there is no library, no tests and no CI; 0 stars, 8 commits all made on 2025-09-01.",
+    "For statistically sound numbers: each README row is one process run with one wall-clock timing, no repeat count, no variance and unstated compiler and runtime versions."
+  ],
+  "integration": {
+    "form": "source-drop (three standalone benchmark programs and a Makefile; not a library)",
+    "dependencies": "Zig 0.13+, Emscripten (emsdk 'latest', unpinned), Go 1.24+, g++ or clang++, taskset, and the Wasmer, Wasmtime and WasmEdge CLIs",
+    "min_toolchain": "Zig 0.13+ and Go 1.24+ per the README; C++20; Emscripten version not stated",
+    "platforms": "Linux host for the Makefile (taskset, ~/.wasmedge/bin path); the wasm32-wasi modules run on any WASI runtime",
+    "thread_safety": "not applicable (single-threaded programs)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stack-size asymmetry (possible harness flaw, not reproduced here because nothing was built): matmul_and_hash keeps three 64x64 u64 arrays on the stack, about 96 KB per call. Zig 0.13 gives wasm32-wasi executables a 16 MiB stack by default (src/link/Wasm.zig), but Emscripten's default STACK_SIZE is 64 KB and overflow is unchecked at -O2 (settings.js: 'it will fail silently'); the em++ line sets no -sSTACK_SIZE. A rebuild of the C++ wasm module may therefore trap or corrupt memory, and the README omits the printed Result hashes that would show all builds computed the same value.",
+    "The per-language targets (make bench-cpp-wasm, bench-zig-wasm, bench-go-wasm) run under Wasmer's default engine; the WasmEdge rows come from make bench-wasm-runtimes, which also runs the Zig module on Wasmer Cranelift, Wasmer LLVM and Wasmtime, yet the README publishes no Zig numbers for those three runtimes.",
+    "The README note that Zig WASM is 'nearly matching C++ optimized native' contradicts its own table (15,305 vs 49,279 ops/sec, 3.2x slower). The 4.2x 'C++ optimized' native gain mixes -O2 to -O3, LTO and -march=native on a Zen 5 CPU with AVX-512; GCC's -O3 loop interchange plus 64-bit vector multiplies is a likely cause (not measured), so it says nothing about wasm.",
+    "Makefile has dead targets: bench-cpp-wasm-opt depends on an undefined build-cpp-wasm-opt and runs a bench-cpp-opt.wasm nothing builds, and the help text lists a bench-wasm target that does not exist."
+  ],
+  "pick_this_over_siblings_when": "Unlike wasm-perf, Speedy.js or the Chankse JavaScript-vs-WebAssembly matmul study, which measure wasm against JavaScript in V8, this repo compares source languages (Zig, C++, Go) on standalone WASI runtimes, so it only fits a server-side WASI runtime or language question; for C++-to-wasm compiler quality, Cheerp's claim against Emscripten is the closer catalogued comparison, and neither is strong evidence.",
+  "verified_claims_summary": "On one pinned core of an AMD Ryzen AI 9 HX 370 (Ubuntu 24.04), the Zig ReleaseFast wasm32-wasi build ran 15,305 ops/sec under WasmEdge JIT against 11,855 for the same 64x64 u64 matmul + FNV-1a loop compiled by em++ -O2, about 1.29x (derived from page data). Each figure is a single run with unstated compiler and runtime versions, and native GCC -O3 -march=native C++ (49,279 ops/sec) beats both wasm builds by more than 3x.",
+  "status_note": "Stale since 2025-09-01 (8 commits in one day, 0 stars, no issues), MIT-licensed and trivially copyable, but it is a benchmark playground rather than a component, and the -O2 vs ReleaseFast baseline plus a probable 64 KB Emscripten stack overflow in the C++ wasm build (not reproduced) mean the 1.29x should not be relied on.",
+  "sources_read": [
+    "https://github.com/msf/wasmplay",
+    "https://github.com/msf/wasmplay/commits/main",
+    "https://github.com/msf/wasmplay/commit/a15e99c",
+    "https://github.com/msf/wasmplay/issues",
+    "https://raw.githubusercontent.com/msf/wasmplay/HEAD/README.md",
+    "https://raw.githubusercontent.com/msf/wasmplay/HEAD/Makefile",
+    "https://raw.githubusercontent.com/msf/wasmplay/HEAD/benchmark.cpp",
+    "https://raw.githubusercontent.com/msf/wasmplay/HEAD/benchmark.zig",
+    "https://raw.githubusercontent.com/msf/wasmplay/HEAD/benchmark.go",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/main/src/settings.js",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/main/src/settings_internal.js",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/main/tools/building.py",
+    "https://raw.githubusercontent.com/emscripten-core/emscripten/main/tools/link.py",
+    "https://raw.githubusercontent.com/ziglang/zig/0.13.0/src/link/Wasm.zig",
+    "https://raw.githubusercontent.com/ziglang/zig/0.13.0/src/Compilation.zig"
+  ],
+  "confidence": 0.6
+}

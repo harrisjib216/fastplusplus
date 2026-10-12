@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/nidud/asmc",
+  "one_liner": "Self-hosted MASM-syntax x86/x64 assembler descended from JWasm; forum timings put it about 1.5x faster than Microsoft's ML.",
+  "what_it_does": "Asmc (asmc for 16/32-bit, asmc64 for 64-bit) assembles MASM-syntax source into COFF, ELF/ELF64, OMF, PE, DOS MZ or flat binary output and can link through -link with the bundled linkw. The command line mirrors ML (-c, -Fo, -Zi, -coff, -Zp and so on), so it can replace ml/ml64 in a build script, and it runs on both Windows and Linux. On top of MASM it adds a C-like high-level layer (.switch, .for, .class, procedure calls inside expressions, C string literals) and newer instruction sets (AVX-512 subsets, AVX10.1/10.2, APX registers r16-r31 per the 2.39-2.40 change log).",
+  "how_it_is_fast": "It keeps JWasm's architecture: the FASTPASS optimisation stores preprocessed lines in memory during pass one and replays them in later passes instead of re-reading and re-expanding the sources (fastpass.asm). Most allocations come from a bump-pointer arena that carves 512 kB chunks and frees them only at exit (LclAlloc in memalloc.asm). Symbols are looked up in FNV-style hash tables (32K global and 4K local buckets, symbols.asm), and reserved words use a table whose hashes are computed when Asmc itself is built (reswords.asm). Since 2.14 (2015) the C code inherited from JWasm has been ported to hand-written assembly and the tool now builds itself; no profile says which of these accounts for the gap to ML.",
+  "when_to_use": [
+    "Large MASM-syntax code bases (Windows x86/x64) where ml/ml64 assembly time is a visible part of the build and you can validate the object output.",
+    "You need MASM syntax on Linux producing ELF or ELF64 objects, which ML cannot do.",
+    "You need instructions that older ML releases lack: the change log adds AVX-512 VBMI/VBMI2/FP16/VP2INTERSECT, AVX10.1/10.2, GFNI and APX extended registers in 2.39-2.40.",
+    "Writing new assembly where the HLL extensions (.switch, .for, .class, inline C strings, invoke with expressions) save effort and you accept an Asmc-only dialect."
+  ],
+  "when_not_to_use": [
+    "You need output identical to MASM: by default Asmc generates different code for HLL constructs and prologues (test reg,reg instead of or reg,reg; .untilcxz as dec ecx/jnz instead of loop; sub instead of add -size), so object diffs against ML fail unless you pass -Zg.",
+    "You need a toolchain that builds from source without trusting a binary: the build needs a prebuilt asmc committed in bin/, and the maintainer says a 32-bit build 'cant be done without a binary' (issue #18).",
+    "Assembly is a small share of build time: the measured gain is about 1.5-1.7x on a 21-22k-line source (roughly 0.6-0.9 s saved per build in those forum runs).",
+    "You want a vendor-supported or widely deployed assembler: Asmc has 91 stars and one main author; a regression left the ELF64/Linux build broken from 2.39.09 to 2.39.15 (issue #36, fixed 2026-10-01).",
+    "You cannot accept GPL-2.0-or-later for a tool you modify or redistribute."
+  ],
+  "integration": {
+    "form": "standalone command-line tool (prebuilt asmc, asmc64, asmc.exe and asmc64.exe in bin/, plus linkw, libw, make and Visual Studio .props/.targets files)",
+    "dependencies": "none at run time; building from source needs a prebuilt Asmc binary and make. Windows setup runs asmc-2.40.cmd (it offers to build the bundled libc and import libraries); Linux 'make install' uses sudo to write /usr/bin, /usr/lib/asmc and /etc/profile.d/asmc-profile.sh",
+    "min_toolchain": "Prebuilt binaries; a source build needs an existing Asmc recent enough to assemble the current sources (issue #36: before the fix, hll.asm needed a 2.39.11 or later bootstrap; with the patch a 2.39.08 bootstrap built 2.39.15)",
+    "platforms": "Hosts: Windows x86/x64 and Linux x86/x86-64. Targets: 16/32/64-bit x86 with COFF, ELF/ELF64, OMF, PE, MZ and flat binary output",
+    "thread_safety": "not applicable: single-threaded command-line tool with global assembler state, one process per invocation",
+    "drop_in_for_baseline": "partial: ML-style command line and MASM syntax, but default code generation differs from Masm (use -Zg), Masm-only keywords such as SIZE, LENGTH, TYPE, HIGH, LOW, THIS and MASK are treated as identifiers unless -Zne is given, @Version reports 1000 (Masm 10), and source using Asmc's HLL extensions will not assemble with ML"
+  },
+  "gotchas": [
+    "Default code generation is not Masm's: doc/command/option-zg.md lists the differences (test vs or, dec/jnz vs loop, byte-sized test on memory operands, prologue sub vs add -size); -Zg restores Masm output.",
+    "Masm keywords HIGH, LOW, LENGTH, SIZE, TYPE, THIS, MASK, WIDTH, NAME, PAGE and TITLE are free identifiers by default; -Zne gives them their Masm meaning (doc/command/option-zne.md), so unmodified Masm sources that use them need that switch.",
+    "Lineage: history.txt says Asmc began in 2011 as 'a modified version of JWASM' and tracked JWasm releases 2.09-2.12 before diverging, so it is a JWasm descendant even though the record's is_fork_of is null; JWasm and UASM are catalogued siblings with the same MASM claim from the same forum thread.",
+    "Speed evidence cannot be checked: the numbers exist only in masm32.com forum snippets (masm32.com does not resolve here, ENOTFOUND) with no hardware, versions or method, and no benchmark harness lives in the repo. A 2020 snippet attributed to the author (nidud) gives 4181 clock ticks for asmc, 4867 for jwasm and 7285 for uasm64 assembling the MASM32 library (no ML row, first-party, thread URL not identified), and a 2024 snippet's '7-8x faster than MASM' contradicts the 1.5-1.7x timings."
+  ],
+  "pick_this_over_siblings_when": "Against its JWasm-lineage siblings JWasm and UASM, pick Asmc when you want the fastest of the three in the same forum test (1200 ms vs 1480 ms JWasm and 1630 ms UAsm64) and the most recent instruction-set coverage and releases (v2.40, October 2026); prefer JWasm if you want a MASM clone without Asmc's dialect changes. The other siblings (minias, aron, Keystone) target GNU or Apple assembler syntax or embedding, not MASM.",
+  "verified_claims_summary": "Third-party forum timings only: jj2007 on masm32.com assembled a 21,000-line MASM source in 1200 ms with Asmc against 1800 ms with both ML 6.15 and ML 10.0 (1.5x, derived from snippet data), and in a 2021 post built the 22k+ line RichMasm source in 1259 ms against 2185 ms for ML 10.0 (about 1.7x, derived from snippet data). Hardware, Asmc versions and method are not stated, and the posts were seen only as search snippets.",
+  "status_note": "Actively maintained (v2.40 released 2026-10-10, 1,349 commits, 0 open and 17 closed issues), GPL-2.0-or-later with prebuilt Windows and Linux binaries, so it is easy to try as a tool; the speed case is anecdotal and the build cannot be bootstrapped without an existing binary.",
+  "sources_read": [
+    "https://github.com/nidud/asmc",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/readme.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/history.txt",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/makefile",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/asmc-profile.sh",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/asmc-2.40.cmd",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/doc/command/readme.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/doc/command/option-zg.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/doc/command/option-zne.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/doc/symbol/at-version.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/doc/tools/readme.md",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/src/fastpass.asm",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/src/memalloc.asm",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/src/symbols.asm",
+    "https://raw.githubusercontent.com/nidud/asmc/HEAD/source/asmc/src/reswords.asm",
+    "https://github.com/nidud/asmc/tree/master/source/asmc/src",
+    "https://github.com/nidud/asmc/tree/master/bin",
+    "https://github.com/nidud/asmc/issues",
+    "https://github.com/nidud/asmc/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/nidud/asmc/issues/18",
+    "https://github.com/nidud/asmc/issues/36",
+    "https://masm32.com/board/index.php?msg=92718 (attempted, ENOTFOUND; content known from WebSearch snippets only)"
+  ],
+  "confidence": 0.5
+}

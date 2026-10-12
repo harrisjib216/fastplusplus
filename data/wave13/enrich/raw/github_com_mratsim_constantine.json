@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/mratsim/constantine",
+  "one_liner": "Constant-time pairing-curve cryptography in Nim whose macro-generated x86-64 MULX/ADCX/ADOX inline assembly beats its own compiler-built field arithmetic.",
+  "what_it_does": "Constantine is a constant-time elliptic-curve and pairing library aimed at blockchain and zero-knowledge workloads. It covers field, extension-field and curve arithmetic on BN254, BLS12-381 and the Pasta curves, plus MSM, Ethereum BLS signatures, EIP-4844 KZG and the EVM BN254/BLS12-381 precompiles. It is consumed from Nim, or as a C static/shared library built with nimble make_lib, through Rust crates (constantine-sys, constantine-ethereum-kzg, a Halo2 ZAL crate) or Go bindings. The assembly is not a separate API: it is the default build path, and CTT_ASM=0 swaps in the generic compiler path behind the same functions.",
+  "how_it_is_fast": "Nim macros act as a compile-time assembler. They emit size-specialised inline asm for each limb count: CIOS Montgomery multiplication, squaring and reduction ('sparebit' variants for moduli with a free top bit). On x86-64 these use MULX with the two independent carry chains of ADCX/ADOX, which C compilers do not emit. A runtime hasAdx() check picks the ADX kernels for 2-6 limbs and otherwise falls back to plain ADD/ADC assembly. The assembly also sidesteps GCC's poor _addcarry_u64 code generation (setc/addb round trips, shown in README-PERFORMANCE.md), and the inline-asm blocks keep the compiler from turning branchless constant-time code back into branches. ARM64 has its own inline-asm generators (2-8 limbs).",
+  "when_to_use": [
+    "Ethereum consensus or execution clients and provers that need constant-time BLS12-381 or BN254 primitives (BLS signatures, KZG for EIP-4844, EIP-2537 and BN254 precompiles) on x86-64 servers with ADX and BMI2 (Broadwell or Zen and later).",
+    "Builds that must use GCC: the asm path removes most of GCC's carry-handling penalty, and the first-party figure is 2.4x for GCC with inline asm over plain GCC.",
+    "Rust, Go or C projects that want a pairing-curve backend with no runtime dependencies (GMP is only used in tests).",
+    "Many-core MSM and batched KZG verification, where its threadpool runs nested parallel loops (three parallel MSMs, each with three nested parallel loops, for batch KZG verification)."
+  ],
+  "when_not_to_use": [
+    "When you need an audited or stable library. The README carries an 'experimental' badge and says the library is provided as-is, without guarantees, at least until it is audited and formal proofs exist.",
+    "When you need evidence that the assembly pays off on your platform. No asm-off numbers or external-library comparisons are published; the charts are asm-on Constantine timings only.",
+    "CPUs or VMs without ADX. The fallback x86 asm is marked in limbs_montgomery.nim as 'faster than GCC but slower than Clang', so a Clang build there may do better with CTT_ASM=0.",
+    "MSVC (not configured; Windows is tested with MinGW only), Apple Clang with LTO (no Intel asm syntax), GCC 15 with LTO (#588: cyclotomic exponentiation tests fail, which affects BLS signatures and KZG), or GCC on ARM64 (#582: 'more than 30 operands in asm').",
+    "Fields wider than 6 limbs (384 bits) on x86-64, and full-width moduli with no spare bit: Montgomery multiplication there takes the compiler path (mulMont_FIPS or generic CIOS), not the ADX kernels."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime; build needs Nim v2.2.0 plus a C compiler (Clang recommended); Rust crates by git dependency invoke nimble with CC=clang from build.rs; Go bindings link the static library",
+    "min_toolchain": "Nim v2.2.0; GCC 7+ or Clang 14+ (Clang 14 for -masm=intel, required with LTO); Homebrew Clang on macOS",
+    "platforms": "x86-64 (MULX/ADCX/ADOX kernels with runtime ADX dispatch, ADD/ADC asm fallback), x86-32 asm, ARM64 inline asm with Clang (GCC broken per #582), generic code elsewhere; Linux, macOS, Windows via MinGW",
+    "thread_safety": "not documented for the primitives; the core arithmetic does no heap allocation, CPU-feature globals are set at load, and parallel MSM/KZG APIs take an explicit threadpool",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "The asm-versus-compiler comparison is not like-for-like. The release flags set no -march, -mbmi2 or -madx, so the CTT_ASM=0 build cannot use MULX at all; only the ADCX/ADOX dual carry chain is something compilers truly cannot emit. In addition, bench_fields_template.nim's Multiplication and Squaring loops reuse loop-invariant inputs with preventOptimAway placed only before the loop. The asm kernels are 'asm volatile' with a 'memory' clobber and cannot be hoisted, while the plain C path can be, and bench_blueprint.nim itself warns that 'the simplest operations might be optimized away by the compiler'.",
+    "The 'CPU cycles' column in the published benchmarks (for example Fp[BLS12_381] multiplication 68 cycles) is rdtsc ticks at the nominal clock; the harness prints a warning that turbo and overclocking skew it.",
+    "Every generated asm block that writes through a pointer carries a full 'memory' clobber (a comment says the Poly1305 MAC test fails without it). This forces the compiler to reload operands around each kernel and limits scheduling across calls. Issue #446 (open) reports that a 1.7x field-arithmetic advantage on secp256k1 shrinks to a 0.85x disadvantage at the elliptic-curve level, traced to cache misses.",
+    "The README is stale on ARM: it says 'Assembly is planned for ARM', and the Rust install notes say Constantine has no ARM assembly, yet constantine/math/arithmetic/assembly holds limbs_asm_*_arm64.nim generators that config.nim enables (UseASM_ARM64) for any GCC-compatible compiler."
+  ],
+  "pick_this_over_siblings_when": "Pick Constantine over CryptOpt when you need a complete constant-time pairing-curve stack (BLS signatures, KZG, EVM precompiles, MSM) with asm specialised per limb count. Pick CryptOpt, or CRYPTOGAMS-style perlasm kernels, when you need field arithmetic for Curve25519, P-256 or secp256k1 checked for equivalence against Fiat Cryptography with measured gains over GCC and Clang, which Constantine does not offer (its README says formal proofs are not yet produced).",
+  "verified_claims_summary": "First-party prose only, in README-PERFORMANCE.md: MULX/ADCX/ADOX assembly is 'up 60%' faster for BLS12-381 (6-limb) field arithmetic and '~60% faster than Clang', and there is a '2.4x perf ratio' between plain GCC and GCC with inline asm. No CPU, compiler version, table or run log stands behind these figures, and the same file's GCC-versus-Clang figures disagree (up to 2x, ~50%, 20-25%). The published charts (Ryzen 7 7840U; i9-9980XE for BN254 MSM) show asm-on Constantine timings only. The nimble bench tasks can reproduce an on/off pair (outputs are suffixed _asmIfAvailable or _noAsm via CTT_ASM=0), subject to the harness caveats above.",
+  "status_note": "Actively maintained (last commit 2026-08-04, Nim 2.2.x regression #628 open), MIT OR Apache-2.0 and copyable. It is unaudited and labelled experimental, its speedup over its own compiler path is an undocumented first-party claim, and toolchain-specific failures (GCC 15 LTO #588, GCC ARM64 asm #582) mean Clang is the only well-trodden build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/README.md",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/README-PERFORMANCE.md",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine.nimble",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/LICENSE-MIT",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/platforms/config.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/platforms/abstractions.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/platforms/primitives.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/platforms/isa_x86/macro_assembler_x86.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/platforms/isa_x86/macro_assembler_x86_att.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/math/arithmetic/limbs_montgomery.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/math/arithmetic/assembly/limbs_asm_mul_mont_x86_adx_bmi2.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/constantine/math/arithmetic/assembly/limbs_asm_mul_mont_arm64.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/benchmarks/bench_blueprint.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/benchmarks/bench_fields_template.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/benchmarks/bench_fp.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/benchmarks/bench_gmp_modmul.nim",
+    "https://raw.githubusercontent.com/mratsim/constantine/HEAD/benchmarks/platforms.nim",
+    "https://github.com/mratsim/constantine/tree/master/constantine/math/arithmetic/assembly",
+    "https://github.com/mratsim/constantine/tree/master/benchmarks",
+    "https://github.com/mratsim/constantine/tree/master/media",
+    "https://github.com/mratsim/constantine/issues?q=is%3Aissue+blst+OR+performance+OR+gcc+OR+assembly",
+    "https://github.com/mratsim/constantine/issues/446",
+    "https://github.com/mratsim/constantine/issues/357",
+    "https://github.com/mratsim/constantine/issues/588",
+    "https://github.com/mratsim/constantine/issues/582",
+    "https://ethresear.ch/t/releasing-constantine-v0-2-0-jan-2025-a-modular-cryptography-stack-for-ethereum/19990 (ENOTFOUND; search snippet only)"
+  ],
+  "confidence": 0.74
+}

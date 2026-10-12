@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn",
+  "one_liner": "Educational cat/dog CNN, training and inference, hand-written in NASM AVX-512; claims ~10x over an unpublished NumPy CNN, slower than PyTorch.",
+  "what_it_does": "A standalone Linux x86-64 program, entered at _start and linked with ld against libc/libm only for expf and logf. It loads preprocessed 128x128x3 cat/dog images from raw files, trains a fixed network (three 3x3 Conv2D+ReLU+2x2 MaxPool stages, Dense 32768-128 ReLU, Dense 128-1 sigmoid) with per-sample backprop and SGD (batch 16, lr 0.01, 10 epochs), and prints the test accuracy. It is not a library: the layer shapes, file paths and hyperparameters are NASM equ constants and hard-coded call arguments, every tensor is a global .bss buffer, and there is no API.",
+  "how_it_is_fast": "Activations are stored channel-interleaved (HWC), so the three kernel rows of a 3x3 window are contiguous runs of 3*C floats. Each row is loaded as masked 16-float ZMM chunks (9 lanes for the 3-channel first layer) and accumulated with vfmadd231ps. Dense layers are 16-wide FMA dot products, and max-pooling processes 16 channels per instruction, recording argmax as k-mask bitmaps. Every output scalar ends with a horizontal reduction (vextractf32x8, vextractf128, two haddps) and a call to relu. This is direct convolution with no im2col/GEMM, no register blocking across filters or pixels, no batching and no threads, which is consistent with the README's admission that it stays slower than PyTorch.",
+  "when_to_use": [
+    "Studying how a complete CNN forward and backward pass (conv, max-pool argmax masks, dense, BCE loss, SGD) maps onto AVX-512 instructions, in about 2,400 lines of commented NASM.",
+    "Teaching or self-study of masked AVX-512 loads, k-mask logic and HWC layouts for convolution.",
+    "A starting point for hand-writing a small fixed-shape conv kernel on an AVX-512 (F+BW+DQ) x86-64 Linux box, with the expectation of rewriting the inner loops."
+  ],
+  "when_not_to_use": [
+    "Any production training or inference: PyTorch is faster by the author's own statement, and NumPy-based code is the only baseline it is claimed to beat.",
+    "CPUs without AVX-512F/BW/DQ (most client Intel parts since Alder Lake, Zen 3 and earlier, Apple silicon): it uses vmovdqu8 and kmovd (BW) and vextractf32x8 (DQ) unconditionally, with no fallback.",
+    "Reusing it as a kernel library: routines use ad-hoc register conventions (rbx and r12-r15 clobbered, inputs in rax/r14/k1) and global buffers, so they cannot be called from C/C++ without wrappers.",
+    "Different shapes or datasets without editing assembly: image size, filter counts, the 19,998-train/5,000-test split and file paths are hard-coded.",
+    "Workflows that need a trained model: _start never writes the learned weights out (write_floats exists only as a debug helper)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "NASM, GNU ld, glibc libc/libm (expf, logf); the dataset as raw files from the author's Google Drive links (no preprocessing script in the repo) and parameters/parameters.raw initial weights; Docker (debian:bookworm-slim) is the documented environment",
+    "min_toolchain": "NASM (any version that assembles AVX-512; build.sh uses -f elf64 -g -F dwarf) plus ld with /lib64/ld-linux-x86-64.so.2",
+    "platforms": "x86-64 Linux only (raw syscalls, ELF64), AVX-512F + AVX-512BW + AVX-512DQ required",
+    "thread_safety": "Not thread-safe: single-threaded program, and all weights, activations and gradients live in global .bss buffers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No benchmark harness exists: the repo contains no timing code (no rdtsc, clock_gettime or time syscall), no NumPy reference, and no hardware or version notes. The ~10x figure was measured outside the repo. It was added to the README on 2026-02-08 (commit c775a12) without numbers.",
+    "Silent failure on missing inputs: loader.asm and parameters.asm never check the return value of open() or read(). Running from the wrong directory, or without dataset/raw_files/*.raw, leaves the buffers zero-filled and 'trains' on zeros. The program also needs about 1 GB of static .bss for the training images, plus about 35 MB of weights and gradients.",
+    "Training visits samples in file order every epoch (no shuffling) and drops the last 14 of the 19,998 training images to fit whole batches of 16. The README's '25,000 images' is the train plus test total.",
+    "The '1.4x faster than PyTorch' figure the README credits to the earlier mnist-asm-nn project is not in that project's own README, which instead claims about 7x over a NumPy implementation and does not mention PyTorch."
+  ],
+  "pick_this_over_siblings_when": "Pick it over CvsAssemblyBenchmark or FP-ASM only when you want a full end-to-end training loop (conv, pool, dense, backprop) to read; those siblings have measured, reproducible timings for their kernels, and this one has none. For real CNN inference on small targets, ESP-NN's measured int8 kernels are the catalogued option.",
+  "verified_claims_summary": "The only performance statement is the README's 'approximately 10x faster than an equivalent NumPy-based CNN', for both training and inference. No timings, CPU, NumPy/BLAS version or NumPy code are published, so the ratio cannot be checked. The author also says it does not reach PyTorch speed. Reading the code confirms it is a single-threaded, per-sample, direct-convolution implementation that reaches the same 78% test accuracy as the author's Python version.",
+  "status_note": "A 2025-12 to 2026-02 educational project (last commit 2026-02-08, one open feature-idea issue). It is MIT-licensed and readable, but it is a fixed-shape training program rather than a reusable library, and its speed claim is first-party with no data behind it.",
+  "sources_read": [
+    "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/README.md",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/build.sh",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/macros.inc",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/_start.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/loader.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/buffer.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/parameters.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/padding.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/forward.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/convolution.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/maxpool.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/dense.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/dot_product.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/activation_functions.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/loss.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/backward.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/matrix_ops.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/update_weights.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/debug_tools.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/debug_buffer.asm",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/cat-dog-asm-cnn/HEAD/print.asm",
+    "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn/tree/main/parameters",
+    "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn/commits/main",
+    "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn/commit/c775a12",
+    "https://github.com/mohammad-ghaderi/cat-dog-asm-cnn/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/mohammad-ghaderi/mnist-asm-nn/HEAD/README.md"
+  ],
+  "confidence": 0.6
+}

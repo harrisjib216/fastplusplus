@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/mklarqvist/positional-popcount",
+  "one_liner": "C99 SIMD kernels counting set bits per bit position over 16-bit arrays; up to 16x faster than GCC-vectorized scalar code.",
+  "what_it_does": "Computes the positional population count: for a stream of 16-bit words (8- and 32-bit variants exist too), how many words have bit 0 set, bit 1 set, and so on, accumulated into a caller-supplied array of 16 uint32_t counters. The API is one call, pospopcnt_u16(data, len, flags), which picks a kernel by array length from what the build enables, plus around 40 named kernels (scalar, SSE, AVX2, AVX-512BW, AVX-512VBMI) reachable through get_pospopcnt_u16_method(). It is research code for the Klarqvist, Mula and Lemire paper (arXiv 1911.02696), not a polished library.",
+  "how_it_is_fast": "The fastest kernels use a Harley-Seal carry-save adder (CSA) network: 16 vectors of 32 words are compressed into bit-plane accumulators (ones, twos, fours, eights, sixteens). Only the sixteens plane is expanded into per-position 16-bit lane counters, by shift-and-mask, once every 16 vectors. On AVX-512 each CSA is two vpternlogd instructions. The lane counters are flushed into the 32-bit totals every 65,535 vectors so they cannot overflow. Mid-size inputs use an 'adder forest' (a shallower CSA tree) or Mula's blend-and-popcnt kernel, and arrays under 32 values use an SSE2 psadbw kernel.",
+  "when_to_use": [
+    "Per-bit-position tallies over arrays of thousands to millions of 16-bit flags, e.g. SAM/BAM FLAG fields, one-hot or bitmap feature columns, or bit-sliced statistics.",
+    "x86-64 with AVX-512BW (Skylake-X, Cannon Lake, Ice Lake or later), where the Harley-Seal kernel reached 0.12 cycles per value on warm data.",
+    "AVX2-only x86 machines: the AVX2 CSA kernel still measured 0.199 cycles per value against 2.049 for the auto-vectorized scalar loop on Cannon Lake (about 10x), and 0.308 against 3.778 on Haswell (about 12x), derived from the README cycle table.",
+    "Arrays of about 1,024 values or more; the auto-dispatch switches to the CSA kernels at 512 (AVX-512) or 1,024 (AVX2) values.",
+    "You can vendor two C99 files and build them for a known target CPU."
+  ],
+  "when_not_to_use": [
+    "Arrays under about 512 values: in the README speedup table the AVX-512 Harley-Seal kernel is 0.52x at 128 values and 0.74x at 256, and the gain over the scalar loop is 2-3x at best.",
+    "Portable binaries: dispatch happens only at compile time (POSPOPCNT_SIMD_VERSION from __AVX512F__, __AVX2__ or __SSE4_2__). A -march=native build will not run on older CPUs, and a default x86-64 build (SSE2 only) falls back to a scalar umul128 kernel.",
+    "Non-x86 targets: the header includes arm_neon.h but there are no NEON or ASIMD kernels; ARM gets scalar code only. The later Clausecker, Lemire and Schintke work covers AVX2, AVX-512 and ASIMD.",
+    "Production use: the README sends production users to libalgebra.h. The repo has had no commits since January 2020, and its open MinGW build failure (issue #30, 'invalid register for .seh_savexmm') was never fixed.",
+    "8-bit or 32-bit input through the auto path: get_pospopcnt_u8_method(PPOPCNT_U8_AUTO) and the u32 AUTO both return the scalar naive loop (a TODO in pospopcnt.c), so you must pick a named kernel."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (pospopcnt.h + pospopcnt.c; the benchmarks need C++11, and the instrumented benchmark needs Linux perf events)",
+    "min_toolchain": "C99; GCC or Clang in practice (the kernels use the & operator on __m128i, __restrict__, __attribute__ and unsigned __int128). Travis CI ran GCC 5-8 and Clang; the README numbers came from GCC 7.3.1.",
+    "platforms": "x86 / x86-64 with SSE4.2, AVX2 or AVX-512BW (or AVX-512VBMI) enabled at compile time; scalar fallback elsewhere",
+    "thread_safety": "Not documented. By inspection the kernels keep no global or static state and write only the caller's counter array, so concurrent calls with separate counter arrays are safe.",
+    "drop_in_for_baseline": "partial: it replaces a hand-written per-bit counting loop with one call that adds into 16 uint32_t counters, but there is no std or libc equivalent to drop it into, and some kernels overwrite the counters instead of adding to them (see gotchas)."
+  },
+  "gotchas": [
+    "Silent wrong answers on AVX-512F CPUs without AVX-512BW (Knights Landing/Mill): __AVX512F__ selects the AVX-512 dispatch path, but the BW kernels it calls for len >= 256 compile to stubs that return 0 without counting, and pospopcnt_u16_avx512_harley_seal returns 0 when neither BW nor VBMI is enabled. The counters stay unchanged and no error is reported.",
+    "Harness flaw in benchmark.cpp: assert_truth() prints FAILURE on a mismatch but always returns true, and it returns early when all counters are zero, so ./bench (and the CI run './bench 100000 10') never fails on wrong counts and silently times no-op stubs. The Linux instrumented_benchmark does check: it runs with its test flag always on and prints 'Problem detected' for a kernel that returns all zeros or wrong counts.",
+    "Harness bug introduced on 2019-12-05 (commit 2c941c7, 'Refactor statistics calculations'): StatisticsBuilder::calculate divides an uninitialized time.mean, so the MB/s figure is garbage. It also sums cycles with std::accumulate(..., 0), an int accumulator that truncates totals above 2^31. At the defaults (1M values, 500 iterations) the no-SIMD baseline's total of about 8.8e9 cycles wraps, so the current ./bench badly under-reports that baseline. The README tables date from March to August 2019 and predate the bug, so they cannot be reproduced with today's ./bench, which also no longer prints MB/s.",
+    "API inconsistency: most kernels add into flags, but pospopcnt_u16_avx512_masked_ops stores its 16 counters with _mm512_storeu_si512, and the 8-bit wrappers built by make_pospopcnt_u8_from_u16 assign flags[i] = ... instead of adding. Zero the counters before every call when mixing kernels."
+  ],
+  "pick_this_over_siblings_when": "Choose it over sse-popcount when you need a count per bit position rather than one total popcount; sse-popcount solves the plain total-popcount problem. Against libalgebra (same author), choose this repo only to study or benchmark the individual pospopcnt kernels; its own README says libalgebra.h is the production-ready packaging.",
+  "verified_claims_summary": "On a Cannon Lake Core i3-8121U with GCC 7.3.1 at -O3 -march=native, single core, the AVX-512BW Harley-Seal kernel was 16.28x faster than GCC's auto-vectorized naive loop at 65,536 16-bit values (6.43x at 4,096, 0.52x at 128). Against the same loop with vectorization disabled it was 138.71x faster. A separate 1M-value table (README, also from Sky Lake and Haswell) gives 0.121 cycles per value and 48,906 MB/s for the AVX-512 CSA kernel against 2.049 cycles and 2,953 MB/s for the auto-vectorized loop, about 17x (derived from page data). The data was cache-warm: the reference function had just read it.",
+  "status_note": "Abandoned since 2020-01-23 (no releases, MinGW issue #30 still open) but Apache-2.0 and small enough to vendor. The published numbers predate the 2019-12-05 bugs in benchmark.cpp; anyone re-measuring should use the instrumented_benchmark or fix calculate() and assert_truth() first.",
+  "sources_read": [
+    "https://github.com/mklarqvist/positional-popcount",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/README.md",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/pospopcnt.h",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/pospopcnt.c",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/benchmark.cpp",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/Makefile",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/example.c",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/benchmark/linux/instrumented_benchmark.cpp",
+    "https://github.com/mklarqvist/positional-popcount/commits/master/benchmark.cpp",
+    "https://github.com/mklarqvist/positional-popcount/commits/master/README.md",
+    "https://github.com/mklarqvist/positional-popcount/commit/2c941c75e7dd4aebf0b00a0eef68f537cff25c01",
+    "https://github.com/mklarqvist/positional-popcount/issues?q=is%3Aissue",
+    "https://github.com/mklarqvist/positional-popcount/issues/30",
+    "https://github.com/mklarqvist/positional-popcount/issues/25"
+  ],
+  "confidence": 0.85
+}
