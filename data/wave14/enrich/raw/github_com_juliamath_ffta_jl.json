@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/juliamath/ffta.jl",
+  "one_liner": "Generic pure-Julia FFT for any element type; its only speed claim over FFTW is a 2021 one-shot N=64 snippet that no longer reproduces.",
+  "what_it_does": "Computes forward and backward FFTs (fft, bfft, rfft, brfft and plan_* versions through the AbstractFFTs.jl interface) for arrays of any element type that defines one(T) and conversion from Float64/ComplexF64: for example Float64, Float32, BigFloat, Symbolics variables, inside StaticArrays containers. Complex transforms work along any set of dimensions in the current source, though the README still says vectors and matrices only; real-input rfft/brfft stop at 2D. It is used through the same AbstractFFTs calls as FFTW.jl, but the two packages fight over dispatch when both are loaded.",
+  "how_it_is_fast": "Planning builds a call graph that factors N: radix-4/radix-2 recursion for powers of two, radix-3 for powers of three, mixed-radix Cooley-Tukey with N1 chosen near sqrt(N) for composites, an O(N^2) DFT for primes below 73 and Bluestein's chirp-z convolution above that. Twiddles are generated on the fly with Singleton's trigonometric recurrence instead of stored tables, and the code is generic Julia that specialises on the element and array type. The README attributes its one speed win to that specialisation carrying into small StaticArrays; with planned execution a contributor measured FFTA as slower than FFTW in every size class (issue #130).",
+  "when_to_use": [
+    "FFTs over element types FFTW cannot handle: Complex{BigFloat} for high precision, Symbolics variables to derive a symbolic transform, or SizedArray/SVector containers that should keep their type.",
+    "Small transforms where a pure-Julia, MIT-licensed dependency with no binary library matters more than speed.",
+    "Code that must stay generic over the number type (the README asks only that one(T) and the relevant convert methods exist).",
+    "Power-of-two sizes when calling the internal FFTA.fft_pow2_radix4! with preallocated MVector output and SVector input, which the maintainer suggested in issue #119 as the fastest route for small sizes."
+  ],
+  "when_not_to_use": [
+    "Anywhere FFTW applies with a reused plan: issue #130 measured planned FFTA at a geomean 2.6x slower for powers of two, 7.3x for smooth sizes, 5.8x for primes, 5.2x for 2D and up to 11.8x for 2D rfft (aarch64 Neoverse-N1, Julia 1.12.6, FFTW 3.3.11 single-threaded); the README itself says to use FFTW.jl for performance.",
+    "In a session that also loads FFTW: FFTA.plan_fft and FFTA.fft dispatch to FFTW's more specific methods for ordinary ComplexF64 arrays and return FFTW plans (open issue #66), so you may not be running FFTA at all.",
+    "Large prime or prime-heavy sizes: Bluestein scratch and the chirp are rebuilt on every execution (n = 1009 costs about 23 us of setup per call in issue #130).",
+    "Float32 work at large n where accuracy matters: issue #118 (open, reported by stevengj) found error growing nearly O(n) because of the twiddle recurrence; the June 2026 Singleton-recurrence change targets this, but the issue is still open.",
+    "3D or higher real-input transforms (plan_rfft throws 'only supports 1D and 2D FFTs') and multithreaded transforms (no threading)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "AbstractFFTs, Reexport, Primes, MuladdMacro, DocStringExtensions, plus the LinearAlgebra and Random standard libraries",
+    "min_toolchain": "Julia 1.6.7 per Project.toml (issue #110 warns some FFTs may fail on older Julia versions)",
+    "platforms": "any platform Julia runs on (pure Julia, no binary artifacts)",
+    "thread_safety": "not documented; from the source, a plan's CallGraph holds mutable workspace vectors that composite-size kernels write into, so one plan should not be executed from several threads at once",
+    "drop_in_for_baseline": "partial — same AbstractFFTs API (fft, bfft, rfft, plan_fft) as FFTW.jl, but no FFTW flags or wisdom, no multithreading, real transforms only up to 2D, and loading both packages makes FFTW's methods win dispatch"
+  },
+  "gotchas": [
+    "The catalogued benchmark is stale and the README snippet now times FFTW against itself. The 698.611 ns vs 5.433 us lines first appear in the v0.2.2 README (September 2021), when FFTA exported its own fft that ran directly on the SVector. Since v0.2.3 FFTA.fft is AbstractFFTs.fft, and with FFTW loaded in the same session (as in the snippet's `import FFTA, FFTW`) FFTW's plan_fft method wins for the converted ComplexF64 vector (issue #66). Issue #119 (April 2026, Julia 1.12.4, FFTA 0.3.1, FFTW 1.10.0) reproduced 4.922 us for FFTA.fft and 4.945 us for FFTW.fft, against 422 ns for a reused FFTW plan on a plain Vector; the maintainer agreed the README result is from 'a now-really-old version of FFTA' and that the comparison may be FFTW against itself. No valid current measurement shows FFTA faster than FFTW.",
+    "Even the original 2021 numbers compared one-shot calls: fft(x) builds a plan on every call, so the 7.8x mostly measured FFTW planning plus SVector-to-Array conversion (34 allocations), not transform speed.",
+    "The repo's benchmark suite runs FFTA and FFTW in separate Julia processes to avoid the dispatch clash, but it times fft($x) and rfft($x) with a fresh plan per call, and its results exist only as CI artifacts and a github.io report, not in the repo.",
+    "Twiddle factors come from a recurrence whose inner step is wrapped in @fastmath, and the README's 'N in {1,2}' limit is out of date for complex transforms (any set of dimensions now) but still true for rfft."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling is an FFT; other pure-Julia entries such as Bessels.jl, Gaius.jl and TriangularSolve.jl cover special functions and dense linear algebra. Choose FFTA over its FFTW baseline only for generic element types (BigFloat, symbolic) or a binary-free MIT dependency, not for speed.",
+  "verified_claims_summary": "The README shows one BenchmarkTools pair from FFTA v0.2.2 (2021): fft on a 64-element StaticArrays SVector of Float64 took 698.611 ns in FFTA and 5.433 us in FFTW.jl, both as one-shot calls that plan on every invocation, with no CPU, Julia version or FFTW build stated. A 2026 rerun on current versions (issue #119) found both at about 4.9 us, probably FFTW in both calls, and planned FFTW at 422 ns; a contributor's planned comparison (issue #130) has FFTA 2.2x to 11.8x slower than FFTW by geomean across size classes.",
+  "status_note": "Maintained by the JuliaMath org (recent commits are the Singleton-recurrence accuracy work and CI bumps; v0.3.1 is the latest registered release) and MIT-licensed, but its only speed claim is a 2021 one-shot snippet the maintainer concedes is obsolete; current measurements show it slower than FFTW, so treat it as a generic-type FFT, not a faster one.",
+  "sources_read": [
+    "https://github.com/JuliaMath/FFTA.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/src/FFTA.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/src/plan.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/src/algos.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/src/callgraph.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/src/singleton_twiddle.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/docs/src/benchmarks.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/HEAD/benchmark/fftw_env/bench_fftw.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.1.0/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.0/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.0/Project.toml",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.1/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.2/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.2/src/FFTA.jl",
+    "https://raw.githubusercontent.com/JuliaMath/FFTA.jl/v0.2.3/README.md",
+    "https://github.com/JuliaMath/FFTA.jl/issues?q=is%3Aissue",
+    "https://github.com/JuliaMath/FFTA.jl/issues/119",
+    "https://github.com/JuliaMath/FFTA.jl/issues/118",
+    "https://github.com/JuliaMath/FFTA.jl/issues/130",
+    "https://github.com/JuliaMath/FFTA.jl/issues/66",
+    "https://github.com/JuliaMath/FFTA.jl/commits/main",
+    "https://github.com/JuliaMath/FFTA.jl/commits/main/README.md",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/F/FFTA/Versions.toml",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/F/FFTA/Compat.toml"
+  ],
+  "confidence": 0.8
+}

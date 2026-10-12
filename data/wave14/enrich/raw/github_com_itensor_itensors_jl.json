@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/itensor/itensors.jl",
+  "one_liner": "Julia tensor-network library (DMRG, TRG, CTMRG) that matches or beats C++ ITensor v3 at large bond dimension on MKL.",
+  "what_it_does": "ITensors.jl is the Julia rewrite of the ITensor tensor-network library. Its ITensor type has named indices that match by identity, so contractions are written as A * B without index bookkeeping, and it supports dense and quantum-number (block-sparse) storage through the NDTensors.jl backend. MPS/MPO algorithms such as dmrg, OpSum and siteinds moved to the separate ITensorMPS.jl package in v0.7 (October 2024). It is not a drop-in for C++ ITensor: the concepts (Index, ITensor, MPS, Sweeps) carry over, but programs have to be rewritten in Julia.",
+  "how_it_is_fast": "Heavy lifting is dense GEMM/SVD/eigensolver calls in BLAS/LAPACK (Intel MKL in the benchmark, through MKL.jl), so at large bond dimension both versions mostly run the same MKL kernels. The Julia side's block-sparse contraction code in NDTensors.jl, Strided.jl permutations and KrylovKit Lanczos/Davidson steps are compiled by Julia's LLVM JIT for the concrete element and block types. The benchmark sources give no reason for the gap; the logs show it per sweep (for example 1303 s per sweep for Julia against 1875 s wall and 1640 s CPU for C++ at maxdim 10000), which points at the block-sparse bookkeeping and contraction layer rather than BLAS. An optional splitblocks transform (sparser MPO blocks) existed only in Julia, but the compared rows do not use it.",
+  "when_to_use": [
+    "DMRG on quantum-number-conserving 1D and 2D lattice models at bond dimensions of roughly 1000 and up, where the 2021 runs show Julia 1.05-1.7x faster than C++ ITensor v3 single-threaded.",
+    "New tensor-network projects where Julia is acceptable: active development (ITensors.jl v0.9.32, last commit 2026-09-27), MKL or OpenBLAS backends, plus extensions for HDF5, TensorOperations and Zygote-based autodiff.",
+    "Prototyping TRG, CTMRG or custom contractions interactively, where named-index contraction cuts bookkeeping code and the JIT cost is paid once per session.",
+    "Workloads that benefit from block-sparse multithreading (Julia started with -t N) instead of BLAS threads; the benchmark runner refuses to combine the two."
+  ],
+  "when_not_to_use": [
+    "Short runs or one-shot scripts: compilation and package load cost seconds, which dominates jobs that run for well under a minute.",
+    "Embedding in an existing C++ code base; C++ ITensor stays the natural choice there, and calling Julia from C++ adds a runtime.",
+    "Expecting the 2021 numbers to hold today: they were measured with ITensors.jl v0.1.36 on Julia 1.5; the package has since been restructured (NDTensors rewrite, MPS code split into ITensorMPS.jl) and nobody has re-run the comparison.",
+    "Small bond dimension 2D QN DMRG: the same data show C++ ahead (DMRG 2D QN maxdim 1000: 405.8 s Julia vs 334.8 s C++; DMRG 1D QN maxdim 200: 18.0 s vs 16.9 s).",
+    "Relying on multi-threaded BLAS for speed: in the logs neither side scales with MKL threads on these block-sparse problems (Julia per-sweep 1303, 1091, 1042 s at 1, 4, 8 threads)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages NDTensors, Strided, Dictionaries, StaticArrays, TimerOutputs, TupleTools and others from the General registry; ITensorMPS.jl for DMRG and MPS/MPO; MKL.jl recommended in the README for performance; optional HDF5, TensorOperations, VectorInterface, ZygoteRules extensions",
+    "min_toolchain": "Julia 1.10 (current Project.toml compat); the benchmarked v0.1.36 ran on Julia 1.5.2 and 1.5.3",
+    "platforms": "any platform Julia supports; BLAS backend selectable (OpenBLAS default, MKL through MKL.jl)",
+    "thread_safety": "not documented in what was read; block-sparse multithreading is enabled with ITensors.enable_threaded_blocksparse() and Julia threads, and the benchmark runner errors out when both block-sparse threads and BLAS threads exceed 1",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 'Julia slower at small size' TRG and CTMRG rows: the warm-up call runs with outputlevel 0, but the timed call uses outputlevel 1, which executes @show of exp(-beta * ising_free_energy(beta)) (a QuadGK.quadgk integral from ITensors.jl examples/src/2d_classical_ising.jl) and ising_magnetization. The first timed run in each Julia process therefore includes JIT compilation of QuadGK and the reference integral, work the C++ side never does. The log 2021-01-26T16:09 shows TRG maxdim 10 at 1.111 s for the first (1 BLAS thread) run, then 0.090, 0.077 and 0.078 s at 2, 3 and 4 threads in the same process, against C++ 0.158-0.174 s; CTMRG maxdim 50 (first run of the 2021-01-22 process) is 2.33 s against 1.32-1.46 s for the later Julia runs. The published 1.11 s vs 0.16 s TRG row is a compile artifact; once compiled Julia is about 2x faster there, though C++ timing also includes process launch.",
+    "Version label mismatch: the data folder is data/julia/v0.1.37 and the runner default says v0.1.37, but the run logs print 'Using ITensors.jl v0.1.36' and wrote to data/julia/v0.1.36 (2464.746600888 s for conserve_ky maxdim 6000 appears in both); the committed Manifest.toml also pins ITensors 0.1.36 and NDTensors 0.1.22. The logs do give what the record lacks: Julia v1.5.2 and v1.5.3, Julia BLAS vendor mkl, and the actual C++ build line (g++ -m64 -std=c++17 -fconcepts -fPIC -O2 -DNDEBUG -fopenmp, Intel Parallel Studio 2020.4.304 MKL). Julia's MKL version is not recorded, so the two sides may use different MKL builds.",
+    "C++ single-thread wall time exceeds its CPU time by about 14% (conserve_ky maxdim 10000 sweep 7: CPU 27m26s, wall 31m20s; maxdim 6000: 11m24s vs 12m57s), so the C++ process was waiting on something (memory or contention on the shared cluster node). Julia prints wall time only. Using C++ CPU time instead of wall, the maxdim 10000 last-sweep gap shrinks from 1.44x to about 1.26x (1303 s vs 1640 s), still a Julia win.",
+    "The C++ link line mixes the single dynamic library -lmkl_rt with the layered -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core; at 4 and 8 MKL threads the C++ CPU time rises 4x and 8x while wall time stays at about 31 minutes per sweep, so the multi-thread C++ data say little. Results agree numerically (final energies -26.6761544 on both sides at maxdim 6000, TRG kappa identical to 15 digits), so the work matches; each figure is a single run with no variance."
+  ],
+  "pick_this_over_siblings_when": "The siblings in this category are single kernels or solvers (TriangularSolve.jl and Gaius.jl against MKL/OpenBLAS, OrdinaryDiffEq.jl against Sundials, Yao.jl for state-vector circuits); pick ITensors.jl when the job is a tensor-network algorithm such as DMRG on large, QN-conserving systems, where it is the only catalogued Julia library with a matched comparison against a mature C++ code.",
+  "verified_claims_summary": "ITensorBenchmarks.jl ran identical DMRG (1D Heisenberg dense and QN, 2D Hubbard QN and momentum-conserving), TRG and CTMRG problems single-threaded in January-February 2021 on a Flatiron cluster node whose CPU is not stated, timing ITensors.jl v0.1.36 on Julia 1.5 with MKL against C++ ITensor v3.1.6 built with g++ -O2 and MKL 2020.4. Julia was 1.05-1.7x faster at large bond dimension (2D momentum-conserving Hubbard at maxdim 10000: 6245 s vs 8945 s, one run each, final energies matching), C++ was ahead at small 2D QN sizes, and the small TRG/CTMRG losses are inflated by uncompiled QuadGK reference code in Julia's first timed run.",
+  "status_note": "ITensors.jl is active (v0.9.32, last commit 2026-09-27, Apache-2.0, 686 stars) and installable from the General registry, but the benchmark repo is stale since 2021-12 and pinned to ITensors 0.1.36 and Julia 1.5, so its numbers describe a five-year-old code base on both sides.",
+  "sources_read": [
+    "https://github.com/ITensor/ITensors.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensors.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/ITensor/ITensors.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/ITensor/ITensors.jl/v0.1.36/examples/src/2d_classical_ising.jl",
+    "https://github.com/ITensor/ITensors.jl/issues?q=is%3Aissue+performance+slower",
+    "https://github.com/ITensor/ITensors.jl/issues?q=is%3Aissue+label%3Aperformance",
+    "https://github.com/ITensor/ITensorBenchmarks.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/Manifest.toml",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/ITensorBenchmarks.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/runbenchmarks.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/deps/options.mk.sample",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_dmrg_2d_conserve_ky/runbenchmark.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_dmrg_2d_conserve_ky/runbenchmark.h",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_trg/runbenchmark.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_trg/runbenchmark.h",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_ctmrg/runbenchmark.jl",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/src/bench_ctmrg/runbenchmark.h",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/docs/src/index.md",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/docs/make.jl",
+    "https://github.com/ITensor/ITensorBenchmarks.jl/tree/main/logs",
+    "https://github.com/ITensor/ITensorBenchmarks.jl/tree/main/data/julia",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/logs/2021-01-22T18:02:18.798_benchmark_[\"ctmrg\", \"dmrg_1d\", \"dmrg_1d_qns\", \"dmrg_2d_conserve_ky\", \"dmrg_2d_qns\", \"trg\"]_blas_num_threads_1:8_blocksparse_num_threads_1.log",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/logs/2021-01-28T21:45:43.189_benchmark_[\"dmrg_2d_conserve_ky\"]_blas_num_threads_[1, 4, 8]_blocksparse_num_threads_1.log",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/logs/2021-01-26T16:09:43.929_benchmark_[\"trg\"]_blas_num_threads_1:4_blocksparse_num_threads_1.log",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/julia/v0.1.37/bench_dmrg_2d_conserve_ky/blas_num_threads_1/blocksparse_num_threads_1/maxdim_6000.txt",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/julia/v0.1.37/bench_dmrg_2d_conserve_ky/blas_num_threads_1/blocksparse_num_threads_1/maxdim_10000.txt",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/c++/v3.1.6/bench_dmrg_2d_conserve_ky/blas_num_threads_1/blocksparse_num_threads_1/maxdim_6000.txt",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/c++/v3.1.6/bench_dmrg_2d_conserve_ky/blas_num_threads_1/blocksparse_num_threads_1/maxdim_10000.txt",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/julia/v0.1.37/bench_trg/blas_num_threads_1/blocksparse_num_threads_1/maxdim_10.txt",
+    "https://raw.githubusercontent.com/ITensor/ITensorBenchmarks.jl/HEAD/data/c++/v3.1.6/bench_trg/blas_num_threads_1/blocksparse_num_threads_1/maxdim_10.txt"
+  ],
+  "confidence": 0.75
+}

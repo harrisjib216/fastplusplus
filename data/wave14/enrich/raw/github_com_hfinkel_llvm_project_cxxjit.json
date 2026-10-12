@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/hfinkel/llvm-project-cxxjit",
+  "one_liner": "Research Clang 9 fork adding [[clang::jit]]: templates instantiated at run time; beats dynamic-size Eigen, ties size-specialized AoT.",
+  "what_it_does": "ClangJIT is a fork of LLVM/Clang 9.0 (cxxjit branch) where a function template marked [[clang::jit]] and built with -fjit at compile and link time can receive non-constant values for its non-type template parameters and strings naming types for its type parameters; the call instantiates and compiles that specialization at run time. Source stays ordinary C++ apart from the attribute and the runtime template arguments, so the programmer gets fixed-size or fixed-type code paths without enumerating them ahead of time. It targets two problems the wiki names: long compile times from instantiating many templates, and slow generic code paths when sizes or types are only known at run time.",
+  "how_it_is_fast": "Runtime specialization: matrix sizes read at run time become template arguments, so Eigen takes its fixed-size path, where the optimizer sees constant trip counts and can fully unroll and vectorize. The compiler embeds a serialized AST of the translation unit, its IR and the original command line in the binary; on the first call the runtime (__clang_jit in clang/lib/CodeGen/JIT.cpp) reads the AST with ASTReader, instantiates the template through Sema, generates code with the stored -O3 options, links the program's IR as available_externally for inlining and loads the result with LLVM ORC. Later calls hit a hash-table cache keyed by the template key, the non-type argument bytes and the type strings.",
+  "when_to_use": [
+    "Research or prototyping of run-time template specialization in C++, for example reproducing the SC19 P3HPC ClangJIT paper (arXiv 1904.08555).",
+    "Template-heavy numeric kernels (Eigen-style small fixed-size matrices) where the sizes or scalar types are only known at run time and few of the possible combinations are used in any one run.",
+    "Codes where instantiating every size/type combination ahead of time inflates build time: the wiki's build drops from 9.7 s (float/double/long double with dispatch) to 3.5 s.",
+    "Long-running jobs that call the JIT function once and loop inside it, so the one-time compile and the per-call dispatch are amortised."
+  ],
+  "when_not_to_use": [
+    "Production code: the fork has had no commits since 2019-12-30, is based on LLVM 9.0, and crash and build reports (#17 UD2 trap with Blaze expression templates, #25 segfault on cxxjit-ni-9.0, #28 'Declaration may not be in a Comdat!' with the wiki's type-string example, #30 '-fjit' unknown) remain open.",
+    "When the sizes or types are few and known: an AoT build specialized to the size ties the JIT (1.01 vs 1.0 s, 8.45 vs 8.34 s, 35.1 vs 35.3 s), so a switch over fixed-size instantiations gets the same speed with a stock compiler.",
+    "Hot call sites that call a JIT template in a tight loop: issue #31 measured about 93 ns per call of an already-compiled empty [[clang::jit]] function.",
+    "Larger matrices: the gain over dynamic-size Eigen falls from about 8x at size 3 to 2.4x at size 7 and 1.03x at size 16.",
+    "Start-up-sensitive or size-sensitive binaries: the program carries its serialized AST and IR and links the Clang/LLVM libraries to compile at run time; compile latency is not reported."
+  ],
+  "integration": {
+    "form": "source-drop — build the whole LLVM/Clang fork (wiki CMake recipe with LLVM_ENABLE_PROJECTS=llvm;clang;openmp) and compile and link with its clang++ -fjit",
+    "dependencies": "the forked Clang/LLVM 9.0 toolchain and its libraries at run time; CUDA runtime (-lcudart) for the device-code JIT path present in the source",
+    "min_toolchain": "the fork's own clang++ (LLVM 9.0.0 base); the wiki's Clang was built with GCC 8.2.0 in RelWithDebInfo mode",
+    "platforms": "Linux documented (benchmarked on an Intel Xeon E5-2699); Windows and Visual Studio support asked about in open issues #21 and #22 with no documented answer; source contains a CUDA device JIT path that the wiki does not document",
+    "thread_safety": "Not documented on the wiki. The runtime guards the instantiation cache with a global mutex and serializes all compilation under a second global mutex (clang/lib/CodeGen/JIT.cpp), so concurrent calls are safe but contend.",
+    "drop_in_for_baseline": "partial — the C++ source changes only by adding [[clang::jit]] and passing runtime template arguments, but it needs the forked compiler; stock compilers reject runtime template arguments."
+  },
+  "gotchas": [
+    "Harness gap: the runtime rows exclude JIT compilation time and the wiki never reports it, so the end-to-end cost (AST deserialization, Sema instantiation and -O3 codegen on the first call) is unknown; the benchmark also calls the JIT function once with the loop inside, which hides the about 93 ns per-call dispatch (global mutex plus hashing of the argument bytes and type strings in __clang_jit) that issue #31 measured.",
+    "The win is over Eigen's dynamic-size path, not over AoT code quality: AoT built for the same fixed size matches the JIT within 1-2 percent at every size, and at size 16 the JIT is slightly slower (35.3 vs 35.1 s).",
+    "The benchmark never uses m after the timed loop (no output or checksum), is a single run timed with system_clock, and its main(), the Eigen version and the ClangJIT commit are not published, so it cannot be rerun exactly.",
+    "Language restrictions: decltype(auto) and other body-dependent deduction are unavailable on JIT templates, explicit specializations are not JIT-compiled, a runtime pointer argument creates one instantiation per pointer value, and type strings are parsed in the declaring context with unspecified visibility of later-declared types."
+  ],
+  "pick_this_over_siblings_when": "Most siblings are managed-runtime JITs (HotSpot, .NET, Bun, LuaJIT) beating C or C++ programs; ClangJIT is C++ specialized at run time and only beats generic C++ code. Proteus (llnl/proteus) is the closer alternative: it specializes host, CUDA and HIP code on runtime values through a Clang pass plugin or compiler-independent frontends on LLVM 19-22 without a forked compiler, so pick ClangJIT only to study [[clang::jit]]'s template-level semantics (runtime non-type and type-string template arguments) or the SC19 paper.",
+  "verified_claims_summary": "Author's wiki benchmark (Eigen loop m = Ones + 0.00005*(m + m*m), double, 40,000,000 repeats, -march=native -ffast-math -O3, Intel Xeon E5-2699, JIT compile time excluded): JIT fixed-size code 1.0, 8.34 and 35.3 s for sizes 3, 7 and 16 vs 8.05, 20 and 36.2 s for dynamic-size AoT Eigen and 1.01, 8.45 and 35.1 s for AoT code specialized to that size. Build time with the JIT is 3.5 s vs 9.7 s for AoT float/double/long double with dispatch and 5.3 s for AoT double only.",
+  "status_note": "Abandoned research prototype (cxxjit branch last updated 2019-12-30, cxxjit-ni-9.0 2020-01-16, LLVM 9.0 base, open crash and build issues), Apache-2.0 WITH LLVM-exception; worth reading as a reference design, not as a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/wiki/hfinkel/llvm-project-cxxjit/Home.md",
+    "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/README.md",
+    "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit-ni-9.0/README.md",
+    "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/clang/lib/CodeGen/JIT.cpp",
+    "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/clang/lib/Driver/ToolChains/Clang.cpp",
+    "https://raw.githubusercontent.com/hfinkel/llvm-project-cxxjit/cxxjit/llvm/CMakeLists.txt",
+    "https://github.com/hfinkel/llvm-project-cxxjit",
+    "https://github.com/hfinkel/llvm-project-cxxjit/tree/cxxjit/clang/lib",
+    "https://github.com/hfinkel/llvm-project-cxxjit/branches/all",
+    "https://github.com/hfinkel/llvm-project-cxxjit/commits/cxxjit?author=hfinkel",
+    "https://github.com/hfinkel/llvm-project-cxxjit/issues",
+    "https://github.com/hfinkel/llvm-project-cxxjit/issues/31",
+    "https://github.com/hfinkel/llvm-project-cxxjit/issues/17",
+    "https://github.com/hfinkel/llvm-project-cxxjit/issues/28",
+    "https://github.com/llnl/proteus",
+    "WebSearch: ClangJIT Finkel Poliakoff Richards (snippets only; arxiv.org/abs/1904.08555 and sc19.supercomputing.org unreachable, ENOTFOUND)"
+  ],
+  "confidence": 0.7
+}

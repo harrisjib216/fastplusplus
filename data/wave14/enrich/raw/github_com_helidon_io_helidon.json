@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/helidon-io/helidon",
+  "one_liner": "Java 27 microservice framework on the virtual-thread Níma WebServer; edges nginx on HttpArena's HTTP/2 hello-world profiles only.",
+  "what_it_does": "Helidon SE is a set of Java libraries (Maven group io.helidon) for writing HTTP, HTTP/2, gRPC and WebSocket services, served by Níma WebServer. Handlers are plain blocking Java code (Handler.handle(ServerRequest, ServerResponse)) run thread-per-request on virtual threads, configured through a builder or application.yaml with named listeners. It is an application server framework, not a configurable reverse proxy, so it replaces nginx only where nginx serves application responses through a custom module, as in HttpArena.",
+  "how_it_is_fast": "Níma is written for Java virtual threads: blocking socket I/O per connection and request, with the JDK parking virtual threads on I/O instead of an event-loop and callback stack (README: 'high throughput of a reactive server with the simplicity of thread-per-request'). The HTTP/2 layer advertises 8192 concurrent streams and a 1 MiB initial window by default. The benchmark entry adds an 8192 accept backlog, zero read/connect timeouts and, in the tuned variant, turns off configurable header, prologue and path validation. JSON uses helidon-json binding and gzip uses java.util.zip.GZIPOutputStream, which calls the JDK's native zlib.",
+  "when_to_use": [
+    "JVM teams that want blocking, thread-per-request handler code with HTTP/1.1, HTTP/2 (TLS and h2c), gRPC and WebSocket on one server and one config file.",
+    "HTTP/2-heavy services with many multiplexed small requests per connection: on HttpArena baseline-h2 it served 3.50-3.82M req/s, slightly above the nginx entry (3.32-3.41M) with the same 32-core server cpuset.",
+    "Pipelined or many-streams HTTP/1.1 traffic, where it posted 10.65M req/s on pipelined-4096 (reference-only profile) against nginx's 4.04M.",
+    "Gzip-compressed JSON APIs, where it led the C++ frameworks that run json-comp-4096 (325,703 req/s vs userver 297,311) with comparable compressed sizes (about 1,337 vs 1,358-1,393 bytes per response, derived from bandwidth over req/s)."
+  ],
+  "when_not_to_use": [
+    "Plain HTTP/1.1 keep-alive at high connection counts: baseline-4096 1.69M req/s vs nginx 3.28M (0.52x), and limited-conn-4096 0.61M vs 2.63M (0.23x).",
+    "TLS HTTP/1.1, static files and h2c JSON: json-tls 0.70M vs nginx 1.31M, static-tls 0.33M vs 0.72M, static-h2 0.28M vs 0.80M, json-h2c 1.09M vs 1.73M; the fastest C/C++ HTTP/2 stacks (h2o 16.1M, agensio 14.7M, proxygen 5.85M on baseline-h2-256) are 1.6x to 4.5x ahead.",
+    "Memory-constrained hosts: peak memory was 10.5-28.2 GiB on the h2/h2c rows (default JVM heap sizing, no -Xmx in the Dockerfile) vs 3.5-3.7 GiB for nginx and 104-288 MiB for proxygen.",
+    "Tail-latency-sensitive endpoints: p99 at baseline-h2-1024 was 297.28 ms (tuned) vs nginx 151.79 ms, and at json-comp-4096 276.30 ms vs userver 28.70 ms.",
+    "Short-lived processes, serverless or anything that cannot use JDK 27: Helidon 27 requires Java 27, and JVM start-up and JIT warm-up are outside the measured windows."
+  ],
+  "integration": {
+    "form": "module (Maven artifacts io.helidon.webserver:helidon-webserver, helidon-webserver-http2, -grpc, -websocket; parent io.helidon.applications:helidon-se 27.0.0)",
+    "dependencies": "Helidon common, config and webserver modules; JDK 27 standard library (TLS from configured PEM key and certificate); no native libraries",
+    "min_toolchain": "JDK 27 (README: 'Java 27 is required to use Helidon 27'); Maven 3.8.0+ to build Helidon itself",
+    "platforms": "any platform with a JDK 27 build; benchmarked on Linux x86-64 (Threadripper PRO 3995WX) in Docker",
+    "thread_safety": "Each request runs on its own virtual thread (thread-per-request model per the README); handler instances are shared across requests, so handler state must be thread-safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The tuned entry disables validate-request-headers, validate-response-headers and validate-path for HTTP/1.1 and HTTP/2 plus validate-prologue for HTTP/1.1; all default to true in Helidon (HttpConfigBlueprint warns that turning off response validation 'can allow invalid response header values to be written'). The effect is within run noise: the default-validation production variant was faster than tuned on all three baseline-h2c rows (4.21M/4.69M/4.54M vs 4.16M/4.46M/4.50M) and only 1.6-3.1 percent behind on baseline-h2, so the production numbers (3.50M and 3.76M vs nginx 3.41M and 3.32M, 1.03x and 1.13x) are the ones to quote.",
+    "Harness anomaly behind the largest ratio: the nginx entry's cleartext h2c rows (2.46-2.52M req/s) are 25-28 percent below its own HTTP/2-over-TLS rows (3.32-3.41M), while proxygen, agensio and Helidon all run h2c at or above their TLS rate. nginx's port-8082 h2c server block lacks the explicit http2_max_concurrent_streams and server-level keepalive_requests tuning of its 8443 TLS block; the cause was not established, but the 1.69-1.79x h2c lead is measured against an nginx h2c path that underperforms the same build's TLS path.",
+    "Margins on baseline-h2-256 (1.03-1.06x) are smaller than the spread between Helidon's own tuned and production runs, rows come from 5 s runs with best-of-3 selection (which also discards JIT warm-up), and the Helidon (October 2026) and nginx (August 2026) rows were recorded in separate runs. On the wire Helidon's h2 responses averaged about 61 bytes vs nginx's 82 (bandwidth over req/s, derived from page data), so the per-response header work is not identical.",
+    "Both HttpArena Helidon entries are maintained by Helidon developer tomas-langer (vendor-tuned submissions), static files in the tuned entry go through a custom handler serving precompressed .br/.gz variants instead of Helidon's static-content feature (which the production entry uses), and async-db uses blocking JDBC with HikariCP rather than an async driver (documented divergence)."
+  ],
+  "pick_this_over_siblings_when": "Pick Helidon over the event-loop JVM siblings (Eclipse Vert.x, Quarkus on Vert.x/Netty, Netty, Undertow) when you want blocking thread-per-request code on virtual threads with HTTP/2 and gRPC built in; for raw numbers on the same suite, Vert.x posted more on pipelined-4096 (11.78M vs 10.65M) and Quarkus more on baseline-h2-256 (4.67M vs 3.61M, separate runs), and Kestrel is the .NET counterpart.",
+  "verified_claims_summary": "HttpArena on a Threadripper PRO 3995WX (server pinned to 32 cores / 64 threads, h2load with 64 threads and 100 streams per connection over loopback, 5 s runs, best of 3): Helidon SE 27.0.0 on Oracle JDK 27 with default JVM flags served 3.61M (tuned) and 3.50M (production) req/s on baseline-h2-256 against 3.41M for nginx 1.31.4 with a custom C handler module built -O3 -march=native, and 4.16-4.50M req/s on h2c against nginx's 2.46-2.52M. It also beat the C++ frameworks on gzip JSON (json-comp-4096, 1.10x over userver) but lost to nginx on six other shared profiles by 0.23x to 0.64x.",
+  "status_note": "Actively maintained Oracle-led project (Apache-2.0, 3.8k stars, 5,057 commits, last commit 2026-10-11, 585 open issues) and safe to adopt, but the speed claim is narrow: it beats nginx only on HTTP/2 hello-world and pipelined profiles in one vendor-tuned suite entry, and loses to the fastest C/C++ HTTP/2 servers.",
+  "sources_read": [
+    "https://github.com/helidon-io/helidon",
+    "https://raw.githubusercontent.com/helidon-io/helidon/HEAD/README.md",
+    "https://raw.githubusercontent.com/helidon-io/helidon/HEAD/webserver/http2/src/main/java/io/helidon/webserver/http2/Http2ConfigBlueprint.java",
+    "https://raw.githubusercontent.com/helidon-io/helidon/HEAD/http/http/src/main/java/io/helidon/http/HttpConfigBlueprint.java",
+    "https://github.com/helidon-io/helidon/issues?q=is%3Aissue+http2+performance",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/pom.xml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/src/main/java/com/httparena/Main.java",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/src/main/java/com/httparena/JsonHandler.java",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/src/main/java/com/httparena/BaselineHandler.java",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-tuned/src/main/resources/application.yaml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-production/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-production/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/helidon-production/src/main/resources/application.yaml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nginx/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/helidon-tuned.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/helidon-production.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/userver.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/hical.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/proxygen.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/proxygen-coro.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/h2o.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/agensio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/tools/h2load.sh"
+  ],
+  "confidence": 0.75
+}

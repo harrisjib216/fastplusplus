@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/juliasimd/triangularsolve.jl",
+  "one_liner": "Pure-Julia SIMD triangular solves (trsm-style) that beat MKL by 9-11% single-threaded at N=100 in a 2021 README run.",
+  "what_it_does": "Solves A/U, A/L, L\\A and U\\A (plus unit-diagonal variants) for Float32/Float64 strided matrices with several right-hand sides, in place or into a separate output, with a trailing Val(true)/Val(false) to switch multithreading on or off (threaded by default). The functions are TriangularSolve.rdiv! and TriangularSolve.ldiv!: the module exports nothing and does not add methods to LinearAlgebra, so callers must call them qualified. Other element types and non-matching argument types fall through to LinearAlgebra; vector right-hand sides use separate pure-Julia substitution loops that never call BLAS.",
+  "how_it_is_fast": "Hand-written @generated kernels on VectorizationBase solve register-resident W x W blocks (W = SIMD width) with fused negative multiply-adds, unrolled over U SIMD vectors of rows chosen so the blocks fit the register file. Larger problems are blocked to an L2-sized panel (block_size from cache_size(2)) with a LoopVectorization @turbo update between panels, and the threaded path splits the right-hand-side rows into independent blocks run on Polyester tasks capped at min(physical cores, Julia threads). Everything is JIT-specialized for the host CPU, so small sizes avoid BLAS call and threading overhead; ldiv! with LowerTriangular reuses the rdiv! kernels on transposed views.",
+  "when_to_use": [
+    "Julia code doing many small to medium Float64/Float32 triangular solves with a matrix right-hand side (the published run is 100x100 with 100 right-hand sides), e.g. inside an LU-based solver; RecursiveFactorization.jl and LinearSolve.jl already depend on it.",
+    "Latency-bound small solves where MKL or OpenBLAS threading overhead dominates: the README's 4-thread rows are 1.55-1.62x faster than MKL at N=100.",
+    "Apple M1 or other machines where the default BLAS trsm is weak at small sizes (README M1 rows: 1.4-2.1x against an unnamed BLAS).",
+    "Vector right-hand sides in Julia where you want a BLAS-free forward/back substitution (author-measured 1.14-7.42x over OpenBLAS trsv on one AVX2 EPYC 7502, single-threaded)."
+  ],
+  "when_not_to_use": [
+    "Element types other than Float32/Float64 (complex, BigFloat, Dual numbers): those calls just forward to LinearAlgebra.",
+    "When you need results bit-identical to BLAS trsm/trsv: the kernels reassociate and use fused multiply-adds, and PR #48 notes vector results differ from trsv in rounding.",
+    "Large solves where a tuned multithreaded BLAS trsm scales better: no published comparison exists above N=100 against MKL, and the 2026 numbers (PR #41) go to N=1000 only against single-threaded OpenBLAS on one AMD EPYC 7502.",
+    "Code that already runs inside an outer threaded region or alongside multithreaded BLAS: the default call is threaded (Polyester), and Polyester's README suggests disabling its inner threads when parallelising at the outer level.",
+    "Projects that cannot follow Julia-version churn in LoopVectorization/VectorizationBase: past issues include segfaults (#13, #18 on Julia 1.6.5), load failure on 1.8.0-beta1 (#20) and a precompile hang on 1.8 (#21)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "LoopVectorization 0.12.30+, VectorizationBase 0.21, Polyester, LayoutPointers, Static, CloseOpenIntervals, IfElse, PrecompileTools, LinearAlgebra",
+    "min_toolchain": "Julia 1.10 (Project.toml compat); tests reported passing on Julia 1.10.11 and 1.12.4 in PR #41/#48",
+    "platforms": "any CPU Julia and VectorizationBase support (README timings on x86-64 AVX-512 Tiger Lake and Apple M1; 2026 PR timings on AVX2 Zen 2 only)",
+    "thread_safety": "not documented; the current source has no global buffers or other module-level mutable state (the 2021 code kept per-thread LDIVBUFFERS), and the threaded path runs on Polyester's shared task pool",
+    "drop_in_for_baseline": "partial: same argument order as LinearAlgebra.rdiv!/ldiv!, but they are separate unexported functions (call TriangularSolve.ldiv!), take an extra threading flag, and only accelerate Float32/Float64 strided arrays"
+  },
+  "gotchas": [
+    "The README numbers are from a 2021 author REPL session (Julia 1.8.0-DEV.438, i7-1165G7, MKL of unstated version) on v0.1-era code. All of the August 2026 kernel work (native left-upper/right-lower kernels, shortened backward chains, the vector path) came in PRs #41-#49 from the ChrisRackauckas-Claude account; #41 and #48 opened with a 'Draft, please ignore until reviewed' banner and were merged within about a day with no formal review. Those PRs were benchmarked only on an AVX2 AMD EPYC 7502 against single-threaded OpenBLAS (PR #41 also lists threaded TriangularSolve against single-threaded BLAS); AVX-512, aarch64 and MKL are untested per the PR text.",
+    "Harness check: the README benchmark solves against unshifted rand(N,N) triangles. A numpy simulation of that distribution (200 draws, N=100) gives cond(U) about 1e16 and solution entries of 1e11-1e19. Results stay finite, so the timings are not affected, but the run shows nothing about accuracy. The test suite instead adds 1 or n to the diagonal.",
+    "Thread counts were equal in the Intel run: the 2021 v0.1.4 source already capped TriangularSolve at min(num_cores, num_threads) = 4, the same as the MKL setting in the README. The README's copy-paste script, though, sets BLAS to Threads.nthreads() before the single-thread pair, unlike the session it reproduces. The README still ends with the stale line that only rdiv!/UpperTriangular and ldiv!/LowerTriangular are supported; that was true of the 2021 code (other cases fell back to LinearAlgebra) but not since v0.2.2.",
+    "Issue #26 (closed December 2022): some ldiv! paths passed nthreads == static(0) into m_thread_block_size, an integer division by zero that LLVM can turn into a poison value. The maintainer agreed it should be 1. The current source passes static(1) for serial calls."
+  ],
+  "pick_this_over_siblings_when": "Pick it for triangular solves the way you would pick Gaius.jl for small gemm: both are pure-Julia kernels that beat a vendor BLAS only at small sizes. Unlike FFTA.jl or Bessels.jl, which replace FFTW or openlibm calls, TriangularSolve's baseline is MKL itself, and its margin is small single-threaded (about 10%) but larger multithreaded or on M1.",
+  "verified_claims_summary": "One BenchmarkTools REPL session (median of 10000 samples, 100x100 Float64 with 100 right-hand sides, Julia 1.8.0-DEV.438 on an i7-1165G7) gives TriangularSolve 17.9/19.7 us against MKL's 19.9/21.6 us single-threaded (rdiv! upper, ldiv! lower) and 8.8/9.9 us against 14.2/15.3 us with 4 threads on each side. The Apple M1 single-thread rows (21.6 and 23.9-34.4 us against 46.2 and 49.1 us) name no BLAS and give no versioninfo.",
+  "status_note": "Active (last commit 2026-08-15, v0.2.6, MIT). The code was substantially rewritten in August 2026 and the README numbers were never re-run; it is a dependency of RecursiveFactorization.jl and LinearSolve.jl, so it is maintained alongside the SciML stack.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/HEAD/src/TriangularSolve.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/HEAD/test/runtests.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/v0.1.4/src/TriangularSolve.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/v0.1.5/src/TriangularSolve.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/v0.1.6/src/TriangularSolve.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/TriangularSolve.jl/v0.1.8/src/TriangularSolve.jl",
+    "https://github.com/JuliaSIMD/TriangularSolve.jl/issues?q=is%3Aissue",
+    "https://github.com/JuliaSIMD/TriangularSolve.jl/issues/26",
+    "https://github.com/JuliaSIMD/TriangularSolve.jl/commits",
+    "https://github.com/JuliaSIMD/TriangularSolve.jl/pull/41",
+    "https://github.com/JuliaSIMD/TriangularSolve.jl/pull/48",
+    "https://github.com/JuliaSIMD/LoopVectorization.jl",
+    "https://github.com/JuliaSIMD/Polyester.jl"
+  ],
+  "confidence": 0.55
+}

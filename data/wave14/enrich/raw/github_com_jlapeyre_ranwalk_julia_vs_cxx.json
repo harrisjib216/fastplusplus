@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/jlapeyre/ranwalk-julia-vs-cxx",
+  "one_liner": "2014 toy random-walk benchmark: Julia 0.3's dSFMT-backed randbool() beats libstdc++ mt19937 plus bernoulli_distribution(0.5) about 3x.",
+  "what_it_does": "Two pairs of single-file programs (rwtest_simple.jl/.cc, and the slightly larger rwtest.jl/.cc) simulate 100,000 one-dimensional random walks of 3,000 coin flips each and print a histogram of the final displacements. It is a demonstration, not a library, and has no API. The README's times come from the 'simple' pair; the Julia 0.4 time presumably comes from rwtest.jl, whose 2015 version picked randbool() before Julia 0.4.0-dev+980 and rand(Bool) after it (inference from the macro in that file).",
+  "how_it_is_fast": "Almost all of the time is random-number generation. In Julia 0.3, randbool() is ((dsfmt_randui32() & 1) == 1), and dsfmt_gv_genrand_uint32 is a ccall into the C library libdSFMT, which returns one 64-bit word per call from a state block that dSFMT (SIMD-oriented Fast Mersenne Twister) regenerates in bulk every 382 draws. In Julia 0.4, rand(Bool) is rand_ui52_raw(r) % Bool, an inlined pop from a Julia buffer filled in bulk by dsfmt_fill_array_close1_open2!. The C++ side calls std::bernoulli_distribution, which in gcc 4.9's libstdc++ goes through __detail::_Adaptor and generate_canonical<double, 53>: two mt19937 calls, a floating-point multiply-add and a division per flip, then a compare with p. The gap is one dSFMT word per flip against two MT19937 words plus floating point, not JIT versus AOT code generation.",
+  "when_to_use": [
+    "As a cautionary example that libstdc++ std::bernoulli_distribution(0.5) costs two 32-bit engine calls plus a floating-point division per bit; for coin flips in C++, take bits from one engine output instead (one bit per draw, or 32 flips per mt19937 word).",
+    "As a historical data point that Julia's 2014 global RNG (C dSFMT) was a faster Boolean source than GNU libstdc++ <random> on gcc 4.9.1.",
+    "As a minimal teaching pair showing that the RNG and its front end, not loops or function calls, dominate a simple Monte Carlo kernel, which is what the README itself concludes."
+  ],
+  "when_not_to_use": [
+    "As evidence that a JIT beats ahead-of-time C++: in Julia 0.3 every flip is a ccall into compiled C (libdSFMT), so the faster side's inner work is AOT C code, and the README says the result does not support 'Julia is faster than C++'.",
+    "As a current benchmark: Julia 0.3/0.4 and gcc 4.9.1 are obsolete, Julia 1.7+ defaults to Xoshiro256++, and the September 2024 script update was not re-timed.",
+    "As copyable code: the repository has no licence file.",
+    "As a statistics reference: the C++ histogram array is never zeroed (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Julia (the timed rwtest_simple.jl of 2015 needs Julia 0.3 for randbool(); the 2024 scripts use stderr and need Julia 0.7 or later); a C++11 compiler and standard library with <random>",
+    "min_toolchain": "C++11 (README: Debian gcc 4.9.1, c++ -std=c++11 -O3; -march=native was slower); Julia 0.3.4-pre for the published number",
+    "platforms": "Any; the CPU of the published runs is not documented",
+    "thread_safety": "Not applicable: single-threaded programs using a global RNG (std::mt19937 global in C++, the global dSFMT state in Julia 0.3)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the 'Julia' side's hot path is C. Julia 0.3 base/random.jl defines randbool() = ((dsfmt_randui32() & 1) == 1), and base/dSFMT.jl defines dsfmt_gv_genrand_uint32() as ccall((:dsfmt_gv_genrand_uint32, :libdSFMT), Uint32, ()). The 1.27 s figure times a Julia loop around 3e8 calls into compiled C dSFMT, so it is evidence about RNG libraries, not about a runtime JIT beating AOT compilation.",
+    "Unequal work per flip: libstdc++ 4.9 bernoulli_distribution::operator() builds an _Adaptor whose operator() calls generate_canonical<double, 53>; with a 32-bit engine k = (53 + 32 - 1) / 32 = 2, so the C++ program makes 6e8 mt19937 calls plus 3e8 divisions against 3e8 dSFMT words in Julia 0.3. The README concedes a faster C++ program is possible; none was tried with one engine call per flip.",
+    "C++ correctness bugs (output only, not timing): counts_on_lattice_sites is allocated with new int[] and never zeroed, so the printed histogram adds to indeterminate values (Julia uses zeros()), and it is freed with delete instead of delete[], which is undefined behaviour.",
+    "The scripts at HEAD are not the timed code: the 2015 rwtest_simple.jl called randbool() and println(STDERR, ...), the 2024 commit 'Update Julia scripts from 2014 to 2024' replaced them with rand(Bool) and stderr, which do not run on Julia 0.3. Timers also differ (std::clock CPU time in C++, @elapsed wall time in Julia), and the README gives one 'typical' time per language with no CPU model."
+  ],
+  "pick_this_over_siblings_when": "Do not pick it for a decision; it is the weakest evidence in runtime-jit-beats-aot. For a JIT language beating C++ on comparable code with named toolchains, the kostya/LangArena entries (Julia 1.13 Sort::Self, Java and C# rows) or the Julia no-BLAS matmul entry in kostya/benchmarks are better; keep this one only as an RNG-overhead example.",
+  "verified_claims_summary": "Single 'typical' timings from 2014-2015 on an undocumented CPU: 3e8 coin flips took 3.88 s in C++ (Debian gcc 4.9.1, -std=c++11 -O3, libstdc++ std::mt19937 with std::bernoulli_distribution(0.5), std::clock CPU time) against 1.27 s in Julia 0.3 (randbool(), one ccall into C dSFMT per flip) and 1.68 s in Julia 0.4 (rand(Bool) from a dSFMT-filled buffer). That is about 3.1x and 2.3x, or about 12.9 ns versus 4.2 ns per flip (derived from page data).",
+  "status_note": "Stale toy repository (code from 2014-2015, Julia scripts ported to Julia 1.x syntax in September 2024 without new timings) with no licence, so reference only; the measured gap is libstdc++ <random> front-end overhead against the C dSFMT generator, and it supports neither a JIT nor a Julia-over-C++ claim.",
+  "sources_read": [
+    "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx",
+    "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx/commits/master",
+    "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/README.md",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/NOTES",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest_simple.cc",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest_simple.jl",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest.cc",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest.jl",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/LICENSE",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/e41eb1f/rwtest_simple.jl",
+    "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/e41eb1f/rwtest.jl",
+    "https://raw.githubusercontent.com/JuliaLang/julia/release-0.3/base/random.jl",
+    "https://raw.githubusercontent.com/JuliaLang/julia/release-0.3/base/dSFMT.jl",
+    "https://raw.githubusercontent.com/JuliaLang/julia/release-0.4/base/random.jl",
+    "https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/master/dSFMT.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-4.9/libstdc%2B%2B-v3/include/bits/random.h",
+    "https://raw.githubusercontent.com/gcc-mirror/gcc/releases/gcc-4.9/libstdc%2B%2B-v3/include/bits/random.tcc"
+  ],
+  "confidence": 0.8
+}

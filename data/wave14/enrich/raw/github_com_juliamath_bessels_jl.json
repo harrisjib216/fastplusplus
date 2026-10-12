@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/juliamath/bessels.jl",
+  "one_liner": "Pure-Julia Bessel, Hankel and Airy functions for real arguments; README claims 2.3-10x over SpecialFunctions.jl (openlibm/AMOS).",
+  "what_it_does": "Evaluates J, Y, I, K (plus exponentially scaled variants), Hankel, spherical Bessel and Airy functions for real Float32/Float64 arguments and integer or non-integer orders, with in-place sequence versions such as Bessels.besselj!(out, 0:10, x). The API mirrors SpecialFunctions.jl names (besselj(nu, x), besselk0(x), airyai(x)), so switching is mostly a change of `using`. Complex arguments are supported only for the Airy functions and order-0/1 J and I; negative arguments that give a complex result throw DomainError.",
+  "how_it_is_fast": "Each function splits the (nu, x) plane into regions and uses a cheap closed form in each: fixed minimax polynomials (for Float64 besselj0, 16 degree-13 polynomials centred on roots and extrema after Harrison's 2009 'Fast and accurate Bessel function computation', then a modified Hankel asymptotic expansion above x = 26), Debye uniform asymptotic expansions for large orders, large-argument expansions, power series for small x, and a Levin sequence transformation for besselk. Everything is generic Julia that inlines into the caller and uses evalpoly and SIMDMath vector Horner/Levin kernels, whereas the baseline goes through ccall into openlibm (FreeBSD msun j0/y0) or AMOS's complex-argument Fortran routines. The maintainer attributes most of the gap to faster-converging asymptotic series and to avoiding continued fractions (search snippet of a fortran-lang Discourse thread, page itself unreachable).",
+  "when_to_use": [
+    "Julia code that evaluates many scalar Bessel J/Y/I/K values for real Float64 or Float32 arguments inside a hot loop, where a ccall into openlibm or AMOS per value dominates.",
+    "Order-0 and order-1 calls (besselj0, bessely0, besseli0, besselk0 and their order-1 versions) where fixed polynomial approximations replace the libm or AMOS path.",
+    "Many consecutive integer orders at one argument: besselj(0:100, x) uses recurrence (README: 398 ns for 101 orders), and besselj!(out, nu, x) avoids the allocation.",
+    "Code that needs Bessel functions differentiable with Enzyme (master ships an EnzymeCore extension) or wants native Float32 code paths for the order-0/1 functions (Float16 inputs are computed in Float32)."
+  ],
+  "when_not_to_use": [
+    "Complex arguments or complex orders beyond Airy and order-0/1 J and I: use SpecialFunctions.jl (AMOS).",
+    "Tiny arguments with integer orders: issue #58 measured besselj(10, x) for x around 1e-10 at about 30.9 ns against 8.5 ns in SpecialFunctions, because the power series calls gamma instead of a factorial and has no integer-order shortcut.",
+    "When the last ulp matters near zeros: the README's own ArbNumerics comparison gives maximum relative errors up to 2e-11 (besselj(5.0, x)) and 7e-13 (besselj1), and says accuracy is sometimes a digit or two worse than SpecialFunctions.",
+    "Hankel and spherical functions at awkward inputs: open bugs give NaN for hankelh1(7, sqrt(224)) (#111), sphericalbesselj with large l and small x (#121) and besselj for negative x with large negative integer order (#113).",
+    "Higher precision (BigFloat, Double64) is not supported yet (#98); Float128 files exist in the source but the README lists higher precision as a plan."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Registered v0.2.8: none. Master (0.3.0-DEV): Gamma.jl and SIMDMath.jl, with EnzymeCore as an optional extension.",
+    "min_toolchain": "Julia 1.10 on master; Julia 1.6 for registered v0.2.8",
+    "platforms": "any platform Julia runs on (pure Julia, no binary artifacts)",
+    "thread_safety": "not documented; the scalar functions keep no shared mutable state in the source read, and the ! variants write only to the caller's buffer",
+    "drop_in_for_baseline": "partial — same function names as SpecialFunctions.jl for real arguments, but complex support is limited, negative arguments with complex results throw DomainError, and both packages export the same names, so calls must be qualified if both are loaded"
+  },
+  "gotchas": [
+    "Hot-path performance bug on master (open issue #115 since June 2024): besseli_power_series in src/BesselFunctions/besseli.jl calls Math.check_convergence(t, s), but the helper is defined as check_convergence(ser, term) = abs(term) <= eps(T)*ser, so for positive x the test abs(s) <= eps*t never fires and the loop always runs all 3001 iterations. Results stay correct because the terms underflow to zero, but besseli and besselix with nu <= 25 and x <= 35 (outside the large-argument branch) cost thousands of loop iterations instead of tens. Registered v0.2.8 has the correct test (abs(a) < eps(T) * abs(out)); the maintainer called it an oversight from the Enzyme refactor. The README's 'besseli(nu, x) 7x' row cannot hold in that region on the master branch that the README's quick start installs.",
+    "The README benchmark table was written between January and October 2022 on Julia 1.7.2 under Rosetta, before the besselj0 rewrite to Harrison's root-centred polynomials, the SIMDMath and Enzyme refactors, and the May 2026 move of gamma into Gamma.jl, so the ratios describe older code; no comparison harness is in the repo, and benchmark/benchmark.jl's 'bessely' group actually times besselj0 and besselj1.",
+    "The README still says the package is 'self contained without any external dependencies'; master now depends on Gamma.jl and SIMDMath.jl. Bessels.gamma is a re-export of Gamma.jl, so the README's 5x gamma row is no longer Bessels' own code.",
+    "`pkg> add Bessels` gives v0.2.8 (the last registered version, early 2023), while the README quick start adds the git URL and gets the unregistered 0.3.0-DEV master, which has the Enzyme support and also the besseli slowdown above."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling covers special functions: FFTA.jl, Gaius.jl and TriangularSolve.jl are other pure-Julia replacements for C libraries in different domains. Pick Bessels.jl over the baseline SpecialFunctions.jl for real-argument Bessel evaluations in Julia hot loops; keep SpecialFunctions for complex arguments, tiny-argument integer orders, and, on master, small-order besseli.",
+  "verified_claims_summary": "The README reports first-party speed ratios against SpecialFunctions.jl for random x and nu in (0, 100) on Julia 1.7.2 on an Apple M1 under Rosetta, with no absolute times and no published harness: 2.5x and 2.3x for besselj0 and bessely0 (the only rows whose baseline is C, openlibm's msun j0/y0 through ccall), and 4-10x for the other rows, whose baseline is mostly AMOS Fortran via openspecfun. A commenter on a fortran-lang Discourse thread reproduced roughly 10x for besselk0 with a simple @benchmark (known from a search snippet; the thread itself was unreachable).",
+  "status_note": "Active only in maintenance mode: 2026 commits are dependency bumps, Enzyme fixes and the Gamma.jl split by one maintainer, the last registered release is v0.2.8 from early 2023, and several NaN bugs plus the besseli convergence bug (#115) stay open; MIT and pure Julia, so it is easy to vendor or pin to v0.2.8.",
+  "sources_read": [
+    "https://github.com/JuliaMath/Bessels.jl",
+    "https://github.com/JuliaMath/Bessels.jl/commits/master",
+    "https://github.com/JuliaMath/Bessels.jl/commits/master/README.md",
+    "https://github.com/JuliaMath/Bessels.jl/issues?q=is%3Aissue",
+    "https://github.com/JuliaMath/Bessels.jl/issues/115",
+    "https://github.com/JuliaMath/Bessels.jl/issues/58",
+    "https://github.com/JuliaMath/Bessels.jl/issues/111",
+    "https://github.com/JuliaMath/Bessels.jl/tree/master/src/BesselFunctions",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/benchmark/benchmark.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/Bessels.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/precompile.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/Math/Math.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/BesselFunctions/BesselFunctions.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/BesselFunctions/besseli.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/BesselFunctions/besselj.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/BesselFunctions/besselk.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/HEAD/src/BesselFunctions/U_polynomials.jl",
+    "https://raw.githubusercontent.com/JuliaMath/Bessels.jl/v0.2.8/src/besseli.jl",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/B/Bessels/Versions.toml",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/B/Bessels/Compat.toml",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/B/Bessels/Deps.toml"
+  ],
+  "confidence": 0.75
+}

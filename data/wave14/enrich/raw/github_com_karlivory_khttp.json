@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/karlivory/khttp",
+  "one_liner": "Synchronous Rust HTTP/1.1 micro-framework (memchr and libc only) with an epoll dispatcher; 1.12-1.22x Drogon on the-benchmarker's trivial routes.",
+  "what_it_does": "A low-level HTTP/1.1 server and optional client crate. You register closures per method and path, with :param and wildcard routes, on a Server builder, then call serve(), serve_threaded() or, with the epoll feature, serve_epoll(). Handlers get a RequestContext whose body is a blocking std::io::Read, and they write through a ResponseHandle, so request and response bodies stream without an async runtime. Hooks run at connection setup, before routing and at teardown. It is not a drop-in for Drogon or any C++ framework.",
+  "how_it_is_fast": "The request head is read into a reused thread-local buffer and parsed in place with memchr-based scanning; routing is a small param and wildcard matcher, and the Date header line is cached once per second (code taken from faf). With the epoll feature, one thread runs an epoll loop: edge-triggered accept on the listener, level-triggered readiness on client sockets, and each ready connection is handed to a fixed worker pool (max(10, 2 x available_parallelism) threads), with an in-flight flag so only one worker owns a connection at a time. The crate has two dependencies and builds small; benchmarks.md reports 1.7 MB peak memory against 4.6-43.5 MB for actix-web, axum, may_minihttp and poem.",
+  "when_to_use": [
+    "Small internal Rust HTTP/1.1 services on Linux behind a TLS-terminating proxy, where a two-crate dependency tree and a few MB of RSS matter more than features.",
+    "Keep-alive traffic with tiny plaintext or JSON responses on a few cores: in the-benchmarker snapshots with about 4 CPUs per server it serves 1.12-1.22x Drogon's requests per second.",
+    "Code that should stay synchronous (blocking Read bodies, streamed file responses) without bringing in tokio.",
+    "Tools that need an embedded HTTP endpoint plus a minimal client from the same crate (client feature)."
+  ],
+  "when_not_to_use": [
+    "Anything needing TLS, HTTP/2, WebSockets or async handlers: none exist; it is HTTP/1.1 only.",
+    "Clients that pipeline requests: extra requests that arrive in the same read are silently dropped (see gotchas).",
+    "Untrusted or slow clients without a read timeout: workers block in read(), so as few as max(10, 2 x cores) slow connections can stall the server unless connection_setup_hook sets a read timeout.",
+    "Many-core boxes: one epoll thread feeds every worker through a single Mutex-guarded mpsc queue. Published results stop at 4 server cores (the-benchmarker) and a 14-CPU laptop.",
+    "Projects that need a maintained dependency: last commit and release 0.2.0 on 2025-09-19, single author, 40 stars, one open PR since 2025-09-12."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr; libc (only with the epoll feature)",
+    "min_toolchain": "Rust edition 2021; no rust-version declared on crates.io (the-benchmarker built it with Rust 1.98)",
+    "platforms": "any std target for serve() and serve_threaded(); the epoll feature is Linux 64-bit only (compile_error elsewhere)",
+    "thread_safety": "Handlers run concurrently on a worker thread pool (or one thread per connection with serve_threaded); each connection is processed by one worker at a time",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No HTTP/1.1 pipelining: read_request parses one head out of a thread-local buffer, and any bytes past it go only to the body reader, which ignores them for a GET with no Content-Length. A second pipelined request in the same read is lost and the client waits forever (src/server/mod.rs, src/body_reader.rs).",
+    "serve_epoll leaks a heap Handle (64-byte aligned, holding an Arc of the handler config) for nearly every closed connection: the worker deletes the fd from epoll and sets closed, but the Handle is freed only if a stale event for it is already in the epoll thread's current batch. Churn-heavy traffic therefore grows memory. serve_epoll also never calls connection_teardown_hook.",
+    "Plain serve() binds each connection to a pool thread for its whole keep-alive life, so with the default max(10, 2 x cores) threads only that many connections are served at once. This is why khttp fell to about 30k req/s at 512 connections in the-benchmarker before its suite entry switched to serve_epoll.",
+    "Client sockets are level-triggered while a worker owns them, so the epoll thread keeps waking on the same ready fd until a worker drains it. That busy-spin burns CPU that shows up in the suite's server_cpu_saturation."
+  ],
+  "pick_this_over_siblings_when": "In the same the-benchmarker snapshot khttp (197-216K req/s) is level with Tako (Rust, 194-220K) and behind PowPow (Nim, 237-248K) and jet_server (Dart, 240-256K), so pick it for a synchronous, two-dependency Rust server, not for peak throughput. Take actix-web or a tokio-based server when you need TLS, HTTP/2, async I/O or a maintained project.",
+  "verified_claims_summary": "the-benchmarker/web-frameworks data.json (2026-10-06): zrk closed-loop over keep-alive on three trivial routes, each server pinned to about 4 CPUs on a 16-CPU x86_64 Fedora host labelled 'M1 Eight-Core Processor'. khttp 0.2 (serve_epoll, Rust 1.98, LTO, codegen-units 1) did 215,714 / 199,813 / 197,117 req/s at 64 / 256 / 512 connections against Drogon 1.9.13 (cmake release, no LTO, Date and Server headers off) at 177,005 / 178,341 / 171,358, 1.22x / 1.12x / 1.15x (derived from page data). Both ran at only 58-63% CPU saturation, below the suite's 75% server-bound bar; the 2026-09-24 snapshot, where both were CPU-bound, shows 1.13-1.18x.",
+  "status_note": "Stale (last commit and crates.io release 0.2.0 on 2025-09-19, 4,660 downloads) but MIT-licensed and small enough to vendor. Code reading found two correctness gaps behind the fast path: pipelined requests are dropped, and the epoll mode leaks a Handle per closed connection. Neither affects the keep-alive, non-pipelined numbers. Harness caveats: the suite entry was written by the khttp author, only the Rust side has LTO, and Drogon's threads_num 0 probably sizes its IO threads to all 16 host CPUs, since std::thread::hardware_concurrency ignores the cpuset (not checked in run logs).",
+  "sources_read": [
+    "https://github.com/karlivory/khttp",
+    "https://github.com/karlivory/khttp/tree/main/src",
+    "https://github.com/karlivory/khttp/tree/main/src/server",
+    "https://github.com/karlivory/khttp/issues?q=is%3Aissue",
+    "https://github.com/karlivory/khttp/pulls",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/README.md",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/benchmarks.md",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/server/builder.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/server/epoll.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/server/mod.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/threadpool.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/router.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/date.rs",
+    "https://raw.githubusercontent.com/karlivory/khttp/HEAD/src/body_reader.rs",
+    "https://crates.io/api/v1/crates/khttp",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/data.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/README.md",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/rust/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/rust/khttp/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/rust/khttp/Cargo.toml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/rust/khttp/src/main.rs",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/cpp/drogon/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/cpp/drogon/config.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/cpp/drogon/main.cc",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/cpp/drogon/controllers/UserCtrl.cc",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/HEAD/cpp/drogon/CMakeLists.txt"
+  ],
+  "confidence": 0.6
+}

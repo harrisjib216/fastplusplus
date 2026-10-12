@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/josephg/jumprope-rs",
+  "one_liner": "Rust rope (skip list of gap-buffer leaves) that replays real editing traces about 2.4-2.7x faster than the author's C librope.",
+  "what_it_does": "An editable large-string type for text editors and CRDTs: insert, remove and replace at unicode-character offsets in O(log n), plus read-back via to_string(), chars() and the faster substrings()/slice_substrings() chunk iterators. It is not a drop-in String replacement; it is a separate type with a String-like editing API. An optional wchar_conversion feature adds O(log n) UTF-16 offset conversion and wchar-based edits, and JumpRopeBuf is a wrapper that coalesces runs of adjacent keystrokes before applying them.",
+  "how_it_is_fast": "A skip list (random node heights, bias 65/256) whose nodes are fixed 392-byte gap buffers instead of librope's 136-byte plain arrays, so consecutive keystrokes at the same spot only move the gap inside one node instead of shifting bytes or walking the list. Each skip entry stores character counts, so locating a character offset is a top-down O(log n) walk; nodes are fixed-size structs with raw pointers and an inline head node. All operations take pre-validated &str, so there is no per-insert UTF-8 validation pass.",
+  "when_to_use": [
+    "Replaying or applying keystroke-level edit streams to documents from tens of KB to MB (CRDT/OT engines, collaborative editors); the author's own diamond-types depends on it.",
+    "Editors or servers that receive positions in unicode characters, or in UTF-16 units from JavaScript/Java/C# clients (enable wchar_conversion; costs about 15% per the README).",
+    "Wasm builds where bundle size matters (README: 18 kB brotli vs 30 kB for ropey); build with default-features = false to drop the entropy-seeded StdRng.",
+    "Typing-heavy workloads with runs of adjacent inserts or backspaces, via JumpRopeBuf, which merges them before touching the rope."
+  ],
+  "when_not_to_use": [
+    "Small strings: the README says under about 100 bytes use String or SmartString; every JumpRope embeds a full head node (392-byte gap buffer plus a 21-entry next array) and an RNG, so even an empty rope is around 1 KB.",
+    "Memory-constrained documents: issue #5 (open since 2023) reports over 90% memory overhead from node layout, and the maintainer says it can sit around 400% after many edits because split nodes are never merged back.",
+    "When you need line/column indexing: ropey has it; the line_conversion feature flag in Cargo.toml only adds internal gap-buffer bookkeeping and exposes no line API.",
+    "Long-term-supported dependencies: last release 1.1.2 (2023-05-15), last commit 2023-05-20, three open issues and two open PRs without maintainer activity."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rand 0.8 (small_rng), str_indices 0.4",
+    "min_toolchain": "Rust edition 2021 (rustc 1.56+); no rust-version declared",
+    "platforms": "any (pure Rust, no SIMD); wasm build provided in jumprope-wasm",
+    "thread_safety": "JumpRope is Send + Sync (mutation needs &mut); JumpRopeBuf uses a RefCell, so it is Send but not Sync and borrow() panics if already borrowed",
+    "drop_in_for_baseline": "partial — same author and same skip-list idea as librope, but a Rust API (char offsets, &str, Range) rather than librope's C API; C code would need its own FFI shim"
+  },
+  "gotchas": [
+    "Out-of-range positions are silently clamped: insert past the end appends, and remove past the end is ignored, so index bugs in the caller do not panic.",
+    "Debug builds use 10-byte nodes (NODE_STR_SIZE is 10 under debug_assertions, 392 in release), so debug performance and memory behaviour are not representative, and JumpRope::new() uses a fixed seed (123) in debug or without ddos_protection, which makes the skip-list shape predictable to an adversary.",
+    "wchar API: chars_to_wchars returned a wrong value in all cases before 1.1.2 (CHANGELOG); unreleased master adds is_ascii_only(), which actually tests for no surrogate pairs (issue #8).",
+    "Benchmark harness flaws: the librope (C) column calls rope.c through FFI with a CString heap allocation and copy per insert inside the timed loop (182,315 of them per automerge-paper replay; not measured, but at an assumed 15-30 ns per small malloc/free pair that is roughly 2.7-5.5 ms of librope's 16.28 ms), and rope.c is built by cc defaults without NDEBUG. The README's 'about 10x faster again' JumpRopeBuf claim comes from benches/benches.rs, which runs collapse() on the trace outside the timer and feeds JumpRopeBuf the pre-merged ops (automerge-paper 259,778 patches become 10,712 ops; rustcode 40,173 become 13,561), so the merging work is not timed."
+  ],
+  "pick_this_over_siblings_when": "No other rope is catalogued in this category; the string-and-text siblings (regex, csv-zero, mail-parser and others) solve different problems. Against its C predecessor librope (wave 1), pick jumprope for any Rust or wasm project; librope only makes sense for C callers.",
+  "verified_claims_summary": "The author's criterion harness (rope_benches 'realworld') replays four crdt-benchmarks keystroke traces on one core of a Ryzen 5800X: jumprope 6.66 ms vs librope 16.28 ms on automerge-paper (2.4x), and 1.66 vs 3.93, 0.59 vs 1.59, 3.81 vs 10.01 ms on the other three (derived from page data), with compiler versions and C flags unstated and the table last updated in October 2021. The C side pays a per-insert CString allocation and UTF-8 validation that the Rust side does not, and the only correctness check is final length (the end contents of all four traces are ASCII, so that length check is at least valid).",
+  "status_note": "Unmaintained since May 2023 (1.1.2 on crates.io, about 111k downloads, used by diamond-types) but ISC OR Apache-2.0, about 3,300 lines of Rust in src/ (miri-clean since 1.0 per the CHANGELOG), and small enough to vendor.",
+  "sources_read": [
+    "https://github.com/josephg/jumprope-rs",
+    "https://github.com/josephg/jumprope-rs/commits/master",
+    "https://github.com/josephg/jumprope-rs/issues?q=is%3Aissue",
+    "https://github.com/josephg/jumprope-rs/issues/4",
+    "https://github.com/josephg/jumprope-rs/issues/5",
+    "https://github.com/josephg/jumprope-rs/issues/8",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/jumprope.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/buffered.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/gapbuffer.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/utils.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/fast_str_tools.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/src/iter.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/benches/benches.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/main.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/src/rope.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/build.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/README.md",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.c",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/rope_benches/rope.h",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/crdt-testdata/src/lib.rs",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/benchmark_data/automerge-paper.json.gz",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/benchmark_data/rustcode.json.gz",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/benchmark_data/sveltecomponent.json.gz",
+    "https://raw.githubusercontent.com/josephg/jumprope-rs/HEAD/benchmark_data/seph-blog1.json.gz",
+    "https://crates.io/api/v1/crates/jumprope",
+    "https://crates.io/api/v1/crates/jumprope/reverse_dependencies"
+  ],
+  "confidence": 0.8
+}

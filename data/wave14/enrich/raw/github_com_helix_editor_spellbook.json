@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/helix-editor/spellbook",
+  "one_liner": "Rust rewrite of Nuspell that checks Hunspell-format dictionaries; 1.5-8x faster single-word check() than Nuspell and Hunspell on en_US.",
+  "what_it_does": "Spellbook is a no_std (alloc-only) Rust crate that loads a Hunspell .aff/.dic pair from in-memory strings (Dictionary::new(&aff, &dic)) and answers check(&str) -> bool and suggest(&str, &mut Vec<String>), plus add() and remove_stem() for personal dictionaries. It follows Nuspell's checking and suggestion logic almost line for line, so results should match Nuspell's; it is not an API drop-in for the Hunspell or Nuspell C/C++ interfaces. Used by codebook (Zed editor and LSP spell checker) and as an optional cargo-spellcheck back end.",
+  "how_it_is_fast": "The stem table is a hash multimap (HashBag) built on hashbrown's HashTable (SwissTable-style SIMD group probing) with foldhash by default, where Nuspell rolls its own table hashed with std::hash. Stems and flag sets use 'German string' (Umbra) small-string and small-slice layouts with inline storage, flags are NonZeroU16 in sorted boxed slices searched by binary search, and affixes sit in a sorted table indexed by first character and binary-searched (Nuspell's trick). The author did not profile the C++ side; the string-search explanation is labelled a suspicion.",
+  "when_to_use": [
+    "Spell checking inside a Rust program (editor, LSP server, linter, CLI) with existing Hunspell dictionaries, where per-word check latency matters: tens to hundreds of ns per en_US word.",
+    "Replacing a Hunspell or Nuspell FFI binding to drop the C++ toolchain and ICU dependency; the crate needs only hashbrown (plus foldhash by default) and works no_std with alloc.",
+    "Memory-sensitive hosts: the author's DHAT run shows about 2.6 MB total allocated to load en_US and check one word vs 4.4 MB for Nuspell and 3.3 MB for Hunspell, with 947 live blocks at peak vs about 50,000-90,000.",
+    "Dictionaries with large affix tables (fr_FR, de_DE) on 0.4.2 or later, where issue #15 reports fr check() at 46.82 ns vs Hunspell 268.84 ns and Nuspell 184.69 ns."
+  ],
+  "when_not_to_use": [
+    "You need phonetic suggestions (Hunspell PHONE tables): not implemented, suggest() mirrors Nuspell.",
+    "Dictionaries with complex compounding directives: the README says these 'may work less well', the project calls itself alpha, and a Dutch compound word panicked on a UTF-8 boundary until a March 2026 fix (issue #12).",
+    "Compound-heavy checking where you already use Nuspell: the only compound row (en_US '20000th') is 676 ns vs Nuspell 656 ns, so no gain there.",
+    "Suggestion-heavy workloads on versions before 0.4.2: issue #15 measured fr_FR suggestions at 1.47 s vs Hunspell 243 ms before the affix and ICONV fixes; suggest() speed is not in the published comparison.",
+    "You need a stable API or a C/C++ interface: the README warns of breaking changes to any part of the API and MSRV."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "hashbrown (>=0.15, no default features); foldhash optional and on by default (default-hasher feature)",
+    "min_toolchain": "Rust 1.70 (rust-version in Cargo.toml), edition 2021",
+    "platforms": "any target with alloc (no_std, no platform-specific code documented)",
+    "thread_safety": "check() and suggest() take &self and the benchmarks share one Dictionary through a static Lazy, so it is Sync for a Sync hasher; add() and remove_stem() need &mut self. Not otherwise documented.",
+    "drop_in_for_baseline": "partial — reads the same Hunspell .aff/.dic files and aims for Nuspell-identical results, but it is a Rust API (dictionary passed as strings, not paths); C/C++ users would need their own FFI."
+  },
+  "gotchas": [
+    "Harness flaw: the published C++ harness does not match the published numbers. the-mikedavis/ffi-dictionaries (last commit 2026-04-14) still times Hunspell and Nuspell with nightly libtest #[bench] and uses 'earthly' for word_with_suffix, yet the June 2026 compare.md (commit 09013cf, 'bench: Migrate to criterion') labels every column a Criterion median for 'earthed', and the C++ word_with_suffix figures rose from 236.94/141.47 ns (the Nov 2024 'earthly' table) to 353.01/273.76 ns. The C++ columns therefore came from an unpublished local harness and cannot be reproduced from public code; issue #15's fr_FR C++ figures likewise have no published bench.",
+    "The Nov 2024 version of the table had the Nuspell and Spellbook uppercase ('EARTH') and word_with_prefix ('unearth') values apparently swapped (Nuspell 280.78 ns uppercase and 924.66 ns prefix, now 882.94 and 283.38 ns); copies quoted from that version are wrong.",
+    "The DHAT totals are for a whole example binary that loads en_US and checks 'hello', so they compare dictionary-load memory, not per-check allocation.",
+    "Uses unsafe for the Umbra string/slice layouts, in-place UTF-8 byte edits (sharp-s handling, suggestion swaps) and unchecked indexing in the ngram suggester; words over 360 bytes (MAX_WORD_LEN) are rejected without checking, as in Nuspell."
+  ],
+  "pick_this_over_siblings_when": "No other spellchecker is catalogued; the nearest siblings are Rust rewrites of C++ text tools (jieba-rs, Vibrato, Vaporetto), so pick Spellbook whenever the task is Hunspell-dictionary spell checking from Rust. Compared with ZSpell (in Spellbook's own doc, not catalogued), Spellbook supports compounds, numbers and suggestions and loads pt_BR in about 100 ms, where ZSpell's affix expansion gives near-constant 47-62 ns checks but 83 MB of allocations for en_US.",
+  "verified_claims_summary": "Author-run Criterion medians (June 2026 table) for single-word check() on the stock en_US dictionary: Spellbook 42.82 ns vs Nuspell 125.89 ns and Hunspell 197.25 ns for 'earth', 14.14 vs 112.92 and 220.89 ns for a number, 779 vs 1,249 and 4,329 ns for 'light-weight-like', and a tie with Nuspell on the compound '20000th' (676 vs 656 ns). The C++ libraries were vendored and built by the cc crate (probably -O3 under cargo bench) and called through a thin FFI shim; no CPU, compiler version or flags are stated, and the C++ columns came from a harness that is not published in its current form.",
+  "status_note": "Active (0.4.2 released 2026-06-03, last commit 2026-07-11, about 203k crates.io downloads), MPL-2.0 and self-described alpha with an unstable API; usable today for en_US-class dictionaries, while the C++ comparison is first-party and its current C++ harness is unpublished.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/README.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/docs/compare.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/781c609/docs/compare.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/docs/internals.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/benches/check.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/c7f2d78/benches/check.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/247bc4d/benches/check.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/src/checker.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/src/aff.rs",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/src/hash_bag.rs",
+    "https://github.com/helix-editor/spellbook/commits/master/docs/compare.md",
+    "https://github.com/helix-editor/spellbook/commits/master/benches/check.rs",
+    "https://github.com/helix-editor/spellbook/commit/09013cf",
+    "https://github.com/helix-editor/spellbook/issues?q=is%3Aissue",
+    "https://github.com/helix-editor/spellbook/issues/15",
+    "https://github.com/helix-editor/spellbook/issues/12",
+    "https://crates.io/api/v1/crates/spellbook",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/README.md",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/build.rs",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/benches/nuspell-check.rs",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/benches/hunspell-check.rs",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/vendor/nuspell/src/interface.cxx",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/vendor/nuspell/src/dictionary.cxx",
+    "https://raw.githubusercontent.com/the-mikedavis/ffi-dictionaries/HEAD/vendor/hunspell/src/hunspell.cxx",
+    "https://github.com/the-mikedavis/ffi-dictionaries/commits/main",
+    "https://github.com/the-mikedavis/ffi-dictionaries/branches"
+  ],
+  "confidence": 0.75
+}

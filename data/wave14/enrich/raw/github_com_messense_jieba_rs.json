@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/messense/jieba-rs",
+  "one_liner": "Rust port of the jieba Chinese word segmenter; claimed faster than cppjieba, about 2.2x faster than nodejieba through Node bindings.",
+  "what_it_does": "Segments Chinese text into words with the jieba algorithm: dictionary prefix DAG, max-probability route by dynamic programming, and an HMM (Viterbi) pass for out-of-vocabulary runs. The Rust API is a Jieba value with cut, cut_all, cut_for_search, tokenize and tag (POS) methods that return Token/Tag structs borrowing from the input (word plus Unicode and byte offsets), plus optional TF-IDF and TextRank keyword extractors behind features. It reads the same 'word freq tag' dictionary format as jieba and cppjieba, embeds the default dictionary zstd-compressed, and ships an unpublished C API crate (capi, cdylib) for C or C++ callers.",
+  "how_it_is_fast": "The dictionary lives in a character-level trie whose root transitions for BMP characters are a directly indexed 65,536-entry table and whose other edges sit in one open-addressing hash table keyed by (parent node, char), each slot carrying the child id, the word id and a small Bloom-style filter of the child's first characters, so most walks cost one probe per character and non-children cost none; cppjieba's Trie.hpp instead allocates an unordered_map<Rune, TrieNode*> per node. Word candidates go into a compressed-sparse-row DAG (one flat u64 edge array), log-frequencies are kept in a dense f64 array for the route DP, and per-thread scratch buffers (thread_local) are reused so a cut allocates only its output vector. Han-run splitting is a hand-written character-class scanner (the regex dependency was dropped in September 2026) and character counting uses the bytecount crate's runtime-dispatched SIMD.",
+  "when_to_use": [
+    "Rust services or pipelines that segment large volumes of Chinese text with jieba-compatible output and dictionaries (default dictionary is jieba's; Traditional-character coverage is not documented, see issue #112).",
+    "Search indexing (tantivy via cang-jie or tantivy-jieba) where cut_for_search or tokenize with byte offsets feeds an inverted index.",
+    "Multi-threaded batch segmentation: one shared Jieba (cut takes &self, the crate's own bench shares a static LazyLock<Jieba> across rayon threads).",
+    "Node.js, Python, PHP, WASM or R projects that want a faster drop-in for nodejieba or Python jieba through the existing bindings.",
+    "Keyword extraction with jieba's TF-IDF or TextRank on the same segmenter (features tfidf, textrank)."
+  ],
+  "when_not_to_use": [
+    "You need cppjieba's exact C++ API inside a C++ codebase: jieba-rs exposes only a Rust API and an unpublished C API whose cut copies every token into a new heap string (marked FIXME), which eats into the per-call advantage.",
+    "You need a reproducible, current speed figure against cppjieba before switching: none exists in either repository (see verified claims).",
+    "Japanese, Korean or other languages: the classifiers treat only CJK ideographs plus ASCII alphanumerics and '+#&._%-' as segmentable text; use Vibrato or Vaporetto for Japanese.",
+    "Binary size or startup matters: the embedded dictionary is compressed into the binary and Jieba::new decompresses and builds the trie at runtime (issue #98 asks how to reduce binary size); disable default-dict and load a dictionary yourself.",
+    "You require output stable across versions: tokenization changed in September 2026 (RE_SKIP dot fix #157, search-mode alphanumeric blocks #161)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "jieba-macros, bytecount, rustc-hash; include-flate (default-dict, tfidf), ordered-float (tfidf, textrank); wasm-bindgen and serde on wasm targets",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85 or newer); no rust-version declared on crates.io",
+    "platforms": "any Rust target, including wasm (wasm-bindgen exports); no architecture-specific code in the core files read",
+    "thread_safety": "cut, tag and tokenize take &self and use thread-local scratch buffers, so one Jieba can be shared across threads; add_word, load_dict and set_hmm_model need &mut self",
+    "drop_in_for_baseline": "partial — same algorithm and dictionary file format as cppjieba, but a Rust API (Vec<Token> results); C/C++ use goes through the unpublished capi cdylib, and the Node/Python bindings replace nodejieba/jieba rather than cppjieba itself"
+  },
+  "gotchas": [
+    "README example is stale: it compares jieba.cut(...) to a Vec<&str>, but cut now returns Vec<Token<'a>> and the crate docs map t.word first; upgrading from older versions breaks callers that expected Vec<&str>.",
+    "Harness note on the only full comparison (@node-rs/jieba vs nodejieba 3.5.8): both bindings default to HMM off (node-rs cut hmm.unwrap_or(false); nodejieba lib/nodejieba.cpp useHMM = false), so the 2.18x Cut rows compare like modes on the Weicheng corpus; but nodejieba 3.5.8 is itself a node-addon-api (N-API) addon, so the README's 'N-API is faster than v8 C++ API' explanation is stale, nodejieba's binding.gyp sets no optimisation flags (node-gyp Release defaults or a downloaded prebuilt binary), and the benchmark script no longer contains the nodejieba row, so the table cannot be regenerated.",
+    "The repository's mirror of cppjieba's load test (examples/weicheng) installs tikv-jemallocator as global allocator and cuts line by line with wall-clock Instant, while cppjieba's test/load_test.cpp uses the system allocator, CPU-time clock(), MixSegment with HMM on and now a different input (synthetic_doc.utf8); results from the two are not comparable as published.",
+    "Very large single inputs: jieba-rs 0.7.2 aborted on a 250 MB document with a 4 GB StaticSparseDAG allocation (issue #124, fixed by capping DAG capacity in PR #126); current code also drops per-thread scratch above 4 MiB (32 MiB for DAG edges) after each call, so huge inputs re-allocate every time."
+  ],
+  "pick_this_over_siblings_when": "No Chinese segmenter is catalogued yet; the nearest siblings are Vibrato (MeCab reimplementation) and Vaporetto (KyTea-style pointwise tokenizer), which target Japanese, so pick jieba-rs for Chinese text and jieba-compatible dictionaries, and those two for Japanese.",
+  "verified_claims_summary": "No reproducible jieba-rs vs cppjieba measurement exists: the 33% figure comes from a 2019 contributor blog post (blog.paulme.ng, unreachable here, known only by its title and a later snippet), and the later 'Making jieba-rs 2.4x faster' post is jieba-rs against its own earlier version (2.85 to 1.32 us per HMM cut on an Apple M4 Max, snippet only). The closest public numbers are the @node-rs/jieba README (jieba-rs 0.11.0 vs nodejieba 3.5.8 wrapping cppjieba, Apple M4 Max, Node.js v26.8.2, tinybench): Cut on the 246,568-character Weicheng text 17.9 ms vs 39.2 ms and on a 1,184-character preface 61.3 us vs 133.6 us (about 2.18x, derived from page data), Tag about 1.9-2.05x, with both bindings in non-HMM mode and binding marshalling included on both sides.",
+  "status_note": "Actively maintained (0.11.0 released 2026-09-16, about 4.4 million crates.io downloads, many bindings), MIT-licensed and pure Rust with no unsafe in the core files read; usable from C/C++ only via the unpublished capi crate.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/Cargo.toml",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/examples/weicheng/src/main.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/examples/weicheng/Cargo.toml",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/src/lib.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/src/trie.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/src/sparse_dag.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/src/hmm.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/jieba/benches/jieba_benchmark.rs",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/capi/Cargo.toml",
+    "https://raw.githubusercontent.com/messense/jieba-rs/HEAD/capi/src/lib.rs",
+    "https://github.com/messense/jieba-rs/tree/master/jieba/src",
+    "https://github.com/messense/jieba-rs/issues?q=is%3Aissue",
+    "https://github.com/messense/jieba-rs/issues/124",
+    "https://github.com/messense/jieba-rs/issues/157",
+    "https://github.com/messense/jieba-rs/commits/master",
+    "https://messense.me/making-jieba-rs-2-4x-faster (ENOTFOUND)",
+    "https://crates.io/api/v1/crates/jieba-rs",
+    "https://raw.githubusercontent.com/napi-rs/node-rs/HEAD/packages/jieba/README.md",
+    "https://raw.githubusercontent.com/napi-rs/node-rs/HEAD/packages/jieba/benchmark/jieba.ts",
+    "https://github.com/napi-rs/node-rs/tree/main/packages/jieba/src",
+    "https://raw.githubusercontent.com/napi-rs/node-rs/HEAD/packages/jieba/src/lib.rs",
+    "https://github.com/yanyiwu/nodejieba",
+    "https://github.com/yanyiwu/nodejieba/tree/master/lib",
+    "https://raw.githubusercontent.com/yanyiwu/nodejieba/HEAD/index.js",
+    "https://raw.githubusercontent.com/yanyiwu/nodejieba/HEAD/package.json",
+    "https://raw.githubusercontent.com/yanyiwu/nodejieba/HEAD/README.md",
+    "https://raw.githubusercontent.com/yanyiwu/nodejieba/HEAD/lib/nodejieba.cpp",
+    "https://raw.githubusercontent.com/yanyiwu/nodejieba/HEAD/binding.gyp",
+    "https://raw.githubusercontent.com/yanyiwu/cppjieba/HEAD/include/cppjieba/Trie.hpp",
+    "https://raw.githubusercontent.com/yanyiwu/cppjieba/HEAD/test/load_test.cpp",
+    "WebSearch: \"jieba-rs\" cppjieba benchmark 33% faster weicheng Paul Meng (snippets: messense.me 2.4x post, npm @node-rs/jieba)"
+  ],
+  "confidence": 0.6
+}

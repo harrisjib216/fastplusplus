@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/julialinearalgebra/lowrankapprox.jl",
+  "one_liner": "Julia package of randomized, early-terminating low-rank factorizations (ID, pivoted QR, SVD, CUR); README times an ID about 3.5x faster than SciPy's Fortran ID.",
+  "what_it_does": "Computes partial (rank- or tolerance-terminated) pivoted QR, interpolative decomposition, SVD, Hermitian eigendecomposition and CUR of dense matrices or matrix-free LinearOperators, plus spectral-norm estimation and partial range finding. The API is Julia-native: idfact(A; rtol=..., rank=..., sketch=...) returns skeleton and redundant column indices and the interpolation matrix T, and every factorization type supports fast multiplication and least-squares solves. It is not a drop-in for SciPy's interp_decomp; the outputs are equivalent in form but the interface, 1-based indices and language differ.",
+  "how_it_is_fast": "By default it sketches the matrix with a Gaussian random matrix of order k+8 (starting at the block size 32 and doubling until the rank is found), which is one Level-3 BLAS GEMM, then runs an early-terminating blocked pivoted QR built on LAPACK's xLAQPS panel kernel (called via ccall) that stops once a pivot falls below max(atol, rtol times the largest column norm); the ID follows from that partial QR. The SciPy baseline at the README's time wrapped the id_dist Fortran 77 library, whose iddp_aid makes a separate rank-estimation pass and uses its own Householder pivoted QR and per-column subsampled randomized Fourier transform, with no BLAS or LAPACK calls (checked in SciPy v1.14.1 sources). So the gap is algorithm plus optimized BLAS/LAPACK, not Julia code generation.",
+  "when_to_use": [
+    "Dense matrices with rapidly decaying spectra (kernel, Cauchy, Hilbert-like or integral-equation blocks in hierarchical or fast multipole solvers) where you want an approximation to a stated relative tolerance rather than a fixed rank.",
+    "Matrix-free operators: wrap a product or composition as a LinearOperator and factor it from matvecs only, without forming the matrix.",
+    "When you need actual skeleton columns or rows (ID or CUR) for compression or interpretability instead of an abstract basis.",
+    "Julia codebases that already link OpenBLAS or MKL and want partial SVD/eigen or range finding with tunable sketches (randn, srft, sub, sprn)."
+  ],
+  "when_not_to_use": [
+    "Matrices that are not numerically low-rank: the adaptive sketch keeps doubling its order and the total cost exceeds a plain dense QR or SVD.",
+    "Small matrices: issue #25 shows psvd on a 49x80 matrix taking about 998 us and 504 KiB vs about 746 us and 125 KiB for LinearAlgebra's svd.",
+    "When results must be deterministic or carry a guaranteed error bound: sketches use the global RNG (the README notes the Hilbert rank comes out 26 or 27 between runs), and atol/rtol are checked only against QR pivot magnitudes, so accuracy is approximate by the README's own description.",
+    "C or C++ projects: this is Julia-only; LAPACK 3.12's xGEQP3RK now offers the same tolerance-terminated pivoted QR directly (issue #60 proposes adopting it), and SciPy 1.15+ ships a Cython port of the ID code.",
+    "Projects that need an actively maintained dependency: last commit 2024-02-10 and nine open issues, including an unanswered Julia 1.12 warning."
+  ],
+  "integration": {
+    "form": "module (Julia package in the General registry, v0.5.5)",
+    "dependencies": "FFTW, LowRankMatrices, Nullables, and the LinearAlgebra, SparseArrays and Random standard libraries; LAPACK via LinearAlgebra.BLAS.liblapack (OpenBLAS by default)",
+    "min_toolchain": "Julia 1.0 per Project.toml compat (CI runs 1.0 and the latest 1.x)",
+    "platforms": "any platform Julia's BLAS/LAPACK supports; CI covers x64 Linux, macOS and Windows",
+    "thread_safety": "not documented (sketches draw from Julia's default RNG; factorization objects are mutable structs)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No benchmark harness exists: the README's ~0.02 s vs ~0.07 s vs ~0.3 s are approximate 'early tests' from around 2015 with no hardware, Julia, BLAS, SciPy or MATLAB versions, no thread counts and no statement of whether Julia's first-call compilation was excluded. The baseline is the same author's own Python wrapper (scipy.linalg.interpolative is copyright 2013 Kenneth L. Ho; LowRankApprox.jl copyright 2015 Ken Ho) over BLAS-free Fortran 77, while Julia's sketch runs in the linked BLAS GEMM with an unstated thread count, so part of the 3.5x may come from BLAS (and possibly multithreading) rather than the algorithm.",
+    "First call in a session pays Julia's JIT compilation for the whole idfact/sketch/LAPACK-wrapper chain, which is not part of the README figure.",
+    "Calls LAPACK's auxiliary routine xLAQPS directly, so it depends on the linked LAPACK exporting it; issue #35 reported an access violation after pqr with MKL on Julia 1.5.4 (fine with OpenBLAS on 1.6), closed as not planned.",
+    "Julia 1.12 prints 'Constructor for type \"Array\" was extended in LowRankApprox without explicit qualification or import' (issue #62, open, no reply)."
+  ],
+  "pick_this_over_siblings_when": "No sibling does randomized low-rank or interpolative decomposition; pick it for that job in Julia. Unlike NativeMinuit.jl or NonuniformFFTs.jl, which beat C++ implementations of comparable algorithms with Julia code, this entry's edge is a different algorithm plus LAPACK against a Python/Fortran baseline, so it is not evidence that a JIT beats AOT C++.",
+  "verified_claims_summary": "The README reports an interpolative decomposition of a 1024 x 1024 Hilbert matrix to relative precision about 1e-15 in ~0.02 s with LowRankApprox (Julia), ~0.07 s with SciPy calling the Fortran 77 id_dist library, and ~0.3 s in MATLAB (about 3.5x vs SciPy, derived from page data). No hardware, versions, flags or benchmark code are given, SciPy's interp_decomp defaults to its randomized path (rand=True) but the README does not say which was used, and no C or C++ baseline was measured.",
+  "status_note": "Stale since February 2024 (v0.5.5, nine open issues without maintainer replies) but MIT-licensed, about 4,000 lines of Julia, and still installable from the General registry; usable only from Julia.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/README.md",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/Project.toml",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/LICENSE.md",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/LowRankApprox.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/lapack.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/pqr.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/id.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/sketch.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/matrixlib.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/psvd.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/cur.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/snorm.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/linop.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/permute.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/trapezoidal.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/prange.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/util.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/test/runtests.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/test/id.jl",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/commits/master",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues?q=is%3Aissue",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues/25",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues/32",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues/35",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues/60",
+    "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/issues/62",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/L/LowRankApprox/Versions.toml",
+    "https://raw.githubusercontent.com/JuliaRegistries/General/master/L/LowRankApprox/Compat.toml",
+    "https://raw.githubusercontent.com/scipy/scipy/main/scipy/linalg/interpolative.py",
+    "https://raw.githubusercontent.com/scipy/scipy/v1.14.1/scipy/linalg/src/id_dist/src/iddp_aid.f",
+    "https://raw.githubusercontent.com/scipy/scipy/v1.14.1/scipy/linalg/src/id_dist/src/idd_qrpiv.f",
+    "https://raw.githubusercontent.com/scipy/scipy/v1.14.1/scipy/linalg/src/id_dist/src/idd_frm.f"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/juliasymbolics/symbolicutils.jl",
+  "one_liner": "Pure-Julia symbolic term-rewriting engine (core of Symbolics.jl). It beats SymEngine (C++) only on IR-cached search and substitution and on JIT-compiled evaluation.",
+  "what_it_does": "Provides typed symbolic expressions (BasicSymbolic, created with @syms), a rule-based rewriting language (@rule, RuleSet, simplify), substitution (substitute, plus the Substituter and IRSubstituter drivers), variable search (search_variables!) and code generation (Code.Func/toexpr, which Symbolics.jl wraps as build_function). Differentiation comes from Symbolics.jl (executediff), and the benchmark had to write its own Taylor-series and iterative numeric-evaluation helpers. The API is unrelated to SymEngine.jl's Basic type, so switching means rewriting code, not swapping a dependency.",
+  "how_it_is_fast": "Expressions are hash-consed (one shared object per distinct subexpression, held in a global WeakCacheSet), so trees are really DAGs. An IRStructure flattens a set of expressions into a linear IR with a dependency graph. search_variables! and IRSubstituter then visit each shared node once and skip subtrees a sparse rule cannot touch. Code generation lowers an expression, optionally after common-subexpression elimination (Code.cse), to a Julia Expr that is eval'd and JIT-compiled by LLVM to native code. The compiled-call comparison is against SymEngine's LambdaRealDoubleVisitor, which walks a tree of closures.",
+  "when_to_use": [
+    "Julia or ModelingToolkit pipelines that turn symbolic models into numeric functions and call them many times: the generated function's call was 2.2x (with CSE) to 4.2x (without) faster than SymEngine's lambda visitor, once the 12-20x slower code generation and the first-call LLVM compile are paid.",
+    "Repeated variable searches or substitutions over a fixed, large set of expressions with shared subtrees, where you can keep one IRStructure alive across calls (2.1-2.2x over SymEngine free_symbols in the search rows).",
+    "Sparse substitutions that match few nodes of a large tree: IRSubstituter was 1.9x and the plain Substituter 1.28x faster than SymEngine subs.",
+    "Building custom rewrite systems (user rule sets, custom term types through TermInterface), which SymEngine does not offer."
+  ],
+  "when_not_to_use": [
+    "Polynomial expansion: SymEngine is 41x (n=8) to 361x (n=32) faster on expand((x+y+z+w)^n) in the same run, and SymbolicUtils' expand uses Int64 coefficients that silently wrap above 2^63 (stated in the benchmark text).",
+    "Differentiation, Taylor series and deep numeric evaluation, where SymEngine is 48x, 10x and 28x faster.",
+    "One-shot code generation: codegen init is 12x (no CSE) to 20x (CSE) slower than SymEngine's, before the LLVM compile on first call, which neither row counts.",
+    "Dense substitutions (3.5x slower) and small expressions (trig-product substitution 4.1x slower).",
+    "Non-Julia hosts: there is no C or C++ API, so it is not an option for a C++ codebase that uses SymEngine directly."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "about 29 Julia packages, including DynamicPolynomials, MultivariatePolynomials, Graphs, TermInterface, WeakCacheSets, TaskLocalValues, SpecialFunctions, MacroTools, Moshi and PrecompileTools; Symbolics.jl is needed for differentiation",
+    "min_toolchain": "Julia 1.10 (Project.toml compat); the benchmark ran on Julia 1.13.0",
+    "platforms": "any platform Julia supports (pure Julia)",
+    "thread_safety": "Expression construction goes through a global hash-consing WeakCacheSet behind one ReentrantLock (WCS_LOCK), so it is safe but serialized across threads. The equality memo and the COMPARE_FULL flag are task-local. Multithreaded simplification is still an open issue (#62); otherwise not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw in the compiled-call rows (the two rows SymbolicUtils wins by JIT): the inputs are x=0.0, y=1.732, z=3.464, so log(x) = -Inf and every call returns +Inf (reproduced by evaluating the same expression in numpy). Every function of x (sin, cos, log, tan, sinh, cosh, tanh, atanh, asin, acos, atan) gets argument 0, typically its cheapest path. The per-call rows therefore mostly time dispatch overhead (closure-tree interpreter against native code), the case most favourable to the JIT; the 2.2x/4.2x margins were not measured at ordinary inputs.",
+    "Harness selection: the 10-row summary leaves out the expand table, where SymEngine is 41-361x faster, and reports the faster SymbolicUtils variant per row. IRSubstituter calls populate_ir! on its input, so the warm-up call inserts the whole tree and its substituted results into the IR. clear_cache! empties only the Int32 index cache, so no timed sample pays IR construction. The search IRs are populated explicitly before timing. All timings are Chairmarks minima, which leaves GC pauses out of the allocation-heavy Julia side.",
+    "Library limits that the benchmark had to work around: the recursive evaluate stack-overflows on a 10000-deep expression (the harness uses its own iterative evaluator), and code generation crashed in get_degrees on a zero-symbol Term inside an Add (the harness folds 2^e to a constant to avoid it).",
+    "The baseline is SymEngine_jll 0.12.0, three releases old. Per the verifier's reading of the Yggdrasil recipe it is built thread-safe, for generic x86_64 and without LLVM, so SymEngine's own LLVM-compiled lambda was unavailable and the JIT-vs-interpreter rows compare different execution models."
+  ],
+  "pick_this_over_siblings_when": "Its wins share ClangJIT's mechanism (compile the specific expression at run time), but they apply only when you generate code from symbolic models in Julia and call it many times. For raw symbolic algebra speed (expand, diff, series, evaluation), SymEngine itself, already in the list, is the faster choice by 10-361x.",
+  "verified_claims_summary": "In SciMLBenchmarks' SymEngineComparison (Julia 1.13.0 JIT, SymbolicUtils 4.46.6 and Symbolics 7.39.2 against SymEngine 0.12.0 through SymEngine.jl 0.13.2, AMD EPYC 7502 CI runner, Chairmarks minima), SymbolicUtils wins 4 of the 10 summary rows. Those are the CSE'd compiled call (0.31 vs 0.69 us), two IR-backed variable searches (2.1-2.2x) and sparse substitution (1.9x with IRStructure, 1.28x without). It is 3.5-48x slower in the other six rows and 41-361x slower on polynomial expansion, which the summary omits.",
+  "status_note": "Actively developed (last commit 2026-10-11, v4.50.0, MIT, 560 stars) as the core of Symbolics.jl and ModelingToolkit. The benchmark is first-party, by SciML maintainers, on v4.46.6 from a single CI run.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/Symbolics/SymEngineComparison.md",
+    "https://raw.githubusercontent.com/SciML/SciMLBenchmarks.jl/master/benchmarks/Symbolics/SymEngineComparison.jmd",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/README.md",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/Project.toml",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/irstructure.jl",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/substitute.jl",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/hashconsing.jl",
+    "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/graph_traversal.jl",
+    "https://github.com/JuliaSymbolics/SymbolicUtils.jl",
+    "https://github.com/JuliaSymbolics/SymbolicUtils.jl/tree/master/src",
+    "https://github.com/JuliaSymbolics/SymbolicUtils.jl/issues?q=is%3Aissue%20state%3Aopen%20performance"
+  ],
+  "confidence": 0.6
+}
