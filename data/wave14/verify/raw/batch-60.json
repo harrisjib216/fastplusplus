@@ -1,0 +1,110 @@
+[
+  {
+    "id": "https://github.com/sciml/diffeqgpu.jl",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "All quoted times are in paper_artifacts/data/{Tesla_V100,RTX_5000}/{CPP,Julia}/*_times_*.txt, and the derived ratios check out. The code (GPU_ODE_MPGOS/Lorenz.cu, makefile, GPU_ODE_Julia/bench_lorenz_gpu.jl, runner_scripts/gpu/run_ode_{cpp,julia}.sh) is public. It is first-party, though: the scripts are by the DiffEqGPU authors. The host CPU and CUDA toolkit version are not stated, and the harness is asymmetric. MPGOS is timed once, cold, with clock() around one kernel launch, while Julia takes the BenchmarkTools warm minimum. The methods also differ: Tsit5 against RK4 and RKCK45. Finally, the C++ Lorenz right-hand side promotes float to double. Together these keep it below A and B.",
+    "corrections": {
+      "claimed_speedup": "No speedup numbers in the READMEs. The DiffEqGPU README says: 'See GPUODEBenchmarks for comparison of our GPU solvers against CPUs and GPUs implementation in C++, JAX and PyTorch'. Ratios below are MPGOS ms / Julia ms (derived from page data). Tesla_V100, fixed step: 8.5x to 10.0x for n=8 to 8192 (2.118/0.2317 = 9.1x at n=8), 2.8x at n=32768, then 0.88x at n=131072 and 0.65x at n=8,388,608 (94.157 vs 145.317 ms). Tesla_V100, adaptive: 6.9x at n=8, 1.4x at n=131072, 0.77x at n=524288, 0.70x at n=8,388,608 (48.808 vs 69.451 ms). RTX_5000, fixed step: 2.2x to 2.5x for n<=2048, 5.4x at n=2,097,152 and 4.8x at n=8,388,608 (886.082 vs 183.920 ms). RTX_5000, adaptive: 0.52x to 0.66x for n<=8192 (0.144 vs 0.253 ms at n=8), 1.08x at n=32768, 2.3x at n=8,388,608 (191.764 vs 83.490 ms).",
+      "compiler_and_flags": "MPGOS: nvcc -o Lorenz.exe -O3 -std=c++11 --ptxas-options=-v --gpu-architecture=sm_70 -lineinfo -maxrregcount=128 (GPU_ODE_MPGOS/makefile), BlockSize 1024, PRECISION float. runner_scripts/gpu/run_ode_cpp.sh rewrites Lorenz.cu to SOLVER RK4 for the fixed-step run and SOLVER RKCK45 for the adaptive run, and rebuilds for each n. Julia: DiffEqGPU.vectorized_solve (fixed dt 0.001f0) and vectorized_asolve (dt 0.001f0, reltol = abstol = 1f-8), both with GPUTsit5(), timed as the BenchmarkTools minimum of CUDA.@sync (GPU_ODE_Julia/bench_lorenz_gpu.jl). GPU_ODE_Julia/Manifest.toml pins Julia 1.8.5 and DiffEqGPU 2.1.0. The CUDA toolkit and CUDA.jl versions are not stated; the README recommends CUDA >= 11.",
+      "caveats": "Mixed result, not a uniform win, and the harness favours Julia in three ways. (1) Asymmetric timing: MPGOS runs once per process (one Solve() kernel launch timed with clock(), which measures process CPU time, plus cudaEventSynchronize), with no warm-up and no repetition. Julia reports the BenchmarkTools minimum over many warm runs. The MPGOS floor of about 2 ms for every n<=8192 on the V100 (0.42 ms on the RTX 5000) looks like fixed first-launch or idle-clock overhead, and Julia's 6x to 10x V100 lead at small n probably comes from it (inference). (2) Unequal arithmetic in the C++ problem definition: GPU_ODE_MPGOS/Lorenz_SystemDefinition.cuh lines 11 and 13 use the double literals 10.0 and 2.666 with float state, so part of every right-hand-side evaluation runs in FP64 with float/double conversions. The Julia RHS uses 10.0f0 and 2.666f0. The RTX 5000 is probably the Quadro RTX 5000 (Turing), which runs FP64 at a small fraction of its FP32 rate, while the V100 runs it at half rate. This plausibly explains why MPGOS beats Julia 1.5x at n=8.4M on the V100 but loses 4.8x on the RTX 5000 (inference, not measured). (3) MPGOS is built for sm_70 only, so on the RTX 5000 (sm_75) it ran JIT-compiled PTX, also built with -maxrregcount=128. The methods also differ. Julia runs Tsit5 in both modes, while MPGOS runs RK4 (fixed step) and RKCK45 (adaptive). At fixed dt=0.001, Tsit5 makes about 6 RHS evaluations per step against RK4's 4. The tolerances do match: MPGOS defaults RelativeTolerance and AbsoluteTolerance to 1e-8 (SourceCodes/SingleSystem_PerThread_Interface.cuh, line 482), as Julia sets them. On the V100, Julia is slower than MPGOS for the largest ensembles (0.65x to 0.88x from n=131072 fixed step, 0.62x to 0.77x from n=524288 adaptive). On the RTX 5000 adaptive runs it is slower for n<=8192. The host CPU and the exact RTX 5000 model are not stated. Only float32 was tested. The benchmark repo was last committed 2024-01-04 and pins DiffEqGPU 2.1.0, so the data predate current DiffEqGPU.jl. The CMAME 2024 paper (Utkarsh et al., 'Automated translation and accelerated solving of differential equations on multiple GPU platforms') was not opened (journal and arXiv blocked). GPUODEBenchmarks only holds the scripts and data; the solver lives in DiffEqGPU.jl.",
+      "hardware": "NVIDIA Tesla V100 and an RTX 5000 (data folder names Tesla_V100 and RTX_5000; probably the Turing Quadro RTX 5000, but the files read do not say). Host CPU model, driver and CUDA toolkit version not stated.",
+      "why_faster": "The source states no mechanism, and a language-level win is not established. The observed gaps line up with harness and baseline differences (inference from the code): a single cold MPGOS launch timed with clock() against a warm BenchmarkTools minimum at small n; FP64 literals in the C++ Lorenz RHS, which are costly on the FP64-weak RTX 5000; sm_70-only PTX JIT on the RTX 5000; and different integrators (Tsit5 against RK4 and RKCK45)."
+    },
+    "notes": "Downgraded A to C. The numbers are real and match the data files, but the evidence is first-party, the harness is asymmetric (one cold clock() launch against a warm BenchmarkTools minimum), the integrators differ, and the C++ Lorenz RHS uses double literals (10.0, 2.666), which probably cripples MPGOS on the FP64-weak RTX 5000, where Julia's large-n win appears. On the V100, Julia loses at large n (0.65x). If an enricher confirms the FP64-promotion effect, D under the crippled-baseline precedent is arguable. Corrected the caveat claiming tolerances were unset: MPGOS defaults to 1e-8, matching Julia. Metadata checked: MIT, 329 stars, last commit 2026-10-08, active; GPUODEBenchmarks has 27 stars and was last committed 2024-01-04.",
+    "urls_opened": [
+      "https://github.com/utkarsh530/GPUODEBenchmarks/tree/main/paper_artifacts/data",
+      "https://github.com/utkarsh530/GPUODEBenchmarks/tree/main/paper_artifacts/data/Tesla_V100",
+      "https://github.com/utkarsh530/GPUODEBenchmarks/tree/main/paper_artifacts/data/RTX_5000",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/CPP/MPGOS_times_unadaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/CPP/MPGOS_times_adaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/Julia/Julia_times_unadaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/Julia/Julia_times_adaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/CPP/MPGOS_times_unadaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/CPP/MPGOS_times_adaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/Julia/Julia_times_unadaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/Julia/Julia_times_adaptive.txt",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/README.md",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/run_benchmark.sh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/runner_scripts/gpu/run_ode_cpp.sh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/runner_scripts/gpu/run_ode_julia.sh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/makefile",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/Lorenz.cu",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/Lorenz_SystemDefinition.cuh",
+      "https://github.com/utkarsh530/GPUODEBenchmarks/tree/main/GPU_ODE_MPGOS/SourceCodes",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/SourceCodes/SingleSystem_PerThread_Interface.cuh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/SourceCodes/SingleSystem_PerThread_ExplicitRungeKutta_Steppers.cuh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/SourceCodes/SingleSystem_PerThread_Solver.cuh",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_Julia/bench_lorenz_gpu.jl",
+      "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_Julia/Manifest.toml",
+      "https://github.com/utkarsh530/GPUODEBenchmarks",
+      "https://github.com/utkarsh530/GPUODEBenchmarks/commits",
+      "https://github.com/SciML/DiffEqGPU.jl",
+      "https://github.com/SciML/DiffEqGPU.jl/commits"
+    ]
+  },
+  {
+    "id": "lang:mojo/iinoshirozheng/mojo-analyze#mandelbrot",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "ANALYSIS.md shows Mojo (SIMD) 0.0554 s against C (-O3, scalar) 0.0904 s, and the code (c/mandelbrot.c, benchmarks/mandelbrot/mandelbrot.mojo), flags (pixi.toml build and build-c) and CPU (Apple M4 Pro) are public, which would meet A. But the C baseline is plain one-pixel-at-a-time scalar code, while the Mojo version is hand-vectorised into 4-pixel masked SIMD batches, and the repo says so itself ('Not an apples-to-apples same-technique comparison, by design'). That is naive code against a tuned other-language version, so the crippled-baseline precedent puts it at D.",
+    "corrections": {
+      "compiler_and_flags": "Mojo 1.0.0 (pixi.toml allows mojo >=1.0.0,<2; ANALYSIS.md states 1.0.0): mojo build --fp-mode contract=off benchmarks/mandelbrot/mandelbrot.mojo, at the default optimisation level 3 (mojolang.org mojo build docs, WebSearch snippet only). C: Apple clang 21, clang -O3 -ffp-contract=off -o dist/mandelbrot-c c/mandelbrot.c (pixi.toml build-c). No -march/-mcpu, LTO or PGO on either side.",
+      "caveats": "Not a same-technique comparison, and the repo says so. The Mojo version restructures the pixel loop into SIMD[DType.float64, 4] batches with a per-lane active mask (two 128-bit NEON registers per vector on arm64). It keeps iterating each batch until its slowest lane escapes, then runs a scalar remainder loop. The C and Rust versions iterate one pixel at a time in a while loop with a data-dependent exit, which clang does not autovectorise, so C runs fully scalar. The 1.6x therefore measures hand vectorisation against scalar code, not Mojo code generation. A C version using clang vector extensions or NEON intrinsics would be the fair baseline, and none is provided. Both sides are optimised builds with FMA contraction turned off, and the checksums match (42411634). Single machine (Apple M4 Pro, macOS 26.5.2), 2 warm-ups and 7 timed runs, means reported (C stdev 0.0019 s). The Linux CI runs have no C row yet. Single-author repo with 0 stars and 0 forks. C is ahead of Mojo on the other four categories in the same repo (sieve 1.05x, word frequency 1.6x, CSV aggregation 2.3x, JSON 2.3x).",
+      "same_algorithm": false,
+      "same_opt_level": true,
+      "why_faster": "Hand-written explicit SIMD in the Mojo source (4 Float64 lanes with per-lane escape masks) against scalar C and Rust loops that the compilers cannot autovectorise because of the data-dependent early exit. This is the repo's own explanation, and it makes the win the programmer's vectorisation, not a language or codegen advantage."
+    },
+    "notes": "Downgraded A to D under the wave-14 crippled-baseline rule (naive scalar C against a hand-SIMD Mojo version). The numbers and flags all check out, but the repo itself calls the comparison not same-technique. same_algorithm corrected to false and same_opt_level to true (both optimised builds with FP contraction off; the Mojo default level 3 comes from a docs snippet). MIT, 0 stars, last commit 2026-09-25, active.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/README.md",
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/ANALYSIS.md",
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/pixi.toml",
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/c/mandelbrot.c",
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/benchmarks/mandelbrot/mandelbrot.mojo",
+      "https://raw.githubusercontent.com/iinoshirozheng/mojo-analyze/main/LICENSE",
+      "https://github.com/iinoshirozheng/mojo-analyze",
+      "https://github.com/iinoshirozheng/mojo-analyze/commits"
+    ]
+  },
+  {
+    "id": "lang:fortran/julialang/microbenchmarks#userfunc_mandelbrot",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The CSV at a963d28 shows C 0.076702 ms and Fortran 0.053836 ms. Code (perf.c, perf.f90 at that commit), compiler (gcc/gfortran 7.3.1), flags (Makefile -O$*, best of -O0..-O3) and CPU (i7-3960X, per the julialang.org benchmarks page source) are all public, so the 2018 run itself meets A. It is held at C because the suite's own current run (gcc 13.3.0, both at -O2, 2026-04-21) reverses the result: C 0.045061 ms, Fortran 0.05296 ms, Fortran 1.18x slower. The 2018 win is specific to that toolchain, the winning -O level per side is not recorded, and the two harnesses do different side work.",
+    "corrections": {
+      "claimed_speedup": "benchmarks.csv at a963d28 (2018, gcc/gfortran 7.3.1): userfunc_mandelbrot C 0.076702 ms, Fortran 0.053836 ms, so Fortran is 1.42x faster than C (derived from page data). The suite's current results (gh-pages dev/benchmarks.csv, generated 2026-04-21, gcc 13.3.0, both at -O2, separate GitHub Actions runners) reverse this: C 0.045061 ms, Fortran 0.05296 ms, so Fortran is 1.18x slower than C. In 2018 Fortran was slower than C on most other benchmarks (derived): matrix_multiply 1.16, matrix_statistics 1.54, recursion_quicksort 1.19, parse_integers 6.88, print_to_file 5.97; iteration_pi_sum 1.00 and recursion_fibonacci 0.99.",
+      "compiler_and_flags": "2018 run: C with gcc 7.3.1 '$(CC) -std=c99 -O$* perf.c ... -lopenblas $(LIBM) $(CFLAGS)' and Fortran with gfortran 7.3.1 '$(FC) -fexternal-blas -static-libgfortran -O$* perf.f90 ... -lopenblas' (Makefile at a963d28). Each language reports the best timing over -O0..-O3, per the julialang.org benchmarks page. Which level won is not published, and CFLAGS inherited from Julia's Make.inc are not visible. Current CI: gcc 13.3.0, both at -O2 (benchmarks/c2.csv and fortran2.csv), in separate ubuntu-latest jobs.",
+      "caveats": "The 2018 result does not survive the suite's current run. With gcc 13.3.0, both at -O2, the same double-complex C code is faster than Fortran (Fortran 1.18x slower), though C and Fortran now run in separate GitHub Actions jobs on different runner VMs (bench-c, bench-fortran in .github/workflows/benchmarks.yml). In 2018, C was the outlier on this benchmark: Julia 0.052706, Rust 0.057636 and Go 0.059685 ms were also faster than C's 0.076702 ms. The harnesses differ slightly. C runs 5 trials of 100 calls, and each call mallocs, fills and frees a 546-int result array; it sums only the first call. Fortran runs 5 trials of 1000 calls and adds each result to a volatile integer. Both report the minimum per call. The inner escape-time loop is the same (maxiter 80, 21x26 grid, sum 14791). C uses C99 double complex for z*z+c, while Fortran uses complex(dp) with z**2. The source gives no mechanism. The earlier inference (C99 Annex G complex-multiply checks) is not supported by the 2026 run, where the same C code wins. The data are from the Julia v1.0.0 / gcc 7.3.1 era (2018), and julialang.org itself calls them 'a bit dated'. The win is on one benchmark of eight.",
+      "same_opt_level": true,
+      "same_algorithm": true
+    },
+    "notes": "Confirmed at C with a new rationale. The 2018 numbers match and their methodology is fully public, but the suite's current run (gcc 13.3.0, -O2) shows Fortran 1.18x slower than C on the same code, so the claim is stale and toolchain-specific. Recorded the harness differences and dropped support for the C99-complex inference. MIT (LICENSE.md), 91 stars, last commit 2026-04-21, active.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/bin/benchmarks.csv",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/Makefile",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/perf.c",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/perf.f90",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/a963d284b09d04b3e0374f6dd46ec4b039ed5569/README.md",
+      "https://raw.githubusercontent.com/JuliaLang/www.julialang.org/main/benchmarks.md",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks/index.html",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/gh-pages/dev/benchmarks.csv",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/c/perf.c",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/fortran/perf.f90",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/Makefile",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/.github/workflows/benchmarks.yml",
+      "https://raw.githubusercontent.com/JuliaLang/Microbenchmarks/master/LICENSE.md",
+      "https://github.com/JuliaLang/Microbenchmarks",
+      "https://github.com/JuliaLang/Microbenchmarks/commits"
+    ]
+  }
+]
