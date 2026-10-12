@@ -3360,6 +3360,80 @@
     }
   },
   {
+    "name": "NonuniformFFTs.jl (Julia NUFFT, CPU and GPU) vs FINUFFT and cuFINUFFT",
+    "repo_url": "https://github.com/jipolanco/NonuniformFFTs.jl",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "FINUFFT v2.4.1 (C++, CPU) and cuFINUFFT (CUDA C++, GPU), both compiled locally and called through FINUFFT.jl v3.4.0",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Type-1 and type-2 3D non-uniform FFTs on a uniform 256^3 grid, random points in [0, 2*pi)^3 with point density N/M^3 from 1e-4 to 10, tolerance 1e-6, Float64 complex data; each time includes set_points plus the transform.",
+    "claimed_speedup": "Docs and README text match the record (CPU 'comparable'; GPU default method 'slightly faster than CuFINUFFT at low point densities, but slightly slower at large ones'; shared-memory method gives 'important gains'). Numbers come from the raw medians in benchmark/CPU+CUDA/results.H100_jean-zay/*.dat (ComplexF64, 256^3, tol 1e-6, set_points plus exec; all ratios derived from page data). GPU type 1: at density 1e-4 (1,678 points) NonuniformFFTs global-memory 0.00322 s vs CuFINUFFT 0.00536 s (1.66x faster); at density 1 (16.8M points) NonuniformFFTs shared-memory 0.0415 s vs CuFINUFFT's best 0.1774 s (4.27x faster) while the default global-memory method is 0.2809 s vs 0.1809 s (1.55x slower); at density 10 (167.8M points) shared-memory 0.300 s vs CuFINUFFT's best (its own SM method) 0.822 s (2.74x faster; 6.97x against CuFINUFFT GM 2.089 s) while the default method is 3.187 s (1.53x slower than CuFINUFFT GM). GPU type 2: 1.92x faster at density 1e-4 (0.00280 s vs 0.00538 s) but slower at high density with either method (best 0.0295 s vs 0.0223 s at density 1, 1.32x slower; 0.2166 s vs 0.1087 s at density 10, 1.99x slower). CPU (24 threads): type 1 ranges from 1.93x faster (atomics variant, 0.105 s vs 0.202 s at density 1e-4) to 1.78x slower (atomics, 1.273 s vs 0.717 s at density 1), and 1.03-1.17x faster at density 10; type 2 is 1.84x faster at density 1e-4 (0.0867 s vs 0.1598 s, an FFT-dominated case), about 0.89-0.96x in the middle and 1.05x at density 10.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/docs/src/benchmarks.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "FINUFFT v2.4.1 built with Nvidia nvc++ (version not stated) via CMake 'Release' with default flags (actual flags not printed); cuFINUFFT built with nvcc from CUDA 12.8, CMAKE_CUDA_ARCHITECTURES=90; both called through FINUFFT.jl v3.4.0 with locally compiled binaries. FINUFFT options: tol 1e-6, modeord=1, spread_sort=1, spread_kerevalmeth=1, FFTW.ESTIMATE, nthreads = Julia thread count (24); cuFINUFFT gpu_sort=1, gpu_kerevalmeth=1, gpu_method 1 and 2; upsampfac left at the library default (only the 1e-14 reference plans set 2.0). NonuniformFFTs.jl v0.8.3 (2025-07-11), sigma=1.5, HalfSupport(4), FFTW.ESTIMATE, KernelAbstractions/CUDA.jl; Julia version not stated (benchmark Project.toml has no Manifest or compat). BenchmarkTools @benchmark medians. Script: benchmark/CPU+CUDA/run_benchmarks.jl.",
+    "hardware": "Jean Zay (IDRIS): 2x Intel Xeon Platinum 8468 (24 cores used) and one NVIDIA H100 SXM5 80 GB (1/4 of a node). A second run on one AMD Instinct MI300A (Adastra) compares only the CPU against FINUFFT.",
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": false,
+    "same_algorithm": null,
+    "same_opt_level": null,
+    "why_faster": "Docs, GPU only and hedged: the shared-memory variant 'completely avoids atomic operations on shared memory', which 'seems to speed up things quite a bit and might explain the important gains' over cuFINUFFT. The implementation is described as 'heavily inspired' by the cuFINUFFT paper, so the algorithm family is the same but not identical.",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "26 stars; Julia General registry package",
+    "has_code": true,
+    "tradeoffs": "Julia package; one KernelAbstractions.jl code base targets CUDA, AMD and other GPUs. Also offers real-valued non-uniform data transforms (extra gains, not available in FINUFFT).",
+    "caveats": "Author's own benchmark; the docs show only SVG plots, numbers exist only in the raw .dat files. The CPU result is parity (wins and losses by up to about 2x either way depending on density), not a win. The GPU win is limited to type 1 with the non-default shared-memory method at densities of about 1 and above, or to very sparse problems; the default global-memory method is about 1.5x slower than CuFINUFFT at high density, and type 2 at high density is slower than CuFINUFFT with either method. The docs say CuFINUFFT's gpu_method=2 'seems to be considerably slower in nearly all cases', but the raw data show it beating CuFINUFFT's method 1 for type 1 at densities of 1 and above (0.822 s vs 2.089 s at density 10), so fair comparisons must use CuFINUFFT's SM curve. The two libraries do not do the same work: NonuniformFFTs uses sigma=1.5 with a width-8 Kaiser-Bessel-type kernel while (Cu)FINUFFT uses its own kernel with its default upsampling factor (not set by the script); measured errors are of the same order (type 1 about 1.7e-6 vs 1.4e-6 on GPU, 1.3e-6 vs 3.7e-6 on CPU). The docs say points are uniform in [0, 2*pi)^3, but run_benchmarks.jl draws standard-normal coordinates (randn, Xoshiro(42)) for both libraries, so the point cloud is clustered. FINUFFT was built with nvc++ rather than GCC or Clang, and the CPU sides link different FFTW builds (locally built FINUFFT vs FFTW.jl), which dominates the sparse-point CPU rows. The 'real data' gains solve a different (real-valued) problem. On AMD GPUs the default method scales badly. Only one GPU model (H100), one grid size and one tolerance (1e-6); Julia version not stated. Not a JIT-versus-AOT effect: the GPU gains come from a different shared-memory spreading design.",
+    "found_via": [
+      "Julia General registry candidate (jipolanco). Opened README, docs/src/benchmarks.md and benchmark/CPU+CUDA/run_benchmarks.jl on raw.githubusercontent.com and the github.com repo and commits pages; the rendered docs on github.io are blocked."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "id": "https://github.com/jipolanco/nonuniformffts.jl",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "downgrade",
+      "tier_before": "A",
+      "tier_reason": "The docs page benchmarks.md, the script benchmark/CPU+CUDA/run_benchmarks.jl and the raw medians in benchmark/CPU+CUDA/results.H100_jean-zay/*.dat are public and name the CPU (Xeon Platinum 8468) and GPU (H100), but the Julia version is not stated anywhere (the benchmark Project.toml has no Manifest or compat bounds), the nvc++ version is not given and the actual FINUFFT Release flags are not printed, so it falls short of A (same rule as the wave-14 AcceleratedKernels verdict); first-party, hence C.",
+      "notes": "Downgrade A to C: Julia version and nvc++ version/flags are not stated, and the evidence is first-party. Real but narrow GPU win (type 1, non-default shared-memory method, density of about 1 and above: 2.7-4.3x over CuFINUFFT's best), CPU parity, type 2 slower at high density; the win is an implementation and parameter difference, not a Julia-vs-C++ codegen effect, so it fits runtime-jit-beats-aot poorly. Baseline FINUFFT is already listed (wave 8, https://github.com/flatironinstitute/finufft).",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/docs/src/benchmarks.md",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/README.md",
+        "https://github.com/jipolanco/NonuniformFFTs.jl",
+        "https://github.com/jipolanco/NonuniformFFTs.jl/commits/master",
+        "https://github.com/jipolanco/NonuniformFFTs.jl/tree/master/benchmark/CPU+CUDA",
+        "https://github.com/jipolanco/NonuniformFFTs.jl/commits/master/benchmark/CPU+CUDA/run_benchmarks.jl",
+        "https://github.com/jipolanco/NonuniformFFTs.jl/tree/master/benchmark/CPU+CUDA/results.H100_jean-zay",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/run_benchmarks.jl",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/Project.toml",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/README.md",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/plots/plot_benchmarks.jl",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/CuFINUFFT_256_ComplexF64_global_memory.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/CuFINUFFT_256_ComplexF64_shared_memory.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/FINUFFT_256_ComplexF64_CPU.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CPU.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CPU_atomics.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CUDABackend_global_memory.dat",
+        "https://raw.githubusercontent.com/jipolanco/NonuniformFFTs.jl/master/benchmark/CPU%2BCUDA/results.H100_jean-zay/NonuniformFFTs_256_ComplexF64_CUDABackend_shared_memory.dat"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "README: on CPU 'comparable performance' to FINUFFT (no CPU win claimed); on GPU it 'can be faster than the CUDA-based CuFINUFFT, especially for large problem sizes'. Docs: the default global-memory GPU method is 'slightly faster than CuFINUFFT at low point densities, but slightly slower at large ones'; the non-default shared-memory method gives 'important gains with respect to the CuFINUFFT implementation' at large densities. The gains appear only in plots; no numeric ratio is printed on either page.",
+      "compiler_and_flags": "FINUFFT built with Nvidia nvc++ via CMake 'Release' with default flags (FFTW.ESTIMATE, spread_sort=1, spread_kerevalmeth=1, tolerance 1e-6, modeord=1); cuFINUFFT built with nvcc from CUDA 12.8 and CMAKE_CUDA_ARCHITECTURES=90; NonuniformFFTs.jl v0.8.3 (2025-07-11) on Julia with KernelAbstractions.jl/CUDA.jl (Julia version not stated on the page). Script: benchmark/CPU+CUDA/run_benchmarks.jl.",
+      "caveats": "Author's own benchmark, results only as SVG plots with no numeric table. The CPU result is parity, not a win. The GPU win is regime dependent: the default method is slower than cuFINUFFT at high density and the faster shared-memory method has to be chosen. The 'real data' gains solve a different (real-valued) problem. On AMD GPUs the default method scales badly. Only one GPU model (H100) and one tolerance (1e-6) were tested, and the Julia compiler version is not stated."
+    }
+  },
+  {
     "domain": "other-languages-faster-than-c-cpp-asm",
     "category": "runtime-jit-beats-aot",
     "baseline_in_list": true,
@@ -4112,6 +4186,81 @@
     }
   },
   {
+    "name": "EvoTrees.jl (Julia gradient-boosted trees) vs XGBoost hist (C++, CPU and GPU)",
+    "repo_url": "https://github.com/Evovest/EvoTrees.jl",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "XGBoost v3.1.2 (C++/CUDA, 'hist' algorithm) driven from Julia through XGBoost.jl",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Regression boosted trees (mse loss, mae eval metric on the training set each round) on uniformly random data, 200 rounds, nobs 100k/1M/10M, nfeats 10/100, EvoTrees max_depth 6/11 (XGBoost run with max_depth - 1, i.e. 5/10), 64 bins, eta 0.05, row and column subsample 0.5; training and inference wall time from a single @elapsed run per cell on CPU (12 threads) and GPU. The script generates Float32 data (T = Float32) although the README says Matrix{Float64}.",
+    "claimed_speedup": "No headline claim; README tables only. CPU training is faster only at 10M rows x 10 features (26.45 s vs 30.99 s at depth 6, 51.88 s vs 55.20 s at depth 11; 1.17x and 1.06x derived from page data), equal at 100k x 100 depth 6 (0.79 s both), and slower elsewhere (for example 192.58 s vs 111.69 s at 10M x 100 depth 11, 0.36 s vs 0.21 s at 100k x 10 depth 6); CPU inference is slower in every row. GPU: EvoTrees trains faster at depth 11 with 100 features (2.17 s vs 2.92 s at 100k, 5.07 s vs 6.80 s at 1M, 37.25 s vs 41.98 s at 10M) and infers faster in those rows (0.32 s vs 0.58 s at 1M, 3.57 s vs 5.91 s at 10M); GPU is slower at depth 6 and with 10 features.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Julia 1.10.8; README header says EvoTrees v0.18.3 and XGBoost v3.1.2 (hist on CPU, tree_method 'gpu_hist' on GPU per the last public harness); XGBoost is the prebuilt binary from the Julia package (build flags not stated). The XGBoost harness lived in benchmarks/regressor.jl up to commit 6edfadb (2026-08-18; a run_xgb switch, set false at 97840b9) and was removed in c038532 (2026-08-21); the current script times EvoTrees only.",
+    "hardware": "AMD Ryzen 5900X (12 threads) and NVIDIA RTX A4000",
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": false,
+    "same_algorithm": null,
+    "same_opt_level": null,
+    "why_faster": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-09",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "201 stars; Julia General registry package",
+    "has_code": true,
+    "tradeoffs": "Slower than XGBoost in most CPU rows and all CPU inference rows; supports multi-target and maximum-likelihood objectives natively in Julia.",
+    "caveats": "The README does not claim to beat XGBoost; the wins are read off its own tables and are regime-specific (CPU only at 10M rows x 10 features, 1.06-1.17x; GPU only at depth 11 with 100 features, 1.13-1.35x training). EvoTrees is slower in most rows, and CPU inference is slower in every row. The CPU table was re-measured in commit db96e75 (2026-09-04, 'Jdb/v20', package now v0.20.0) while the version header still says EvoTrees v0.18.3, and the XGBoost harness had already been removed from the public script on 2026-08-21, so the current CPU XGBoost column cannot be reproduced from the repository; the GPU table dates from 97840b9 (2025-12-24). The script generates Float32 data while the README says Float64. Models are trained on random data; model quality or equal tree structure is not compared, and the two libraries bin features differently. Each cell is one @elapsed run with a warm-up only for the first configuration; no variance reported. One machine.",
+    "found_via": [
+      "Julia General registry candidate (Evovest). Opened the raw README (Performance tables) and github.com repo and commits pages."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.4,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "id": "https://github.com/evovest/evotrees.jl",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "README Performance tables compare EvoTrees with XGBoost hist on CPU (Ryzen 5900X) and GPU (RTX A4000) with Julia 1.10.8 and package versions, but XGBoost is a prebuilt binary with unstated build flags and the current benchmarks/regressor.jl no longer contains the XGBoost harness, so the comparison is not reproducible from the public code; first-party numbers, C.",
+      "notes": "Confirm C. Numbers in claimed_speedup match the current README exactly. Key shortcomings: mostly slower than XGBoost, narrow wins only; the public script no longer runs XGBoost (removed 2026-08-21) although the CPU table with XGBoost columns was updated 2026-09-04 under a stale v0.18.3 label; Float32 data vs README's Float64. same_algorithm left null: same histogram-GBDT family with matched hyperparameters, but separate implementations and no equal-model check. Baseline XGBoost is already listed (wave 8, https://github.com/dmlc/xgboost). Metadata (Apache-2.0, 201 stars, last commit 2026-10-09) checked and correct.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/README.md",
+        "https://github.com/Evovest/EvoTrees.jl",
+        "https://github.com/Evovest/EvoTrees.jl/commits/main",
+        "https://github.com/Evovest/EvoTrees.jl/commits/main/README.md",
+        "https://github.com/Evovest/EvoTrees.jl/commits/main/benchmarks/regressor.jl",
+        "https://github.com/Evovest/EvoTrees.jl/tree/main/benchmarks",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/benchmarks/regressor.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/bece6ac/benchmarks/regressor.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/c038532/benchmarks/regressor.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/6edfadb/benchmarks/regressor.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/97840b9/README.md",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/d1ffd16/README.md",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/db96e75/README.md",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/Project.toml",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-df.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-mlj.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/regressor-grps.jl",
+        "https://raw.githubusercontent.com/Evovest/EvoTrees.jl/main/benchmarks/Project.toml"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "Regression boosted trees on random Matrix{Float64}, 200 iterations, nobs 100k/1M/10M, nfeats 10/100, max_depth 6/11; training and inference seconds on CPU (12 threads) and GPU.",
+      "compiler_and_flags": "Julia 1.10.8, EvoTrees v0.18.3, XGBoost v3.1.2 hist; XGBoost build flags are not stated (prebuilt binary via Julia packages). Script: benchmarks/regressor.jl.",
+      "caveats": "The README does not claim to beat XGBoost; the wins are read off its own table. Models are trained on random data and model quality or equal tree structure is not compared. XGBoost thread and GPU options other than hist are not listed. Whether Julia compilation time is inside the timings is not stated. One machine, no variance reported."
+    }
+  },
+  {
     "domain": "other-languages-faster-than-c-cpp-asm",
     "category": "runtime-jit-beats-aot",
     "baseline_in_list": true,
@@ -4483,6 +4632,77 @@
     }
   },
   {
+    "id": "lang:julia/aaronang/stl-benchmark#parsestl",
+    "name": "Julia vs C++ (clang, CMake Release): aaronang/stl-benchmark ParseStl",
+    "repo_url": "https://github.com/aaronang/stl-benchmark",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "C++ ParseStl benchmark (Google Benchmark) built with clang++ and CMake -DCMAKE_BUILD_TYPE=Release",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Parse the binary STL file nist.stl (80-byte header, uint32 triangle count, then 50-byte records of 12 float32 plus a 2-byte attribute count; about 7,400 triangles judging from Julia's 347.06 KiB allocation) into a vector of triangle structs, opening the file on every iteration. C++ (cpp/main.cpp): std::ifstream, reserve, then two read() calls per triangle (48 bytes plus a 2-byte dummy) and emplace_back; reported as Google Benchmark mean CPU time over 1729 iterations (real time 429.234 us). Julia (julia/stl.jl): open, skip(80), read UInt32, then map over triangles with read!(stl, Ref{Triangle}) plus skip(2); reported as BenchmarkTools @btime, which prints the minimum time.",
+    "claimed_speedup": "C++ 409.210 us, Julia 211.641 us, Python 25150.9 us: Julia about 1.93x faster than C++ (derived from page data).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "C++: /usr/bin/clang++ (version not stated, probably Apple clang given the setup) via CMake -DCMAKE_BUILD_TYPE=Release (CMake's Release default for Clang is -O3 -DNDEBUG; not printed in the repo), C++11, no -march; Google Benchmark submodule at 9ffb8df. Julia v1.0 started with julia -O3 (BenchmarkTools 0.4.1 per Manifest.toml); Julia's JIT targets the host CPU.",
+    "hardware": "Only the C++ run lists the machine: '8 X 2300 MHz CPU s', L1 32K, L2 262K, L3 6291K (CPU model not named); the Julia run's hardware is not stated",
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": true,
+    "same_algorithm": null,
+    "same_opt_level": null,
+    "why_faster": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2018-10-08",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "7 stars",
+    "has_code": true,
+    "tradeoffs": "Single small parsing kernel written by the repo author in each language.",
+    "caveats": "Author says 'I am neither a C++ nor Julia expert'. The Julia side was tuned by a Julia core contributor (PR #2 by SimonDanisch, which the linked blog credits with making the Julia code '4 times faster'), while the C++ side uses straightforward iostream reads. The two timings use different statistics (Google Benchmark mean CPU time vs BenchmarkTools minimum wall time) and the Julia run's hardware is not stated. The win is version dependent: in open PR #3 (2020) Chris Rackauckas reports the unchanged parser at 689.599 us on Julia 1.3+ because IOStream reads now take a lock (243.900 us with the lock disabled), i.e. slower than the README's C++ time (different machine, no C++ rerun). Open PR #4 (2021) rewrites both stl.jl and main.cpp and is unmerged. Explanatory blog post is on github.io (blocked here). Julia 1.0 from 2018.",
+    "found_via": [
+      "WebSearch (github.com) 'Julia package faster than the C++ ... benchmark README' surfaced the repository; opened the repo, raw README and commits pages."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.2,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "README shows C++ ParseStl 409.210 us (CPU time) and Julia 211.641 us with public code (cpp/main.cpp, cpp/CMakeLists.txt, julia/stl.jl) and build steps (clang, CMake Release, julia -O3), but no clang version, no CPU model (only '8 X 2300 MHz CPU s' for the C++ run) and no hardware for the Julia run, so not A; author's own single measurement, C.",
+      "notes": "Confirm C. README numbers match (C++ 409.210 us vs Julia 211.641 us, 1.93x derived; 2.03x using real time 429.234 us). Both sides do the same read pattern at -O3-level optimisation, so not a crippled baseline, but the gain is an I/O-library effect that disappeared on Julia 1.3+ (689.599 us in PR #3) and the Julia side was expert-tuned while the C++ side was not; record these as shortcomings. Metadata (MIT, 7 stars, last commit 2018-10-08, abandoned) checked and correct.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/README.md",
+        "https://github.com/aaronang/stl-benchmark",
+        "https://github.com/aaronang/stl-benchmark/commits/master",
+        "https://github.com/aaronang/stl-benchmark/tree/master/cpp",
+        "https://github.com/aaronang/stl-benchmark/tree/master/julia",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/CMakeLists.txt",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/main.cpp",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/stl.jl",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Manifest.toml",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Project.toml",
+        "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/python/benchmark.py",
+        "https://github.com/aaronang/stl-benchmark/pulls?q=is%3Apr",
+        "https://github.com/aaronang/stl-benchmark/pull/2",
+        "https://github.com/aaronang/stl-benchmark/pull/3",
+        "https://github.com/aaronang/stl-benchmark/pull/4"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "workload": "Parse the file nist.stl (the README does not define the STL format) once per iteration; C++ reports CPU time over 1729 iterations, Julia reports @btime.",
+      "compiler_and_flags": "clang/clang++ (version not stated) via CMake Release; Julia v1.0 started with `julia -O3`",
+      "caveats": "Author says 'I am neither a C++ nor Julia expert' and asks readers to report inefficient implementations. The two timings come from different tools (Google Benchmark CPU time vs BenchmarkTools @btime) and possibly different machines; the C++ and Julia parsers were not compared for equal work or allocation behaviour, and the explanatory blog post is on github.io (blocked here). Julia 1.0 from 2018."
+    }
+  },
+  {
     "id": "https://github.com/jlapeyre/ranwalk-julia-vs-cxx",
     "name": "Julia vs C++11 random-walk Monte Carlo (jlapeyre/ranwalk-Julia-vs-Cxx)",
     "repo_url": "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx",
@@ -4544,6 +4764,69 @@
     },
     "corrected_fields": {
       "caveats": "Not the same work: the C++ code draws a full Mersenne Twister output per coin flip through bernoulli_distribution, while Julia's rand(Bool) consumes random bits more cheaply, so this compares RNG front ends, not compilers (agent inference from rwtest_simple.cc and rwtest_simple.jl). The author notes a faster C++ program is possible. No licence file, so the code is reference only. gcc 4.9.1-era results, CPU model not stated, single timing per language."
+    }
+  },
+  {
+    "name": "LowRankApprox.jl (Julia randomized interpolative decomposition) vs SciPy/Fortran ID",
+    "repo_url": "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "SciPy interpolative decomposition (scipy.linalg.interpolative via PyMatrixID), which at the README's time wrapped the Fortran77 ID library; SciPy 1.15.0 ported that code to Cython. The README also names MATLAB. Neither is a C or C++ -O3 baseline.",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Interpolative decomposition (ID) of a 1024 x 1024 Hilbert matrix to relative precision about 1e-15.",
+    "claimed_speedup": "README: ~0.02 s with LowRankApprox in Julia vs ~0.07 s with SciPy (Fortran backend) and ~0.3 s in MATLAB, i.e. about 3.5x faster than SciPy (derived from page data); the README also says 'large speedups over similar codes written in MATLAB and Python (and even some in Fortran and C)'.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": "README: 'in part both algorithmic improvements as well as ... low-level optimizations' (the package uses an early-terminating pivoted-QR based ID rather than the Fortran library's algorithm).",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2024-02-10",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "129 stars; Julia General registry package",
+    "has_code": true,
+    "tradeoffs": "Randomized, early-terminating approximation; works on BLAS/LAPACK-compatible matrices and matrix-free operators.",
+    "caveats": "Single approximate figure per language ('early tests', package origin 2015) with no hardware, Julia, SciPy, BLAS or compiler versions and no benchmark script; it is not stated whether SciPy ran its deterministic or randomized ID routine. The baseline is a Python wrapper over Fortran77 (since SciPy 1.15.0 a Cython port), not C or C++ at -O3, so the README figure no longer describes current SciPy. The README attributes the gap partly to a different algorithm, and the package's core work is LAPACK xLAQPS plus BLAS calls through ccall, so any win is algorithm plus OpenBLAS/LAPACK rather than Julia codegen. The 'even some in Fortran and C' claim has no numbers. Last commit 2024-02-10 (stale).",
+    "found_via": [
+      "Julia ecosystem sweep: batch-grepped READMEs of Julia General registry packages on raw.githubusercontent.com for C, C++ or Fortran comparisons; opened github.com repo and commits pages for metadata."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.25,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "id": "https://github.com/julialinearalgebra/lowrankapprox.jl",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "The README gives three approximate first-party timings (~0.02 s Julia, ~0.07 s SciPy, ~0.3 s MATLAB) for an ID of a 1024x1024 Hilbert matrix with no benchmark script, hardware, library versions or flags, so it is first-party numbers without methodology (C). The baseline is off-target for this wave (Python over Fortran77, now Cython; MATLAB), not C or C++ at -O3.",
+      "notes": "Numbers match the README exactly (3.5x vs SciPy derived from page data). Not a language-level win: the ID's heavy lifting is LAPACK xLAQPS and BLAS via ccall into OpenBLAS, the baseline is Fortran77-through-Python (Cython since SciPy 1.15.0), and no C or C++ baseline exists; record as off-baseline, library- and algorithm-driven. Metadata checked: MIT (Expat) LICENSE.md, 129 stars, last commit 2024-02-10, not a fork.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/README.md",
+        "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl",
+        "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/commits",
+        "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/LICENSE.md",
+        "https://github.com/JuliaLinearAlgebra/LowRankApprox.jl/tree/master/src",
+        "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/lapack.jl",
+        "https://raw.githubusercontent.com/JuliaLinearAlgebra/LowRankApprox.jl/master/src/pqr.jl",
+        "https://raw.githubusercontent.com/scipy/scipy/main/doc/source/release/1.15.0-notes.rst"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline": "SciPy interpolative decomposition (scipy.linalg.interpolative, which calls a Fortran backend; README links PyMatrixID); the README also names MATLAB",
+      "caveats": "Single approximate figure per language with no hardware, Julia, SciPy or compiler versions, no benchmark script, and 'early tests' from the package's 2015-2016 origin. The baseline is a Python wrapper over Fortran, not C or C++ at -O3, and the README attributes the gap partly to a different algorithm. The 'even some in Fortran and C' claim has no numbers."
     }
   },
   {
@@ -5190,6 +5473,145 @@
     }
   },
   {
+    "name": "Ripserer.jl (Julia persistent homology) vs Ripser and Cubical Ripser (C++)",
+    "repo_url": "https://github.com/mtsch/Ripserer.jl",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "Ripser (C++, master commit 286d369) and Cubical Ripser (C++, commits 6edb9c5 for 2D and a063dac for 3D)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Persistent homology of Vietoris-Rips filtrations (datasets from the Ripser paper and PH-roadmap, parsed as Float32, parse time included) and of cubical image filtrations; minimum of five runs.",
+    "claimed_speedup": "Docs: 'very close to Ripser, usually within around 30%' and 'on very sparse inputs ... can sometimes outperform Ripser'. Ripserer/Ripser time ratios from the page: Alpha-Rips 0.807 (636 ms vs 789 ms), 0.741 (872 ms vs 1.179 s), 0.744 (56 ms vs 76 ms), 0.942 (5.844 s vs 6.203 s) and 1.058 (49.431 s vs 46.707 s, slower); sparse=true mode 0.993 and 0.998 on o3_1024 and o3_4096, 0.932 on random16, but 1.267 on dragon2000 and 1.304 on fract-r; dense mode is slower on 5 of 6 sets (ratio 1.04 to 1.99, o3_4096 151.5 s vs 76.2 s) with random16 at 0.803. Versus Cubical Ripser: 0.96 on bonsai64 (2.875 s vs 2.996 s), slower elsewhere (up to 2.631).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/benchmarks.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Ripserer v0.15 (Julia version not stated; the RipsererBenchmarks.jl Manifest.toml does not record it). Ripser (commit 286d369) built by the harness (RipsererBenchmarks.jl src/ripser.jl get_ripsers runs `make all`) from its Makefile line `c++ -std=c++11 -Wall ripser.cpp -o ripser -Ofast -D NDEBUG`; Cubical Ripser 2D (6edb9c5) and 3D (a063dac) Makefiles compile every file with `c++ -std=c++11 -Ofast`. The compiler behind `c++` and its version are not stated. Timing: BenchmarkTools, samples=5, minimum reported.",
+    "hardware": "Laptop with Intel Core i5-4200U @ 1.60GHz and 8 GB RAM",
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": false,
+    "same_algorithm": true,
+    "same_opt_level": null,
+    "why_faster": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-06-29",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "82 stars; Julia General registry package",
+    "has_code": true,
+    "tradeoffs": "Uses more memory than Ripser on small inputs (heap includes the Julia runtime, for example 138 MiB vs 33 MiB on alpha_3_sphere_3000) but supports higher-dimensional cubical complexes, critical simplices and representative cycles.",
+    "caveats": "Mostly parity or slower: dense mode is 1.04-1.99x slower on 5 of 6 Rips sets (o3_4096 151.5 s vs 76.2 s), so the docs' 'usually within around 30%' holds only with sparse=true; sparse mode is 0.993-1.304; wins of about 1.06-1.35x appear only on very sparse Alpha-Rips inputs and tiny random16. Ripser is timed as an external process (launch plus stdout text output) against in-process Ripserer, which favours Ripserer on short runs. Ripserer's heap is 3-5x Ripser's on Alpha-Rips (includes the Julia runtime). Against Cubical Ripser, which the docs say uses a more specialized algorithm, Ripserer wins only bonsai64 (0.96) and is up to 2.6x slower elsewhere. Single 2020-era run (Ripserer v0.15, 2020 Ripser commits) on an old dual-core laptop; compiler and Julia versions not stated.",
+    "found_via": [
+      "Julia General registry candidate (mtsch). Opened raw docs/src/index.md and docs/src/benchmarks.md of Ripserer.jl and the RipsererBenchmarks.jl README, plus github.com repo and commits pages."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.4,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "id": "https://github.com/mtsch/ripserer.jl",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "Author's own benchmark: code is public (mtsch/RipsererBenchmarks.jl src/ripser.jl, src/ripserer.jl, src/benchmarksuites.jl), the CPU is stated (i5-4200U) and the C++ flags follow from the harness's `make all` on Ripser's public Makefile (-Ofast -D NDEBUG), but the compiler behind `c++`, its version and the Julia version are not stated, so not A; first-party, so C.",
+      "notes": "All ratios on docs/src/benchmarks.md match the record; the 'within around 30%' and 'can sometimes outperform Ripser' quotes are from docs/src/index.md. Ripser is not in the catalog (baseline_in_list corrected to false). Build flags recovered from the harness and the baselines' public Makefiles (-Ofast); the main shortcoming is a subprocess-vs-in-process timing asymmetry and wins limited to very sparse inputs. Metadata checked: MIT, 82 stars, last commit 2026-06-29, not a fork.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/benchmarks.md",
+        "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/index.md",
+        "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/README.md",
+        "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/LICENSE",
+        "https://github.com/mtsch/Ripserer.jl",
+        "https://github.com/mtsch/Ripserer.jl/commits",
+        "https://github.com/mtsch/RipsererBenchmarks.jl",
+        "https://github.com/mtsch/RipsererBenchmarks.jl/tree/master/src",
+        "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/run_everything.jl",
+        "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/Manifest.toml",
+        "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripser.jl",
+        "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripserer.jl",
+        "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/benchmarksuites.jl",
+        "https://raw.githubusercontent.com/Ripser/ripser/286d369/Makefile",
+        "https://raw.githubusercontent.com/CubicalRipser/CubicalRipser_2dim/6edb9c5/Makefile",
+        "https://raw.githubusercontent.com/CubicalRipser/CubicalRipser_3dim/a063dac/Makefile"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline_in_list": true,
+      "compiler_and_flags": "Ripserer v0.15 (Julia version not stated); Ripser and Cubical Ripser built from the stated master commits, compiler and flags not stated. Code and datasets: github.com/mtsch/RipsererBenchmarks.jl.",
+      "caveats": "Mostly parity or slower; wins of about 1.05-1.35x appear only on very sparse Alpha-Rips inputs and in a few tiny cases, and the docs give no mechanism for them (the shared tricks, implicit complex and clearing, are the same as Ripser's). Author's own benchmark on an old dual-core laptop with a 2020-era Ripserer v0.15 and 2020 Ripser commits, so the page may be stale. Ripser build flags are not stated."
+    }
+  },
+  {
+    "name": "SymbolicUtils.jl / Symbolics.jl (Julia symbolic engine) vs SymEngine (C++): SciMLBenchmarks SymEngineComparison",
+    "repo_url": "https://github.com/JuliaSymbolics/SymbolicUtils.jl",
+    "language": "Julia",
+    "domain": "other-languages-faster-than-c-cpp-asm",
+    "category": "runtime-jit-beats-aot",
+    "baseline": "SymEngine v0.12.0 (C++ symbolic library, via SymEngine.jl v0.13.2 and SymEngine_jll)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "Ten symbolic workloads adapted from SymEngine's own C++ benchmark suite plus SymbolicUtils-native ones: diff of expand((x^y+y^z+z^x)^50), 15-term Taylor series, trig-product substitution, 10^5-draw random-expression substitution (dense and sparse rule), variable search on shared and unshared expression sets, numeric evaluation of a 10000-deep expression, code-generation init, and the call of the generated function with common-subexpression elimination.",
+    "claimed_speedup": "Summary table (SymEngine s vs SymbolicUtils s; the SymbolicUtils column is the faster of two variants): SymbolicUtils faster in 4 of 10 rows: compiled call with CSE 6.93256e-7 vs 3.13135e-7 (2.2x), variable search on dissimilar expressions 4.67036e-4 vs 2.13078e-4 (2.2x), variable search on common subtrees 1.02663e-3 vs 4.89876e-4 (2.1x), sparse-rule substitution 1.10077e-3 vs 5.92595e-4 (1.9x). The per-variant tables show the plain variants: search_variables! without IRStructure is slower than SymEngine (1.37841e-3 vs 1.02663e-3 common, 5.97345e-4 vs 4.67036e-4 dissimilar), and the plain Substituter wins the sparse rule by only 1.28x (8.61063e-4 vs 1.10077e-3) on a 2810-node tree against SymEngine's 3271-node tree. The compiled call without CSE is 1.0665e-5 vs 2.559e-6 (4.2x). SymEngine faster in the other 6 rows: diff of expand 6.95691e-3 vs 0.332787 (48x), eval_double of a 10000-deep expression 0.0116745 vs 0.331982 (28x), codegen init without CSE 1.15092e-3 vs 1.34645e-2 (12x; with CSE 1.66448e-4 vs 3.34998e-3, 20x), series 1.99123e-3 vs 1.98982e-2 (10x), trig-product substitution 1.478e-5 vs 6.0009e-5 (4.1x), dense-rule substitution 1.13195e-3 vs 3.95472e-3 (3.5x). All ratios derived from page data.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/Symbolics/SymEngineComparison.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Julia 1.13.0 (LLVM 20.1.8, JIT target znver2), SymbolicUtils v4.46.6, Symbolics v7.39.2, SymEngine.jl v0.13.2 over the prebuilt SymEngine_jll v0.12.0+0. Per the public Yggdrasil recipe (S/SymEngine/build_tarballs.jl, symengine commit 088aa01) SymEngine_jll is built with CMake and no CMAKE_BUILD_TYPE, which SymEngine's CMakeLists defaults to Release (CMake's -O3 -DNDEBUG), for a generic x86_64 target, with WITH_SYMENGINE_THREAD_SAFE=yes, GMP integers and no LLVM (derived from public build recipe; compiler version not stated). Timings are minimum over samples (Chairmarks).",
+    "hardware": "128 x AMD EPYC 7502 32-Core Processor (128 virtual cores), Linux x86_64 CI runner",
+    "compared_against_cpp_std_directly": false,
+    "language_level_claim": false,
+    "same_algorithm": false,
+    "same_opt_level": null,
+    "why_faster": "Per the benchmark text: the substitution and search wins use SymbolicUtils' IRStructure acceleration structure, which visits shared subexpressions once; the compiled-call win is a native Julia function produced by Code.toexpr plus eval (JIT compiled), against SymEngine's LambdaRealDoubleVisitor, which the file describes as 'an interpreter over the expression tree'.",
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-10-11",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "560 stars; Symbolics.jl core",
+    "has_code": true,
+    "tradeoffs": "The JIT path pays a large setup cost: codegen init is 12x slower than SymEngine's. Core operations (expand, differentiate, series, deep evaluation) are 10-48x slower than SymEngine in this run.",
+    "caveats": "First-party benchmark by the Symbolics/SciML maintainers, single CI run without variance; the file says the first workload set 'plays to SymEngine's strengths', and SymEngine wins 6 of 10 rows by 3.5-48x. Two of the four SymbolicUtils wins (variable search) need an IRStructure populated outside the timed region; the plain search_variables! is 1.28-1.34x slower than SymEngine, and the IR-backed substitution likewise reuses an IR built in warm-up, so the IR rows exclude the DAG construction SymEngine's subs and free_symbols pay for. The plain Substituter's 1.28x sparse-rule win is on a tree 14% smaller than SymEngine's (2810 vs 3271 nodes). SymEngine 'variable search' is free_symbols converted to a Julia Vector and unioned into a Julia Set through ccall-based hashing, not an identical operation. The compiled-call row is JIT-compiled native code against SymEngine's tree interpreter (the jll has no LLVM backend), and the SymbolicUtils codegen-init row times only toexpr plus eval, so LLVM compilation of the generated function, which happens on the first call, is in neither row. SymEngine_jll is SymEngine 0.12.0 (three releases behind 0.15.0) built thread-safe (atomic reference counts) for generic x86_64 without TCMalloc, not SymEngine's tuned configuration, and its compiler version is not stated.",
+    "found_via": [
+      "Julia ecosystem candidate; opened SciML/SciMLBenchmarks.jl benchmarks/Symbolics (github.com tree) and the rendered SciMLBenchmarksOutput markdown on raw.githubusercontent.com (docs.sciml.ai is blocked)."
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w14-jitaot-registry"
+    ],
+    "id": "https://github.com/juliasymbolics/symbolicutils.jl",
+    "verification": {
+      "date": "2026-10-11",
+      "verdict": "downgrade",
+      "tier_before": "C",
+      "tier_reason": "First-party SciML benchmark (SciMLBenchmarks.jl benchmarks/Symbolics/SymEngineComparison.jmd) with Julia 1.13.0 and EPYC 7502 stated; the SymEngine side is the prebuilt SymEngine_jll 0.12.0 whose compiler is not stated (flags only derivable from the Yggdrasil recipe), so not A; C. Downgraded as a claim: two of the four 'wins' exist only with an IRStructure built outside the timed region.",
+      "notes": "Summary numbers on the page match the record, but the headline '4 of 10 rows faster' overstates the language win: the two search wins and most of the sparse-substitution win come from an IRStructure precomputed outside the timed region (plain variants lose search and win sparse substitution by only 1.28x on a smaller tree), and the compiled-call win is JIT code against SymEngine's interpreter in an LLVM-less, thread-safe SymEngine_jll build. SymEngine is already listed in COPYABLE.md with this same page as its benchmark, so this is the reverse claim on the same benchmark; keep as tier C with these shortcomings. Metadata checked: MIT LICENSE.md, 560 stars, last commit 2026-10-11, not a fork.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/SciML/SciMLBenchmarksOutput/main/markdown/Symbolics/SymEngineComparison.md",
+        "https://github.com/JuliaSymbolics/SymbolicUtils.jl",
+        "https://github.com/JuliaSymbolics/SymbolicUtils.jl/commits",
+        "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/LICENSE.md",
+        "https://github.com/JuliaSymbolics/SymbolicUtils.jl/tree/master/src",
+        "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/irstructure.jl",
+        "https://raw.githubusercontent.com/JuliaSymbolics/SymbolicUtils.jl/master/src/substitute.jl",
+        "https://raw.githubusercontent.com/JuliaPackaging/Yggdrasil/master/S/SymEngine/build_tarballs.jl",
+        "https://raw.githubusercontent.com/symengine/symengine/088aa01bf4ba020e22b7492086abdc08b37a5f7f/CMakeLists.txt",
+        "https://raw.githubusercontent.com/symengine/SymEngine.jl/master/src/subs.jl",
+        "https://raw.githubusercontent.com/symengine/SymEngine.jl/master/src/types.jl"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "SymbolicUtils is faster than SymEngine in 4 of 10 rows (SymEngine s vs SymbolicUtils s): compiled call with CSE 6.93256e-7 vs 3.13135e-7 (2.2x), variable search on dissimilar expressions 4.67036e-4 vs 2.13078e-4 (2.2x), variable search on common subtrees 1.02663e-3 vs 4.89876e-4 (2.1x), substitution of a 10^5-draw expression with a sparse rule 1.10077e-3 vs 5.92595e-4 (1.9x) (ratios derived from page data). SymEngine is faster in the other 6: diff of expand 6.95691e-3 vs 0.332787 (SymbolicUtils 48x slower), eval_double of a 10000-deep expression 0.0116745 vs 0.331982 (28x), codegen init 1.15092e-3 vs 1.34645e-2 (12x), series 1.99123e-3 vs 1.98982e-2 (10x), trig-product substitution 1.478e-5 vs 6.0009e-5 (4.1x), dense-rule substitution 1.13195e-3 vs 3.95472e-3 (3.5x).",
+      "compiler_and_flags": "Julia 1.13.0 (LLVM 20.1.8, znver2), SymbolicUtils v4.46.6, Symbolics v7.39.2, SymEngine.jl v0.13.2 with the prebuilt SymEngine_jll v0.12.0+0 binary (its compiler and flags are not stated); timings are minimum over samples (Chairmarks). Source: SciML/SciMLBenchmarks.jl benchmarks/Symbolics/SymEngineComparison.jmd.",
+      "caveats": "First-party benchmark by the Symbolics/SciML maintainers, single run without variance. The file itself says the first workload set 'plays to SymEngine's strengths' and the second set is SymbolicUtils-native; for substitution and search rows the SymbolicUtils column is the faster of two variants (plain and IRStructure-backed). The SymEngine 'variable search' is free_symbols accumulation into a set, not an identical operation. The compiled-call row excludes the 12x higher compile cost. The C++ build flags of SymEngine_jll are not stated, so the baseline's optimisation level is unknown."
+    }
+  },
+  {
     "id": "lang:crystal/kostya/langarena#etc-words",
     "name": "Crystal: LangArena Etc::Words",
     "repo_url": "https://github.com/kostya/LangArena",
@@ -5206,7 +5628,7 @@
     "baseline_stdlib": [
       "libstdc++"
     ],
-    "compiler_and_flags": "C/C++ (cpp/Makefile, c/Makefile; versions and build commands from the results file): Clang 22.1.8 and GCC 16.0.1 20260322 (trunk r16-8246, Ubuntu snapshot package), libstdc++ (no -stdlib flag), -std=c++20 for C++. Headline 'prod' rows (make -j prod): -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer, linked with -Wl,-z,relro,-z,now -Wl,--gc-sections. 'Fast': -O3 -march=native -mtune=native -DNDEBUG -pipe -fstack-protector -ftree-vectorize -funroll-loops. 'Unsafe': -O3 -march=native -DNDEBUG -pipe -fno-stack-protector -fomit-frame-pointer -ffast-math -fvisibility=hidden -fno-common -fstrict-overflow -fno-trapping-math. 'PGO': -O2 plus -fprofile-instr-use (Clang) or -fprofile-use -fprofile-correction (GCC). -flto=thin (Fast) and -flto=full (Unsafe) appear only in the link flags while objects are compiled without -flto, so those builds probably get no LTO (inference from cpp/Makefile). All 16 Clang/GCC x C/C++ x prod/Fast/Unsafe/PGO configurations were compared (instrumented PGO/Gen rows and the author's mycc/cproc compilers excluded). Crystal 1.21.1 [73ea5c2b1] (2026-09-26): headline row 'crystal build main.cr --release' (in Crystal 1.13 and later --release means -O3 --single-module, LLVM backend, generic x86-64 target, Boehm GC); the 'Crystal/O3' hack row is 'crystal build main.cr -O3', i.e. without --single-module, which plausibly explains its 3.5x slower time (inference, not stated by the suite).",
+    "compiler_and_flags": "C/C++ (cpp/Makefile, c/Makefile; versions and build commands from the results file): Clang 22.1.8 and GCC 16.0.1 20260322 (trunk r16-8246, Ubuntu snapshot package), libstdc++ (no -stdlib flag), -std=c++20 for C++. Headline 'prod' rows (make -j prod): -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer, linked with -Wl,-z,relro,-z,now -Wl,--gc-sections. 'Fast': -O3 -march=native -mtune=native -DNDEBUG -pipe -fstack-protector -ftree-vectorize -funroll-loops. 'Unsafe': -O3 -march=native -DNDEBUG -pipe -fno-stack-protector -fomit-frame-pointer -ffast-math -fvisibility=hidden -fno-common -fstrict-overflow -fno-trapping-math. 'PGO': -O2 plus -fprofile-instr-use (Clang) or -fprofile-use -fprofile-correction (GCC). -flto=thin (Fast) and -flto=full (Unsafe) appear only in the link flags while objects are compiled without -flto, so those builds probably get no LTO (inference from cpp/Makefile). All 16 Clang/GCC x C/C++ x prod/Fast/Unsafe/PGO configurations were compared (instrumented PGO/Gen rows and the author's mycc/cproc compilers excluded). Crystal 1.21.1 [73ea5c2b1] (2026-09-26): headline row 'crystal build main.cr --release' (Crystal 1.21.1's src/compiler/crystal/command.cr defines --release as '-O3 --single-module'; LLVM backend, Boehm GC); the 'Crystal/O3' hack row is 'crystal build main.cr -O3', i.e. without --single-module, which plausibly explains its 3.5x slower time (inference, not stated by the suite).",
     "hardware": "AMD Ryzen 7 3800X 8-Core Processor, 78GB RAM, x86_64 Linux (results file 2026-10-05, host kostya-ms7c37)",
     "compared_against_cpp_std_directly": true,
     "language_level_claim": false,
@@ -5253,6 +5675,7 @@
         "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
         "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/string.cr",
         "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/hash.cr",
+        "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/compiler/crystal/command.cr",
         "https://github.com/kostya/LangArena",
         "https://github.com/kostya/LangArena/commits"
       ],

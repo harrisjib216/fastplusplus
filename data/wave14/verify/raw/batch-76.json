@@ -1,0 +1,107 @@
+[
+ {
+  "id": "lang:crystal/kostya/langarena#etc-words",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "A",
+  "tier_reason": "Public code for every side (crystal/main.cr class Words, cpp/src/words.cpp, c/src/words.c; workload and checksum in run.js), C/C++ flags in cpp/Makefile and c/Makefile, and exact compiler versions, build commands (crystal build main.cr --release) and the CPU (AMD Ryzen 7 3800X) in results/2026-10-05-kostya-ms7c37.js; every quoted runtime matches the Etc::Words-runtime rows. Same tier as the already verified Java, Go, Rust and Zig rows of this test.",
+  "corrections": {
+   "claimed_speedup": "Crystal 0.88 s (peak RSS 8.8 MB) vs C++/G++/PGO 1.587 s (best of the 16 Clang/GCC C and C++ configurations), C++/G++ 1.638 s and C++/Clang++ 1.707 s (prod, -O2), C++/G++/Fast 1.651 s (-O3 -march=native) and C/Clang 1.988 s: about 1.80x faster than the best C/C++ row, 1.86x faster than C++/G++ prod and 2.26x faster than C/Clang (derived from page data). Zig 0.91 s, Rust 1.021 s and Go 1.129 s also beat every C/C++ row. The lead is stable across five monthly runs: 1.79x on 2026-07-14 (Crystal 1.20.3, 0.901 s vs C++/G++ 1.611 s), 1.81x on 2026-08-14, 1.80x on 2026-09-03, 1.82x on 2026-09-18 and 1.80x on 2026-10-05 (derived from the results files). The suite's 'Crystal/O3' row (crystal build -O3 without --release) is much slower at 3.105 s, slower than every C row.",
+   "compiler_and_flags": "C/C++ (cpp/Makefile, c/Makefile; versions and build commands from the results file): Clang 22.1.8 and GCC 16.0.1 20260322 (trunk r16-8246, Ubuntu snapshot package), libstdc++ (no -stdlib flag), -std=c++20 for C++. Headline 'prod' rows (make -j prod): -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer, linked with -Wl,-z,relro,-z,now -Wl,--gc-sections. 'Fast': -O3 -march=native -mtune=native -DNDEBUG -pipe -fstack-protector -ftree-vectorize -funroll-loops. 'Unsafe': -O3 -march=native -DNDEBUG -pipe -fno-stack-protector -fomit-frame-pointer -ffast-math -fvisibility=hidden -fno-common -fstrict-overflow -fno-trapping-math. 'PGO': -O2 plus -fprofile-instr-use (Clang) or -fprofile-use -fprofile-correction (GCC). -flto=thin (Fast) and -flto=full (Unsafe) appear only in the link flags while objects are compiled without -flto, so those builds probably get no LTO (inference from cpp/Makefile). All 16 Clang/GCC x C/C++ x prod/Fast/Unsafe/PGO configurations were compared (instrumented PGO/Gen rows and the author's mycc/cproc compilers excluded). Crystal 1.21.1 [73ea5c2b1] (2026-09-26): headline row 'crystal build main.cr --release' (Crystal 1.21.1's src/compiler/crystal/command.cr defines --release as '-O3 --single-module'; LLVM backend, Boehm GC); the 'Crystal/O3' hack row is 'crystal build main.cr -O3', i.e. without --single-module, which plausibly explains its 3.5x slower time (inference, not stated by the suite).",
+   "workload": "Split a generated text of 50,000 space-separated words (3 to 8 lowercase letters) into words, count frequencies in a hash map, then report the most frequent word, the vocabulary size and a checksum; 360 timed iterations after 72 untimed warm-up iterations (run.js). Each harness checks the final checksum against run.js (1998586832), so Crystal does the same work as C and C++.",
+   "why_faster": "Not stated by the suite; inferred from the sources. Crystal's String#split(Char) with a block (src/string.cr in 1.21.1) decodes the text with Char::Reader and yields a freshly GC-allocated String copy per word, so Crystal does not avoid per-word allocation; it then counts in Hash(String, Int32), an open-addressing table with an indices array and a flat entries array that caches each key's hash (src/hash.cr), and leaves reclamation to the Boehm GC. C++ extracts each word with istringstream operator>> (sentry plus locale whitespace checks) into a std::string that fits the small-string buffer, and inserts into node-based std::unordered_map<std::string,int> with one malloc per distinct word and all nodes freed at the end of every iteration; the C version strdup's the whole text each iteration, tokenizes with strtok_r and mallocs plus strdup's every distinct key into uthash. A standard-library container, tokenizer and allocator effect, not code generation.",
+   "caveats": "Mostly a standard-library and idiom comparison (tokenizer, hash container and allocator), so it says little about Crystal's code generation; a C++ version with string_view tokenizing and a flat hash map would likely close the gap (inference, not measured). Crystal allocates a new String per word as well, so the gap is not zero-copy splitting. The Crystal harness runs GC.collect after the timer stops, so the last collection is untimed, while C++ frees its map nodes inside every timed iteration. Only the --release build wins; the suite's Crystal/O3 build (no --single-module) runs 3.105 s, slower than every C and C++ row. LangArena calls itself 'a subjective benchmark' and says AI tools helped translate the tasks between languages; it publishes one measurement per test and configuration (no variance), though the lead is stable across five monthly runs. The headline C/C++ rows are -O2 with hardening flags, but the -O3 -march=native Fast, Unsafe and PGO rows also lose; the Makefiles' LTO flags are link-only. The row was selected because a non-C/C++ language beats every C and C++ configuration; most other tasks in the suite go the other way. Ratios are derived from the results files, not stated by the suite.",
+   "language_level_claim": false,
+   "same_algorithm": true,
+   "same_opt_level": true
+  },
+  "notes": "Confirm at A: runtimes match the 2026-10-05 results file (Crystal 0.88 s, C++/G++/PGO 1.587 s best, C++/G++ 1.638 s, C/Clang 1.988 s, RSS 8.8 MB) and four earlier monthly runs give the same 1.79-1.82x lead; metadata checks out (MIT, 41 stars, 16 forks, not a fork, last commit 2026-10-08). Shortcomings to record: container and idiom win (istringstream plus node-based unordered_map vs Crystal's open-addressing Hash and Boehm GC), not codegen; Crystal also allocates a String per word; only the --release build wins (Crystal/O3 row 3.105 s loses to every C row); final GC untimed; single measurement per configuration; subjective AI-assisted suite; prod C/C++ at -O2 (the -O3 rows also lose).",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/crystal/main.cr",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/crystal/shard.yml",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/words.cpp",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/words.c",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/README.md",
+   "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/string.cr",
+   "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/hash.cr",
+   "https://raw.githubusercontent.com/crystal-lang/crystal/1.21.1/src/compiler/crystal/command.cr",
+   "https://github.com/kostya/LangArena",
+   "https://github.com/kostya/LangArena/commits"
+  ]
+ },
+ {
+  "id": "lang:go/kostya/langarena#distance-ngram",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "A",
+  "tier_reason": "Public code for every side (golang/distance.go NGram.ngram, cpp/src/distance.cpp NGram::ngram, c/src/distance.c NGram_calc; workload in run.js), C/C++ flags in the Makefiles, and Go 1.27.1, the build commands, compiler versions and the CPU (AMD Ryzen 7 3800X) in results/2026-10-05-kostya-ms7c37.js; both sides pack the same 4-grams into two pre-sized standard hash maps, so A stands (same precedent as the C#, Rust and Zig rows of this test).",
+  "corrections": {
+   "claimed_speedup": "Go 0.603 s (peak RSS 12.0 MB) vs C++/Clang++/PGO 0.822 s (best of the 16 Clang/GCC C and C++ configurations), C++/G++/Fast 0.85 s (-O3 -march=native), C++/G++ 0.863 s and C++/Clang++ 0.877 s (prod, -O2), C/Clang 1.811 s: about 1.36x faster than the best C/C++ row, 1.43x faster than C++/G++ prod and 3.0x faster than C/Clang (derived from page data). Go/Opt (static, stripped) 0.598 s. Rust 0.533 s and Zig 0.52 s are faster still. The lead grew over five monthly runs: 1.16x on 2026-07-14 (Go 1.26.5, 0.699 s vs C++/Clang++/PGO 0.81 s), 1.21x on 2026-08-14, 1.29x on 2026-09-03 (Go 1.27.1), 1.27x on 2026-09-18 and 1.36x on 2026-10-05 (derived from the results files).",
+   "compiler_and_flags": "C/C++ (cpp/Makefile, c/Makefile; versions and build commands from the results file): Clang 22.1.8 and GCC 16.0.1 20260322 (trunk r16-8246, Ubuntu snapshot package), libstdc++ (no -stdlib flag), -std=c++20 for C++. Headline 'prod' rows (make -j prod): -O2 -DNDEBUG -fstack-protector-strong -fno-omit-frame-pointer, linked with -Wl,-z,relro,-z,now -Wl,--gc-sections. 'Fast': -O3 -march=native -mtune=native -DNDEBUG -pipe -fstack-protector -ftree-vectorize -funroll-loops. 'Unsafe': -O3 -march=native -DNDEBUG -pipe -fno-stack-protector -fomit-frame-pointer -ffast-math -fvisibility=hidden -fno-common -fstrict-overflow -fno-trapping-math. 'PGO': -O2 plus -fprofile-instr-use (Clang) or -fprofile-use -fprofile-correction (GCC). -flto=thin (Fast) and -flto=full (Unsafe) appear only in the link flags while objects are compiled without -flto, so those builds probably get no LTO (inference from cpp/Makefile). All 16 Clang/GCC x C/C++ x prod/Fast/Unsafe/PGO configurations were compared (instrumented PGO/Gen rows and the author's mycc/cproc compilers excluded). Go: go1.27.1 linux/amd64, 'go build -buildvcs=false' (the gc compiler has no optimisation levels and always optimises; default GOAMD64=v1 generic target, no PGO); Go/Opt adds -a -trimpath -ldflags='-s -w' with a static netgo build, which does not change code generation.",
+   "workload": "For 10 generated string pairs (lengths 4 to 20,003 over a 10-letter alphabet), pack each 4-gram into a 32-bit key, count the first string's grams in one hash map and the second string's in another while counting the intersection, and sum the overlap scores; 100 timed iterations after 20 untimed warm-up iterations, with the result checked against run.js's checksum (397440).",
+   "why_faster": "Not stated by the suite; inferred from the sources. Same algorithm on both sides (two pre-sized maps of 4-byte grams; Go even does an extra grams2 lookup per gram and converts each string to a []byte). Go's built-in map[uint32]int has been a Swiss-table open-addressing map since Go 1.24, while libstdc++'s std::unordered_map<uint32_t,int> allocates and frees a node per distinct gram (up to 10,000 per map with a 10-letter alphabet) and maps the identity hash to a prime bucket count. Go's garbage is also collected by a concurrent GC that can use spare cores, while C++ frees its nodes on the timed thread. A container and runtime effect, not code generation.",
+   "caveats": "Container comparison: a C++ open-addressing map (absl::flat_hash_map, boost::unordered_flat_map) would likely close the gap, and the suite only uses std::unordered_map (the C rows use uthash with a malloc per gram and are about 3x slower). Timing is wall-clock, and Go's concurrent GC may do part of its reclamation on otherwise idle cores of the 8-core Ryzen while the C++ rows free every node on the timed thread. Rust, Zig, C# and Julia also beat every C/C++ row here, so the result is about std::unordered_map, not Go. The lead grew from 1.16x in July 2026 to 1.36x in October, mostly with Go 1.27 (the C++ rows stayed at 0.81-0.85 s). LangArena calls itself 'a subjective benchmark' and says AI tools helped translate the tasks between languages; it publishes one measurement per test and configuration (no variance). The headline C/C++ rows are -O2 with hardening flags, but the -O3 -march=native Fast, Unsafe and PGO rows also lose, and Go builds for generic x86-64; the Makefiles' LTO flags are link-only. The row was selected because a non-C/C++ language beats every C and C++ configuration; most other tasks in the suite go the other way. Ratios are derived from the results files, not stated by the suite.",
+   "language_level_claim": false,
+   "same_algorithm": true,
+   "same_opt_level": true
+  },
+  "notes": "Confirm at A: runtimes match the 2026-10-05 results file (Go 0.603 s, C++/Clang++/PGO 0.822 s best, C++/G++ 0.863 s, C/Clang 1.811 s, RSS 12.0 MB), Go and C++ run the same algorithm with pre-sized maps, and Go leads in all five monthly runs (1.16-1.36x); same_opt_level set true because Go has no optimisation levels and the -O3 -march=native C++ rows also lose. Shortcomings to record: Swiss-table map vs node-based std::unordered_map, not codegen; concurrent GC may use spare cores (wall-clock timing); Rust, Zig, C# and Julia also win; single measurement per configuration; subjective AI-assisted suite; prod C/C++ at -O2; 1.7x the memory of C++. Metadata checks out (MIT, 41 stars, last commit 2026-10-08).",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-07-14-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-08-14-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-03-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-09-18-kostya-ms7c37.js",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/distance.go",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/benchmark.go",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/golang/go.mod",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/distance.cpp",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/src/distance.c",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/src/benchmark.cpp",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/cpp/Makefile",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/c/Makefile",
+   "https://raw.githubusercontent.com/kostya/LangArena/HEAD/run.js",
+   "https://github.com/kostya/LangArena",
+   "https://github.com/kostya/LangArena/commits"
+  ]
+ },
+ {
+  "id": "https://github.com/freaky/cw",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "First-party hyperfine output in the README against FreeBSD 12's wc and GNU coreutils 8.30 wc on a 2.1 GHz Westmere Xeon (no exact CPU model), with no rustc version, no build flags for either wc, no benchmark script and only one of the input files identified, so it falls short of A; first-party, so C.",
+  "corrections": {
+   "claimed_speedup": "README hyperfine ratios (cw faster by) vs FreeBSD wc / GNU wc 8.30 on the 341,152,640-byte Pickwick Papers XML: -l 3.44x / 4.17x; default counts 1.45x / 2.05x; -lL 1.73x / 15.07x; -m 70.36x / 30.21x; -mlL 9.05x / 3.88x; -mLlw 3.15x / 1.35x. On test-utf-8.html: -m 84.74x / 124.21x and -mlL 9.42x / 18.95x. Multi-file xargs run: cw --threads=12 is 11.55x faster than wc and 17.31x faster than gwc and 7.07x faster than single-threaded cw, so single-threaded cw is about 1.6x faster than wc and 2.4x faster than gwc (derived from page data). Measured in January 2019 (README last changed 2019-01-18, help output shows cw 0.5.0).",
+   "hardware": "FreeBSD 12 on a 2.1 GHz Westmere Xeon (README; exact CPU model not stated)",
+   "caveats": "First-party numbers from one FreeBSD 12 machine, measured in January 2019 with cw 0.4-0.5 (the README's benchmark sections were last edited on 2019-01-18; the record's '2020-2021' was wrong), against GNU coreutils 8.30. The README itself says gwc is pessimised on FreeBSD by the system's weak memchr, so Linux/glibc ratios will be smaller; GNU coreutils 9.0 (2021) added an AVX2 newline-counting path to wc -l (WebSearch snippet only), so the -l ratios are outdated. The 70x to 124x -m ratios compare a UTF-8-only byte-counting fast path against locale-aware multibyte decoding in both wc implementations; without -m cw counts bytes and ignores the locale. The win comes from algorithms and crates (SIMD bytecount, memchr, threading), not from Rust code generation (same_algorithm false). Input files other than the Dickens XML are not included, the hyperfine commands are shown only as output, and build flags for both wc binaries and the rustc version are not stated. Several rows depend on multi-threading or the optional runtime-dispatch-simd feature. Unmaintained since March 2021.",
+   "language_level_claim": false,
+   "same_algorithm": false
+  },
+  "notes": "Confirm at C: every ratio in the record matches the README's hyperfine output, metadata checks out (MIT LICENSE.txt and Cargo.toml, 107 stars, 5 forks, not a fork, last commit 2021-03-09, so abandoned). Shortcomings to record: first-party 2019 numbers on FreeBSD 12 against GNU wc 8.30 that predate coreutils 9.0's AVX2 wc -l; the 70-124x -m rows compare a UTF-8-only fast path with locale-aware decoding; win is SIMD crates and threading rather than the language; no benchmark script, flags or rustc version; abandoned. Not a duplicate (wz, the other Rust wc replacement in this wave, is a separate project).",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/Freaky/cw/HEAD/README.md",
+   "https://raw.githubusercontent.com/Freaky/cw/HEAD/Cargo.toml",
+   "https://raw.githubusercontent.com/Freaky/cw/HEAD/LICENSE.txt",
+   "https://raw.githubusercontent.com/Freaky/cw/HEAD/CHANGELOG.md",
+   "https://github.com/Freaky/cw",
+   "https://github.com/Freaky/cw/commits",
+   "https://github.com/Freaky/cw/commits/master/README.md"
+  ]
+ }
+]
