@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/arm-software/optimized-routines",
+  "one_liner": "Arm's own AArch64 assembly memcpy, memset, memchr, strlen, strcmp and friends; replaces generic or older libc string routines.",
+  "what_it_does": "The string subproject of Arm Optimized Routines provides hand-written AArch64 (and older 32-bit Arm) implementations of the hot string.h functions: memcpy/memmove, memset, memchr, memrchr, memcmp, strlen, strnlen, strcpy, stpcpy, strcmp, strncmp, strchr, strchrnul and strrchr, with scalar, AdvSIMD, SVE, SVE2, MOPS and MTE-safe variants. `make` builds libstringlib.a and libstringlib.so, but every symbol carries a suffix (__memcpy_aarch64, __strlen_aarch64_sve2 and so on), so you either call them directly or rename them to the libc names, as FreeBSD's libc does with a `#define __memcpy_aarch64 memcpy` wrapper per file. There is no runtime dispatch in the library: you pick the variant for your CPU or write the ifunc/function-pointer selection yourself.",
+  "how_it_is_fast": "Branchless size-class copying with overlapping unaligned loads and stores (small copies up to 32 bytes, medium up to 128, then a software-pipelined 64-byte loop with a 16-byte-aligned destination and an always-overlapping tail), so one entry point serves memcpy and memmove. The string scanners load 16 or 32 bytes at a time with AdvSIMD (or SVE/SVE2 predicated loads), compute a NUL/character syndrome and locate the first match with bit tricks instead of a byte loop; MOPS variants use the Armv8.8 CPYP/CPYM/CPYE and SETP instructions. The code is tuned on several Neoverse and Cortex cores and is the upstream source of glibc's AArch64 string routines.",
+  "when_to_use": [
+    "AArch64 binaries linked against a libc with generic C or stale string code: musl (static builds), newlib, older or custom embedded libcs, bare-metal and kernel-like environments.",
+    "Fully static or PLT-free builds where you want glibc-class string routines without glibc's ifunc indirection (the ClickHouse PR's motivation).",
+    "Workloads dominated by small, random-size memcpy/memcmp/strlen/memchr calls (the repo's own benchmarks use SPEC2017-derived size and alignment distributions, mostly under 300 bytes).",
+    "Building a libc or runtime (as FreeBSD libc and Android bionic do) and needing a permissively licensed, maintained AArch64 string set with MTE-safe variants.",
+    "You want to benchmark or pick a specific variant (AdvSIMD versus SVE versus MOPS) per core yourself."
+  ],
+  "when_not_to_use": [
+    "On a current glibc for AArch64: the maintainer says 'pretty much all of it is in GLIBC already' (issue #71) and the ClickHouse PR expects no large change there; replacing glibc's ifunc-selected SVE memcpy on Graviton 3/4 made an early ClickHouse revision 12-17% slower in several queries.",
+    "Blindly choosing the SVE string variants on 128-bit-SVE cores (Neoverse-V2, Graviton4): the ClickHouse PR reports them 'up to 3x slower' there and kept AdvSIMD instead.",
+    "32-bit Arm: the maintainer calls the string/arm routines 'quite old and not very optimized' (issue #71); x86-64 has no string routines at all (string/x86_64 holds only check-arch.S).",
+    "Projects that need FORTIFY _chk variants (issue #27 still open) or a drop-in that dispatches by CPU feature on its own.",
+    "Anyone who needs published numbers before adopting: the repo stores none, and the only figures against a libc are unmethodologised claims in an unmerged ClickHouse PR."
+  ],
+  "integration": {
+    "form": "static lib, shared lib or source-drop (one .S file plus asmdefs.h per function)",
+    "dependencies": "none at run time; GNU make and a GCC or Clang that assembles the wanted extensions (+sve, +sve2, +mops, +memtag)",
+    "min_toolchain": "not documented; CI moved to GCC 16 and Clang 22 in July 2026; SVE files are only built if the compiler supports them",
+    "platforms": "AArch64 (Armv8-A baseline; optional SVE, SVE2, SME streaming-compatible, MOPS, MTE variants) and 32-bit Arm; Linux/ELF primarily, with config.mk.dist sections for Windows on Arm (Msys, clang) and macOS",
+    "thread_safety": "Stateless leaf routines operating only on caller buffers (reentrant); not otherwise documented",
+    "drop_in_for_baseline": "partial: same C semantics and glibc-compatible ABI, but suffixed symbol names, so you alias them to memcpy/strlen yourself (link-time override is described as best effort for static linking) and choose the CPU variant yourself"
+  },
+  "gotchas": [
+    "Harness flaw in string/bench/memcpy.c: the 'Forwards/Backwards memmove unaligned' rows call each memcpy variant, including the libc `memcpy` baseline row, on overlapping buffers (fn(a, a + 256 + (i & 31), size) with size up to 64 KB). That is undefined behaviour for a libc memcpy, and libc memmove is never timed, so those rows are not a valid libc comparison; Arm's own memcpy is overlap-safe by design.",
+    "A user reported in issue #76 (Dec 2024) that the strlen benchmark built at -O2 'will just skip running the test function'; the maintainer replied he had not seen it with the latest version and suggested -flto. No benchmark results are stored anywhere in the repo.",
+    "The default (non -mte) strlen, strchr and memchr read whole aligned 16-byte blocks past the terminator and are documented 'Not MTE compatible'; on MTE-enabled systems use the -mte variants, which ClickHouse measured 20-40% slower than plain strlen above 512 bytes. Issue #63 (closed 2023) was a false MTE fault from the 16-byte overread with unaligned input.",
+    "memcmp may read all n bytes even when the first difference is earlier (issue #60, closed as correct per the C standard), which trips hand-written guard-page tests that pass a length longer than the mapped data."
+  ],
+  "pick_this_over_siblings_when": "Pick it over jnettlet/cortex_a72_memcpy (one core, memcpy/memset only, claims parity or small wins over this library on Cortex-A72) or dssgabriel's SVE string routines (a research set benchmarked against this library's 23.01 SVE versions) when you need a complete, maintained AArch64 string.h set with MTE-safe variants; bavison/arm-mem or copies-and-fills only make sense for 32-bit Raspberry Pi targets, and AOCL-LibMem is the x86 (AMD) counterpart.",
+  "verified_claims_summary": "No measured comparison against any libc exists in the repository; the only libc numbers are in ClickHouse PR #118916 (open, unmerged as of 2026-10-08), which reports memcpy +26-37%, memmove about 2x on small sizes, memcmp +50-80%, strlen 2.9x and memchr 3x on Graviton4 (Neoverse-V2) versus its musl build's previous routines, themselves 'generic C and 2020-vintage AOR asm', with no harness, sizes, compiler or run count stated, while the automated ClickHouse performance report showed no significant change across 32 queries.",
+  "status_note": "Actively maintained by Arm (last commit 2026-10-08, biannual releases, latest v26.07, new SVE2 strlen and memchr in September 2026), dual MIT or Apache-2.0 WITH LLVM-exception, copyable; already shipped inside glibc, FreeBSD libc and Android bionic, so check your libc before vendoring.",
+  "sources_read": [
+    "https://github.com/ARM-software/optimized-routines",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/README.md",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/README.md",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/Dir.mk",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/config.mk.dist",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/include/stringlib.h",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/include/benchlib.h",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/bench/memcpy.c",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/bench/strlen.c",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/bench/memset.c",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/memcpy.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/memcpy-sve.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/strlen.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/strlen-mte.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/memchr.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/HEAD/string/aarch64/memcmp.S",
+    "https://github.com/ARM-software/optimized-routines/tree/master/string",
+    "https://github.com/ARM-software/optimized-routines/tree/master/string/aarch64",
+    "https://github.com/ARM-software/optimized-routines/tree/master/string/x86_64",
+    "https://github.com/ARM-software/optimized-routines/commits/master",
+    "https://github.com/ARM-software/optimized-routines/commits/master/string/aarch64/memcpy-sve.S",
+    "https://github.com/ARM-software/optimized-routines/commit/23c4393",
+    "https://github.com/ARM-software/optimized-routines/issues?q=is%3Aissue+memcpy+OR+strlen+OR+memchr+OR+string+OR+memset+OR+strcmp",
+    "https://github.com/ARM-software/optimized-routines/issues/76",
+    "https://github.com/ARM-software/optimized-routines/issues/71",
+    "https://github.com/ARM-software/optimized-routines/issues/60",
+    "https://github.com/ClickHouse/ClickHouse/pull/118916",
+    "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/aarch64/string/Makefile.inc",
+    "https://raw.githubusercontent.com/aosp-mirror/platform_bionic/main/libc/arch-arm64/dynamic_function_dispatch.cpp"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/antonblanchard/crc32-vpmsum",
+  "one_liner": "POWER8+ vpmsum carry-less-multiply CRC32/CRC32C kernel in assembly (and intrinsics C); 41x a slice-by-8 table CRC on 32 kB.",
+  "what_it_does": "Computes a 32-bit CRC for any polynomial on POWER8 and later (ppc64 and ppc64le) using the vector polynomial multiply-sum instructions. You run `make` once to generate a constants header for your polynomial (CRC32C with reflection and xor-out by default, Ethernet CRC32 and CRC32K examples in the Makefile), then copy four files (crc32.S, crc32_wrapper.c, the constants header, ppc-opcode.h) or the single-file intrinsics version (vec_crc32.c) into your build. The API is one function, `unsigned int crc32_vpmsum(unsigned int crc, unsigned char *p, unsigned long len)`, whose name can be changed with -DCRC32_FUNCTION so several polynomials can coexist.",
+  "how_it_is_fast": "CRC folding with carry-less multiplication: the main loop keeps 8 independent 16-byte accumulators (8 x 16 B per iteration) to hide the 6-cycle vpmsumd latency at one issue per cycle, folds up to 32 kB (MAX_SIZE) down to 1024 bits with precomputed x^n mod P constants, reduces 1024 bits to 64, then finishes with a fixed-point Barrett reduction. Bit-reflected CRCs are handled by loading bytes reversed (vperm) instead of reflecting bits. Unaligned heads, tails and inputs under 31 bytes go through a byte-at-a-time Sarwate table loop in the C wrapper; inputs of 16 to 255 aligned bytes use a separate short path with per-length constants.",
+  "when_to_use": [
+    "CRC32C (iSCSI, ext4/btrfs, Ceph, RocksDB style) or zlib/Ethernet CRC32 on IBM POWER8, POWER9 or POWER10 Linux, buffers of hundreds of bytes and up.",
+    "Storage or network paths that checksum 4 kB to multi-MB blocks, where a table-driven CRC costs about 3 cycles per byte on POWER8 (0.33 bytes/cycle in the README's slice-by-8 run).",
+    "You need a non-standard 32-bit polynomial accelerated: crc32_constants generates the folding and Barrett constants for any polynomial, reflected or not.",
+    "Codebases that cannot pull in a whole crypto or compression library and want a small, dual-licensed (Apache-2.0 or GPL-2.0+) source drop."
+  ],
+  "when_not_to_use": [
+    "Any non-POWER target, or POWER7 and older: the code needs the ISA 2.07 vpmsum instructions and has no portable fallback beyond a byte-wise table loop; check AT_HWCAP2 & PPC_FEATURE2_VEC_CRYPTO at run time yourself.",
+    "Tiny inputs: below 31 bytes the wrapper runs a one-byte-per-step table loop, slower than slice-by-8; the Linux kernel's glue only enters the vector path at 528 bytes or more (VECTOR_BREAKPOINT 512 plus 16) and uses the table code below that.",
+    "If you already use zlib-ng (arch/power/crc32_power8.c), Go's hash/crc32 on ppc64le, the Linux kernel, Ceph or RocksDB on POWER: each ships a derived copy of this code, so vendoring it again gains nothing.",
+    "You need CRC-64, CRC-16/T10-DIF or crc32_combine: the generator covers 32-bit CRCs only and there is no combine function (issue #10 asked for one).",
+    "Projects that need active upstream maintenance: no commits since 2020-03-26."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none at run time; the constants header is generated at build time by the repo's crc32_constants tool (buildable on non-POWER hosts for cross builds)",
+    "min_toolchain": "GCC or Clang targeting POWER8 with -mcpu=power8 -mcrypto -mpower8-vector -maltivec -mvsx (Clang 7+ needed the 2020 workaround in clang_workaround.h); exact minimum versions not documented",
+    "platforms": "ppc64 and ppc64le Linux, POWER8 or later (vpmsum required); big- and little-endian both handled",
+    "thread_safety": "Stateless pure function over caller memory (running CRC passed in and returned), so reentrant; not otherwise documented",
+    "drop_in_for_baseline": "partial: same CRC result as a table-driven CRC for the polynomial the header was generated for, but under its own function name and signature, and only after generating constants per polynomial; the repo's slice-by-8 baseline computes a different CRC (big-endian 0x04C11DB7) than the default build (reflected CRC32C)"
+  },
+  "gotchas": [
+    "Only one size was ever measured: the 41x figure is for a 32 kB page-aligned buffer, which is exactly the kernel's MAX_SIZE fold block (the best case, one block, no head or tail work); no numbers exist for small, unaligned or multi-block inputs, and the repo's own vec_crc32_bench (intrinsics C) has no published figure, so the gain of hand-written assembly over the intrinsics version is unknown.",
+    "The baseline is slice-by-8 for a different polynomial and bit order (big-endian Ethernet CRC32 versus reflected CRC32C) built at the Makefile's -O2; it ran at about 1.34 GB/s (0.33 bytes/cycle, derived from page data), so a stronger table method such as slice-by-16 or zlib's braided CRC would narrow the gap. The slice-by-8 harness was refactored in 2017 (commit aadb491) after the README numbers, but its inner loop is unchanged.",
+    "The 3.8x btrfs figure in the README does not match the Linux commit 6dd7a82cc54e message, which (per search-result text, page not opened) says 'over 3.7x faster' for a dd 4 GiB btrfs write test.",
+    "The assembly saves non-volatile vector and GPR registers below the stack pointer (in the ABI's protected zone) and reads constants TOC-relative through r2; Ceph's separate crc32c_ppc_fast_zero_asm.S, not this repo's crc32.S, broke with a relocation-out-of-range error in shared libraries (issue #14, fixed in ceph#59558). The intrinsics C version gave wrong results on big-endian ppc64 with Clang until commit c520cfb (2018)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libgcrypt, Nettle or CRYPTOGAMS when you need only a POWER CRC32/CRC32C (or a custom 32-bit polynomial) as a few vendorable files rather than a whole crypto library; none of the other catalogued hand-written kernels in this category targets CRC on POWER.",
+  "verified_claims_summary": "First-party README run: 5,000,000 CRC32C passes over one 32 kB L1-resident buffer took 2.937 s with the vpmsum assembly versus 122.220 s for a Linux-kernel-derived slice-by-8 C table CRC (different polynomial, Makefile -O2, compiler version unstated), about 41.6x, or 52 GiB/s and 13.6 bytes/cycle on an unnamed 4.1 GHz POWER8, timed with shell `time`.",
+  "status_note": "Dormant since 2020-03-26 (54 commits, one open issue about a Ceph-side file) but small, dual Apache-2.0/GPL-2.0+ licensed and copyable; the same algorithm lives on, maintained, in mainline Linux (lib/crc/powerpc), Go hash/crc32, zlib-ng, Ceph and RocksDB.",
+  "sources_read": [
+    "https://github.com/antonblanchard/crc32-vpmsum",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/README.md",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/Makefile",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_bench.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/slice_by_8_bench.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_wrapper.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32.S",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/vec_crc32.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_constants.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_test.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/crc32_two_implementations.c",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/ppc-opcode.h",
+    "https://raw.githubusercontent.com/antonblanchard/crc32-vpmsum/HEAD/LICENSE.TXT",
+    "https://github.com/antonblanchard/crc32-vpmsum/commits/master",
+    "https://github.com/antonblanchard/crc32-vpmsum/commit/aadb491",
+    "https://github.com/antonblanchard/crc32-vpmsum/issues?q=is%3Aissue",
+    "https://github.com/antonblanchard/crc32-vpmsum/issues/14",
+    "https://raw.githubusercontent.com/torvalds/linux/master/lib/crc/powerpc/crc32.h",
+    "https://raw.githubusercontent.com/golang/go/master/src/hash/crc32/crc32_ppc64le.s",
+    "https://raw.githubusercontent.com/zlib-ng/zlib-ng/develop/arch/power/crc32_power8.c",
+    "https://raw.githubusercontent.com/facebook/rocksdb/main/util/crc32c_ppc_asm.S",
+    "https://raw.githubusercontent.com/ceph/ceph/main/src/common/crc32c_ppc_asm.S",
+    "https://raw.githubusercontent.com/MariaDB/server/main/mysys/crc32/crc32_ppc64.c",
+    "WebSearch snippet: git.beagleboard.org mirror of Linux commit 6dd7a82cc54e 'crypto: powerpc - Add POWER8 optimised crc32c' (page not opened)"
+  ],
+  "confidence": 0.8
+}
