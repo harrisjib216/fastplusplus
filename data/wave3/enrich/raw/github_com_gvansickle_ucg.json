@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/gvansickle/ucg",
+  "one_liner": "Ack-style recursive source-code grep using PCRE2 JIT and threaded traversal; about 3.7x faster than egrep -R on a kernel-tree search.",
+  "what_it_does": "ucg is a command-line tool, not a library, for recursively searching source trees with PCRE regexes. Its options follow ack (and partly ag and grep): file selection is by built-in language types (--cpp, --type=cc, --type-add), and --include/--exclude globs and .ucgrc config files are supported. It does not read .gitignore, and by default it searches only files of recognized types.",
+  "how_it_is_fast": "Regex matching runs in PCRE2 with JIT compilation over the whole file buffer, not line by line, and newlines are counted only around matches. Directory traversal runs on its own threads (default 2, --dirjobs) and feeds a queue of scanner threads (default one per core, -j). A literal-prefix analysis of the pattern drives hand-written SSE2/SSE4.2/POPCNT prefilters (PCMPESTRI find_first_of over first-possible code units, PCMPEQB plus movemask for single bytes and newline counting) that skip ahead to candidate positions. The ISA variant is chosen at load time, with scalar fallbacks. Files are read whole with posix_fadvise(SEQUENTIAL) and 128 KB to 1 MB I/O sizing.",
+  "when_to_use": [
+    "Interactive regex searches over large multi-language source trees (kernel- or Boost-sized) on multi-core x86-64 Linux, filtered by language type.",
+    "You want ack's command-line conventions or PCRE syntax (lookarounds, backreferences) and something faster than egrep -R --include or ag.",
+    "Machines where ripgrep is unavailable and a GPL-3.0 tool is acceptable (Fedora Copr, AUR and Homebrew packages exist)."
+  ],
+  "when_not_to_use": [
+    "ripgrep is installed: it beats ucg in every published comparison (0.079 s vs 0.163 s on the kernel whitelist search; 0.168 s vs 0.229 s on ucg's own Boost table).",
+    "Single large files with weak or no literal anchors: in ripgrep's 2018-01-08 suite ucg was slower than GNU grep 3.1 on subtitles_en_surrounding_words (3.567 vs 1.070 s), subtitles_en_no_literal (5.394 vs 3.446 s) and the Russian literal patterns (about 2.2x slower).",
+    "Files larger than about 2 GiB, or filesystems that return short reads: the whole-file read loop does not advance its buffer pointer, so such files are searched incorrectly (see gotchas).",
+    "You need .gitignore handling, context lines (-A/-B/-C, open issue #113), match counts (-c, open issue #61), or a non-x86 build (open issue #123: HEAD does not compile on ARM; #122: 0.3.3 fails on NetBSD).",
+    "You need an embeddable library or a permissive licence: ucg is a GPL-3.0-only CLI with no library API."
+  ],
+  "integration": {
+    "form": "built command-line binary (autotools: configure && make); no library API",
+    "dependencies": "libpcre2-8 >= 10.20 (preferred) or libpcre >= 8.21; argp-standalone on macOS",
+    "min_toolchain": "C++20 compiler (configure.ac requires AX_CXX_COMPILE_STDCXX(20, ext, mandatory) and C18); the README's 'gcc 4.8 or greater' line is stale",
+    "platforms": "x86-64 fully supported (SSE2/SSE4.2/POPCNT paths picked at load time, scalar fallbacks); historically tested on Linux, macOS, TrueOS/FreeBSD and Cygwin; ARM build broken at HEAD (issue #123); Fedora 44 test failures open (issue #148)",
+    "thread_safety": "not applicable (standalone CLI; internally multithreaded with std::thread)",
+    "drop_in_for_baseline": "partial: grep-like output and some grep options, but ack-style defaults differ (smart-case on, only known file types searched, recursion on, no .gitignore, PCRE rather than POSIX ERE syntax)"
+  },
+  "gotchas": [
+    "Whole-file read bug in src/File.cpp: 'while((retval = read(file_descriptor, file_data, file_size)) > 0);' never advances the destination pointer. A short read, which Linux always produces for files above 2,147,479,552 bytes and which can happen on FUSE or network filesystems, makes the next read overwrite the start of the buffer while the tail stays unread. Matches in such files are then wrong or missing. EINTR is not retried. The kernel and Boost benchmark files are small, so the published numbers are not affected.",
+    "Defaults differ from grep: --smart-case is on, so an all-lowercase pattern matches case-insensitively, and -k/--known-types is on, so files with unrecognized extensions are silently skipped. Patterns are compiled with PCRE2_NEVER_UTF and PCRE2_NEVER_UCP, so matching is byte-wise: '.', \\w and case folding have no Unicode semantics for UTF-8 text.",
+    "Multithreaded traversal skips directories already reached through a symlink (issue #106), so ucg can search fewer files than grep -R. This is why it printed 390 lines against 404 in the ripgrep benchmark row.",
+    "PCRE2 JIT needs writable-then-executable memory; PaX MPROTECT hardening is unsupported (open issue #101). The mmap read path is disabled in the source as 'very broken'."
+  ],
+  "pick_this_over_siblings_when": "The indexed siblings (ngi, trigrep, frg, ugrep with ugrep-indexer) need an index build before they are fast. ucg needs no index and fits one-off searches with ack syntax. For unindexed search, ripgrep, a non-catalogued incumbent, is faster than ucg in every published source, so choose ucg mainly for its ack-compatible interface.",
+  "verified_claims_summary": "In the ripgrep 0.8.0 README, ripgrep's author ran a whole-word [A-Z]+_SUSPEND search over a built Linux kernel tree, restricted to C files, on an Intel i7-6900K. ucg took 0.163 s, GNU grep (egrep -R with --include filters) 0.611 s and ripgrep 0.079 s, so ucg was about 3.7x faster than grep (derived from page data). ucg searched slightly fewer files (390 lines against 404) and compiler flags for ucg and grep are not given. The same suite's 2018 single-file runs against grep 3.1 are mixed. ucg's own first-party Boost table (Fedora 25, average of 10 runs) shows ucg 0.229 s against grep 2.26 at 0.370 s and ripgrep 0.168 s.",
+  "status_note": "Low-activity single-maintainer project: the last source change was 2024-12-28 (new --null, --line-number and --with-filename options), and the 2026-09-14 commits only touch CI, m4 macros and the perf-comparison setup. It is GPL-3.0-only and usable as a packaged CLI, but the published numbers date from 2016-2018 and a large-file read bug is present at HEAD.",
+  "sources_read": [
+    "https://github.com/gvansickle/ucg",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/README.md",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/configure.ac",
+    "https://github.com/gvansickle/ucg/tree/master/src",
+    "https://github.com/gvansickle/ucg/commits",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/src/FileScanner_sse4_2.cpp",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/src/FileScanner.cpp",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/src/FileScannerPCRE2.cpp",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/src/File.cpp",
+    "https://github.com/gvansickle/ucg/issues",
+    "https://github.com/BurntSushi/ripgrep/blob/0.8.0/README.md",
+    "https://github.com/gvansickle/ucg/tree/master/.github/workflows",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/.github/workflows/github-actions-ucg-ci-using-podman.yml",
+    "https://raw.githubusercontent.com/gvansickle/ucg/HEAD/tests/benchmark_progs.csv"
+  ],
+  "confidence": 0.75
+}
