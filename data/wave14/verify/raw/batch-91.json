@@ -1,0 +1,88 @@
+[
+  {
+    "id": "lang:d/tchaloupka/httpbench#raw-epoll-http-responder",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "All twelve D-vs-C RPS pairs match the README multi-core and pipelining tables, and the code (_suite/runner.d, c/epoll/http_epoll.c with c/epoll/Makefile, dlang/epoll/app.d with dlang/epoll/meta.json), both flag sets, ldc2 1.29.0 and the Ryzen 7 3700X host are public; it falls short of A only because the gcc version is unstated (unpinned debian:testing build-essential image). Kept at C because the result is parity from single 30 s runs (0.94x to 1.10x), not a demonstrated win.",
+    "corrections": {
+      "compiler_and_flags": "D: ldc2 1.29.0 via dub, DFLAGS '--betterC' from dlang/epoll/meta.json with the runner default '--release -O3 --boundscheck=off --ffast-math --mcpu=native' appended (_suite/runner.d applyDefaultBuildEnv); C: gcc -Wall -O3 -D_GNU_SOURCE (plus -D EDGE for the edge variant) from c/epoll/Makefile, gcc version not stated (build-essential in an unpinned debian:testing Docker image, _suite/Dockerfile).",
+      "caveats": "This is a parity data point, not a win: counting the 10 non-pipelined cells, D is ahead in 8 and behind in 2 (64 clients, both variants) by at most 10%, and about 3% behind in both pipelined cells (0.97x); single 30 s runs with no variance reported, so the differences are probably noise. The D build adds --mcpu=native and --ffast-math while the C build is plain -O3 without -march=native, so the flags are not matched (likely irrelevant for a syscall-bound loop). The C file is frevib's epoll echo server slightly modified; the D file is a near line-by-line port calling the same libc functions, but it is not identical: epoll_wait takes 256 events per call in D versus 128 in C, D keeps each client's 2048-byte buffer inline in a static array while C mallocs a 4096-byte buffer on every accept, and D skips C's send-length checks and partial-request handling (asserts instead). The suite's own C README says the D variants exist to test performance issues of the during library, and the main README presents the C servers as the reference ceiling, so neither source claims D is faster. Benchmark code, flags, ldc2 1.29.0 and the CPU are public; only the gcc version is missing. Unlicense is a public-domain dedication with no patent grant. Last commit 2022-05-30.",
+      "same_algorithm": true,
+      "same_opt_level": false,
+      "why_faster": "No language-level win is shown: both servers are syscall-bound loops over the same libc epoll_wait/recv/send calls, and the small D leads in single runs are within noise; the D port also uses a larger epoll_wait batch (256 vs 128), inline per-client buffers instead of malloc on accept, and skips send-result checks, so any residual gap is not attributable to the language."
+    },
+    "notes": "Numbers verified exactly against README.md tables; workload, hardware, license (Unlicense), stars (19) and last commit (2022-05-30, abandoned) confirmed. Shortcomings to record: parity not a win, single runs, unmatched flags (D --mcpu=native --ffast-math only), D port differs in epoll batch size and buffer handling, gcc version unstated.",
+    "urls_opened": [
+      "https://github.com/tchaloupka/httpbench",
+      "https://github.com/tchaloupka/httpbench/commits/master",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/README.md",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/_suite/runner.d",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/_suite/Dockerfile",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/README.md",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/Makefile",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/meta.json",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/epoll/http_epoll.c",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/epoll/meta.json",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/epoll/app.d",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/tchaloupka/during",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "examples/echo_server/README.md shows the author's own best-of-3 runs (131090 vs 95894 vs 45063 req/s) with the D compiler and CPU stated but the baselines' compiler only described as '-O3, no -g', so first-party with partial methodology: C. The httpbench rows match the README tables but are single 30 s runs with an unstated gcc version.",
+    "corrections": {
+      "baseline_in_list": true,
+      "caveats": "First-party numbers from the library author. The echo baselines are different programs, not ports: mrloop is a generic C event-loop library using liburing and methane/echoserver a generic C++ epoll echo server, whereas the during example uses a preallocated mempooled buffer pool registered with io_uring and swaps read/write buffers, so the echo comparison is not same-algorithm. The echo numbers date from 2019 (ldc2-1.18.0, Fedora 31, Linux 5.3.12), are best-of-3 on loopback with the load tool on the same machine, and the baselines' compiler and version are not stated (only -O3 without -g); the library has since been rewritten for Linux 6.x and released as 0.6.0 (2026-10-09) without new measurements. The httpbench rows compare a D port (dlang/during/raw/app.d) of the C liburing HTTP responder (c/io_uring/http_uring.c) with the same provided-buffer design (D uses 1024-byte buffers, C 2048): single 30 s runs per cell on a 2-vCPU server VM, D ahead in 5 of 6 cells (up to 1.20x at 128 clients) and 3% behind at 64 clients, within plausible single-run noise, and the D build adds --mcpu=native --ffast-math while the C build is plain -O3. The httpbench C README says the D variants exist to test performance issues of the during library, not to claim a win, and the during README makes no performance claim beyond pointing to the echo example. An echo server is a socket event loop rather than an HTTP server, so the category fits loosely.",
+      "why_faster": "Echo example: io_uring with a preallocated buffer pool registered as fixed buffers and read/write buffer swapping, against a generic liburing event-loop library and an epoll server (design, not language); httpbench: same provided-buffer design as the C liburing port, so the small differences are not attributable to the language or the wrapper."
+    },
+    "notes": "Echo numbers (131090/95894/45063 req/s; 1.37x and 2.91x derived) and all six httpbench during-vs-C io_uring pairs verified. Metadata confirmed: BSL-1.0, 37 stars, last commit 2026-10-09 (release 0.6.0), active. baseline_in_list set true because both echo baselines and the httpbench C server are C/C++ at -O3, the wave's listed baseline; shortcomings: not same algorithm in the echo test, 2019-era first-party numbers, baseline compiler unstated, httpbench gap within noise.",
+    "urls_opened": [
+      "https://github.com/tchaloupka/during",
+      "https://github.com/tchaloupka/during/commits/master",
+      "https://raw.githubusercontent.com/tchaloupka/during/HEAD/README.md",
+      "https://raw.githubusercontent.com/tchaloupka/during/HEAD/examples/echo_server/README.md",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/README.md",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/during/meta.json",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/dlang/during/raw/app.d",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/io_uring/Makefile",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/io_uring/meta.json",
+      "https://raw.githubusercontent.com/tchaloupka/httpbench/HEAD/c/io_uring/http_uring.c"
+    ]
+  },
+  {
+    "id": "https://github.com/linkerd/linkerd2-proxy",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The numbers are now read on the blog posts' source files in the linkerd/website repo (the linkerd.io pages are blocked here): Buoyant-run benchmarks on the public Kinvolk harness with versions and the Xeon 4214 hardware stated, but written and run by the vendor (Buoyant's CEO) with no build flags, so vendor-blog tier C; the 2019 Kinvolk study was commissioned by Buoyant and its own report is unreachable.",
+    "corrections": {
+      "benchmark_url": "https://github.com/linkerd/website/blob/main/linkerd.io/content/blog/2021/0527-linkerd-vs-istio-benchmarks/index.md",
+      "claimed_speedup": "Buoyant posts on linkerd.io (source markdown in linkerd/website): (1) 'Why Linkerd doesn't use Envoy' (2020-12-03), internal benchmark on Kinvolk's harness at 4,000 RPS: Linkerd2-proxy 14-15 MB vs Istio's Envoy 135-175 MB ('ten times the size'), CPU 15 ms per instance vs 22-156 ms ('from 50% more to 10x more'), called 'not an entirely fair comparison'. (2) 'Benchmarking Linkerd and Istio' (2021-05-27, Linkerd 2.10.2 vs Istio 1.10.0 minimal, 2,000 RPS): max data-plane proxy memory 17.8 MB vs 154.6 MB (8.7x, derived from page data), max proxy CPU time 10 ms vs 88 ms; added latency 9 ms vs 15 ms at the median and 47 ms vs ~253 ms at the max (Istio 438% more at the max, derived from page data). The Buoyant press release's '36% more median latency' is snippet only and does not match the post's data (67% more, derived from page data). (3) 2021 Redux (2021-11-29, Linkerd 2.11.1 vs Istio 1.12.0, 2,000 RPS): 26.3 MB vs 156.2 MB memory (5.9x, derived from page data), 36 ms vs 67 ms CPU (1.86x), added latency 6 ms vs 17 ms median and 42 ms vs ~350 ms max. (4) The 2019 Kinvolk study (Linkerd 2.3-edge vs Istio 1.1.6, 500 and 600 RPS) as summarised by Buoyant: 5.7 MB vs 47 MB average per proxy, but data-plane CPU comparable and Linkerd's 15% higher at 600 RPS.",
+      "workload": "Kinvolk service-mesh-benchmark harness (wrk2 load against emojivoto-style microservices, mTLS on, metrics on, no retries or tracing) at 20, 200 and 2,000 RPS, 10-minute runs, 5 kept runs per level after discarding outliers, reporting the maximum memory and CPU time of any single data-plane proxy plus client-side latency percentiles; the 2020 figures come from an internal run at 4,000 RPS.",
+      "hardware": "2021 runs: Equinix Metal dfw2, 6 worker nodes plus one load-generator node of type s3.xlarge.x86 (Intel Xeon 4214, 24 physical cores at 2.2 GHz, 192 GB RAM), Kubernetes v1.19 (May) or v1.21.4 (Nov) on Lokomotive; hardware of the 2020 4,000 RPS run not stated.",
+      "compiler_and_flags": "Release binaries: Linkerd 2.10.2 default install vs Istio 1.10.0 minimal profile (May 2021), Linkerd 2.11.1 vs Istio 1.12.0 (Nov 2021); build flags not stated for either proxy.",
+      "caveats": "Vendor benchmarks: every post is by William Morgan of Buoyant, which sells Linkerd products, and the 2019 Kinvolk study was commissioned by Buoyant; the posts themselves say the 2020 numbers are internal and 'not an entirely fair comparison'. The comparison is Linkerd versus Istio, so the Envoy side carries Istio's sidecar configuration and feature set, and the language effect is not isolated from the design difference (a purpose-built micro-proxy versus general-purpose Envoy). The metrics are the maximum memory and CPU time of any single proxy, as the posts note, not cumulative cost. The gap narrows over time: CPU 8.8x in May 2021 but 1.86x in Nov 2021 after Linkerd 2.11.1 moved to jemalloc (proxy memory rose from 17.8 to 26.3 MB), and in the 2019 study Linkerd's data plane used more CPU than Istio's at 600 RPS. Raw data is in Google Sheets and the reproduction steps are on a linkerd2 wiki page; the harness repo kinvolk/service-mesh-benchmark (Apache-2.0, 142 stars) was archived on 2024-02-06 and lists no results. linkerd.io, buoyant.io, kinvolk.io and the CNCF mirror were not opened (blocked); the numbers were read in the post sources in the linkerd/website GitHub repo. The linkerd2-proxy README itself has no benchmark."
+    },
+    "notes": "Benchmark page found: the record's snippet numbers are confirmed in the source of 'Why Linkerd doesn't use Envoy' (4,000 RPS) and the May 2021 post (438% derived; 36% median figure is press-release only and inconsistent with the post). Metadata confirmed: Apache-2.0, 2.1k stars, last commit 2026-10-05, active. Shortcomings: vendor-run, Linkerd-vs-Istio not Rust-vs-C++ isolated, max-per-proxy metric, CPU gap shrank to 1.86x in the Nov 2021 redux.",
+    "urls_opened": [
+      "https://github.com/linkerd/linkerd2-proxy",
+      "https://github.com/linkerd/linkerd2-proxy/commits/main",
+      "https://github.com/kinvolk/service-mesh-benchmark",
+      "https://github.com/linkerd/website/blob/main/linkerd.io/content/blog/2021/0527-linkerd-vs-istio-benchmarks/index.md",
+      "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2021/0527-linkerd-vs-istio-benchmarks/index.md",
+      "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2021/1129-linkerd-vs-istio-benchmarks/index.md",
+      "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2019/0518-linkerd-benchmarks/index.md",
+      "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2020/1203-why-linkerd-doesnt-use-envoy/index.md"
+    ]
+  }
+]
