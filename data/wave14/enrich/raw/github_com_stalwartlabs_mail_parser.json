@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/stalwartlabs/mail-parser",
+  "one_liner": "Rust RFC 5322/MIME e-mail parser with SIMD scanning and lazy zero-copy decoding; 9x to 31x GMime, VMime, libEtPan!, Dovecot.",
+  "what_it_does": "Parses a whole raw message (RFC 5322, MIME RFC 2045-2049, RFC 2047/2231 and many mail RFCs) from a byte slice into a read-only Message that is read through Copy views: typed header getters (subject(), from(), date(), message_id(), received()), the MIME part tree, nested message/rfc822 parts and the RFC 8621 text/HTML/attachment body lists. Bodies are transfer-decoded and charset-converted only when read (text(), decoded(), text_prefix()), across 41 charsets, with Shift_JIS, Big5, GB18030 and other multi-byte CJK charsets behind the optional full_encoding feature (encoding_rs). It cannot build or modify messages (separate mail-builder crate) and has no C API, so it is not a drop-in for GMime, VMime, libEtPan! or Dovecot lib-mail.",
+  "how_it_is_fast": "SIMD kernels (NEON on aarch64, AVX2 and SSE2 on x86-64, memchr elsewhere) find MIME boundaries and header-field ends; header names, charset labels and HTML entities are looked up with compile-time perfect hashing (the hashify crate); a message is stored in a handful of flat vectors and strings borrow from the input (zero-copy). Nothing is decoded during parse; when a body is read, Base64 and quoted-printable go through encodify's SIMD codecs and UTF-8 is validated with simdutf8. parse_with() plus MessageBuffers reuses one message's storage for the next.",
+  "when_to_use": [
+    "Rust mail servers, indexers, spam or DKIM pipelines that parse many messages but read few bodies: on the author's Apple M4 the headers workload runs 2,638 MiB/s on Enron (Dovecot 480, libEtPan! 266, VMime 137, GMime 132).",
+    "Full decoding of ordinary mail: Enron full workload 2,420 MiB/s vs Dovecot 366, libEtPan! 96, VMime 70 and GMime 65; attachment-heavy messages 12.7 GB/s vs GMime 960 MiB/s.",
+    "JMAP or IMAP servers that need RFC 8621 body lists, has_attachments(), part roles and decode-problem flags (isEncodingProblem) rather than raw MIME trees.",
+    "Untrusted input: the parser has nesting, part-count and encoded-nesting limits (64, 10,000 and 3 by default), cargo-fuzz targets for parser, fields, charsets, kernels and mbox, and Miri test runs."
+  ],
+  "when_not_to_use": [
+    "C or C++ code bases: Rust only, so you need your own FFI layer; the 1.0 line requires Rust 1.98, a very recent toolchain.",
+    "You need a released, stable API today: the benchmarked 1.0.0 is an unreleased breaking rewrite; crates.io still serves 0.11.9 (2026-09-09), which decodes every body during parse, has a different API and is not in the published tables.",
+    "Streaming or very large inputs: parse() takes the whole message as one slice and returns None for input of 4 GiB or more; Dovecot's istream-based message-parser works block by block.",
+    "Building, editing or re-serialising messages: the parsed message is read-only (use mail-builder).",
+    "Legacy CJK mail without the full_encoding feature: those bodies are decoded as UTF-8 and reported as an unknown charset."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "hashify 0.3, memchr 2.8, simdutf8 0.1, encodify 1.0; optional encoding_rs 0.8 (full_encoding) and serde",
+    "min_toolchain": "Rust 1.98 for 1.0.0 (repository; edition 2024); 0.11.9 on crates.io has no declared MSRV",
+    "platforms": "any Rust target; SIMD kernels on aarch64 (NEON) and x86-64 (AVX2 and SSE2), memchr fallback elsewhere; only Apple silicon macOS was benchmarked",
+    "thread_safety": "MessageParser, Message and the views are Send + Sync (README and CHANGELOG); build one parser and share it; parse_owned() gives a Message<'static> that can move between threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry in the full workload: the GMime shim calls g_mime_text_part_get_text, which in GMime 3.2.15 opens an iconv filter whenever a charset parameter is present, UTF-8 to UTF-8 included (gmime-text-part.c lines 280-288, no same-charset shortcut in g_mime_filter_charset_new), while the VMime and libEtPan! shims skip conversion for UTF-8 bodies and only run g_utf8_validate_len. So GMime's 1 MB UTF-8 body goes through macOS iconv at 97 MiB/s against 2,212 (VMime) and 2,796 (libEtPan!), which is the 176.61x top of the README's '13 to 177' range; without that corpus the GMime full geometric mean is about 23x rather than 31x (derived from page data in results/summary.md). It is GMime's ordinary API, but the shims are not tuned equally.",
+    "The headers and structure ratios measure header parsing plus boundary scanning only: no library decodes bodies there, throughput is corpus bytes over time, so corpora with large bodies reach 80,868 MiB/s and the 1 MB plain-text cells hundreds of GB/s; the README excludes plain-large from those geometric means but not from the full one.",
+    "The numbers were measured on 2026-09-28 at the 1.0.0 merge; later commits (SSSE3 tier, charset label remapping, an address-lexer fix for backslash escapes #162, HTML text fixes) were not re-measured. Only one machine was used (Apple M4, NEON path); the AVX2/SSE2 kernels, Linux, glibc iconv and distribution GLib were not measured, and GMime and VMime copy the input into their own streams as their users would.",
+    "unsafe is confined to the SIMD kernels and a UTF-8 module that turns already-validated bytes into str/String; Miri cannot run every NEON instruction encodify uses, so the parser's Miri runs use encodify's portable path (--cfg encodify_scalar, which only works from encodify 1.0.1)."
+  ],
+  "pick_this_over_siblings_when": "No other e-mail parser is catalogued; encodify (its Base64/quoted-printable layer) is the sibling to take when you only need transfer encodings without MIME parsing. Against the most used Rust parser, mailparse 0.17.0 (not catalogued), mail-parser is 1.3x to 4.6x faster on the full workload of the README corpora (3.0x geometric mean; 1.25x on the 1 MB plain-text body) and also handles boundary-prefix lines correctly where mailparse splits them.",
+  "verified_claims_summary": "On an Apple M4 Mac mini (macOS 26.6.2), mail-parser 1.0.0 built by rustc 1.98.1 (release, opt-level 3) was timed with criterion against GMime 3.2.15, VMime master 5b01911, libEtPan! 1.10.1 and Dovecot 2.4.5 lib-mail, all built from pinned sources at -O3 with Apple clang 21 and driven through project-written C/C++ shims, median of three runs over 11 corpora: full-workload geometric means of 31x GMime, 20x VMime, 15x libEtPan!, 9.3x Dovecot and 3.0x mailparse, headers 5.2x to 33x, with a published equivalence check showing equal message, part and leaf counts on Enron and the generated corpora.",
+  "status_note": "Actively maintained (last commit 2026-10-10, about 4.25 million crates.io downloads, the parser of Stalwart Mail Server, Apache-2.0 OR MIT, copyable), but the measured 1.0.0 rewrite is unreleased and needs Rust 1.98; tier A harness whose GMime column pays a UTF-8-to-UTF-8 iconv pass the other C shims skip.",
+  "sources_read": [
+    "https://github.com/stalwartlabs/mail-parser/issues",
+    "https://github.com/stalwartlabs/mail-parser/commits/main",
+    "https://github.com/stalwartlabs/mail-parser/commit/79b2f3f",
+    "https://github.com/stalwartlabs/mail-parser/commit/4a6bacf",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/README.md",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/README.md",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/results/summary.md",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/results/check.md",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/build.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/vendor/build.sh",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/Cargo.toml",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/benches/compare.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/impls/mod.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/impls/v1.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/impls/mailparse.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/ffi.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/workload.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/src/tally.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/gmime.c",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/vmime.cpp",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/libetpan.c",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/dovecot.c",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/utf8.c",
+    "https://raw.githubusercontent.com/stalwartlabs/mail-parser/HEAD/benches/compare/shim/tally.h",
+    "https://raw.githubusercontent.com/jstedfast/gmime/3.2.15/gmime/gmime-text-part.c",
+    "https://raw.githubusercontent.com/jstedfast/gmime/3.2.15/gmime/gmime-filter-charset.c",
+    "https://raw.githubusercontent.com/jstedfast/gmime/3.2.15/gmime/gmime-iconv.c",
+    "https://raw.githubusercontent.com/stalwartlabs/hashify/HEAD/README.md",
+    "https://crates.io/api/v1/crates/mail-parser",
+    "https://crates.io/api/v1/crates/mail-parser/reverse_dependencies"
+  ],
+  "confidence": 0.8
+}

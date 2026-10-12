@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/sstadick/crabz",
+  "one_liner": "pigz-style parallel gzip/zlib/BGZF/Mgzip/Snappy CLI in Rust on the gzp crate; pure-Rust backend edges pigz 2.4.",
+  "what_it_does": "crabz is a command-line compressor and decompressor that splits input into 128 KB blocks and compresses them on N threads, like pigz, writing gzip, zlib, raw deflate, BGZF, Mgzip or Snappy. It is a thin CLI over the gzp library (ZBuilder/ParCompress), which is the part to reuse in Rust code as a near drop-in `Write` that compresses in parallel. Flags differ from pigz (-l level, -p threads, -f format, -d decompress, -P pin cores, -I in place); output goes to stdout unless -o or -I is given.",
+  "how_it_is_fast": "pigz's design ported to Rust: the caller thread reads 128 KB chunks, N compressor threads each deflate a chunk with a Sync flush and compute its CRC32, and a writer thread emits blocks in order while combining CRCs. With -p 1 it switches to a plain single-stream flate2 GzEncoder. The rust-backend win over pigz comes from miniz_oxide's cheaper match search (greedy at levels <= 3, 768 probes at level 9 versus zlib's max_chain 4096) and, at -p >= 2, from skipping pigz's 32 KB dictionary priming, not from a new algorithm.",
+  "when_to_use": [
+    "You want pigz-class multi-threaded gzip compression from a single static binary that also builds on Windows, installed via cargo, Homebrew, conda-forge or a .deb.",
+    "Bioinformatics pipelines that need BGZF or Mgzip output with multi-threaded block decompression (libdeflate backend), where the README shows crabz ahead of bgzip and pigz on compression at most thread counts.",
+    "Rust programs that need parallel gzip writing: use the gzp crate directly (about 2.56M crates.io downloads) rather than shelling out to pigz.",
+    "Builds that must avoid C zlib: the deflate_rust feature gives miniz_oxide for gzip/deflate, about 1.1x faster than pigz 2.4 at level 3 on one thread and a tie at level 6."
+  ],
+  "when_not_to_use": [
+    "When compression ratio matters at a given level: the pure-Rust backend's level 9 searches much less than zlib's and its parallel blocks start with an empty window, and no compressed sizes were published, so compare output sizes before switching.",
+    "Plain gzip decompression speed: crabz -d on a regular .gz is single-threaded flate2 MultiGzDecoder; the README gain over pigz -d is only 1.06-1.11x, and ISA-L or libdeflate-based tools are the faster choice (issue #22 asks for ISA-L).",
+    "If you expect a pure-Rust binary: the default build is zlib-ng plus libdeflate (C), and current releases install the C mimalloc allocator as #[global_allocator] in every feature set.",
+    "Scripts written for gzip/pigz flag semantics: no -k/--keep (issue #30 open), no --no-name (#21 open), -I deletes the input, and the README says -d may change.",
+    "Old toolchains or old distros: current crabz is edition 2024 with let-chains and pins Rust 1.97.1; a CentOS 7 build failure (#10) is still open."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "gzp 2.0.4 (flate2 with zlib-ng, zlib or miniz_oxide; libdeflater; snap; flume; core_affinity), mimalloc, structopt, strum, num_cpus, env_logger",
+    "min_toolchain": "Rust edition 2024 with let-chains (Rust 1.88+ in practice); repo pins 1.97.1 in rust-toolchain.toml",
+    "platforms": "Linux, macOS and Windows per the README; thread pinning (-P) depends on core_affinity and is skipped with a warning where unsupported",
+    "thread_safety": "CLI tool; gzp writers are Send and own their worker threads, concurrent use of one writer is not documented",
+    "drop_in_for_baseline": "partial: emits standard multi-member-compatible gzip that gzip/pigz can read, but CLI flags differ from pigz (-l not -N, no -k, stdout default) and level numbers mean different effort on the Rust backend"
+  },
+  "gotchas": [
+    "Harness flaw behind the rust-backend rows at -p >= 2: gzp sets needs_dict() = cfg!(feature = \"any_zlib\"), so with deflate_rust every 128 KB block is compressed with no 32 KB dictionary from the previous block, while pigz primes each block. This was already so in gzp 0.7.2, the version the README-era crabz (v0.4.0) used. The parallel rows therefore do less work and produce larger output than pigz, and the README gives no sizes. The data fit this: level 6 is a tie at -p 1 (27.064 vs 27.034 s) but crabz wins 1.10x at -p 2 (12.400 vs 13.619 s), and crabz's own -p 1 to -p 2 speedup is 2.18x against pigz's 1.99x (derived from page data).",
+    "-p 1 and -p >= 2 run different code: ZBuilder uses a single-stream flate2 GzEncoder (SyncZ) for 0 or 1 threads and ParCompress (N compressor threads plus a writer thread) otherwise. That explains the superlinear 44.907 s to 19.977 s jump at level 9. The default -p is the logical CPU count.",
+    "miniz_oxide levels are not zlib levels: flate2 level 9 maps to NUM_PROBES[9] = 768 (1500 is level 10, not 9) against zlib's level-9 max_chain of 4096, and levels <= 3 use greedy parsing. The 1.18-1.19x level-9 wins likely trade compression ratio for speed.",
+    "The README tables use the old '-c level' flag of crabz v0.4.0 (gzp 0.7.2, August 2021), whose Cargo.toml had no mimalloc. So the measured 'all Rust' build probably used the system allocator, and the current builds that link mimalloc were never benchmarked. In v0.7.0 the zlib-ng backend wrote corrupt gzip at level 1 on incompressible input (issue #11, output buffer too small); v0.7.1 fixed it."
+  ],
+  "pick_this_over_siblings_when": "Pick crabz/gzp over zipir when you need multi-threaded gzip or BGZF output and a pigz-like workflow; zipir's catalogued wins are single-threaded whole-command times against zlib-ng, ISA-L and bgzip. Pick it over libbzip2-rs, bzip2z or snap (rust-snappy) only when the format must be gzip-compatible; those siblings target bzip2 and Snappy.",
+  "verified_claims_summary": "First-party hyperfine runs (3 warmups, 3 runs) on a Ryzen 9 3950X under Ubuntu 20 compressed bench-data catted 100 times. crabz built with the miniz_oxide backend ran 1.11x faster than apt pigz 2.4 at level 3 on one thread, 1.38x at 32 threads and 1.18-1.19x at level 9, tied at level 6, and decompressed 1.06-1.11x faster. Compressed sizes were not reported, and at -p >= 2 crabz skipped the per-block dictionary that pigz uses, so equal output quality is not shown.",
+  "status_note": "Low-activity maintenance: after the March 2024 v0.10.0 the only change is a tooling and dependency refresh released as v0.10.1 on 2026-08-19, and 10 issues remain open. It is Unlicense OR MIT, about 50k crates.io downloads; the reusable engine is gzp (2.0.4, about 2.56M downloads), and the README itself calls the results 'not groundbreaking'.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sstadick/crabz/HEAD/README.md",
+    "https://raw.githubusercontent.com/sstadick/crabz/HEAD/benchmark.sh",
+    "https://raw.githubusercontent.com/sstadick/crabz/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sstadick/crabz/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/sstadick/crabz/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/sstadick/crabz/v0.4.0/Cargo.toml",
+    "https://raw.githubusercontent.com/sstadick/crabz/v0.4.0/src/main.rs",
+    "https://raw.githubusercontent.com/sstadick/crabz/v0.3.0/Cargo.toml",
+    "https://raw.githubusercontent.com/sstadick/crabz/v0.5.0/Cargo.toml",
+    "https://github.com/sstadick/crabz/issues?q=is%3Aissue",
+    "https://github.com/sstadick/crabz/issues/1",
+    "https://github.com/sstadick/crabz/issues/11",
+    "https://github.com/sstadick/crabz/issues/14",
+    "https://github.com/sstadick/crabz/tags",
+    "https://github.com/sstadick/crabz/tags?after=v0.7.10",
+    "https://github.com/sstadick/crabz/commits",
+    "https://crates.io/api/v1/crates/crabz",
+    "https://raw.githubusercontent.com/sstadick/gzp/HEAD/README.md",
+    "https://raw.githubusercontent.com/sstadick/gzp/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sstadick/gzp/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/sstadick/gzp/HEAD/src/deflate.rs",
+    "https://raw.githubusercontent.com/sstadick/gzp/HEAD/src/par/compress.rs",
+    "https://raw.githubusercontent.com/sstadick/gzp/v0.7.2/src/deflate.rs",
+    "https://raw.githubusercontent.com/sstadick/gzp/v0.7.2/src/lib.rs",
+    "https://raw.githubusercontent.com/sstadick/gzp/v0.7.2/Cargo.toml",
+    "https://github.com/sstadick/gzp/tags?after=v0.8.0",
+    "https://crates.io/api/v1/crates/gzp",
+    "https://raw.githubusercontent.com/Frommi/miniz_oxide/master/miniz_oxide/src/deflate/core.rs"
+  ],
+  "confidence": 0.75
+}

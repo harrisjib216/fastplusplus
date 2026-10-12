@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/sharkdp/fd",
+  "one_liner": "Rust parallel, gitignore-aware replacement for GNU find; 13-23x faster wall time on one regex name search, by using every core.",
+  "what_it_does": "fd is a command-line file finder with its own syntax (fd PATTERN [PATH...]) and opinionated defaults: regex on the file name only, smart case, hidden files and .gitignore/.ignore/.fdignore matches skipped. It covers the common find jobs (type, extension, size, time, owner filters, -x per-result and -X batched command execution, --format templates) but is deliberately not a POSIX find clone: there is no find-style boolean expression language, -prune, or -delete. It ships as a standalone binary (crate fd-find), not as a library.",
+  "how_it_is_fast": "Directory traversal runs on the ignore crate's WalkParallel (shared with ripgrep), one worker per logical core capped at 64, using readdir file types so most entries need no stat. Each worker matches the base name with the Rust regex crate (finite-automaton engine with literal prefilters) and sends hits in batches of up to 256 over a bounded crossbeam channel to one printer thread; jemalloc is the allocator on most Linux targets. Issue data suggest about a 3x single-thread gain from the faster matcher and the rest from threads: on a Chromium checkout (2.1M files) fd -u -j1 took 2.543 s against find -iregex 8.736 s and find | grep 2.970 s, while the default parallel fd took 221.8 ms (ratios derived from page data, issue #1395).",
+  "when_to_use": [
+    "Interactive name, extension or regex searches over large warm-cache trees (hundreds of thousands to millions of entries) on a multi-core workstation, where wall time matters more than CPU time.",
+    "Source trees where skipping .gitignore'd and hidden paths is what you want anyway; the pre-2023 README timed the default mode at 123.7 ms against 811.6 ms for fd -HI on a 1M-file home folder.",
+    "Generating file lists for fzf, editors and launchers (FZF_DEFAULT_COMMAND='fd --type file').",
+    "Slow or cold storage, where parallel directory reads overlap I/O (issue #1661: 33M files, cold cache, fd master 5.645 s vs find 25.325 s).",
+    "Running a command per match in parallel: on 8 cores fd -x rm took 2.69 s against find -exec rm {} \\; at 17.17 s (issue #1778)."
+  ],
+  "when_not_to_use": [
+    "Scripts that rely on POSIX find semantics (expression operators, -prune, -newer chains, -delete, full -printf) or on find's default of listing everything: fd's defaults differ and it is not a drop-in replacement.",
+    "Shared or many-core machines where total CPU matters: on an i9-13900T fd took 0.383 s real but 1.920 s user + 6.126 s sys, against 1.103 s real and about 1.1 s CPU for find -iregex (issue #1395); a reporter on a 128-thread server saw it slow other jobs (#1661). Pass -j N there.",
+    "Many short invocations or single flat directories: fd's startup was 5.4 ms against 0.64 ms for find -quit, mostly from spawning worker threads, and GNU find -printf %f was 1.79x faster than fd --format on a PATH listing (issue #1614).",
+    "Pre-9.0 distribution builds (for example Debian 12's package): on 33M files with a hot cache that fd took 18.67 s against find's 14.67 s and about 12.5x the CPU, while a current master build took 3.675 s (issue #1661).",
+    "Per-file deletion or process spawning via -x: use -X (fd -X rm 0.15 s) or find -delete (0.12 s), since -x spawns one process per match with extra futex and pipe overhead (issue #1778)."
+  ],
+  "integration": {
+    "form": "standalone CLI binary (crate fd-find; packaged by Debian/Ubuntu as fdfind, Fedora, Arch, Alpine, Homebrew and others)",
+    "dependencies": "Rust crates ignore, regex, regex-syntax, globset, aho-corasick, crossbeam-channel, clap, lscolors, jiff, nix/libc; tikv-jemallocator by default (feature use-jemalloc) on Linux and other targets except Windows, macOS, FreeBSD, OpenBSD, Android, illumos, riscv64 and 32-bit musl",
+    "min_toolchain": "Rust 1.90.0 (edition 2024) to build 10.5.0; prebuilt binaries otherwise",
+    "platforms": "Linux, macOS, Windows, BSDs and others; 10.4.0 dropped full support for Intel Macs and Windows 7",
+    "thread_safety": "Not applicable (CLI); traversal threads default to available_parallelism capped at 64, set with -j/--threads",
+    "drop_in_for_baseline": "partial — different syntax and defaults (hidden and ignored files skipped, regex on the base name, smart case); add -u (alias for -HI since v8.4.0) and -p to approach find's coverage, and there is no find expression language"
+  },
+  "gotchas": [
+    "Benchmark harness: the README's 23x/13x is wall clock only, on an unstated machine with all logical cores against single-threaded GNU find, with no CPU time reported. The numbers date from commit 61ebd9b (2023-12-19, around v9.0.0) on a 4M-file corpus; the previous README run on a 1M-file corpus showed 9x and 5x (fd -HI 811.6 ms vs find -iregex 7.236 s). The README command (fd -u '[0-9]\\.jpg$') differs from the published fd-benchmarks script (fd -HI '.*[0-9]\\.jpg$'), whose output diff checks only find -iregex against fd -HI. No correctness bug was found behind the numbers.",
+    "The baseline is GNU find's slow path: -iregex runs a gnulib regex over the full path, and plain find | grep was already 2.9x faster than find -iregex on the Chromium tree (issue #1395), so much of the headline gap is the matcher and the threads, not the walk.",
+    "Output order is not deterministic: results are sorted only if the search finishes within 100 ms with at most 1000 hits buffered; otherwise they stream in worker order. Patterns match the base name only unless -p/--full-path is given, and -H ignores .git/ since v9.0.0.",
+    "Memory and threading history: fd 8.3/8.4 used an unbounded channel and reached about 24.6 GB RSS on a 200M-entry tree (issue #918, fixed with a bounded queue in Nov 2022); thread start-up made default runs hundreds of times slower than -j1 on WSL2 before 9.0 (issue #1131)."
+  ],
+  "pick_this_over_siblings_when": "Pick fd over minifind or c-blake's cligen/dents when you want a mature, distribution-packaged, gitignore-aware finder with regex/glob matching and parallel exec; dents claims about 1.7x over fd on plain walks and minifind is a narrower find reimplementation. For find-compatible syntax, bfs (C, catalogued in wave 11) is the closer choice.",
+  "verified_claims_summary": "First-party hyperfine runs (README, updated 2023-12-19) on the author's warm-cache home folder (about 750k directories, 4M files): fd -u '[0-9]\\.jpg$' 854.8 ms against GNU find -iregex 19.922 s (about 23x) and find -iname 11.226 s (about 13x), both returning the same 546 files. CPU model, core count, fd and findutils versions and build flags are not stated, fd used all cores, and third-party runs in the issue tracker range from 4x faster (33M files, current master) to slower than find (pre-9.0 builds, single directories, startup-bound runs).",
+  "status_note": "Actively maintained (10.5.0, commits into October 2026, 44.8k stars), MIT OR Apache-2.0 and packaged by every major distribution; the README benchmark has not been re-run since December 2023 and older distribution builds lack the v9.0.0 traversal speedups.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/README.md",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/src/walk.rs",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/src/cli.rs",
+    "https://raw.githubusercontent.com/sharkdp/fd/HEAD/src/config.rs",
+    "https://raw.githubusercontent.com/sharkdp/fd-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/sharkdp/fd-benchmarks/HEAD/warm-cache-simple-pattern.sh",
+    "https://raw.githubusercontent.com/sharkdp/fd-benchmarks/HEAD/config.sh",
+    "https://raw.githubusercontent.com/sharkdp/fd-benchmarks/HEAD/prelude.sh",
+    "https://github.com/sharkdp/fd/blame/master/README.md",
+    "https://github.com/sharkdp/fd/commit/61ebd9be6a0c0e380028509be9553aac7931fe08",
+    "https://github.com/sharkdp/fd/issues?q=is%3Aissue%20slower%20than%20find",
+    "https://github.com/sharkdp/fd/issues/1395",
+    "https://github.com/sharkdp/fd/issues/1661",
+    "https://github.com/sharkdp/fd/issues/1614",
+    "https://github.com/sharkdp/fd/issues/1778",
+    "https://github.com/sharkdp/fd/issues/1131",
+    "https://github.com/sharkdp/fd/issues/918"
+  ],
+  "confidence": 0.82
+}

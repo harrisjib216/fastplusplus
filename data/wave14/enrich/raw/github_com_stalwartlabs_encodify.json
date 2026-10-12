@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/stalwartlabs/encodify",
+  "one_liner": "Rust SIMD Base64/Base32/quoted-printable codecs for mail protocols; matches or beats simdutf 7.7.1 (C++) on Base64 and MIME Base64.",
+  "what_it_does": "A Rust crate of binary-to-text codecs used by the mail stack: Base64 (standard, URL-safe, strict or lenient, MIME 76-column CRLF, folded DKIM/iCalendar/vCard values), Base32 (RFC 4648 and Stalwart id alphabet, u64 JMAP ids), quoted-printable (body, RFC 2047 Q, DKIM), RFC 2047 encoded words, percent/xtext escapes, IMAP modified UTF-7 and PEM. Every operation is a method on a const engine value (base64::STANDARD, base64::MIME, qp::BODY ...) with encode/decode returning Vec or String, *_append into caller buffers and *_slice into caller slices. It is not an API clone of simdutf or of the base64 crate.",
+  "how_it_is_fast": "Hand-written SIMD kernels: on aarch64 NEON (vld3q/vst4q deinterleave plus 64-entry vqtbl4q_u8 table lookups), on x86 SSSE3 and AVX2 pshufb nibble-table classification with 16-bit multiplies (mullo_epi16) for bit shuffling, picked by runtime feature detection. MIME bodies get dedicated line kernels: the decoder detects a run of equal-length lines from the first two lines (inputs of 512 bytes or more) and decodes across CRLF breaks without a separate strip pass, and the encoder writes CRLF between 76-column lines in the same pass. Output goes into caller-owned buffers through MaybeUninit without zero-filling; the portable fallbacks use table-driven Base64 (two symbols per 12-bit lookup when encoding, four pre-shifted tables when decoding) and SWAR quoted-printable (README).",
+  "when_to_use": [
+    "Rust mail, IMAP, JMAP or DKIM code that decodes MIME Base64 bodies with 76-column CRLF lines: 14.1 vs 10.1 GB/s (Apple M5 Max) and 8.6 vs 5.2 GB/s (Zen 2 AVX2) over simdutf 7.7.1 at 64 KiB.",
+    "Many small Base64 values (tokens, header encoded words, 32-byte blobs) decoded from Rust, where calling simdutf through FFI costs about 3x (6.08 vs 2.02 GB/s on Apple, 1.63 vs 0.56 on AMD at 32 B).",
+    "Quoted-printable or Base32 hot paths: 5x to 9x the quoted_printable crate and 3x to 6.5x data-encoding at 64 KiB in the author's tables.",
+    "One dependency-light crate (memchr, simdutf8) that also covers RFC 2047 words, IMAP UTF-7, PEM and folded vCard/iCalendar values.",
+    "Targets without SIMD support in Rust (wasm32, RISC-V, 32-bit ARM): the portable table-driven fallbacks are 1.0x to 2.7x the base64 crate in the README."
+  ],
+  "when_not_to_use": [
+    "C or C++ code: it is a Rust crate with no C API; use simdutf directly, and a current 9.x release rather than the 7.7.1 that was benchmarked.",
+    "Bulk plain Base64 encode: parity with simdutf on Apple (25.7 vs 26.0 GB/s) and with the Rust base64-turbo crate on AMD (19.2 vs 19.9 GB/s); on AVX-512 machines simdutf has Ice Lake base64 kernels while encodify stops at AVX2.",
+    "You need WHATWG forgiving-base64 semantics (JavaScript atob): encodify's STANDARD engine is strict and rejects whitespace, so you must pick LENIENT or MIME explicitly and check that its padding rules match.",
+    "Risk-averse dependency policies: 3 commits, 1 star, first release 2026-09-28, one reverse dependency on crates.io (jmap-client), only first-party benchmarks."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr 2.7, simdutf8 0.1",
+    "min_toolchain": "Rust 1.89 (MSRV checked in CI); running the comparison benchmarks needs Rust 1.93 or later because of base64-turbo",
+    "platforms": "aarch64 (NEON chosen at compile time), x86 and x86-64 (SSSE3 and AVX2 chosen at runtime when SSE2 is in the target baseline), portable fallbacks on every other target including wasm32, RISC-V, PowerPC, s390x and 32-bit ARM",
+    "thread_safety": "not documented; engines are immutable Copy constants with no shared mutable state in the code read (src/base64/mod.rs), so they can be used from any thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry in the plain-decode row: simdutf 7.7.1's base64_to_binary follows WHATWG forgiving-base64 and skips ASCII whitespace even with LastChunkHandlingOptions::Strict (simdutf.h in simdutf-rs v0.7.0), while encodify::base64::STANDARD is a strict decoder that does no whitespace handling, so the 1.2x (Apple) and 1.3x (AMD) decode leads compare unequal work; the 3x gap at 32 B also includes simdutf's non-inlinable FFI call and runtime dispatch.",
+    "Stale baseline: the simdutf crate 0.7.0 (still the latest on crates.io) vendors simdutf 7.7.1 from December 2025; upstream reached 9.2.1 in September 2026 with an AVX2 base64 encoder alphabet-lookup rewrite and an arm64 insert_line_feed16 optimisation, which touch exactly the rows where encodify leads (AMD encode 1.4x, Apple MIME encode 1.5x).",
+    "README tables have not changed since the v1.0.0 commit: the AMD Base32 rows predate the AVX2 Base32 kernel added in 1.0.2 (they match the SSSE3 table within 1%), and in 1.0.0 the build script ignored --cfg encodify_scalar (fixed in 1.0.1, CHANGELOG), so the published portable-fallback table could not have come from the published 1.0.0 tree as documented.",
+    "MIME decode speed depends on a line-shape detector: the benchmark feeds perfectly regular 76-column CRLF lines, which always hit the line kernels; irregular line lengths, LF-only mixes or inputs under 512 bytes fall back to the generic quad loop and are not benchmarked. The crate denies unsafe_code globally but the kernels and buffer module opt back in (raw-pointer and MaybeUninit writes, each with a SAFETY comment; cargo-fuzz targets exist)."
+  ],
+  "pick_this_over_siblings_when": "Take encodify when you need transfer encodings inside a Rust process rather than a CLI (uutils coreutils' base64 is a command-line tool); mail-parser already depends on encodify for its Base64 and quoted-printable body decoding, so use encodify alone when you only need the codecs without MIME parsing.",
+  "verified_claims_summary": "Author's criterion runs (cargo bench --bench codec, bench profile at opt-level 3, rustc and C++ compiler versions not stated) of encodify against simdutf 7.7.1 C++ called through the simdutf 0.7.0 crate, on an Apple M5 Max (NEON) and a 4-vCPU AMD EPYC Zen 2 VM (AVX2): at 64 KiB encodify ties simdutf on Apple plain encode (25.7 vs 26.0 GB/s), leads it 1.2x to 1.7x on the other Base64 and MIME rows (simdutf's MIME encode rows emit LF only), and ties the Rust base64-turbo crate on AMD plain Base64.",
+  "status_note": "Brand new but active (3 commits from 2026-09-28 to 2026-10-02, 1.0.2 on crates.io with about 920 downloads, Apache-2.0 OR MIT, so copyable), with first-party tier C numbers measured against a simdutf release two major versions behind upstream and a plain-decode row that compares a forgiving decoder with a strict one.",
+  "sources_read": [
+    "https://github.com/stalwartlabs/encodify",
+    "https://github.com/stalwartlabs/encodify/commits/main",
+    "https://github.com/stalwartlabs/encodify/commit/1d38afb",
+    "https://github.com/stalwartlabs/encodify/commit/a9837bd",
+    "https://github.com/stalwartlabs/encodify/tree/main/src",
+    "https://github.com/stalwartlabs/encodify/tree/main/src/base64",
+    "https://github.com/stalwartlabs/encodify/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/README.md",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/build.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/benches/codec.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/.github/workflows/rust.yml",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/buffer.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/mod.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/decode/mod.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/encode.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/kernel/mod.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/kernel/neon.rs",
+    "https://raw.githubusercontent.com/stalwartlabs/encodify/HEAD/src/base64/kernel/x86.rs",
+    "https://crates.io/api/v1/crates/encodify",
+    "https://crates.io/api/v1/crates/encodify/reverse_dependencies",
+    "https://crates.io/api/v1/crates/simdutf",
+    "https://raw.githubusercontent.com/Nugine/simdutf-rs/HEAD/build.rs",
+    "https://raw.githubusercontent.com/Nugine/simdutf-rs/HEAD/cpp/simdutf.h",
+    "https://raw.githubusercontent.com/Nugine/simdutf-rs/v0.7.0/cpp/simdutf.h",
+    "https://github.com/simdutf/simdutf/releases"
+  ],
+  "confidence": 0.6
+}

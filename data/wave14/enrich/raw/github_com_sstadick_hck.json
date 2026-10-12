@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/sstadick/hck",
+  "one_liner": "Rust cut(1) clone with regex or literal delimiters and column reordering; 4.6-6.3x faster than GNU cut 8.30 field extraction.",
+  "what_it_does": "hck selects fields from delimited text line by line, like cut -f, but also splits on regexes or multi-character literals, reorders output columns in -f order, selects or excludes columns by header name (-F/-E, optionally regex), reads compressed inputs (-z) and can write BGZF-gzipped output (-Z). It is a CLI (with an internal hcklib library), not a byte-for-byte cut replacement. The default input delimiter is the regex \\s+, the default output delimiter is a tab, and there is no -b/-c, -s or --complement mode.",
+  "how_it_is_fast": "With -L and a single-byte delimiter, fields in ascending order and a one-byte line terminator, hck runs a fast path. memchr2 scans for the separator and the newline in one SIMD pass, and once the rightmost requested field is found it jumps to the next newline with a single memchr. Files are memory-mapped by default (ripgrep's MmapChoice logic) and otherwise read through a ripgrep-derived line buffer. Other modes split each line with bstr substring search or the Rust regex crate. Release builds use fat LTO, codegen-units=1 and PGO, which the README credits with 5-30%.",
+  "when_to_use": [
+    "Pulling a few fields out of large single-byte-delimited files (CSV/TSV logs, multi-GB exports) on Linux, where the -L fast path ran 1.2 s against 7.5 s for GNU cut 8.30 on 7M lines.",
+    "Splitting on runs of spaces, multi-character literals ('$;$') or regexes without a tr -s pipe, for example ps aux | hck -f2,1,3-.",
+    "Selecting or excluding columns by header name or header regex, or emitting columns in a different order than the input, which cut cannot do.",
+    "Reading gzip/zstd/xz inputs or writing tabix-indexable BGZF output in the same step (-z / -Z)."
+  ],
+  "when_not_to_use": [
+    "Real CSV with quoted fields or embedded delimiters: hck splits on every delimiter occurrence (stated non-goal); use xsv or another CSV parser.",
+    "Scripts that rely on cut semantics: a line without the delimiter is treated as a single field 1, so it is printed whole only when field 1 is selected (cut prints it whatever the selection, unless -s); the output delimiter defaults to tab rather than the input delimiter; there are no byte/character modes.",
+    "Regex delimiters for speed: hck -d'\\s+' (10.0 s) and -d'[[:space:]]+' (8.6 s) were slower than tr -s ' ' | cut (7.5 s) in its own table. GNU coreutils 9.11+ also has cut -w for blank-run fields, and the next release's NEWS says cut -f -w is up to 10x faster.",
+    "Column reordering at full speed: any -f order other than ascending disables the fast path (tuc's table: hck -Ld, -f1,19,8 1.465 s vs 1.276 s in order).",
+    "macOS and 32-bit targets get no mmap (disabled in mmap.rs), so the headline mmap rows do not apply there."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "regex, memchr, bstr, memmap2, ripline, grep-cli (external decompressor binaries for -z on non-.gz files), gzp with zlib-ng and libdeflate (C) for -Z, flate2 (zlib-ng-compat), clap",
+    "min_toolchain": "Rust edition 2024 with let-chains (Rust 1.88+ in practice); no rust-version declared",
+    "platforms": "Linux, macOS (no mmap) and Windows release binaries; the PGO plus native just recipe does not work on Windows; mmap only on 64-bit",
+    "thread_safety": "Single-threaded field parsing; only -Z output compression uses worker threads (-t)",
+    "drop_in_for_baseline": "partial: same -f/-d range syntax, but -d is a regex unless -L is given, the output delimiter is tab unless -D or -I is set, lines lacking the delimiter are treated as field 1 instead of echoed whole, and -b/-c/-s/--complement are missing"
+  },
+  "gotchas": [
+    "Likely edge-case bug (code reading, not executed): the single-byte fast path (SingleByteDelimParser::fill_line, used for -L plus a one-byte delimiter in both mmap and --no-mmap modes) requires the buffer to end in a newline. When the last line has no trailing '\\n', memchr finds no newline and the parser returns io::ErrorKind::InvalidData, so hck logs an error and exit(1)s. The last line is dropped and unflushed BufWriter output may be lost. Every test writes files with writeln!, so this case is untested.",
+    "Headline cut ratio is against GNU cut 8.30 (2018), whose field loop reads byte by byte with getc. hck also stops scanning each line after field 19, and output delimiters differ (tab vs comma) although all output goes to /dev/null. The cut row is noisy (6.827-9.769 s), and at its minimum the gap is about 5.7x (derived from page data). mawk 1.3.4 (4.993 s) also beat cut.",
+    "mmap is not always the faster default: in issue #42 a user measured the literal path at 11.69 s with mmap vs 7.48 s with --no-mmap on a 10 GB TSV. Before v0.6.6 (Sep 2021) the literal fast path kept scanning past the rightmost field and lost to the regex path.",
+    "The multi-character comparison pits one tool against a pipeline: hck inside the same tr -s pipeline takes 6.171 s against 7.471 s for tr | cut, and tuc's README measured 5.266 vs 5.310 s, so the 4.3x headline mostly measures avoiding tr."
+  ],
+  "pick_this_over_siblings_when": "Against tuc, which measured 1.080 s to hck's 1.276 s on the same 1,8,19 task and is GPL-3.0, pick hck when you need MIT/Unlicense terms, header-name/regex column selection, or -z/-Z compression handling. Against eBay tsv-utils' tsv-select (1.702 s in hck's table) and uutils cut (1.764 s in tuc's table), hck is faster for plain single-byte extraction but is not a TSV toolkit.",
+  "verified_claims_summary": "On a Ryzen 9 3950X under Ubuntu 20 (hyperfine, 3 warmups, 5 runs, output to /dev/null), extracting fields 1, 8 and 19 from the 7M-line UCI all_train.csv took hck -L 1.198 s and hck regex mode 1.649 s against 7.541 s for Ubuntu's GNU cut 8.30 (6.3x and 4.6x), with the hck build flags and toolchain unstated. An independent table in the tuc README (machine and cut version unstated) shows the same order: hck -Ld, 1.276 s vs system cut 5.726 s, about 4.5x (derived from page data).",
+  "status_note": "Maintenance mode: since 2024 the commits are dependency, toolchain and fmt bumps, the latest being v0.11.6 on 2026-06-15. It is MIT OR Unlicense, about 69k crates.io downloads, and packaged for Homebrew, conda-forge, MacPorts, NetBSD and as a .deb.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/README.md",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/benchmark.sh",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/justfile",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/mod.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/core.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/single_byte_delim_parser.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/line_parser.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/field_range.rs",
+    "https://raw.githubusercontent.com/sstadick/hck/HEAD/src/lib/mmap.rs",
+    "https://raw.githubusercontent.com/sstadick/ripline/HEAD/src/line_buffer.rs",
+    "https://github.com/sstadick/hck/issues?q=is%3Aissue",
+    "https://github.com/sstadick/hck/issues?page=2&q=is%3Aissue",
+    "https://github.com/sstadick/hck/issues/12",
+    "https://github.com/sstadick/hck/issues/42",
+    "https://github.com/sstadick/hck/commits",
+    "https://crates.io/api/v1/crates/hck",
+    "https://raw.githubusercontent.com/riquito/tuc/HEAD/README.md",
+    "https://raw.githubusercontent.com/coreutils/coreutils/master/NEWS"
+  ],
+  "confidence": 0.75
+}

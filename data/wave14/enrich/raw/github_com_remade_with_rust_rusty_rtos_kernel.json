@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty_rtos_kernel",
+  "one_liner": "FreeRTOS V11.3.1 scheduler rewritten in safe no_std Rust; fewer instructions per rv32 tick and cooperative switch, less RAM per task, more flash.",
+  "what_it_does": "A no_std, forbid(unsafe) reimplementation of FreeRTOS's tasks.c, queue.c, timers.c, event_groups.c and stream_buffer.c (tasks, tick, queues, semaphores, priority-inheriting mutexes, notifications, software timers, event groups, stream and message buffers, two-core SMP), proved trace-identical to the C kernel on 22 conformance scenarios. The Rust API keeps the FreeRTOS names as methods on one Kernel object whose geometry (tasks, queues, lists) is fixed at compile time by a system! macro; tasks are stackless state machines, so a call that would block in C returns Wait::Blocked and is called again. The context switch itself lives in separate port crates, and the rusty_rtos-capi crate exposes xTaskCreate and friends as extern \"C\" so unmodified FreeRTOS demo files link against it.",
+  "how_it_is_fast": "The wins are design, not code generation. A Kairos cooperative yield happens at a call site and saves only the 14 registers the ABI says are live, while FreeRTOS's RISC-V portYIELD() is an ecall trap that saves all 28 GPRs (83 instructions for every switch); on Cortex-M, where both kernels pend PendSV, the counts are equal (19 vs 19). Stackless tasks remove the per-task stack, which is where the 176 B vs 596 B RAM row comes from. The tick row came from caching the running task's priority (removing a generational-handle arena resolve) and masking a 64-bit tick compare down to one 32-bit bltu. Selection is slower than C (45 vs 27) because of handle validation and the stackless bookkeeping.",
+  "when_to_use": [
+    "FreeRTOS-style firmware on RV32 (QEMU virt, ESP32-C6 class), Cortex-M or ESP32-S3 where you want a memory-safe kernel that keeps the FreeRTOS API names and is diff-tested against the C kernel's own trace.",
+    "Many small tasks under RAM pressure, written as state machines: 176 B per stackless task against 596 B for a FreeRTOS TCB plus a 512 B stack; the project puts the flash/RAM crossover at about 13-14 tasks.",
+    "Yield-heavy workloads on RISC-V (queues that block, semaphore takes, taskYIELD), where a cooperative switch counts 75 instructions against FreeRTOS's 110.",
+    "Migrating an existing FreeRTOS C code base gradually: the C ABI crate lets the standard demo files link unmodified against the Rust kernel.",
+    "Evaluating differential conformance testing of a kernel rewrite: the trace oracle, Kani proofs and mutant counts are public."
+  ],
+  "when_not_to_use": [
+    "Flash-constrained parts: 19,484 B against FreeRTOS's 13,924 B (1.40x) for kernel plus RISC-V port, 22,396 B in the default speed build per the kernel README, 17,860 B with the small feature.",
+    "Preemption- or interrupt-heavy systems: a preemptive switch counts 119 against 110 and scheduler selection 45 against 27, so the cooperative-switch win does not carry over.",
+    "Anything needing an MPU, privilege separation, xTaskCreateStatic-style static allocation, co-routines, more than two cores, core affinity or queue items larger than 8 bytes; none is supported.",
+    "Production or certified products today: first published 2026-09-16, eight releases in three weeks (0.3.3 on 2026-10-04), 0 GitHub stars, about 425 crates.io downloads and no independent users or measurements.",
+    "When you need wall-clock or cycle evidence: the C-compared rows are retired-instruction counts under QEMU, and the only silicon cycle figures (ESP32-S3, predating 0.2.1) have no C arm."
+  ],
+  "integration": {
+    "form": "crate (rusty_rtos_kernel facade over the no_std rusty_rtos_kernel-core, optional alloc), plus separate port crates and the rusty_rtos-capi C ABI crate",
+    "dependencies": "rusty_rtos_core 0.2.5 (shared vocabulary); a rusty_rtos_port-<arch> crate for real hardware (the only place unsafe is allowed); no C, no FFI in the kernel",
+    "min_toolchain": "Rust 1.85 (edition 2024); the published instruction-count bench also needs the unstable '-C target-feature=+relax', which its own config says a stable toolchain cannot produce",
+    "platforms": "host sim (x86-64 Windows and Linux), Cortex-M (thumbv7m, thumbv7em, thumbv8m.main), riscv32imac/imafc, xtensa-esp32s3 (esp toolchain); conformance corpus run on QEMU M3, QEMU RV32 and a XIAO ESP32-S3",
+    "thread_safety": "One Kernel object owned by the firmware; methods take &mut self and critical sections come from the port; two-core SMP is supported without affinity, with cross-core yields drained by Kernel::take_core_yields() and FromISR variants for interrupt context.",
+    "drop_in_for_baseline": "partial: rusty_rtos-capi links unmodified FreeRTOS demo C files (25-26 of them pass their own checkers), but there is no static allocation, no MPU, no co-routines, queue items are limited to 8 bytes, and the native Rust API is stackless (blocking calls return Wait::Blocked)."
+  },
+  "gotchas": [
+    "Possible harness flaw behind the headline tick row (9 vs 15), unverified without disassembly: the Rust arm calls a generic Kernel method that is monomorphised into the bench crate itself (codegen-units = 1), so 'no LTO' does not stop it being inlined into the bracket, the result is discarded with 'let _ =', and minstret is read through asm declared options(nomem), which lets the optimiser move kernel loads and stores across the counter reads. The C arm calls xTaskIncrementTick across a translation-unit boundary and computes its return value. The executed source path (suspended check, tick load-add-store, wrap test, unblock compare) is already about 8 instructions, before the time-slice list-length test, the yield-pending test, a call and a return, so 9 is consistent with the switch_required computation being dead-code-eliminated. The project's own ledger documents the same 'a probe that discards a result measures the discarding' defect in its flash bench, and the POISON gate (two calls must count at least 1.5x one) cannot detect it.",
+    "The RAM-per-task win applies to stackless state-machine tasks: the native API returns Wait::Blocked instead of blocking and the task is called again; C-style tasks with their own stacks need a port's stack swap and pay for the stack as FreeRTOS does.",
+    "The bench configuration differs from the shipped build: tick-work runs on SimPort unless --features real-port is passed (run.sh does not pass it; the scorecard says the three C-compared rows are identical on both), sets overflow-checks = false while the kernel workspace's hardening policy sets overflow-checks = true in release, and needs the unstable +relax target feature.",
+    "Numbers drift between documents: bench/tick-work/README.md still prints tick 56 and selection 79 (cooperative switch 109 vs 110), the C FreeRTOSConfig.h says run.sh builds the C arm with and without the stack-overflow check but run.sh never sets KAIROS_STACK_CHECK, flash appears as 19,484, 19,746 and 22,396 B, and the kernel README opens with an unrelated 'In The Wild with 870 Active Installs' RAGconverter.com banner while crates.io shows about 425 downloads."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Embassy when you want FreeRTOS's API, semantics and C demo compatibility with trace-level equivalence to the C kernel rather than a Rust-native async executor; the other catalogued concurrency entries (Tokio, GHC threads, ring buffers) target hosted systems and do not compete on microcontrollers.",
+  "verified_claims_summary": "On QEMU virt rv32imac under -icount shift=0, retired instructions per call (minstret bracket, median of 512, PARITY and POISON gates) for unmodified FreeRTOS V11.3.1 built with clang -O2 per translation unit versus the Rust kernel at opt-level 2, no LTO, one codegen unit: tick 15 vs 9 and scheduler selection 27 vs 45; the 75 vs 110 cooperative and 119 vs 110 preemptive switch rows add a static llvm-objdump count of the register half (30 or 74 vs 83), the 18.47 vs 22.32 list row is callgrind on an x86-64 host at Rust opt-level 3 with LTO against gcc -O2, RAM per task is 176 B vs 596 B (stackless vs TCB plus 512 B stack), and flash is 19,484 B vs 13,924 B against it. No silicon cycle comparison exists.",
+  "status_note": "Very active but very young (220 commits, last commit 2026-10-09, crate 0.3.3 of 2026-10-04, MIT OR Apache-2.0) and with no outside adoption yet; well documented and heavily self-tested, but the tick row's bracket should be checked against a disassembly before quoting the 0.60x.",
+  "sources_read": [
+    "https://github.com/Remade-With-Rust/rusty_rtos_kernel",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/docs/LEDGER.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/crates/rusty_rtos_kernel-core/src/kernel.rs",
+    "https://github.com/Remade-With-Rust/rusty_rtos_kernel/tree/main/crates/rusty_rtos_kernel-core/src",
+    "https://github.com/Remade-With-Rust/rusty_rtos_kernel/tree/main/firmware/riscv32-qemu-tick-work",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/firmware/riscv32-qemu-tick-work/Cargo.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/firmware/riscv32-qemu-tick-work/.cargo/config.toml",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_kernel/HEAD/firmware/riscv32-qemu-tick-work/src/main.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/rusty_rtos_port/HEAD/crates/rusty_rtos_port-riscv/src/lib.rs",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/README.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/run.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/c/main.c",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/tick-work/c/FreeRTOSConfig.h",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/switch-cost/run.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/bench/list-cost/run.sh",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/plans/freertos-scorecard.md",
+    "https://raw.githubusercontent.com/Remade-With-Rust/kairos/HEAD/docs/LEDGER.md",
+    "https://crates.io/api/v1/crates/rusty_rtos_kernel"
+  ],
+  "confidence": 0.62
+}
