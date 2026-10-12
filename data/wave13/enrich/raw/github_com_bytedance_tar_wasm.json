@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/bytedance/tar-wasm",
+  "one_liner": "Rust tar crate compiled to WebAssembly behind a TarBuilder JS class; builds in-memory tars 50-160x faster than tar-js and tarts.",
+  "what_it_does": "Writes tar archives in memory from (name, Uint8Array) pairs in browsers and Node.js: `new TarBuilder()`, `add_file(name, content)`, optional `set_gzip(true)`, then `finish()` returns a Uint8Array. It is write-only (no reading or extraction, no directories, symlinks or per-file metadata, no streaming); the npm package ships both a bundler (ESM) and a Node.js (CommonJS) build. The API differs from tar-js (`append(path, input, opts)`) and tarts (one call over an array), so it is not a drop-in.",
+  "how_it_is_fast": "About 50 lines of Rust wrap the tar crate's `Builder<Vec<u8>>` (tar 0.4.38): each file is copied into wasm memory, gets a 512-byte GNU header and is appended to a Vec that grows geometrically, so the total work is linear in archive size. The two JS baselines reallocate and copy the whole archive for every appended file (tar-js `extend` plus a byte-by-byte zero fill; tarts concatenates with `reduce`), which is quadratic. The speedup is therefore mostly algorithmic buffer management rather than wasm compute; the crate is even built with `opt-level = \"s\"` (size).",
+  "when_to_use": [
+    "A web app that packs hundreds to thousands of in-memory files (exports, bundles for download or upload) and currently uses tar-js or tarts.",
+    "Isomorphic code that needs the same tar writer in a bundler-built browser app and in Node.js, with total archive size comfortably below the wasm32 memory limit.",
+    "Large archives built inside a Web Worker or worker_threads, as the README recommends, to keep the main thread responsive.",
+    "Producing a .tar.gz by piping finish() output through the platform CompressionStream('gzip') rather than the built-in set_gzip."
+  ],
+  "when_not_to_use": [
+    "You need to read, list or extract archives: issue #2 (read and write support) has been open since August 2022.",
+    "You need real metadata: every entry gets mode 0777, uid/gid 0 and mtime 0, and there is no way to add directories or links.",
+    "Very large or streamed archives: the whole archive is held in a Rust Vec inside wasm linear memory and then copied out to JS, so peak memory is several times the archive size; use a streaming writer such as tar-stream or node-tar (neither was benchmarked against it).",
+    "Server-side Node.js archiving to disk, where node-tar or tar-stream are the standard choices and no comparison exists.",
+    "Anything that needs maintenance or security updates: the repository was archived on 2025-07-21 and the last npm release (0.1.7) is from 2022-10-27."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (tar 0.4.38, yazi 0.1.4, wasm-bindgen 0.2.82 and console_error_panic_hook are compiled into the wasm); rebuilding needs Rust, wasm-pack and jq",
+    "min_toolchain": "any JS runtime with WebAssembly; a bundler that handles wasm imports for the ESM build, or Node.js for the CommonJS build (versions not documented)",
+    "platforms": "browsers and Node.js (wasm32); browser use shown only by an unpublished examples/nextjs-benchmark page",
+    "thread_safety": "not documented; a TarBuilder lives in one wasm instance and is single-threaded, so use one builder per worker",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "set_gzip(true) compresses with yazi Format::Zlib, so the output is a zlib (RFC 1950) stream, not gzip; gunzip and `tar -xz` will reject it. Use CompressionStream('gzip') instead, as the README suggests.",
+    "add_file throws for absolute paths or `..` components (tar crate: 'paths in archives must be relative' / 'must not have `..`'); names longer than 100 bytes are written with a GNU ././@LongLink entry rather than POSIX pax headers.",
+    "finish() takes the builder by value (Rust `self`), so the JS object cannot be reused afterwards; wasm linear memory grown for a big archive is not returned while the module instance lives.",
+    "Benchmark harness flaw: both baselines are quadratic writers, so the 50-160x mostly measures their O(n^2) buffer growth. Each library also runs once, cold, in sequence, with no warm-up, no repeats and no output check (the only test asserts the archive length is > 0). The wasm module loads through the top-level import before the timer starts, the README output comes from an earlier bench.ts (labels differ), and no browser numbers are shown despite 'depending on the browser'."
+  ],
+  "pick_this_over_siblings_when": "No other tar writer is catalogued in this category; siblings such as hash-wasm or fast-pako win by moving compute-bound kernels to wasm, while tar-wasm wins mainly through linear buffer growth, so pick it only to replace tar-js or tarts for in-memory archive building, and pair it with fast-pako or CompressionStream for compression.",
+  "verified_claims_summary": "With the repo's Node.js script (ts-node; Node, rustc and wasm-pack versions not stated) on a Xeon Platinum 8269CY, building one in-memory tar of 1,001 generated lorem-ipsum text files took 24.6 ms with tar-wasm, against 3,943.5 ms for tar-js 0.3.x (160x) and 1,251.6 ms for tarts 2.0.x (51x), one cold run each. Both baselines copy the whole archive on every append, so the ratio reflects quadratic versus linear buffer growth more than WebAssembly.",
+  "status_note": "Abandoned: archived by ByteDance on 2025-07-21, last commit 2023-01-24, npm 0.1.7 from 2022-10-27. It is MIT-licensed and a thin wrapper around the maintained Rust tar crate, so it is easy to rebuild or reimplement, but nobody maintains it.",
+  "sources_read": [
+    "https://github.com/bytedance/tar-wasm",
+    "https://github.com/bytedance/tar-wasm/commits",
+    "https://github.com/bytedance/tar-wasm/issues",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/DEVELOPMENT.md",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/src/utils.rs",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/tests/web.rs",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nodejs-benchmark/bench.ts",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nodejs-benchmark/package.json",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nodejs-benchmark/README.md",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nextjs-benchmark/README.md",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nextjs-benchmark/pages/index.tsx",
+    "https://raw.githubusercontent.com/bytedance/tar-wasm/HEAD/examples/nextjs-benchmark/package.json",
+    "https://registry.npmjs.org/@bytedance%2ftar-wasm",
+    "https://raw.githubusercontent.com/beatgammit/tar-js/HEAD/lib/tar.js",
+    "https://raw.githubusercontent.com/beatgammit/tar-js/HEAD/lib/utils.js",
+    "https://raw.githubusercontent.com/porsager/tarts/HEAD/tarts.js",
+    "https://raw.githubusercontent.com/alexcrichton/tar-rs/0.4.38/src/builder.rs",
+    "https://raw.githubusercontent.com/alexcrichton/tar-rs/0.4.38/src/header.rs"
+  ],
+  "confidence": 0.8
+}
