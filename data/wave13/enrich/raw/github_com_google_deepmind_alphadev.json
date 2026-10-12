@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/google-deepmind/alphadev",
+  "one_liner": "RL-discovered x86-64 cmov sorting kernels for 3-8 ints; the branchless sort3/4/5 form now sits inside libc++ std::sort.",
+  "what_it_does": "Companion repo to the 2023 Nature paper 'Faster sorting algorithms discovered using deep reinforcement learning'. It ships nine GNU inline-asm (AT&T, x86-64) functions that sort a fixed 3 to 8 int32 buffer (Sort3AlphaDev to Sort8AlphaDev, 17 to 91 instructions) or a length-prefixed buffer of up to 3, 4 or 5 ints (VarSort3/4/5), each taking an int* and sorting in place, plus non-runnable pseudocode of the AlphaZero-style agent. What reached users is not this asm but a C++ re-expression of the sort3/sort4/sort5 programs that libc++ uses inside std::sort for arithmetic types with std::less or std::greater.",
+  "how_it_is_fast": "The programs are branchless sorting networks: each compare-exchange is a cmp followed by paired cmovl/cmovg into fresh registers, so random input causes no branch mispredictions and the dependency chains are short. The search found small instruction savings over hand networks, notably the 'swap move' that inserts a third element into an already ordered pair with one fewer min/max; libc++ encodes this as __partially_sorted_swap next to a ternary-select __cond_swap. In std::sort these kernels only handle the 3-5 element leaves and pivot sampling, which is why the large-array gain is small.",
+  "when_to_use": [
+    "You already build with libc++ (LLVM 15 or later) and sort contiguous arrays of int, unsigned, 64-bit integers, float or double with the default comparator: you get the branchless sort3/4/5 automatically.",
+    "You need a reference for branchless fixed-size sorting networks of 3 to 8 signed 32-bit ints on x86-64, e.g. to compare against your own network or a compiler's cmov output.",
+    "Research or teaching on superoptimisation and RL program search, where the exact discovered instruction sequences and their exhaustive correctness test are the point."
+  ],
+  "when_not_to_use": [
+    "As a drop-in speedup: an independent cycle count in issue #2 (Clang -O3, rdcycle) found Sort3/4/5AlphaDev about 9% slower than a plain C sorting network that Clang compiled to cmov, and only 13-15% faster than a naive hand-written asm network.",
+    "For unsigned, 64-bit or floating-point keys: the asm uses signed 32-bit compares (cmovl/cmovg on eax-class registers) and assumes int32 elements.",
+    "With GCC, MSVC, ARM or any non-x86-64 target: the inline asm is AT&T x86-64 only and the README says only Linux with clang is supported; issue #5 reports an 'unknown register name' compile error.",
+    "Large-array sorting: the paper-reported gain for libc++ std::sort at over 250,000 elements is about 1.7% (search snippet), and current libc++ also changed partitioning since, so the gain is not separable.",
+    "If you want VarSort or sort6-8 in a library: none of them were upstreamed (an issue asking for VarSort5 in libc++ was closed 'not planned')."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the sort functions; the test needs Bazel and GoogleTest release-1.12.1; alphadev.py imports JAX/Haiku/numpy but is pseudocode",
+    "min_toolchain": "Clang with GNU inline asm (BUILD uses -std=c++17); libc++ route: LLVM 15 or later",
+    "platforms": "x86-64 only (Linux per README); libc++ C++ version is portable",
+    "thread_safety": "Pure functions on the caller's buffer; no shared state (not documented)",
+    "drop_in_for_baseline": "partial — the libc++ C++ form is already inside std::sort; the asm functions are not std::sort replacements, only fixed-size int32 kernels with a different interface"
+  },
+  "gotchas": [
+    "Harness flaw: the repo contains no benchmark at all. sort_functions_test.cc only checks correctness on every permutation of every '<'/'=' pattern for n items, and alphadev.py stubs out the assembly simulator and measure_latency (they return {} / pass) and still has an undefined 'value' in make_target (issue #11), so none of the paper's latency figures can be reproduced from this repo.",
+    "The VarSort programs read the element count from buffer[0] and branch on it; in VarSort3 a count of 0 or below skips the cmovge that sets r9d and stores that uninitialised register into buffer[2], and counts above 3 are treated as 3, so callers must pass 1..N.",
+    "In libc++ the int, unsigned, long, long long, float, double and long double instantiations of std::sort with std::less are explicit externs compiled into the libc++ shared library, so on a platform with a system libc++ (macOS) the code you run depends on the OS library version, not the headers you compile against.",
+    "The libc++ gate is is_arithmetic, not 'integral' as the commit message says, so float and double also take the branchless path (NaN keys break strict weak ordering in either path)."
+  ],
+  "pick_this_over_siblings_when": "No sibling in this category sorts small fixed-size arrays; the other entries (FastMemcpy, asmlib, FP-ASM, CvsAssemblyBenchmark) are memcpy, libc-replacement or numeric kernels. Pick AlphaDev only as a reference for cmov sorting networks or to cite the libc++ change; for production use, use libc++'s std::sort, or write the network in C and let Clang emit the cmovs.",
+  "verified_claims_summary": "The LLVM commit 194d1965 (Marco Gelmi, 2022-04-08, review D118029) replaced libc++'s branching __sort3/__sort4/__sort5 with branchless versions for contiguous arithmetic types and reports statistically significant gains sorting random uint32 and uint64 arrays of 1 to 262,144 elements on unnamed Skylake, ARM and AMD machines, with no percentages; the 'up to 70% faster for short sequences, about 1.7% above 250,000 elements' figures come from search snippets of the Nature paper and DeepMind blog, not opened here. Third-party checks cut against the asm itself: issue #2 measured Sort3/4/5AlphaDev about 9% slower than a Clang -O3 C sorting network, and arXiv 2307.14503 (snippet only) reports a shorter and faster human-written sort3.",
+  "status_note": "Archived read-only since 2024-08-22 with 3 commits; Apache-2.0 asm is copyable but niche (x86-64, int32, clang), and the practical value already ships in libc++ std::sort, so treat this as a reference rather than a dependency.",
+  "sources_read": [
+    "https://github.com/google-deepmind/alphadev",
+    "https://raw.githubusercontent.com/google-deepmind/alphadev/HEAD/README.md",
+    "https://raw.githubusercontent.com/google-deepmind/alphadev/HEAD/sort_functions_test.cc",
+    "https://raw.githubusercontent.com/google-deepmind/alphadev/HEAD/alphadev.py",
+    "https://raw.githubusercontent.com/google-deepmind/alphadev/HEAD/BUILD",
+    "https://raw.githubusercontent.com/google-deepmind/alphadev/HEAD/WORKSPACE",
+    "https://github.com/google-deepmind/alphadev/issues?q=is%3Aissue",
+    "https://github.com/google-deepmind/alphadev/issues/2",
+    "https://github.com/google-deepmind/alphadev/issues/3",
+    "https://github.com/google-deepmind/alphadev/issues/4",
+    "https://github.com/google-deepmind/alphadev/issues/5",
+    "https://github.com/llvm/llvm-project/commit/194d1965d2c841fa81e107d19e27fae1467e7f11",
+    "https://github.com/llvm/llvm-project/commit/194d1965d2c841fa81e107d19e27fae1467e7f11.patch",
+    "https://raw.githubusercontent.com/llvm/llvm-project/main/libcxx/include/__algorithm/sort.h"
+  ],
+  "confidence": 0.6
+}
