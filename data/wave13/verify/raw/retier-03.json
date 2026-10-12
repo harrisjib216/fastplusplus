@@ -1445,5 +1445,60 @@
       "https://github.com/smartnic/superopt/blob/master/Makefile",
       "https://github.com/smartnic/superopt/blob/master/artifact/README.md"
     ]
+  },
+  {
+    "id": "https://github.com/stanfordpl/stoke",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: the README's popcount 7.9x compares g++ -O3 without -mpopcnt against a search explicitly allowed popcnt (crippled baseline) and is not reproducible with the checked-in driver; the peer-reviewed ASPLOS 2013 kernels (mont 1.6x over gcc -O3) stand, with their validator assumptions and the unsound bounded verification documented. B stays with the README row struck.",
+    "corrections": {
+      "claimed_speedup": "ASPLOS 2013 paper, Figure 1 and Section 1: the OpenSSL big-number Montgomery multiplication kernel rewritten by STOKE is '16 lines shorter, 1.6x faster' than the gcc -O3 code 'and slightly faster than expert handwritten assembly'; abstract: STOKE's programs 'either match or outperform the code produced by gcc -O3, icc -O3, and in some cases, expert handwritten assembly'; Figure 11 plots speedups over llvm -O0 for Hacker's Delight p01-p25, saxpy, mont and list (chart only). The README popcount tutorial's 1.046 s vs 0.133 s (7.9x) is struck: it compares g++ -O3 built without -mpopcnt or -march against a rewrite found with --cpu_flags { popcnt }, was timed on an older main.cc, and the checked-in examples/tutorial/main.cc now calls rand() every iteration, so it cannot be reproduced.",
+      "caveats": "The paper is from 2013 and the speedups are on a small set of hand-picked loop-free kernels plotted relative to llvm -O0 starting points; per-kernel numbers are chart-only, gcc/icc versions and the timing machine are not stated. The README says STOKE cannot yet take a generic loop and beat gcc/llvm -O3, calls it a research prototype that is not production ready, says nobody is actively working on the code base, and needs gcc 4.9 to build. Harness flaw in the README demo: the popcount 7.9x has a crippled baseline (no -mpopcnt) and is not reproducible with the current driver. Correctness depends on the verification strategy: the tutorial uses --strategy hold_out (8 training and 1016 hold-out test cases), bounded validation is unsound (issue #1008: a counting-loop rewrite passed --bound 1024 yet was wrong for inputs above 16 bits; a maintainer replied 'Bounded verification is inherently unsound'), the ASPLOS 2013 validator treats 64-bit multiplication and division as uninterpreted functions and assumes stack addresses are constant offsets from rsp, and the ASPLOS 2017 run saw 180 candidate rewrites fail sound verification. The ASPLOS 2017 translation-mode 25% median gain came mostly from removing NaCl sandbox no-ops and 32-byte jump alignment; the linked-list kernel is slower than gcc -O3. The search cost is a static sum of instruction latencies; a plain stoke run does not re-rank by measured runtime. Open issues report wrong instruction semantics (#1004 vfnmadd132pd) and unsupported instructions in the validators (#943 tzcntq)."
+    },
+    "urls_opened": [
+      "https://github.com/StanfordPL/stoke/blob/develop/examples/tutorial/synthesize.conf",
+      "https://github.com/StanfordPL/stoke/blob/develop/examples/tutorial/main.cc",
+      "https://github.com/StanfordPL/stoke/issues/1008",
+      "https://github.com/StanfordPL/stoke/blob/develop/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/stgatilov/recip_rsqrt_benchmark",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the metric is throughput over 4 chained calls in 4 interleaved streams on arrays far larger than cache, the 'exhaustive' double sweep covers only [1, 1 + 2^-29] (all rounding to float 1.0), special values are never tested, and the checked-in source no longer builds with GCC or Clang. First-party 2015 run, C stays with corrections.",
+    "corrections": {
+      "caveats": "No licence file, so reference only. Results are from July 2015 on Ivy Bridge with MSVC 2013 (flags not stated, no build file); newer CPUs have much faster divps and sqrtps, so the gap is likely smaller today. Metric: one unrepeated rdtsc pass (TSC reference ticks, not core cycles) over about 168 MB of floats and 201 MB of doubles, far larger than cache, with each value going through 4 chained calls in 4 interleaved streams, so it mixes latency and throughput; the 1.1-tick fast float rows move about 12 GB/s (derived), so they may be partly memory-bound, which would understate rather than inflate the fast-row speedups. Precision column flaw: the 'exhaustive' double range is enum_all_floats(1.0, 1.0 + DBL_EPSILON * (1 << 23)), i.e. [1, 1 + 2^-29], and all 8.4M of those doubles round to the same float 1.0 before rcpps or rsqrtps, so the double max-error figures rest on the 16.8M random exp2 samples only; for float rsqrt the exhaustive sweep covers [1, 2] only. Special values are never tested (the harness feeds only positive finite values): recip_float4_nr1(+inf) returns NaN instead of 0, rsqrt_float4_nr1(0) returns NaN instead of +inf, and the double variants round to float first so inputs above about 3.4e38 become inf (recip returns 0). The fast variants trade accuracy (max relative error about 3e-4 without refinement, about 1.5e-7 to 3e-7 with one Newton-Raphson step). Build: the 2018 commit 505a8fc added an unconditional #include <intrin.h>, so main.cpp as checked in will not compile with GCC or Clang on Linux (code reading, not built)."
+    },
+    "urls_opened": [
+      "https://github.com/stgatilov/recip_rsqrt_benchmark/blob/master/main.cpp",
+      "https://github.com/stgatilov/recip_rsqrt_benchmark/commit/505a8fc",
+      "https://github.com/stgatilov/recip_rsqrt_benchmark/blob/master/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/tacitvs/fp_asm_lib_dev",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the README kernel table was measured on the v2 code (2026-07-19) whose fp_fold_dotp_f32 dropped four lanes of partial sums for n % 8 != 0 (fixed 2026-10-04) while bench_math.c never checks outputs, and the swarm 2.2x motion win comes from hoisting the rotation matrix per batch that the plain C baseline recomputes per star. Numbers measured on a kernel later fixed for a correctness bug (libfacedetection precedent): A to C.",
+    "corrections": {
+      "caveats": "The reduction wins come from multiple SIMD accumulators against a single-accumulator strict-order scalar loop that gcc cannot vectorize without -ffast-math, so a hand-unrolled or -ffast-math C loop would close much of the 8.6x/5.1x gap; outputs are not bit-identical to the strict-order loop. The README kernel table was published with the v2 code on 2026-07-19; that version of fp_fold_dotp_f32 dropped four lanes of partial sums whenever n >= 8 and n % 8 != 0 (a VEX scalar tail op on xmm0 zeroed ymm0[255:128]), fixed 2026-10-04; the benchmark's n = 100,000 is a multiple of 32 so the timed work was unaffected, but benchmarks/bench_math.c times only (best of 200, volatile sink) and never compares outputs, so the measured kernel's correctness was never checked by the harness. swarm_bench harness asymmetry: in the motion stage fp_map_quat_rotate_vec3_f32 builds a 3x3 rotation matrix once per batch while the plain C c_rotate evaluates the full quaternion formula per star, so the 2.2x motion win is mostly algorithmic hoisting a C programmer could also do; the analysis-stage C loops are single-accumulator strict-order loops. Memory-bound kernels (axpy, scale) are at parity. The kernel table is one older laptop CPU (i7-4600M). Latent bug: fp_mat4_mul_vec3_batch takes an int count but the kernel tests only r9d before looping on the full 64-bit r9, relying on the caller zeroing the upper 32 bits, which neither x86-64 ABI guarantees; a NULL input pointer silently returns 0.0 (1.0 for products)."
+    },
+    "urls_opened": [
+      "https://github.com/tacitvs/fp_asm_lib_dev/blob/main/benchmarks/bench_math.c",
+      "https://github.com/tacitvs/fp_asm_lib_dev/commits/main/src/fp_fold.asm",
+      "https://github.com/tacitvs/fp_asm_lib_dev/blob/main/benchmarks/swarm_bench.c"
+    ]
+  },
+  {
+    "id": "https://github.com/teamchong/vectorjson",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the streaming path that produces the 14x-2028x rows is a Zig bracket tracker plus a JavaScript byte scanner mutating one live object with an O(1) getValue(), while the stock loop re-parses the whole buffer per 12-character chunk, so the figures measure an O(n) versus O(n^2) algorithm with a JS scanner, not wasm or SIMD (zimdjson is unused in streaming); the README and bench comment contradict the code, the 100 KB stock rows are single cold runs, and one-shot JSON.parse is faster. No valid measurement of a wasm speedup: C to D.",
+    "corrections": {
+      "caveats": "The 14x-2028x streaming figures come from an algorithmic difference, not raw parse speed: the stock loop does buffer += chunk and re-parses the whole buffer into a fresh object graph on every 12-character chunk (O(n^2)), while VectorJSON's createParser().getValue() returns the same live object that a JavaScript byte-by-byte scanner (spScan in src/js/index.ts) extends in place with a Zig bracket tracker (src/zig/stream.zig) only counting structure; zimdjson and SIMD are used only for one-shot parse() and tapes, so no WebAssembly or SIMD contribution is isolated in the streaming rows, and the README 'How It Works' section and the benchmark comment (which say each feed()/getValue() re-runs the SIMD parse over the accumulated buffer) contradict the code. One-shot JSON.parse is faster (1 KB 2.16M ops/s vs 1.37K ops/s, a fixed per-call cost of about 0.7 ms in parse()). Harness asymmetries: when a stock run is slow (the 100 KB rows) the stock time is one cold warm-up run while VectorJSON is the median of 3 after 2 warm-ups; Bun is 'latest' (unpinned) on an unnamed GitHub Actions CPU; @streamparser/json is installed but never benchmarked. Live object: getValue() returns the same object later feed() calls mutate. Weak validation in streaming mode: only '}' or ']' underflow is flagged (mismatched bracket kinds pass) and malformed scalars become null inside a try/catch, so malformed input can finish as 'complete'."
+    },
+    "urls_opened": [
+      "https://github.com/teamchong/vectorjson/blob/main/src/js/index.ts",
+      "https://github.com/teamchong/vectorjson/blob/main/src/zig/stream.zig",
+      "https://github.com/teamchong/vectorjson/blob/main/bench/streaming.ts",
+      "https://github.com/teamchong/vectorjson/blob/main/README.md"
+    ]
   }
 ]

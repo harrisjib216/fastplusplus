@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/stanfordpl/stoke",
+  "one_liner": "Research stochastic superoptimizer for x86-64 that rewrites short loop-free assembly kernels to match or beat gcc -O3 and icc -O3 output.",
+  "what_it_does": "STOKE takes an x86-64 function out of an ELF binary (stoke extract), generates test cases for it, runs an MCMC search for a cheaper instruction sequence that gives the same live outputs, and patches the winner back into the binary (stoke replace). It is a set of command-line tools driven by config files (def_in and live_out registers, test-case sets, cost terms, proposal masses), not a library and not a drop-in assembler or compiler pass. It can synthesize from an empty program or optimize starting from the target, and it ships a bounded validator, an SMT-based formal validator (Z3 or CVC4) and a DDEC equivalence checker.",
+  "how_it_is_fast": "The speed comes from the code it finds, not from the tool. Metropolis-Hastings sampling over opcode, operand, swap and rotate moves minimises a cost of test-case Hamming error plus a static sum of instruction latencies. This lets it find algorithmically different sequences that compiler rewrite rules miss: one 128-bit mulq instead of four imulq in OpenSSL's Montgomery kernel, cmov chains for Hacker's Delight p21, a 4-way SSE broadcast for a hand-unrolled SAXPY. In the ASPLOS 2013 pipeline, candidates within 20% of the best cost are re-ranked by measured runtime and checked by an STP-based validator. The 2017 loop work (DDEC with alias relationship mining) proves loop rewrites equivalent.",
+  "when_to_use": [
+    "A hot, short, loop-free x86-64 sequence (tens of instructions: bit tricks, multi-word arithmetic, fixed-size SIMD bodies) where a few cycles per call matter and you can spend tens of minutes to hours of search per kernel",
+    "Finding a better instruction sequence to hand-port into your own inline assembly or intrinsics, as a research aid next to reading compiler output",
+    "Code built under unusual constraints that compilers handle poorly, such as Native Client sandboxing rules (ASPLOS 2017: median 25%, up to 97% on 13 NaCl libc string functions)",
+    "Reproducing or extending the superoptimization papers (ASPLOS 2013, PLDI 2014 floating point, PLDI 2016 stratified synthesis), since the repo is their artifact"
+  ],
+  "when_not_to_use": [
+    "General loops or whole programs: the README says 'We're not quite at the point where we can take a generic loop and expect to improve gcc/llvm -O3 code'; on the paper's linked-list benchmark STOKE ended up slower than gcc -O3",
+    "Production builds: the README says 'STOKE isn't production ready' and 'nobody is actively working on this code base'; the last source change was 2019-10-03",
+    "Modern toolchains and ISAs: it builds only with gcc 4.9 on Ubuntu 14.04/16.04 (or the Docker image) and supports a pre-2016 instruction subset, so code from newer compilers may not load",
+    "Non-x86 targets (Arm, RISC-V, GPU) or kernels with complex memory aliasing where test-case generation is weak",
+    "Any case where you cannot afford a sound equivalence proof: rewrites that pass test cases or bounded validation can still be wrong"
+  ],
+  "integration": {
+    "form": "built command-line tools (stoke, stoke_tcgen and subcommands); output is an assembly file or a patched ELF binary",
+    "dependencies": "gcc/g++ 4.9, Boost (filesystem, thread, regex), jsoncpp, GMP, CLN, ANTLR, bison/flex, ghc and Haskell libraries, Z3 and CVC4, the x64asm submodule and Intel Pin for dynamic test cases; Docker image stanfordpl/stoke recommended",
+    "min_toolchain": "exactly gcc 4.9 per README ('Below that ... not enough features ... Above that, there are some issues with an ABI change in gcc-5'); Ubuntu 14.04 or 16.04",
+    "platforms": "Linux x86-64 hosts only; best on Haswell or newer, Sandy Bridge works without AVX2; rewrites target x86-64 only",
+    "thread_safety": "not documented (the search itself is single process; the paper parallelised across a cluster with separate runs)",
+    "drop_in_for_baseline": "partial — stoke replace patches one rewritten function into an existing x86-64 ELF binary, but only if the new code is no larger than the old function (README FAQ: use -falign-functions to pad); it does not replace a compiler or assembler"
+  },
+  "gotchas": [
+    "Harness flaw in the README demo: the 1.046 s vs 0.133 s popcount timing compares g++ -O3 built without -mpopcnt or -march (so gcc cannot emit popcnt) against a STOKE rewrite that uses popcntq; the checked-in examples/tutorial/synthesize.conf even passes '--cpu_flags \"{ popcnt }\"' to the search. The timing was also taken with an older main.cc (popcnt(i)); the checked-in examples/tutorial/main.cc now calls rand() on every iteration, so the 7.9x cannot be reproduced from the current tutorial.",
+    "Correctness depends on the verification strategy you choose: the tutorial uses '--strategy hold_out' (8 training and 1016 hold-out test cases), and bounded validation is unsound (issue #1008: a rewrite of a counting loop passed bounded verification at --bound 1024 yet was wrong for inputs above 16 bits; a maintainer replied 'Bounded verification is inherently unsound'). The ASPLOS 2017 run saw 180 candidate rewrites that failed sound verification because they were not equivalent.",
+    "The ASPLOS 2013 validator treats 64-bit multiplication and division as uninterpreted functions and assumes stack addresses are constant offsets from rsp, so 'verified' rewrites are proven only under those assumptions.",
+    "The search cost is a static sum of instruction latencies (cost 'correctness + latency'); the paper re-ranks the best candidates by measured runtime, but a plain stoke synthesize or optimize run does not, and Figure 3 of the paper shows outliers where predicted and actual runtime disagree. Open issues also report wrong instruction semantics (#1004 vfnmadd132pd) and unsupported instructions in the validators (#943 tzcntq)."
+  ],
+  "pick_this_over_siblings_when": "Pick STOKE over Minotaur, SuperCoder or Unison when the target is a short x86-64 kernel and you want whole-sequence algorithmic rewrites with an SMT equivalence check rather than LLVM-IR peepholes, model-generated assembly or better register allocation; pick SLOTHY for Arm Cortex-A/M cryptography and DSP kernels, and K2 for eBPF programs.",
+  "verified_claims_summary": "The ASPLOS 2013 paper starts from llvm -O0 binaries and reports STOKE rewrites that match gcc -O3 and icc -O3 on Hacker's Delight p01-p25 and beat them on several kernels; the OpenSSL Montgomery multiplication kernel came out 16 lines shorter and 1.6x faster than gcc -O3 and slightly faster than OpenSSL's handwritten assembly. Compiler versions and the timing CPU are not stated (search ran on 40 dual-core 1.8 GHz AMD Opterons), and per-kernel values exist only in Figure 11's chart; the 2017 paper separately reports a median and mean 25% (up to 97%) over Google's NaCl libc string functions on Xeon E5-2667v2 machines, gains that come largely from NaCl's sandboxing no-ops and 32-byte jump alignment.",
+  "status_note": "Abandoned research artifact (last code change 2019-10-03, a CodeQL workflow added 2020-12-04, 62 open issues) under Apache-2.0; usable from its Docker image to find sequences you then hand-port, but too toolchain-bound (gcc 4.9) and unsound under its default test-case verification to put in a build.",
+  "sources_read": [
+    "https://github.com/StanfordPL/stoke",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/README.md",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/LICENSE",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/Makefile",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/configure.sh",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/.travis.yml",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/docs/papers/asplos13.pdf",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/docs/papers/asplos17.pdf",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/examples/tutorial/main.cc",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/examples/tutorial/Makefile",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/examples/tutorial/synthesize.conf",
+    "https://raw.githubusercontent.com/StanfordPL/stoke/develop/examples/tutorial/testcase.conf",
+    "https://github.com/StanfordPL/stoke/commits/develop",
+    "https://github.com/StanfordPL/stoke/issues",
+    "https://github.com/StanfordPL/stoke/issues?q=is%3Aissue+bug+incorrect",
+    "https://github.com/StanfordPL/stoke/issues/1008",
+    "https://github.com/StanfordPL/stoke/issues/919"
+  ],
+  "confidence": 0.78
+}

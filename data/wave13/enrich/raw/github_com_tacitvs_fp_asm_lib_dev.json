@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/tacitvs/fp_asm_lib_dev",
+  "one_liner": "NASM AVX2 kernels with a C API for float reductions, dot products and batched vec3/mat4 math; beats strict-order scalar C loops.",
+  "what_it_does": "A static/shared C library (libfpasm) of array kernels written in x86-64 NASM: reductions, fused folds (dot, sum of squares, SAD), element-wise maps, prefix scans, set ops and vec3/mat4/quaternion batch math over 10 numeric types, plus C wrappers for Haskell-style higher-order functions. You call plain C functions that take pointer + count (for example fp_fold_dotp_f32(a, b, n) or fp_mat4_mul_vec3_batch(out, m, in, n)); it replaces hand-written loops rather than any standard library API.",
+  "how_it_is_fast": "Reductions keep four independent YMM accumulators (32 floats per iteration) so the float add dependency chain that a strict-order C loop cannot break without -ffast-math is split across 32 partial sums; dot products use vfmadd231ps into the same four accumulators. The batch transform loads the four matrix columns once and does broadcast + FMA per vertex, two vertices per iteration, and the quaternion batch converts the quaternion to a 3x3 rotation matrix once per call. A runtime dispatcher selects AVX-512 or AVX-VNNI (vpdpbusd) variants of selected folds when the CPU has them.",
+  "when_to_use": [
+    "Hot f32/f64 sums, dot products, sums of squares or SAD over arrays of thousands of elements or more, in code you cannot build with -ffast-math or -fassociative-math, and where reassociated rounding is acceptable (README: 8.6x sum, 5.1x dot at 100k f32 on Haswell).",
+    "int8/uint8 dot products on AVX-VNNI or AVX-512 VNNI CPUs, for example quantized vector scoring (fpasm-info --bench: 14-16x over the library's own AVX2 kernel on i7-13700HX and Emerald Rapids).",
+    "CPU-side batched vertex transforms by a column-major mat4 in an x86-64 game or renderer (1.5x vs scalar -O3 at 100k vertices), with helpers for D3D11/D3D12/Vulkan/Metal/OpenGL projection conventions.",
+    "C projects or FFI hosts (Common Lisp CFFI, Chez Scheme, Rust, Zig, Python ctypes) that want batch kernels behind a plain-C, pointer-plus-count ABI with an ABI version check."
+  ],
+  "when_not_to_use": [
+    "Anything that is not x86-64 with AVX2 + FMA (no ARM/Apple Silicon path; pre-Haswell CPUs cannot run it).",
+    "Memory-bound element-wise maps such as axpy and scale: the project's own table shows parity with autovectorized -O3 C.",
+    "When results must match a sequential scalar sum bit for bit, or when you can enable -ffast-math, #pragma omp simd reduction or write a multi-accumulator C loop yourself; the project never measures those stronger C baselines, which likely close much of the reduction gap.",
+    "Production-critical code that needs a mature dependency: single author, 1 star, and PORTING_STATUS.md lists many hot-kernel correctness and ABI bugs fixed only in July-October 2026.",
+    "Performance-sensitive use of the L1 functional layer (closures, State monad): FP_COVERAGE.md says these allocate on every bind and run 1-2 orders of magnitude slower than an imperative loop."
+  ],
+  "integration": {
+    "form": "static lib + shared lib (libfpasm.a / libfpasm.so / libfpasm.dll), Makefile or CMake target fpasm::fpasm",
+    "dependencies": "none at runtime; NASM >= 2.13 and a C11 compiler (gcc or clang) to build",
+    "min_toolchain": "NASM 2.13+, C11 gcc/clang (gcc >= 13 or clang >= 16 only for ISA=raptorlake)",
+    "platforms": "x86-64 Linux (System V) and Windows x64 (MinGW/MSYS2), AVX2 + FMA required; AVX-512 and AVX-VNNI variants of some folds picked at runtime",
+    "thread_safety": "Documented as safe for concurrent calls: no mutable global state, constants in read-only memory, CPU-detection and dispatch tables initialized run-once; output buffers of concurrent calls must not overlap (tested with 16 threads and ThreadSanitizer).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Float results are reassociated (32 partial sums, FMA in dot) so they differ in the last bits from a strict-order loop; a NULL input pointer silently returns 0.0 (1.0 for products) instead of reporting an error.",
+    "fp_mat4_mul_vec3_batch takes an int count but the SysV shim copies it with a 64-bit mov (mov r9, rcx) and the kernel tests only r9d before looping on the full 64-bit r9, so it relies on the caller leaving the upper 32 bits zero, which neither x86-64 ABI guarantees; counts are also capped at INT_MAX. Vec3f is 16 bytes (x, y, z, pad) and the kernel writes the fourth lane.",
+    "The README kernel table was published with the v2 code on 2026-07-19; that version of fp_fold_dotp_f32 dropped four lanes of partial sums whenever n >= 8 and n % 8 != 0 (VEX scalar tail op on xmm0 zeroed ymm0[255:128]), fixed 2026-10-04. The benchmark's n = 100,000 is a multiple of 32 so the timed work is unaffected, but benchmarks/bench_math.c times only and never compares outputs.",
+    "swarm_bench harness asymmetry: in the motion stage fp_map_quat_rotate_vec3_f32 builds a 3x3 rotation matrix once per batch while the plain C c_rotate evaluates the full quaternion formula per star, so the 2.2x motion win is mostly algorithmic hoisting a C programmer could also do; the analysis-stage C loops (c_vsum, c_sumsq, c_sqdiff) are single-accumulator strict-order loops."
+  ],
+  "pick_this_over_siblings_when": "Pick it over CvsAssemblyBenchmark (a single matmul demo) or seelabs/nasm (hex codec only) when you want a linkable, tested x86-64 library of float reductions and game-math batch kernels; ESP-DSP is the analogue for Xtensa/RISC-V microcontrollers, and asmlib targets libc string/memory replacements rather than numeric folds.",
+  "verified_claims_summary": "On an Intel Core i7-4600M (Haswell) with gcc 13, both the library caller and scalar C reference loops built at -O3 -march=native, 100k-element f32 arrays, best of 200: sum 85.0 vs 9.9 us (8.6x), dot 96.0 vs 18.9 us (5.1x), batch mat4 x vec3 189 vs 122 us (1.5x), axpy and scale at parity; the reference is a single-accumulator strict-order loop gcc cannot vectorize without fast-math. swarm_bench (1M stars, Emerald Rapids Xeon, 1 thread) checks FP-ASM against plain C and reports 7.01 vs 14.48 ms per frame (2.1x), dropping to 1.4x with 4 threads while rendering.",
+  "status_note": "Active (238 commits, last 2026-10-07) and MIT-licensed, small enough to vendor, but a 1-star single-author project whose hot kernels had several correctness and ABI bugs fixed only in October 2026 (including a lost-lanes tail bug in fp_fold_dotp_f32 present when the README table was published, though not exercised at its n = 100,000), and whose microbenchmark never checks results.",
+  "sources_read": [
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/commits/main",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/issues?q=is%3Aissue",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/tree/main/src/asm",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/commits/main/benchmarks/bench_math.c",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/commits/main/src/asm/fp_core_fused_folds_f32.asm",
+    "https://github.com/TACITVS/FP_ASM_LIB_DEV/commits/main/README.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/README.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/Makefile",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/benchmarks/bench_math.c",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/examples/swarm/swarm_bench.c",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/examples/swarm/swarm_sim.c",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/examples/swarm/swarm_sim.h",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/src/asm/fp_core_reductions_f32.asm",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/src/asm/fp_core_fused_folds_f32.asm",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/src/asm/3d_math_kernels.asm",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/src/asm/fp_core_matrix.asm",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/src/asm/abi.inc",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/include/fp_types.h",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/tests/test_reductions.c",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/FP_COVERAGE.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/HEAD/PORTING_STATUS.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/2ce7f6a/README.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/2ce7f6a/PORTING_STATUS.md",
+    "https://raw.githubusercontent.com/TACITVS/FP_ASM_LIB_DEV/2ce7f6a/src/asm/fp_core_fused_folds_f32.asm"
+  ],
+  "confidence": 0.8
+}
