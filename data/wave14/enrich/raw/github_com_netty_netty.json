@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/netty/netty",
+  "one_liner": "Java asynchronous network framework; a 2015 Netty 3 hello-world server out-ran a 4-worker nginx echo setup and Crow.",
+  "what_it_does": "Netty is an event-driven framework for writing protocol servers and clients on the JVM. You get Channels, event loops, a ChannelPipeline of handlers, ByteBuf buffers and codecs for HTTP/1.1, HTTP/2, HTTP/3/QUIC, WebSocket, DNS, Redis, MQTT, STOMP, memcache and more. It is a toolkit, not a web server: the benchmarked 'server' is three small Java classes (about 130 lines) (an HttpRequestDecoder, an HttpResponseEncoder, an HttpContentCompressor and a handler that builds a 'Hello World' response). Nothing in nginx's configuration carries over.",
+  "how_it_is_fast": "Each channel's handlers run on a single event-loop thread, so request handling needs no locks. On Linux, the native transports (epoll, edge-triggered by default per EpollMode; io_uring, a first-class module in 4.2) replace the JDK NIO selector; kqueue serves macOS/BSD. Buffers come from pooled direct-memory allocators: the 4.1 pooled allocator (page/run/subpage chunks) or the 4.2 default adaptive allocator (magazines chosen by thread id, sized from allocation histograms), which cut GC pressure and copying. FastThreadLocal indexes an array instead of hashing. In the cited benchmark, though, most of the margin over nginx comes from configuration (see gotchas), not these techniques.",
+  "when_to_use": [
+    "Custom TCP/UDP or binary protocol servers, proxies and gateways on the JVM, where you need control over the pipeline, buffers and threading",
+    "High-connection-count HTTP/1.1, HTTP/2 or WebSocket front ends on Linux, with the epoll or io_uring native transport",
+    "As the I/O layer under a higher-level framework (Vert.x, Quarkus and many RPC stacks build on it) when you need to drop below the framework",
+    "Long-running services where JIT warm-up and a resident JVM are acceptable and steady-state throughput matters"
+  ],
+  "when_not_to_use": [
+    "Static files, TLS termination or reverse proxying that nginx handles with configuration alone; with Netty you write and maintain the server code",
+    "Short-lived processes or tight memory budgets: JVM start-up and warm-up, plus pooled direct memory (issue #15691 reports direct memory growing from about 70 MB to 700 MB between 4.2.2 and 4.2.4; #15850 'Adaptive allocator direct memory allocation regression' is open)",
+    "When you expect to beat a properly configured native server: in the same 2015 table Kore (572,782 req/s), libmicrohttpd (533,626) and Onion (483,824) beat Netty, and so did Undertow (616,547), another JVM server",
+    "When you want routing, middleware and a ready HTTP API rather than raw handlers; use a framework built on Netty instead"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond the JDK for the NIO transport; optional native transport jars (epoll, io_uring, kqueue; 4.2 needs glibc 2.17+), optional netty-tcnative/BoringSSL or BouncyCastle for TLS",
+    "min_toolchain": "Java 8 for Netty 4.2 (the io_uring transport needs Java 9+); building from source needs a JDK and Maven",
+    "platforms": "any JVM platform via NIO; native epoll and io_uring on Linux, kqueue on macOS/BSD",
+    "thread_safety": "Each Channel is bound to one event-loop thread of a MultiThreadIoEventLoopGroup and its handlers run there; blocking inside a handler stalls every channel on that loop, and handlers shared across channels must be written to be thread-safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Wrong artifact measured: benchmarks/netty/build.gradle resolves org.jboss.netty:netty:latest.integration. Per Maven Central metadata that is 3.2.10.Final, the last release under the old JBoss groupId (org.jboss.netty.* API), which is incompatible with io.netty 4.x. The 2015 numbers say nothing about the current 4.2.19.Final / 4.1.139.Final (both tagged 2026-10-06).",
+    "Harness asymmetries, all favouring Netty. (1) HelloWorldServerHandler sets only Content-Type, Content-Length and Connection, never the Date header the benchmark's own spec requires. Response sizes derived from page data (MB/s over req/s): Netty exactly 100 bytes; the nginx echo row 119 bytes, matching a chunked 'Hello World!\\n' body with Date and Server cleared; Crow 128 bytes. So Netty skips date formatting and sends the fewest bytes. (2) nginx is capped at worker_processes 4 on a 6-core/12-thread Xeon, and its latency is bimodal: p50 68 us, p75 6.90 ms, p99 24.24 ms. (3) wrk runs 12 threads on the same host.",
+    "The README's Netty figure is the best of four runs (420,723 / 422,543 / 421,462 / 422,580 req/s; the spread is only 0.4%). nginx has a single run file (nginx_echo_01, 381,368). Crow's README figure, 256,552, is not crow_01 (251,341), so the README appears to pick favourable runs.",
+    "Upgrading to 4.2: the default allocator switched from pooled to adaptive (set -Dio.netty.allocator.type=pooled to restore 4.1 behaviour), client TLS hostname verification is now on by default, and 4.1 and 4.2 jars cannot coexist on one classpath. Security fixes arrive often (12 pages of GitHub advisories; ten published 2026-09-10, including High GHSA-pvjx-v7vp-62vq, unbounded per-connection queue growth via HTTP/1.1 pipelining in HttpServerCodec), so stay on the latest patch release."
+  ],
+  "pick_this_over_siblings_when": "Vert.x and Quarkus (siblings with current HttpArena wins over nginx 1.31.4) run on Netty and add routing and an application model, so pick raw Netty only when you need custom protocols or direct control of pipeline, buffers and transports. For plain HTTP on the JVM, the sibling Undertow beat Netty in this same table (616,547 vs 422,580 req/s).",
+  "verified_claims_summary": "Setup: nanoant/WebFrameworkBenchmark, December 2015, Xeon E5-1650 v2, Ubuntu 14.04, Linux 3.16, wrk with 12 threads and 100 keep-alive connections on the same machine, 20 s runs, JVM version unstated. A Netty 3.2-era hello-world server reached 422,580 req/s (best of four, p99 4.08 ms) against OpenResty nginx with the echo module limited to 4 workers at 381,368 (1.11x), and Crow (-O3, multithreaded) at 256,552 (1.65x). Both ratios are derived from page data, and Netty also sent the smallest response (no Date header).",
+  "status_note": "Netty is very actively maintained (Apache-2.0, 35.1k stars; 4.2.19.Final and 4.1.139.Final tagged 2026-10-06; 5.0.0.Alpha2 on Maven Central). This entry's evidence, however, is a 2015 single-author benchmark of the long-superseded org.jboss.netty 3.2 jar, so treat the nginx ratio as historical and config-driven.",
+  "sources_read": [
+    "https://github.com/netty/netty",
+    "https://github.com/netty/netty/tags",
+    "https://github.com/netty/netty/security/advisories",
+    "https://github.com/netty/netty/wiki/Netty-4.2-Migration-Guide",
+    "https://github.com/netty/netty/issues?q=is%3Aissue+adaptive+allocator+memory",
+    "https://raw.githubusercontent.com/netty/netty/4.2/buffer/src/main/java/io/netty/buffer/PoolChunk.java",
+    "https://raw.githubusercontent.com/netty/netty/4.2/buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+    "https://raw.githubusercontent.com/netty/netty/4.2/buffer/src/main/java/io/netty/buffer/ByteBufUtil.java",
+    "https://raw.githubusercontent.com/netty/netty/4.2/transport-classes-epoll/src/main/java/io/netty/channel/epoll/EpollMode.java",
+    "https://raw.githubusercontent.com/netty/netty/4.2/common/src/main/java/io/netty/util/concurrent/FastThreadLocal.java",
+    "https://repo1.maven.org/maven2/org/jboss/netty/netty/maven-metadata.xml",
+    "https://repo1.maven.org/maven2/io/netty/netty-all/maven-metadata.xml",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/netty/build.gradle",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/netty/run.sh",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/netty/src/main/java/HelloWorldServer.java",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/netty/src/main/java/HelloWorldServerHandler.java",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/netty/src/main/java/HelloWorldServerPipelineFactory.java",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/nginx/run_echo.sh",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/nginx/conf/echo.conf",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/crow/helloworld.cpp",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/benchmarks/crow/run.sh",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/time.sh",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/common/threads.sh",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/netty_01.txt",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/netty_02.txt",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/netty_03.txt",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/netty_04.txt",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/nginx_echo_01.txt",
+    "https://raw.githubusercontent.com/nanoant/WebFrameworkBenchmark/HEAD/results/E5-1650v2-Ubuntu-14.04LTS/crow_01.txt",
+    "https://github.com/MDA2AV/HttpArena/tree/main/frameworks",
+    "https://github.com/MDA2AV/HttpArena/tree/main/frameworks/netty (404)"
+  ],
+  "confidence": 0.8
+}

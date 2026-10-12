@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/menketechnologies/awkrs",
+  "one_liner": "AWK implementation in Rust with a fused bytecode VM; its single-rule fast paths run 2-5x faster than mawk on 1M-line files.",
+  "what_it_does": "awkrs is a command-line awk (binary awkrs, plus an aw alias) that accepts the union of POSIX, gawk and mawk options and implements most gawk extensions: BEGINFILE/ENDFILE, coprocesses, CSV mode, arrays of arrays, @include/@namespace, /inet sockets and MPFR bignums via -M. It adds awkrs-only modes: rayon-parallel record processing (-j, default 1, only for programs it judges parallel-safe), a REPL, an LSP server, a DAP debugger, AOT compilation of BEGIN-only programs and a persistent bytecode cache for -f scripts. It is a drop-in command for many awk one-liners, not a library you embed from C.",
+  "how_it_is_fast": "Programs compile to a stack bytecode VM with peephole superinstructions (print $N becomes PrintFieldStdout, s += $N becomes AddFieldToSlot) and slot-indexed scalars. Regular files are memory-mapped, and a single-rule program whose body is one fused opcode skips the VM entirely: detect_inline_program in src/lib.rs routes { print $N }, { s += $N }, { s += $a * $b }, { print $a, $b, $c }, { print $a \"sep\" $b }, { a[$N] += k }, /literal/ { c += k }, NR % m == k { print $N } and { gsub(\"lit\", \"repl\"); print } to hand-written byte loops that find fields by scanning raw bytes, match literals with memchr's memmem and append output to one buffer. Every one of the nine 1M-line benchmark programs hits one of these shapes; the only benchmark that runs through the VM (the BEGIN loop) ties mawk.",
+  "when_to_use": [
+    "Shell pipelines running one-rule awk one-liners (print fields, sum a column, count literal matches, no-match gsub) over large regular files, where the README measured 2.3-5.4x mawk 1.3.4 and 3.6-31x gawk 5.4.0 on an Apple M5 Max.",
+    "Literal-substring filters or gsub on files where gawk is slow in a UTF-8 locale: /alpha/ counting took 11.1 ms vs gawk 351 ms and mawk 19.3 ms on 1M lines.",
+    "Teams that want gawk extensions (CSV mode, arrays of arrays, PROCINFO[\"sorted_in\"], -M bignums) in a single Rust binary, installable with cargo install or Homebrew.",
+    "Embarrassingly parallel per-record programs on multi-core machines, via -j N with output reordered to input order (not part of the measured numbers)."
+  ],
+  "when_not_to_use": [
+    "Multi-rule or multi-statement programs: they leave the inline fast paths and run on the bytecode VM, whose only measured case (a CPU-bound BEGIN loop) ties mawk (9.6 vs 9.7 ms), and associative-array counting only ties gawk (343.7 vs 342.4 ms).",
+    "Numeric columns with units, suffixes, hex under -n, or NaN/Inf strings: the { s += $N } and { s += $a * $b } fast paths parse fields differently from awk (see gotchas) and can return different sums.",
+    "CRLF files where output bytes matter: the inline paths drop the trailing CR that the rest of awkrs, gawk and mawk keep.",
+    "Huge single files piped into head or a slow consumer: the inline loops append to one output buffer for the whole file with no flush inside the loop, so memory grows with output size and nothing is written until the loop ends.",
+    "Scripts needing gawk's interactive debugger, per-line profiler, arbitrary @load .so extensions or audited multibyte field splitting (documented gaps); the project has 1 star and no third-party users on record."
+  ],
+  "integration": {
+    "form": "crate (command-line binaries awkrs and aw; cargo install awkrs or a Homebrew tap; also builds a lib and staticlib for its AOT mode)",
+    "dependencies": "Many crates, including fusevm, cranelift-* 0.130, regex, memchr, memmap2, rayon, reedline, lsp-server and rug with gmp-mpfr-sys, which needs a C compiler and make at build time",
+    "min_toolchain": "Rust 2021 edition; no rust-version (MSRV) declared in Cargo.toml or on crates.io",
+    "platforms": "Unix (benchmarked on macOS arm64; CI builds mawk on Ubuntu for parity runs); Windows not documented",
+    "thread_safety": "Not applicable for the CLI; -j N runs parallel-safe programs on rayon workers with per-worker runtime state and does not merge record-rule mutations into END.",
+    "drop_in_for_baseline": "partial — same command-line surface and most gawk extensions, but documented gawk gaps, and the inline fast paths differ from awk on CRLF input and on non-integer numeric fields"
+  },
+  "gotchas": [
+    "Correctness bug in the benchmarked numeric fast paths: process_file_add_field_to_slot_raw and process_file_add_mul_fields_to_slot_raw (the paths behind the 'sum first column' and 'field computation' rows) parse each field with parse_number_bytes, which accepts only a whole-field integer or Rust's str::parse::<f64>, while the VM path uses awk's longest-numeric-prefix rule. A field such as '12ms' or '3.5%' adds 0 instead of 12 or 3.5, 'nan' or 'inf' turns the sum into NaN or Inf where gawk reads 0, and -n (hex/octal coercion) is ignored, so the same sum written as two statements gives a different answer. The fallback also calls from_utf8_unchecked on raw field bytes, which is undefined behaviour in Rust for non-UTF-8 input.",
+    "CRLF divergence in the fast paths: all five inline loops strip a trailing CR before the newline, while awkrs's own record splitter (record_io.rs split_lines_unix) keeps it 'for gawk parity', so { gsub(\"lit\", \"x\"); print } on a CRLF file emits LF-only lines, and with a non-default FS the last field loses its CR, unlike gawk, mawk and awkrs's VM path. The 2026-10-08 commit '-j: parallel workers keep a record's trailing CR and newline' fixed the same issue in parallel mode only.",
+    "The README numbers are stale and benchmark-shaped: generated 2026-04-10 on awkrs 0.1.18 (the crate is now 0.5.7), the JIT rows come from a Cranelift module that has since been removed (README caveat of 2026-06-01), every input is seq-generated integers with LF line endings (which trigger neither bug above), outputs are never compared across engines, a compiler comment (normalize_field_indices in src/compiler.rs) records that the field-index fusions these paths depend on once stopped firing on real programs after a parser change, and the locale is not pinned, so gawk's 351 ms regex and 436 ms gsub rows may reflect multibyte matching.",
+    "Baselines are Homebrew gawk 5.4.0 and mawk 1.3.4 with unknown build flags; each 10-60 ms hyperfine mean includes process startup, and awkrs maps the file with mmap while gawk and mawk read it through read()."
+  ],
+  "pick_this_over_siblings_when": "Pick awkrs over eBay TSV Utilities, hck or tuc when you need actual awk programs rather than fixed cut or filter verbs, and over the catalogued frawk when you want gawk extension coverage and POSIX awk syntax; prefer tsv-utils, hck or tuc for column selection and filtering at scale, since their claims do not rest on one-rule special cases.",
+  "verified_claims_summary": "One first-party hyperfine run (2026-04-10, awkrs 0.1.18, Apple M5 Max, macOS, 1M-line seq-generated files, mean of at least 10 runs after 3 warm-ups) shows the bytecode build at 16.1 ms vs mawk 1.3.4 66.2 ms and gawk 5.4.0 100.8 ms for { print $1 } (4.1x mawk), 2.3-3.1x mawk on the summing and field-print programs, 5.3x mawk and 31x gawk on no-match gsub, and parity with gawk on associative-array counting and with mawk on a CPU-bound BEGIN loop (ratios derived from page data); outputs were not cross-checked and the benchmarked programs all take inline fast paths.",
+  "status_note": "Very active (604 commits, last commit 2026-10-11, crate 0.5.7 with 2,037 downloads, MIT) and pursuing gawk parity with a large parity corpus, but it has 1 star, no issue tracker activity, benchmark numbers six months and five minor versions old, and fast paths that still diverge from awk semantics on CRLF and non-integer numeric fields.",
+  "sources_read": [
+    "https://github.com/MenkeTechnologies/awkrs",
+    "https://github.com/MenkeTechnologies/awkrs/commits/main",
+    "https://github.com/MenkeTechnologies/awkrs/issues?q=is%3Aissue",
+    "https://github.com/MenkeTechnologies/awkrs/tree/main/src",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/README.md",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/scripts/benchmark-vs-awk.sh",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/benchmarks/benchmark-results.md",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/BUGS.md",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/src/record_io.rs",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/src/runtime.rs",
+    "https://crates.io/api/v1/crates/awkrs",
+    "https://raw.githubusercontent.com/MenkeTechnologies/awkrs/HEAD/src/compiler.rs"
+  ],
+  "confidence": 0.6
+}

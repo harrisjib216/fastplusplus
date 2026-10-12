@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/pmarreck/bzip2z",
+  "one_liner": "Clean-room Zig bzip2 with SA-IS block sorting; compresses 1.7-1.8x faster than bzip2 1.0.8 on a synthetic periodic input, decompresses slower.",
+  "what_it_does": "A pure-Zig reimplementation of the bzip2 format: a memory-only core (compressWithOptions, decompress, streaming decompressStream with per-block CRC diagnostics), a C ABI static library (c/include/bzip2z.h) and bzip2-compatible CLIs (bzip2z, bunzip2z, bzcatz) written in C on top of that ABI. Output is standard .bz2 readable by bzip2 and pbzip2, but not byte-identical to the reference encoder. Optional concurrent block compression (threads) keeps a single stream; opt-in pbzip2-style multi-stream output (-j N or multi_stream) enables parallel decompression.",
+  "how_it_is_fast": "The Burrows-Wheeler step builds a suffix array with SA-IS (induced sorting, linear time, after Yuta Mori's sais via sile/sais) over the block concatenated with itself, then keeps positions below n to get the rotation order. This replaces bzip2's mainSort/fallbackSort, which degrades on highly repetitive blocks, so the gain is largest on periodic data. Compression can also run blocks on a worker pool with a bounded queue and reassemble them in order into one stream; decompression of a normal single-stream file stays sequential.",
+  "when_to_use": [
+    "Zig projects that want a bzip2 encoder and decoder without linking libbz2, under the MIT licence.",
+    "Compressing large, repetitive or machine-generated data (logs, periodic binary records) where bzip2's block sort hits its slow fallback path.",
+    "Multi-core hosts that must emit a single standard bzip2 stream but want parallel block compression (threads > 1).",
+    "Decoders that need to say where corruption is: decompressStream reports stream, block, phase, bit offset and stored versus computed CRC."
+  ],
+  "when_not_to_use": [
+    "Decompression-heavy workloads: the README's own rows show it at 0.76-0.82x of system bzip2 from 8 MB up, and pbzip2 multi-stream decode is far faster.",
+    "When byte-identical output to reference bzip2 matters (reproducible archives, checksum-pinned artefacts): sizes differ by under 0.2% and the encoder is not the reference one.",
+    "Memory-tight encoders: the SA-IS on a doubled block allocates on the order of 15-20 MB of scratch per 900 kB block in flight (derived from the allocations in bwtEncode and buildSuffixArraySAIS), times the worker count; the README's 'Peak memory' column is a formula, not a measurement.",
+    "If you need a drop-in libbz2 C API (BZ2_bzCompress and friends): its C ABI is its own bzip2z_* interface.",
+    "Projects pinned to an older Zig: the current source uses the Zig 0.16 std.Io API and the flake pins Zig 0.16.0, although build.zig.zon still says minimum 0.15.2."
+  ],
+  "integration": {
+    "form": "Zig module plus static lib (bzip2z, bzip2z_ffi) with C header; CLI binaries",
+    "dependencies": "none for the library; the CLI build pulls pmarreck/progrez (progress bar); the dev shell and benchmark use system bzip2 and pbzip2 from nixpkgs",
+    "min_toolchain": "Zig 0.16.0 for the current source (flake.nix pins 0.16.0; build.zig.zon declares 0.15.2, which the std.Io code no longer matches)",
+    "platforms": "CI builds macOS aarch64, Linux x86_64 and aarch64, Windows x86_64 and aarch64; benchmarks only on Apple M4 Max",
+    "thread_safety": "Not documented for shared state; each call takes its own allocator and spawns its own worker threads when threads > 1",
+    "drop_in_for_baseline": "partial — the CLI accepts bzip2 flags and the format is interoperable, but the library API is not libbz2's and outputs are not byte-identical"
+  },
+  "gotchas": [
+    "Harness flaw in bench/bench_bzip2.zig: bzip2z is timed as in-process library calls on an in-memory buffer, while system bzip2 and pbzip2 are timed as subprocesses including spawn, reading the temp input file and writing the output file, which flatters bzip2z most at small sizes (its 0.97x decompress parity at 1 MB likely hides a real deficit). The pbzip2 decompress command omits the -p thread flag, so pbzip2 decompresses with all cores even in the 'threads = 1' rows, which is why those rows show 2.55-9.56x; and because the benchmark never sets multi_stream, bzip2z's own parallel decode path is never measured.",
+    "The 'mixed' benchmark input is 75% periodic (a-z cycle, XYXY, byte ramp) plus 25% random, the kind of block that pushes bzip2 1.0.8 into its slow fallback sort and favours linear-time SA-IS; the bench supports text, binary, repetitive and random patterns but the README reports only mixed, so the 1.7-1.8x compression gain on ordinary text is unmeasured. Each figure is the mean of 3 iterations with no warm-up, against bzip2 of unknown build flags.",
+    "The 'Peak memory (Zig)' column is computed as input + compressed + decompressed + 2 MB, not measured, and is reported identically for 1 and 16 threads.",
+    "The numbers date from 2026-01-15 on Zig 0.15.2; the benchmark source has since been ported to Zig 0.16 and the decoder changed (bit-reader refill 2026-10-11, structural checks and a randomized-block derandomize offset fix 2026-10-10), so the table predates the current code; the decoder fixes concern robustness on crafted or legacy input, not the measured round trips."
+  ],
+  "pick_this_over_siblings_when": "Pick bzip2z over libbzip2-rs when you work in Zig or C and want faster single-stream compression on repetitive data or parallel block compression; pick libbzip2-rs when you need a libbz2-compatible API, byte-identical output or faster decompression.",
+  "verified_claims_summary": "First-party runs on an Apple M4 Max (Zig 0.15.2 ReleaseFast against nixpkgs bzip2 1.0.8 and pbzip2 1.1.13, 2026-01-15) on a synthetic 1-128 MB mostly periodic input: single-thread compression 1.72-1.79x faster than bzip2 (18.64 vs 10.43 MB/s at 1 MB), decompression 0.97x at 1 MB and 0.76-0.82x at 8 MB and above; with 16 threads compression reaches 162.74 MB/s at 128 MB, 15.10x single-threaded bzip2 and 1.41x pbzip2 (derived from page data). The baselines were timed as subprocesses with file I/O.",
+  "status_note": "Actively developed (76 commits, last 2026-10-12, heavy differential and fuzz testing against reference bzip2), MIT-licensed and copyable, 1 star, no releases; the published benchmark predates the current code and measures only one synthetic pattern with an asymmetric harness.",
+  "sources_read": [
+    "https://github.com/pmarreck/bzip2z",
+    "https://github.com/pmarreck/bzip2z/commits/yolo",
+    "https://github.com/pmarreck/bzip2z/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/README.md",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/build.zig",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/test",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/CODE_MINIMAP.md",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/PLAN.md",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/NEXT_STEPS.md",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/ZIG_0.15_TO_0.16_MIGRATION.md",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/bench/bench_bzip2.zig",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/src/bzip2.zig",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/src/core.zig",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/src/concurrency.zig",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/c/include/bzip2z.h",
+    "https://raw.githubusercontent.com/pmarreck/bzip2z/HEAD/docs/mktp-research/bzip2.md",
+    "https://crates.io/api/v1/crates/banzai"
+  ],
+  "confidence": 0.65
+}

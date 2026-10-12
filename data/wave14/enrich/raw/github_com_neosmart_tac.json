@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/neosmart/tac",
+  "one_liner": "Rust tac that reverses a file's lines using mmap and an AVX2 newline scan; claims 2.55x over GNU tac.",
+  "what_it_does": "A command-line replacement for GNU Coreutils tac: prints the lines of each FILE (or stdin) last line first. It is a binary crate (cargo install tac), not a library, and supports only -h, -v and --line-buffered; GNU's -b/--before, -r/--regex and -s/--separator are absent, so only newline separators work. Regular files (and stdin redirected from a file on Unix) are memory-mapped; pipes are buffered in memory up to 4 MiB and then meant to spill to a temp file.",
+  "how_it_is_fast": "The whole input is memory-mapped, so there are no read() syscalls; the README credits this for the larger gain when speculative-execution mitigations make syscalls expensive. On x86 with AVX2 (runtime-detected), the file is scanned backwards from a 32-byte-aligned point, two 32-byte vectors at a time: _mm256_cmpeq_epi8 + _mm256_movemask_epi8 build a 64-bit newline mask, then lzcnt picks the last newline and BZHI clears it. Each line goes out as one write_all of a slice of the mapping into a BufWriter. aarch64 has a NEON version of the same loop, but only with the nightly feature; every other target uses a byte-at-a-time loop.",
+  "when_to_use": [
+    "Only after the AVX2 mask bug below is fixed or ruled out on your build. Then: reversing large, seekable log files on local disk (tac access.log | grep ...) where scan throughput matters",
+    "Workloads that pass FILE arguments (or redirect a file into stdin on Unix), so the mmap path runs",
+    "Systems where speculative-execution mitigations make read() syscalls expensive; the README says the gap over GNU tac widens there",
+    "When you need an MIT-licensed tac or one that runs natively on Windows"
+  ],
+  "when_not_to_use": [
+    "On x86-64 with AVX2 (the default path) until the movemask sign-extension bug is fixed: per code reading and an emulation of the loop, output gets scrambled whenever a newline is the last byte of the lower 32-byte half of a 64-byte block",
+    "Piped input over 4 MiB: after the spill to the temp file, the loop reads into buf[total_read..], an empty slice, so read returns 0 and everything past the first 4 MiB is dropped without an error",
+    "When you rely on GNU tac options (-s custom separators, -r regex separators, -b) or on GNU behaviour for empty files: tac on a 0-byte file fails with memmap's 'memory map must have a non-zero length' and exits non-zero",
+    "Files that may be truncated while being read (copytruncate log rotation): a shrinking mapped file can raise SIGBUS; GNU's read-based approach does not have this hazard",
+    "aarch64 on stable Rust (scalar fallback only) and 32-bit x86: the x86 cfg imports core::arch::x86_64 and calls _bzhi_u64, which exist only on x86_64, so an i686 build likely fails to compile (not tested)"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "atty 0.2 and memmap 0.7 (both flagged by RustSec: memmap unmaintained RUSTSEC-2020-0077; atty unsound on Windows RUSTSEC-2021-0145 and unmaintained RUSTSEC-2024-0375)",
+    "min_toolchain": "Rust 2018 edition on stable for x86 AVX2 (no rust-version declared); NEON needs nightly with --features nightly, which enables the old #![feature(stdsimd)] gate",
+    "platforms": "x86-64 with AVX2 runtime-detected (BMI2 and LZCNT are also enabled but not checked); aarch64 NEON on nightly only; scalar fallback elsewhere; Linux, macOS and Windows (stdin mmap is Unix-only)",
+    "thread_safety": "not applicable (single-threaded command-line tool)",
+    "drop_in_for_baseline": "partial — same default output for newline-separated files, but no -b/-r/-s, errors on empty files, truncates piped input over 4 MiB, and (per code reading) the AVX2 path can scramble output"
+  },
+  "gotchas": [
+    "Correctness bug in the AVX2 hot path (code reading plus an emulation of the loop; not run on the real binary): `matches = (matches << 32) | _mm256_movemask_epi8(..) as u64`. Rust's movemask returns i32, and casting i32 to u64 sign-extends. When bit 31 of the lower 32-byte window is set, the upper 32 mask bits all become 1, and the upper window's 32 bytes come out one byte at a time in reverse order. A Python emulation of search256 differed from GNU tac's output on 162 of 300 random inputs (0 of 300 with zero extension), and on about 1.6% of the bytes of a synthetic 200 KB log. The bug came in with commit ec5f71a (2021-08-31, the 64-byte unroll that changed `as u32` to `as u64`) and ships in crates.io 2.0.0 and 2.1.0. The repo has no tests; CI only runs cargo build and cargo test.",
+    "Stdin spill bug: once buffered stdin reaches 4 MiB, the data is written to std::env::temp_dir()/.tac-<pid>, but later reads target buf[4 MiB..], an empty slice. The loop ends there, so only the first 4 MiB is reversed. The temp-file name is predictable, File::create follows symlinks, and the file is not deleted when output fails, because the `?` on a broken pipe returns before the cleanup.",
+    "The speed numbers predate the current code: the README's 2.55x (no hardware, input or GNU version) was added 2021-07-12 for the 32-bit-mask loop. The later +14% (hyperfine, WSL1, AMD 1950X, 200x concatenated /usr/share/dict/words, commit ec5f71a message) was timed on the unrolled loop that carries the mask bug, and its output was apparently never checked.",
+    "search256 is gated only on is_x86_feature_detected!(\"avx2\") but also enables lzcnt and bmi2 (BZHI); a CPU or emulator that exposes AVX2 without BMI2 would fault with an illegal instruction."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling reverses lines. The closest are the other coreutils rewrites (fd and minifind for find, FUC cpz/rmz for cp/rm, dumac for du), and unlike those tac currently has an unresolved output-correctness problem. Prefer GNU tac until the mask cast is fixed.",
+  "verified_claims_summary": "One first-party ratio: about 2.55x faster than GNU Coreutils tac with mitigations disabled and 'more otherwise', with no CPU, input file, GNU version or command, and no benchmark code in the repo. The author's blog (unreachable here; search snippet only) says up to 3x. The ratio was written for the July 2021 32-bit-mask loop, not the 64-bit loop that ships in 2.0.0 and 2.1.0.",
+  "status_note": "Stale: last commit and crates.io 2.1.0 on 2024-01-22, two GitHub issues ever, no tests. It is MIT-licensed and one ~380-line source file, so the fixes are small (cast through u32 before widening; read into buf[..] after spilling; handle empty files), but the released crate should not be trusted for correct output on AVX2 machines or piped input over 4 MiB until then.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/README.md",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/src/tac.rs",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/Cargo.lock",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/Makefile",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/.cargo/config",
+    "https://raw.githubusercontent.com/neosmart/tac/HEAD/.github/workflows/rust.yml",
+    "https://github.com/neosmart/tac",
+    "https://github.com/neosmart/tac/issues?q=is%3Aissue",
+    "https://github.com/neosmart/tac/commits/master",
+    "https://github.com/neosmart/tac/commit/ec5f71a",
+    "https://github.com/neosmart/tac/commit/1c5e429",
+    "https://github.com/neosmart/tac/commit/2db64e3",
+    "https://github.com/neosmart/tac/tree/master/.github/workflows",
+    "https://crates.io/api/v1/crates/tac",
+    "https://crates.io/api/v1/crates/tac/2.1.0/download",
+    "https://crates.io/api/v1/crates/memmap/0.7.0/download",
+    "https://raw.githubusercontent.com/rust-lang/reference/master/src/expressions/operator-expr.md",
+    "https://raw.githubusercontent.com/rust-lang/stdarch/master/crates/core_arch/src/x86/avx2.rs",
+    "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/memmap/RUSTSEC-2020-0077.md",
+    "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/atty/RUSTSEC-2021-0145.md",
+    "https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/atty/RUSTSEC-2024-0375.md",
+    "WebSearch: neosmart \"world's fastest tac\" SIMD rust benchmark hyperfine GNU coreutils (snippets of https://neosmart.net/blog/using-simd-acceleration-in-rust-to-create-the-worlds-fastest-tac/)",
+    "https://neosmart.net/blog/wp-json/wp/v2/posts/4801 (did not resolve)"
+  ],
+  "confidence": 0.75
+}

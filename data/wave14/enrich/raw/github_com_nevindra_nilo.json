@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/nevindra/nilo",
+  "one_liner": "Zig web framework on zio fibers; beats nginx on HttpArena h2/h2c, TLS-JSON and pipelined rows, loses on plain HTTP/1.1.",
+  "what_it_does": "nilo is a batteries-included Zig 0.17 web toolkit (twelve modules: HTTP server, Postgres/SQLite, S3, fetch, jobs, cache, JWT, protobuf, config, password hashing, ids). A route is a plain function whose argument types drive parameter parsing, 400/404 answers and the OpenAPI document; HTTP/1.1, h2c, HTTP/2 over TLS and unary gRPC/Connect share one port and one route table when built with `.http2 = true`. It is an application framework you write the service in, not a configurable server or a drop-in for nginx.",
+  "how_it_is_fast": "Each connection runs as a stackful coroutine on lalinsky's zio runtime (io_uring with epoll fallback on Linux), pinned to the executor thread it was dealt to with no work stealing (ADR 199), and every executor runs its own accept fiber (ADR 200, which took short-lived-connection throughput from about 0.66M to 1.97M req/s on the author's 8-core box). A request does one arena allocation, which a test enforces, and idle connections hand their buffer pages back. The author's own profile puts nilo's code at about 181 ns, roughly 4% of a served request's CPU, with the kernel's socket path as the rest, so the HttpArena wins over nginx come mostly from nginx's slower HTTP/2 path and from the thread-per-core fiber design, not from Zig codegen.",
+  "when_to_use": [
+    "You are writing a new service in Zig and want routing, typed handlers, OpenAPI, Postgres/SQLite and TLS in one dependency tree with no C toolchain (libdeflate is the only optional C piece).",
+    "HTTP/2 or h2c-heavy internal APIs or unary gRPC on one port: nilo served 9.01M req/s at baseline-h2c-256 against nginx 2.46M and proxygen 5.88M, and 7.27M at baseline-h2-256 against nginx 3.41M.",
+    "JSON over TLS 1.3 without a terminating proxy, on CPUs with AES-NI and PCLMUL: 1.56M req/s at json-tls-4096 against nginx 1.31M and h2o 1.23M.",
+    "WebSocket echo services: 4.11M msg/s at echo-ws-512, level with mongoose (3.95M) and ahead of proxygen (3.18M).",
+    "Linux deployments where a few MiB of idle RSS matters (author measures 4,669 bytes per idle connection after its pages are returned)."
+  ],
+  "when_not_to_use": [
+    "Peak plain HTTP/1.1 throughput: baseline-4096 is 3.08M req/s, 0.94x nginx and 0.70x libreactorng; limited-conn-4096 is 0.88x nginx; h2o and agensio serve h2/h2c at about twice nilo's rate.",
+    "Many concurrent HTTP/2 static downloads: static-h2 fell from 862K req/s at 256 connections to 202K at 1,024 (0.25x nginx, 0.14x agensio) while RSS reached 0.7-1.4 GiB; a database-bound handler did 0.28x userver on async-db.",
+    "Fixed-rate load on few cores: latency-500k-8cpu delivered only 88% of the offered 500K req/s with a 1.16 s mean latency, where libreactorng and mongoose held 0.99 and 0.95 of it.",
+    "You need stability: pre-1.0 (v0.8.0), 8 stars, a single maintainer, forty upgrade-affecting entries in v0.8.0 and seventy-one in v0.7.0, and it pins zio main plus forks of pg.zig and tls.zig rather than tagged releases.",
+    "Windows servers (WSL2 only per decided.md), HTTP/3, templates, streaming gRPC, WebSocket over HTTP/2, or state shared across instances outside the database."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "zio (lalinsky/zio, pinned main commit) for plain HTTP; behind build flags: pg.zig and zqlite (bundles SQLite) for nilo_sql, a tls.zig fork for TLS 1.3, libdeflate (C) for gzip",
+    "min_toolchain": "Zig 0.17.0 for v0.8.0 (v0.7.0 and earlier need Zig 0.16.0)",
+    "platforms": "Linux x86_64 and aarch64 (io_uring with epoll fallback), macOS via kqueue; Windows only for four loop-free modules, servers under WSL2. TLS needs -Dcpu with aes+pclmul (x86_64) or aes+sha2 (aarch64), or AES-GCM runs about 70x slower",
+    "thread_safety": "One executor thread per core by default; a connection and its handler stay on one OS thread across every wait, so per-request state needs no locks, while shared services need nilo.Mutex unless threads = 1",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The json-comp lead (2.06x userver, 4.8x Drogon) runs libdeflate, a C library, through nilo's -Dlibdeflate flag; nginx, h2o and agensio do not run that profile, so it compares only against C++ frameworks.",
+    "Throughput rows come from different HttpArena runs (nilo.json 2026-10-11 against nginx and h2o rows from 2026-08-30), and the author's bench/result/http.md shows several framework changes (Date header, 4,096 backlog, no stealing, one acceptor per executor) made in response to earlier HttpArena readings; the pinned scheduling doubled saturated p50 at baseline-4096 and pushed pipelined p99.9 past 1 s in its own before/after table.",
+    "The README's 4,669 bytes per connection is an idle connection; the author measures about 29.5 KiB per active connection (483 MiB over 16,384 WebSockets), and json-tls-4096 shows a 309 ms p99 against a 3.1 ms mean.",
+    "The README throughput figure (1,401,412 req/s on four cores) and its p99 table come from nilo's own harness against Zig, Rust, Go, Node and Bun servers only; HttpArena is the only C/C++ comparison. The entry's handlers use the documented API (standard mode) and do the JSON arithmetic and compression per request; no shortcut was found in frameworks/nilo/src/main.zig."
+  ],
+  "pick_this_over_siblings_when": "Pick nilo over zix, zeemo or libxev (each about 4.4M req/s at baseline-4096 against nilo's 3.08M) when you need HTTP/2, unary gRPC, TLS and a SQL layer in the same Zig framework rather than the fastest HTTP/1.1 path; if raw h2c rate is the goal, the vanilla (V) entry reached 15.6M req/s on baseline-h2c-256 against nilo's 9.0M.",
+  "verified_claims_summary": "On HttpArena's Threadripper PRO 3995WX (server on 64 hardware threads, load generator on the other 64 over loopback, best of three 5 s runs), nilo v0.8.0 built with Zig 0.17 --release=fast for x86_64_v3+aes+pclmul served 9.01M req/s at baseline-h2c-256 and 7.27M at baseline-h2-256 versus nginx 1.31.4 (custom C module, -O3 -march=native) at 2.46M and 3.41M, 1.19x nginx on json-tls and 2.97x on pipelined, but 0.94x nginx on plain baseline-4096 and below h2o and agensio on h2 and h2c.",
+  "status_note": "Very active single-maintainer MIT project (504 commits, 15 of them on 2026-10-12 alone, v0.8.0 tag, 8 stars) whose author also maintains its HttpArena entry; fine to depend on for a Zig service, but expect breaking changes each release and untagged upstream pins.",
+  "sources_read": [
+    "https://github.com/nevindra/nilo",
+    "https://github.com/nevindra/nilo/commits",
+    "https://github.com/nevindra/nilo/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/README.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/docs/comparison.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/bench/result/http.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/docs/decided.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/docs/guide/deploying.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/build.zig",
+    "https://raw.githubusercontent.com/nevindra/nilo/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lalinsky/zio/HEAD/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nilo/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nilo/build.zig",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nilo/build.zig.zon",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nilo/src/main.zig",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nilo/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nilo.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/h2o.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/agensio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/proxygen.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/userver.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/libreactorng.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/mongoose.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh"
+  ],
+  "confidence": 0.64
+}

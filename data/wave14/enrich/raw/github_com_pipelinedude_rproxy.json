@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/pipelinedude/rproxy",
+  "one_liner": "Rust io_uring HTTP/1.1 filtering reverse proxy; first-party 1.24x nginx-as-proxy throughput on a 2-byte keep-alive response.",
+  "what_it_does": "A prefork HTTP/1.1 reverse proxy meant to sit behind nginx (or another front end) and enforce traffic policy before requests reach the backend: HMAC JWT checks with a cached verdict, IP allow/deny, per-worker sliding-window rate limits, method/header/query/cookie/form validation with custom rejection responses, path canonicalisation and request-smuggling rejection. It also does Host/path routing, 7 load-balancing modes (including rendezvous hashing), a per-worker LRU response cache, active health checks, WebSocket tunnelling and Prometheus metrics. Configuration is one cascading YAML file (global, domain, route, backend); it is a standalone binary, not a library, and it does not read nginx configuration.",
+  "how_it_is_fast": "Each worker is a forked single-threaded monoio (io_uring) process accepting through SO_REUSEPORT, so there are no locks or cross-thread hand-offs; per-request state lives in thread_local! structures and pooled buffers, and the README says the hot path allocates nothing at log level info. The response head is rebuilt in one pass from httparse output and, for small bodies, written together with the body in a single write; the June results file attributes the jump from 0.88x to 1.24x of nginx to that head+body coalescing, removing a double parse and a load-balancer fix. Backend connections are kept alive in a per-worker pool, and backend liveness and counters live in a MAP_SHARED region read without locks.",
+  "when_to_use": [
+    "You already run nginx (or a load balancer) for TLS and static files and want JWT, IP ACL, rate-limit and request-validation policy in one YAML file instead of nginx if/location blocks or Lua.",
+    "Linux hosts with io_uring (kernel 5.6+, 5.11+ recommended) serving HTTP/1.1 keep-alive API traffic with small responses, the shape where its measured lead over nginx appeared.",
+    "You need ACL-safe path canonicalisation (/x/../admin, //admin, /%61dmin) applied identically to routing, filters, cache key and the forwarded request.",
+    "Small internal deployments where per-worker rate limits and caches (limit roughly multiplied by worker count) are acceptable."
+  ],
+  "when_not_to_use": [
+    "As a front-line edge proxy replacing nginx or HAProxy: the author positions it only as a filter behind one, and it has no HTTP/2 or HTTP/3, no config reload on SIGHUP and no graceful drain on SIGTERM.",
+    "When you need global rate limits or a shared cache: rate_limit, the LRU cache, the backend pool and leastconn counts are all per worker.",
+    "TLS-heavy paths: the only TLS number is rproxy alone at 134,168 req/s against a plaintext backend ceiling, with no nginx or HAProxy TLS row to compare.",
+    "Anything that needs a licence: the repository has no LICENSE file, so it can only be studied, not legally reused.",
+    "Production-critical use: 0 stars, 2 public commits (2026-08-18 and 2026-08-25), one author, no releases."
+  ],
+  "integration": {
+    "form": "standalone binary (cargo build --release; Dockerfile builds a glibc binary on a scratch image)",
+    "dependencies": "monoio 0.2.4 (io-uring), io-uring 0.6, httparse, rustls 0.23 with monoio-rustls and rustls-native-certs, tokio, hyper and reqwest (health/metrics process only), serde_yaml, regex, lru, hmac/sha2, nix, socket2",
+    "min_toolchain": "Rust edition 2021 (exact MSRV not documented); Linux kernel 5.6+ with io_uring, 5.11+ recommended",
+    "platforms": "Linux only (io_uring, MAP_SHARED, fork); x86-64 per the Dockerfile; glibc required (musl lacks syscalls monoio needs, per the Dockerfile comment)",
+    "thread_safety": "Not applicable as a library; each worker is a separate single-threaded process, shared state is MAP_SHARED counters only",
+    "drop_in_for_baseline": "partial — it proxies HTTP/1.1 like an nginx proxy_pass location, but uses its own YAML config, lacks HTTP/2, static files and reload, and is meant to run behind nginx rather than replace it"
+  },
+  "gotchas": [
+    "Harness flaw in the August three-proxy run: bench/haproxy_baseline.sh prints 'median-of-3' but keeps the best of three wrk runs, pins no cores, and gives the backend nginx and the nginx proxy worker_processes 4 each while HAProxy runs its default thread count (bench/haproxy.cfg sets no nbthread) and rproxy reads its worker count from bench_config.yml, which is not in the repo; when that count is below the 12 allowed CPUs rproxy's cpu_affinity 'auto' policy (src/platform.rs) pins each worker to its own core while nginx stays unpinned, so the August 1.15x and 1.21x ratios are not equal-resource comparisons. The script also expects haproxy.cfg and a built haproxy-2.8.5/ at the repo root, neither of which is published (the config is at bench/haproxy.cfg), so it cannot run as published.",
+    "Only the June 2026-06-27 run (bench/BENCHMARK_RESULTS.md: median of 3 after a warmup, 2 workers each on pinned cores 2-3) is close to like-for-like; its nginx proxy config was not published, and the repo's bench/nginx_proxy.conf listens on 8081 and proxies to 8081 (a self-loop) while bench/backend_nginx.conf listens on 8080, the rproxy port, so none of the checked-in configs is what was measured. A pre-existing system nginx was running on the box during the June run (the first nginx-proxy attempt collided with it on :8082).",
+    "Both measured runs predate the first public commit (2026-08-18), the README contradicts itself (a measured HAProxy row, then 'HAProxy was not measured on the current rig'), and bench/rproxy.yaml sets log_level: debug, which the README says enables per-request logging and allocation; it listens on 8083 and was evidently not the measured config.",
+    "Unknown YAML keys are silently ignored, so a typo disables a filter without an error; rate_limit is per worker, so the effective global limit is about rate_limit x workers."
+  ],
+  "pick_this_over_siblings_when": "Pick rproxy over routez, Arc or monolake when the job is a policy filter (JWT, ACL, rate limit, validation, canonical paths) behind an existing nginx rather than a general reverse proxy; routez publishes a broader nginx and HAProxy comparison (1.26x as a keep-alive reverse proxy), and monolake uses the same monoio io_uring runtime with a larger team and history.",
+  "verified_claims_summary": "On the author's i5-12450H laptop-class box (wrk -t4 -c100 -d10s keep-alive over loopback, nginx backend returning a 2-byte 'OK'), the June run with 2 pinned workers each gave rproxy 189,810 req/s against an nginx reverse proxy at 153,484 (1.24x), median of 3; a later unpinned run reported 323,035 vs nginx 282,032 (1.15x) and HAProxy 2.8.5 266,603 (1.21x), but those are best-of-3 with unequal worker counts. nginx's version and build flags are not stated; rproxy is built with fat LTO, codegen-units 1 and opt-level 3.",
+  "status_note": "Active (last commit 2026-08-25) but a 0-star, 2-commit solo project with no LICENSE file, so reference only; the most comparable benchmark (June) used configs and code not in the public history, and the published three-proxy script reports best-of-3 as a median on unpinned, unequal worker counts.",
+  "sources_read": [
+    "https://github.com/PipelineDude/rproxy",
+    "https://github.com/PipelineDude/rproxy/commits/main",
+    "https://github.com/PipelineDude/rproxy/tree/main/src",
+    "https://github.com/PipelineDude/rproxy/tree/main/docs",
+    "https://github.com/PipelineDude/rproxy/issues",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/README.md",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/docs/DESIGN-NOTES.md",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/BENCHMARK_RESULTS.md",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/haproxy_baseline.sh",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/tls_bench.sh",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/nginx_proxy.conf",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/backend_nginx.conf",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/haproxy.cfg",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/rproxy.yaml",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/perf_gate.sh",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/bench/perf_report.txt",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/src/fast_proxy.rs",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/src/platform.rs",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/src/config.rs",
+    "https://raw.githubusercontent.com/PipelineDude/rproxy/HEAD/src/main.rs"
+  ],
+  "confidence": 0.6
+}

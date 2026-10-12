@@ -1,13 +1,13 @@
 [
   {
     "id": "https://github.com/mda2av/ioxide",
-    "evidence_tier_final": "A",
-    "tier_reason": "Retiered C to A for consistency with the other HttpArena entries verified in this wave (nilo, Kestrel, cpeak, Helidon, tokio-uring, zix, zeemo, vanilla, minima-sync): the CPU model that batch-19 found missing is published in site/data/current.json (AMD Ryzen Threadripper PRO 3995WX) and the entry code, nginx build flags (-O3 -march=native) and per-entry results JSON are public. The first-party shortcomings (suite and repo share the owner MDA2AV; C io_uring servers libreactorng and libioma beat it; h2o and agensio beat it on h2; 4.11M is preview.6, pinned preview.7 gives 3.90M) stay recorded.",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the benchmarked ioxide 0.7.211 carries issue #221 (severity high: a recycled write slab lets one client receive another client's response bytes), fixed only in 0.15.251, and the entry's static-h2/h3 cache breaks HttpArena's engine rule; numbers measured on code later fixed for a hot-path correctness bug (Paserati precedent): A to C. The verifier's preview.7 caveat is corrected (the 1.25x over nginx is the pinned run).",
     "corrections": {
-      "hardware": "HttpArena server: AMD Ryzen Threadripper PRO 3995WX (site/data/current.json)"
+      "caveats": "Correction: the stored 4,111,381 baseline-4096 is the final saved run of HttpArena PR #1372 (results commit 048221e), already on the pinned .NET preview.7 with runtime-async=on (3,896,541 was preview.7 before runtime-async), so the 1.25x over nginx stands. The benchmarked ioxide 0.7.211 carries issue #221 (severity high: a recycled write slab lets one client receive another client's response bytes), fixed only in 0.15.251 (2026-09-27); keep-alive rows are probably unaffected. The entry's h2/h3 static cache (Multiplexed.cs) is built in the entry and never refreshed, breaking HttpArena's engine rule, so the static-h2 and static-h3 wins are suspect. The HTTP/1.1 handler sends no Date or Server header (about 63 vs 135 bytes per response) and uses unbounded buffers; nginx rows 2026-08-15/20, ioxide 2026-08-29 (cross-run)."
     },
     "urls_opened": [
-      "https://github.com/MDA2AV/HttpArena/blob/main/site/data/current.json"
+      "enricher record data/wave14/enrich/raw/github_com_mda2av_ioxide.json"
     ]
   },
   {
@@ -1080,6 +1080,83 @@
     },
     "urls_opened": [
       "enricher record data/wave14/enrich/raw/github_com_noamteyssier_hist_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/nevindra/nilo",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; entry handlers are clean, with the losing profiles and the author's own memory admission recorded.",
+    "corrections": {
+      "caveats": "Entry handlers are clean (standard mode, JSON math and gzip per request). static-h2 drops from 862K to 202K req/s at 1,024 connections (0.25x nginx); latency-500k-8cpu delivers 88% of the rate with a 1.16 s mean; async-db is 0.28x userver; json-tls p99 is 309 ms against a 3.1 ms mean; the author's own bench/result/http.md admits about 29.5 KiB per active connection. Several framework ADRs (197-200) were tuned after HttpArena readings; pins zio main plus pg.zig and tls.zig forks."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_nevindra_nilo.json"
+    ]
+  },
+  {
+    "id": "https://github.com/ngs-doo/dsl-json",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the reduced-precision caveat is narrowed (only the z field takes the approximate path) and the released 2.0.2 crash is recorded.",
+    "corrections": {
+      "caveats": "From the 2.0.2 source (commit d1f7a8d): DoublePrecision.LOW only raises the fast-path limit to 19 characters, so the x and y fields (about 21-22 characters, exponent form) still go through exact Double.parseDouble and only z takes the approximate path; the kostya README flags reduced-precision C++ variants but not this one, and nothing cross-checks output. Released 2.0.2 throws AIOOBE in approximateDouble on 2E15 (#283), fixed only on unreleased master; XXE report #296. RapidJSON SAX Precise is still faster (0.433-0.500 s vs 0.571)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_ngs_doo_dsl_json.json"
+    ]
+  },
+  {
+    "id": "https://github.com/menketechnologies/awkrs",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: every file benchmark runs a single-rule inline fast path whose numeric parsing and CR handling diverge from awk (the bench inputs hide it), the JIT rows came from a since-removed module, and the numbers were never re-run on current code; measured paths compute a different function from the baseline (stb-zip-style divergence, kept and documented): C to D.",
+    "corrections": {
+      "caveats": "All nine file benchmarks hit single-rule inline fast paths; only the BEGIN loop uses the VM, where it ties mawk. The benchmarked raw paths use parse_number_bytes (a whole-field parse with no awk numeric prefix, so '12ms' counts as 0, bare nan/inf poison sums, -n is ignored, from_utf8_unchecked is UB) and five inline loops strip CR while the VM path keeps it; the bench inputs (sequential integers, LF) hide both. The JIT rows came from a Cranelift module since removed."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_menketechnologies_awkrs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/pipelinedude/rproxy",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (reference only, no LICENSE); the August run is not equal-resource and its script is best-of-3 mislabelled as median.",
+    "corrections": {
+      "caveats": "bench/haproxy_baseline.sh labels best-of-3 as 'median-of-3' and pins no cores; the backend nginx and nginx proxy each get worker_processes 4; HAProxy runs default threads; rproxy reads its worker count from a missing bench_config.yml, and under 12 CPUs its cpu_affinity auto pins its workers while nginx stays unpinned, so the August 1.15x/1.21x is not equal-resource. The script needs an unpublished root haproxy.cfg and haproxy-2.8.5/; the June run had a system nginx already running; bench/rproxy.yaml (log_level debug) is not the measured config."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_pipelinedude_rproxy.json"
+    ]
+  },
+  {
+    "id": "https://github.com/pmarreck/bzip2z",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the pbzip2 rows omit -p, the memory column is a formula and multi-stream decode is never measured.",
+    "corrections": {
+      "caveats": "bench/bench_bzip2.zig's pbzip2 decompress call omits -p, so the 'threads = 1' pbzip2 rows decode on all cores (2.55-9.56x); the 'peak memory' column is a formula (input plus compressed plus decompressed plus 2 MB), identical for 1 and 16 threads, while the real SA-IS scratch is about 15-20 MB per 900 kB block; multi_stream is never set, so its parallel decode is never measured. Numbers predate the Zig 0.16 port and the October decoder changes."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_pmarreck_bzip2z.json"
+    ]
+  },
+  {
+    "id": "https://github.com/neosmart/tac",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the AVX2 hot path has had a mask sign-extension bug since 2021-08-31 (crates 2.0.0 and 2.1.0), and the later +14% was timed on it.",
+    "corrections": {
+      "caveats": "AVX2 hot-path bug (code reading plus Python emulation): _mm256_movemask_epi8(..) as u64 sign-extends the i32, so a newline at bit 31 of the lower window sets all upper mask bits and scrambles 32 bytes (162 of 300 random inputs differ from GNU tac in emulation); introduced in ec5f71a (2021-08-31), shipped in crates 2.0.0 and 2.1.0; the README 2.55x predates it but the later +14% was timed on the buggy loop. Piped stdin over 4 MiB is silently truncated; the temp file leaks on a broken pipe; an empty file errors; no -s, -r or -b; no tests."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_neosmart_tac.json"
+    ]
+  },
+  {
+    "id": "https://github.com/netty/netty",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the measured artifact is Netty 3.2.10.Final, the handler omits the required Date header, and nginx was capped at 4 workers.",
+    "corrections": {
+      "caveats": "The measured jar is org.jboss.netty 3.2.10.Final per the Maven metadata. The handler omits the Date header the benchmark spec requires (bytes per response: Netty 100, nginx echo 119 chunked, Crow 128); nginx is capped at 4 workers with bimodal latency; the README picks the best of 4 runs. Current Netty 4.2 has open adaptive-allocator memory issues (#15691, #15850) and the HttpServerCodec pipelining advisory GHSA-pvjx-v7vp-62vq (High)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_netty_netty.json"
     ]
   }
 ]
