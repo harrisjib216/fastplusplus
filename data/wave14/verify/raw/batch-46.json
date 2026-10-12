@@ -1,0 +1,41 @@
+[
+  {
+    "id": "paper:jimblandy-context-switch-tokio-vs-threads",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "jimblandy/context-switch README shows the numbers with public code (thread-brigade/src/main.rs vs async-brigade/src/main.rs, thread-creation vs async-creation) built by cargo --release on both sides, but there is no rustc version and no CPU model (4-core HT laptop only), and it is a one-person microbenchmark repo rather than a well-known suite or a paper, so C. Both sides are Rust: no C or C++ program is measured, so it does not meet the wave 14 C/C++ -O3 baseline.",
+    "corrections": {
+      "baseline": "Linux kernel threads created through Rust std::thread (pthread_create under glibc, 1 MiB stacks in thread-brigade), running the same 500-stage Unix-socket-pair brigade written in Rust and built with cargo --release; no C or C++ program is measured",
+      "baseline_in_list": false,
+      "workload": "Context-switch benchmark: 500 tasks chained by Unix-domain socket pairs (UnixStream::pair, called 'pipes' in the README) relay one byte from first to last; 100 warm-up and 10,000 timed iterations, thread version (std::thread, blocking read_exact/write_all) versus Tokio version (tokio::spawn, async UnixStream). Separate programs measure task creation (thread-creation with std::thread::spawn versus async-creation with async_std::task::spawn, not Tokio) and resident memory per task (rss-per-thread.sh and rss-per-task.sh with pmap, linear regression).",
+      "claimed_speedup": "README summary: a context switch takes about 0.2 us between async tasks versus 1.7 us between kernel threads, but the README says this advantage goes away when the switch is due to I/O readiness (both converge to 1.7 us) and when the program is pinned to one core; creating a task takes about 0.3 us (async-std 1.6, not Tokio) versus about 17 us for a kernel thread (about 57x, derived from page data); memory per task a few hundred bytes (about 0.4 KiB) versus about 20 KiB (9.5 KiB user plus 10 KiB kernel). 500-task brigade: async 1.795 ms per iteration (18.19 s elapsed) versus threads 2.657 ms (26.91 s); the page states this as 18.19/26.91 = 0.68, 'a 30% speedup', and the per-iteration ratio is about 1.48x (derived from page data). Pinned to one core with taskset, threads take 1.709 ms per iteration, about 5% faster than async (derived from page data). 50,000 tasks (100 iterations): thread-brigade 466 MiB resident versus async-brigade about 21 MiB. 250,000 async tasks ran; threads stopped at about 80,000 on the author's laptop.",
+      "compiler_and_flags": "cargo run --release for both sides in one workspace with no [profile] overrides (default release profile, opt-level 3); rustc version not stated. The brigade timings in the README were committed 2020-05-18 with tokio 0.2.19 in Cargo.lock, the 50,000-task memory figures 2019-11-30 with tokio 0.2.1, and the summary (0.2 us / 1.7 us, 0.3 us / 17 us) 2020-05-24 with tokio 0.2.21 and async-std 1.6.0; the current Cargo.lock pins tokio 1.19.2 and async-std 1.12.0 (update of 2022-06-20) and nothing was re-measured after that.",
+      "usability": "copyable",
+      "caveats": "No C or C++ program is measured: both sides are Rust built at the same release profile, so the result compares concurrency models (user-space async tasks versus OS threads), not languages, and the C/C++ baseline the wave asks for (pthreads, epoll, Boost.Asio at -O3) is absent; a C pthreads version would likely behave like the Rust thread side, but nobody ran one. The task-creation figure (about 0.3 us) was measured with async-std 1.6, not Tokio. All numbers date from 2019-2020 on tokio 0.2.x; the repo now pins tokio 1.19.2 and was never re-measured. The README itself says the 0.2 us versus 1.7 us switch advantage disappears when the switch is due to I/O readiness (both 1.7 us), which is the case in the socket-pair brigade, and that pinning the threaded version to one core removes the brigade advantage (threads 1.709 ms versus async 1.795 ms per iteration), which the author could not explain; thread-brigade ran at 137% CPU versus 99% for async, pointing at cross-core wake-ups. The README does not show the runs behind the 0.2 us, 1.7 us, 0.3 us and 17 us summary figures. Elapsed times include setup and 100 warm-ups. Single laptop (4 cores, two-way HT, 32 GiB), no CPU model, kernel or rustc version, one run per configuration. The benchmark repo (756 stars, last commit 2024-11-16, stale) has no licence file, so its harness is reference-only; Tokio itself is MIT. Second claim on the already-listed Tokio entry (1M-tasks memory record), different benchmark.",
+      "why_faster": "Tokio tasks are compiler-sized futures (about 0.4 KiB resident each) polled by a user-space executor, so a hand-off is an epoll readiness event plus a task poll instead of waking a kernel thread, and creation needs no kernel thread, TID or mmap'd stack. The author's own pinned run shows much of the brigade gap comes from cross-core wake-ups of kernel threads rather than from per-switch cost, and the README says per-switch cost converges to 1.7 us when switches are driven by I/O readiness."
+    },
+    "notes": "Numbers all found in the jimblandy/context-switch README, but the record overstated them: the task-creation figure is async-std 1.6 rather than Tokio, the async switch advantage vanishes for I/O-readiness switches and for single-core pinning, the 1.5x needed a derived label (page says 30% by elapsed time), and every figure dates from tokio 0.2.x (2019-2020) while the repo now pins 1.19.2. Shortcomings to record: no C or C++ side at all (Rust threads versus Rust async, concurrency-model claim, baseline_in_list set false), one laptop with no CPU model or rustc version, unlicensed one-person harness (stale since 2024-11-16), workload uses Unix socket pairs not pipes. Second claim on already-listed tokio-rs/tokio (wave 14 1M-tasks memory record): candidate for decision duplicate if one Tokio entry is wanted; metadata confirmed (MIT, 33.4k stars, last commit 2026-10-11, not a fork, not archived).",
+    "urls_opened": [
+      "https://github.com/jimblandy/context-switch",
+      "https://github.com/jimblandy/context-switch/commits",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/README.md",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/thread-brigade/src/main.rs",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/async-brigade/src/main.rs",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/thread-creation/src/main.rs",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/async-creation/src/main.rs",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/async-creation/Cargo.toml",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/async-brigade/Cargo.toml",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/HEAD/Cargo.lock",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/0c9da6828528a02336b53e701e75f6e66f93ecc7/README.md",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/0c9da6828528a02336b53e701e75f6e66f93ecc7/Cargo.lock",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/4a1046ce05ad1e67ad065845b3293c12929786cd/README.md",
+      "https://raw.githubusercontent.com/jimblandy/context-switch/1efde014875332729793318687f6f71225357214/README.md",
+      "https://github.com/tokio-rs/tokio",
+      "https://github.com/tokio-rs/tokio/commits"
+    ]
+  }
+]
