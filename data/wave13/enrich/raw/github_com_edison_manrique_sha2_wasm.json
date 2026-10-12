@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/edison-manrique/sha2-wasm",
+  "one_liner": "AssemblyScript SHA-256/SHA-512, HMAC and PBKDF2 compiled to a 13 KB wasm; claims 5-7% over hash-wasm under Bun.",
+  "what_it_does": "An npm package (@edison-manrique/sha2-wasm, latest 1.2.0) whose AssemblyScript core implements SHA-256 and SHA-512 (FIPS 180-4), HMAC (RFC 2104) with a constant-time verify, and PBKDF2-HMAC (RFC 8018), behind a TypeScript loader that copies input into fixed regions of the wasm linear memory. After one awaited Sha2Wasm.load() or fromBuffer(), calls are synchronous: Sha256/Sha512 hash, hmac, hmacVerify and pbkdf2, streaming hashers via createHasher (update, digest, reset), and an async hashFile for Blob/File with a progress callback; output is hex or bytes. It is not API-compatible with hash-wasm, whose helpers return promises and whose createSHA256 hashers use init/update/digest.",
+  "how_it_is_fast": "Plain scalar SHA-2 with no SIMD: the compression loop runs the first 16 rounds fully unrolled and the remaining 48 in 16-round unrolled blocks, keeps the message schedule in 16 rolling locals instead of a 64-word array, uses the reduced Ch and Maj forms and bswap for big-endian loads, and is built by asc at optimizeLevel 3, shrinkLevel 2, noAssert with converge on the stub runtime. Input is copied into a static 1 MiB input zone and hashed in place, so a call allocates nothing on the GC heap except the returned Uint8Array. PBKDF2 precomputes the HMAC ipad/opad states once per key, so each iteration costs two compressions instead of four.",
+  "when_to_use": [
+    "Browser or edge code that needs SHA-256, SHA-512, HMAC and PBKDF2 together in one dependency-free ~13 KB wasm with synchronous calls after a one-time load.",
+    "Many small messages hashed in a synchronous loop where avoiding per-call GC allocation matters (README: about 2.2 M SHA-256 hashes/s of 55 B under Bun, with no baseline for that row).",
+    "Synchronous PBKDF2-HMAC-SHA256/512 (for example BIP39 seeds at 2048 iterations) where WebCrypto's promise-based deriveBits is inconvenient; the PBKDF2 path pre-hashes long passwords correctly and was checked against node:crypto for one short password.",
+    "Single-caller streaming of a large Blob or File with a progress callback (hashFile), when nothing else calls the library until it finishes (see gotchas)."
+  ],
+  "when_not_to_use": [
+    "HMAC with keys longer than the hash block size (64 B for SHA-256, 128 B for SHA-512): the one-shot path returns non-standard MACs for most such key lengths (see gotchas).",
+    "Node, Bun or Deno server code: node:crypto is used here only as a correctness oracle and never timed, and the catalogued tape-sha256 entry found node:crypto about 2.3x faster than a SIMD wasm SHA-256 inside Node.",
+    "Interleaved or concurrent use (several streaming hashers, or one-shot HMAC/PBKDF2 calls while a hasher or hashFile is in flight): everything shares one instance's fixed scratch memory, and streaming contexts can be overwritten silently.",
+    "One-shot hashing or hmacVerify of inputs over 1 MiB: they write the whole input into the 1 MiB zone and throw RangeError; use createHasher instead. pbkdf2 caps dkLen at 8192 bytes.",
+    "Security-critical code or anything needing SHA-224, SHA-384 or SHA-512/256: the README says the code is unaudited, the repo has 12 commits and 1 star, and only SHA-256 and SHA-512 are implemented."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (package.json declares no dependencies); building needs AssemblyScript (asc), esbuild and tsc, and the benchmark needs hash-wasm, none of which package.json declares",
+    "min_toolchain": "Node >= 18 (package.json engines), or Bun, Deno or a browser with WebAssembly; AssemblyScript version for rebuilding not pinned",
+    "platforms": "any WebAssembly host (wasm32, no SIMD or threads needed); README lists Node.js, Bun, Deno and browsers through bundlers such as Vite and Webpack",
+    "thread_safety": "not documented; a global singleton instance with fixed scratch regions, so calls are not reentrant and interleaved users of one instance share state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Long-key HMAC bug (found by reading assembly/sha256.ts and sha512.ts): hmac_compute zeroes the 64/128-byte key block at the start of CRYPTO_WORK, then hashes a long key with hash_raw, whose context sits at the same address, so after hashing the second half of the key block (bytes 32-63 for SHA-256, 64-127 for SHA-512) holds the key's leftover partial block instead of zeros. Any key longer than the block whose length is not a multiple of it (RFC 4231 test case 6 uses a 131-byte key) therefore gets a non-standard MAC from Sha256.hmac, Sha512.hmac and HMAC.digest whenever key plus message fit in the 1 MiB fast path, and from hmacVerify always; the >1 MiB slow path pre-hashes the key in TypeScript and is correct, so the same key gives different MACs depending on message size. The tests cover only RFC 4231 case 1 (20-byte key), and the >1 MiB HMAC test checks only output length.",
+    "Scratch overlap: the AssemblyScript one-shot routines use CRYPTO_WORK from its first byte (SHA-256 hmacVerify up to 400 B, SHA-512 HMAC about 720 B, SHA-512 hmacVerify 784 B, PBKDF2 about 800 B or 1,536 B plus the salt, SHA-512 hash up to 464 B), but the TypeScript ring that holds streaming-hasher contexts starts 384 B in. A hasher placed early in the ring, such as the first one created or hashFile's, which awaits between chunks, can be overwritten mid-stream by one of those calls with no error. reset()'s collision check compares the context with the IV, which never matches after a digest, so every reuse takes a new slot and the 32 KB ring wraps silently after about 120 SHA-256 or 62 SHA-512 allocations, possibly onto a live context. The README's claim that it never silently produces a corrupt hash is not supported by the code.",
+    "Benchmark harness: one sequential, non-interleaved run per library in one Bun process (sha2-wasm SHA-256 and SHA-512 first, then hash-wasm), median of 5 on an unnamed CPU with hash-wasm unpinned, so a 1.05x/1.07x margin cannot be told apart from noise. The documented 'bun run bench' and test/bench.ts do not exist (the file is test/full.bench.ts, package.json has no bench script or hash-wasm dependency, and .gitignore says dependencies come from a parent workspace). The 500 MB digests are not checked against node:crypto (only 'abc' and empty-string vectors are), MB means MiB, and the ~68%-of-native-C figure has no C code in the repo.",
+    "The static API throws until Sha2Wasm.load() or fromBuffer() has been awaited once. The README is Spanish only, and its project tree lists files (test/bench.ts) that are not in the repo."
+  ],
+  "pick_this_over_siblings_when": "Against its baseline hash-wasm, catalogued in this wave and covering many more algorithms (MD5, SHA-3, xxHash, Argon2 and others), the measured edge is 5-7% on one engine and the HMAC and scratch defects above are absent there, so prefer hash-wasm; for small batched SHA-256 messages the tape-sha256 SIMD build reports 1.55x over hash-wasm in Node. Pick sha2-wasm only for a tiny synchronous SHA-2, HMAC and PBKDF2 bundle used by one caller at a time with HMAC keys no longer than one block.",
+  "verified_claims_summary": "The author's test/full.bench.ts, run under Bun (JavaScriptCore) on an unnamed 'modern x86-64' CPU, hashed a 500 MiB buffer of 0x5a with a streaming hasher (2 warm-ups, median of 5, digest outside the timed region) and reported SHA-256 at 217 MB/s and SHA-512 at 314 MB/s, 1.05x and 1.07x hash-wasm's results from the same process. The HMAC, PBKDF2, small-hash and file rows have no baseline, and the '~68% of native C (gcc -O3 -march=native)' line has no code behind it.",
+  "status_note": "Active but brand-new: 12 commits from 2026-07-27 to 2026-07-29, npm versions 1.0.0 to 1.2.0 published within two days, 1 star, and unaudited by its own README; Apache-2.0 and small enough to vendor, but the long-key HMAC and scratch-overlap bugs need fixing before HMAC or streaming use in production.",
+  "sources_read": [
+    "https://github.com/edison-manrique/sha2-wasm",
+    "https://github.com/edison-manrique/sha2-wasm/commits/main",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/asconfig.json",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/tsconfig.json",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/index.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/memory.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/common.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/constants.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/sha256.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/sha512.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/assembly/pbkdf2.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/sha2-wasm.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/allocator.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/sha256.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/sha512.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/hmac.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/src/types.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/test/full.bench.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/test/index.test.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/test/stress.test.ts",
+    "https://raw.githubusercontent.com/edison-manrique/sha2-wasm/HEAD/examples/server.ts",
+    "https://registry.npmjs.org/@edison-manrique%2Fsha2-wasm",
+    "https://registry.npmjs.org/hash-wasm/latest"
+  ],
+  "confidence": 0.7
+}

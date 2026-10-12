@@ -63,3 +63,4 @@ Retier leads, uncatalogued projects and blocked papers reported by verifiers and
 - Enrichment leads (2026-10-12, continued): daadaada/gas (C++ GPU assembly language, sm_70+, no numbers); noble-secp256k1 (pure JS, maybe worth a check against the C addon).
 - Enrichment leads (2026-10-12, continued): zeebo/xxh3 (Go XXH3 with assembly); asb/copies-and-fills (libcofi, claims 2-3x over generic libc memcpy on ARM); fastarm ARM memcpy variants (copy in veejay thirdparty, upstream unconfirmed).
 - Enrichment leads (2026-10-12, continued): fleek-network/blake3js-perf (pure-JS BLAKE3 case study, numbers only on the Fleek blog).
+- Enrichment leads (2026-10-12, continued): consento-org/longfn (performance alternative to long.js named in its issue #88).

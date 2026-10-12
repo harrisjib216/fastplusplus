@@ -1,0 +1,53 @@
+{
+  "id": "paper:eastl-sort-radix-sort",
+  "one_liner": "EA's introsort (eastl::sort) plus an LSD radix_sort; beat the VC++ 7.1 Dinkumware std::sort 1.7-1.9x on random 10k arrays.",
+  "what_it_does": "eastl::sort(first, last[, comp]) has the same signature as std::sort, works on any random-access iterators (including std::vector's), and calls eastl::quick_sort unless EASTL_DEFAULT_SORT_FUNCTION names another routine. eastl::stable_sort maps to merge_sort, which allocates through EASTL's default allocator; merge_sort_buffer and tim_sort_buffer take a caller-supplied buffer instead. eastl::radix_sort<Iter, ExtractKey, DigitBits = 8>(first, last, buffer) has a different interface: a key-extractor functor exposing an integral radix_type and a scratch range as long as the input.",
+  "how_it_is_fast": "quick_sort is a classic SGI-style introsort: median-of-three pivot, unguarded Hoare partition, a depth limit of 2*log2(n) after which it heap-sorts the range (partial_sort), and one final insertion pass with a cutoff of 28 elements on x86/x86-64 and 16 elsewhere (guarded over the first 28, unguarded after). There is no pattern-defeating, branchless or SIMD partitioning, so the published gains came from a weak VC++ 7.1-era baseline, not a new algorithm: EASTL's own time is about the same in the Dinkumware and STLport tables. radix_sort is LSD with 8-bit digits by default; it computes the next digit's histogram during the current scatter and skips passes where every key has the same digit.",
+  "when_to_use": [
+    "You already build against EASTL (game or console code) and want one sort that behaves the same on every platform and stays fast in debug builds (VC7.1 Debug table: 5.8x-19.7x over the Debug std::sort)",
+    "Stable sorting of unsigned integer keys, or structs keyed by an unsigned integer, when you can spare an n-element scratch buffer: radix_sort",
+    "You need a stable sort with no heap allocation: tim_sort_buffer or merge_sort_buffer with your own buffer",
+    "You want to swap the sort used across a whole codebase from one place via EASTL_DEFAULT_SORT_FUNCTION / EASTL_DEFAULT_STABLE_SORT_FUNCTION"
+  ],
+  "when_not_to_use": [
+    "Expecting a speedup over a current libstdc++, libc++ or MSVC std::sort: every published number is from 2005-2007, and against STLport (Release) the random-input gain was only 1.00x-1.12x, against GCC 4.1 libstdc++ 0.96x on vector<uint32>",
+    "Sorting move-only element types such as unique_ptr: the pivot stays a reference into the array during partitioning (see gotchas), which in a model of the code makes the final insertion pass do roughly quadratic work",
+    "Signed or floating-point keys with radix_sort: it orders by raw bits, so negative ints land after positive ones, and float keys are not accepted",
+    "Large integer or float arrays where throughput matters: pdqsort, vqsort, ips4o and ska_sort have published benchmarks against std::sort; EASTL has none newer than 2007",
+    "Already-sorted heavy objects: EASTL was 0.55x (slower) on sorted vector<TestObject> against the Dinkumware sort in the release table"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "EABase (CMakeLists.txt fetches it with FetchContent); stable_sort/merge_sort also need EASTL's default allocator and the operator new[] overloads the application must supply",
+    "min_toolchain": "C++14 (CMakeLists.txt: target_compile_features cxx_std_14)",
+    "platforms": "any; insertion-sort cutoff kQuickSortLimit is 28 on x86/x86-64 and 16 on other CPUs",
+    "thread_safety": "doc/FAQ.md: algorithms have no instance data and run on the stack, so concurrent calls on separate ranges are safe; note that stable_sort/merge_sort allocate through the shared default allocator, although the FAQ claims no EASTL function allocates",
+    "drop_in_for_baseline": "partial — eastl::sort and eastl::stable_sort take the same arguments as std::sort/std::stable_sort and accept std iterators; radix_sort needs a key extractor and an external buffer, and stable_sort allocates through EASTL's allocator"
+  },
+  "gotchas": [
+    "Move-only types: for non-copy-constructible elements quick_sort passes the median-of-three result as an rvalue reference into the array (get_partition T&& overload; the copyable path copies it into pivotCopy), so the pivot value changes whenever iter_swap moves that slot. A Python model of HEAD sort.h still sorts correctly with no out-of-bounds access in 6,000 trials, but the final unguarded insertion pass grew from about 4.5n element moves to about 0.012-0.02 n^2 (4.8M vs 73k moves at n = 16,000); the test suite has no move-only sort test. This path was added for issue #92 (2017).",
+    "radix_sort sorts raw bit patterns: with the header's own example key type (typedef int radix_type) negative keys sort after positive ones (model: [5,-1,3,-200,0,100000,-7] becomes [0,3,5,100000,-200,-7,-1]); TestSort.cpp only tests uint8/16/32 keys.",
+    "radix_sort has no first == last guard: on an empty range it evaluates extractKey(*srcFirst) one past the end (a null dereference for a default-constructed eastl::vector, whose mpBegin is NULL). DigitBits equal to the key width (allowed by the static_assert) makes 1 << DigitBits overflow for 32-bit keys, and each pass uses two 2^DigitBits uint32 stack arrays.",
+    "Harness behind the published rows (benchmark/source/BenchmarkSort.cpp, BenchmarkSort()): each row is one timed sort of 10,000 elements (the second of two iterations) with no repeats or variance, the '/sorted' rows re-sort the previous call's output, and the 'TestObject[]' rows reset and re-sort the same std::vector/eastl::vector<TestObject> rather than a C array, so they repeat the vector<TestObject> rows (published 1.72x vs 1.78x, 0.59x vs 0.55x)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you are already standardised on EASTL and want its sort family (introsort, tim_sort_buffer, merge_sort_buffer, radix_sort) without another dependency. For speed, pdqsort has current numbers against GCC's std::sort, vqsort (Highway) and x86-simd-sort cover SIMD key sorting, and ska_sort or Boost spreadsort are radix-style sorts with published measurements.",
+  "verified_claims_summary": "EA's doc/Benchmarks.md (EASTL 0.96, Windows x86, VC++ 7.1 Release, no CPU model) times one sort of 10,000 elements: eastl::quick_sort beat the Dinkumware std::sort 1.84x-1.87x on random uint32 and ValuePair vectors and 1.78x on TestObject, but lost 0.55x on already-sorted TestObject. The same EASTL code ran at about the same speed in the STLport table (2,943,627 vs 2,916,146 cycles for vector<uint32>), where std::sort was only 1.12x slower, so the 1.87x reflects the old Dinkumware sort (derived from page data). radix_sort has no published numbers.",
+  "status_note": "EASTL is actively maintained (BSD-3-Clause, 9.4k stars, 79 open issues) and usable as a library, but its sort code is a classic median-of-three introsort with no published measurement against any modern standard library. This enrichment found three issues the verifier did not record: the move-only pivot aliasing (quadratic final pass in a model of the code), radix_sort misordering signed keys, and radix_sort reading past the end of an empty range. The published TestObject[] rows duplicate the vector<TestObject> rows in today's harness.",
+  "sources_read": [
+    "https://github.com/electronicarts/EASTL",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/README.md",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/sort.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/algorithm.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/include/EASTL/vector.h",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/benchmark/source/BenchmarkSort.cpp",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/test/source/TestSort.cpp",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/doc/Benchmarks.md",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/doc/EASTL-n2271.pdf",
+    "https://raw.githubusercontent.com/electronicarts/EASTL/HEAD/doc/FAQ.md",
+    "https://github.com/electronicarts/EASTL/issues?q=is%3Aissue+sort",
+    "https://github.com/electronicarts/EASTL/issues?q=is%3Aissue+radix",
+    "https://github.com/electronicarts/EASTL/issues/92"
+  ],
+  "confidence": 0.7
+}
