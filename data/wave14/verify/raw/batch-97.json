@@ -1,0 +1,90 @@
+[
+ {
+  "id": "paper:fuc-cpz-w14-sys-blogs",
+  "verdict": "downgrade",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "First-party hyperfine tables in comparisons/README.md with the full run script, the comparison crates (comparisons/cp_stdlib, comparisons/cp_rayon) and the release profile in Cargo.toml public, and the CPU stated (i7-7700), but the rustc version, the GNU coreutils version and the distro build flags of cp are not stated, so it falls short of A (same treatment as hck, wz and awkrs in this wave).",
+  "corrections": {
+   "compiler_and_flags": "cargo b --workspace --release; Cargo.toml [profile.release] sets lto = true, codegen-units = 1, strip = true, panic = abort. rustc version not stated. GNU cp is the distro binary of an el9_1 (RHEL 9 family) system; its coreutils version and build flags are not stated.",
+   "caveats": "The win is parallel copying, not Rust code generation: the single-threaded Rust cp_stdlib in the same table (std::fs::copy per file) matches GNU cp (19.496 s vs 18.436 s at 1M files, 0 B). The tables were last regenerated in March 2023 (commits 4cb8736 and ebf11a7, 2023-03-23/24) and the code has changed since. cpz is not the fastest tool in every row: in a flat directory of 100,000 files the Rust xcp wins (0 B: xcp 1.133 s, cpz 1.365 s, cp -r 1.618 s; 1 GiB: xcp 1.209 s, cpz 2.080 s, cp -r 2.464 s), and cp_rayon and fcp edge it at 5 files per directory with 1 GiB. Total CPU time rises: at 1M files, 0 B, cpz uses 26.48 s user+system against 18.10 s for cp -r (derived from page data). The run script also builds and runs wcp (C++) but no wcp row appears in any results table. cpz copies with copy_file_range, which can clone extents on a reflink-enabled xfs, while an older GNU cp may do a byte copy; cp_stdlib uses the same syscall and still matches cp, so this is not the main factor. Source and destination on the same xfs SATA partition, one machine, warm page cache with no sync between runs; the variance on the cpz rows is large (+- 0.976 s at 1M files). The author's blog overview (alexsaveau.dev/blog/fuc) does not resolve from this environment.",
+   "why_faster": "From fuc_engine/src/ops/copy.rs: a root worker thread spawns up to available_parallelism - 1 scoped worker threads fed directory nodes through a crossbeam channel; each worker unshares its file-descriptor table (unshare CLONE_FILES) to avoid fd-table contention, reads directories with raw getdents64 (rustix RawDir, 32 KiB buffer), works relative to directory fds with openat/mkdirat/statx, and copies regular files with copy_file_range. The single-threaded std-based cp_stdlib matching GNU cp shows the gain is the parallel traversal, not the language.",
+   "same_opt_level": null,
+   "same_algorithm": false,
+   "language_level_claim": false
+  },
+  "notes": "All four claimed rows match comparisons/README.md exactly. Downgraded A to C: rustc version and GNU cp version/build flags are unstated, and the numbers are first-party from March 2023. Record shortcomings: gain is multithreading (not language), loses to Rust xcp in flat directories, higher total CPU, wcp missing from results despite being in the script, stale 2023 numbers.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/Cargo.toml",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/LICENSE",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/Cargo.toml",
+   "https://github.com/SUPERCILEX/fuc",
+   "https://github.com/SUPERCILEX/fuc/commits/master",
+   "https://github.com/SUPERCILEX/fuc/commits/master/comparisons/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/copy.rs",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/mod.rs",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/cp_stdlib/src/main.rs",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/cp_stdlib/src/lib.rs"
+  ]
+ },
+ {
+  "id": "paper:fuc-rmz-w14-sys-blogs",
+  "verdict": "downgrade",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "First-party hyperfine tables in comparisons/README.md with the run script, comparison crates (comparisons/rm_stdlib, rm_rayon, rm_remove_dir_all) and the Cargo release profile public and the CPU stated (i7-7700), but the rustc version, the GNU coreutils version and the distro build flags of rm are not stated, so not A (same treatment as hck, wz and awkrs in this wave).",
+  "corrections": {
+   "compiler_and_flags": "cargo b --workspace --release; Cargo.toml [profile.release] sets lto = true, codegen-units = 1, strip = true, panic = abort. rustc version not stated. GNU rm is the distro binary of an el9_1 (RHEL 9 family) system; its coreutils version and build flags are not stated.",
+   "caveats": "The win is parallel tree deletion, not Rust code generation: the single-threaded Rust rm_stdlib (std::fs::remove_dir_all) in the same table matches GNU rm (9.345 s vs 9.491 s at 1M files, 0 B). Flat directories show parity (100,000 files at depth 0: 830.7 ms vs 847.1 ms at 0 B, 1.115 s vs 1.129 s at 1 GiB), and the plain rm_rayon variant beats rmz in two rows (10 files 1 GiB; 100,000 files 1 GiB flat). Total CPU time roughly doubles: at 1M files, 0 B, rmz uses 19.19 s user+system against 9.23 s for rm -r (derived from page data). The tables were last regenerated in March 2023 (commits 4cb8736 and ebf11a7) and the deletion code has changed since (2026-07 NFS deletion fixes). One machine, one xfs SATA partition, trees regenerated by ftzz in --prepare so the page cache is warm. GNU coreutils and rustc versions are not stated. The author's technical overview (alexsaveau.dev/blog/fuc) does not resolve from this environment.",
+   "why_faster": "From fuc_engine/src/ops/remove.rs: a root worker thread spawns up to available_parallelism - 1 scoped worker threads fed directory nodes through a crossbeam channel; each worker unshares its file table and fs context (unshare CLONE_FILES | CLONE_FS), reads directories with raw getdents64 (rustix RawDir) and deletes with unlinkat relative to the directory fd, removing a directory once its children are gone. The single-threaded rm_stdlib matching GNU rm shows the gain is the parallel traversal, not the language.",
+   "same_opt_level": null,
+   "same_algorithm": false,
+   "language_level_claim": false
+  },
+  "notes": "All four claimed rows match comparisons/README.md exactly. Downgraded A to C: rustc version and GNU rm version/build flags are unstated, numbers are first-party from March 2023. Record shortcomings: gain is multithreading (not language), parity on flat directories, about 2x total CPU, stale 2023 numbers.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/Cargo.toml",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/LICENSE",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/Cargo.toml",
+   "https://github.com/SUPERCILEX/fuc",
+   "https://github.com/SUPERCILEX/fuc/commits/master",
+   "https://github.com/SUPERCILEX/fuc/commits/master/comparisons/README.md",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/fuc_engine/src/ops/remove.rs",
+   "https://raw.githubusercontent.com/SUPERCILEX/fuc/master/comparisons/rm_stdlib/src/main.rs"
+  ]
+ },
+ {
+  "id": "https://github.com/c-blake/cligen",
+  "verdict": "confirm",
+  "reject_reason": null,
+  "page_compares_against_baseline": true,
+  "numbers_found_on_page": true,
+  "evidence_tier_final": "C",
+  "tier_reason": "The ratios are first-party one-line doc comments in cligen/dents.nim (find, ls1AU, lss1AU) and bu/doc/du.md, with no timings, machine, kernel, file system, cache state, tool versions, build flags or script, so C.",
+  "corrections": {
+   "caveats": "The numbers are one-line source comments with no machine, kernel, file system, cache state, tool versions, Nim build flags or script; ranges are given without raw timings. The ratios date from 2020 and cover only the portable path: commit 2948a0d (2020-06-19) says the optional -d:batch mode (a custom sys_batch kernel module) adds about another 1.25x and that the help ratios were deliberately not updated for it. The '1.7x faster than BSD find|fd' comment means both BSD find and the Rust fd (commit ebb78e9, 2020-10-28: 'Also include slow Rust fd in comparison'). The walk is a different implementation from GNU find's fts traversal: bu/doc/newest.md says GNU find worries about arbitrary file-system depth while the author has never seen a non-artificial depth above 30, so the walker trades generality for speed. Workloads are print-only walks of /usr, not find with predicates.",
+   "workload": "Recursive tree walk of /usr printing paths (dents find vs GNU find, BSD find and fd), listing with ls -1AUR --color=none and ls -s1AUR --color=none to /dev/null (dents ls1AU -r0, lss1AU -r0), and du totalling st_blocks (bu du vs GNU du)."
+  },
+  "notes": "All quoted ratios are verbatim in cligen/dents.nim lines 342, 383 and 428 and bu/doc/du.md; ISC licence, 584 stars, last commit 2026-08-26 confirmed. Record shortcomings: no methodology at all, 2020-era ratios, batch-mode speedups excluded from the stated ratios, depth-limited design.",
+  "urls_opened": [
+   "https://raw.githubusercontent.com/c-blake/cligen/HEAD/cligen/dents.nim",
+   "https://raw.githubusercontent.com/c-blake/cligen/HEAD/LICENSE",
+   "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/du.md",
+   "https://raw.githubusercontent.com/c-blake/bu/HEAD/doc/newest.md",
+   "https://raw.githubusercontent.com/c-blake/bu/HEAD/README.md",
+   "https://github.com/c-blake/cligen",
+   "https://github.com/c-blake/cligen/commits/master",
+   "https://github.com/c-blake/cligen/commits/master/cligen/dents.nim",
+   "https://github.com/c-blake/cligen/commit/2948a0d",
+   "https://github.com/c-blake/cligen/commit/ebb78e9"
+  ]
+ }
+]
