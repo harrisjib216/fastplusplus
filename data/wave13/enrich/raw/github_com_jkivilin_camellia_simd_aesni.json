@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/jkivilin/camellia-simd-aesni",
+  "one_liner": "Byte-sliced Camellia kernels computing S-boxes with AES-NI/VAES/GFNI; 3-19x faster than NTT's table-based reference C.",
+  "what_it_does": "Standalone Camellia-128/192/256 block encryption and decryption kernels plus vectorized key setup, in GCC assembly (x86-64 AVX/AVX2, AArch64 Neon+AES) and portable C intrinsics (x86 SSE4.1/AVX2/AVX-512, AArch64 CE, POWER8+ VSX crypto, RISC-V RVA23 Zvkb+Zvkned). The API is camellia_keysetup_simd128() into a caller-owned struct camellia_simd_ctx, then fixed-width calls that process exactly 16 blocks (SIMD128) or 32 blocks (SIMD256), plus 1-block constant-time variants taking an nblocks count. There are no modes of operation, no tail handling and no runtime CPU dispatch; each build is a separate test binary.",
+  "how_it_is_fast": "Camellia's S-boxes share AES's GF(2^8) inversion, so with affine pre- and post-filters (vpshufb nibble lookups, or a single GFNI affine instruction) the S-box layer runs on AES SubBytes via AESENCLAST, with 16 or 32 independent blocks byte-sliced across vector registers to fill the pipelines. GFNI replaces the filter-plus-AES sequence with vgf2p8affineinvqb/vgf2p8affineqb, which is why GFNI builds roughly double VAES builds. The technique is from the author's master's thesis 'Block Ciphers: Fast Implementations on x86-64 Architecture' (pp. 42-50).",
+  "when_to_use": [
+    "A protocol or policy requires Camellia and your mode is parallel: CTR, CBC/CFB decryption, XTS or OCB over at least 16 blocks (256 B) per call.",
+    "x86-64 with GFNI (Ice Lake/Tiger Lake and later, Zen 4/Zen 5): SIMD256 GFNI builds reach about 14-19x the table-based C (about 0.92 cycles/byte on Ryzen 9 7900X per the README).",
+    "You need a cache-timing-safe Camellia: the vector paths use no secret-indexed tables, unlike the reference's four 1 KiB SP tables; the 1-block SIMD128 variants exist for CBC encryption and single blocks.",
+    "AArch64 with Crypto Extensions or POWER8+ where only table-based Camellia exists: 2.2-3.0x in 16-block mode on Cortex-A53/ThunderX2 and about 2.4x on POWER9 per the README."
+  ],
+  "when_not_to_use": [
+    "Serial workloads (CBC encryption, single blocks): the constant-time 1-block variants are 1.2x-2.9x slower than the table-based C on most listed CPUs (only AVX-512+GFNI on Tiger Lake is about 1.2x faster).",
+    "You want a library rather than kernels: libgcrypt ships the same author's code (cipher/camellia-simd128.h says it is from this repository) with modes, runtime dispatch and an extra GFNI/AVX-512 64-way path, under LGPL-2.1.",
+    "You are free to pick the cipher: the best GFNI Camellia figure is about 0.92 cycles/byte on Zen 4, while catalogue entries on other machines show AEGIS-128L near 0.18 and SUPERCOP AES-256-GCM near 0.70 cycles/byte, with authentication included.",
+    "RISC-V: the RVA23+Zvkb+Zvkned path was added 2025-12-25 with no published performance numbers and builds with -mstrict-align."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc only); GNU make and GCC cross compilers for the provided test binaries",
+    "min_toolchain": "GCC with the relevant ISA flags (-maes, -mvaes, -mgfni, AVX-512 for the intrinsics builds); README rows cite gcc-13, gcc-14 and gcc-15; Ubuntu 22.04 cross-compilers listed as prerequisites",
+    "platforms": "x86-64 and i386 (AES-NI with SSE4.1/AVX, AVX2, optional VAES/GFNI/AVX-512), AArch64 with Neon+AES CE, ppc64le POWER8+ with VSX and crypto, riscv64 RVA23 with Zvkb+Zvkned",
+    "thread_safety": "not documented; all key material lives in the caller-owned struct camellia_simd_ctx and no global mutable state is declared in camellia_simd.h",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Benchmark noise sets the ratios: main.c times each variant once for 1 s (CLOCK_MONOTONIC, 8 KiB in-place buffer, no repetitions, CPU pinning only in the ThunderX2 sample), and the same camellia_ref_x86-64.o reference reads 372.0 MiB/s in one README sample and 313.4 MiB/s in the other on the same Ryzen 9 7900X (19% apart), so a ratio swings by that much depending on which run it is divided by (the AES-NI SIMD256 sample is 13.9x against 372 but 16.5x against 313).",
+    "README sample outputs are older than the code and the bullets: the current intrinsics code always prints a 1-block line (have_camellia_1blk_simd128() returns 1 since the 2025-12-14 commit), yet the test_simd256_intrinsics_x86_64_gfni_avx512 sample has none; the 16-block asm sample gives 3.6x on the 7900X against a ~4.5x bullet, and the Cortex-A53 sample gives 1.26x against a ~2.2x gcc-15 bullet.",
+    "Throughput is raw ECB-style block processing on an L1-resident 8 KiB buffer; counter generation, XOR and chaining costs of a real mode are not included.",
+    "Argument order is (ctx, out, in), the reverse of the reference's (src, dst), and the 16/32-block functions take no length, so callers must always supply exactly 16 or 32 blocks."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued aead-and-ciphers siblings (libaegis, HiAE, Rocca, intel-ipsec-mb, Crypto++, Botan, Mbed TLS) is a Camellia kernel; pick this only when Camellia is mandated, and pick libaegis or an AES-GCM library whenever the cipher is your choice.",
+  "verified_claims_summary": "The author's main.c times NTT's camellia-BSD-1.2.0 table-based C (gcc -O2, no -march) against the SIMD kernels, Camellia-128, 8 KiB in place, 1 s per variant: 32-block AVX2/AVX-512+GFNI builds come out about 14-19x faster on Ryzen 9 7900X, Ryzen 9 9950X3D and Core i3-1115G4, AES-NI-only AVX2 builds about 5.4-5.8x on Core i5-6500, and 16-block builds 2.2-4.5x on x86, ARM and POWER9; the README samples I re-derived give 13.9x and 19.1x on the 7900X, but they were run on older code than the bullets.",
+  "status_note": "Active (last commit 2026-01-01, ARMv8 1-block work merged from a contributor), MIT-licensed and small enough to vendor, but it is a kernel collection with 0 issues filed and 20 stars; libgcrypt's LGPL copy is the maintained production route.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/README.md",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/main.c",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/camellia_simd.h",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/camellia_simd256_x86-64_aesni_avx2.S",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/camellia_simd128_with_aes_instruction_set.c",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jkivilin/camellia-simd-aesni/HEAD/camellia-BSD-1.2.0/camellia.c",
+    "https://github.com/jkivilin/camellia-simd-aesni/commits",
+    "https://github.com/jkivilin/camellia-simd-aesni/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/master/cipher/camellia-simd128.h",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/master/cipher/camellia-gfni-avx512-amd64.S",
+    "https://raw.githubusercontent.com/gpg/libgcrypt/master/cipher/camellia-aesni-avx2-amd64.h"
+  ],
+  "confidence": 0.8
+}

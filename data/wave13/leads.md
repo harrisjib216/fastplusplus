@@ -67,3 +67,4 @@ Retier leads, uncatalogued projects and blocked papers reported by verifiers and
 - Enrichment leads (2026-10-12, continued): coregx/coregex (Go regex engine, claims 3-3000x over regexp; upstream of the gofiber simd package).
 - Enrichment note (2026-10-12): athre0z/disas-bench October 2025 charts show yaxpeax-x86 (already catalogued) ahead of iced on x86 decode (Ryzen 9 9950X, i9-13900K).
 - Enrichment leads (2026-10-12, continued): supercop.wasm (npm 5.0.1, faster than berith in berith's own table; repo likely nazar-pc/supercop.wasm, unchecked); linasm 1.13 (linasm.sourceforge.net, x86-64 assembly statistics library, vstat's closest competitor). hazae41/ed25519.wasm is berith's successor (likely duplicate).
+- Enrichment leads (2026-10-12, continued): smuellerDD/leancrypto (ships PQRV's RISC-V assembly; issue #2 cites ML-KEM-1024 about 60% faster on SpacemiT X60).

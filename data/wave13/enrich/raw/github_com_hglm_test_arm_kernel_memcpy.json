@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/hglm/test-arm-kernel-memcpy",
+  "one_liner": "2013 hand-tuned ARMv6/ARMv7 assembly for Linux kernel copy_page, memset, memzero and memcpy, with a userspace benchmark against the old kernel routines.",
+  "what_it_does": "A userspace sandbox for rewritten 32-bit ARM Linux kernel memory routines: copy_page, memset, memzero, memcpy, copy_from_user and copy_to_user, assembled next to the unmodified 2013 kernel versions (*_orig.S) and libc memcpy/memset. The benchmark program times or validates any of them through a function pointer with the same memcpy/memset signatures (copy_page takes a fixed 4096-byte page). The kernel-ready part (copy_page, memset, memzero) was posted as a 3-patch set in the companion hglm/patches repo; memcpy and the user-copy variants never left the work-in-progress stage.",
+  "how_it_is_fast": "The gain comes from a new PLD prefetch strategy for ARMv6/ARMv7 cache lines. The old copy_page issued paired preloads 2-3 lines ahead from a loop built for StrongARM. The new one does one preload per line at a configurable PREFETCH_DISTANCE and stops prefetching past the end of the source. It also uses wider 8-register LDM/STM blocks. memset and memzero align the destination to 8 bytes (ARMv7) or 32 bytes (ARMv6) before a 64-byte STM loop. They handle the 8-64 byte tail with a computed jump into an unrolled STM ladder and are written to assemble mostly to 16-bit Thumb2 instructions. The experimental memcpy adds a fast path for word-aligned copies of 256 bytes or less and uses unaligned word loads for copies of up to 64 bytes.",
+  "when_to_use": [
+    "You maintain a 32-bit ARMv6 (Raspberry Pi 1 class) or ARMv7 kernel or bare-metal codebase that still uses the 2013-era arch/arm/lib copy_page, memset or memzero, and you want a reference for a better prefetch distance.",
+    "You want a ready-made validation and timing harness for ARM32 memcpy/memset variants: 50 memcpy and 23 memset size/alignment tests, plus a --validate mode that checks every byte of a 16 MiB buffer.",
+    "Page-sized or larger copies on an ARMv6 SoC with 32-byte cache lines, where the author reports the largest gain (about 70-80% on copy_page).",
+    "Studying how write alignment (8 vs 32 bytes) and the PLD distance interact on a given SoC before tuning your own routine."
+  ],
+  "when_not_to_use": [
+    "AArch64 or x86: the code is 32-bit ARM assembly only, and the benchmark exits unless sizeof(size_t) == sizeof(int).",
+    "Userspace memcpy/memset on a Raspberry Pi or other ARM32 board: the siblings bavison/arm-mem or copies-and-fills are drop-in libc replacements aimed at that job, and these routines carry kernel names and kernel conventions.",
+    "Kernel copy_from_user/copy_to_user: the author's own issue #1 (2013-12-03) says the current versions do not work correctly in the kernel, and the userspace harness never exercises user-space page faults.",
+    "Current upstream kernels: the patches stopped applying cleanly by February 2015 and nothing has changed since 2013-08-28.",
+    "When you need published, reproducible numbers: no run output, compiler version, SoC or clock is checked in."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (GNU toolchain assembling .S files through the C preprocessor; the benchmark links -lm -lrt)",
+    "min_toolchain": "Makefile uses gcc with -std=gnu99 -Ofast and unified ARM syntax; no compiler version documented",
+    "platforms": "32-bit ARM: ARMv6 and ARMv7 tested (Thumb2 build optional on ARMv7); ARMv5 untested; the optimized memcpy and user-copy routines use PLD unconditionally, so they do not work on ARMv4",
+    "thread_safety": "not documented; the .S routines read use no global state (registers and stack only)",
+    "drop_in_for_baseline": "partial — memset, memzero and copy_page keep the kernel's signatures and were packaged as kernel patches (hglm/patches/arm-mem-funcs) for 2013 kernels; memcpy and the user-copy routines exist only as userspace test versions"
+  },
+  "gotchas": [
+    "The quoted speed-ups were not measured on the copy_page now at HEAD. They come from the 2013-07-12 patch commit message and the mailing-list post, both written before commit 83f288c (2013-07-14) reworked copy_page.S. The patch version runs a loop per L1_CACHE_BYTES with PREFETCH_DISTANCE 3 (96 B on ARMv6, 192 B on ARMv7). HEAD defaults to PRELOAD_LINE_SIZE 32 with a prefetch offset of 128 B (ARMv6) or 256 B (ARMv7). Running bench.script at HEAD therefore times different code from the posted kernel patch.",
+    "Latent overrun in HEAD copy_page.S on ARMv4 (no PLD) with the default PRELOAD_LINE_SIZE 32: NO_PLD loads r2 = COPY_COUNT = 4096/32 = 128, but each loop iteration copies 64 bytes, so it copies 8192 bytes. That runs one full page past both source and destination. The kernel patch version copies 32 bytes per iteration and is correct. ARMv4 is listed as untested.",
+    "The README's NEON step is broken: the Makefile line is '#NEON_CLAGS = DUSE_NEON', a misspelled variable with no leading '-'. Uncommenting it never sets NEON_CFLAGS, so NEON stays off unless you fix the Makefile by hand.",
+    "Harness limits: each address/size pattern table holds only 256 entries, so the same 128 source/destination pairs repeat, keeping caches and branch predictors warm. Results print as one MB/s line per repetition with no median or aggregation. An independent tester on the July 2013 linux-arm-kernel thread (Willy Tarreau) found that the prefetch strategy did not work well for copy_page and large memcpy on his platforms. A follow-up tweak gained about 0.8% on memcpy. This comes from a WebSearch snippet only; lore.kernel.org was unreachable."
+  ],
+  "pick_this_over_siblings_when": "Pick it only for kernel-side 32-bit ARM copy_page/memset/memzero work or as an ARM32 test harness. For userspace on a Raspberry Pi, bavison/arm-mem or simonjhall/copies-and-fills replace libc directly. For modern Arm cores, Arm Optimized Routines is maintained and covers AArch64.",
+  "verified_claims_summary": "No results are published. The patch commit message (2013-07-12) claims copy_page speed-ups over the 2013 in-kernel copy_page of 10% on a Cortex-A8 to 80% on the ARMv6 Raspberry Pi, measured in a userspace sandbox; the patches README says 'on the order of 70%' for copy_page and large memcpy. Compiler version, SoC and clocks are unstated, and the copy_page code those figures came from was reworked two days later. An independent tester on linux-arm-kernel reported that copy_page and large-memcpy prefetching did not work well on his platforms (snippet only).",
+  "status_note": "Abandoned since 2013-08-28 and labelled experimental by its author, with a known-broken copy_from/to_user (issue #1). Licensing is per file: MIT for the new memcpy and benchmark, GPL-2.0-only for the kernel-derived memset, memzero and copy_page. No upstream merge was found. Useful as a reference and harness, not as a dependency.",
+  "sources_read": [
+    "https://github.com/hglm/test-arm-kernel-memcpy",
+    "https://github.com/hglm/test-arm-kernel-memcpy/commits/master",
+    "https://github.com/hglm/test-arm-kernel-memcpy/commit/83f288c",
+    "https://github.com/hglm/test-arm-kernel-memcpy/issues?q=is%3Aissue",
+    "https://github.com/hglm/test-arm-kernel-memcpy/issues/1",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/README.md",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/bench.script",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/benchmark.c",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/Makefile",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/kernel_defines.h",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/kernel_defines_orig.h",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/asm.h",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/new_arm.h",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/copy_page.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/copy_page_orig.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memset.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memset_orig.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memzero.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memzero_orig.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memcpy_armv6v7.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/memcpy_orig.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/copy_template.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/copy_template_orig.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/copy_from_user_armv6v7.S",
+    "https://raw.githubusercontent.com/hglm/test-arm-kernel-memcpy/HEAD/new_arm.S",
+    "https://raw.githubusercontent.com/hglm/patches/HEAD/README.md",
+    "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0002-Optimize-copy_page-for-modern-ARM-platforms.patch",
+    "https://raw.githubusercontent.com/hglm/patches/HEAD/arm-mem-funcs/0003-Optimize-ARM-memset-and-memzero-functions.patch"
+  ],
+  "confidence": 0.6
+}

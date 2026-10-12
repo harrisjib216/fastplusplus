@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/higan-emu/libco",
+  "one_liner": "C89 stackful coroutine library whose hand-assembled per-CPU switch costs a few function calls, against hundreds for POSIX ucontext.",
+  "what_it_does": "libco gives one OS thread many cooperative threads ('cothreads'), each with its own stack, through a small C89 API: co_active, co_create, co_derive (use your own memory), co_switch, co_delete and co_serializable. Control moves only when code calls co_switch(target). There is no scheduler, no arguments to the entry function, no return from it and no safety checks by design. It is not a drop-in for ucontext: the API is different and smaller, and you compile libco.c, which #includes the backend for the detected CPU and compiler.",
+  "how_it_is_fast": "Each CPU backend is a few dozen bytes of hand-assembled machine code stored as a const array (co_swap_function) in the text section, or made executable with mprotect/VirtualProtect. It saves only callee-saved state and jumps to the target: rsp, rbp, rbx and r12-r15 on SysV amd64 (plus xmm6-15 on Win64); x19-x30, sp and d8-d15 on AArch64. The swap is entered through an ordinary call and leaves with 'pop rax; jmp rax', so a switch costs about as much as a call plus a handful of loads and stores. Compared with glibc swapcontext, it skips the signal-mask system call. It also does not save the MXCSR/x87 control words or switch any OS thread-block fields, which is part of why it is cheap.",
+  "when_to_use": [
+    "Emulators and simulators that interleave several components (CPU cores, video, audio) in one OS thread and switch between them millions of times per second.",
+    "Single-threaded servers or event loops in C or C++ that want stackful coroutines through a tiny, permissively licensed C89 API instead of ucontext.",
+    "Snapshot and restore of coroutine state, for example emulator save states: co_serializable() returns 1 on the hand-assembled backends read here (amd64, arm, aarch64), so copying the co_derive() buffer captures the cothread.",
+    "Portable code that must cover x86, amd64, ARM, AArch64 and PowerPC with one API, falling back to setjmp/longjmp on other POSIX targets or Windows fibers."
+  ],
+  "when_not_to_use": [
+    "C++ code that throws exceptions inside cothreads on Windows with the amd64.c or x86.c backend. Issue #45 (open since 2024-08-31) reports terminate() or invalid memory reads; exceptions work on Linux and with fiber.c.",
+    "32-bit ARM hard-float code that keeps floating-point values live across co_switch: arm.c saves only r4-r11, sp and lr, not the AAPCS callee-saved VFP registers d8-d15 (found by reading the code; no issue filed).",
+    "When you need guard pages, growable stacks, overflow detection, entry-function arguments (closure support was closed as wontfix, issue #16) or moving cothreads between OS threads.",
+    "Multithreaded programs that do not define LIBCO_MP: without it thread_local expands to nothing and the active-cothread state is a plain process global.",
+    "RISC-V and other CPUs without a backend (they fall back to sjlj, issue #44 open). Also avoid it in hardened builds: the machine-code arrays have no ENDBR64 and no shadow-stack handling, an inference that matters if CET/IBT is enforced."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C library malloc/free/assert, overridable through LIBCO_MALLOC, LIBCO_FREE and LIBCO_ASSERT; bundled valgrind.h header)",
+    "min_toolchain": "C89; CI builds with GCC -std=c89 on Linux, -m32 for x86, qemu for armv7/aarch64/ppc64le/ppc, and MSVC (cl /Zc:__STDC__) for Windows amd64/x86",
+    "platforms": "x86 and amd64 (Windows, macOS, Linux, BSD), 32-bit ARM, AArch64, 32/64-bit PowerPC ELFv1 and ppc64le ELFv2; other POSIX targets via sjlj.c, Windows via fiber.c; ucontext.c is never picked by libco.c and must be compiled directly",
+    "thread_safety": "Not thread-safe by default; define LIBCO_MP to make the active-cothread state thread_local. usage.md warns not to switch a non-cothread context across CPU cores.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the overhead multiples: doc/examples/test_timing.cpp, the only timing code in the repo, prints a 'co_switch skew' ratio. Its 'subroutine call' baseline is a one-line function in the same file built at -O3 (build.sh, CI), so GCC and Clang will normally inline it (not built here to confirm). The denominator is then a loop of volatile increments, not a call. Each co_switch iteration performs two switches (there and back). The printed labels say '50 million' and '100 million' calls while Iterations is 500,000,000. No output is recorded, and the workflow page shows 0 runs today.",
+    "ABI state not saved: ARM32 skips VFP d8-d15, and SysV amd64 skips the callee-saved MXCSR and x87 control-word bits, so a rounding-mode change in one cothread leaks into others. On Win64, LIBCO_NO_SSE clobbers xmm6-15 against the ABI (issue #43). Windows amd64/x86 backends break C++ exception handling (issue #45).",
+    "The register save area sits at the bottom of the same malloc'd block that the stack grows down into. With no guard page, an overflow silently corrupts the saved context; issue #13's Windows crash in fflush was a too-small stack.",
+    "Backend quirks: sjlj.c needs -D_FORTIFY_SOURCE=0 (CI sets it; glibc's checked longjmp rejects cross-stack jumps), swaps the process-wide SIGUSR1 handler while creating a cothread, and fails valgrind with an unexplained invalid write. Under LIBCO_MPROTECT, which Clang builds force on, the mprotect/VirtualProtect return value is ignored."
+  ],
+  "pick_this_over_siblings_when": "Against the Boost.Context sibling (fcontext 9 ns / 19 cycles vs 547 ns for ucontext on its own published harness), pick libco when you want a four-call C89 API, an ISC licence, a small vendorable source set (libco.c, settings.h, one backend file and the bundled valgrind.h) and serializable cothread state. Pick Boost.Context when you need measured numbers, C++ exceptions inside coroutines on Windows, or 32-bit ARM hard-float code.",
+  "verified_claims_summary": "doc/targets.md gives switch overhead as a multiple of an ordinary C function call: amd64 ~6x (~10x on Windows), x86 ~5x, PowerPC ~20x, Windows fibers ~15x, setjmp/longjmp ~30x and POSIX ucontext ~300x. No hardware, compiler or date is given; the multiples presumably come from the repo's test_timing.cpp, whose call baseline is likely inlined at -O3. The README's 10,000,000+ switches per second is an assertion, and no independent measurement was found.",
+  "status_note": "Stale since 2024-09-10 (CI and C89 fixes), with 6 open issues including Windows exceptions and RISC-V. It is ISC-licensed and small enough to vendor (libco.c plus one backend file), but treat the ARM32 VFP and Windows exception gaps as blockers for those targets.",
+  "sources_read": [
+    "https://github.com/higan-emu/libco",
+    "https://github.com/higan-emu/libco/commits/master",
+    "https://github.com/higan-emu/libco/issues?q=is%3Aissue",
+    "https://github.com/higan-emu/libco/issues/13",
+    "https://github.com/higan-emu/libco/issues/32",
+    "https://github.com/higan-emu/libco/issues/43",
+    "https://github.com/higan-emu/libco/issues/45",
+    "https://github.com/higan-emu/libco/issues/51",
+    "https://github.com/higan-emu/libco/pulls?q=is%3Apr",
+    "https://github.com/higan-emu/libco/tree/master/doc",
+    "https://github.com/higan-emu/libco/tree/master/doc/examples",
+    "https://github.com/higan-emu/libco/tree/master/.github/workflows",
+    "https://github.com/higan-emu/libco/actions/workflows/ci.yml",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/README.md",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/targets.md",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/usage.md",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/libco.h",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/libco.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/settings.h",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/amd64.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/x86.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/arm.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/aarch64.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/ppc.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/ppc64v2.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/sjlj.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/ucontext.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/fiber.c",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/examples/test_timing.cpp",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/examples/test.h",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/examples/build.sh",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/doc/examples/build.bat",
+    "https://raw.githubusercontent.com/higan-emu/libco/HEAD/.github/workflows/ci.yml"
+  ],
+  "confidence": 0.65
+}

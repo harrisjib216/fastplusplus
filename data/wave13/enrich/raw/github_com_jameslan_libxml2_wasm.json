@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/jameslan/libxml2-wasm",
+  "one_liner": "libxml2 compiled to WebAssembly with a TypeScript DOM API; parses XML faster than pure-JS parsers, roughly level with native libxmljs2.",
+  "what_it_does": "Wraps libxml2 (built with Emscripten, shipped as one ES module with the wasm inlined) behind a TypeScript API: XmlDocument.fromString / fromBuffer, node navigation and editing, XPath, XSD, RelaxNG and DTD validation, XInclude, C14N and serialisation. It is not a drop-in for libxmljs2: the class and method names differ and every document must be released with dispose() (or a `using` declaration), because the tree lives in the wasm heap.",
+  "how_it_is_fast": "Parsing runs entirely inside libxml2's C parser (xmlCtxtReadMemory) compiled to wasm; parse() returns only a handle to the C tree, so no JS object is created per node until code asks for one. The Buffer API copies the UTF-8 bytes into the wasm heap with one HEAPU8.set and skips the UTF-16 to UTF-8 conversion that the String API (lengthBytesUTF8 + stringToUTF8) pays on every call. Against libxmljs2 it also carries less per-allocation work: libxmljs2 routes every libxml2 malloc/free through xmlMemMalloc/xmlMemFree wrappers that query xmlMemUsed() and report external memory to V8, plus per-node register/deregister callbacks, while the wasm build uses plain malloc and is configured --without-threads.",
+  "when_to_use": [
+    "You need a real libxml2 DOM (XPath 1.0, XSD/RelaxNG/DTD validation, C14N, XInclude) in a browser or in Node without a native addon or node-gyp toolchain.",
+    "Node or serverless deployments where per-platform prebuilt native binaries (libxmljs2, libxmljs) break across libc, OS or Node versions; one wasm build runs everywhere Node 18+ runs.",
+    "Parsing many small documents (under a few KB) from Buffers or Uint8Arrays: the measured Buffer-API row was 2.1x libxmljs2 and 2.1x @rgrove/parse-xml on the 780-byte file.",
+    "Replacing pure-JS parsers (fast-xml-parser, xmldoc, @rgrove/parse-xml) when the input arrives as bytes and parse time dominates: 3.3-6.3x faster on the 35 KB and 2.3 MB files in the repo's run."
+  ],
+  "when_not_to_use": [
+    "Your input is a JS string and documents are tens of KB or larger: the String API measured 0.48x (35 KB) and 0.86x (2.3 MB) of native libxmljs2 in the same run.",
+    "Very large documents or streaming: no SAX or xmlTextReader API is exported, the whole tree must fit in a 32-bit wasm heap (binding/emcc.txt sets ALLOW_MEMORY_GROWTH without MAXIMUM_MEMORY, so Emscripten's default cap applies), and wasm memory grows but never shrinks.",
+    "Code that walks the whole tree from JS: every property access (name, content, next, firstChild) is a JS-to-wasm call plus a UTF8ToString copy, so parse-plus-traverse can lose the edge that the parse-only benchmark shows over JS object trees.",
+    "HTML parsing (built --without-html; issue #72 open), async resolution of XInclude or XSD imports (issues #143-145 open), or code that cannot guarantee dispose() calls.",
+    "Teams wanting a libxmljs2-compatible API: porting means rewriting calls and adding explicit lifetime management."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (libxml2 2.15.1 is compiled into the single-file module); building from source needs Emscripten (CI pins 5.0.2) and the libxml2 git submodule",
+    "min_toolchain": "Node.js 18+, Chrome/Edge 89+, Safari 15+ (ES module with top-level await); TypeScript typings included",
+    "platforms": "any JavaScript runtime with WebAssembly and ES modules; CI runs Node 18/20/22/24 on Linux, macOS and Windows",
+    "thread_safety": "not documented; libxml2 is configured --without-threads and each module instance has one wasm heap, so do not share documents across workers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the headline: benchmark/index.mts gives the Buffer API a pre-read UTF-8 Buffer but passes libxmljs2 the JS string, although libxmljs2's FromXml (src/xml_document.cc) takes a Buffer too; on like-for-like strings the wasm build wins only on the 780-byte file. The pure-JS rows compare a parse that builds no JS objects with parsers that build full JS object trees.",
+    "Baseline overhead not of wasm's making: libxmljs2 0.32 installs xmlMemSetup wrappers (xmlMemMalloc plus an xmlMemUsed() check and Nan::AdjustExternalMemory) and node register/deregister callbacks, and its documents are freed by GC finalizers inside the timed loop while libxml2-wasm calls dispose(); part of the small-file win is binding design rather than codegen.",
+    "Published numbers come from v0.1.0 (Dec 2023: libxml2 master of late 2023, no -O level at link, unstated local Emscripten) and were not re-run for the current -O2 -flto --closure 1 build on libxml2 2.15.1 and Emscripten 5.0.2.",
+    "Node and attribute wrappers hold raw pointers into the wasm heap: using them after the owning document is disposed is a use-after-free (issue #137 fixed one such path); FinalizationRegistry frees forgotten documents eventually, but the README still calls dispose() required."
+  ],
+  "pick_this_over_siblings_when": "Pick it over sax-wasm when you need a full DOM with XPath, schema validation or C14N rather than a streaming event parser; pick sax-wasm for huge or streamed inputs where holding the whole tree in the wasm heap is not acceptable.",
+  "verified_claims_summary": "The repo's benny run (Node v18.19.0, Apple M3 Max, v0.1.0 build) parses 780 B, 35 KB and 2.3 MB fixtures into a DOM: the Buffer API reached 167,479 / 17,114 / 62 ops/s versus native libxmljs2 0.32 (libxml2 2.9.9) at 78,688 / 12,414 / 50 fed strings, and versus @rgrove/parse-xml at 78,790 / 5,049 / 19; the like-for-like String API rows (120,578 / 6,013 / 43) beat libxmljs2 only on the small file. First-party, single machine, numbers unchanged since 2023-12-26.",
+  "status_note": "Actively maintained (last commit 2026-10-05, npm latest 0.7.2 released 2026-09-07, 54 stars) under MIT with libxml2's own notice bundled, while its main native competitor libxmljs2 is marked no longer maintained; usable as a dependency today, but the benchmark has not been refreshed since v0.1.0.",
+  "sources_read": [
+    "https://github.com/jameslan/libxml2-wasm",
+    "https://github.com/jameslan/libxml2-wasm/issues?q=is%3Aissue",
+    "https://github.com/jameslan/libxml2-wasm/issues?q=is%3Aissue&page=2",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/benchmark/index.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/benchmark/package.json",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/binding/emcc.txt",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/binding/exported-functions.txt",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/document.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/libxml2.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/disposable.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/nodes.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/index.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/utils.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2-wasm/HEAD/src/libxml2raw.d.mts",
+    "https://raw.githubusercontent.com/jameslan/libxml2/f52e859efe97cf3f0b78d731976402748878529a/VERSION",
+    "https://registry.npmjs.org/libxml2-wasm",
+    "https://github.com/marudor/libxmljs2",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/README.md",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/index.js",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/lib/document.js",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/src/xml_document.cc",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/src/libxmljs.cc",
+    "https://raw.githubusercontent.com/marudor/libxmljs2/v0.32.0/binding.gyp"
+  ],
+  "confidence": 0.8
+}
