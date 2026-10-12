@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/tidwall/redcon",
+  "one_liner": "Go framework for writing Redis-protocol servers; its 136-line map clone out-ran redis-server about 2x on a 2016 laptop pipeline test.",
+  "what_it_does": "Redcon parses the Redis wire protocol (RESP and telnet-style inline commands) and hands each command to a Go callback, so you build your own server that redigo, redis-py, jedis and redis-cli can talk to. The API is ListenAndServe(addr, handler, accept, closed) plus Conn and Command types, with ListenAndServeTLS, unix-socket listeners, a ServeMux, a built-in PubSub (SUBSCRIBE/PSUBSCRIBE/PUBLISH) and Conn.Detach for taking over a connection. It is not a Redis replacement: every command, data structure and persistence rule is yours to write.",
+  "how_it_is_fast": "Each connection gets its own goroutine that reads into a growable 4 KB buffer, parses every complete command in that buffer in one pass, runs the handler for each, appends all replies to one byte slice and flushes it with a single write per batch, so a 512-deep pipeline costs a handful of syscalls. With GOMAXPROCS above 1 the Go scheduler spreads connections across cores, which single-threaded Redis cannot do. In the benchmark the handler is a map lookup under a sync.RWMutex with no persistence, expiry or data-type machinery, so most of the gap is less work per command rather than a faster event loop; the README itself names no mechanism.",
+  "when_to_use": [
+    "You need a custom service (spatial index, proxy, cache front, test double) that existing Redis clients can talk to without a new client library.",
+    "Your service is written in Go and you want the goroutine-per-connection model with plain blocking-style handlers.",
+    "Read-heavy, deeply pipelined traffic from many connections on a multicore box: the README's multi-threaded GET (3,993,610.25 rps) scales past the single-threaded run (2,403,846.25).",
+    "You want Redis-compatible pub/sub, TLS or unix-socket serving out of the box."
+  ],
+  "when_not_to_use": [
+    "You actually need Redis: no persistence, expiry, replication, cluster or data types come with it; the benchmarked clone has SET, GET, SETNX, DEL, PING, QUIT, pub/sub and a blank CONFIG stub.",
+    "Facing untrusted clients without a length guard: the parser has no cap on multibulk count or bulk length, and crafted lengths can pin a core or crash the process (see gotchas).",
+    "Write-heavy multi-core workloads behind one global lock: the README's multi-threaded SET (1,944,390.38 rps) is slower than single-threaded (2,018,570.88).",
+    "A C++ codebase that wants an in-process library: this is Go and runs as a separate server or sidecar; the author's C port tidwall/redcon.c is the in-process option.",
+    "Tail-latency-bound services: the README publishes throughput only, no latency percentiles."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/tidwall/btree v1.1.0, github.com/tidwall/match v1.1.1 (used by PubSub)",
+    "min_toolchain": "Go 1.20 (go.mod since commit 7776fcd, 2026-07-22, which uses unsafe.String)",
+    "platforms": "any Go target with the net package (TCP, unix sockets, TLS)",
+    "thread_safety": "Handlers run concurrently, one goroutine per connection, so shared state needs your own locking (the example uses sync.RWMutex); a Conn is meant to be used inside its handler, and a detached connection must be flushed and closed by its new owner.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The comparison is cross-run: the Redis row (SET 941,265.12, GET 1,189,909.50) was published on 2016-08-20 (commit 9e38e36) and never re-run, while the Redcon rows were re-measured twice, at SET 3,119,151.50 on 2016-09-07 (commit 4276409) and SET 2,018,570.88 after the 2016-09-18 API rewrite (commit 67c21aa). The 2.1x ratios pair runs a month apart on different code; the original same-day ratios were 1,320,655.00 vs 941,265.12 for SET (about 1.40x, derived) and 1,552,354.25 vs 1,189,909.50 for GET (about 1.30x, derived).",
+    "Parser robustness, found by reading redcon.go and resp.go at HEAD (not executed): readCommands has no upper bound on the multibulk count and its 'for j := 0; j < count; j++' loop keeps incrementing past the buffer without breaking, so '*1000000000000000000\\r\\n' spins the connection goroutine for about 1e18 iterations; a bulk length near MaxInt64 makes 'i+size+2' overflow negative and index the buffer out of range, an unrecovered panic that ends the process (redcon.go has no recover). The exported ReadNextCommand (used by evio's Redis example) checks 'count <= 0' instead of the bulk length n, so '$-2' passes and 'packet[i:i+n]' panics.",
+    "Stored arguments are sub-slices of a per-command copy of the whole raw RESP message, so keeping cmd.Args[2] in a map (as the clone does) retains the key and framing bytes too, and every command costs one allocation.",
+    "Over a real network the gap shrinks: in issue #3 (2016) the author's two-droplet test gave single-threaded Redcon 687,994.50 rps vs Redis 622,045.25 (about 1.1x, derived) at -P 128 -c 128; the benchmark clone's CONFIG stub reads cmd.Args[2] unchecked, so a two-argument CONFIG command panics it."
+  ],
+  "pick_this_over_siblings_when": "Pick redcon over evio when you want a simple goroutine-per-connection handler API with pub/sub, TLS and Detach and your connection count is moderate; evio (an epoll/kqueue event loop that reuses redcon's ReadNextCommand parser) only matched Redis at pipeline 1 in its own table. Neither replaces Redis; both are frameworks for your own RESP server.",
+  "verified_claims_summary": "redis-benchmark (-t set,get -n 10000000 -P 512 -c 512, one fixed key, 3-byte values) against the example Go-map clone versus redis-server with AOF off (version not stated) on a 2.8 GHz Core i7 MacBook Pro with Go 1.7: single-threaded Redcon SET 2.02M vs 0.94M rps (about 2.1x) and GET 2.40M vs 1.19M (about 2.0x), but the Redis row is from a 2016-08-20 run and the Redcon rows from a 2016-09-18 re-run.",
+  "status_note": "Active (last commit 2026-07-22, a number-parsing fix), MIT, single-package Go module that is easy to vendor; the headline numbers are a 2016 first-party cross-run comparison (CLAUDE.md precedent sends cross-run comparisons to D), and the parser should get length limits before it faces untrusted clients.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/resp.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/example/clone.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/go.mod",
+    "https://raw.githubusercontent.com/tidwall/redcon/HEAD/LICENSE",
+    "https://github.com/tidwall/redcon/commits/master/redcon.go",
+    "https://github.com/tidwall/redcon/commits/master/redcon.go?after=7e866b48ea78ec2a060fa30cd945052e4bfa5031+34",
+    "https://github.com/tidwall/redcon/commits/master/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/9e38e36/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/408b582/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/a88a6c7/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/4276409/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/0ec132a/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/67c21aa/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/ffcf137/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/142cd0b/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/b110d63/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon/4276409/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/0ec132a/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/67c21aa/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/bd8eb49/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/6f1afba/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/ffcf137/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/142cd0b/redcon.go",
+    "https://raw.githubusercontent.com/tidwall/redcon/b110d63/redcon.go",
+    "https://github.com/tidwall/redcon/commit/7776fcd",
+    "https://github.com/tidwall/redcon/issues?q=is%3Aissue+panic+OR+crash+OR+DoS+OR+performance",
+    "https://github.com/tidwall/redcon/issues/3",
+    "https://raw.githubusercontent.com/tidwall/evio/HEAD/examples/redis-server/main.go",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

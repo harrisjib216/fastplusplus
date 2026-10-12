@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/traefik/traefik",
+  "one_liner": "Go reverse proxy and load balancer; one small third-party Docker test shows lower TLS (HTTP/2) tail latency than nginx at 5k req/s.",
+  "what_it_does": "Traefik is an HTTP reverse proxy and load balancer written in Go that builds its routing table from providers (Docker and Swarm, Kubernetes, Amazon ECS, file, Consul, etcd) and applies configuration changes without restarts, with Let's Encrypt certificates, middlewares, retries and circuit breakers, metrics and access logs. It ships as a single binary or the official Docker image. It replaces nginx at the network level but not at the configuration level: routes are routers, services and middlewares declared in YAML/TOML, container labels or CRDs, so nginx.conf cannot be reused.",
+  "how_it_is_fast": "Traefik is not a speed-first design. It serves clients with Go's net/http server and crypto/tls (one goroutine per connection, HTTP/2 streams handled concurrently on goroutines spread over all cores) and forwards with Go's httputil.ReverseProxy, a sync.Pool of 32 KiB copy buffers and a keep-alive upstream pool (maxIdleConnsPerHost 64 in the test). When a client multiplexes everything over one HTTP/2 TLS connection, as Vegeta does here, Traefik spreads those streams across CPUs while nginx serves each connection inside one worker process, which is the most plausible design reason for its lower TLS tail in this test. An experimental fastProxy built on valyala/fasthttp (pkg/proxy/fast, v3.2+, HTTP/1 backends only) exists but was not enabled in the benchmark.",
+  "when_to_use": [
+    "Container or Kubernetes platforms where routes appear and disappear often and you want them discovered from labels or CRDs with hot reload instead of templating nginx.conf.",
+    "TLS-terminating edge at moderate fixed request rates (thousands of req/s, not saturation) where clients multiplex HTTP/2 and P99 matters more than peak throughput; the only evidence is one small third-party test.",
+    "Teams that want automatic ACME/Let's Encrypt certificates and built-in metrics without extra modules.",
+    "Small CPU quotas in containers when running Traefik built with Go 1.25+, whose GOMAXPROCS follows the container CPU limit (unlike nginx's worker_processes auto in the tested config)."
+  ],
+  "when_not_to_use": [
+    "Maximum plaintext throughput: the benchmark's own author credits nginx for plaintext throughput, and the plain HTTP/1.1 row shows no Traefik win (HAProxy best P99 about 1.09 ms). Search snippets of other tests (not opened) point the same way: an August 2026 local lab put NGINX 1.30.4 at 53,359 req/s vs Traefik 3.7.12 at 37,705 (p99 3.40 vs 8.01 ms, no TLS), and HAProxy's 2020 vendor ingress test had HAProxy 42,000 vs Traefik 19,000 req/s.",
+    "CPU- or memory-budgeted deployments where you need numbers: this suite records no CPU or memory use, and Traefik issue #6954 (higher CPU in v2 than v1, TLS involved) was closed in 2023 without a root cause.",
+    "If you need to keep existing nginx.conf logic (rewrites, Lua, caching): configuration is not portable.",
+    "If the decision rests on this benchmark alone: tier C, one archived 0-star repo, no CPU model, prebuilt images, P99 values only as approximate README prose."
+  ],
+  "integration": {
+    "form": "standalone binary or official Docker image (Go module source)",
+    "dependencies": "none at runtime (single binary); built from source with Go 1.25 (go.mod go 1.25.0)",
+    "min_toolchain": "Go 1.25 to build v3.6.13 (go.mod); prebuilt binaries and images need no toolchain",
+    "platforms": "Go-supported OS/architectures; supported release architectures were not checked this session",
+    "thread_safety": "not applicable (separate proxy process); dynamic configuration is swapped at runtime without restart",
+    "drop_in_for_baseline": "partial — replaces nginx as a reverse proxy on the wire, but routing, TLS and middleware configuration must be rewritten in Traefik's own model"
+  },
+  "gotchas": [
+    "Mislabelled rows: the suite's 'HTTPS/1.1' scenario is HTTP/2 because Vegeta's -http2 flag defaults to true (v12.13.0 attack.go) and only -insecure is passed, so both TLS rows measure the same HTTP/2 workload over a few multiplexed connections.",
+    "Harness asymmetry (new, untested): the suite's nginx.conf sets keepalive_requests 10000, which nginx 1.28 also applies to HTTP/2 (ngx_http_v2.c sends GOAWAY once connection requests reach keepalive_requests). At 5,000 req/s over one multiplexed connection, nginx forces a reconnect about every 2 s (about 10 per 20 s run), each a full RSA-4096 handshake, since Vegeta's tls.Config has no ClientSessionCache and nginx has no ssl_session_cache. Traefik's keep-alive cap is opt-in (KeepAliveMaxRequests/KeepAliveMaxTime, middleware installed only when set), so its connection is never rotated. Plausible contributor to nginx's ~24 ms P99.",
+    "Run-to-run noise exceeds the claimed gap: in the restricted run Caddy, which uses the same Go crypto/tls as Traefik, shows about 86 ms mean on the 'HTTPS/1.1' row and about 1 ms on the 'HTTPS/2' row, which are the same HTTP/2 workload (read from benchmark.png). A single run per scenario cannot separate a Traefik advantage from noise, and Caddy's result argues against a 'Go TLS is faster' explanation.",
+    "Restricted-run asymmetry: nginx worker_processes auto counts the host's 24 CPUs under a 2-CPU CFS quota, while Traefik v3.6.13 (Go 1.25) sizes GOMAXPROCS to the quota; the backend nginx and the Vegeta container are unrestricted and share the host."
+  ],
+  "pick_this_over_siblings_when": "Pick Traefik over Caddy when you want provider-driven dynamic routing (Docker labels, Kubernetes CRDs) more than Caddy's automatic HTTPS; neither has a verified speed win over nginx, and in this same suite Caddy's restricted TLS row was the slowest of all. Over small first-party proxies such as routez, rproxy or Spire, pick Traefik for maturity and features, not for throughput.",
+  "verified_claims_summary": "In fabianwimberger/reverse-proxy-benchmark (third-party, archived), Vegeta v12.13.0 at a fixed 5,000 req/s for 20 s fetched a ~20 KB JSON through official images of Traefik 3.6.13, nginx 1.28.3, HAProxy 3.3.6 and Caddy 2.11.2 to an nginx backend on one Docker host (24 cores, 29 GB RAM, Ubuntu 24.04.4, CPU model not stated); the README reports Traefik best in both TLS rows (mean ~0.46-0.48 ms, P99 ~1.37-1.47 ms) against nginx P99 ~24 ms and HAProxy ~1.79 ms, with no win on plain HTTP/1.1. Both TLS rows are really HTTP/2, P99 values exist only as README prose, and the chart (means only) shows nginx at ~32-34 ms only in the 2-CPU restricted run.",
+  "status_note": "Traefik is actively maintained (last commit 2026-10-08, 65.2k stars, MIT) and widely deployed, but the speed claim rests on a single archived third-party run with a nginx-only connection-rotation handicap, so treat it as tier C evidence of TLS tail latency, not a general win over nginx.",
+  "sources_read": [
+    "https://github.com/traefik/traefik",
+    "https://github.com/traefik/traefik/issues?q=is%3Aissue+label%3Akind%2Fbug%2Fperformance+OR+performance+latency+sort%3Acomments-desc",
+    "https://github.com/traefik/traefik/issues/6954",
+    "https://raw.githubusercontent.com/traefik/traefik/v3.6.13/go.mod",
+    "https://raw.githubusercontent.com/traefik/traefik/v3.6.13/pkg/proxy/httputil/proxy.go",
+    "https://raw.githubusercontent.com/traefik/traefik/v3.6.13/pkg/proxy/httputil/bufferpool.go",
+    "https://raw.githubusercontent.com/traefik/traefik/v3.6.13/pkg/proxy/fast/proxy.go",
+    "https://raw.githubusercontent.com/traefik/traefik/v3.6.13/pkg/server/server_entrypoint_tcp.go",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/Makefile",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/docker-compose.yml",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/docker-compose.restricted.yml",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/nginx/default.conf",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/haproxy/haproxy.cfg",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/traefik/traefik.yml",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/traefik/dynamic.yml",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/caddy/Caddyfile",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/configs/backend/nginx.conf",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/analyze_results.py",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/scripts/summarize.py",
+    "https://raw.githubusercontent.com/fabianwimberger/reverse-proxy-benchmark/HEAD/assets/local-results/benchmark.png",
+    "https://raw.githubusercontent.com/tsenart/vegeta/v12.13.0/attack.go",
+    "https://raw.githubusercontent.com/tsenart/vegeta/v12.13.0/lib/attack.go",
+    "https://raw.githubusercontent.com/nginx/nginx/release-1.28.0/src/http/v2/ngx_http_v2.c",
+    "WebSearch: traefik experimental fastProxy (doc.traefik.io fastproxy pages, snippets only)",
+    "WebSearch: Traefik vs Nginx vs HAProxy benchmark (snippets of dev-website.teramont.net/blog/nginx-vs-traefik-comparison and haproxy.com ingress benchmark news, not opened)",
+    "https://community.traefik.io/t/traefik-performance-lags-behind-nginx-and-caddy/28919 (ENOTFOUND, not read)"
+  ],
+  "confidence": 0.3
+}

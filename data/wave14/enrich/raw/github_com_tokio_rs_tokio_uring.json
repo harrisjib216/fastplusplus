@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/tokio-rs/tokio-uring",
+  "one_liner": "io_uring-backed Rust runtime; a hand-rolled HTTP/1.1 server on it edges nginx 1.09x in HttpArena but loses to plain epoll tokio.",
+  "what_it_does": "tokio-uring is a Rust crate that runs a Tokio current_thread runtime plus an io_uring driver, with its own TcpListener, TcpStream, UdpSocket and fs::File types whose read/write calls take buffers by ownership and hand them back with the result (BufResult). The catalogued result is not the crate itself but HttpArena's frameworks/tokio-uring server: about 300 lines of hand-written HTTP/1.1 parsing (request line, Content-Length and chunked bodies, keep-alive, pipelining) on tokio-uring's TcpStream, answering only /pipeline and the a+b sum endpoint. It is not a drop-in for nginx or for tokio::net; code using it is written against a different, completion-style API.",
+  "how_it_is_fast": "The server starts one tokio_uring::start runtime per available CPU, each with its own SO_REUSEPORT listener, so accepts are sharded by the kernel and no task crosses threads. Each connection parses every complete request in its buffer and writes all responses in one write_all, which is what makes the pipelined profile (depth 16) 12x nginx. Responses are a minimal 63 bytes (no Date or Server header) against about 135 for nginx. The io_uring use is the basic one: one-shot accept/read/write submissions with a 16 KiB owned Vec per read and the default 256-entry ring; the crate's registered-buffer calls (read_fixed/write_fixed) are not used, and provided-buffer rings (issue #112), multishot recv and SQPOLL are not involved.",
+  "when_to_use": [
+    "Linux-only services (kernel 5.10+ per lib.rs, 5.11+ per README) where you control the kernel and container security profile and want a thread-per-core, shared-nothing design.",
+    "Workloads that mix network and file I/O and benefit from submitting file reads/writes asynchronously through the same ring (tokio::fs uses a blocking thread pool instead).",
+    "Experiments or research on completion-based I/O in Rust where a fork or vendored copy is acceptable.",
+    "Heavily pipelined HTTP/1.1 microbenchmarks, where batching responses per read gives 48.9M req/s against nginx's 4.0M in HttpArena (though plain tokio does 54.8M with the same design)."
+  ],
+  "when_not_to_use": [
+    "If you only want faster networking than nginx: HttpArena's plain tokio (epoll) entry with the same hand-rolled parser and flags beats tokio-uring on every shared profile (baseline-4096 4,187,085 vs 3,565,878 req/s) and uses less CPU per request at a fixed 1M req/s (18.7 vs 25.3 us).",
+    "Connection-churn workloads: in limited-conn-4096 (10 requests per connection, 1.32M reconnects) its p99 is 20.50 ms against 2.36 ms for tokio and 7.65 ms for nginx.",
+    "Default Docker or Kubernetes containers: Docker's default seccomp profile (defaultAction SCMP_ACT_ERRNO, no io_uring_* syscalls allowed) makes io_uring_setup fail; HttpArena runs the server with --security-opt seccomp=unconfined and --ulimit memlock=-1:-1.",
+    "Production code that needs a maintained dependency: last release 0.5.0 on 2024-05-27, last commit 2025-07-07, 57 open issues and 41 open PRs, a maintainer called it a 'bus factor problem' (issue #281) and issue #336 'Is tokio-uring safe for production?' has no maintainer reply.",
+    "Code that needs Tokio's multi-thread work-stealing scheduler or Send futures: tasks are spawned with spawn_local on a current_thread runtime and resource types are mostly !Sync (multi_thread support is open issue #258)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "tokio 1.x (net, rt, sync), io-uring 0.6, slab, libc, socket2 0.4, futures-util; optional bytes",
+    "min_toolchain": "Rust edition 2018, no MSRV declared (issue #239 open); HttpArena builds with rust:1.95. Linux kernel 5.10+ (lib.rs docs) or 5.11+ (README says 5.4 does not work).",
+    "platforms": "Linux only (io_uring); x86-64 and aarch64 wherever the kernel supports io_uring. Containers need a seccomp profile that allows io_uring_setup/enter/register.",
+    "thread_safety": "Single-threaded per runtime: tokio_uring::start runs a current_thread runtime with a LocalSet, tasks use spawn_local, most resource types are !Sync; scale by starting one runtime per thread.",
+    "drop_in_for_baseline": "partial — not a replacement for nginx at all (you write the server yourself); against tokio::net it is a different API (buffers passed by ownership, explicit close()), though Tokio-based libraries still run inside its runtime."
+  },
+  "gotchas": [
+    "TcpListener::accept is not cancellation safe (open bug #129): dropping a partly polled accept future, e.g. losing a select! race or a timeout, leaks the accepted fd until the process exits; dropping other ops also cannot recover the buffer until the kernel completes it.",
+    "Resources closed only on drop are closed in the background at an unspecified time (lib.rs 'Closing resources'); call close().await explicitly for deterministic fd release.",
+    "Harness note: the measured server sends no Date or Server header (63 bytes per response vs about 135 for nginx, derived from bandwidth/req/s), routes only /pipeline and treats every other path as the a+b endpoint, so per-request work is lighter than nginx's; the io_uring path itself is not the reason for any lead, since the identical epoll tokio server is 1.17x faster at baseline-4096.",
+    "CHANGELOG.md stops at 0.4.0 (2022-11-05); 0.5.0 changes are undocumented there."
+  ],
+  "pick_this_over_siblings_when": "Pick the Rust raw tokio HttpArena entry over this one for HTTP serving: same parser, same flags, faster on every profile and cheaper per request; pick tokio-uring only when you specifically need io_uring file I/O in the same thread-per-core runtime. Among io_uring servers in the suite, ioxide (MDA2AV, 4,111,381 req/s), vanilla-io_uring (4,307,987) and libreactorng (4,377,377) all post higher baseline-4096 numbers.",
+  "verified_claims_summary": "In HttpArena on a Threadripper PRO 3995WX (server pinned to 32 cores / 64 threads, gcannon load over loopback, 5 s runs, best of 3), the hand-rolled tokio-uring HTTP/1.1 server (rust 1.95, target-cpu=native, opt-level 3, thin LTO) served 3,565,878 req/s at baseline-4096 vs nginx 1.31.4 (custom handler module, -O3 -march=native) 3,284,513 (1.09x), 48,876,057 vs 4,037,345 pipelined at depth 16 (12.1x), and tied nginx at limited-conn-4096 (2,636,459 vs 2,626,297); h2o, mongoose, libioma, libreactorng and the plain epoll tokio entry are faster at baseline.",
+  "status_note": "Stale but MIT-licensed: last release 0.5.0 (2024-05-27), last commit a clippy/rustfmt fix on 2025-07-07, open questions about maintenance (#281, #336) unanswered by maintainers, so treat it as usable for experiments and vendorable, not as a maintained production dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-uring/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-uring/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-uring/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio-uring/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/src/main.rs",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/tokio/Cargo.toml",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nginx/nginx.conf",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/tokio-uring.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/tokio.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/common.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/framework.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/README.md",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/src/runtime/mod.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/src/net/tcp/stream.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/src/net/tcp/listener.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio-uring/HEAD/src/buf/mod.rs",
+    "https://github.com/tokio-rs/tokio-uring",
+    "https://github.com/tokio-rs/tokio-uring/commits",
+    "https://github.com/tokio-rs/tokio-uring/issues?q=is%3Aissue+is%3Aopen+sort%3Acomments-desc",
+    "https://github.com/tokio-rs/tokio-uring/issues/281",
+    "https://github.com/tokio-rs/tokio-uring/issues/336",
+    "https://github.com/tokio-rs/tokio-uring/issues/129",
+    "https://crates.io/api/v1/crates/tokio-uring",
+    "https://raw.githubusercontent.com/moby/profiles/HEAD/seccomp/default.json"
+  ],
+  "confidence": 0.75
+}

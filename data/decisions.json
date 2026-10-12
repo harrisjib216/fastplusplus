@@ -27097,11 +27097,13 @@
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
       "Memory-only comparison (1M tasks: Tokio 214 MB vs Asio 853 MB, concurrencpp 606 MB) from a 4-star 2023 hobby repo (Xavorim/cpp_tasks_bench) with the C++ compiler unnamed and C++ libraries unpinned; Tokio is larger at 1 task.",
-      "A later raw copy (HttpArena raw tokio HTTP/1.1 server) shares the repo URL; the verified concurrency-runtimes identity is kept by override and the HttpArena rows live under lang:rust/mda2av/httparena#baseline-4096."
+      "A later raw copy (HttpArena raw tokio HTTP/1.1 server) shares the repo URL; the verified concurrency-runtimes identity is kept by override and the HttpArena rows live under lang:rust/mda2av/httparena#baseline-4096.",
+      "The harness is logically fair and the per-task slope still favours tokio (about 216 vs 619 vs 872 bytes, derived), but the measured tokio 1.28.2 predates PR #5809 (2023-06-21), which aligns the task Cell to 128 bytes on x86-64, so current per-task memory is probably higher (not re-measured, not in the changelog). Peak RSS mixes a fixed cost: tokio runs 8 worker threads while Asio runs 1 thread; the C++ programs are untuned and their versions unpinned."
     ],
     "measurements": [
       "verifier batch-01 (wave 14)",
-      "orchestrator (wave 14 merge)"
+      "orchestrator (wave 14 merge)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ],
     "name": "Tokio (1M concurrent tasks, peak memory)",
     "category": "concurrency-runtimes"
@@ -28441,10 +28443,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "A Go 1.7 era laptop run with the Redis version unknown and one fixed key (no -r); the multi-threaded SET is slower than single-threaded; no mechanism stated."
+      "A Go 1.7 era laptop run with the Redis version unknown and one fixed key (no -r); the multi-threaded SET is slower than single-threaded; no mechanism stated.",
+      "Cross-run comparison: the Redis row (SET 941,265.12 / GET 1,189,909.50) was published 2016-08-20 (commit 9e38e36) and never re-run, while the Redcon rows were re-measured twice (3,119,151.50 on 2016-09-07 in 4276409, then 2,018,570.88 after the 2016-09-18 API rewrite 67c21aa); the same-day ratios were only 1.40x SET and 1.30x GET (derived). Issue #3's network test at GOMAXPROCS=1: Redcon 687,994.50 vs Redis 622,045.25 (about 1.1x). Security, from reading the code: readCommands puts no cap on the multibulk count, so *1000000000000000000 spins a goroutine for about 1e18 iterations; a bulk length near MaxInt64 overflows i+size+2 into an unrecovered panic that crashes the process; the exported ReadNextCommand checks count <= 0 instead of n, so $-2 panics (evio's Redis example uses it); the clone's CONFIG stub panics on a 2-argument CONFIG."
     ],
     "measurements": [
-      "verifier batch-33 (wave 14)"
+      "verifier batch-33 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -28848,10 +28852,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "HttpArena: the suite's plain epoll tokio entry beats it (4,187,085 vs 3,565,878 at baseline-4096), so io_uring is not the reason for the win; the hand-rolled server sends about 63 vs nginx's about 135 bytes per response (unequal work); behind libreactorng, libioma, mongoose and h2o. Last commit 2025-07-07."
+      "HttpArena: the suite's plain epoll tokio entry beats it (4,187,085 vs 3,565,878 at baseline-4096), so io_uring is not the reason for the win; the hand-rolled server sends about 63 vs nginx's about 135 bytes per response (unequal work); behind libreactorng, libioma, mongoose and h2o. Last commit 2025-07-07.",
+      "No correctness bug behind the numbers, but io_uring is not the reason for the lead: the same-design epoll tokio entry is faster on every profile and cheaper per request at a fixed 1M req/s (18.7 vs 25.3 us CPU per request on latency-1m-1024); limited-conn-4096 p99 is 20.50 ms against tokio's 2.36 ms and nginx's 7.65 ms. The entry uses only one-shot operations (no read_fixed, no buffer rings), sends no Date or Server header (63 vs about 135 bytes for nginx), and runs with seccomp=unconfined because Docker's default seccomp profile blocks io_uring_* (EPERM). Open bug #129: accept leaks an fd on cancel; the crate is stale (0.5.0, 2024-05-27; maintenance issues #281 and #336 unanswered)."
     ],
     "measurements": [
-      "verifier batch-43 (wave 14)"
+      "verifier batch-43 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -30353,10 +30359,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "The harness 'HTTPS/1.1' row is actually HTTP/2 (vegeta -http2 defaults to true; the harness passes only -insecure); archived 0-star personal benchmark with prebuilt images, flags unknown on both sides, no CPU model (24 cores, 29.0 GB, Ubuntu 24.04.4), means only from a chart, no raw results, p99 approximate; no HTTP/1.1 win; the restricted run is uneven (nginx worker_processes auto starts 24 workers under a 2-CPU quota while Traefik's Go 1.25 gets a container-aware GOMAXPROCS); probable cause is harness and config (nginx one worker per HTTP/2 connection), not the language."
+      "The harness 'HTTPS/1.1' row is actually HTTP/2 (vegeta -http2 defaults to true; the harness passes only -insecure); archived 0-star personal benchmark with prebuilt images, flags unknown on both sides, no CPU model (24 cores, 29.0 GB, Ubuntu 24.04.4), means only from a chart, no raw results, p99 approximate; no HTTP/1.1 win; the restricted run is uneven (nginx worker_processes auto starts 24 workers under a 2-CPU quota while Traefik's Go 1.25 gets a container-aware GOMAXPROCS); probable cause is harness and config (nginx one worker per HTTP/2 connection), not the language.",
+      "Harness flaw (untested): the suite's nginx.conf keepalive_requests 10000 also caps HTTP/2 (ngx_http_v2.c sends GOAWAY), so nginx reconnects about every 2 s at 5k req/s, about 10 full RSA-4096 handshakes per run, with no Vegeta ClientSessionCache and no nginx ssl_session_cache, while Traefik's keep-alive cap is opt-in and never rotates. Run noise: the restricted Caddy (Go TLS) shows about 86 ms mean on the 'HTTPS/1.1' row against about 1 ms on 'HTTPS/2' for the same HTTP/2 workload, so one run cannot separate Traefik's edge from noise."
     ],
     "measurements": [
-      "verifier batch-96 (wave 14)"
+      "verifier batch-96 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
