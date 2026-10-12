@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/gnutls/nettle",
+  "one_liner": "Nettle's runtime-dispatched assembly for AES, GCM, ChaCha and SHA, using CPU crypto instructions; beats Nettle's own table C up to 13x on POWER9.",
+  "what_it_does": "Nettle is a low-level C crypto library (ciphers, hashes, MACs, AEADs; public-key in the separate hogweed library on GMP) with no memory allocation and no I/O. It is the crypto backend that GnuTLS builds on. The catalogued part is its per-architecture assembly (x86_64, arm, arm64, powerpc64, s390x, sparc64, x86). Fat builds, the default since 3.7, set function pointers in a constructor based on CPU features, so existing callers of nettle_aes256_encrypt, gcm_aes256_encrypt, chacha_crypt or sha256_update get the fast path with no API change.",
+  "how_it_is_fast": "Mostly by calling the CPU's crypto instructions instead of Nettle's table-driven C. On POWER8 and later it uses vcipher and vpmsumd (vector crypto), with a stitched GCM-AES loop since 3.10. On x86_64 it uses AES-NI with two blocks interleaved per loop, SHA-NI and PCLMULQDQ. On arm64 it uses the AES, PMULL, SHA1 and SHA2 extensions, and on s390x the MSA facilities. Elsewhere it uses SIMD: ChaCha on POWER runs four blocks in parallel in AltiVec (_nettle_chacha_crypt_4core) against a one-block C core. The fat-*.c files read CPUID, getauxval(AT_HWCAP/AT_HWCAP2), elf_aux_info, sysctl or AIX _system_configuration, and NETTLE_FAT_OVERRIDE can force a variant.",
+  "when_to_use": [
+    "POWER8, POWER9 or POWER10 Linux or AIX hosts doing AES-CTR, AES-GCM or ChaCha in GnuTLS or directly through Nettle. This is where the 13x (AES256-CTR/GCM) and 3.5x (ChaCha) Power9 figures come from.",
+    "s390x and arm64 servers or Android/Apple/BSD arm64 devices with crypto extensions, where a fat build picks hardware AES, GHASH (PMULL), SHA-1 and SHA-256 at run time.",
+    "x86_64 code hashing large volumes with SHA-1 or SHA-256 on CPUs with SHA-NI (NEWS 3.5: 3-5x over Nettle's earlier x86_64 assembly).",
+    "Projects that need a small LGPL-3.0+/GPL-2.0+ crypto core with caller-owned contexts, no malloc and constant-time GHASH on all platforms (rewritten in 3.9), and that accept library-level speed rather than the fastest x86 numbers."
+  ],
+  "when_not_to_use": [
+    "Throughput-critical AES-GCM or ChaCha20 on modern x86_64. The x86_64 directory has AES-NI with only two blocks in flight, separate AES and PCLMUL GHASH passes (no stitched GCM), a one-block SSE2 chacha-core-internal.asm, and no VAES, AVX2 or AVX-512 paths. libgcrypt (sibling) ships VAES/AVX512 AES.",
+    "CPUs without carry-less multiply (no PCLMULQDQ, PMULL or vpmsumd). The 3.9 side-channel-silent GHASH rewrite made the C GHASH about 3x slower on x86_64 (NEWS 3.9), so GCM there is slow.",
+    "POWER8 with Nettle 3.10 or 3.10.1. The new p8 stitched GCM-AES files used ISA 3.0 lxv, stxv and lxvb16x instructions while being selected on POWER8 crypto_ext, which was fixed in 3.10.2 (commits d891462, 2dffb58). Before 3.10.2 any ppc64 assembly could also be used without VSX.",
+    "Closed-source static linking where LGPL-3.0 relinking terms are a problem (dual LGPL-3.0-or-later / GPL-2.0-or-later).",
+    "Cases where you need published, reproducible numbers. The speedups exist only as release-note sentences, with no CPU model, compiler, flags or raw nettle-benchmark output."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none for libnettle; libhogweed (public key) needs GMP 6.1.0+ or the bundled mini-gmp (not binary compatible, slower); OpenSSL libcrypto optional, only for comparison rows in nettle-benchmark",
+    "min_toolchain": "C99 compiler with alignof/alignas (Nettle 4.0), GNU make, m4 for the .asm files; autoconf 2.69 and ./.bootstrap for git checkouts; ppc64 assembly needs VSX (ISA 2.06) since 3.10.2",
+    "platforms": "assembly for x86, x86_64, arm (v6, Neon), arm64, powerpc64 (p7/p8/p9), s390x, sparc64; fat runtime dispatch on x86_64, arm, arm64, powerpc64 and s390x (Linux, BSD, Android, Apple, AIX); generic C everywhere else",
+    "thread_safety": "Contexts are caller-allocated, so use one per thread. The only shared state is the fat dispatch pointers set by a constructor. fat-x86_64.c says the init is idempotent and pointer writes are atomic on x86; the manual's wording was not read.",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "The headline ratios measure hardware crypto instructions against Nettle's own C or older assembly, not against another library. On x86_64 Nettle's AES-NI interleaves only two blocks, and ChaCha is a one-block SSE2 core, so do not expect parity with libraries that keep 4-8 AES blocks in flight or use AVX2/AVX-512.",
+    "Correctness bugs in the measured POWER code: the 3.7 AltiVec ChaCha that produced the 3.5x figure had a counter-update bug that broke GnuTLS tests on ppc64 (fixed 3.7.1). 3.9 fixed a Power7 ChaCha path that used a later-ISA instruction. 3.10.1 fixed a buffer overread and a stack alignment issue in the new ppc64 SHA-256 assembly. 3.10.2 removed ISA 3.0 instructions from the POWER8 GCM-AES files. Pin 3.10.2 or later on POWER. None of these fixes is described as changing speed.",
+    "Packaging slip: the 3.5 tarball omitted x86_64/sha_ni. That broke x86_64 --enable-fat builds and gave 'worse performance than promised' with --enable-x86-sha-ni until 3.5.1. Also, the x86_64 fat self-test override list in configure.ac covers only vendor:intel and vendor:amd, not aesni or sha_ni, so those paths are tested only on hosts that have the instructions.",
+    "Harness limits (examples/nettle-benchmark.c): it times one warm 10,240-byte buffer in a single run, extended until it lasts over 0.1 s, with no repetitions or median. The 'Mbyte/s' column divides by 1,048,576 (MiB/s). Cycle columns appear only when -f <clock> is passed, and the rdtsc micro-benchmarks run on uninitialised state. Small-message and per-call overhead are not measured."
+  ],
+  "pick_this_over_siblings_when": "Pick Nettle over libgcrypt or CRYPTOGAMS when you want a compact, allocation-free library with stable APIs and automatic hardware dispatch on POWER8+, s390x and arm64, for example under GnuTLS. Pick libgcrypt for wider x86 SIMD (VAES/AVX512, SHA-NI, AES-XTS paths), and CRYPTOGAMS to vendor individual perlasm kernels with per-core cycle tables.",
+  "verified_claims_summary": "NEWS 3.7 says the new PowerPC64 assembly ran 13x faster for AES256-CTR and AES256-GCM and 3.5x faster for ChaCha on a Power9 machine, against Nettle's generic C (table AES, C GHASH, one-block C ChaCha). The contributor's 2020 patch posts (nettle-bugs list, blocked here, seen as search snippets only) gave about 13.5x for GCM-AES encrypt and decrypt and about 26x for GHASH on POWER9, and about 17.5x and 30x on POWER8. A 2021 thread reported the stitched-GCM idea at 2.35 vs 1.30 cycles/byte for gcm_aes128 on a 3.5 GHz POWER9. NEWS 3.5 claims 3-5x for SHA-NI SHA-1/SHA-256 over Nettle's earlier x86_64 assembly. No CPU model, compiler, flags or raw output is published for any of these.",
+  "status_note": "Actively maintained by Niels Möller (last commit on the GitHub mirror 2026-10-07, 4,905 commits, NEWS already describing 4.1 after the ABI-breaking 4.0). Copyable under LGPL-3.0-or-later or GPL-2.0-or-later; the GitHub repo is a mirror and upstream lives at lysator.liu.se, whose list and git hosts did not resolve from this session.",
+  "sources_read": [
+    "https://github.com/gnutls/nettle",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/NEWS",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/README",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/fat-x86_64.c",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/fat-ppc.c",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/fat-arm64.c",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/fat-setup.h",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/examples/nettle-benchmark.c",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/x86_64/README",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/powerpc64/README",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/x86_64/aesni/aes128-encrypt.asm",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/x86_64/chacha-core-internal.asm",
+    "https://raw.githubusercontent.com/gnutls/nettle/HEAD/x86_64/sha_ni/sha256-compress-n.asm",
+    "https://github.com/gnutls/nettle/tree/master/x86_64",
+    "https://github.com/gnutls/nettle/tree/master/powerpc64",
+    "https://github.com/gnutls/nettle/tree/master/powerpc64/p8",
+    "https://github.com/gnutls/nettle/commits/master/powerpc64/p8",
+    "https://github.com/gnutls/nettle/commit/d891462ba3f6e39e3696b657dcb69e9869ad9762",
+    "https://lists.lysator.liu.se/mailman/hyperkitty/list/nettle-bugs@lists.lysator.liu.se/thread/7GW3XBDM7ZVS6OZEEQ3ZY23WEWSCDJUA (DNS failure; content from WebSearch snippets only)"
+  ],
+  "confidence": 0.6
+}
