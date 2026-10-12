@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/usubalang/usuba",
+  "one_liner": "Bitslicing DSL whose OCaml compiler emits SIMD C ciphers roughly on par with hand-tuned SUPERCOP references.",
+  "what_it_does": "Usuba is a synchronous dataflow language for writing block and stream ciphers (DES, AES, Serpent, ChaCha20, Rectangle and the NIST lightweight candidates) once; the Usubac compiler, written in OCaml, turns a .ua file into a single C file for general-purpose registers, SSE, AVX2, AVX-512, Neon or AltiVec through macro headers in arch/. The output is not a drop-in library: the generated function works on bitsliced or m-sliced data, so the caller supplies the transposition and the mode wrapper (the repo's checks/correctness/<cipher>/main.c, stream.c and crypto_stream.h serve as templates).",
+  "how_it_is_fast": "Bitslicing (and its m-slicing generalisation) processes 64 to 512 blocks per call as boolean circuits on SIMD registers, which is also constant-time by construction. Usubac replaces S-box tables with known circuits from data/sboxes (data/sboxes/des_1.ua is Matthew Kwan's 1998 gate list, the same one the baseline uses), then applies bitslice-aware inlining, instruction scheduling and interleaving of independent cipher instances before the C compiler sees the code. The repo's ablation log (results.org, from bench/inlining and bench/scheduling-bs) lists DES at x0.46 to x0.76 relative to the -no-inline build once inlining is on; the log does not label the unit.",
+  "when_to_use": [
+    "You need a constant-time implementation of an S-box-based or ARX cipher that has no hand-tuned SIMD code (lightweight or NIST LWC candidates such as Ascon, Gift, Pyjamask, Rectangle) and want one source for x86 GP, SSE, AVX2 and AVX-512.",
+    "Bulk, parallel workloads: CTR or ECB over many blocks, where 64 to 512 independent blocks per call keep every bitslice lane busy.",
+    "Research or prototyping where you want to compare slicing strategies (bitslice, vslice, hslice) or check masking (arch/MASKED.h) without hand-writing intrinsics.",
+    "Vendoring a single generated C file is acceptable and you can write the transposition and mode wrapper yourself."
+  ],
+  "when_not_to_use": [
+    "AES or ChaCha20 where a maintained library already exists: the authors' own table has Usuba 1.9-2.2% slower than the Kasper-Schwabe and Kivilinna bitsliced AES and level with Dolbeau and moon on ChaCha20 AVX/AVX2, so there is nothing to gain.",
+    "Serpent on AVX or AVX2, where Usuba is 3.6-4.6% slower than the avx-8way and avx2-16way references.",
+    "Sequential modes (CBC encryption) or short messages: bitslicing needs many independent blocks in flight.",
+    "Production use that needs a maintained toolchain: the compiler is a research prototype, substantive development stopped in September 2022 (last commits 2024-09-04 only touch Docker and build instructions), init_scheduler is disabled as buggy (issue #78), and some passes overflow the stack (results.org log; issue #65 recommends ulimit -s unlimited).",
+    "You want a library API: there is no packaged runtime, release or ABI; you get one C function per cipher."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Compiler: OCaml via opam (opam switch create . --deps-only), Perl for the test and benchmark scripts. Generated code: one arch/*.h macro header (STD, SSE, AVX, AVX512, Neon, AltiVec) and compiler intrinsics headers; transposition and mode code come from checks/correctness templates.",
+    "min_toolchain": "not documented; the Docker image in docker/Dockerfile (Debian Bullseye) is the reference build environment. Benchmarks used clang, gcc or icc at -O3 with -march=native or explicit ISA flags.",
+    "platforms": "Generated C targets 64-bit general-purpose registers, x86 SSE/SSSE3, AVX2 and AVX-512, Arm Neon and PowerPC AltiVec headers; only x86-64 was benchmarked. AVX builds need -mavx2 or -march on an AVX2 CPU (issue #65).",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the largest wins (Rectangle SSE +22.95%, AVX +14.43%, AVX2 +14.29%, GP +9.54%) come from bench/ua-vs-human/rectangle/rectangle_ua and rectangle_ref, which run.pl calls but which are not in the master tree (404), so the Rectangle reference and its timing loop cannot be inspected. The SUPERCOP rows read supercop-data/dadaubuntu/..., which is not committed either, and name compiler settings (icc -xSSSE3, icc -xSSE2, icc -msse4.2) that the committed supercop/okcompilers/c does not list.",
+    "Harness flaw in ciphers/des/main.c: verif() compares the output with a Perl DES but only prints 'Encryption error.' to stderr and carries on, and compile.pl reads only stdout, so a wrong binary would still be timed. Timing uses _rdtsc (TSC reference cycles, not core cycles) and includes byte swaps and the 64x64 to 256x256 transposition on both sides. The Usuba side also copies the key with memcpy on every call, which makes the comparison slightly conservative.",
+    "Several rows pair different compilers or ISA flags: Serpent GP (+15.11%) is Usuba clang -march=native against Linux C icc -msse4.2, and Serpent AVX is Usuba clang against icc. The DES baseline is Kwan's code with S-box circuits dated March 1998, and Usuba's data/sboxes/des_1.ua matches Kwan's s1 gate for gate (the other seven were not checked), so the DES row mostly isolates scheduling and inlining, not circuit quality. The Serpent SLOC figures are computed from chacha20_shadow.ua plus 190, a copy-paste error that affects code-size claims only.",
+    "The default branch is main, which was restructured and no longer carries bench/, ciphers/ or experimentations/; the hand-tuned comparison exists only on the old master branch."
+  ],
+  "pick_this_over_siblings_when": "No sibling is a cipher compiler: tachyon-rs is the pick for production AES-GCM and ChaCha20-Poly1305 against OpenSSL, and SPARKNaCl for verified NaCl primitives; choose Usuba only when you need constant-time bitsliced code for a cipher those libraries do not implement, or want one source for several SIMD widths.",
+  "verified_claims_summary": "Usubac-generated C for DES, AES-CTR, ChaCha20, Serpent-CTR and Rectangle was timed against hand-tuned SUPERCOP references (Kwan DES, Kasper-Schwabe SSSE3 and Kivilinna AVX AES, moon and Dolbeau ChaCha20, Linux C and avx2-16way Serpent) with clang or icc -O3, using SUPERCOP xor_cycles on 4096-byte messages (mean of the faster half of the samples) on an unnamed amd64 host. Across the 15 rows Usuba ranges from 23% faster (Rectangle SSE) to 4.6% slower (Serpent AVX2), with a median of +1.66% and 5 rows within 2%, consistent with the paper's 'on par' claim (abstract seen in a search snippet only); DES GP is 11.47 against 12.01 cycles per byte for Kwan with identical S-box circuits.",
+  "status_note": "Stale research prototype (substantive work ended September 2022, last commit 2024-09-04, no releases, 62 stars); MIT-licensed, and a generated C file plus one arch header can be vendored without the OCaml toolchain, but the benchmark evidence is partly missing from the repo (Rectangle harness, SUPERCOP raw data) and the DES harness does not enforce its correctness check.",
+  "sources_read": [
+    "https://github.com/usubalang/usuba",
+    "https://raw.githubusercontent.com/usubalang/usuba/main/README.md",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/README.md",
+    "https://raw.githubusercontent.com/usubalang/usuba/main/results.org",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/bench/ua-vs-human/human.tex",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/bench/ua-vs-human/run.pl",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/bench/ua-vs-human/.gitignore",
+    "https://github.com/usubalang/usuba/tree/master/bench/ua-vs-human",
+    "https://github.com/usubalang/usuba/tree/master/bench/ua-vs-human/rectangle",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/bench/ua-vs-human/rectangle/rectangle_ref/run.pl",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/bench/ua-vs-human/rectangle/rectangle_ua/run.pl",
+    "https://github.com/usubalang/usuba/tree/master/ciphers/des",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/ciphers/des/results.txt",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/ciphers/des/compile.pl",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/ciphers/des/main.c",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/ciphers/des/kwan/des.c",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/samples/usuba/des.ua",
+    "https://github.com/usubalang/usuba/tree/master",
+    "https://github.com/usubalang/usuba/tree/master/data/sboxes",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/data/sboxes/des_1.ua",
+    "https://github.com/usubalang/usuba/tree/master/supercop",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/supercop/version",
+    "https://raw.githubusercontent.com/usubalang/usuba/master/supercop/okcompilers/c",
+    "https://github.com/usubalang/usuba/issues?q=is%3Aissue",
+    "https://github.com/usubalang/usuba/issues/65",
+    "https://github.com/usubalang/usuba/issues/78",
+    "https://github.com/usubalang/usuba/commits/main",
+    "https://github.com/usubalang/usuba/tree/main/arch",
+    "https://github.com/usubalang/examples",
+    "https://dariusmercadier.com/assets/documents/usuba-pldi19.pdf (blocked by egress proxy, 403)"
+  ],
+  "confidence": 0.6
+}

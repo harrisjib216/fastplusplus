@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/yinkam/xtreme-grep",
+  "one_liner": "Small Rust learning-project grep (xerg) that searches files in parallel with rayon; claims 17.7-33.7x over macOS system grep on a target/ directory.",
+  "what_it_does": "A command-line regex search tool, installed with `cargo install xerg`, taking a pattern and a file or directory. It prints colour-highlighted matches grouped under per-file headers by default, or `file:line: content` lines with `-x`, and an optional `--stats` summary. It has no grep flags (-i, -v, -n, -l, -c, -F, -r are absent or only planned), so it is not a drop-in grep.",
+  "how_it_is_fast": "Data parallelism: walkdir collects the file list, then a global rayon pool of cores-1 threads spawns one task per file, which accounts for the 484-745% CPU use reported against grep's ~96%. Matching uses the Rust regex crate (finite-automata engine with literal prefilters, not PCRE). Single files skip the pool and are read with fs::read_to_string (up to 7 MB) or memmap2 (7-100 MB); multi-file runs stream each file with BufReader::lines().",
+  "when_to_use": [
+    "Reading a compact (about 1,000 lines) example of rayon-parallel file search in Rust, which is what the project calls itself: a Pragmatic AI Labs bootcamp learning project.",
+    "Ad-hoc interactive searches of UTF-8 source trees on a multi-core machine where coloured, per-file grouped output is wanted and grep flags are not.",
+    "Comparisons against BSD grep on macOS, the only baseline it was measured against."
+  ],
+  "when_not_to_use": [
+    "Any scripted or grep-compatible use: ANSI colour codes are always emitted (default red, no --color=never or auto), even with -x into a pipe, and the -x format puts a space after the line-number colon.",
+    "Searching binaries, build output or non-UTF-8 text: multi-file mode silently drops every line that is not valid UTF-8 without running the regex on it, and a single file of up to 100 MB that is not valid UTF-8 fails with an error instead of being searched.",
+    "When you need case-insensitive or inverted matching, counts, file lists or fixed strings: none of these flags exist yet.",
+    "When ripgrep (catalogued in wave 11) is available: it does the same parallel walk with binary detection, .gitignore handling, full flags and published benchmarks.",
+    "Huge result sets in default mode: results are queued in an unbounded channel and printed only after every file has been searched."
+  ],
+  "integration": {
+    "form": "crate (CLI binary `xerg`; the lib exposes run, run_xtreme and search_files)",
+    "dependencies": "clap, rayon, regex (default features off: std, perf, unicode-perl), walkdir, memmap2, num_cpus",
+    "min_toolchain": "Rust edition 2024, so Rust 1.85 or newer; no rust-version declared",
+    "platforms": "Any Rust std target in principle; README results are macOS only",
+    "thread_safety": "Not applicable to the CLI; the binary builds a global rayon pool of cores-1 threads, and the lib's search functions run on whatever global rayon pool the host process has",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the 17.7x/33.7x numbers: on the target/ directory xerg skips hidden directories (target/*/.fingerprint) and drops every non-UTF-8 line of the binary artefacts without regex-matching it, while grep scans every byte single-threaded; in -x mode the stats line hard-codes skipped:0, so the dropped lines are invisible. Pattern, grep command line, grep version (macOS ships BSD grep), CPU model and run count are not published; the 1 ms-resolution timings with a CPU% column look like one run of zsh's time builtin (inference). The single-file and src/ rows (4.0 vs 3.0 ms, 3.0 vs 3.0 ms) are within that resolution.",
+    "benches/performance.rs does contain a grep head-to-head (contrary to the verifier note), but it calls xerg's search functions in-process while spawning grep with Command::output() on every iteration, so only grep pays process start-up and pipe capture; its default-mode runner also never prints results.",
+    "The regex crate is built without the unicode-case feature, so any (?i) pattern in the default Unicode mode fails to compile and xerg panics on Regex::new(pattern).unwrap() (read from Cargo.toml and regex-syntax translate.rs, not executed); invalid patterns also panic. The README's 'PCRE support' claim is wrong: no backreferences or lookaround.",
+    "The README's two tables disagree (17.7x vs '23x' for default mode, CPU 484% vs 650%); the '23x' and 6.5-6.9 core figures are from the 0.2.0 changelog and predate the 0.2.1 rewrite."
+  ],
+  "pick_this_over_siblings_when": "Practically never for production: ripgrep (wave 11) covers the same parallel search with correct binary and encoding handling, and fastgrep and zrep in this category at least benchmark against named GNU grep 3.12. xerg only makes sense as a short, readable teaching example of rayon-based search.",
+  "verified_claims_summary": "First-party, single-environment timings on an unnamed multi-core MacBook against 'system grep' (version and flags unstated, most likely macOS BSD grep) with an unstated pattern: on a Rust target/ directory 28,122 ms for grep vs 1,590 ms for xerg default and 835 ms for xerg -x, with near-identical 3-4 ms results on one file and on src/. The work is unequal (parallel vs single-threaded, binary lines and hidden directories skipped by xerg), so the ratio does not measure faster matching.",
+  "status_note": "MIT-licensed bootcamp learning project with 3 stars, 51 commits and 142 crates.io downloads; no release or commit since 0.2.1 on 2025-11-14, and the record's 'active' status is stale; the speed claim deserves D-level weight given unequal work and an unpublished harness.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/README.md",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/PERFORMANCE_ANALYSIS.md",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/Makefile",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/search/mod.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/search/crawler.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/search/default.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/search/reader.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/search/xtreme.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/output/highlighter.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/output/colors.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/output/result.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/src/output/mod.rs",
+    "https://raw.githubusercontent.com/yinkam/xtreme-grep/HEAD/benches/performance.rs",
+    "https://github.com/yinkam/xtreme-grep",
+    "https://crates.io/api/v1/crates/xerg",
+    "https://raw.githubusercontent.com/rust-lang/regex/master/Cargo.toml",
+    "https://raw.githubusercontent.com/rust-lang/regex/master/regex-syntax/src/hir/translate.rs",
+    "https://raw.githubusercontent.com/rust-lang/regex/master/regex-syntax/src/unicode.rs",
+    "https://raw.githubusercontent.com/rust-lang/regex/master/regex-syntax/src/hir/mod.rs"
+  ],
+  "confidence": 0.8
+}

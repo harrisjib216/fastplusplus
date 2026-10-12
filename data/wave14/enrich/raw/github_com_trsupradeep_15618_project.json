@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/trsupradeep/15618-project",
+  "one_liner": "2019 CMU course study timing Rust+Rayon against C++/OpenMP on four kernels; Rayon wins only large parallel stable sorts.",
+  "what_it_does": "A Carnegie Mellon 15-618 student project, not a library: Mandelbrot, integer matrix multiplication, stable and unstable sorting, and f64 sum / sum-of-squares reductions written twice, in Rust with Rayon 1.0.3 and in C++ with OpenMP and libstdc++ parallel mode. Each program sweeps 1-16 threads, keeps the best of three runs, and the results are graphed in project_docs/15618-Project-Final.pdf with raw timings in data/Data.xlsx. The 'API' compared is Rayon's par_iter/par_chunks/par_sort against #pragma omp parallel for / reduction and __gnu_parallel sorting; there is nothing to link.",
+  "how_it_is_fast": "Where Rayon comes out ahead it is the library algorithm, not the language: Rayon's par_sort is a parallel merge sort (rayon::slice::mergesort with par_merge) that reached 8.9x self-speedup at 16 threads on 100M u64, against 6.1x for GNU parallel mode's multiway mergesort (parallel_sort_mwms) on 100M int (derived from Data.xlsx). The serial unstable-sort lead is pdqsort (Rust sort_unstable) against introsort. Rayon's work-stealing join gives dynamic load balancing, but on uniform reductions OpenMP's static schedule won at every thread count. The authors attribute the matmul result to GCC vectorizing the inner loop while LLVM did not, but that comparison rests on a wrong C++ kernel (see gotchas).",
+  "when_to_use": [
+    "As a dated, qualitative reference on Rayon versus OpenMP ergonomics: parallel iterators that refuse to compile racy sharing versus pragmas (the report notes OpenMP segfaults during development).",
+    "As a hint, to be re-measured on current versions, that a work-stealing parallel merge sort can out-scale libstdc++ parallel mode on 100M-element sorts at 12-16 threads.",
+    "As teaching material on how decomposition (pixel versus row) and Rayon's adaptive splitting change speedup curves.",
+    "Never as a dependency: adopt Rayon or OpenMP themselves."
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust/Rayon beats C++/OpenMP at matrix multiplication: the C++ kernels compute a different product (B indexed by row i), so those rows are not same-work.",
+    "For reductions or embarrassingly parallel loops: OpenMP was faster at every thread count on the reductions, and Mandelbrot was C++-faster serially and within about 1% multithreaded.",
+    "As a current comparison: Rayon 1.0.3, rustc 1.33.0 (2019-02-28) and GCC 4.8.5 (2015); Rust's std sorts and Rayon have since been rewritten, and open issue #1 (2024-08-12) asks for an update.",
+    "As copyable code: the repository has no licence.",
+    "When you need the hardware: the CPU model is never stated (thread sweep to 16, 'compute bound at 8 threads')."
+  ],
+  "integration": {
+    "form": "source-drop (benchmark programs, not a library)",
+    "dependencies": "Rust: rayon 1.0.3, clap 2.33, num 0.2, num_cpus 1.10, crossbeam 0.7, rand 0.6; C++: OpenMP (libgomp), libstdc++ parallel mode, CycleTimer.h",
+    "min_toolchain": "rustc 1.33.0, edition 2018 (from the committed binaries); g++ -m64 -O3 -Wall -fopenmp (GCC 4.8.5 in the committed sort binary)",
+    "platforms": "x86-64 Linux (committed binaries); CPU not stated",
+    "thread_safety": "not applicable (benchmark programs); the Rayon versions are data-race-free by construction",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Matmul harness is broken on the C++ side: matmul_serial2 and matmul_par_row compute c += A[iOff + k] * B[RM(k, i, size)], indexing B by the row i instead of the column j, so every j of a row re-reads one cache-resident column of B and the result is a different matrix; all-ones inputs and no result check hide it, while the Rust kernel walks B[index][col] correctly. The C++ 'par_outer' block calls matmul_par_row again without resetting minThread, and the C++ serial script passes an undefined ${serial_cc}, so those runs also execute both 16-thread parallel variants after the serial timing.",
+    "New binary-level finding: the committed Rust binaries (rust/bin/quicksort-rust and mandelbrot-rust) are release builds by rustc 1.33.0 (2aa4c46cf 2019-02-28) for x86_64-unknown-linux-musl, statically linked against musl (musl malloc and memcpy) with Ubuntu 16.04 GCC 5.4.0 startup objects, while the C++ sort binary was built by GCC 4.8.5 (Red Hat 4.8.5-36) against glibc, so the two sides differ in libc and allocator. quicksort-rust contains rayon::slice::mergesort::par_mergesort but no rayon quicksort symbol, so its '[sort-unstable par]' loop runs the stable par_sort exactly as the committed source does; the Data.xlsx unstable-parallel numbers (for example 684 ms at 16 threads for 100M) cannot have come from the committed binary or source.",
+    "Sort comparisons are uneven: Rust sorts Vec<u64> (8-byte keys) while the C++ binary sorts std::vector<int> (4-byte keys), which handicaps Rust; the C++ 'unstable' parallel path is also multiway mergesort (parallel_sort_mwms<false>), not quicksort; and the Rust serial times in Data.xlsx are one value (10908 ms stable, 3611 ms unstable for 100M) copied into every thread row.",
+    "The report's prose overstates its data: 'Rayon performs better for all cases of threads for size 2048' fails at 8 threads (2501.7 vs 2277.6 ms), and its Mandelbrot time comparison (Figure 3) sets Rust pixel-parallel against C++ row-parallel, where the C++ pixel version uses schedule(static) and the row version schedule(dynamic)."
+  ],
+  "pick_this_over_siblings_when": "NPB-Rust (GMAP) is the better-controlled Rayon-versus-OpenMP comparison (full NAS kernels against the group's own C++ port); use this repository only for its small-kernel observations and the single surviving data point, parallel stable sort at 12-16 threads.",
+  "verified_claims_summary": "Data.xlsx (best of three runs, unnamed x86-64 Linux machine, threads 1-16) shows Rayon 1.0.3 par_sort on 100M random u64 at 1380 ms with 12 threads and 1226 ms with 16, against 1534.1 and 1476.2 ms for GNU parallel-mode stable sort of 100M int built with g++ 4.8.5 -O3 (about 1.11x and 1.20x, derived from page data); C++ was faster at 1-8 threads and serially (8467.6 vs 10908 ms). The matmul 'wins' are invalid because the C++ kernel computes a different product, and OpenMP won every reduction.",
+  "status_note": "Abandoned since 2019-11-01 (open issue #1 asks to update OpenMP and Rayon), no licence and 56 stars: a dated reference for reading, not code to copy, with harness defects (wrong C++ matmul kernel, Rust sort numbers not reproducible from the committed source or binary, musl-versus-glibc builds) that leave only the parallel stable-sort result standing.",
+  "sources_read": [
+    "https://github.com/trsupradeep/15618-project",
+    "https://github.com/trsupradeep/15618-project/issues",
+    "https://github.com/trsupradeep/15618-project/tree/master/rust",
+    "https://github.com/trsupradeep/15618-project/tree/master/rust/bin",
+    "https://github.com/trsupradeep/15618-project/tree/master/scripts",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/README.md",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/project_docs/15618-Project-Final.pdf",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/data/Data.xlsx",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/matrixmultiply/main.cpp",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/matrixmultiply/Makefile",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/reduction/main.cpp",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/reduction/Makefile",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/mandelbrot/main.cpp",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/mandelbrot/Makefile",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/quicksort/Makefile",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/C%2B%2B/quicksort/quicksort",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/bin/quicksort-rust",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/bin/mandelbrot-rust",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/matrixmultiply/src/main.rs",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/matrixmultiply/Cargo.toml",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/quick_sort/src/main.rs",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/quick_sort/Cargo.toml",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/reduction/src/main.rs",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/reduction/Cargo.toml",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/mandelbrot/src/main.rs",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/rust/mandelbrot/Cargo.toml",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/scripts/matmul/profile_matmul_rust_threads.sh",
+    "https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/scripts/matmul/profile_matmul_c%2B%2B_threads.sh"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/thobiasknudsen/verztable",
+  "one_liner": "Zig port of Verstable's chained open-addressing hash table; edges Abseil/Boost/Ankerl on small and string-keyed tables only.",
+  "what_it_does": "A generic Zig hash table, HashMap(K, V), that becomes a set when V is void. The API follows Zig's std maps (put, putNoClobber, get, getPtr, getOrPut, getEntry, remove, iterators, reserve/ensureTotalCapacity, shrink, clone) and takes an allocator at init; integer, enum, u8-array and []const u8 keys get automatic hash and equality, and HashMapWithFns accepts custom functions. It is not a drop-in for the C++ tables it was benchmarked against; inside Zig it replaces std.AutoHashMap/StringHashMap with almost the same call shape.",
+  "how_it_is_fast": "It follows Verstable's design: open addressing with linear probing, but keys that share a home bucket form a chain linked through 16-bit per-bucket metadata (4-bit hash fragment, 1-bit in-home flag, 11-bit displacement to the next chain member). A key always owns its home bucket (a squatter from another chain is evicted), so a lookup walks only its own chain and the fragment rejects about 15/16 of non-matching entries without touching the bucket array; deletion relinks the chain instead of leaving tombstones. For []const u8 keys each bucket stores the full 64-bit hash to skip memcmp, strings of 8 bytes or fewer are hashed as a packed integer, and iteration scans metadata 8 entries at a time with @Vector.",
+  "when_to_use": [
+    "Zig code that uses std.AutoHashMap or std.StringHashMap for lookup-heavy work: in the author's u32 set tables it beats Zig std on lookups and misses at every size (100K lookup 9 ns vs 13 ns, miss 9 vs 18), though std inserts faster at 100K (25 vs 31 ns).",
+    "String-keyed maps and sets (random 8-64 byte keys), where the stored 64-bit hash avoids repeated memcmp; this is where its wins over the C++ tables cluster.",
+    "Small tables (around 100 elements) with delete/re-insert churn, where tombstone-free deletion keeps chains short.",
+    "Small tables queried mostly with absent keys, where hash-fragment filtering rejects misses cheaply."
+  ],
+  "when_not_to_use": [
+    "Large integer-keyed tables: at 100K u32 keys it loses almost every row to Abseil and Boost even though they pay an FFI call per operation (random insert 31 ns vs 13 and 15 ns, lookup 9 vs 5 and 6 ns).",
+    "C or C++ projects: use Boost unordered_flat_map or Abseil flat_hash_map, or Verstable itself in C; verztable is Zig only (0.15.2+).",
+    "Signed or wider-than-64-bit integer keys with the default hash: negative i32/i64 keys hit an illegal @intCast (see gotchas); supply HashMapWithFns.",
+    "Code that keeps pointers into the table across inserts or removes, or string keys whose bytes do not outlive the map (keys are stored as borrowed slices).",
+    "Production use that needs a track record: single author, v0.1.0, no issues filed yet, tests do not cover signed keys."
+  ],
+  "integration": {
+    "form": "Zig package (module added through build.zig.zon; tag v0.1.0)",
+    "dependencies": "none for the library; the C++ submodules (abseil-cpp, boost unordered and friends, unordered_dense) are used only by the benchmark",
+    "min_toolchain": "Zig 0.15.2+ (minimum_zig_version in build.zig.zon)",
+    "platforms": "any Zig target (pure Zig; @Vector SIMD is portable)",
+    "thread_safety": "not documented; an unsynchronized struct, so concurrent writers need external locking",
+    "drop_in_for_baseline": "partial — near drop-in for Zig std.AutoHashMap/StringHashMap (same method names, allocator at init), not for the C++ Abseil/Boost/Ankerl tables"
+  },
+  "gotchas": [
+    "Harness flaws beyond the verifier's two (C++ tables never reserved in 'Reserved Ins.'; every C++ op is a non-inlined extern \"C\" call): per-op times are integer-divided (total ns / ops), so 100-element rows move in whole-ns steps and a 1 vs 2 ns 'win' can be a tie; 'High Load' only looks up 95 keys in a 95-key table, repeating Random Lookup at normal load; 'Seq. Insert' is sequential only for u64 (u32 and string rows insert the random keys in order); and the C++ iteration row is a counting loop inside one wrapper call, which over Ankerl's dense value vector clang can reduce to a pointer difference, so Ankerl's 0 ns says nothing about FFI overhead.",
+    "The memory table is not like for like: verztable's figure includes its 2-byte metadata per bucket, but the C++ figures are bucket_count x sizeof(value_type) only, omitting Abseil's control bytes, Boost's group metadata and Ankerl's separate bucket index array (Ankerl keeps values in a dense vector sized by element count). The README's '~25% more memory' is unreliable in both directions; its own table shows 50% (12.0 KB vs 8.0 KB for 1K u32 keys).",
+    "Correctness: AutoHashFn hashes integers as hashInteger(@as(u64, @intCast(key))), so HashMap(i32, V) or HashMap(i64, V) with negative keys (or u128 keys above 2^64) is illegal behaviour, a panic in Debug/ReleaseSafe and undefined in ReleaseFast; the test suite has no signed-key test.",
+    "Pointer stability: inserting a key whose home bucket holds another chain's key evicts that key to a new bucket, and remove moves the chain's last key into the hole, so pointers from getPtr/getOrPut/getEntry are invalidated by any insert or remove, not only by growth."
+  ],
+  "pick_this_over_siblings_when": "No hash-table sibling is catalogued in this category (the siblings are sorts, compressors, allocators and compilers); against the C++ tables it was measured with, pick verztable only inside Zig for small or string-keyed tables, and keep Boost unordered_flat_map or Abseil flat_hash_map for large integer-keyed tables in C++.",
+  "verified_claims_summary": "The author's harness (Zig 0.15.2 ReleaseFast; C++ tables compiled by Zig's clang with -std=c++17 -O3 -DNDEBUG and called through non-inlined extern \"C\" wrappers; malloc for all; CPU and OS not stated) reports mean ns/op over 15 iterations for 16 operation mixes on u32, u64 and string keys at 100, 3K and 100K elements. Verztable beats the best C++ table in 156 of 432 rows and loses 239; by geometric mean it is about 3% faster than Boost and about 1.33x and 1.46x faster than Abseil and Ankerl (derived from page data), with wins concentrated on string keys and 100-element tables and losses on 100K integer tables.",
+  "status_note": "Single-author port released as v0.1.0 (tag 2025-12-28, last commit 2025-12-29, 46 commits, 15 stars, no issues filed); MIT and one source file of about 1,450 lines, so easy to vendor, but young, Zig 0.15-specific and unsafe for signed keys with the default hash.",
+  "sources_read": [
+    "https://github.com/ThobiasKnudsen/verztable",
+    "https://github.com/ThobiasKnudsen/verztable/tags",
+    "https://github.com/ThobiasKnudsen/verztable/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/README.md",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/build.zig",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/src/benchmark.zig",
+    "https://raw.githubusercontent.com/ThobiasKnudsen/verztable/HEAD/src/cpp_hashtables_wrapper.cpp",
+    "https://raw.githubusercontent.com/martinus/unordered_dense/HEAD/include/ankerl/unordered_dense.h"
+  ],
+  "confidence": 0.7
+}

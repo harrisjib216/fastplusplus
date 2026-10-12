@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/trifectatechfoundation/libbzip2-rs",
+  "one_liner": "Memory-safe Rust port of libbzip2 exposing the same C API; about 11% fewer compression cycles than C libbzip2 on x86-64.",
+  "what_it_does": "libbz2-rs-sys implements the bzip2 format in Rust and exports the libbzip2 C API: the low-level BZ2_bzCompress*/BZ2_bzDecompress* stream functions, BZ2_bzBuffToBuff*, and (with the default stdio feature) the BZFILE and zlib-style bzopen/bzread functions. Rust code gets it by default through the bzip2 crate (0.6.0 and later); C programs link the separate libbz2-rs-sys-cdylib build, which produces libbz2_rs.so/.a (cargo-c recommended for soname and pkg-config). The test suite asserts that compressed output and decompression results are byte-identical to C libbzip2 1.0.8.",
+  "how_it_is_fast": "Same algorithm as libbzip2 (Burrows-Wheeler block sort with mainSort/fallbackSort and the workFactor budget, MTF/RLE, multi-table Huffman); the code began as a c2rust translation and was then rewritten into safe Rust (compress.rs, decompress.rs and blocksort.rs carry #![forbid(unsafe_code)]; unsafe is confined to the C-API layer in bzlib.rs). Visible implementation changes: the bit writer (LiveWriter) copies bs_buff, bs_live and num_z into locals and writes them back on Drop instead of updating EState fields through a pointer on every bsW call, and the decoder is a c2rust-style `'state_machine: loop { match current_block }` that the benchmark builds with LLVM's -enable-dfa-jump-thread pass. No SIMD or target-specific code. The Rust build executes 5-8% more instructions than C when compressing silesia-small.tar yet takes fewer cycles (derived from page data), so the gain is higher IPC, not less work; the project's own explanation is only that zlib-rs experience was applied (blog post not reachable, search snippet only).",
+  "when_to_use": [
+    "Rust projects using the bzip2 crate: libbz2-rs-sys is already its default backend since 0.6.0, and it needs no C compiler when cross-compiling.",
+    "Compression-heavy bzip2 work on x86-64: about 10-12% fewer CPU cycles at every level 1-9 on a 15.7 MB tar in the project's CI on a Ryzen 9 9900X.",
+    "Replacing system libbz2 to get a memory-safe decoder for untrusted .bz2 input when speed parity, not a large speedup, is the goal.",
+    "Reproducible archives that must match libbzip2 output byte for byte (tests assert identical output at level 9).",
+    "Embedded or no_std targets: the cdylib builds without std using the c-allocator feature or caller-supplied bzalloc/bzfree."
+  ],
+  "when_not_to_use": [
+    "Decompression-heavy work on Apple Silicon: on the Apple M2 runner the Rust decoder is slower than C on five of six files (+0.1% to +9.5% user time in the 2026-10-06 run), consistently since 2025.",
+    "When you need a large bzip2 speedup: the gains are 3-12%; a parallel bzip2 or a different codec moves throughput far more, and the Zig bzip2z sibling claims 1.79x single-threaded compression.",
+    "Builds pinned to libbz2-rs-sys 0.2.3 or 0.2.4: a blocksort logic error aborts compression with internal error 1002 on some inputs of about 600 KB or more (issue #137, fixed in 0.2.5 on 2026-05-16; the bad versions are not yanked on crates.io).",
+    "Need for features beyond libbzip2 1.0.x (multithreading, bzip3): none are implemented; issue #139 asking for bzip3 is open.",
+    "Projects that require an OSI-listed licence: it ships under the bzip2-1.0.6 licence (permissive, BSD-style, no patent grant)."
+  ],
+  "integration": {
+    "form": "crate (libbz2-rs-sys) or shared/static lib (libbz2-rs-sys-cdylib: libbz2_rs.so / libbz2_rs.a)",
+    "dependencies": "libc (optional; needed for the stdio and c-allocator features); none for a no_std build with a caller-supplied allocator",
+    "min_toolchain": "Rust 1.82 (workspace MSRV)",
+    "platforms": "portable Rust with no SIMD or target-specific code; benchmarked on x86-64 Linux and aarch64 macOS",
+    "thread_safety": "not documented; state lives per bz_stream as in libbzip2 and the Rust sources hold no mutable globals apart from an ASSERT_CODE atomic in no_std builds, so separate streams on separate threads should be safe",
+    "drop_in_for_baseline": "partial: same BZ2_* C API (capi version 1.0.9) and byte-identical output, but the cdylib is named libbz2_rs rather than libbz2, so C programs must relink or the library must be renamed/symlinked; BZ2_bzlibVersion reports 1.1.0-libbz2-rs-sys-0.2.5"
+  },
+  "gotchas": [
+    "Harness flag asymmetry: the CI builds the Rust side with RUSTFLAGS=-Cllvm-args=-enable-dfa-jump-thread while the C side (bzip2-sys build.rs via the cc crate, CC=clang, -O3) gets no such flag; the decoder is exactly the switch-in-a-loop state machine this pass targets, so part of the 3-7% x86 decompression gain may come from the pass rather than the port. Toolchains are unpinned (rustup stable, runner clang), and run-to-run drift exceeds within-run noise: within-run CV is 0.2-1.3%, but the version-bump-only commit c6b9b3d measured the x86 level-1 compression delta at -10.17% against -8.11% for its parent 7fe0c34, the level-1 delta ranged from -8.9% to -12.3% across 2026 runs, and the sample3.ref compression delta went -10.8%, -0.2%, -1.1%, +1.1%, -5.5% over the last five runs (2026-04-07 to 2026-10-06: a blocksort fix, a version bump and two clippy-fix commits).",
+    "Three of the six decompression rows are tiny inputs (sample3.bz2 is 235 bytes, sample1.bz2 32 KB, sample2.bz2 74 KB; 0.5-4 ms per process), so whole-process cycles there are dominated by startup and stream initialisation; only zip64support.tar.bz2 and re2-exhaustive.txt.bz2 are large (about 2.2e9 and 1.8e9 cycles), showing -4.3% and -4.1% on x86 but +4.8% and +1.0% on the M2. On the M2, level-1 compression was 1.7-5.9% slower than C in every 2025 run and only turned 3-4% faster from the 2026-04-06 run onward.",
+    "Internal asserts mirror libbzip2: with the std feature an internal error prints the report and calls std::process::exit(3), killing the host process; 0.2.3 and 0.2.4 hit this (error 1002) because a commit replaced the highest-set-bit loop for the quadrant shift in mainSort with count_ones().",
+    "Rust executes more instructions than C (+5-8% compressing silesia-small.tar, +21-24% decompressing the three small files on x86; derived from page data), so the cycle win depends on the microarchitecture, which matches the weaker M2 results."
+  ],
+  "pick_this_over_siblings_when": "Pick libbzip2-rs over bzip2z (Zig, SA-IS block sort, 1.79x faster single-threaded compression but 0.97x decompression and a new codebase) when you need the libbzip2 C API, byte-identical output and a widely deployed memory-safe drop-in (42.8M crates.io downloads); pick bzip2z when raw compression speed matters more than compatibility.",
+  "verified_claims_summary": "In the project's own CI data (libbzip2-rs-bench, latest run at commit ac73367 on 2026-10-06, 20 repetitions per command), one harness binary calling libbz2-rs-sys versus libbzip2 1.0.8 (bzip2-sys, built with clang at -O3) used 10.1-12.3% fewer CPU cycles compressing the 15.7 MB silesia-small.tar at levels 1-9 and 3.4-7.4% fewer decompressing six bzip2 files on an AMD Ryzen 9 9900X. On an Apple M2 compression was 3.3-4.2% faster in user time but decompression was 0.1-9.5% slower on five of six files.",
+  "status_note": "Actively maintained (last commit 2026-10-06, v0.2.5 released 2026-05-16 with the error-1002 fix) and the default backend of the bzip2 crate; the bzip2-1.0.6 licence is permissive but not OSI-listed, and the benchmark has a Rust-only -enable-dfa-jump-thread flag, unpinned toolchains and tiny decompression inputs, so treat the decompression gain as unproven and the x86 compression gain of about 11% as the solid result.",
+  "sources_read": [
+    "https://github.com/trifectatechfoundation/libbzip2-rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/bzip2_benchmarks.json",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/.github/workflows/bench.yml",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/Cargo.toml",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/src/lib.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/src/compress.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/src/decompress.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/src/blocksort.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys/src/bzlib.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/Cargo.toml",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/src/lib.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/examples/compress.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/test-libbz2-rs-sys/examples/decompress.rs",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys-cdylib/README.md",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/libbz2-rs-sys-cdylib/Cargo.toml",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs/HEAD/silesia-small.tar (HEAD request, size only)",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-linux-x86.json",
+    "https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-macos-arm64.json",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/issues?q=is%3Aissue",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/issues/137",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/commits/main",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/commits/main/.github/workflows/bench.yml",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/commit/1948e55",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/commit/7fe0c34",
+    "https://github.com/trifectatechfoundation/libbzip2-rs/commit/c6b9b3d",
+    "https://crates.io/api/v1/crates/libbz2-rs-sys",
+    "https://crates.io/api/v1/crates/bzip2",
+    "https://trifectatech.org/blog/bzip2-crate-switches-from-c-to-rust/ (DNS failure; WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}
