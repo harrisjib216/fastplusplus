@@ -1,0 +1,82 @@
+[
+  {
+    "id": "https://github.com/avafly/optimize-cnn",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README table (cnn_fuse 783 ms, cnn_neon 1045 ms vs cnn_ort 2440, cnn_ncnn 2302, cnn_tflite 1621 ms) with public harness code (src/cnn_*.cpp, src/common.h run_timed and verify) and the CPU (Raspberry Pi 4B, Cortex-A72) stated, but no compiler name or version and the framework libraries are unstated prebuilt binaries, so not A.",
+    "corrections": {
+      "compiler_and_flags": "CMake Release build (default), C++17, -Wall -Wextra -Wpedantic, OpenMP; the hand-written variants (cnn_struct, cnn_const, cnn_neon, cnn_fuse) add -funsafe-math-optimizations -mcpu=native; ONNX Runtime 1.27.1, ncnn 20260526, TFLite 2.20.0 and OpenBLAS are linked as prebuilt libraries from ~/Documents/libs with unstated build options; compiler name and version not stated",
+      "workload": "Inference of a tiny fixed Fashion-MNIST CNN (conv 8 ch, conv 16 ch, FC) over 70,000 28x28 images, processed in blocks of 32; ncnn, TFLite and the hand-written variants run one image per OpenMP thread (single-threaded ncnn net and per-thread TFLite interpreters), ORT uses intra-op threads with sub-batches of 8; one warmup, then the best of --runs timed runs (N not stated) of steady_clock wall time; README text gives 4 threads for the framework rows.",
+      "caveats": "A single fixed tiny model hand-coded in about 200 lines per variant, not a reusable library or a general SIMD library; the category simd-intrinsics-libraries is a loose fit (NEON intrinsics in an ML inference demo). The hand-written builds get -mcpu=native and -funsafe-math-optimizations while the frameworks are prebuilt binaries with unknown build flags, and the author tuned each framework (per-thread ncnn allocators with fp16 and packing disabled, per-thread TFLite interpreters, ORT batch shape); compiler and version are not stated and the per-row thread count and run count of the table are not stated. The hand-written outputs are checked against reference logits with a 1e-4 tolerance (frameworks with argmax agreement only), so the fast path computes the same model. Uses the author's hand-written GEMM from optimize-gemm (already catalogued in wave 8, blas-lapack). 10 stars, 18 commits, all from August 2026."
+    },
+    "notes": "Numbers on the README match the record exactly and the harness compares like with like (same 70,000 images, same block-of-32 pattern, correctness check against exported reference logits). Main shortcomings: one fixed toy model, compiler unstated, frameworks built with unknown flags while the hand-written code gets -mcpu=native -funsafe-math-optimizations, and the category is a loose fit (ML inference demo rather than a SIMD library). Related to avafly/optimize-gemm (wave 8) but a distinct project, not a duplicate.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/README.md",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/cnn_fuse.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/cnn_neon.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/cnn_ort.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/cnn_ncnn.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/cnn_tflite.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/src/common.h",
+      "https://raw.githubusercontent.com/Avafly/optimize-cnn/HEAD/LICENSE",
+      "https://github.com/Avafly/optimize-cnn",
+      "https://github.com/Avafly/optimize-cnn/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/lemire/pospopcnt_avx512",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party sample output in the README (scalar 17.325 vs AVX-512BW Harley-Seal 1KB 0.497 cycles per 16-bit word) with public benchmark code (benchmark/linux/instrumented_benchmark.cpp, Makefile -O3 -march=native), but the compiler is not named and the CPU is only 'a Cannon Lake processor', so not A; the CCPE 2021 paper was not opened.",
+    "corrections": {
+      "baseline": "pospopcnt_u16_scalar in include/pospopcnt.h: an unrolled bit-by-bit scalar loop (65 instructions per 16-bit word in the sample output, i.e. not vectorized; a clang pragma disables vectorization) in the same repo",
+      "compiler_and_flags": "Makefile: -O3 -march=native, -std=c99 for C and -std=c++0x for C++ (instrumented_benchmark built with $(CXX)), FLAGSIZE now defaults to 32; compiler name and version not stated in the README sample output or in results.txt",
+      "hardware": "'a Cannon Lake processor' (README sample output; estimated clock 2.9 to 3.2 GHz); exact model not stated",
+      "caveats": "Benchmark repo of the Klarqvist, Mula and Lemire paper (CCPE 33(17), 2021, arXiv 1911.02696; AUTHORS lists the same three authors), whose main code is mklarqvist/positional-popcount, already in this wave at tier A; the AVX-512BW Harley-Seal kernels here are block-size variants (1KB, 512B, 256B) of the same algorithm. Since 2022 the repo also carries assembly kernels imported from clausecker/pospop (count16avx512, count16avx2, count16neon; also already listed) and Clausecker's benchmark scripts for the later paper, and the README sample output predates them. The scalar baseline is a deliberately non-vectorized loop, so the 35x overstates the gain over compiler auto-vectorized scalar code (positional-popcount reports about 16x against that). The 19 MB array exceeds the caches, so the AVX-512 rows (about 12 GB/s) are memory-bound. Single sample run on one machine; results.txt (n = 8,388,608, three trials) shows the same scale (17.32 vs 0.510 cycles per word). Last commit 2025-10-19 is under 12 months old, so 'active' holds, but the repo is a research benchmark rather than a maintained library."
+    },
+    "notes": "Numbers match the README; the comparison is against the authors' own unvectorized scalar loop. Likely duplicate: same authors, same paper and the same AVX-512BW Harley-Seal technique as mklarqvist/positional-popcount (tier A in wave 13), plus imported clausecker/pospop kernels; the orchestrator should consider decision 'duplicate' folding into positional-popcount. Kept as confirm at C because the evidence itself is valid.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/README.md",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/Makefile",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/AUTHORS",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/results.txt",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/benchmark/linux/instrumented_benchmark.cpp",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/include/pospopcnt_avx512bw.h",
+      "https://raw.githubusercontent.com/lemire/pospopcnt_avx512/HEAD/include/pospopcnt.h",
+      "https://raw.githubusercontent.com/mklarqvist/positional-popcount/HEAD/pospopcnt.c",
+      "https://github.com/lemire/pospopcnt_avx512",
+      "https://github.com/lemire/pospopcnt_avx512/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/stgatilov/recip_rsqrt_benchmark",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README sample results with public benchmark code (main.cpp, routines_sse.h, rdtsc.h), compiler (MSVC 2013 x64) and CPU (Core i7-3770) stated, but no optimisation flags and no build file in the repo, so not A.",
+    "corrections": {
+      "baseline": "the repo's own 'ieee' variants in routines_sse.h: _mm_div_ps(1, x) and _mm_div_ps(1, _mm_sqrt_ps(x)) (and the _pd forms), i.e. the divps/sqrtps instructions a compiler emits for 1.0f/x and 1.0f/sqrtf(x)",
+      "compiler_and_flags": "MSVC 2013 C++ compiler, x64 mode (README); optimisation flags not stated and no project or build file in the repo; later commits fixed compilation on GCC (2015) and MSVC 2017 (2018)",
+      "workload": "Vectorized 1/x and 1/sqrt(x) on __m128 (4 floats) or __m128d (2 doubles; the fast double variants convert to float and use rcpps/rsqrtps) over about 33.5M float and 16.8M double test values (an exhaustive 1.0 to 2.0 range plus exp2 of uniform(-20, 20)); each value is passed through the function 4 times in 4 interleaved streams; rdtsc cycles per call and maximal relative error against the div/sqrt variant.",
+      "caveats": "No licence file, so reference only. Results are from July 2015 on Ivy Bridge with MSVC 2013; newer CPUs have much faster divps and sqrtps (general knowledge, not from the page), so the gap is likely smaller today. The README describes the metric as throughput (cycles per call), not latency; the harness chains 4 calls per stream over 4 independent streams, so it mixes latency and throughput, and rdtsc counts reference cycles rather than core cycles. The fast variants trade accuracy (max relative error about 3e-4 without refinement, about 1.5e-7 to 3e-7 with one Newton-Raphson step), so they are not drop-in replacements for exact division; the 'ieee' rsqrt reference is div plus sqrt (two roundings), not a correctly rounded rsqrt. The baseline is the authors' own exact variant in the same harness. Tied to a Stack Overflow question (31555260)."
+    },
+    "notes": "All claimed numbers appear in the README sample results and the ratios are correctly labelled as derived. The record's metric 'latency' should read 'throughput' per the README (metric is not a correctable field here). Main shortcomings: no licence, 2015 Ivy Bridge/MSVC 2013 data with flags unstated, and approximate results (about 12-bit accuracy for the fastest rows).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/stgatilov/recip_rsqrt_benchmark/HEAD/README.md",
+      "https://raw.githubusercontent.com/stgatilov/recip_rsqrt_benchmark/HEAD/main.cpp",
+      "https://raw.githubusercontent.com/stgatilov/recip_rsqrt_benchmark/HEAD/routines_sse.h",
+      "https://github.com/stgatilov/recip_rsqrt_benchmark",
+      "https://github.com/stgatilov/recip_rsqrt_benchmark/commits"
+    ]
+  }
+]
