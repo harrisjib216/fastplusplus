@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/sc2in/zigmark",
+  "one_liner": "Zig CommonMark+GFM parser and HTML/Typst renderer; README shows it ahead of cmark only through a shell-wrapped baseline.",
+  "what_it_does": "Parses CommonMark 0.31.2 plus the GFM extensions (tables, task lists, strikethrough, extended autolinks, disallowed raw HTML) into a typed AST and renders it to HTML, Typst, Markdown, an ASCII tree, a terminal view or a compact 'AI' dump. It ships as a Zig module, a CLI (`zigmark file.md -o out.html`), a C ABI (`libzigmark.so` with `zigmark_parse`/`zigmark_render_html`) and a WASM build. It also parses and edits YAML/TOML/JSON/ZON frontmatter, edits AST blocks in place, and queries collections of documents. The API is its own, not a cmark drop-in.",
+  "how_it_is_fast": "Two passes: a first scan of every line collects link reference definitions into a hash map, then a block pass (mecha parser combinators plus hand-written line classifiers over a pre-split line array) and a hand-written inline state machine implement the CommonMark delimiter algorithm. Plain-text runs inside inlines are skipped with a `@Vector` byte-compare scan for the special characters (`*_~[!`<\\` and newline, plus `@` under GFM), with a lookup-table scalar tail. Renderers stream into an 8 KiB buffered writer instead of building the output string. Nothing in the code points to a structural advantage over cmark: the README's lead over cmark comes from a harness asymmetry (see gotchas).",
+  "when_to_use": [
+    "Zig projects that want an in-process CommonMark+GFM parser with a typed AST, block mutation and frontmatter editing in one module.",
+    "Markdown-to-Typst/PDF pipelines (eisvogel-style preamble driven by frontmatter, mermaid fences rendered to SVG through the lazy pozeiden dependency).",
+    "Noncommercial or internal tooling that wants a small static CLI (about 2 MB peak RSS on a 27 KB file) or a WASM build of about 81 KiB.",
+    "Doc-site tooling that needs to query or rewrite sections of many Markdown files (the Library query API, --set-block, --section-start/--section-end)."
+  ],
+  "when_not_to_use": [
+    "Commercial products or paid client work: PolyForm Noncommercial 1.0.0 forbids it without a separate licence from SC2 (solo practitioners using it as a tool are exempted in the README).",
+    "When raw conversion speed is the goal: on the repo's own unwrapped comparison lowdown (2.2 ms) beats every zigmark build and discount (2.7 ms) is within one standard deviation of ReleaseFast (2.4 ms); no throughput test on large inputs exists.",
+    "Untrusted input without limits: SECURITY.md documents O(n^2) worst-case behaviour of the inline scanner on unmatched brackets, bounded only by the input cap, whereas cmark is built to stay linear on pathological input.",
+    "Inputs over 16 MiB: Parser.max_input_bytes defaults to 16 MiB and the CLI uses the default, so larger files fail with error.InputTooLarge.",
+    "Toolchains other than Zig 0.16.0 or later; 0.x API that has changed across 11 minor releases since 2025."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "mecha, zig-clap, mvzr, tomlz and zig-yaml (SC2 forks for the last two); pozeiden (lazy, for mermaid SVG in the CLI/WASM; a no-op fallback when used as a library); commonmark-spec and cmark-gfm are fetched only for the spec tests.",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon)",
+    "platforms": "any Zig target; CI on x86_64-linux and aarch64-linux; wasm32 build; SIMD scan falls back to scalar where no vector length is suggested",
+    "thread_safety": "not documented (Parser is a plain value struct and all output is caller-owned; pozeiden made its mermaid rendering thread-safe in v0.2.0)",
+    "drop_in_for_baseline": "partial — the CLI takes a file and writes HTML like cmark, but adds -o, enables GFM extensions by default, and the C ABI differs from cmark's cmark_markdown_to_html/node API"
+  },
+  "gotchas": [
+    "Harness flaw behind the headline: flake.nix's bench app runs cmark and cmark-gfm through a generated `#!/bin/sh` wrapper (`exec cmark \"$@\" > /dev/null`) while zigmark, lowdown and discount are spawned directly under `hyperfine -N`, so every cmark run pays an extra shell start on a 2-5 ms start-up-dominated workload (hyperfine's `--output=null` would have made it symmetric), and the cmark peak-RSS rows include the shell. The work also differs: the zigmark CLI parses with GFM extensions on and a mermaid hook, while plain `cmark`/`cmark-gfm` (no -e flags) render CommonMark only.",
+    "The README table is stale: it is dated 2026-06-04 (the v0.7.0 release that added the bench app) and says README.md was 27 KB, but README.md is now about 33 KB and the current bench app also writes a 'mermaid-heavy input' table that the README lacks, so the numbers predate releases 0.8.0 to 0.11.1 and the current harness. No CPU or baseline versions are given.",
+    "The C ABI (`zigmark_parse`, `zigmark_render_*` in src/root.zig) allocates every AST node and string with `std.heap.page_allocator`, i.e. a page-granular mmap/munmap per allocation, so C callers get a much slower and more memory-hungry path than the CLI's general-purpose allocator; `zigmark_free_string` recovers the length by scanning for the NUL terminator.",
+    "The separate `nix run .#benchmark` app (benchmark.md) is a zigmark-only self-comparison whose command `./zig-out/bin/zigmark ./Readme.md > /dev/null` runs under hyperfine -N, so `>` and `/dev/null` are passed as arguments rather than a redirect, and the file name differs in case from README.md."
+  ],
+  "pick_this_over_siblings_when": "rushdown (Rust) is the closer CommonMark sibling and its make-bench numbers beat cmark in-process without a wrapped baseline; pick zigmark only when you need a Zig-native or C-ABI library with Typst output and frontmatter/AST editing, and your use is noncommercial.",
+  "verified_claims_summary": "One process per run converting the repo's own 27 KB README.md to HTML, hyperfine -N mean over 500 runs on an unstated machine: zigmark ReleaseFast 2.4 ms against cmark 5.3 ms and cmark-gfm 5.6 ms (nixpkgs builds, versions unstated), but the cmark rows include an extra /bin/sh process; the directly spawned C tools lowdown (2.2 ms) and discount (2.7 ms) tie or beat zigmark, so no valid win over C is shown.",
+  "status_note": "Active (162 commits, v0.11.1 on 2026-08-07, 3 open issues, two of them Zig 0.16 migration bugs in the terminal renderer and spec-runner timing) and passes all 652 CommonMark and 24 GFM spec tests, but PolyForm Noncommercial licensing makes it reference-only for commercial users and the only speed evidence comes from a harness that shell-wraps the cmark baselines.",
+  "sources_read": [
+    "https://github.com/sc2in/zigmark",
+    "https://github.com/sc2in/zigmark/tree/main/src",
+    "https://github.com/sc2in/zigmark/tree/main/src/markdown",
+    "https://github.com/sc2in/zigmark/issues",
+    "https://github.com/sc2in/zigmark/commits/main",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/build.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/benchmark.md",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/main.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/noop_mermaid.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/markdown/parser.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/markdown/inline.zig",
+    "https://raw.githubusercontent.com/sc2in/zigmark/HEAD/src/markdown/combinators.zig"
+  ],
+  "confidence": 0.75
+}

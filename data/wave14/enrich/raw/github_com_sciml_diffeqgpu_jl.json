@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/sciml/diffeqgpu.jl",
+  "one_liner": "Julia GPU ensemble ODE/SDE solvers that compile one trajectory per thread; against MPGOS (CUDA C++) results are mixed.",
+  "what_it_does": "Solves many small, independent ODE or SDE problems (parameter sweeps, Monte Carlo, uncertainty quantification) on a GPU through the SciML ensemble interface: `solve(EnsembleProblem(prob; prob_func), GPUTsit5(), EnsembleGPUKernel(CUDA.CUDABackend()); trajectories = N)`, or the older array-vectorised `EnsembleGPUArray`. The user writes an out-of-place Julia right-hand side that returns an `SVector`. The lower-level `DiffEqGPU.vectorized_solve` / `vectorized_asolve` take a GPU array of prepared problems and return `(ts, us)` matrices that stay on the device. These are what the MPGOS comparison timed. It is not a library for one large ODE; for that, use OrdinaryDiffEq with a CuArray state.",
+  "how_it_is_fast": "`EnsembleGPUKernel` generates one KernelAbstractions kernel (`ode_solve_kernel`, ndrange = number of trajectories) in which each GPU thread runs a complete integrator on its own problem: GPUTsit5 (FSAL, 6 RHS evaluations per step), GPUVern7/9, or Rosenbrock23, Rodas4/5P and Kvaerno3/5 for stiff problems. The state lives in StaticArrays, `@muladd` fuses multiply-adds, and Julia's GPU compiler inlines the user's RHS into the kernel. This removes the per-step kernel launches that make JAX or PyTorch vmap solvers slow. It is the same thread-per-system design MPGOS uses in CUDA C++, so against MPGOS there is no structural advantage: on the V100 at 8.4M trajectories the fixed-step time ratio (145.3 / 94.2 ms = 1.54) almost exactly matches Tsit5's 6 RHS evaluations per step over RK4's 4 (derived from page data).",
+  "when_to_use": [
+    "10^4 to 10^7 independent small non-stiff ODEs (a handful of states, Float32) on one GPU from Julia, e.g. parameter sweeps or Monte Carlo over u0/p.",
+    "You need per-trajectory adaptive stepping, callbacks or events, stiff integrators (Rodas5P, Kvaerno5) or SDE methods (GPUEM, GPUSIEA) inside the kernel.",
+    "Non-NVIDIA hardware: the same code targets CUDA, AMD ROCm, Intel oneAPI, Apple Metal and OpenCL backends, whereas MPGOS is CUDA-only.",
+    "Code already written against the SciML EnsembleProblem API, where switching from EnsembleThreads to EnsembleGPUKernel is a one-line change."
+  ],
+  "when_not_to_use": [
+    "Maximum throughput on a datacenter NVIDIA GPU at very large ensembles: in the authors' own data MPGOS was faster on the V100 from 131,072 trajectories up (0.65x fixed step and 0.70x adaptive for Julia at 8.4M).",
+    "One large ODE whose cost is in a big structured f: use a CuArray state with OrdinaryDiffEq instead.",
+    "Short jobs where latency to the first result matters: Julia JIT compile time was excluded from every timing, and the high-level solve() transfers problems to the GPU and results back on every call (lower-level API tutorial).",
+    "Trajectories with very different costs (warp divergence; open issue #376), ContinuousCallback at high thread counts (out of dynamic GPU memory, open issue #219), SDEs with non-diagonal noise (open issue #331), or a RHS that needs generic linear algebra or allocations (#110).",
+    "Float64 on consumer GPUs: the docs recommend Float32, and only Float32 was benchmarked."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "KernelAbstractions, SciMLBase, DiffEqBase, StaticArrays, Adapt, ForwardDiff, LinearSolve, SimpleDiffEq, SimpleNonlinearSolve and others; one GPU backend package loaded as a weak-dependency extension (CUDA.jl 6, AMDGPU.jl 2, oneAPI.jl 2, Metal.jl 1 or OpenCL.jl 0.10)",
+    "min_toolchain": "Julia 1.10 (Project.toml compat, DiffEqGPU 3.21.4); the MPGOS comparison used Julia 1.8.5 and DiffEqGPU 2.1.0",
+    "platforms": "NVIDIA (CUDA), AMD (ROCm), Intel (oneAPI), Apple M-series (Metal), CPU via OpenCL/pocl",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — the solver set replaces an MPGOS-style CUDA C++ ensemble solve, but the API is the Julia SciML EnsembleProblem interface, not MPGOS's ProblemSolver C++ class; RHS functions must be rewritten in Julia"
+  },
+  "gotchas": [
+    "Crippled baseline (enricher finding, source-confirmed plus derived): GPU_ODE_MPGOS/Lorenz_SystemDefinition.cuh computes `10.0*( X[1]-X[0] )` and `X[0]*X[1] - 2.666 * X[2]` with double literals on float state, so every MPGOS RHS evaluation does FP64 multiplies and conversions; the Julia RHS uses 10.0f0 and 2.666f0. From the V100 to the RTX 5000, MPGOS slows 9.4x fixed step (94.157 to 886.082 ms at n=8,388,608) and 3.9x adaptive, while Julia slows only 1.27x and 1.20x (derived from page data). This is consistent with an FP64 bottleneck on the FP64-weak RTX 5000, so the RTX 5000 large-n wins (4.8x fixed, 2.3x adaptive) do not show faster code generation (inference; not rerun).",
+    "Where the baseline is not FP64-bound (V100, n of 131,072 or more), MPGOS wins, and the 1.54x fixed-step gap matches the 6-versus-4 RHS evaluation count of Tsit5 against RK4, so per-evaluation cost is a wash; the integrators were never matched (Tsit5 against RK4 and RKCK45).",
+    "Asymmetric timing: Lorenz.cu times one cold Solve() per process with clock() (process CPU time, which equals wall time only if the CPU spins during the synchronise), while bench_lorenz_gpu.jl reports the BenchmarkTools minimum of warm repeated `vectorized_solve` calls, with problem construction and the host-to-device copy outside the timed region. MPGOS's flat ~2 ms on the V100 for n up to 8192 produces the small-n 6-10x Julia lead.",
+    "Stale, fragile harness: data pin DiffEqGPU 2.1.0 and Julia 1.8.5 (current 3.21.4, which merged 'Reduce EnsembleGPUKernel CPU host overhead' #560 on 2026-10-04). run_ode_cpp.sh rewrites Lorenz.cu lines 15 and 17 with sed. MPGOS appends to ./data/cpp while run_benchmark.sh clears ./data/CPP, so repeated runs accumulate rows. MPGOS is built for sm_70 only, so the RTX 5000 ran JIT-compiled PTX."
+  ],
+  "pick_this_over_siblings_when": "OrdinaryDiffEq.jl is the CPU sibling and the right choice for one ODE or a few hundred trajectories; pick DiffEqGPU when you have thousands to millions of small independent ODEs and a GPU, or need AMD/Intel/Apple GPU support that MPGOS (CUDA C++) lacks, but not on the strength of a speed win over MPGOS.",
+  "verified_claims_summary": "First-party GPUODEBenchmarks data: Float32 Lorenz ensembles (8 to 8.4M trajectories, t in [0,1], dt 0.001, tolerances 1e-8) with DiffEqGPU 2.1.0 GPUTsit5 on Julia 1.8.5 against MPGOS RK4/RKCK45 built with nvcc -O3 for sm_70, on a Tesla V100 and an RTX 5000 (host CPU and CUDA version not stated). Julia was 6-10x faster for small ensembles on the V100 and 2.3-4.8x faster at 8.4M on the RTX 5000, but 0.65-0.70x as fast at 8.4M on the V100. The C++ side was timed cold once and its RHS is promoted to FP64.",
+  "status_note": "Actively maintained (1,274 commits, Project.toml v3.21.4, newest commit 2026-10-08, 38 open issues) and MIT-licensed, so it is usable today. The MPGOS evidence is first-party and two major versions old, and its Julia wins trace to a cold-timed baseline (small n) and an FP64-promoted C++ RHS on an FP64-weak GPU (large n), so tier D under the crippled-baseline precedent is defensible.",
+  "sources_read": [
+    "https://github.com/SciML/DiffEqGPU.jl",
+    "https://github.com/SciML/DiffEqGPU.jl/commits/master",
+    "https://github.com/SciML/DiffEqGPU.jl/issues?q=is%3Aissue+is%3Aopen+performance+OR+slow+OR+wrong",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/src/DiffEqGPU.jl",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/src/ensemblegpukernel/lowerlevel_solve.jl",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/src/ensemblegpukernel/kernels.jl",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/src/ensemblegpukernel/perform_step/gpu_tsit5_perform_step.jl",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/docs/src/tutorials/lower_level_api.md",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/docs/src/getting_started.md",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/docs/src/manual/ensemblegpukernel.md",
+    "https://raw.githubusercontent.com/SciML/DiffEqGPU.jl/HEAD/docs/src/index.md",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/README.md",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/run_benchmark.sh",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/runner_scripts/gpu/run_ode_cpp.sh",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/runner_scripts/gpu/run_ode_julia.sh",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/makefile",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/Lorenz.cu",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_MPGOS/Lorenz_SystemDefinition.cuh",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_Julia/bench_lorenz_gpu.jl",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/GPU_ODE_Julia/Project.toml",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/CPP/MPGOS_times_unadaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/CPP/MPGOS_times_adaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/Julia/Julia_times_unadaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/Tesla_V100/Julia/Julia_times_adaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/CPP/MPGOS_times_unadaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/CPP/MPGOS_times_adaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/Julia/Julia_times_unadaptive.txt",
+    "https://raw.githubusercontent.com/utkarsh530/GPUODEBenchmarks/main/paper_artifacts/data/RTX_5000/Julia/Julia_times_adaptive.txt"
+  ],
+  "confidence": 0.75
+}
