@@ -1,0 +1,97 @@
+[
+  {
+    "id": "lang:javascript/alya-lang/benchmarks#binary-trees",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README table (also state/latest_results.json, 2026-10-08) shows C 126.3 ms vs Bun 98.3 ms for binary trees; code (cross_lang/collections/binary_trees.c/.js, cross_lang/runner.ts) and compiler/flags (gcc 13.3.0 -O2) are public, but no CPU model is stated (runs on a GitHub Actions ubuntu-latest shared runner), so not A; a 0-star suite built to promote Alya is not a well-known independent suite, so not B.",
+    "corrections": {
+      "compiler_and_flags": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0 invoked by cross_lang/runner.ts as 'gcc -O2 binary_trees.c -o binary_trees_c' (no -march, no LTO); Bun 1.4.2 run as 'bun run binary_trees.js' (installed by oven-sh/setup-bun@v2 at CI time); Ubuntu 24.04.5 LTS x64 on a GitHub Actions ubuntu-latest runner (.github/workflows/benchmark.yml).",
+      "caveats": "This suite exists to compare the new Alya language; the Bun-versus-C row is incidental, first-party to Alya, and the repo gives no mechanism for Bun. C is built at -O2, not -O3. Runs happen on a shared GitHub Actions ubuntu-latest VM (CPU model not stated, noisy neighbours) and the README is rewritten by CI on each dispatch, so the numbers drift between commits. Timing is whole-process wall clock via spawnSync (1 warm-up, median of 10), so Bun's runtime start-up and JIT warm-up are inside its 98.3 ms and C's process start is inside 126.3 ms; the workload is only about 100 ms. The work differs in memory management: the C version calls glibc malloc per node and walks every tree again with a recursive free_tree inside the timed region, while the JS version never frees and leaves dead trees to the GC (possibly never collected before exit). Bun beats C on only this 1 of 14 rows; C wins the other 13 by 1.9x to 9x. The README's start-up, binary-size and RSS table rows for Bun and C are hard-coded strings in runner.ts, not measurements.",
+      "why_faster": "Allocator/GC (verifier inference from binary_trees.c and binary_trees.js; the repo states no mechanism): JavaScriptCore allocates the small TreeNode objects from its GC heap's size-class free lists and reclaims dead short-lived trees in bulk or not at all before exit, while the C version pays a glibc malloc and a free per node plus an extra recursive free traversal of every tree.",
+      "same_algorithm": true,
+      "same_opt_level": false,
+      "language_level_claim": true
+    },
+    "notes": "Numbers verified on README and latest_results.json; tier C stands. Shortcomings for the orchestrator: C at -O2 not -O3, CPU unstated (GitHub Actions shared runner), whole-process wall-clock timing of ~100 ms runs, C pays malloc/free per node plus a timed recursive free pass while JS relies on GC, Bun wins only this 1 of 14 rows, suite is a 0-star promotional benchmark for Alya.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/README.md",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/cross_lang/collections/binary_trees.c",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/cross_lang/collections/binary_trees.js",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/cross_lang/runner.ts",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/state/latest_results.json",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/package.json",
+      "https://raw.githubusercontent.com/alya-lang/benchmarks/main/.github/workflows/benchmark.yml",
+      "https://github.com/alya-lang/benchmarks",
+      "https://github.com/alya-lang/benchmarks/commits",
+      "https://github.com/alya-lang/benchmarks/tree/main/.github/workflows"
+    ]
+  },
+  {
+    "id": "lang:julia/dyu/ffi-overhead#plusone-call",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "Code (hello.c, hello.cpp, hello.jl, Tuprules.tup), compiler (gcc 5.4.1 -O2 -fPIC) and CPU (i7-3630QM) are all public, which would otherwise meet A, but the Julia and C rows were measured in different runs about 15 months apart: C 1182/1182 is unchanged since the Feb 2017 README (commit 9f0c4d0) and Julia 894/889 was appended in May 2018 (commit c8010d5, '+6 lines, 0 removed') without re-running C, so under the cross-run precedent (PostgreSQL, MySQL, ODB) the comparison goes to D.",
+    "corrections": {
+      "claimed_speedup": "Julia 894 ms and 889 ms vs C 1182 ms and 1182 ms (C++ 1182 and 1183 ms) for 500M calls of plusone(): about 1.3x faster (derived from page data). The C and C++ rows date from the Feb 2017 run; the Julia row was added alone in May 2018 (commit c8010d5) without re-running C, so this is a cross-run comparison.",
+      "compiler_and_flags": "C and C++: gcc/g++ 5.4.1 -O2 -fPIC -Wall -Wextra (Tuprules.tup; C++ adds -std=c++14 -fno-rtti); executables linked with -O2 against newplus/libnewplus.so (plus.c built -O2 -fPIC, -shared) via rpath, so plusone is reached through the PLT. Julia 0.6.3 run as 'julia hello.jl 500000000' with default options; ccall((:plusone, \"./newplus/libnewplus.so\"), ...). Ubuntu 14.04 x64; 2 samples per language; timer is gettimeofday in milliseconds (C) and time() (Julia).",
+      "caveats": "Cross-run comparison: the C and C++ numbers (1182/1182, 1182/1183) are from the Feb 2017 results and were never re-measured when the Julia row (894/889, Julia 0.6.3) was added in May 2018 (commit c8010d5); the LuaJIT row (891/905) that shows the same gap was measured in the 2017 run. Measures foreign-call overhead for a trivial function, not code quality: the C and C++ executables call plusone through the PLT stub of a -fPIC shared library, while Julia's ccall with a constant (symbol, library) pair calls a pointer resolved at JIT time; -fno-plt, static linking or LTO would shrink or remove the gap (verifier inference from Tupfile/Tuprules.tup and hello.jl; the README states no mechanism). Both sides run the same -O2 plusone machine code in libnewplus.so. C is compiled -O2, not -O3. Toolchains are from 2017-2018 (gcc 5.4.1, julia 0.6.3, luajit 2.0.4) and only 2 samples are shown. Most other languages in the table are slower than C (Go 37,975 ms, Node 9,163 ms, Java 4,469 ms). The only rows faster than C in the table are LuaJIT and Julia.",
+      "why_faster": "Call mechanism, not codegen (verifier inference; not stated in the README): the C and C++ loops call plusone() in libnewplus.so through the PLT trampoline (call plusone@plt, then an indirect jmp through the GOT), while Julia 0.6 ccall with a constant library path calls the symbol address resolved when the method is JIT-compiled, skipping the trampoline; plusone itself is the same gcc -O2 code for both.",
+      "same_algorithm": true,
+      "same_opt_level": false,
+      "language_level_claim": true
+    },
+    "notes": "README numbers match, but git history shows the C row (Feb 2017) and the Julia row (May 2018, commit c8010d5) come from separate runs; downgraded C to D under the cross-run precedent (if the orchestrator accepts same-author same-laptop runs, the code/compiler/flags/CPU would meet A). Shortcomings: cross-run comparison, PLT-vs-JIT-resolved call is a linkage artifact rather than a language win, C at -O2 not -O3, 2 samples, 2018 toolchains, repo abandoned since 2023-07-12.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/README.md",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/Tupfile",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/Tuprules.tup",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.c",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.cpp",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.jl",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/hello.lua",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/compile-all.sh",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/run-all.sh",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/prev.md",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/plus.c",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/plus.h",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/master/newplus/Tupfile",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/c8010d585d9b16fe49d216abf546bad4a9a4858a/README.md",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/9f0c4d0367519bfa7dcac6bf18e1958fbb0a6c3b/README.md",
+      "https://raw.githubusercontent.com/dyu/ffi-overhead/a99c92dbb9deb0d361fa2cfa581ad6152513449e/README.md",
+      "https://github.com/dyu/ffi-overhead",
+      "https://github.com/dyu/ffi-overhead/commits/master",
+      "https://github.com/dyu/ffi-overhead/commits/master/hello.jl",
+      "https://github.com/dyu/ffi-overhead/commits/master/README.md",
+      "https://github.com/dyu/ffi-overhead/commit/c8010d585d9b16fe49d216abf546bad4a9a4858a"
+    ]
+  },
+  {
+    "id": "https://github.com/jlapeyre/ranwalk-julia-vs-cxx",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README lists 3.88 s C++-11 vs 1.27 s Julia v0.3 and 1.68 s Julia v0.4, with public code (rwtest_simple.cc, rwtest_simple.jl), compiler (Debian gcc 4.9.1) and flags (-std=c++11 -O3), but no CPU model, so not A; author's own single-timing comparison, so C.",
+    "corrections": {
+      "caveats": "Not the same work: libstdc++ std::bernoulli_distribution(0.5) goes through generate_canonical<double>, which consumes two 32-bit std::mt19937 outputs plus floating-point arithmetic per coin flip, while Julia 0.3/0.4 rand(Bool) drew from its dSFMT-backed global MersenneTwister (a different SIMD generator), so this compares RNG front ends and generators, not compilers (verifier inference from rwtest_simple.cc, rwtest_simple.jl and libstdc++ <random>; the README itself says the result does not support 'Julia is faster than C++' and that a faster C++ program is possible). The C++ timer is std::clock (CPU time) while Julia uses @elapsed (wall time). The Julia scripts were updated in Sep 2024 ('Update Julia scripts from 2014 to 2024') but the numbers are from Julia 0.3/0.4 and gcc 4.9.1 in 2014-2015; current Julia defaults to Xoshiro256++, so a rerun today would compare a different generator. No licence file (LICENSE and LICENSE.md return 404), so the code is reference only. CPU model not stated, single timing per language."
+    },
+    "notes": "Numbers and flags match the README; tier C stands. Shortcomings: different RNG work per flip (two mt19937 draws via generate_canonical vs one dSFMT draw), author disclaims a language-level conclusion, no CPU model, single timings from 2014-2015 toolchains, no licence (reference only).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/README.md",
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest_simple.cc",
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest_simple.jl",
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/rwtest.cc",
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/NOTES",
+      "https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/LICENSE",
+      "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx",
+      "https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx/commits/master"
+    ]
+  }
+]
