@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/teimurjan/blazediff",
+  "one_liner": "Rust image diff compiled to wasm32 with v128 SIMD; pixelmatch-style YIQ diff counts, about 2-6x faster than pixelmatch on large differing images.",
+  "what_it_does": "@blazediff/core-wasm compares two pre-decoded RGBA8 buffers and returns how many pixels differ. It uses pixelmatch's YIQ perceptual delta with Vysniauskas anti-aliasing detection, and it can optionally write a diff image into a caller-supplied Uint8Array. The API looks like pixelmatch but is not a drop-in: you call `await initBlazediff(wasmBytesOrUrl)` once, then `await diff(a, b, width, height, output?, options?)`. The call is async, the output argument comes after width/height, and options are threshold, includeAA, diffMask and diffColorAlt. No PNG or JPEG decoder is bundled.",
+  "how_it_is_fast": "It is a two-pass block algorithm. The cold pass splits the image into blocks (8 to 128 px, sized from image area) and scans them with v128 integer compares plus an integer early-reject bound: delta <= lambda_max * (dr^2+dg^2+db^2) for opaque pixels. That skips blocks with no pixel above the threshold. The hot pass runs the 4-lane f32x4 YIQ delta and the anti-aliasing check only on the changed blocks, and drops to a scalar kernel for semi-transparent lanes. The module is built with RUSTFLAGS +simd128,+bulk-memory, lto fat, codegen-units 1 and opt-level 3, and wasm-opt -O3 is applied only if it is installed.",
+  "when_to_use": [
+    "Visual-regression or screenshot diffing in a browser, a Cloudflare Worker, Deno or Bun, where native addons (@blazediff/core-native) are not available and the screenshots usually differ.",
+    "Large differing pairs (1-18 MP) where pixelmatch takes 100-500 ms per call. The first-party table shows 33-73 ms on 4K and page-sized fixtures on an M1 Max under Node 22.",
+    "You need pixelmatch-compatible counts (YIQ threshold 0.1, AA pixels excluded by default) and can accept a ~0.05% difference in counts.",
+    "You want a small artifact with no postinstall step: about 32 KB of optimized wasm plus about 10 KB of JS glue, per the package README."
+  ],
+  "when_not_to_use": [
+    "Most of your pairs are identical or nearly identical, as in a passing visual-regression suite. wasm-bindgen copies both inputs into linear memory on every call (about 143 MB for the 17.9 MP 4k/1 pair). On identical pairs the same repo's plain-JS @blazediff/core is 4-7x faster than this build (4k/1 identical: 2.50 ms vs 17.47 ms; same/1: 0.22 vs 1.11 ms), and on the 4K and page-sized identical pairs core-wasm's lead over pixelmatch shrinks to 2-32%.",
+    "Small images under about 0.1 MP. Absolute savings are a fraction of a millisecond, and pixelmatch/6 shows only 0.75 vs 0.67 ms.",
+    "Hosts without WebAssembly SIMD. build-wasm.sh produces only a +simd128 artifact and ships no scalar fallback.",
+    "You need bit-identical parity with pixelmatch, such as golden counts stored in tests. Counts differ slightly (4k/1: 69,932 vs 69,912), and PR #91 (2026-07-29) changed counts on images with alpha.",
+    "You need region analysis. It was moved to @blazediff/interpret-native, a Node N-API package with no wasm build."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (wasm-bindgen 0.2.100 glue is bundled); building from source needs Rust with the wasm32-unknown-unknown target, wasm-bindgen-cli 0.2.100 and optionally wasm-opt",
+    "min_toolchain": "Node 18+ per README (Node 20.6+ for the import.meta.resolve recipe); any browser or edge runtime with WebAssembly SIMD (v128); rustc version for builds not stated",
+    "platforms": "any wasm host with SIMD128: browsers, Node, Cloudflare Workers, Deno, Bun; benchmarks only on Apple M1 Max under Node 22",
+    "thread_safety": "not documented; one module instance per JS realm, a synchronous call under an async wrapper, no threads",
+    "drop_in_for_baseline": "partial: same algorithm family and similar options as pixelmatch, but you must call initBlazediff first, diff() returns a Promise, the argument order differs (output after width/height), and counts differ by up to ~0.05%"
+  },
+  "gotchas": [
+    "Harness flaw: pixelmatch's time in the wasm table is not stable across runs. In the same tinybench process as core-wasm it ran 1.5-1.9x slower on the big differing fixtures than in the repo's separate pixelmatch run (4k/1 332.26 vs 201.60 ms, page/2 513.06 vs 267.84 ms). Across the file's own history it also moved from 287.72 ms (June 2026) to 332.26 ms (July) on 4k/1 and from 317.16 to 152.72 ms on page/1, while pixelmatch itself did not change. Against the JS-run pixelmatch numbers, the 4k/1 lead is about 6.1x, not 10x, and the geometric mean over all 34 rows is about 2.1x (derived from page data).",
+    "The headline '~51% faster' is the arithmetic mean of per-row '% time saved' (34 rows, 17 of them identical pairs), not a speed ratio. The geometric-mean speedup is about 2.3x, and about 3.0x on differing rows only (derived from page data). The package README also says 'up to ~16x faster than pixelmatch on 4K', but the largest ratio in the published table is 10.0x (4k/1).",
+    "When the result count is 0, the caller's output buffer is left untouched rather than filled with the grayscale image pixelmatch draws. Two paths do this: the cold pass finds no block above threshold, or wasm.rs's copy_output skips because DiffResult.identical is diff_count == 0, which also covers anti-aliasing-only differences. If you reuse an output buffer, check the count before you trust its contents.",
+    "Every call allocates and copies both full RGBA inputs into wasm linear memory, which never shrinks. A 4K-class pair needs about 143 MB of wasm heap, so memory-capped edge runtimes may run out on very large screenshots."
+  ],
+  "pick_this_over_siblings_when": "This is the only perceptual image-diff entry in the wasm category. Pick it over WebDSP (image filters, no published numbers) when you need a pixelmatch-compatible diff count with a same-harness benchmark. Pick it over writing your own wasm kernel in the style of zaw or kmeans-wasm when you want a maintained, published npm package with the same algorithm as the repo's native and Python builds.",
+  "verified_claims_summary": "benchmarks/pixel-by-pixel.md (updated 2026-07-29 with PR #91) times @blazediff/core-wasm against pixelmatch ^7.2.0 in one tinybench 5 process (25 iterations after 5 warmup, pre-decoded PNG buffers, no output buffer, threshold 0.1) on an Apple M1 Max under Node 22. Results: 4k/1 33.18 vs 332.26 ms, 4k/3 44.65 vs 423.14 ms, page/2 73.42 vs 513.06 ms, and identical 4K and page-sized pairs only 2-32% faster. The module is built with Rust +simd128, lto fat and opt-level 3; whether wasm-opt ran is not recorded.",
+  "status_note": "Active (core-wasm package 6.0.1, last commit 2026-09-21, 352 stars, MIT), a single-maintainer monorepo releasing about every two weeks. The kernel and published numbers changed in July 2026 (PR #91, faster kernel plus an alpha-blend parity fix), so pin a version and re-measure on your own screenshots, ideally in your target browser.",
+  "sources_read": [
+    "https://github.com/teimurjan/blazediff",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/README.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/benchmarks/pixel-by-pixel.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/17fadb6/benchmarks/pixel-by-pixel.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/a3a6f64/benchmarks/pixel-by-pixel.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/7a377ed/benchmarks/pixel-by-pixel.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/5eb8819/benchmarks/pixel-by-pixel.md",
+    "https://github.com/teimurjan/blazediff/commits/main/benchmarks/pixel-by-pixel.md",
+    "https://github.com/teimurjan/blazediff/commits/main/packages/core-wasm",
+    "https://github.com/teimurjan/blazediff/pull/91",
+    "https://github.com/teimurjan/blazediff/issues?q=is%3Aissue",
+    "https://github.com/teimurjan/blazediff/issues/38",
+    "https://github.com/teimurjan/blazediff/issues/76",
+    "https://github.com/teimurjan/blazediff/tree/main/apps/image-benchmark/src/pixel-by-pixel",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/packages/core-wasm/README.md",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/packages/core-wasm/package.json",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/packages/core-wasm/src/index.ts",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/src/wasm.rs",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/src/diff.rs",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/src/lib.rs",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/src/types.rs",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff-shared/src/lib.rs",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/Cargo.toml",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/Cargo.toml",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/crates/blazediff/scripts/build-wasm.sh",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/package.json",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/tsup.config.ts",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/src/utils.ts",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/src/pixel-by-pixel/blazediff-core-wasm-benchmark.ts",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/src/pixel-by-pixel/external-pixelmatch-benchmark.ts",
+    "https://raw.githubusercontent.com/teimurjan/blazediff/HEAD/apps/image-benchmark/src/pixel-by-pixel/blazediff-core-benchmark.ts"
+  ],
+  "confidence": 0.8
+}

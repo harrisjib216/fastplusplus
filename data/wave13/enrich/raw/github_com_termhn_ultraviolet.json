@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/termhn/ultraviolet",
+  "one_liner": "Rust graphics/game linear algebra with SoA 'wide' f32x4/f32x8 types; about 2-5x glam's one-lane code on batched math.",
+  "what_it_does": "A non-generic Rust crate of vectors, matrices, rotors (geometric-algebra rotations in place of quaternions), isometries and projection helpers. Every type comes in a scalar form (Vec3, Mat4) and a 'wide' form (Vec3x4, Vec3x8, Mat4x8, with f64 DVec3x4 variants) that holds 4 or 8 independent values in structure-of-arrays layout. It is not a drop-in for glam or nalgebra: you have to repack your data into wide types and turn branches into mask-and-select code.",
+  "how_it_is_fast": "Vertical SIMD (AoSoA): each component of a Vec3x8 is one f32x8 register, so one vector instruction does the same operation for 8 objects and there are no horizontal shuffles. That is the batching idea behind ISPC and nalgebra's simba wide types. Branchy scalar code becomes branchless lane masks (simd_gt, then select/blend), which avoids branch mispredictions on data-dependent tests. The SIMD comes from the 'wide' crate (safe_arch intrinsics on SSE2/AVX/AVX2, NEON and wasm simd128, with a scalar fallback elsewhere).",
+  "when_to_use": [
+    "Batched game and graphics math (particle Euler integration, ray-primitive tests, transforming thousands of points) where you can store data as AoSoA blocks of 4 or 8",
+    "Branch-heavy per-element tests (ray-sphere, culling) that turn into mask-and-select code and would otherwise mispredict",
+    "x86-64 builds that can use -C target-feature=+avx2 (or target-cpu) for the 8-lane types; 4-lane types work on baseline SSE2 and on aarch64 NEON",
+    "Projects that want rotors and fast compiles with no generics in the API"
+  ],
+  "when_not_to_use": [
+    "Single-object or AoS code: in mathbench's scalar table ultraviolet's scalar types mostly tie glam and are slower on several rows (for example matrix3 determinant 10.42 ns vs glam 2.19 ns), so use glam there",
+    "Matrix-heavy kernels with few objects: glam's one-lane Mat4 beats ultraviolet_f32x8 on matrix4 transpose x16 (73.5 vs 96.3 ns), ties matrix4 multiply x16, and most x256 rows are ties",
+    "Binaries that must pick AVX2 at runtime: wide only detects SIMD at build time, so a portable binary gets SSE2 paths, and an AVX2 build crashes on older CPUs",
+    "If you already use nalgebra: its simba WideF32x8 types are close (ties on Euler and ray-sphere, nalgebra ahead on matrix4 transpose x16 at 87.0 vs 96.3 ns, ultraviolet ahead on vector3 normalize x16 at 7.34 vs 8.54 ns and matrix4 multiply x256), though nalgebra has no wide determinant or inverse rows in mathbench",
+    "Code that needs integer i64 vectors, projective geometric algebra or Euler-angle extraction from rotors: open feature requests #101, #64/#65 and #44"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "wide (0.7 in released 0.10.0, 1.7 at unreleased HEAD 0.11.0); optional serde, mint, bytemuck, num-traits, encase",
+    "min_toolchain": "0.10.0: edition 2018, rust-version not declared; HEAD 0.11.0: edition 2024 and wide 1.7, which requires Rust 1.89",
+    "platforms": "any Rust target; explicit SIMD on x86/x86-64 (SSE2 by default, AVX/AVX2 only when enabled at build time), aarch64 NEON, wasm32 with +simd128; scalar fallback elsewhere",
+    "thread_safety": "not documented; the types are plain Copy value structs with no shared state",
+    "drop_in_for_baseline": "partial: the scalar types cover the same ground as glam, but the speedup only comes from the wide types, which need a data layout change and branchless rewrites"
+  },
+  "gotchas": [
+    "Harness flaw behind the headline ~20x ray-sphere ratio: in mathbench-rs benches/ray_sphere_intersect.rs (commit 8e5467c and still at HEAD) the wide ultraviolet and nalgebra kernels set ray_o to the zero vector, the sphere's centre, so every lane hits and returns t = 10, while the glam_f32x1 baseline uses ray_o = (0, 0, -11) with random directions, so its hit/miss branches depend on the data. The README's claim that glam 'produces the same outputs that the wide versions would' does not hold for this row. Against the scalar table's per-element rate (13.3-13.37 us per 10,000 for every library), ultraviolet_f32x8 at 25.26 us per 80,000 is about 4.2x faster, not 20x (derived from page data).",
+    "The wide unop/binop harness calls std::hint::black_box on every result, so the one-lane glam rows pay 16 barriers per batch of 16 against 2 for the 8-lane rows; this probably inflates the small-op ratios (vector3 normalize, determinant) somewhat.",
+    "The comparison traits (CmpGt and the rest) used by the README's ray-sphere example are not re-exported (open issue #132); you have to depend on wide directly and match its version. HEAD renames blend to select as part of the wide 1.7 migration, which breaks 0.10 code.",
+    "The README and lib.rs docs are stale: they say f64 and integer types are off by default, but Cargo.toml enables int and f64 by default, and the 'projective geometric algebra' features they mention are not implemented (#64, #65). The README's Vec3x8 setup example iterates over empty vectors while pushing to them. No license text files are in the repo (#154); the licence is declared only in Cargo.toml."
+  ],
+  "pick_this_over_siblings_when": "Pick it over glam when your hot loop can process objects in blocks of 4 or 8 and you want ready-made wide vector, matrix and rotor types instead of hand-written intrinsics; nalgebra's wide types are equally fast, so the choice there is API taste. Unlike the C++ SIMD siblings (EVE, VCL, ISPC), it is a Rust-only domain library for 2D/3D math, not a general SIMD wrapper.",
+  "verified_claims_summary": "mathbench-rs wide table (glam's author's shootout, mathbench commit 8e5467c, Rust 1.99.0, RUSTFLAGS=-C target-feature=+avx2, AMD Ryzen 7 3800X, Linux; ultraviolet 0.10.0, glam 0.34.1, nalgebra 0.35.0): ultraviolet_f32x8 ran Euler integration at 80,000 elements about 2.1-2.2x faster than glam's one-lane Vec2/Vec3A loop, matrix4 determinant x16 about 4.2x and vector3 normalize x16 about 4.8x faster, and stayed close to nalgebra_f32x8 (ties on Euler and ray-sphere). The 20x ray-sphere row compares different inputs (see gotchas); the like-for-like per-element rate gives about 4.2x.",
+  "status_note": "Active but slow-moving: 0.10.0 (2025-04-26) is the latest release, HEAD (2026-10-04) carries an unreleased breaking wide 1.7 migration, and the repo moved from termhn to fu5ha; triple-licensed MIT/Apache-2.0/Zlib (declared in Cargo.toml only), widely used (about 1.35M crates.io downloads) and copyable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/fu5ha/ultraviolet/HEAD/README.md",
+    "https://raw.githubusercontent.com/fu5ha/ultraviolet/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/fu5ha/ultraviolet/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/fu5ha/ultraviolet/HEAD/src/lib.rs",
+    "https://github.com/fu5ha/ultraviolet",
+    "https://github.com/fu5ha/ultraviolet/issues",
+    "https://github.com/fu5ha/ultraviolet/issues/132",
+    "https://github.com/fu5ha/ultraviolet/commits",
+    "https://crates.io/api/v1/crates/ultraviolet",
+    "https://crates.io/api/v1/crates/ultraviolet/0.10.0/dependencies",
+    "https://github.com/bitshifter/mathbench-rs/tree/8e5467c/benches",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/README.md",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/ray_sphere_intersect.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/eulerbench.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/matrix4.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/vector3.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/8e5467c/benches/support/macros.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/benches/ray_sphere_intersect.rs",
+    "https://raw.githubusercontent.com/bitshifter/mathbench-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/Lokathor/wide/HEAD/README.md",
+    "https://crates.io/api/v1/crates/wide"
+  ],
+  "confidence": 0.75
+}

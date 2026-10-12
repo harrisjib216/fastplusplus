@@ -1500,5 +1500,90 @@
       "https://github.com/teamchong/vectorjson/blob/main/bench/streaming.ts",
       "https://github.com/teamchong/vectorjson/blob/main/README.md"
     ]
+  },
+  {
+    "id": "https://github.com/stgatilov/utf8lut",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: encode cells are cycles per UTF-16 byte (not per UTF-8 byte as the README says), the table ran SpeedMult = 4 while the library default is 1, the numbers date from 2018, and the LUT singleton has a first-use race; the fast-vs-scalar ratios stand. First-party, C stays with corrections.",
+    "corrections": {
+      "caveats": "The comparison is against the library's own scalar slow path (-b=0, which forces validate mode), not iconv, ICU or another incumbent; the fast-path row uses -m=2 (cmValidate), so both rows validate. The table used FileConverter's SpeedMult = 4 (4-stream decoder, 4x-unrolled encoder) while ProcessorSelector<...>::WithOptions<> and the README usage example default to SpeedMult = 1, so pass SpeedMult = 4 explicitly to get the measured configuration (the multi-stream processor does not support error correction). Normalisation: the core rdtsc timer divides by input bytes, so the encode cells are cycles per UTF-16 byte, not per UTF-8 byte as the README says; for the random set the sizes match, but for the fb2 file (Cyrillic plus ASCII XML markup) the encode and decode cells are not directly comparable, and rdtsc counts TSC reference ticks; both rows share the normalisation, so the fast-vs-scalar ratios stand. Each run converts one ~1 MB array from RAM to RAM repeatedly, so the 2 MiB validating LUT (1 MiB without validation, allocated with _mm_malloc on first use and never freed) stays warm; the README warns it barely fits in cache and that performance depends on the code-point length mix. The numbers date from 2018 (readme.md added 2018-04-09, never re-measured); the 4-stream decoder was changed on 2019-07-27 and reads uninitialised ok1..ok3 flags if stream 0 fails on its first block (UB, normally harmless); the LUT singleton pointer is published before the table is filled (a race on first concurrent use). cmFast and cmFull skip validation, so invalid UTF-8 is undefined behaviour. Compiler only implied (MSVC build of FileConverter). The scalar baseline is a Hoehrmann DFA; the Lemire-Mula paper (snippet only) says u8u16 and utf8sse4 beat utf8lut on European text and it has no ASCII fast path."
+    },
+    "urls_opened": [
+      "https://github.com/stgatilov/utf8lut/blob/master/src/tests/FileConverter.cpp",
+      "https://github.com/stgatilov/utf8lut/blob/master/src/core/ProcessorSelector.h",
+      "https://github.com/stgatilov/utf8lut/blob/master/readme.md"
+    ]
+  },
+  {
+    "id": "https://github.com/swiftwasm/wasmkit",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the only quantified claim (7.4x over the second-generation interpreter, 1.64x over wasmi) divides a 2024-09-17 run by figures copied from an earlier log (PR #115), and rasterising the chart shows WasmKit 0.1.0 at 2172.8 CoreMark iterations/s against wasm3 2180.8 and stitch 2280.9 in the same run, so it beats no external interpreter. Cross-run ratio with no faster-than-incumbent result: C to D.",
+    "corrections": {
+      "claimed_speedup": "Docs: CoreMark score 7.4x higher than WasmKit's own second-generation interpreter; versus wasm3, stitch and wasmi the doc says only 'well competitive'. Values read from the chart SVGs (derived from page data): WasmKit 0.1.0 2172.83 iterations/s, wasm3 2180.79, stitch 2280.91, wasmi 1321.24, so WasmKit trails wasm3 by 0.4% and stitch by 4.7% in the same run. The 0.0.8 bar (291.24) and the wasmi bar (1321.24) are the exact figures of the earlier second-generation log already in PR #115 (merged 2024-08-14), while the 0.1.0 bar comes from a 2024-09-17 snapshot, so the 7.4x and the 1.64x-over-wasmi ratios are cross-run; wasmtime (JIT) in the same old log reached 11527.",
+      "caveats": "The headline 7.4x is against WasmKit's own older stack-based interpreter, not an external incumbent, and is cross-run (0.1.0 measured on 2024-09-17 against 0.0.8 and wasmi figures copied from an earlier log). In the same run WasmKit beats no external interpreter (0.4% behind wasm3, 4.7% behind stitch); the machine, wasmi version and wasm3/stitch builds are not named (bench.py has no stitch entry). The .mprotect bounds-check mode installs process-wide SIGSEGV/SIGBUS handlers and reserves 4 GiB plus a guard tail per wasm32 memory while still running checked loads and stores; the default interpreter stack is 512 KB; fuel metering is translation-time (overhead under 10% per issue #421)."
+    },
+    "urls_opened": [
+      "https://github.com/swiftwasm/WasmKit/blob/main/Benchmarks/README.md",
+      "https://github.com/swiftwasm/WasmKit/pull/115",
+      "https://github.com/swiftwasm/WasmKit/blob/main/Benchmarks/bench.py"
+    ]
+  },
+  {
+    "id": "https://github.com/sycamore-rs/sycamore",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: the suite measures the 0.9.0-beta.2 bundle whose template-cloning renderer was removed in 0.9.0 (View v2) so the numbers describe a dead code path, but the independent suite run reproduces and its App.tsx names the Chrome 154 snapshot hardware (labelled a development snapshot). B stays with corrections.",
+    "corrections": {
+      "hardware": "MacBook Pro 14, Apple M4 (14/20 cores, 48 GB), OSX 26.6.2, Chrome 154.0.8037.98 arm64 (suite App.tsx for the Chrome 154 snapshot, which it labels a 'Development snapshot' that 'may mix browser versions or run counts')",
+      "caveats": "Independent public suite (krausest/js-framework-benchmark) whose App.tsx names the hardware but labels the run a development snapshot; the measured Wasm is a prebuilt bundle checked into the suite (build-prod is a no-op) with the rustc version not stated, so B not A. The measured code path is gone: the suite's sycamore-v0.9.0-beta.2 bundle (prebuilt October 2023) creates rows by cloning cached <template> content (the beta.2 view! macro emits a static Template per element root, instantiated from TEMPLATE_CACHE), while View v2 in 0.9.0 removed that path and the 0.9.4 sources build each element with document.createElement; nobody has published suite numbers for 0.9.x (current release 0.9.4, 2026-10-06). Bugs fixed after the measured beta: keyed/indexed wrong node order (#795, fixed in PR #796, April 2025), dead dependents piling up after disposing memos (PR #831, 0.9.3) and event callbacks firing after drop (#433, fixed by PR #837 in 0.9.4); tracing the beta.2 reconcile_fragments shows the suite's swap, remove, append and replace-all operations avoid the #795 bug, so the numbers stand. Keyed Rust ranking in the snapshot vs React 19.2 hooks (time ratios, derived from page data): wasm-bindgen 0.584, Silkenweb 0.622, dominator 0.681, Leptos 0.684, Dioxus 0.698, Sycamore 0.711, Yew 0.819, ElementaryUI 0.877; 1.296x vanillajs-keyed's time. No event delegation (issue #176 open since 2021): every on:click is its own wasm-bindgen Closure plus addEventListener; create_root leaks its Root struct by design."
+    },
+    "urls_opened": [
+      "https://github.com/krausest/js-framework-benchmark/tree/master/frameworks/keyed/sycamore",
+      "https://github.com/sycamore-rs/sycamore/blob/v0.9.0-beta.2/packages/sycamore-web/src/dom_node_template.rs",
+      "https://github.com/sycamore-rs/sycamore/pull/796",
+      "https://github.com/krausest/js-framework-benchmark/blob/master/webdriver-ts-results/src/App.tsx"
+    ]
+  },
+  {
+    "id": "https://github.com/teimurjan/blazediff",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the pixelmatch baseline column in the wasm table is 1.5-1.9x slower on the large differing fixtures than the same pixelmatch in the repo's separate JS run and swings between the file's own revisions while pixelmatch did not change, so the 10x headline is about 6.1x against a stable baseline; the '~51%' is a mean of per-row percentages (geomean 2.3x) and the project's own plain-JS core is 4-7x faster than the wasm build on identical pairs. Asymmetric and unstable baseline in a first-party harness (TensorFlow DLPerf and LC precedents): A to C.",
+    "corrections": {
+      "claimed_speedup": "README table (Node.js 22, Apple M1 Max, tinybench): '~50.8% faster on average than pixelmatch' (the arithmetic mean of per-row '% time saved' over 34 rows, 17 of them identical pairs; geometric-mean speedup about 2.3x, about 3.0x on differing rows only, derived from page data); 4k/1 332.26 ms vs 33.18 ms (about 10x as printed, about 6.1x against the 201.60 ms the same pixelmatch takes in the repo's separate JS run); 4k/3 423.14 vs 44.65 ms; small blazediff/1 1.24 vs 0.24 ms; identical pairs near parity (4k/2 identical 22.70 vs 22.17 ms). The package README's 'up to ~16x faster than pixelmatch on 4K' exceeds the table's largest ratio (10.0x). The plain-JS @blazediff/core is 4-7x faster than this wasm build on identical pairs.",
+      "caveats": "First-party benchmark measured in Node.js 22 on an Apple M1 Max, not in a browser; whether wasm-opt ran on the measured module is not recorded and the rustc version is not stated. Harness flaw: pixelmatch's time in the wasm table is not stable. In the same tinybench process as core-wasm it ran 1.5-1.9x slower on the big differing fixtures than in the repo's separate pixelmatch run (4k/1 332.26 vs 201.60 ms, 4k/3 423.14 vs 253.77, page/2 513.06 vs 267.84) while small and identical rows agree, and across the file's own history it moved from 287.72 ms (June 2026) to 332.26 ms (July) on 4k/1 and from 317.16 to 152.72 ms on page/1 while pixelmatch itself did not change. The '~51%' headline is a mean of percentages, not a speed ratio. The project's own plain-JS @blazediff/core is 4-7x faster than the wasm build on identical pairs because every wasm call allocates and copies both full RGBA inputs into linear memory (about 143 MB for a 4K-class pair) that never shrinks. Results differ slightly from pixelmatch (counts within about 0.05%); the numbers include the July 2026 PR #91 alpha-parity fix. When the result count is 0 the caller's output buffer is left untouched rather than filled with the grayscale image pixelmatch draws."
+    },
+    "urls_opened": [
+      "https://github.com/teimurjan/blazediff/blob/main/packages/core-wasm/README.md",
+      "https://github.com/teimurjan/blazediff/blob/main/packages/core/README.md",
+      "https://github.com/teimurjan/blazediff/commits/main/packages/core-wasm/README.md",
+      "https://github.com/teimurjan/blazediff/pull/91"
+    ]
+  },
+  {
+    "id": "https://github.com/tensorflow/tfjs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the README tables were assembled from several runs between December 2019 and August 2020 with newer XNNPACK and Emscripten builds per column, the header's 'Chrome 79' cannot cover the SIMD columns (SIMD needed flags or an origin trial then), and the prose ratios were computed from since-replaced rows; first-party, C stays with corrections.",
+    "corrections": {
+      "caveats": "2020-era first-party numbers; CPU models and build flags are not stated. The tables are assembled from several runs: the WASM, WebGL and Plain JS columns date from December 2019 (commit 60a91b8 onward), the WASM+SIMD column was added in June 2020 (5db28e7, 4114cad), threads in August 2020 (f580dfc), and the Pixel 4, ThinkPad and Node rows on 2020-08-26 (b35e9f5), each with newer XNNPACK and Emscripten builds, so the SIMD and threads columns are cross-run against the plain-JS column. The header says all runs were Chrome 79, but WebAssembly SIMD then needed chrome://flags or an origin trial (issue #3896; SIMD shipped by default in Chrome 91), and the README does not say how the SIMD columns were run. The prose 3X-11.5X and 5.3-7.7X ranges were computed from since-replaced 2019 rows and do not match all current rows (Pixel 4 2.4x, ThinkPad 2.7x slower than WebGL, derived from page data). The baseline is the project's own plain-JS CPU backend, a reference backend rather than a tuned JS implementation; the WebGL backend beats WASM on MobileNet V2 on every listed device. The speed comes from XNNPACK kernels compiled with Emscripten; the 2023 XNNPACK upgrade was reverted (#7735), so pin 5e8033a7. The code's default thread count is emscripten_num_logical_cores()/2 capped at 8, not the number of logical cores as the README says; no threads in Node. If the SIMD binary fails to load the backend silently runs the much slower non-SIMD build (issue #7739)."
+    },
+    "urls_opened": [
+      "https://github.com/tensorflow/tfjs/commits/master/tfjs-backend-wasm/README.md",
+      "https://github.com/tensorflow/tfjs/issues/3896",
+      "https://github.com/tensorflow/tfjs/blob/master/tfjs-backend-wasm/src/cc/backend.cc",
+      "https://github.com/tensorflow/tfjs/pull/7735"
+    ]
+  },
+  {
+    "id": "https://github.com/termhn/ultraviolet",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: the ~20x ray-sphere row in mathbench-rs compares different inputs (the wide kernels use ray_o = zero so every lane hits, while the glam_f32x1 baseline uses ray_o = (0, 0, -11) with random directions), so that row is struck and the like-for-like rate is about 4.2x; the other rows share inputs and the public harness, flags and CPU remain, so A stays with the claim corrected.",
+    "corrections": {
+      "claimed_speedup": "mathbench wide table, Ryzen 7 3800X, RUSTFLAGS -C target-feature=+avx2: ultraviolet_f32x8 vs glam_f32x1: euler 2d x80000 18.94 us vs 41.87 us (about 2.2x), euler 3d x80000 28.54 us vs 58.97 us (about 2.1x), matrix4 determinant x16 14.6545 ns vs 62.0342 ns (about 4.2x), vector3 normalize x16 7.3365 ns vs 35.2002 ns (about 4.8x), all ratios derived from page data; nalgebra_f32x8 is equal or within noise. The ray-sphere intersection x80000 row (25.26 us vs 497.6 us, about 20x) is struck: in benches/ray_sphere_intersect.rs (commit 8e5467c and still at HEAD) the wide ultraviolet and nalgebra kernels set ray_o to the zero vector (the sphere centre) so every lane hits and returns t = 10, while the glam_f32x1 baseline uses ray_o = (0, 0, -11) with random directions, so its hit/miss branches depend on the data; comparing per-element rates across the harness's own tables (scalar 13.37 us per 10,000 vs wide 25.26 us per 80,000) gives about 4.2x (derived from page data). Not faster everywhere: glam_f32x1 wins matrix4 transpose x16 and ties matrix4 mul matrix4 x16; ultraviolet_f32x4 is slower than glam on matrix2 and matrix3 transpose x16; gains shrink to ties at x256 sizes.",
+      "caveats": "The comparison is against glam's one-lane scalar type doing the same amount of work, so the ratios mostly measure SoA batching, not a better library; nalgebra's f32x8 types match ultraviolet. Harness flaw: the ray-sphere row compares different inputs (wide kernels all-hit at the sphere centre, glam baseline random directions), so the README's statement that glam 'produces the same outputs' is false for that row. The wide unop/binop harness calls std::hint::black_box on every result, so the one-lane glam rows pay 16 barriers per batch of 16 against 2 for the 8-lane rows, which probably inflates the small-op ratios (vector3 normalize, determinant). In mathbench's scalar table ultraviolet wins outright only the matrix2 and matrix3 transpose rows. The comparison traits (CmpGt and the rest) used by the README's ray-sphere example are not re-exported (open issue #132); HEAD renames blend to select (wide 1.7 migration); AVX2 width is chosen at build time. The README and lib.rs docs are stale (int and f64 features are on by default; the projective geometric algebra features are not implemented, #64/#65); no license text files are in the repo (#154)."
+    },
+    "urls_opened": [
+      "https://github.com/bitshifter/mathbench-rs/blob/master/benches/ray_sphere_intersect.rs",
+      "https://github.com/bitshifter/mathbench-rs/blob/master/README.md",
+      "https://github.com/fu5ha/ultraviolet/issues/132"
+    ]
   }
 ]
