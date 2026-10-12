@@ -1,0 +1,94 @@
+[
+  {
+    "id": "https://github.com/jviney/bilinear_filter_simd",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Public Google Benchmark driver (src/main.cpp, which also checks every SIMD output for equality against the scalar 'No SIMD' result) with CMake flags (Release, -march=native) and the CPU model (Xeon Platinum 8124M on a c5.4xlarge, Core i7-8700) printed, but the compiler used for the runs is never stated (README only lists 'GCC >= 8' as a dependency), and the 2020 numbers predate a 2023 'Fix out of bounds access' commit and a 2021 'Fix potential crash caused by incorrect alignment' commit, so the later-fixed-bug rule caps it at C.",
+    "corrections": {
+      "claimed_speedup": "Readme.md (2020-08-09, Xeon Platinum 8124M, c5.4xlarge EC2): single thread No SIMD 13.3 ms, SSE4 10.7 ms, AVX2 8.14 ms, AVX512 7.33 ms (1.24x, 1.63x, 1.81x, derived from page data); multi-thread No SIMD 1.25 ms vs AVX512 0.822 ms (1.52x, derived). Core i7-8700 (no AVX-512) single thread: No SIMD 7.64 ms, SSE4 5.26 ms, AVX2 4.26 ms (1.79x derived). Benchmarks.md 2020-08-11 run (same 16-thread machine, CPU line not printed): single thread No SIMD 13.3 ms vs AVX512 5.87 ms (2.27x derived), multi-thread 1.23 ms vs 0.743 ms (1.66x derived).",
+      "compiler_and_flags": "CMakeLists.txt: CMAKE_BUILD_TYPE defaults to Release (CMake's GCC default -O3 -DNDEBUG), -march=native, -Wall -Wextra -Wpedantic, C++17. README lists GCC >= 8 as a dependency; the compiler and version used for the 2020 runs are not stated. The ubuntu:23.04 Dockerfile was added in July 2023, after the benchmarks.",
+      "hardware": "Intel Xeon Platinum 8124M @ 3.00 GHz (AWS c5.4xlarge, 16 vCPUs) and Intel Core i7-8700 @ 3.20 GHz (12 threads)",
+      "caveats": "No licence file in the repo, so the code is reference only. A demo project; benchmarks are from August 2020 and predate correctness fixes (2021 'Fix potential crash caused by incorrect alignment', 2023 'Fix out of bounds access' and 'Don't assume image data is tightly packed'). The only baseline is the author's own scalar code built with -march=native (auto-vectorisation possible); the repo links OpenCV but never times cv::resize, the obvious incumbent. SIMD gains are modest: 1.2x to 2.3x single-thread and 1.5x to 1.7x multi-threaded, where scalar multi-thread is already 10x faster than scalar single-thread. Outputs are checked for equality against the scalar result before benchmarking."
+    },
+    "notes": "Numbers match Readme.md and Benchmarks.md exactly. Shortcomings: no licence (reference only), demo repo abandoned since 2023-07-08, own-scalar baseline only (no OpenCV cv::resize timing), compiler for the runs unstated, 2020 numbers predate the 2021 alignment fix and the 2023 out-of-bounds fix.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Readme.md",
+      "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Benchmarks.md",
+      "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Dockerfile",
+      "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/master/src/main.cpp",
+      "https://github.com/jviney/bilinear_filter_simd",
+      "https://github.com/jviney/bilinear_filter_simd/commits",
+      "https://github.com/jviney/bilinear_filter_simd/tree/master/src"
+    ]
+  },
+  {
+    "id": "https://github.com/daskol/fast-bernoulli",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party Google Benchmark table in the README from public code (fast-bernoulli/cc/benchmark/sampler_bench.cc, src/sampler_bench.cc at the time of the run), but compiler, version and CPU model are not stated (only '4 X 3400 MHz' and cache sizes), so C. Tier unchanged; verdict is downgrade because the headline 1000x/1300x is overstated about 16x by unequal work per iteration.",
+    "corrections": {
+      "claimed_speedup": "README Google Benchmark table (parameter 128, p = 0.6): BM_StdSampler 72,260,140 ns, BM_GenericSampler 104,076 ns, BM_AvxSampler 71,017 ns, BM_JitAvxSampler 55,667 ns. The raw time ratios (1017x AVX, 1298x JIT AVX) compare unequal work: BM_StdSampler allocates and fills 16 * 128 * 32 bytes = 524,288 bits per iteration while the other samplers produce 128 blocks of 256 bits = 32,768 bits. Per output bit: Std about 138 ns, AVX about 2.17 ns, JIT AVX about 1.70 ns, i.e. about 64x (AVX), 81x (JIT AVX) and 43x (generic, no SIMD) faster than std::bernoulli_distribution (derived from page data and sampler_bench.cc). The throughput column is bytes/s in both rows (55.4 KiB/s vs 55.0 MiB/s), computed from the same 4096 bytes per iteration, so it repeats the 16x error.",
+      "baseline": "std::bernoulli_distribution<> drawing from std::mt19937_64, one draw per output bit packed into bytes (TStdSampler in fast-bernoulli/cc/sampler.cc)",
+      "workload": "Google Benchmark BM_*Sampler/128 at p = 0.6 (tolerance 1e-3 for the fast samplers): fast samplers fill NoSrcBlocks x 128 blocks with mt19937_64 output and combine them with and/not into 128 blocks of 256 Bernoulli bits; the Std sampler fills 16x as many bits (524,288) one std::bernoulli_distribution draw per bit.",
+      "compiler_and_flags": "README build: CMake -DCMAKE_BUILD_TYPE=Release, C++17, library objects compiled with -mavx -mavx2, optional LLVM 8/9 JIT; compiler and version not stated",
+      "caveats": "The benchmark gives BM_StdSampler 16x more bits per iteration than the fast samplers (size = 16 * noblocks * GetBufferSize()), so the README's raw ~1000x time gap is about 64x per bit (43x for the non-SIMD generic sampler, so most of the win is the algorithm's fewer RNG draws per bit, not AVX). The fast samplers are approximate: the probability is quantised to within the 1e-3 tolerance. The Std baseline ORs bits into a buffer that is never cleared (*it |= ...), so its output is wrong after the first call (timing barely affected). BM_JitGenericSampler calls the non-JIT BM_Sampler, so that row is not JIT (its time matches the generic row). In the current tree the JIT benchmarks sit under a misspelled #ifdef USE_JIT_EXCUTOR while CMake defines USE_JIT_EXECUTOR, so HEAD cannot reproduce the JIT rows; the README table came from the October 2019 src/ layout, which had the same 16x factor. Compiler and CPU model are missing; about 138 ns per std::bernoulli_distribution draw is slow for an optimised build."
+    },
+    "notes": "Downgrade of the claim, not the tier: sampler_bench.cc makes the std baseline do 16x the work, so the real per-bit gain is about 64x (AVX) and 81x (JIT AVX), not 1000-1300x. Other shortcomings: approximate sampler (1e-3 tolerance), std baseline output buffer never cleared, mislabelled JitGeneric row, misspelled USE_JIT_EXCUTOR guard at HEAD, compiler and CPU model unstated, abandoned since 2019-10-28.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/HEAD/README.md",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/benchmark/sampler_bench.cc",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/benchmark/executor_bench.cc",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/benchmark/CMakeLists.txt",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/CMakeLists.txt",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/sampler.cc",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/master/fast-bernoulli/cc/sampler.h",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/2f35bf5/src/sampler_bench.cc",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/2f35bf5/src/CMakeLists.txt",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/2f35bf5/src/sampler.cc",
+      "https://raw.githubusercontent.com/daskol/fast-bernoulli/2f35bf5/README.md",
+      "https://github.com/daskol/fast-bernoulli",
+      "https://github.com/daskol/fast-bernoulli/commits",
+      "https://github.com/daskol/fast-bernoulli/tree/master/fast-bernoulli",
+      "https://github.com/daskol/fast-bernoulli/tree/master/fast-bernoulli/cc",
+      "https://github.com/daskol/fast-bernoulli/tree/master/fast-bernoulli/cc/benchmark",
+      "https://github.com/daskol/fast-bernoulli/commits/master/fast-bernoulli/cc/benchmark/sampler_bench.cc",
+      "https://github.com/daskol/fast-bernoulli/commits/master/README.md",
+      "https://github.com/daskol/fast-bernoulli/tree/2f35bf5"
+    ]
+  },
+  {
+    "id": "https://github.com/mattral/simd-microkernels-for-ml-workloads",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Public benchmark code (src/main_bench.cpp, src/bench_stat.cpp) with compiler and flags stated in docs/BENCHMARKS.md (GCC-12, -O3 -march=native -mfma -ffast-math), but the CPU is a virtualised CI runner whose model 'varies by runner', so not A; first-party only, so C. Verdict downgrade because the README's GeLU 6-10x is a projection, not a measurement.",
+    "corrections": {
+      "claimed_speedup": "README table (approximate, 'this environment', no backing table): packed SGEMM vs a plain triple-loop scalar reference about 0.7x at 64x64 (slower), about 10x at 128, about 26x at 256; vs single-thread OpenBLAS about 4%, 29%, 55%, 59% of its speed at 64-512. docs/BENCHMARKS.md CI run (main_bench, avx_matmul kernel vs scalar): 0.069 vs 0.017 ms at 64 (4.1x), 1.114 vs 0.162 ms at 128 (6.9x), 20.88 vs 2.006 ms at 256 (10.4x) (derived from page data); OpenBLAS table 6.4 vs 165.0 GFLOPS at 64 up to 73.8 vs 124.0 at 1024. GeLU: the README's 6-10x is the author's expected speedup on platforms without SVML; the measured CI run shows AVX2 tanh GeLU and the erff reference within 2% of each other (1,908,062 vs 1,939,830 cycles at n = 1M).",
+      "compiler_and_flags": "docs/BENCHMARKS.md: GCC-12, -O3 -march=native -mfma -ffast-math -DNDEBUG, Ubuntu 22.04 (CMakeLists.txt PERF_FLAGS); README states both kernel and scalar reference built with -O3 -ffast-math",
+      "caveats": "Slower than OpenBLAS at every size (4% to 60% of its single-thread throughput) and, per the README, slower than the scalar loop at 64x64. The baseline is a textbook i-j-p triple loop that walks B with stride N (naive_gemm.hpp), whose throughput falls from 7.6 to 1.6 GFLOPS between 64 and 256, so the 10x-26x figures are against a straw-man scalar loop. The README speedups are rounded figures not traceable to any committed table; docs/BENCHMARKS.md shows 4x-10x for the avx_matmul path, and the bench_stat harness that times the packed kernel has no scalar row. The GeLU 6-10x is an expectation for non-SVML platforms; measured, the AVX2 tanh approximation equals glibc's SVML-vectorised erff (1.02x), and the two compute different formulas. The main_bench 'GElems/s' column is a FLOP proxy (15 ops per element), about 15x the true element rate. Numbers come from noisy shared CI VMs with no CPU model, and OpenBLAS's 165 GFLOPS at N=64 exceeds the stated 2.1 GHz peak, so the utilisation percentages are unreliable. The Zenodo preprint was not opened (zenodo blocked)."
+    },
+    "notes": "Real but weak entry: it beats only a cache-unfriendly naive scalar loop and loses to OpenBLAS everywhere. GeLU 6-10x is projected, not measured (measured 1.02x vs the erff reference), and the README GEMM ratios do not match docs/BENCHMARKS.md (4.1x/6.9x/10.4x). CI VM with no CPU model; Apache-2.0, active (last commit 2026-08-10), 15 stars.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/README.md",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/docs/BENCHMARKS.md",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/kernels/gemm/naive_gemm.hpp",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/main_bench.cpp",
+      "https://raw.githubusercontent.com/Mattral/SIMD-Microkernels-for-ML-Workloads/HEAD/src/bench_stat.cpp",
+      "https://github.com/Mattral/SIMD-Microkernels-for-ML-Workloads",
+      "https://github.com/Mattral/SIMD-Microkernels-for-ML-Workloads/commits"
+    ]
+  }
+]
