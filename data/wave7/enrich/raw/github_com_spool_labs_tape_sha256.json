@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/spool-labs/tape-sha256",
+  "one_liner": "Pure-Rust multi-buffer SHA-256 for batches and hash chains; 2-3.5x the serial sha2 crate on x86 batch hashing.",
+  "what_it_does": "Hashes many independent messages per call (hash_many, hash_many_prefixed for a shared domain prefix, hash_pairs for Merkle parents of prefix||left||right) and advances iterated 32-byte hash chains (hash_chain for one chain, hash_chains for many, as in Solana proof-of-history replay). The API takes slices of messages and an output slice of [u8; 32] digests; there is no Digest trait, no incremental update and no single-message streaming API, so it is not a drop-in for sha2 or OpenSSL. Backend selection is automatic at runtime, with backend(), lane_width() and chain_backend() to report which kernel ran.",
+  "how_it_is_fast": "Multi-buffer SIMD: messages are transposed so each SIMD lane runs one message's SHA-256 compression in lockstep (8 lanes AVX2, 16 lanes AVX-512, 4 lanes NEON or wasm simd128); on Zen 5 the avx512-2x16 kernel interleaves two 16-lane compressions so one fills the other's dependency stalls. Where hardware SHA units exist (x86 SHA-NI, ARMv8 SHA2) it instead keeps four independent hardware streams in flight (shani-x4, neon-sha2-x4) to hide sha256rnds2 latency. Per-family dispatch picks the kernel by measurement (Zen 5 interlace, Zen 4 and Zen 3 SHA-NI x4, Intel single-wave AVX-512), prefixes are read in place rather than copied, and a batch remainder of 1-12 messages is routed to SHA-NI instead of a mostly empty 16-lane group.",
+  "when_to_use": [
+    "Merkle leaf levels in Rust where dozens of similar-length messages (about 1 KiB Solana shreds, 4 KiB blob slices) are hashed at once: 64 leaves took 7.82 us vs 27.71 us for sha2 on Zen 5, about 2.1x on Zen 4/Zen 3 and Intel Xeon.",
+    "Domain-separated leaves (prefix || body) where avoiding the concatenation copy matters; hash_many_prefixed reads prefix and body from separate slices.",
+    "Verifying or replaying many independent hash chains (proof-of-history entries): 32 chains reached 7.3 ns/link vs 45.4 ns for sha2 on Zen 5.",
+    "Pure-Rust builds that cannot link C batch hashers (Firedancer fd_sha256, isa-l_crypto) but want comparable or better throughput on AMD, and an aarch64 batch path (neon-sha2-x4) that Firedancer lacks.",
+    "Throughput-oriented services that can split a batch across the two idle SMT siblings of one core (1.15-1.48x measured; caller pins the threads)."
+  ],
+  "when_not_to_use": [
+    "One large message or streaming input: no incremental API and a single message gets no multi-buffer speedup; use sha2, rscrypto or OpenSSL.",
+    "Few messages per call or widely mixed lengths: lanes idle until the longest message in a group finishes and the driver does not sort by length, while the benchmark workload was chosen so all 64 messages have the same block count.",
+    "Intel Emerald Rapids / Granite Rapids when Firedancer's batch hasher is already available: Firedancer was 2-12% faster in wall time there.",
+    "Browser WebAssembly with batched messages of about 1 KiB: the project's own measurements show WebCrypto slightly faster than the simd128 backend.",
+    "Where a mature, audited hash implementation is required: pre-1.0, first commit 2026-07-26, 13 commits, 1 GitHub star, every SIMD backend is unsafe code, and no fuzzing, miri or sanitizer runs are documented."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none (sha2, rand and ed25519-dalek are dev-dependencies only; Firedancer and isa-l_crypto are linked only under benchmark features)",
+    "min_toolchain": "Rust 1.89 (rust-version), edition 2021, stable",
+    "platforms": "x86-64 with runtime dispatch over AVX-512F+BW, SHA-NI and AVX2; aarch64 with ARMv8 SHA2 extensions or NEON; wasm32 with simd128 (selected at build time, -C target-feature=+simd128); portable scalar fallback elsewhere",
+    "thread_safety": "Entry points are stateless and may be called concurrently on disjoint inputs and outputs; the kernel choice is resolved once and cached in a OnceLock. The crate never spawns or pins threads.",
+    "drop_in_for_baseline": "partial — produces bit-identical SHA-256 digests, but replaces per-message Sha256::new/update/finalize with batch calls over slices; no Digest trait or streaming interface"
+  },
+  "gotchas": [
+    "The scalar, avx2, avx512 and neon Cargo features pin a kernel at build time and fault on CPUs lacking it; -C target-cpu=native made the Zen 5 interlaced kernel 8-14% slower, so re-benchmark before adding it.",
+    "Output slices must have exactly one digest per message or the call panics; a batch is processed in input order in groups of the lane width, so mixed lengths waste lanes until the longest message in each group finishes.",
+    "Harness gap: BENCHMARKS.md says every reference entry point is checked against sha2 before timing, but in benches/merkle_leaves.rs and benches/blob_group.rs only the isa-l_crypto rows are gated; the Firedancer rows are timed without a digest check (a wiring error there would affect the Firedancer comparison, not tape's own numbers, which tests/differential.rs checks against sha2).",
+    "Headline numbers are best-case: best of 15 rounds of 50 iterations over the same cache-resident 67,680-byte batch, and the Zen 5 7.82 us is the best of three pinned invocations (7.82, 8.30, 8.34 us); the Zen 5 machine is unidentified, and the dispatch comment in src/lib.rs cites 12.7 us for the same kernel on an EPYC 9B45. AVX-512 kernels are not guaranteed to run in CI (GitHub-hosted ubuntu and macOS runners only)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Firedancer fd_sha256 batch or Intel ISA-L Crypto when you are in Rust and want no C build, need aarch64 or wasm, hash prefixed leaves without copying, or run on AMD (it measured 60% faster than Firedancer and 39% faster than isa-l_crypto on Zen 5); keep Firedancer on Intel Xeon where it led by 2-12%. Pick hashtree instead for fixed 64-byte Merkle pair hashing from C, and rscrypto or sha2 for single-message or streaming SHA-256.",
+  "verified_claims_summary": "First-party cargo bench merkle_leaves: 64 Solana-style leaves (26-byte prefix plus 1019 or 1044 bytes, 67,680 bytes per batch) on one pinned core, best of 15x50 iterations; the dispatched kernel beat serial sha2 0.10.9 (which uses SHA-NI on x86) by 3.5x on an unidentified Zen 5 (7.82 vs 27.71 us), 2.1x on EPYC 9B14 and 7B13, and 2.0-2.1x on Xeon 8581C and 6985P-C. The Apple 6.8x is against sha2's software path, because sha2 0.10.9 only uses ARMv8 SHA2 on aarch64 with its asm feature (confirmed in its src/sha256.rs); against hardware sha2 the Apple chain gain is about 1.9x (14.5 vs 27.7 ns/link). rustc version and RUSTFLAGS were not recorded.",
+  "status_note": "Active but very young (13 commits from 2026-07-26 to 2026-08-11, crate 0.2.1 with 470 downloads, no issues filed), Apache-2.0 pure Rust with no dependencies and copyable; the code lives at github.com/spool-labs/sha256 because the crate's repository link 404s, SECURITY.md still names 0.1.x as the supported line, and the benchmark harness times Firedancer rows without the sha2 check its documentation claims.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/README.md",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/spool-labs/sha256/HEAD/benches/wasm/README.md",
+    "https://static.crates.io/crates/tape-sha256/tape-sha256-0.2.1.crate (src/lib.rs, src/batch.rs, benches/merkle_leaves.rs, benches/poh_chain.rs, benches/blob_group.rs, tests/differential.rs, build.rs, SECURITY.md, .github/workflows/ci.yml, .cargo_vcs_info.json)",
+    "https://static.crates.io/crates/sha2/sha2-0.10.9.crate (src/sha256.rs backend selection)",
+    "https://crates.io/api/v1/crates/tape-sha256",
+    "https://github.com/spool-labs/sha256",
+    "https://github.com/spool-labs/sha256/issues?q=is%3Aissue",
+    "https://github.com/spool-labs/sha256/commits"
+  ],
+  "confidence": 0.72
+}
