@@ -1,0 +1,64 @@
+[
+  {
+    "id": "https://github.com/eneskemalergin/zipir",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Public harness (tools/bench.sh with Zebrac matched rounds, tools/install.sh peer builds, bench/report.py) times zipir against zlib-ng 2.3.3, ISA-L igzip 2.32.1 and htslib 1.24 bgzip with libdeflate 1.26 or zlib-ng; compiler (Zig 0.16.0, GCC 16.2.1), flags (zipir ReleaseFast -Dcpu=native; zlib-ng CMake Release with WITH_NATIVE_INSTRUCTIONS, C adapters cc -O3 -DNDEBUG -march=native) and CPU (Ryzen 9 3950X) are all stated. The decompression rows (committed ff8e9e8, same batches as the peers) carry the A; the compression rows are weaker (uncommitted working tree, spliced runs).",
+    "corrections": {
+      "claimed_speedup": "Whole-command single-threaded times on one Ryzen 9 3950X, geometric means over files (peer time / zipir time). Decompression: on zlib and raw DEFLATE zipir is the fastest of the timed streaming tools, zlib-ng takes 1.24x its time (zlib 1.17-1.27x, raw 1.18-1.28x); only zlib-ng and the Zig std library were timed on those formats, libdeflate and ISA-L were not. gzip decompression is level with ISA-L igzip (1.01x, per file 0.81-1.25x) and zlib-ng takes 1.10-1.26x. BGZF decompression: bgzip + libdeflate is 1.07x faster than zipir, bgzip + zlib-ng takes 1.06-1.24x. Compression against zlib-ng at the same nominal level (zlib and raw DEFLATE): level 1 1.35x with 34% larger zlib-ng output, level 5 1.08x (0.93-1.23x) with 2% larger output, level 9 2.01x (1.20-3.87x) with 2% larger output. Losses: ISA-L igzip is faster on gzip compression in all three lanes (0.83x, 0.28x and 0.13x of zipir's time) with 15-22% larger output; bgzip + libdeflate is 1.04x and 1.02x faster at no larger output on BGZF compression levels 1 and 5. Presets table: zipir fast 332.8 MB/s at ratio 3.183 against zlib-ng level 2 at 148 MB/s and ratio 3.257 and ISA-L igzip level 2 at 371 MB/s and ratio 3.205, so ISA-L is about 1.1x faster than zipir fast at a matched ratio (derived from page data). Peak RSS: zipir 0.55-0.62 MiB, the C tools 1.6-5.0 MiB.",
+      "compiler_and_flags": "zipir 0.1.2 (compression rows commit 5f25547 with uncommitted changes, decompression rows commit ff8e9e8) through Zig adapters built with Zig 0.16.0 -Doptimize=ReleaseFast -Dstrip=true -Dcpu=native, single-threaded. Peers built by tools/install.sh with GCC 16.2.1: zlib-ng 2.3.3 static via CMake CMAKE_BUILD_TYPE=Release with WITH_NATIVE_INSTRUCTIONS=ON (minigzip CLI for gzip; a C adapter over the native API compiled cc -O3 -DNDEBUG -march=native for zlib and raw DEFLATE); ISA-L igzip 2.32.1 static, CMAKE_C_FLAGS_RELEASE -O3 -DNDEBUG -march=native with nasm; libdeflate 1.26 static at -O3 -DNDEBUG -march=native; htslib 1.24 bgzip -@1 with htslib's default compiler flags, linked statically to libdeflate or to zlib-ng in compat mode.",
+      "hardware": "AMD Ryzen 9 3950X (Zen 2, AVX2, no AVX-512), Linux 7.2.7-200.fc44 (Fedora 44), schedutil governor, every batch pinned to CPU 4, machine in normal use (1-minute load average 1.1-6.6), one host, measured 2026-09-27.",
+      "workload": "Single-threaded whole-command compression at each tool's fast, balanced and dense level (zipir 1/5/9, zlib-ng 1/5/9, ISA-L igzip 0/1/2, bgzip 1/5/9) and decompression of gzip, zlib, raw DEFLATE and BGZF: FASTQ (57.2 MB and 20.2 MB), PRIDE XML (48.0 MB), mzIdentML (1.2 MB) and Canterbury tar (2.8 MB); BGZF compression uses a BAM (76.2 MB) and a VCF (11.5 MB) in place of the FASTQ files; decompression adds Silesia tar (211.9 MB). 3 warmups and 25 interleaved rounds per batch, medians; output size reported beside compression speed; process start-up and file I/O included.",
+      "caveats": "First-party report, one host, machine in normal use (matched interleaved rounds pinned to one CPU keep ratios fair). Compression rows were timed in zipir-only runs at commit 5f25547 with uncommitted changes and spliced against peer rows from a different run (zipir ff8e9e8); a later control batch agreed within -2.1% to -0.7%. The report predates release 0.2.1; the author says the release code decompresses faster and compresses a few percent slower on the small files. Times are whole processes including start-up and file I/O, not library cores. Rankings cover streaming tools only: libdeflate's full-buffer decoders, GNU gzip, host zlib, pigz and Rust flate2 passed qualification but were not timed, and libdeflate beats zipir on BGZF decompression. Nominal levels differ in effort (zlib-ng level 1 is its quick strategy with 34-41% larger output), so the level-1 compression win is not like-for-like; ISA-L igzip beats zipir on gzip compression. Decoder fix b16996a (2026-09-30, stored-block and slow-path output-full handling in src/engine/decode.zig) postdates the measurement; the benchmarked outputs were verified against reference decoders and the fast path only had its 289-byte margin turned into a named constant. A Zig library against different C implementations, not a language-level claim. 0 stars, very new repository.",
+      "same_opt_level": true,
+      "why_faster": "Not stated in the report or README. The win is zipir's own DEFLATE decoder and encoder implementation, not Zig codegen; the README names run-time-selected PCLMUL CRC-32 and AVX2 Adler-32 kernels, which zlib-ng also has. Lower memory comes from one fixed workspace per stream and no libc runtime."
+    },
+    "notes": "Numbers in the record match the report's summary table. Main shortcomings: compression rows from an uncommitted working tree timed in separate runs from the peers, rankings limited to streaming tools (libdeflate full-buffer not timed; libdeflate wins BGZF decode; ISA-L wins gzip compression and ties gzip decode), level-1 compression win comes with 34% larger zlib-ng output, single first-party host, 0 stars. Flags are matched (ReleaseFast -Dcpu=native against -O3/Release -march=native), so same_opt_level is true; same_algorithm stays false.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/bench/linux-x86-avx2/README.md",
+      "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/README.md",
+      "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/README.md",
+      "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/install.sh",
+      "https://raw.githubusercontent.com/eneskemalergin/zipir/HEAD/tools/bench.sh",
+      "https://github.com/eneskemalergin/zipir",
+      "https://github.com/eneskemalergin/zipir/commits/main",
+      "https://github.com/eneskemalergin/zipir/commit/5f25547",
+      "https://github.com/eneskemalergin/zipir/commit/ff8e9e8",
+      "https://github.com/eneskemalergin/zipir/commit/b16996a",
+      "https://github.com/eneskemalergin/zipir/commit/b16996a.diff"
+    ]
+  },
+  {
+    "id": "https://github.com/manishrjain/zroar",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Public benchmark code (bench/bench.zig, a line-for-line port of CRoaring's bench.cpp and synthetic_bench.cpp roaring64 rows, run by bench/run_all.sh; CRoaring v5.0.0 pinned in bench/fetch_croaring.sh), compiler (Zig 0.16.0), flags (ReleaseFast for zroar; CRoaring's C flags fixed by the public build.zig) and CPU (Ryzen 9 5950X at a fixed 4.00 GHz, pinned) are all stated. The CRoaring side is built at Zig's -O2 for C rather than CRoaring's CMake -O3, a release level and not a crippled build, so the tier stays A with the mismatch documented.",
+    "corrections": {
+      "claimed_speedup": "README and BENCHMARKS.md (generated 2026-08-20; CRoaring time / zroar time, geometric means): realdata with bitmaps in memory 2.20x (36 cells, zroar faster in 31; SuccessiveUnion64 0.90-1.04x and ToArray64 0.86-1.25x near parity, IterateAll64 6.50-19.11x and ComputeCardinality64 12.21-13.41x); cold open 6.92x vs portable and 3.44x vs frozen (40 cells); synthetic operations 2.18x (132 cells); Serialize plus Deserialize 615x vs portable and 259x vs frozen (56 cells; zroar's deserialize is a pointer cast); all synthetic families 8.92x. Faster in 339 of 360 cells counting the portable and frozen columns separately. By total time per data set 1.46-6.81x warm and 1.84-5.69x cold (BENCHMARKS.md; README rounds to 1.5x-6.8x and 1.8x-5.7x). README: cardinality 4.8x geomean, up to about 290x on cold opens. Losses: InsertRemoveRandom 0.60x typical (0.33-0.40x on the key-index masks, CRoaring about 3x faster) and synthetic Insert by total time 0.89x (CRoaring faster), although its typical row is 2.21x.",
+      "compiler_and_flags": "Zig 0.16.0; bench/run_all.sh runs zig build bench-exe, which defaults the bench to ReleaseFast, with the default native target. CRoaring 5.0.0 (tag v5.0.0 pinned by bench/fetch_croaring.sh) is compiled inside the same zig build through addCSourceFiles: Zig passes -O2 -DNDEBUG (not -O3) to C sources in ReleaseFast (checked in Zig 0.15.1 src/Compilation.zig; the 0.16.0 tag is not on the GitHub mirror), plus -DCROARING_COMPILER_SUPPORTS_AVX512=0 from build.zig's croaringFlags on CPUs without AVX-512 such as the 5950X. CRoaring's own CMake Release build would use -O3. Both sides allocate through libc malloc (std.heap.c_allocator in bench/bench.zig).",
+      "hardware": "AMD Ryzen 9 5950X, performance governor, boost on with frequency range fixed at 4.00-4.00 GHz, SMT on, benchmark process pinned to CPU 6 (BENCHMARKS.md)",
+      "caveats": "Author benchmark of the author's own library on one host. CRoaring is compiled by Zig's C toolchain at -O2 instead of its CMake -O3 Release build (same_opt_level false; not a debug build). Only CRoaring's 64-bit roaring64 (ART index) is compared. zroar has no run containers and the data sets designed to showcase them were excluded. Cold-open and Deserialize rows set zroar's pointer cast plus version check (buffers are trusted input with no integrity check) against CRoaring's bounds-checked roaring64_bitmap_portable_deserialize_safe or frozen_view, so the 615x and 8.92x figures reflect that design difference. Most of the gain comes from the data layout (one flat buffer with offsets instead of an ART plus per-container heap allocations), not from Zig codegen. CRoaring wins random interleaved insert/remove by about 3x and synthetic Insert by total time. 27 commits, created August 2026, 17 stars; the 'Optimize Iteration' commit (2026-08-21) postdates the BENCHMARKS.md run.",
+      "same_opt_level": false,
+      "why_faster": "README 'Why Is It Faster': one contiguous buffer used in place, a binary search over sorted (high48, offset) pairs plus an offset add, containers packed together for the prefetcher, and no per-container allocations, versus CRoaring reaching a container through a chain of five to six dependent loads (ART walk, containers array, header, payload) with each container separately on the heap; open is a pointer cast instead of a parse. Hot paths use explicit SIMD through Zig vectors. Both sides use libc malloc, so the allocator is not the difference; the win is the data structure, not the language."
+    },
+    "notes": "Numbers in the record match README and BENCHMARKS.md. Correct same_opt_level to false: Zig ReleaseFast builds CRoaring's C at -O2 while zroar's Zig code gets -O3-equivalent optimisation; not crippled, so no tier cap. Shortcomings to record: first-party single host, roaring64 only, run-container data sets excluded, cold-open and deserialize rows compare an unchecked pointer cast with a validating parse, CRoaring faster on random interleaved insert/remove and synthetic Insert total time.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/README.md",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/BENCHMARKS.md",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/build.zig",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/fetch_croaring.sh",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/run_all.sh",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/bench.zig",
+      "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/roaring64.zig",
+      "https://github.com/manishrjain/zroar",
+      "https://github.com/manishrjain/zroar/commits/main",
+      "https://raw.githubusercontent.com/ziglang/zig/0.15.1/src/Compilation.zig"
+    ]
+  }
+]
