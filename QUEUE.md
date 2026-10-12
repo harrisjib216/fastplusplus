@@ -1,9 +1,9 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-07)
+## Unfinished work (resume here first; updated 2026-10-13)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
-extension passes further down. Waves 1-12 are closed (see CLAUDE.md Status). The backlog seed sweep of
+extension passes further down. Waves 1-14 are closed (see CLAUDE.md Status); extensions 2-4 below are done. The backlog seed sweep of
 2026-10-07 seeded every uncatalogued lead with a reachable repo from waves 8-12 (29 projects, 22 verified,
 4 duplicates), so what remains here is blocked on the environment or on the user:
 
@@ -47,7 +47,12 @@ extension passes further down. Waves 1-12 are closed (see CLAUDE.md Status). The
    recording each report before launching more, runs a full day without a kill.
 
 Closed waves, for reference: wave 8 (398 then 401 verified), wave 9 (136 then 141), wave 10 (254 then 265),
-wave 11 (144 then 145), wave 12 (220 then 227); details in CLAUDE.md Status.
+wave 11 (144 then 145), wave 12 (220 then 227), wave 13 (303), wave 14 (274); details in CLAUDE.md Status.
+Added 2026-10-13: paper-access retiers for waves 13-14 (Savina TACO 2023, Rewrite-it-in-Rust CBET paper, NPB-Rust
+arXiv 2502.15536, ixy ANCS 2019, Perceus TR cross-check) and the seed leads in `data/wave13/leads.md` and
+`data/wave14/leads.md` (zipgrep, megadepth, sylph, zimdjson, Singeli, copia, armeria, hunt-rs, uutils/findutils,
+noodles, dSFMT, zspell, sroar, zawk, qulacs, block-aligner, Verstable, daachorse, redcon.c, gnet, Dart AOT and Free
+Pascal benchLANG/compiler-benchmark rows, and others) join items 2 and 4 above.
 
 ## Presentation: make the repo beautiful and useful for agents (added 2026-10-03)
 
@@ -99,11 +104,12 @@ The rewrite was built on the original spec, so its tier definitions, 15–25 cal
 
 1. **Seed-list mining, static lists** (section F): DONE 2026-10-11 (rounds 1 and 2: 152 groups, 266 verified, 637
    no-evidence seeds; see CLAUDE.md Status). Remaining per-list leads are in each wave's leads.md.
-2. **Whole-stdlib decomposition** (end of section F): EASTL has only `eastl::vector` (tier C); ETL,
-   micron.cpp, rpp, itlib, Coost, sfl are not catalogued.
-3. **Wave 13 — assembly-simd-kernels-and-wasm** (section D), seeded from the asm/wasm lists and GitHub topics.
-4. **Wave 14 — other-languages-faster-than-c-cpp-asm** (section E), seeded from the cross-language suites.
-   Needs sections B and C.
+2. **Whole-stdlib decomposition** (end of section F): DONE 2026-10-13 as wave 1 stdlib seeds (10 entries enriched;
+   `data/wave1/raw/w1-stdlib-*.json`).
+3. **Wave 13 — assembly-simd-kernels-and-wasm** (section D): DONE 2026-10-12 (303 verified, all enriched; see
+   CLAUDE.md Status 2026-10-13).
+4. **Wave 14 — other-languages-faster-than-c-cpp-asm** (section E): DONE 2026-10-13 (274 verified, all enriched;
+   open paper-access retiers and seed leads in `data/wave14/leads.md`).
 5. **Per-language curated lists** (section F): locate each with `gh search repos`, then mine.
 6. **Dynamic pages** (section F): re-mine topics/trending on a schedule once the list is published.
 

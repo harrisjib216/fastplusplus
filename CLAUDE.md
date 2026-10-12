@@ -196,6 +196,71 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   whole pass without a usage-limit kill on 2026-10-11. The stop hook asks to commit untracked files after every
   turn while agents are writing; decline until each report is recorded.
 
+- Waves 13-14 (2026-10-12/13): the Agent tool refuses a 21st concurrent subagent, so the loop runs at 20 and launches
+  new pairs only as reports arrive. An org spend-limit kill and a worker restart each left complete enrich/raw files
+  behind: check for the 13-key set plus a confidence, record from the file, and relaunch only the missing partner as
+  a single-prompt pair-NNNb variant. Tool output is capped near 30 KB, so dump 4-8 records per call with truncated
+  fields. adddec.py is all-or-nothing (one unknown id rejects the whole batch) and applies only the override fields,
+  so maintenance_status, compiler_and_flags and claim fixes go through retier corrections; `verify.py apply` appends
+  caveat corrections as "[retier] ..." addenda (write addenda, not rewrites) and replaces the other fields. Build
+  decision and retier ids from the enrich/raw file's own `id` field rather than retyping them. kostya/benchmarks rows
+  are often older than the README's Versions table (the 2026-07-19 bench.b and json rows date from the 2025-08-17
+  run); record the measured toolchain, not the listed one. Cross-run or cross-container comparisons (LangArena rows
+  before a harness change, related_post_gen, Microbenchmarks CI jobs on separate VMs, plb2 rows added on different
+  days) and crippled or asymmetric baselines (startup inside the timed region, -O0 or assert-enabled builds, a
+  Debug build against -O2, GC never collecting while C frees) are the main wave-14 downgrade reasons; same-task
+  idiom differences (SwissTable against std::unordered_map, borrowed keys, stable against unstable sort) stay at
+  their tier with the mechanism documented.
+
+## Status (2026-10-13)
+
+- Waves 13 and 14 closed and the single enrichment pass (wave 1 stdlib seeds, wave 13, wave 14) finished on
+  2026-10-13; QUEUE extensions 2 (whole-stdlib decomposition, run as wave 1 stdlib seeds: 10 entries), 3 (wave 13)
+  and 4 (wave 14) are done. Lists: COPYABLE 2689, REFERENCE 263, REJECTED 41; tiers A 594, B 475, C 1638, D 245;
+  2953 verified entries across all waves, every one enriched except RetroWrite (user hold); SEEDS_NO_EVIDENCE 620.
+  Every category sits in one domain (cafs-lib needed a `domain` override to stdlib-replacements). Next: QUEUE
+  extensions 5-6 (per-language curated lists, dynamic pages), the paper-access retiers and thin-yield re-runs
+  listed in QUEUE.md "Unfinished work", and the presentation pass.
+- Wave 13 (assembly-simd-kernels-and-wasm) closed 2026-10-12: 56 raw files (b1-b8 for all 7 categories plus seed
+  passes), 344 merged, 118 verify batches, 303 verified (A 43, B 21, C 187, D 52; copyable 270, reference 30,
+  mixed 3; wasm-libraries-and-apps 73, simd-intrinsics-libraries 58, assemblyscript-and-wasm-langs 46,
+  hand-written-asm-kernels 45, asm-level-string-and-memory 34, assemblers-and-asm-tooling 32,
+  wasm-runtimes-and-compilers 6, plus 9 filed in other waves' categories by override), 37 duplicates, 3 rejects for
+  invalid evidence (tslime/simdmatrixalgorithm computes wrong answers; unconfirmedlabs/bcs measures TypeScript
+  codegen while the bcs-zig wasm build is never called, Go-stdlib-libp2p precedent; industrial-algebra/orlando
+  README table predates any benchmark, r8e precedent). Retier files retier-01 (2), retier-02 (1) and the
+  enricher-driven retier-03 (156 entries): up to A dioxus, iced, simd-radix-sort, yaxpeax-x86, cafs-lib,
+  positional-popcount, pqm4, corvus, neon-ntt, ultraviolet, quickenshtein, ermig1979/Simd, udis86, BLAKE3; to B
+  bls-eth-wasm, ispc, loro, validateutf8-experiments, minotaur, source-map, rust-dominator, leptos,
+  ppopp2017_artifact, vectorvisor, stoke, sycamore, unison, wasm-bindgen, faster-utf8-validator; 68 moved to C
+  (asymmetric flags, first-party provenance gaps, numbers on code later fixed: fastnoise2, almide,
+  parallelreductionsbenchmark, libgcrypt, libco, absurd-sql, argminmax, diamond-types, md5-simd, constantine,
+  nasm, tinymembench, markdown-wasm, wasmtime-mte, simd-sort, uasm and others); 33 to D (no valid measurement,
+  degenerate workloads, stale or never-run numbers: supercoder, memcpy_benchmark, ttf2woff2-wasm, faster,
+  kmstrsearch, intel-intrinsics, mmemmove, brepkit, wasm-runtime-performance, ai-kernel-optimizer, tar-wasm,
+  md5-wasm, memcpy_fast, clipper2-wasm, alphadev, sax-wasm, autozig, webmscore, wasmboy, camaro and others).
+- Wave 14 (other-languages-faster-than-c-cpp-asm) closed 2026-10-13: 48 raw files (b1-b8 for all 6 active
+  categories; historical-and-minimal yielded nothing cataloguable), 324 merged, 110 verify batches (107 files after
+  deletions and re-renders), 274 verified (A 63, B 16, C 139, D 56 after enrichment; the verifier stage ended at
+  A 73, B 21, C 157, D 23; copyable 254, reference 20; systems-and-safety 62, string-and-text 57, web-and-serving
+  53, runtime-jit-beats-aot 45, numerics-and-arrays 35, concurrency-runtimes 21, one http-servers-frameworks by
+  override), 49 duplicates (second claims on listed repos carry `paper:` ids), 1 reject (dev0x13/gemm-benchmark-2023
+  Mojo kernels do not compute a full GEMM). Record ids are `lang:<language>/<owner>/<repo>#<benchmark>`, one row per
+  benchmark. Enricher-driven retier-01 (274 entries): to D rust-sort, zog, statico, fastGPT, EvoTrees.jl, monolake,
+  ziggit, ranwalk, SymbolicUtils.jl, FFTA.jl, Platinum Searcher, wut-server, awkrs, DiffEqGPU.jl, Traefik, PDFOxide,
+  xerg, during, related_post_gen (C3, D and Rust rows), Chapel fbench, Erlang and Go thread-ring, yosssi
+  Go-vs-nginx gist, JuliaLang Microbenchmarks userfunc_mandelbrot (Fortran and Julia rows: the project's own 2026
+  data shows parity), xemantic almost-pseudo-random, alya Bun binary trees, AcceleratedKernels LJG, Lingua Franca
+  Savina (actor-system startup charged to the CAF and Akka baselines only), Pony message ring (the Pony example
+  runs one of its repetitions), c-blake dups (author's own like-mode run has jdupes faster); to C sambamba,
+  llama2.zig, zipir, Futhark, zroar, hpla-rs, ioxide, needletail, PowPow, Kairos, Thruster, TrueAsync, libbzip2-rs,
+  Undertow, JSON3.jl, Koka cfold (C++ port copies the spine per Add), OCaml benchLANG binary trees (C frees inside
+  the timer, OCaml never collects), rustc compile throughput (unlocked rustup switches mid-run); up to A fib; to B
+  hist-rs, hck, runiq. Name correction: kostya/jit-benchmarks k-nucleotide measures the OpenResty luajit2 fork.
+  Category override bitdp to string-and-text. Open: paper-access retiers and seed leads in data/wave14/leads.md
+  (Savina TACO 2023, Rewrite-it-in-Rust CBET paper, NPB-Rust arXiv 2502.15536, ixy ANCS 2019, plus the second-claim
+  and project leads listed there).
+
 ## Status (2026-10-11)
 
 - QUEUE extension 1 (seed-list mining, awesome-cpp and awesome-c, rounds 1 and 2) closed 2026-10-11: 152 seed groups

@@ -4,6 +4,131 @@ No license, unclear/non-OSI license, mixed licensing, or paper-only. Study the i
 
 ## Verified
 
+### assembly-simd-kernels-and-wasm
+
+#### asm-level-string-and-memory
+
+##### fast-strlen.c (bjourne gist): multi-threaded memchr-based strlen  `C`  `no license`  `abandoned`  `Tier A`
+
+Benchmark-stunt strlen: finds an upper bound by deliberately faulting, then runs memchr on every core; 2.6x over single-threaded libc strlen.
+
+**Beats:** libc strlen (labelled 'strlen' in the gist's printed output; libc implementation and version not stated, glibc presumed on Linux) — On a Xeon W-2245 with gcc 13.1.1 -O3 -march=native, ten strlen calls on a 64-byte-aligned 2 GB buffer of 'A' with the NUL at the last byte took 0.46 s with threaded_strlen and 1.19 s with libc strlen (43.56 vs 16.84 GB/s, about 2.6x, derived from page data). Every returned length was asserted equal. The libc version is not named, and the gain comes from using all online CPUs against one.
+
+**Known shortcoming:** Uses all online CPUs against a single-threaded libc strlen (W-2245 43.56 vs 16.84 GB/s, 2.6x derived) with undefined-behaviour SIGSEGV probing; the author says it is a benchmark stunt only; the E5-2650 v4 run comes from unpublished code (4.00 GB input). Last revision 2023-07-13, 7 stars.
+
+**Known shortcoming:** Enricher: pthread_create/join, clock_gettime, posix_memalign and the 9 timed repeat calls all sit inside assert(), so a -DNDEBUG build spawns no threads and times one call while dividing by 10 (numbers valid only with the stated command line); the E5 block length 4000007776 means the NUL was not inside the buffer (unpublished code); the slow_strlen jump from 2.18 GB/s (gcc 9.4) to 16.87 (gcc 13) suggests the loop was rewritten to a strlen call (inference). Lead: Const-me gist 3ade77faad47f0fbb0538965ae7f8e04 (AVX2 solution to the owen.cafe strlen benchmark).
+
+**Independent measurement:** verifier batch-108 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** A helper thread reads s[4 MB], s[8 MB] and so on in 4 MB steps until it hits unmapped memory. The SA_SIGINFO handler records si_addr and calls pthread_exit, which gives an upper bound on the length without scanning. That range is then cut into ceil(n/nproc) chunks, and sysconf(_SC_NPROCESSORS_ONLN) threads each run libc memchr for '\0' on one chunk. The answer comes from the first chunk that found a zero. The speedup is aggregate memory bandwidth from many cores, not a faster per-core scan.
+
+**Use it when:**
+- Benchmark games such as the '{n} times faster than C' challenge, where strlen over one huge DRAM-resident buffer dominates the run time.
+- As a demonstration that a multi-gigabyte scan on one core tops out near the core's memory bandwidth (about 17 GB/s for every single-thread variant on the W-2245), and that splitting the scan across cores raises the total.
+- As a template for a parallel memchr fan-out when the buffer length is already known: keep the chunked memchr threads and drop the SIGSEGV probe.
+- Teaching material on SIGSEGV and si_addr probing tricks on Linux with glibc.
+
+**Skip it when:**
+- Any production code. The author says it 'heavily relies on undefined behavior and shouldn't be used for anything other than beating benchmarks'.
+- Short or medium strings. Every call does two sigaction calls, creates one probe thread and nproc worker threads, and mallocs two arrays, and only a 2 GB string was measured.
+- Multithreaded programs or libraries. It swaps the process-wide SIGSEGV handler, writes a global fault address and occupies every online CPU while it runs.
+- Non-POSIX targets, or builds with -DNDEBUG (see gotchas).
+- When you want a single-thread speedup. The gist's own AVX2 (15.36 GB/s) and AVX-512 (16.36 GB/s) loops do not beat libc strlen (16.84 GB/s) on the W-2245.
+
+**Vs siblings:** Only when one string of several gigabytes must be measured as fast as possible and taking every core is acceptable, as in the Carandiru0 memcpy_threaded gist, the other many-core-versus-one-core entry. For a real single-thread strlen speedup, WojciechMula/toys avx512-string (4.96x vs libc on one core) or the ImGui ImStrlen AVX2 code (1.41x vs the MSVC CRT) are safe to call on ordinary strings.
+
+**Gotchas:**
+- Side effects inside assert(). pthread_create and pthread_join in threaded_strlen, clock_gettime in nano_count, posix_memalign in main, and the nine repeated calls in benchmark() (assert(func(s) == cnt)) all sit inside assert(). A -DNDEBUG build, such as CMake's default Release flags, therefore drops the pthread_create, pthread_join, clock_gettime and posix_memalign calls themselves. It then spawns no threads, reads an uninitialised timer and buffer pointer, and times one call while dividing by 10 passes. The published numbers hold only for the stated command line without NDEBUG.
+- The probe overshoots by up to 4 MB past the NUL, so worker threads scan mapped memory after the string. Workers whose chunk runs into unmapped memory are killed by the handler through pthread_exit, which is not async-signal-safe. While a call is running, a genuine segfault in any other thread is swallowed the same way.
+- The comparison is all online CPUs against a single-threaded libc strlen, and no multithreaded baseline is timed. On the W-2245 the byte loop slow_strlen (16.87 GB/s) matches libc (16.84 GB/s) under gcc 13.1.1 but runs at 2.18 GB/s under gcc 9.4.0. That fits newer GCC rewriting the loop into a strlen call (inference).
+- The E5-2650 v4 block (34.09 vs 8.76 GB/s, 3.9x) came from code not in the gist. It reports '4.00GB' and length 4000007776, which is 7,777 bytes more than 4e9, so in that run the terminator was not the buffer's last byte, while both revisions allocate 2e9 bytes and write the NUL at N_BUF-1.
+
+**Status:** Abandoned single-file gist (both revisions dated 2023-07-13) with no licence, so it is legally not copyable; useful only as a reference for the parallel-memchr idea, and the author calls it a benchmark stunt built on undefined behavior.
+
+[repo](https://gist.github.com/bjourne/02df9abb0712584da3a74cb325e4fbe6) · [benchmark](https://gist.github.com/bjourne/02df9abb0712584da3a74cb325e4fbe6)
+
+##### Memset by memcpy doubling (riteme gist: 'Memcpy is faster than memset on Intel i7 12700 with glibc 2.36')  `C++`  `no license`  `unknown`  `Tier A`
+
+A 20-line memset wrapper that fills huge buffers by memcpy-doubling an 8 MiB block, 2.47x faster than glibc 2.36 memset.
+
+**Beats:** glibc 2.36 memset() — 100 fills of a 1 GiB buffer (about 107 GB written) took 6.34 s elapsed (6.23 s user) with glibc 2.36-6 memset and 2.57 s elapsed (2.47 s user) with my_memset, i.e. about 16.9 vs 41.8 GB/s and 2.47x (derived from page data). Built with g++ -O3 -march=native on an Intel Core i7-12700 under Manjaro with Linux 6.1, single run each. The glibc 2.36 sources confirm that memset takes rep stosb at this size while memcpy takes the non-temporal path, which explains the gap.
+
+**Known shortcoming:** One run per configuration with the g++ version unstated and no licence (reference); the chunk is 8 MiB (the code comment says 2 MiB); the perf bench contradiction used 1 MB cache-resident buffers (a different regime); glibc 2.40's non-temporal memset probably closes the gap (snippet only).
+
+**Known shortcoming:** Enricher: glibc 2.36 sources confirm the mechanism (memset uses rep stosb above 2048 B, memcpy uses non-temporal stores above its threshold) but glibc 2.40 adds a non-temporal memset on Intel and AMD, so the gain is likely gone (not measured); the harness is one unpinned /usr/bin/time run per variant on a hybrid 8P+4E i7-12700 with frequency scaling, no repetitions, g++ version unstated; the 8 MiB threshold means memcpy only kicks in from 16 MiB (the comments say 2 MiB).
+
+**Independent measurement:** verifier batch-92 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The gain comes from glibc's size heuristics, not from memcpy being inherently faster. In glibc 2.36, x86-64 memset uses rep stosb for every size above __x86_rep_stosb_threshold (2048 bytes). memcpy above __x86_shared_non_temporal_threshold (3/4 of one thread's cache share, well below 8 MiB on this CPU) switches to a page-interleaved loop with non-temporal stores that skip read-for-ownership. The repeated 8 MiB source block fits in the i7-12700's 25 MiB L3, so the copy mostly reads from cache while it streams writes to DRAM.
+
+**Use it when:**
+- Filling or zeroing buffers of tens of MiB or more on x86-64 Linux with glibc older than 2.40, where memset has no non-temporal path.
+- Write-once fills that will not be read back soon (non-temporal stores leave the destination out of cache).
+- As a quick experiment showing whether non-temporal stores help your fill workload, before writing a proper streaming memset.
+
+**Skip it when:**
+- glibc 2.40 or newer on Intel and AMD: memset itself switches to a non-temporal store loop above the same non-temporal threshold (except on Skylake-AVX512 and Cannon Lake, where glibc sets Avoid_Non_Temporal_Memset), so the trick probably gives nothing there (not measured).
+- Buffers under 16 MiB: with the 8 MiB block, no memcpy runs until n reaches 16 MiB, so smaller sizes only pay for an extra branch or a split memset.
+- Buffers that are read right after the fill and fit in cache: non-temporal stores push the data out to DRAM.
+- CPUs whose last-level cache is smaller than 8 MiB, where re-reading the source block probably adds DRAM read traffic (inference, not measured); also non-glibc libcs (musl, MSVC CRT, macOS) whose memcpy and memset thresholds differ.
+
+**Vs siblings:** Use it on glibc 2.36-2.39 when you want a no-intrinsics, portable one-function fix and cannot vendor fancy-memset or nadavrot/memset_benchmark (AVX2 assembly) or write an explicit non-temporal store loop like Carandiru0's memset_threaded. Those siblings stream directly and do not re-read an 8 MiB source, but they need x86 assembly or intrinsics.
+
+**Gotchas:**
+- The constant 2 * 2048 * 2048 is 8 MiB, not the 2 MiB that the code comments say.
+- Harness flaw: one /usr/bin/time run per variant, unpinned, on a hybrid 8P+4E Alder Lake (lscpu shows 12 cores and 9 L2 instances) with frequency scaling active. There are no repetitions or variance and the g++ version is not stated. Both runs include the 1 GiB first-touch faults, with near-equal fault counts (639 vs 634 minor).
+- The 'contradicting' perf bench mem numbers in the comments (i7-12700: memset 72.70 GB/s vs memcpy 31.20 GB/s) use 1 MB cache-resident buffers, a different regime from the 1 GiB fill. The result really compares rep stosb against glibc's non-temporal memcpy path, not memset against memcpy.
+- The gist has no licence, so the code is not formally reusable; the idea is easy to re-implement.
+
+**Status:** Gist from January 1-5, 2023 (12 revisions, 1 star, no licence), not maintained. It is a reference for a glibc-version-specific trick that glibc 2.40's non-temporal memset has probably made unnecessary.
+
+[repo](https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75) · [benchmark](https://gist.github.com/riteme/d584b0bf6cced5d74cde7aa8d2195e75)
+
+#### simd-intrinsics-libraries
+
+##### validateutf8-experiments (lookup UTF-8 validation, Keiser and Lemire)  `C++`  `no license`  `active`  `Tier B`
+
+Research harness for the Keiser-Lemire 'lookup' SIMD UTF-8 validator, about 4-6x faster than the best scalar validator it tests.
+
+**Beats:** scalar UTF-8 validators: shiftless DFA validators in Hoehrmann style ('dfa', 'fdfa', 'bdfa', 'dfa2-4' rows), Fuchsia's FIDL string validator ('fushia' rows, fidl_validate_string) and UTF8-CPP (utfcpp) 2.3.4 utf8::is_valid ('utf8lib' row, vendored in dependencies/utf8_v2_3_4) — In the April 2026 README run (unnamed x86 at about 3.5 GHz, CMake Release with -march=native, compiler not stated, hot-cache best-of-N), AVX2 lookup4 validated hongkong.html (1.8 MB) at 20.9 GB/s and twitter.json (631 KB) at 37.0 GB/s. The baselines were a Hoehrmann DFA at 0.58 GB/s, Fuchsia's validator at 2.6-2.8 GB/s and UTF8-CPP 2.3.4 at 2.57 GB/s (about 8-64x), plus the best ASCII-skipping scalar variant at 5.3-6.1 GB/s (about 4-6x). The older results/skylake.txt shows 17.1 GB/s against 0.62 (DFA), 1.58 (Fuchsia) and 0.51 (UTF8-CPP).
+
+**Known shortcoming:** No CPU model and no LICENSE (reference); the utf8lib baseline is a vendored UTF8-CPP 2.3.4; a research artifact behind simdutf (already listed), kept as the lookup-algorithm evidence.
+
+**Known shortcoming:** The 36x/64x headline is against the plain Hoehrmann DFA; the best scalar validator in the same April 2026 run (fushia_ascii2) gives about 3.9x and 6.0x (derived from page data). The utf8lib baseline (UTF8-CPP 2.3.4) is build-sensitive: 22.9 instructions/byte and 0.51 GB/s in results/skylake.txt (old Makefile) vs 6.7 instructions/byte and 2.57 GB/s in the 2026 CMake build. The test oracle fidl_validate_string accepts the overlong F0 8F BF BF (code_point < 0xffff check); only AVX2 is timed and no CPU model is given. The README's lookup4/basic/range rows match the current real-file driver output (April 2026 rerun), so the earlier 'stale row names' caveat was wrong. The 'basic' kernel is the fastvalidate-utf-8 algorithm, 1.35-1.9x slower than lookup4.
+
+**Independent measurement:** verifier batch-76 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The lookup algorithm classifies every byte together with the byte before it using three 16-entry pshufb/tbl table lookups: the previous byte's high nibble, its low nibble, and the current byte's high nibble. Each lookup returns an 8-bit mask of possible error classes (too short, too long, overlong 2/3/4-byte, surrogate, above U+10FFFF, two continuations), and ANDing the three masks keeps only the errors actually present. A second check uses saturating subtractions on the vectors shifted by 2 and 3 bytes to find positions that must be 3rd or 4th continuation bytes, and XORs that with the first mask. Errors are OR-accumulated with no data-dependent branches, and a 64-byte block that is all ASCII skips the checks, giving about 0.4 instructions per byte on the README's real files and about 1 on random multibyte input.
+
+**Use it when:**
+- Reproducing or extending the Keiser and Lemire SPE 2021 results, or timing a new validator against lookup2/3/4, Zwegner, range and the older fastvalidate kernel on one harness with instruction and branch-miss counters.
+- Choosing a SIMD UTF-8 validation design before porting it to another language or runtime (the README notes the .NET port SimdUnicode came from it).
+- Studying the lookup algorithm in a small code base: src/generic/utf8_lookup4_algorithm.h is about 225 commented lines over a thin simd8 wrapper for AVX2, SSE and NEON.
+
+**Skip it when:**
+- Production validation: the README says 'research purposes only: not for production use' and the repo has no LICENSE file; simdutf ships the same algorithm with runtime CPU dispatch.
+- You need transcoding, the error offset, or UTF-16/UTF-32 work: the kernels only answer valid or invalid.
+- x86 machines without AVX2: on x86-64 the benchmark binds the haswell (AVX2) kernels unconditionally, with no runtime check, and the build uses -march=native.
+- Predicting cold-data throughput: every published number is a hot-cache best-of-N run on 0.6-1.8 MB files or 16 KiB synthetic buffers; DRAM-bound throughput is not measured.
+
+**Vs siblings:** None of the listed simd-intrinsics siblings validate UTF-8. The catalogued simdutf, simdutf8 (Rust) and SimdUnicode (.NET) are the production forms of this algorithm, so use this repository only to benchmark or study lookup2/3/4 against Zwegner, range and the older fastvalidate ('basic') kernels on one harness.
+
+**Gotchas:**
+- The headline ratios depend on which baseline is picked: 36x and 64x are against the plain Hoehrmann DFA (0.58 GB/s, a serial table walk). The strongest scalar baseline in the same 2026 README run, fushia_ascii2 (Fuchsia's validator plus the authors' 16-byte ASCII skip), reached 5.33 GB/s on hongkong.html and 6.14 GB/s on twitter.json, so lookup4 leads a good scalar validator by about 3.9x and 6.0x (derived from page data). On synthetic pure ASCII in results/skylake.txt, fushia_ascii4 reached 29.4 GB/s against 58.7 for lookup4avx (2.0x).
+- The utf8lib baseline (vendored UTF8-CPP 2.3.4) depends heavily on the build. On the same file with the same call it ran 22.9 instructions/byte and 0.51 GB/s in results/skylake.txt and 0.38 GB/s in the 2024 README (old Makefile, -O3 without -march=native), but 6.7 instructions/byte and 2.57 GB/s in the 2026 CMake build. fushia stayed at 6.6-6.7 instructions/byte across those runs, so the lookup-versus-utf8lib gap is 8x or 33x depending on which run is quoted, and newer UTF8-CPP releases are not measured.
+- Oracle flaw in the tests: the brute-force bit-flip test in tests/unit.cpp requires lookup3 to agree exactly with fidl_validate_string. As adapted in benchmarks/fushia.h, that function range-checks 4-byte sequences with code_point < 0xffff instead of < 0x10000, so it accepts the overlong F0 8F BF BF (U+FFFF); a Python model of the function found this is the only invalid 4-byte sequence it accepts. The benchmark timings are unaffected because every timed input is valid, but a bit flip that produces that sequence would abort the test against a correct lookup3.
+- The published tables cover AVX2 only and name no CPU: the README run (April 2026, about 3.5 GHz) gives no model, and results/skylake.txt (about 3.69 GHz) and results/rome.txt (about 3.4 GHz) are identified only by file name. The README table comes from the April 2026 CMake/counters driver, whose real-file section still prints lookup4/basic/range (lookup4avx etc. appear only in the synthetic section), so its row names are current, not stale. Zwegner's validator beat lookup4 on twitter.json in that run (41.0 vs 37.0 GB/s).
+
+**Status:** Refreshed in April 2026 (CMake, CI, new README run) but explicitly research-only and without a LICENSE file, so reference-only; production users should take simdutf, which carries this algorithm.
+
+[repo](https://github.com/lemire/validateutf8-experiments) · [benchmark](https://github.com/lemire/validateutf8-experiments)
+
 ### compression-and-encoding
 
 #### entropy-coders
@@ -1697,6 +1822,138 @@ Research CUDA SpGEMM on 16x16 sparse tiles; PPoPP '22 reports wins over cuSPARSE
 
 [repo](https://github.com/SuperScientificSoftwareLaboratory/TileSpGEMM) · [benchmark](https://doi.org/10.1145/3503221.3508431)
 
+### other-languages-faster-than-c-cpp-asm
+
+#### concurrency-runtimes
+
+##### Go goroutines vs Intel TBB on a task-graph dynamic program (Comparison-Go-CppTBB)  `Go`  `CC-BY-4.0`  `abandoned`  `Tier A`
+
+2017 study: Go goroutines vs Intel TBB tasks on tiled optimal-BST dynamic programming; Go won only at N=4096, by 1.003-1.15x.
+
+**Beats:** Intel oneTBB (2017 Update 3) C++ task scheduler, MSVC v14 build, on the same static optimal binary search tree task graph — On one Intel Core i7-6700HQ laptop (Windows 10, five runs averaged), Go 1.7.4 goroutines beat Intel TBB 2017 Update 3 built with MSVC 2015 (Release /Ox inferred from the vcxproj) only at N=4096: 26,256.6 against 29,365.8 ms (1.12x) at VP=256 and 25,574.2 against 29,381 ms (1.15x) at VP=512, both with NP=4. TBB was faster in every N=2048 cell (1,417.2 against 1,946 ms at NP=4, VP=128, 1.37x) and in 82 of the 96 N=4096 cells.
+
+**Known shortcoming:** Go is faster only at N=4096 with VP 256/512 (1.12x, 1.15x) and TBB is faster elsewhere (1.37x best-vs-best); the paper names no build configuration, so the Release|x64 flags (/Ox /Oi /Ot /GL /MT /sdl in TBB/TBB.vcxproj at commit d503e57) are inferred from the README's tbb.dll requirement; the cache-fit explanation is not in the paper; CC-BY-4.0, archived.
+
+**Known shortcoming:** Raw timings are in the repo after all (docs/N2048.xlsx and docs/N4096.xlsx at d503e57, 5 runs per cell): Go is faster in 14 of 96 N=4096 cells (1.003-1.149x) and 0 of 96 at N=2048; best against best at N=4096 is 1.12x (Go 25,574.2 ms vs TBB 28,655.2 ms). The tiled code on one thread already beats sequential (TBB 1.50x, Go 1.75x at N=2048), so Go's 'superlinear' speed-up is partly cache blocking; Equal/operator== is never called and inverted, so the parallel output is never checked. 6.53/4.41 are N=2048 and 6.28/3.95 are N=4096 (no contradiction); 6255.4/12689.6 are sequential times (the sheet says 12698.6).
+
+**Independent measurement:** verifier batch-84 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** There is no Go-specific technique behind the result. Both programs gain from tiling, which acts as cache blocking for the strided column reads cost[k+1][col] (stride N+1 doubles) that the row-by-row sequential sweep does not have, and from running tiles of the dependency wavefront on several cores. The Go program's sequential code is 2.03x (N=2048) and 1.39x (N=4096) slower than the MSVC build, so the narrow Go wins appear only at N=4096, where the table no longer fits in cache and both sides are memory-bound. The paper speculates that TBB's depth-first execution helps locality and that Go's channel waits trigger extra scheduling, but names no mechanism for the Go wins.
+
+**Use it when:**
+- As a worked example of mapping a 2-D dynamic-programming wavefront onto goroutines plus channels and onto TBB tasks with atomic reference counts, side by side.
+- As raw data for Go-versus-TBB task-graph scaling on a 4-core/8-thread Skylake laptop: docs/N2048.xlsx and docs/N4096.xlsx hold all five runs of every NP x VP cell.
+- To choose a tile count for a blocked DP: both runtimes were fastest at VP 128-512 (tiles of 4-32 cells per side) and both lost ground at VP=2048.
+- As the 2017 replication of Serfass and Tang (2012), when citing how the Go-versus-TBB gap narrowed with Go 1.7.
+
+**Skip it when:**
+- As evidence that Go beats C++: TBB was faster in all 96 N=2048 cells (best versus best 1.37x) and in 82 of 96 N=4096 cells, and the sequential C++ code was 1.39-2.03x faster.
+- Fine-grained graphs with millions of nodes: the Go program starts every tile goroutine up front, and at VP=2048 it took 15.6-80.5 s at N=2048 against TBB's 2.3-7.1 s, with bimodal run-to-run times.
+- On a current toolchain without porting: the C++ side uses the low-level tbb::task API (allocate_root, set_ref_count, spawn_and_wait_for_all), which oneTBB removed, and the Go side is a pre-modules GOPATH layout for Go 1.7.4.
+- As copyable code: the licence is CC-BY-4.0 (not a software licence), the C++ project is a Windows-only Visual Studio 2015 vcxproj that uses printf_s, and the repository has been archived since 2018.
+
+**Vs siblings:** Cite this entry, and not the SCOOP/Qs thread-ring entries for Go and Erlang (whose 'C++/TBB' column is really 503 Boost.Asio-woken pthreads), when you need a compute-bound task graph in which TBB's own task scheduler is the baseline. Its answer is that TBB wins almost everywhere. For data-parallel loops, the Rayon versus OpenMP study is the closer sibling.
+
+**Gotchas:**
+- The raw timings are in the repository after all: docs/N2048.xlsx and docs/N4096.xlsx at release commit d503e57 hold five runs per cell for NP 1-8 x VP 1-2048. From them, Go was faster in 14 of 96 N=4096 cells (VP 128-1024, NP 3-7, 1.003-1.149x) and in none of 96 N=2048 cells. Best against best at N=4096 is Go 25,574.2 ms (NP=4, VP=512) against TBB 28,655.2 ms (NP=5, VP=256), 1.12x (derived from page data); the draft conclusion's 1.15 is the matched NP=4, VP=512 cell. The 6,255.4 and 12,689.6 ms quoted at N=2048 are the sequential runs, and the sheet has 12,698.6 for Go.
+- The self speed-ups mix tiling with parallelism. On one processor the tiled code already beats the sequential sweep: at N=2048, TBB at VP=128 took 4,180.6 ms against 6,255.4 ms (1.50x) and Go at VP=32 took 7,260 ms against 12,698.6 ms (1.75x); at N=4096 the one-thread gains are Go 1.47x and TBB 1.12x (derived from page data). So the 'superlinear' Go figures are partly a cache-blocking effect on a slower Go sequential baseline. They also do not contradict each other: 6.53 and 4.41 are the N=2048, NP=4, VP=128 cells, while 6.28 and 3.95 are the N=4096, NP=4 cells.
+- No result validation: Go's Tree.Equal and C++'s operator== are never called, and both are inverted (they return false as soon as any compared root or cost pair matches), so the parallel output was never checked against the sequential sweep. My reading of the tile wiring (left and lower predecessors; lower-triangle channels left nil) found no race.
+- The timed regions differ by design: Go's includes a blocking runtime.GC() after the parallel run, and C++'s includes constructing and destroying tbb::task_scheduler_init. The inputs differ too: Go uses math/rand with its default seed (Float64), while C++ uses mt19937 seeded from the clock (integers mod 2^20). The amount of work does not depend on the data. Go starts all VP(VP+1)/2 goroutines (about 2.1 million at VP=2048) before any can run, whereas TBB spawns a task only when it becomes ready; the VP=2048 Go averages mix runs of about 11 s and 70 s (N=2048, NP=2).
+
+**Status:** Archived 2018-08-24 (56 commits, 3 stars, no issues). The CC-BY-4.0 research code is tied to Go 1.7 GOPATH builds and the removed tbb::task API, so it is a reference only. Its raw spreadsheets support the record but correct three of its caveats: the raw data is public, Go won 14 cells rather than 2, and the two speed-up pairs come from different problem sizes.
+
+[repo](https://github.com/luncliff/Comparison-Go-CppTBB) · [benchmark](https://github.com/luncliff/Comparison-Go-CppTBB/blob/master/%5BFinal%5DComparison%20of%20Go%20and%20C%2B%2B%20TBB%20on%20Parallel%20Processing.pdf)
+
+#### web-and-serving
+
+##### fib  `Go`  `no license`  `active`  `Tier A`
+
+Go event-loop networking library serving net/http handlers; beats Sogou workflow (C++) on HTTP/1 echo, ties uSockets on TLS.
+
+**Beats:** Sogou workflow (C++ HTTP server) and uSockets (C, BoringSSL) in the lesismal go-*-benchmark repositories; nginx (C) in HttpArena — In the author's go-http1-benchmark (one GitHub Actions run, ubuntu-24.04 runner with 4 vCPUs split 2/2 between server and Rust tokio client, 10,000 connections, 1 KiB POST echo), fib at commit 4ffe768 built with Go 1.27 completed 194,671 round trips/s against Sogou workflow v1.1.0 (C++, Release build, server at -O3) at 150,407 (1.29x), using 32 MB vs 14 MB; in go-tls-benchmark against uSockets with BoringSSL (C) it tied on TLS 1.3 echo (103,427 vs 103,972) and reached 0.94x on TLS 1.3 pipelining. In HttpArena (Threadripper PRO 3995WX per site/data/current.json, separate runs) it trails nginx 1.31.4 on baseline-4096 (3,164,504 vs 3,284,513) and leads it on HTTP/2, HTTP/3 and static TLS profiles, where agensio (C++) is ahead of fib on the HTTP/2 rows.
+
+**Known shortcoming:** The only clear C/C++ win is HTTP/1 echo against workflow (-O3 Release), 1.29x in a single first-party run on a GitHub runner; TLS ties uSockets; uws_events is Go, not uWebSockets; on HttpArena nginx is ahead at baseline and agensio (C++) ahead on h2/h2c; no licence (reference).
+
+**Known shortcoming:** Identity kept by override: a w14-web-hn copy took the bare id at merge; the verified claim is the w14-web-papers one (batch-19).
+
+**Known shortcoming:** No correctness bug (the TLS CBC record check copies crypto/tls's constant-time logic; max_connections already raised to 2,000,000). Harness limits: single runs; the Actions annotation says the container got 4 CPUs, not the wanted 8; workflow ran its stock 2 pollers plus 20 handler threads on 2 vCPUs with strftime Date per response; the TLS pipeline is rate-driven. The record missed losses to nginx on HttpArena (json-tls 0.59x, json-h2c 0.64x); the HttpArena entry runs prefork (32 child processes). No LICENSE; the author says not production-proven (issue #1); object reuse is on by default (fasthttp rule); no http.Hijacker.
+
+**Independent measurement:** verifier batch-19 (wave 14)
+
+**Independent measurement:** orchestrator (wave 14 merge)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** A few event loops only wait for readiness (edge-triggered epoll, kqueue, IOCP) and hand ready connections in one batch to a P-sharded, lock-free (Vyukov MPMC ring) worker pool, so an idle connection holds no goroutine and no I/O buffer. A worker reads until a short read, runs the parser and handler, and corks every response of the round into one writev or sendfile, which is where the pipelining numbers come from; on Linux sockets are read and written with raw recvfrom/sendto/sendmsg system calls. After the crypto/tls handshake fib runs the AES-GCM and AES-CBC record layers itself and decrypts in place, and request, header, URL and Context objects are recycled fasthttp-style to keep the Go heap and GC out of the hot path.
+
+**Use it when:**
+- Go servers holding many mostly idle connections (WebSocket, long polling, device gateways): no goroutine per idle connection; 32 MB at 10,000 WebSocket connections vs 229 MB for gorilla in the author's run.
+- Existing net/http handlers that need more HTTP/1.1 throughput, especially pipelined: 2.3x net/http on echo and 6.9x on pipelining in the author's go-http1-benchmark run.
+- One Go engine serving HTTP/1.1, h2, h2c, HTTP/3 and gRPC: in HttpArena fib is ahead of nginx on baseline-h2-256 (1.65x), baseline-h2c-256 (5.25x), baseline-h3-64 (1.25x) and static-tls-1024 (1.71x), ratios derived from page data.
+- TLS-terminating Go services on AES-GCM where crypto/tls over net costs throughput or memory: 2.3-2.9x crypto/tls pipelining on about a third of the memory, and a tie with uSockets plus BoringSSL on TLS 1.3 echo.
+
+**Skip it when:**
+- Anything you need to copy or vendor: the repository has no LICENSE file (raw LICENSE returns 404, the repo page shows no license), so by default no reuse rights are granted.
+- Production-critical services today: on 2026-10-11 (issue #1) the author wrote that it has not yet been heavily used in production, that client-side work is still in progress, and advised starting with small features; 27 stars, no tagged releases on the repo page.
+- Handlers that block (synchronous database calls, long waits) or keep request objects after returning: handlers run on scarce engine workers, and recycled Request/Header/URL/Context objects are handed to the next request once the handler returns.
+- Peak throughput against the best C and C++ servers: in HttpArena it trails nginx on baseline-4096 (0.96x), json-tls-4096 (774,182 vs 1,313,755) and json-h2c-1024 (1,102,054 vs 1,730,838), agensio (C++) by 2.6x on baseline-h2-256 and 2.2x on json-tls, libreactorng (C) by 2.1x on pipelined-4096 and mongoose on most WebSocket profiles.
+- Tight memory budgets: workflow serves the same HTTP/1 echo in 14 MB vs fib's 32 MB, and uSockets the TLS runs in 51 MB vs 180 MB.
+
+**Vs siblings:** Pick fib over nilo (baseline-h2c-256 9,010,310 vs fib 12,891,491) or Helidon SE (baseline-h2-256 3,612,898 vs 5,634,126) when you want a Go codebase with net/http-style handlers and HTTP/1.1, h2, h2c, HTTP/3, WebSocket and gRPC on one engine; for raw HTTP/1.1 throughput the HttpArena siblings zix, zeemo, vanilla and minima-sync (4.3-4.4M req/s on baseline-4096 vs fib's 3.16M) are faster, and tokio-websockets ties it on echo-ws-limited-4096 (2,641,801 vs 2,613,729).
+
+**Gotchas:**
+- Object reuse is on by default under fasthttp's RequestCtx rule: a net/http handler that keeps the *http.Request, its Header or URL past its return (for example in a goroutine started without Retain) reads or writes another request's data. http.Hijacker is not implemented, so gorilla/websocket does not work, and Request.Context() is not cancelled when the client goes away.
+- Writes never block and request bodies are buffered whole by default: a handler that writes faster than the peer reads queues the difference in memory (reads pause at a 64 KiB watermark, MaxPendingBytes is off by default), and over TLS SendFile reads and encrypts the whole range up front.
+- The HttpArena numbers run under prefork: a child process per two CPUs (GOMAXPROCS=2 each, so 32 processes on 64 cores) sharing ports with SO_REUSEPORT; the docs say one process with 64 Ps stalls on Go's shared heap lock and GC (baseline 1.23M to 1.63M req/s only after object reuse). Children share nothing but the port, so in-memory state exists once per child and HTTP/3 datagrams after a NAT rebinding can reach a child without the connection.
+- Harness limits of the headline numbers: go-*-benchmark rows are single runs on a shared 4-vCPU GitHub runner whose run annotation says the container got 4 CPUs instead of the 8 it wants, with client and server on the same VM; workflow ran its stock benchmark server (2 pollers plus 20 handler threads on 2 vCPUs, Date formatted with strftime on every response vs fib's once-a-second cached Date) and has no pipeline row because it closes connections on pipelined input; the TLS pipeline rows (690,000, 735,000, 750,000) come from a rate-driven phase that measures how much of the offered rate each server held. HttpArena rows are cross-run (fib.json saved 2026-10-08 by the fib author, nginx.json 2026-08-30).
+
+**Status:** Actively developed (last commit 2026-10-11, 297 commits, 27 stars, no tagged releases on the repo page) and, by the author's own account, not yet proven in heavy production use; with no LICENSE file it stays reference-only. No correctness bug was found behind the measured numbers (the hand-written TLS CBC record check copies crypto/tls's constant-time padding logic), but the first-party rows are single runs with the harness limits listed under gotchas. HttpArena's machine model is in site/data/current.json (Threadripper PRO 3995WX) and fib's Go build flags are in frameworks/fib/Dockerfile, so its HttpArena wins over nginx (h2c 5.25x, h2 1.65x, h3 1.25x, static-tls 1.71x, pipelined 5.05x, derived from page data) meet the same basis on which dusty, wtx and cutelyst were tiered A, subject to the cross-run and agensio caveats.
+
+[repo](https://github.com/lesismal/fib) · [benchmark](https://raw.githubusercontent.com/lesismal/fib/HEAD/README.md)
+
+##### zeemo  `Zig`  `no license`  `active`  `Tier A`
+
+Zig io_uring HTTP/1.1 benchmark server and young library; 1.35x nginx's HttpArena baseline rate, ties libreactorng.
+
+**Beats:** nginx 1.31.4 (C, custom handler module, -O3 -march=native -DNDEBUG); same suite rows for libreactorng, libioma, mongoose, h2o (C) and Drogon, agensio, userver (C++) — HttpArena, Threadripper PRO 3995WX with the server pinned to 32 cores / 64 threads and gcannon on the other half over loopback, best of three 5 s runs. At 4096 keep-alive connections zeemo (Zig 0.16 ReleaseFast, baseline x86-64 target) served 4,422,489 req/s vs nginx with a custom C module at -O3 -march=native 3,284,513 (1.35x), libreactorng 4,377,377 (1.01x, a tie) and Drogon 2,022,710. At 16-deep pipelining it served 49.9M vs libreactorng 43.4M. With connections closed every 10 requests it was 0.99x nginx.
+
+**Known shortcoming:** 1% over libreactorng is noise; trails C on limited-conn; README '#1' is stale (zix ahead); built for baseline x86-64 while the C entries use -march=native; unequal response work; no license (reference). Best of 3, cross-run rows.
+
+**Known shortcoming:** The measured code is HttpArena's frameworks/zeemo raw-socket engine (2026-05-18 snapshot), not the library at the repo URL, whose own zeemo-tuned entry has no results file (404). meta.json and the record's why_faster claim 'registered provided-buffer rings', but neither main.zig nor the library's server.zig has buffer rings, registered buffers or multishot recv (single-shot recv; multishot accept only). Bandwidth over rps gives exactly the 66-byte /pipeline response (about 66 bytes per response against libreactorng's 114 and nginx's 142). libreactorng serves about 3% more requests per CPU-second at baseline-4096 (6168.4% vs 6410.6% CPU); latency-10k costs 30.5 us CPU per request against libreactorng's 25.2 (worst of the io_uring engines); zix is ahead on baseline, pipelined and limited-conn. The README's '#1 json-4096' refers to a profile removed on 2026-08-29 (#1375) whose handler used JSON pre-rendered at startup.
+
+**Independent measurement:** verifier batch-49 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** It forks one shared-nothing worker process per CPU allowed by the cgroup and pins each one with sched_setaffinity. Each worker has its own SO_REUSEPORT listener and a 4096-entry io_uring ring with multishot accept. A recv is posted straight into the connection's 2 KiB parser buffer. drainAndSend parses every complete pipelined request in that buffer and writes the responses back to back into a 4 KiB per-connection buffer, then sends them with one send SQE. Responses carry only a status line plus Content-Type and Content-Length (66 bytes for /pipeline), with no Date or Server header. HttpArena's description also claims 'registered provided-buffer rings', but neither main.zig nor the library's server.zig sets up a buffer ring, registered buffers or multishot recv.
+
+**Use it when:**
+- As a 1,223-line reference (four files, tests included) for a fork-per-CPU io_uring HTTP/1.1 loop in Zig 0.16: multishot accept, an fd-indexed slot table and pipelined response batching.
+- As a starting design for small fixed responses on Linux with many keep-alive connections, where per-response header bytes dominate.
+- To study pipelined-response batching: 49.9M req/s at 16-deep pipelining on 64 hardware threads, though zix's 58.8M on the same profile is higher.
+- For trying the library API on a Linux kernel 5.19 or later. The repo has no license, so you can read it but not ship it.
+
+**Skip it when:**
+- In any product or shipped code: the repo has no LICENSE, so it is not legally reusable.
+- When you need HTTP/2, HTTP/3, non-Linux platforms or async handlers. Handlers are synchronous, so one blocking handler stalls that CPU's whole worker.
+- When raw throughput is the only reason: on baseline-4096 it is level with libreactorng (+1%) and slightly behind zix (Zig, 4,442,329 req/s). It trails libioma, libreactorng, zix and nginx on limited-conn-4096, and zix beats it on pipelining.
+- When an idle server's CPU cost matters: at the fixed 10k req/s latency profile it spends 30.5 us of CPU per request, against 25.2 for libreactorng, 27.5 for libioma and 27.3 for zix (from HttpArena cpu_per_req_us).
+- When a client may send large requests: the measured engine closes the connection when headers exceed 2 KiB or a body exceeds 512 B, and closes any accepted fd numbered 4096 or higher in a worker. The library makes these buffer sizes configurable.
+
+**Vs siblings:** Rarely. zix (Zig) is faster on baseline-4096, pipelined-4096 and limited-conn-4096 and adds TLS and database routes, while libxev and the C# minima-sync entry land within 1% on baseline. Pick zeemo only to read a minimal, dependency-free single-binary io_uring loop, and only as reference, since it has no license.
+
+**Gotchas:**
+- Measured code differs from the repo: the HttpArena numbers come from the raw-socket engine in MDA2AV/HttpArena frameworks/zeemo, last changed by its author 2026-05-18. The library's own HttpArena entry (zeemo-tuned, PR #739) has no results file (site/data/results/zeemo-tuned.json returns 404), so the library API has no published numbers.
+- Description flaw: meta.json and the catalogue's why_faster credit 'registered provided-buffer rings', but neither main.zig nor the library's server.zig sets up a buffer ring, registered buffers or multishot recv. The phrase appears to be copied from libioma's and libreactorng's descriptions. The library README's 'multishot accept and recv' is also only half true: accept is multishot, recv is single-shot.
+- Header-volume advantage: responses omit Date and Server. gcannon's bandwidth column uses binary units (3.06 GB/s / 49,860,224 req/s = 65.9 B, exactly the 66-byte /pipeline response), so per-response sizes at baseline-4096 are about 66 B for zeemo, 114 B for libreactorng and 142 B for nginx. These are about 5% above the verifier's decimal-unit figures, with the same ratios (derived from page data).
+- The README's '#1 on json-4096' refers to a profile HttpArena removed on 2026-08-29 (#1375). That JSON handler copied item objects pre-rendered at startup (dataset.zig) and computed only the total per request. At baseline-4096 zeemo also used more CPU than libreactorng (6410.6% vs 6168.4%), so per CPU-second libreactorng served about 3% more requests (derived from page data).
+
+**Status:** A three-day project (20 commits, May 18-20, 2026), 4 stars, no open issues and no license file, so reference-only. The measured engine in the HttpArena repo has had only maintainer profile edits since May 18, 2026.
+
+[repo](https://github.com/skylightis666/zeemo) · [benchmark](https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/zeemo.json)
+
 ### parsing-and-text
 
 #### lexers-tokenizers
@@ -2700,6 +2957,1233 @@ Python solver for Partitioned Learned Bloom Filter parameters; the resulting des
 [repo](https://github.com/kapilvaidya24/PLBF) · [benchmark](https://arxiv.org/abs/2006.03176)
 
 ## Unverified claims (tier C/D)
+
+### assembly-simd-kernels-and-wasm
+
+#### asm-level-string-and-memory
+
+##### hglm ARM memcpy, memset, memzero and copy_page kernel patches (test-arm-kernel-memcpy)  `C`  `Per-file headers: MIT/X11 (benchmark.c, memcpy_armv6v7.S, new_arm.S, Copyright 2013 Harm Hanemaaijer) and GPL-2.0-only (kernel-derived memset.S, memzero.S, copy_page.S, copy templates, user-copy variants and the *_orig.S baselines); asm.h, new_arm.h and kernel_defines*.h have no header; no repo-level LICENSE file`  `abandoned`  `Tier C`
+
+2013 hand-tuned ARMv6/ARMv7 assembly for Linux kernel copy_page, memset, memzero and memcpy, with a userspace benchmark against the old kernel routines.
+
+**Beats:** original Linux kernel ARM memcpy, memset, memzero and copy_page (the benchmark harness also runs libc memcpy/memset alongside) — No results are published. The patch commit message (2013-07-12) claims copy_page speed-ups over the 2013 in-kernel copy_page of 10% on a Cortex-A8 to 80% on the ARMv6 Raspberry Pi, measured in a userspace sandbox; the patches README says 'on the order of 70%' for copy_page and large memcpy. Compiler version, SoC and clocks are unstated, and the copy_page code those figures came from was reworked two days later. An independent tester on linux-arm-kernel reported that copy_page and large-memcpy prefetching did not work well on his platforms (snippet only).
+
+**Known shortcoming:** Only the patch 0002 commit message gives numbers (copy_page 10% on Cortex-A8 to 80% on Raspberry Pi), no published results, compiler version unstated, baseline is the old kernel routines; per-file MIT plus GPL-2.0-only with some headers unlicensed (mixed). Abandoned 2013-08-28.
+
+**Known shortcoming:** The quoted 10-80% copy_page speedups predate commit 83f288c (2013-07-14), which reworked copy_page.S; HEAD's prefetch defaults (32-byte line, 128/256-byte offset) differ from the posted kernel patch (PREFETCH_DISTANCE 3), so bench.script at HEAD times different code. Bug: HEAD copy_page.S NO_PLD path (ARMv4, line size 32) copies 8192 bytes, one full page past source and destination; the kernel patch version is correct. Issue #1: copy_from/to_user broken. Makefile NEON line is a typo ('#NEON_CLAGS = DUSE_NEON'). Willy Tarreau on the July 2013 linux-arm-kernel thread found the prefetch strategy weak for copy_page and large memcpy (WebSearch snippet only; lore.kernel.org unreachable).
+
+**Independent measurement:** verifier batch-92 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The gain comes from a new PLD prefetch strategy for ARMv6/ARMv7 cache lines. The old copy_page issued paired preloads 2-3 lines ahead from a loop built for StrongARM. The new one does one preload per line at a configurable PREFETCH_DISTANCE and stops prefetching past the end of the source. It also uses wider 8-register LDM/STM blocks. memset and memzero align the destination to 8 bytes (ARMv7) or 32 bytes (ARMv6) before a 64-byte STM loop. They handle the 8-64 byte tail with a computed jump into an unrolled STM ladder and are written to assemble mostly to 16-bit Thumb2 instructions. The experimental memcpy adds a fast path for word-aligned copies of 256 bytes or less and uses unaligned word loads for copies of up to 64 bytes.
+
+**Use it when:**
+- You maintain a 32-bit ARMv6 (Raspberry Pi 1 class) or ARMv7 kernel or bare-metal codebase that still uses the 2013-era arch/arm/lib copy_page, memset or memzero, and you want a reference for a better prefetch distance.
+- You want a ready-made validation and timing harness for ARM32 memcpy/memset variants: 50 memcpy and 23 memset size/alignment tests, plus a --validate mode that checks every byte of a 16 MiB buffer.
+- Page-sized or larger copies on an ARMv6 SoC with 32-byte cache lines, where the author reports the largest gain (about 70-80% on copy_page).
+- Studying how write alignment (8 vs 32 bytes) and the PLD distance interact on a given SoC before tuning your own routine.
+
+**Skip it when:**
+- AArch64 or x86: the code is 32-bit ARM assembly only, and the benchmark exits unless sizeof(size_t) == sizeof(int).
+- Userspace memcpy/memset on a Raspberry Pi or other ARM32 board: the siblings bavison/arm-mem or copies-and-fills are drop-in libc replacements aimed at that job, and these routines carry kernel names and kernel conventions.
+- Kernel copy_from_user/copy_to_user: the author's own issue #1 (2013-12-03) says the current versions do not work correctly in the kernel, and the userspace harness never exercises user-space page faults.
+- Current upstream kernels: the patches stopped applying cleanly by February 2015 and nothing has changed since 2013-08-28.
+- When you need published, reproducible numbers: no run output, compiler version, SoC or clock is checked in.
+
+**Vs siblings:** Pick it only for kernel-side 32-bit ARM copy_page/memset/memzero work or as an ARM32 test harness. For userspace on a Raspberry Pi, bavison/arm-mem or simonjhall/copies-and-fills replace libc directly. For modern Arm cores, Arm Optimized Routines is maintained and covers AArch64.
+
+**Gotchas:**
+- The quoted speed-ups were not measured on the copy_page now at HEAD. They come from the 2013-07-12 patch commit message and the mailing-list post, both written before commit 83f288c (2013-07-14) reworked copy_page.S. The patch version runs a loop per L1_CACHE_BYTES with PREFETCH_DISTANCE 3 (96 B on ARMv6, 192 B on ARMv7). HEAD defaults to PRELOAD_LINE_SIZE 32 with a prefetch offset of 128 B (ARMv6) or 256 B (ARMv7). Running bench.script at HEAD therefore times different code from the posted kernel patch.
+- Latent overrun in HEAD copy_page.S on ARMv4 (no PLD) with the default PRELOAD_LINE_SIZE 32: NO_PLD loads r2 = COPY_COUNT = 4096/32 = 128, but each loop iteration copies 64 bytes, so it copies 8192 bytes. That runs one full page past both source and destination. The kernel patch version copies 32 bytes per iteration and is correct. ARMv4 is listed as untested.
+- The README's NEON step is broken: the Makefile line is '#NEON_CLAGS = DUSE_NEON', a misspelled variable with no leading '-'. Uncommenting it never sets NEON_CFLAGS, so NEON stays off unless you fix the Makefile by hand.
+- Harness limits: each address/size pattern table holds only 256 entries, so the same 128 source/destination pairs repeat, keeping caches and branch predictors warm. Results print as one MB/s line per repetition with no median or aggregation. An independent tester on the July 2013 linux-arm-kernel thread (Willy Tarreau) found that the prefetch strategy did not work well for copy_page and large memcpy on his platforms. A follow-up tweak gained about 0.8% on memcpy. This comes from a WebSearch snippet only; lore.kernel.org was unreachable.
+
+**Status:** Abandoned since 2013-08-28 and labelled experimental by its author, with a known-broken copy_from/to_user (issue #1). Licensing is per file: MIT for the new memcpy and benchmark, GPL-2.0-only for the kernel-derived memset, memzero and copy_page. No upstream merge was found. Useful as a reference and harness, not as a dependency.
+
+[repo](https://github.com/hglm/test-arm-kernel-memcpy) · [benchmark](https://github.com/hglm/patches)
+
+##### ImGui SIMD ImStrlen/ImMemchr (PR #8421, Kraionix/ImGuiMemchrBench)  `C++`  `no license`  `stale`  `Tier C`
+
+Unmerged Dear ImGui PR: SSE/AVX2 strlen and memchr with software prefetch, 1.4-1.55x over MSVC CRT on large buffers.
+
+**Beats:** C runtime strlen and memchr (labelled CSTD; ImMemchrCSTD is a plain memchr call). The bench repo is a Visual Studio 2022 project (v143 toolset, Release|x64, static CRT /MT), so CSTD is the MSVC CRT implementation, not glibc — Author-run Google Benchmark tables in PR #8421 on an overclocked i9-10980XE, built with MSVC v143 Release /arch:AVX2 /MT (exact version unstated), against the MSVC CRT: memchr finding a newline every 131 bytes, AVX2+prefetch 20.53 vs 14.29 GiB/s at 1 MB (about 1.44x) and 17.17 vs 10.93 GiB/s at 1 GB (about 1.55x; 1.13x without prefetch); strlen over one long string 93.33 vs 16.45 GiB/s at 1 MB (about 5.7x, L2-resident) and 17.6 vs 12.52 GiB/s at 1 GB (about 1.41x), ratios derived from page data. Only the memchr harness is public; the strlen benchmark code is not.
+
+**Known shortcoming:** Numbers come from an open, unmerged PR thread (ocornut/imgui #8421) on an i9-10980XE; the bench repo README has no results table, compiler or flags and no LICENSE (reference only); only memchr has a public harness, the ImStrlen numbers have none.
+
+**Known shortcoming:** Harness flaws in immemchr.h outside the posted rows: the SSE4.2 variants use _mm_cmpistri (stops at NUL), read 16 bytes past the end and can return a pointer beyond end; the AVX2_UNROLL bound is end - 4096 instead of end - 128; no result validation. The SIMD variants are inlinable in the benchmark's translation unit while CSTD calls the CRT memchr once per 131-byte line (per-call overhead in the gap, inference). The PR's SSE/AVX2 paths call _tzcnt_u32/_andn_u64 gated only on __SSE__/__AVX2__, so a GCC build without -mbmi is expected to fail (read from the header, not compiled). Upstream master 1.93.0 WIP has an unguarded '#define ImStrlen strlen', so the hooks need a patch; ImStrlen over-reads trip ASan.
+
+**Independent measurement:** verifier batch-61 (wave 13), file only (agent killed by the spend limit before reporting)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Each function does one unaligned 32-byte (or 16-byte) load at the start, rounds the pointer up to an aligned boundary, then loops on aligned loads with PCMPEQB + PMOVMSKB and TZCNT to locate the first match, and issues a software prefetch 1024 bytes ahead on every iteration. ImStrlen keeps over-reads inside the first 4 KB page explicitly and then relies on aligned loads never crossing a page; ImMemchr stays inside [buf, buf+count) and finishes the last 0-31 bytes with a scalar loop. At 1 GB most of the gain is the prefetch: AVX2 memchr without it is only 1.13x over the CRT.
+
+**Use it when:**
+- MSVC x64 builds of Dear ImGui that render very large text blocks (multi-megabyte logs through TextUnformatted, where the author saw frame time drop from about 1.6 ms to 0.98 ms on a 16 MB buffer with a newline every 131 characters).
+- Projects already compiling with /arch:AVX2 (or -march=haswell) whose C runtime strlen/memchr is not AVX2-dispatched.
+- As a starting point for your own ImStrlen/ImMemchr override, patched into imgui_internal.h in place of the strlen/memchr defines.
+
+**Skip it when:**
+- Typical ImGui UI text: labels are short, and ImMemchr falls back to a byte-by-byte loop below 32 bytes (16 for SSE) and for every 0-31 byte tail, where a libc memchr is likely as fast or faster (not measured by the author).
+- Linux/glibc or macOS: the only baseline measured is the MSVC static CRT, and glibc already dispatches AVX2/EVEX memchr and strlen, so the gain there is undocumented.
+- Debug builds: the maintainer noted libc is always compiled optimized while ImGui follows the project's flags, so unoptimized intrinsics may lose to the CRT.
+- Builds checked with AddressSanitizer: ImStrlen reads whole aligned 32-byte blocks past the terminator (page-safe but outside the allocation).
+- Non-x86-64 targets: no NEON or other fallback beyond libc.
+
+**Vs siblings:** Pick it over WojciechMula/toys avx512-string when you need AVX2 rather than AVX-512 and the baseline is MSVC's CRT; pick it over AOCL-LibMem when you only want ImGui's two string hot paths sped up rather than replacing libc wholesale. For general use, a tuned libc or Arm/AMD optimized routines remain the safer choice.
+
+**Gotchas:**
+- Benchmark-repo defects found reading ImMemchrBench/immemchr.h (they do not touch the posted AVX2/SSE/CSTD rows): the SSE4.2 variants use _mm_cmpistri, an implicit-length string compare that stops at a 0x00 byte, so they miss matches after an embedded NUL and cannot search for '\0'; their two-chunk loop runs while ptr <= end - 16 but loads ptr + 16 as well, reading 16 bytes past the buffer and returning a pointer beyond end if that garbage holds the byte. The AVX2_UNROLL variants set the unrolled bound to end - 32 * 128 (4096 bytes) instead of end - 128. The harness never compares any variant's result with memchr, so these went unnoticed.
+- Harness asymmetry: the SIMD variants are defined in the benchmark's own translation unit (inlinable under /GL /Ob2), while CSTD calls the static CRT memchr once per 131-byte line, about 8.2 million calls per GiB, so per-call overhead is part of the measured gap (inference from the code; not quantified).
+- Portability: the PR gates the SSE path on __SSE__ (always defined on x86-64) and the AVX2 path on __AVX2__, yet both call _tzcnt_u32 and the AVX2 path _andn_u64, which GCC's bmiintrin.h compiles under target("bmi"); a GCC build without -mbmi is therefore expected to fail with a target-specific option mismatch (read from the header, not compiled here). MSVC accepts them.
+- ImMemchr computes end - 32 (or 16) and end - 1024 before checking the length, forming pointers before the buffer for short inputs (formally undefined, harmless on x86); ImStrlen's aligned loads read up to 31 bytes past the terminator (page-safe), which AddressSanitizer will report as an out-of-bounds read.
+
+**Status:** Reference only: the bench repo has no licence and five commits (last 2025-02-23), the PR has been open and unmerged since 2025-02-21 with the maintainer adding only strlen/memchr #define hooks (commit 1ec99f4, 2025-03-07); the fork's code sits in an MIT-licensed ImGui fork but the author states no licence for it.
+
+[repo](https://github.com/Kraionix/ImGuiMemchrBench) · [benchmark](https://github.com/ocornut/imgui/pull/8421)
+
+##### LibC-String-Optimisations (XEOS x86 and x86-64 string functions)  `Assembly (x86, x86-64) with C tests`  `XEOS Software License 1.0 (custom BSD-style licence with an advertising clause and a clause forbidding combination or linking with GPL/LGPL software; not OSI-approved)`  `abandoned`  `Tier C`
+
+Hand-written SSE2/SWAR x86 and x86-64 assembly strlen, memchr, memcpy, memset, strcat for Mach-O; mostly 1-15% over OS X 10.9 libc.
+
+**Beats:** OS X 10.9 libc strlen, memset, memchr, memcpy, strcat (the README notes it is also heavily optimised); not glibc or musl — The README is first-party: OS X 10.9 libc as the baseline, CPU and compiler versions not stated, one run per row, harness at -O0, 10M calls per row. In 64-bit, XEOS took 0.7% less time on strlen of 1,000 characters, 14% less on 4 KiB memset, 7.7% less on 1,000-byte memchr, 7.6% less on aligned 4 KiB memcpy and 3.4% less on aligned strcat, and 15.6% more on misaligned memcpy. The 12x 32-bit memchr gain is against OS X's slow 32-bit memchr. The 2.8x/3.1x misaligned strcat gains are a timing bug; corrected they are about 0.94x in 64-bit and 1.08x in 32-bit (derived from page data).
+
+**Known shortcoming:** Harness built with no -O flag; OS X 10.9 baseline; gains mostly 1-15% with a 32-bit misaligned memcpy loss; no CPU stated. Licence is the XEOS Software License 1.0 (non-OSI, anti-GPL clause), reference only.
+
+**Known shortcoming:** Harness flaw: strcat-test.c never resets t1 before the misaligned libc loop, so the 'OS X strcat (misaligned)' row also counts the aligned libc, aligned XEOS and xeos_strcat_c loops (xeos_strcat_c was a stub at README commit 7e40015); corrected (derived from page data), 64-bit OS X misaligned is at most 1.34 s vs XEOS 1.42 s (XEOS about 6% slower) and 32-bit 1.64 vs 1.52 s (about 8% faster), so the 2.8x/3.1x strcat wins are artifacts. xeos_memchr compares the length with signed jumps, so n >= 2^63 (the SIZE_MAX idiom) returns NULL; every .o defines a global __SSE2Status, so two objects linked together give a duplicate symbol; xeos_strcat_c truncates on a misaligned destination.
+
+**Independent measurement:** verifier batch-34 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** On the first call each function runs CPUID and caches SSE2 support in a global. The SSE2 path aligns the pointer down to 16 bytes, masks the leading bytes with a shifted all-ones mask, and then scans with pcmpeqb + pmovmskb + bsf. strlen checks one 16-byte block per iteration; memchr broadcasts the byte with punpcklbw/pshufd and unrolls 4x16 bytes. memcpy copies 128-, 64- and 16-byte blocks through eight xmm registers (movdqa when both pointers are aligned, movdqu loads otherwise), and memset stores 16-byte movdqa blocks. The non-SSE2 fallbacks use the SWAR has-zero-byte bit trick on 4- or 8-byte words. There is no AVX, no non-temporal store and no rep movsb/stosb.
+
+**Use it when:**
+- As a short, heavily commented reference for classic SSE2 string scanning (aligned-down load, leading-byte mask, pcmpeqb/pmovmskb/bsf) and SWAR fallbacks, in both 32-bit and 64-bit NASM/yasm syntax.
+- In freestanding x86 kernels or hobby OSes without a libc that need small, dependency-free memchr, strlen or memset on pre-AVX hardware, and only if the XEOS licence terms are acceptable.
+- In 32-bit x86 code on old OS X, where the system memchr was the slow one: 0.53 s vs 6.37 s for 10M scans of 1,000 bytes in the README.
+
+**Skip it when:**
+- On any current libc target. The baseline is the 2013 OS X 10.9 libc, the aligned 64-bit wins are 0.7-14% less time, and the project has no AVX or ERMS paths.
+- For misaligned memcpy: it is slower than OS X in both builds (1.408 vs 1.218 s in 64-bit, 1.458 vs 1.446 s in 32-bit).
+- In GPL/LGPL projects or anywhere an OSI licence is required. Clause 3 of the XEOS Software License 1.0 (printed in the Makefile header) forbids combining or linking the code with GNU-licensed software, and clause 4 requires an advertising acknowledgement.
+- On Linux/ELF or Windows: it is built with yasm -f macho/macho64, uses leading-underscore symbol names and the System V register convention, so it needs porting.
+- In production code in general: the README badge says prototype, the last code commit is from 2014, and the tests only print pointers and strings without comparing them to libc.
+
+**Vs siblings:** Agner Fog's asmlib covers the same functions plus memmove and strcpy, for 32- and 64-bit, with published cycles-per-byte comparisons against glibc and Darwin libraries; fancy-memset and the Arm Optimized Routines cover modern memset and Arm targets. Pick XEOS only as a compact SSE2/SWAR teaching reference, or for a pre-AVX freestanding x86 project that can accept the anti-GPL licence clause.
+
+**Gotchas:**
+- Harness flaw behind the headline strcat wins. strcat-test.c never resets t1 before the misaligned libc loop, so 'OS X strcat (misaligned)' = t2 - t1 also includes the aligned libc loop, the aligned XEOS loop and the xeos_strcat_c loop. In commit 7e40015, where these README numbers were added, xeos_strcat_c was a stub that returned at once. Subtracting the aligned rows leaves at most 3.920867 - 1.314561 - 1.269549 = 1.34 s for OS X misaligned in 64-bit, against XEOS 1.42 s (XEOS about 6% slower). In 32-bit it leaves 4.644904 - 1.653358 - 1.349833 = 1.64 s, against XEOS 1.52 s (about 8% faster). Both are derived from page data. So the 2.8x and 3.1x 'Best result (!!!)' rows are a timing artifact, and the bug is still on master.
+- The README numbers do not come from today's harness. After they were taken, e1e9b3e (2013-08-19) changed the strcat strings from 1000 to 1024 characters and replaced the C reference with real code. Each harness runs twice (SSE2 pass, then the non-SSE2 path) and the README does not say which pass it quotes. Each row is one gettimeofday interval at -O0, and the libc loop always runs first with no warm-up. The libc calls go through dyld stubs while the xeos_* calls are direct, so the 0.38 ns-per-call strlen margin is noise.
+- xeos_memchr compares the remaining length with signed jumps (jle). Any n of 2^63 or more, including the memchr(p, c, SIZE_MAX) idiom, returns NULL even when the byte is present.
+- The C fallback xeos_strcat_c on master handles only an aligned destination end: after the source-alignment bytes, its misaligned branch writes at most one word's worth of bytes and then NUL-terminates, which truncates the result (commit message: 'aligned pointers only for the moment'). The harnesses declare `extern int _SSE2Status` although the 64-bit objects define a quadword.
+
+**Status:** Abandoned prototype: the last code commit is from 2014 (YASM build), the last README edit 2017-01-11, with 7 stars and one open feature request. It is usable only as a reference, because of the custom XEOS licence (anti-GPL and advertising clauses, no LICENSE file) and Mach-O-only builds, and its headline strcat numbers come from a timing bug.
+
+[repo](https://github.com/macmade/LibC-String-Optimisations) · [benchmark](https://github.com/macmade/LibC-String-Optimisations/blob/master/README.md)
+
+##### memcpy_threaded / memset_threaded (Carandiru0 mem.h gist)  `C++`  `CC-BY-NC-SA-4.0`  `abandoned`  `Tier C`
+
+MSVC/Windows header that splits huge memcpy and memset across Intel TBB threads using AVX2 non-temporal loads and stores.
+
+**Beats:** MSVC compiler-intrinsic memcpy and memset (the gist declares #pragma intrinsic(memcpy) and #pragma intrinsic(memset), i.e. the compiler/CRT built-ins), single-threaded and also run multithreaded; MSVC version not stated — The author's code comments report memory-controller bus traffic from Intel PCM: 22 GB/s for MSVC's intrinsic memcpy on one thread, 29 GB/s for it multithreaded, and 33.3 GB/s (10 GB/s read plus 23.3 GB/s write) for ___memcpy_threaded. ___memset_threaded is also reported at 33.3 GB/s of writes. That is about 1.15x over the threaded intrinsic (derived from page data). No CPU model, compiler version, flags, buffer size or harness is given, and the code that produced the numbers is not in the gist.
+
+**Known shortcoming:** Numbers are code comments only (PCM bus traffic, memcpy 33.3 GB/s counts read plus write) with no CPU or compiler; only about 1.15x over the multithreaded MSVC intrinsic (derived); the header is not standalone. CC BY-NC-SA (reference). Last revision 2022-06-12.
+
+**Known shortcoming:** Enricher: the gist is byte-identical to Carandiru0/Common-Libraries Utility/mem.h at commit c4538da; ___memset_threaded broadcasts with _mm256_set1_epi32, so only 0 and -1 fills match memset; the final bytes % 16 are silently dropped; the alignment template parameter is never read and aligned 256-bit ops need 32 bytes, not the 16 the header states; the TBB grain counts __m256i elements so tasks are 64-128 KiB, not 4 KB; the author's 2023-02-27 commit a967e71 switched both routines back to threaded intrinsic memcpy/memset for normal memory (streaming kept only in the *_stream variants); the comment-only PCM figures (read 10 plus write 23.3 GB/s) do not balance for a copy; CC BY-NC-SA 4.0, reference only.
+
+**Independent measurement:** verifier batch-64 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Memset writes 256 bytes per iteration with _mm256_stream_si256/_mm256_stream_ps (non-temporal stores that skip read-for-ownership). Memcpy bounces each 4 KiB block through a 4 KiB thread_local buffer: MOVNTDQA streaming loads (_mm256_stream_load_si256) into the buffer, an mfence, then ordinary loads and non-temporal stores to the destination. Several threads are used because one core cannot saturate DRAM bandwidth; the author reports bus traffic rising from 22 GB/s (single-threaded intrinsic memcpy) and 29 GB/s (threaded intrinsic) to 33.3 GB/s.
+
+**Use it when:**
+- Windows x64 MSVC code that already links oneTBB and needs to clear or copy buffers of many megabytes, where a single core cannot saturate memory bandwidth.
+- Destinations mapped write-combining (GPU upload heaps, mapped device memory): the author's later revision keeps the streaming kernels only for that case and says they give up to 16x there.
+- As a reference for a threaded non-temporal fill or copy pattern (TBB grain splitting plus AVX2 streaming stores) to rewrite under your own licence terms.
+
+**Skip it when:**
+- Ordinary write-back memory: in February 2023 the author's own Common-Libraries version replaced the streaming kernels in ___memcpy_threaded/___memset_threaded with per-block calls to the intrinsic memcpy/memset, keeping streaming only in new *_stream variants for write-combined memory.
+- Any memset with a non-zero byte value: the fill vector is _mm256_set1_epi32(value), so value 0x41 writes the pattern 41 00 00 00, not 41 41 41 41.
+- Sizes that are not multiples of 16 bytes, or buffers aligned to less than 32 bytes: the kernels drop the last bytes % 16 bytes and use aligned 256-bit loads and stores.
+- Small or medium buffers, data that will be read again soon (non-temporal stores evict it from cache), Linux/macOS, GCC/Clang without MSVC extensions, or commercial products (CC BY-NC-SA 4.0).
+
+**Vs siblings:** Pick it over fast-strlen.c (bjourne) or the riteme memset gist only when you are on Windows/MSVC with TBB and want threaded non-temporal fills or copies, especially into write-combined memory. Those siblings are portable C/C++ with a timed harness and stated hardware, while this one has comment-only numbers and a memset value bug. For measured copy and fill kernels, tinymembench is the better reference.
+
+**Gotchas:**
+- Correctness bug: ___memset_threaded broadcasts the int with _mm256_set1_epi32 instead of a byte broadcast, so only zero (and -1) fills match memset; the 33.3 GB/s memset figure is presumably a zero fill (not stated). The bug is still present in the current Common-Libraries ___memset_threaded_stream.
+- Tails are silently dropped: the kernels stop at 16-byte granularity, so the final bytes % 16 bytes are never copied or set. The 'alignment' template parameter is never read, and the header's 'minimum alignment of 16 bytes' note understates the 32 bytes the aligned 256-bit loads and stores need.
+- The TBB grain is counted in __m256i elements (blocked_range over __m256i pointers), so the default block_size of 4096 makes 64-128 KiB tasks, not the 4 KB per thread the comment says.
+- The numbers are memory-controller bus traffic read from Intel PCM, with no CPU, compiler, buffer size or timing harness. The memcpy split (read 10 GB/s, write 23.3 GB/s) does not balance as a DRAM-to-DRAM copy would, so 33.3 GB/s cannot be converted to bytes copied per second. MOVNTDQA streaming loads only act as non-temporal on write-combining memory; on ordinary write-back memory a CPU may treat them as plain loads (Intel SDM text, via search snippets).
+
+**Status:** Abandoned as a gist (four revisions, June 10-12, 2022). The live copy is Utility/mem.h in Carandiru0/Common-Libraries, last changed February 27, 2023, where the threaded routines now call the intrinsic memcpy/memset for normal memory. It is reference-only: Windows/MSVC/TBB-bound, licensed CC BY-NC-SA 4.0 (non-commercial, not OSI) under an 'All Rights Reserved' line, and carrying a memset value bug.
+
+[repo](https://gist.github.com/Carandiru0/a4069c03b32ad4e1ec77a67d78f999c4) · [benchmark](https://gist.github.com/Carandiru0/a4069c03b32ad4e1ec77a67d78f999c4)
+
+##### nadavrot/memset_benchmark (AVX2 assembly memset and memcpy)  `Assembly (x86-64 AVX2, AT&T .S) with C/C++ harness`  `no license`  `abandoned`  `Tier C`
+
+Small-size-tuned AVX2 x86-64 assembly memset and memcpy that beat glibc, Folly and musl on 0-511 byte calls.
+
+**Beats:** glibc memset and memcpy (with and without PLT indirection, 'libc@plt' and 'libc'), also musl and folly (memcpy chart) — On one unnamed AVX2 CPU with an unstated late-2021 glibc (issue #5 asking for both was never answered), the random-size benchmark (sizes and offsets 0-255, 10M calls, median of 20 samples, nop-call overhead subtracted) gives memset: glibc direct 20,172, via PLT 24,344, asm 14,295 (1.41x vs direct, derived from chart data); memcpy: glibc direct 25,263, Folly 23,969, asm 21,547 (1.17x, derived). The harness Stopwatch reports microseconds, so these read as about 2.0 vs 1.4 ns per memset call and 2.5 vs 2.2 ns per memcpy call (derived, assuming the charts plot the harness output); the only outside run (issue #6, 2023, Ivy Bridge i3-3210 without AVX2) timed the C huge_memset, not the assembly, and found musl faster.
+
+**Known shortcoming:** Chart values match (memset 1.41x, memcpy 1.17x over direct libc) but there is no LICENSE (the Folly memset.S is the Apache-2.0 route), no CPU, compiler or glibc version, and glibc direct matches or beats asm_memcpy around 165-250 bytes. Abandoned since 2022-01-10.
+
+**Known shortcoming:** Harness flaw: the 'random' sizes come from a fixed 320-byte DoomRNG table reset every sample; memset draws two bytes per call, so the same 160 (offset, size) pairs repeat 62,500 times per 10M-call sample and branch predictors can learn it, so the README's mispredict claim is optimistic (the ranking stays fair since every implementation sees the same sequence). The 'musl' row is musl's generic C memset compiled -O3 -march=native, not the shipped x86_64 memset.s (rep stosq above 126 B); the proxy shim overrides only memset and forwards to the C local_memset, not the asm; impl.S lacks .note.GNU-stack (Folly fixed its copy in #1814); asm_memcpy is not overlap-safe above 128 B while the glibc and Folly comparators are. Chart units are microseconds per 10M calls, about 2.0 vs 1.4 ns per memset call (derived). The only outside run (issue #6, Ivy Bridge) timed the C huge_memset, not the asm, and musl was fastest there.
+
+**Independent measurement:** verifier batch-28 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Both routines branch on size class and cover each class with two possibly overlapping unaligned stores (1-4, 4-8, 8-16, 16-32, 32-64 bytes, then three or four 32-byte stores up to 128), so a short call costs a couple of compares and two stores with no loop or tail handling. Memsets above 176 bytes store one unaligned head, then 32-byte-aligned vmovdqa stores unrolled five-wide, then one unaligned tail; larger memcpys run a 128-byte loop of four unaligned ymm loads/stores and finish with up to three 32-byte copies plus an overlapping last word. The design follows Joe Bialek's MSRC write-up on Windows memset and targets the short-length distribution the author measured in Chrome and other programs.
+
+**Use it when:**
+- x86-64 code with AVX2 whose profile is dominated by short (0-512 byte), variable-length memset or memcpy calls you can route to a dedicated function, e.g. serialization, IPC message parsing, small-object zeroing.
+- As a reference design when writing your own short-size memset/memcpy: the size-class tree and overlapping-store tricks are easy to read and the repo's exhaustive tester (sizes 0-1023, all small offsets, guard bytes) is reusable.
+- If you already build Folly with AVX2 enabled: use __folly_memset (this memset plus a rep stosq path for fills of 4 KiB and up, licensed Apache-2.0) instead of the unlicensed original.
+- To find out whether your own program's calls are short enough to benefit, via the repo's LD_PRELOAD length-histogram tool.
+
+**Skip it when:**
+- Buffers above 511 bytes were never measured, and the code has no rep stosb/rep movsb, non-temporal store or prefetch path; for multi-kilobyte and larger fills or copies glibc's ERMS/non-temporal paths (and Folly's rep stosq branch, added when it upstreamed this memset) are the safer choice.
+- Overlapping buffers: asm_memcpy is plain memcpy and is not overlap-safe above 128 bytes, whereas glibc's x86-64 memcpy is its memmove entry (the README's own backtrace shows __memmove_avx_unaligned_erms) and Folly's memcpy detects overlap; swapping it in can expose latent overlap bugs.
+- CPUs without AVX2 (asm_memset uses vpbroadcastb; asm_memcpy needs AVX) or the Windows x64 ABI: there is no CPUID dispatch and the code assumes System V argument registers (rdi, rsi, rdx); Linux and macOS symbol variants only.
+- Anything that needs a license: the repository has no LICENSE file, so the code is all-rights-reserved reference material; only the memset has a licensed copy (Folly).
+- memcpy sizes of roughly 155-195 bytes (Folly faster) and 190-255 bytes (glibc called directly faster), as read from the author's own fixed-size chart (docs/memcpy_bench.png).
+
+**Vs siblings:** Pick it (or rather Folly's __folly_memset) over fancy-memset or Agner Fog's asmlib when the workload is short variable-length calls on AVX2 hardware and you want a tiny, readable size-class design; asmlib offers CPU dispatch and a full string-function set but its numbers are against glibc 2.7/2.8, and DPDK's rte_memcpy is the maintained, licensed choice for small cache-resident copies.
+
+**Gotchas:**
+- Harness flaw in the headline 'random sizes' benchmark: offsets and sizes come from one fixed 320-byte table (include/utils.h DoomRNG) that is reset every sample; memset draws two bytes per call, so the same 160 (offset, size) pairs repeat 62,500 times in each 10M-call sample (memcpy draws three, a 320-call cycle). Branch predictors with long histories can learn much of a cycle that short, so the README's claim that this benchmark 'takes into account mispredicted branches' is optimistic; every implementation sees the same sequence, so the ranking is fair but the gap on genuinely random sizes is unmeasured. Hacker News commenters made the same priming criticism (search snippet of thread 29197161; the thread itself was not opened).
+- The 'musl' curve in the fixed-size memset chart is musl's portable C memset copied into src/memset/impl.c and compiled by the harness with -O3 -march=native, not the x86_64 assembly memset.s that musl actually ships (rep stosq above 126 bytes), so it does not represent musl libc on x86-64. 'libc' is &memset called directly and 'libc@plt' adds a jmp trampoline through the PLT; the direct column is the fair glibc comparison.
+- The README says the proxy tool swaps memset and memcpy, but src/memset/shims.c overrides only memset and forwards it to the C local_memset, not asm_memset; LD_PRELOAD experiments with it do not exercise the assembly.
+- The impl.S files carry no .note.GNU-stack section (nor .type/.size/CFI), so GNU ld marks a binary linking them as needing an executable stack; Folly fixed this in its copy (commit 0b150f5, #1814, 2022-07-11). Fixed-size sweeps use only 16-byte-aligned buffers at offset 0 with identical source and destination alignment.
+
+**Status:** Abandoned since 2022-01-10 (110 commits, 344 stars, 3 open issues unanswered) and unlicensed, so treat it as reference; the memset lives on, licensed and maintained, as folly/memset.S, while the memcpy was never upstreamed.
+
+[repo](https://github.com/nadavrot/memset_benchmark) · [benchmark](https://github.com/nadavrot/memset_benchmark)
+
+##### sve-string-routines-benchmarks (Arm SVE strcpy, strncpy, strcmp, strncmp)  `Assembly (AArch64 SVE) with a C harness`  `LGPL-3.0 (repository LICENSE and harness sources); the routine sources derived from Arm optimized-routines keep Arm's header 'SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception' (checked in string/aarch64/new/strcpy-sve.S)`  `stale`  `Tier C`
+
+Research SVE assembly for strcpy, strncpy, strcmp and strncmp that times 1.3-1.6x faster than glibc on Graviton3E, but drops page-fault safety.
+
+**Beats:** GNU libc 2.39 string routines (strcpy, strncpy, strcmp, strncmp, strlen, memcpy as selected on Graviton3E) and the Arm Optimized Routines 23.01 SVE versions — On an AWS Graviton3E (hpc7g.16xlarge, kernel 6.2.0-1018-aws, harness built with GCC 12.3.0; glibc version labelled 2.39 but unconfirmed), median hot-cache per-call times in the raw .dat files give geomean speedups over glibc of 1.64x strcpy, 1.40x strncpy, 1.37x strcmp and 1.45x strncmp from 64 B to 512 MiB (aligned), and 2.8x, 3.0x and 1.8x over AOR 23.01 SVE strcpy, strlen and strcmp. On NVIDIA Grace the glibc gains shrink to about 1.0-1.35x. The routines measured are not fault-safe, and the strncpy is non-conforming.
+
+**Known shortcoming:** Full range starts at 64 B; on Grace the wins shrink to strcpy 1.06x and strcmp 1.01x (Neoverse V1-specific); the glibc 2.39 label is hard-coded; the harness is built at -O0 and its correctness asserts are DEBUG-only (never on); the .S files keep the Arm MIT OR Apache-2.0 WITH LLVM-exception header.
+
+**Known shortcoming:** Enricher (code reading): the new strcpy/strcmp/strlen dropped the LDFF1B first-fault path and use unaligned full-vector LD1B with no alignment step, so a string ending near an unmapped page can SIGSEGV (glibc aligns its loads, AOR uses LDFF1B), meaning the 2.8x/3.0x/1.8x gains over AOR partly come from removed fault safety; the new strncpy's first vector ignores n (writes past dst+n when n is below the vector length), has no zero padding and writes when n==0, never exercised because the benchmark passes n == strlen; the driver is built -O0, the median index is off by one and the stpcpy variant uses an uninitialised p2. Retiered to C, reference only.
+
+**Independent measurement:** verifier batch-48 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** On Neoverse V1 the authors found SVE INCB/INCP loop-offset increments slow. They read the vector length once with CNTB and advance the offset with a plain ADD. They also removed the first-fault machinery (SETFFR, LDFF1B, RDFFRS and the partial-vector fallback path) that Arm's versions use. Each routine becomes a tight loop: full-vector LD1B, CMPEQ/CMPNE against zero, B.ANY or B.NONE, then BRKA/BRKB and LASTA to finish.
+
+**Use it when:**
+- Studying why INCx-based SVE loops underperform on Neoverse V1 (Graviton3/3E) and testing the CNTx+ADD rewrite in your own SVE kernels.
+- Benchmarking your own AArch64 string routines: the harness compares any routine against glibc or AOR across 1-128 B and 64 B-512 MiB, aligned and malloc-aligned.
+- Internal code on Graviton3-class hardware where every string is known to sit in a buffer with at least one vector length (32 bytes on Graviton3) of readable memory after its terminator, and strncpy padding is not needed.
+
+**Skip it when:**
+- As a general libc replacement: the new strcpy, strcmp and strlen do unaligned full-vector LD1B loads with no first-fault or alignment step, so a string that ends within one vector of an unmapped page can raise SIGSEGV. glibc avoids this by aligning loads down to 16 bytes (bic src, srcin, 15), and AOR avoids it with LDFF1B.
+- Anywhere strncpy semantics matter: the new strncpy ignores n on its first vector and does no zero padding (details under gotchas).
+- On Neoverse V2 (NVIDIA Grace): the repo's own Grace data shows strcpy only 1.06x and strcmp 1.01x over glibc, so the gain is largely a Neoverse V1 quirk.
+- Short unaligned strings: some lengths are up to 2.7x slower than glibc (strcpy dips to 0.37x).
+- Non-SVE AArch64 or other ISAs: the routines need SVE (built with -march=armv8.4-a+sve).
+
+**Vs siblings:** Pick it only as a reference for the Neoverse V1 INCx-versus-CNTx+ADD finding. For production AArch64 string functions, Arm Optimized Routines (its fault-safe upstream) or glibc are the safer choice. Among siblings it is the only one with public raw data comparing SVE string routines against both glibc and AOR on Graviton3E and Grace.
+
+**Gotchas:**
+- Correctness bug (code reading): new_strncpy_aarch64_sve sets p0 with PTRUE and only applies WHILELO after the first vector. When n is less than the vector length it writes up to the terminator or a full vector regardless of n, so it can write past dst+n. It never zero-fills when src is shorter than n, and with n == 0 it still writes. The benchmark always passes n == strlen(src), so none of this shows up in the numbers, and the DEBUG-only check (strncmp(src, dst, n) == 0) would not catch it either.
+- Memory-safety flaw behind the AOR comparison: the 2.8x (strcpy), 3.0x (strlen) and 1.8x (strcmp) gains over Arm Optimized Routines come partly from deleting the LDFF1B/RDFFRS first-fault path, which exists so that reads past the terminator cannot fault. The README says the FFR-free path is used only 'where the whole vector is known to be valid', but the code never checks this and uses unaligned full-vector LD1B from the first byte. The benchmark's malloc'd buffers always have mapped memory after the string, so the hazard never shows.
+- Harness details: the C driver builds at GCC's default -O0 (CMAKE_BUILD_TYPE Release is commented out), so each timed call carries a fixed loop and indirect-call overhead that is a sizeable share of the roughly 2 ns short-string timings (it dilutes ratios rather than inflating them). The 'median' is sorted[nsamples/2 + 1] (the 52nd of 101 samples), and the printed SPEEDUP column uses means, not medians. Warm-up calls only the libc routine, and the baseline always runs first. 'Unaligned' mode is plain malloc rather than aligned_alloc(64), not arbitrary byte misalignment.
+- The 'GNU libc 2.39' label is hard-coded in src/main.c, and the stpcpy build of new strcpy-sve.S (BUILD_STPCPY) uses predicate p2, which that routine never initialises (not built by default).
+
+**Status:** Stale research code (last commit 2024-05-29, 0 stars, LGPL-3.0 harness with Arm's MIT OR Apache-2.0 headers on the routines); one search found no upstreamed version in glibc or AOR, and the page-fault and strncpy defects mean it should be treated as a reference for the CNTx+ADD idea, not copied into production.
+
+[repo](https://github.com/dssgabriel/sve-string-routines-benchmarks) · [benchmark](https://raw.githubusercontent.com/dssgabriel/sve-string-routines-benchmarks/HEAD/results/README.md)
+
+##### WebAssembly memory.copy (bulk-memory-operations proposal)  `WebAssembly (proposal text with V8 prototype)`  `Per-directory (repo LICENSE): document/ W3C Software and Document Notice and License; interpreter/ and test/ Apache-2.0; papers/ CC-BY-4.0`  `finished`  `Tier C`
+
+WebAssembly memory.copy/memory.fill instructions; 2017 V8 prototype copied up to about 3-11x faster than Emscripten's wasm memcpy loop.
+
+**Beats:** Emscripten-generated wasm memcpy loop (aligned i32.load/i32.store) used in the Unity demo, plus manually unrolled i32 and i64 load/store loop variants — Ben Smith's 2017 measurement in the proposal Overview copies 1 GiB per row (32 B to 1 MiB chunks) with a hacked V8 that runs memory.copy as a native MemMove call, against Emscripten's i32 memcpy loop and hand-unrolled i32/i64 loops, on an unnamed 2.9 GHz x86-64 machine: 17.902 vs 7.010 GiB/s (best loop) at 1 KiB, 29.728 vs 10.032 at 128 KiB, and a loss at 32 B (1.382 vs 1.565).
+
+**Known shortcoming:** Every number matches Overview.md but the baseline is Emscripten wasm loops, not native libc; the benchmark gist has verification commented out and the intrinsic column needs the author's unpublished V8 hack; no CPU model. Proposal merged into the core spec 2.0 (finished).
+
+**Known shortcoming:** Harness flaws: the public gist's 'intrinsic' module is a stub returning 0 (a stock engine times empty calls; memory.copy was swapped in only by the author's unpublished V8 hack), the verification block is commented out, each cell is one timed pass, 'Gib/s' is really GiB/s, and the drop at 1 MiB is unexplained. The baseline is a scalar 2017 wasm loop, not libc. memory.copy is now the default lowering in Emscripten 4.0.0 and Rust 1.87 / LLVM 20; wasi-libc uses it only above 32 B, matching the 32 B loss.
+
+**Independent measurement:** verifier batch-35 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Instead of a wasm-compiled byte/word loop with a bounds check per access, the engine handles the whole range in one call to its native memmove (the prototype called V8's MemMove), which can use the host CPU's widest vector moves. The proposal's table shows the gain growing with size: a loss at 32 B, 1.2x at 64 B, 2.5x the best hand-unrolled i64 loop at 1 KiB and 3x at 128-512 KiB, against the Emscripten i32 loop 6.8x at 1 KiB and 10.7x at 128 KiB.
+
+**Use it when:**
+- Any Wasm build that copies or clears buffers larger than a few dozen bytes (image, audio and network buffers, Vec/std::vector growth, arena resets): make sure bulk memory is on so memcpy, memmove and memset become memory.copy and memory.fill.
+- Toolchains already default to it: Emscripten 4.0.0 (2025-01-14) enables BULK_MEMORY and implements memcpy and memmove as memory.copy; Rust 1.87+ with LLVM 20 enables bulk-memory on wasm32-unknown-unknown; wasi-libc's memcpy switches to it above 32 bytes.
+- Overlapping moves (memmove) in Wasm: the instruction defines overlap semantics, whereas the 2017 Emscripten memmove fell back to a backward byte loop for overlapping regions.
+- Passive data segments with memory.init plus data.drop for initialising shared memory once in threaded Wasm (the proposal's other half).
+
+**Skip it when:**
+- Tiny copies: at 32 B the prototype intrinsic did 1.382 GiB/s against 1.565 for the unrolled i64 loop; LLVM avoids memory.copy for short constant-length copies and wasi-libc only calls it above 32 bytes (issue #111 cites Firefox's out-of-line memcpy as up to 5x slower than a wasm-written one).
+- Targets that must run on pre-2.0 engines: modules containing the 0xfc-prefixed bulk instructions fail validation there; Rust's wasm32v1-none target and -mno-bulk-memory -mno-bulk-memory-opt in Emscripten exist for that.
+- As evidence about native performance: the comparison is native memmove against scalar 2017 wasm loops without SIMD, not against libc memcpy or a wasm simd128 loop.
+- Code that relies on non-overlap for speed: there is no non-overlapping variant (issue #121 stayed open), so engines always handle the memmove case.
+
+**Vs siblings:** Inside Wasm, use bulk memory for memcpy, memmove and memset and the opt-in wasi-libc simd128 string routines for memchr, strlen and strcmp-style scans; the native siblings (tinymembench kernels, Arm Optimized Routines, AOCL-LibMem) apply only to native builds, and memory.copy in browsers already ends in the host's native memmove.
+
+**Gotchas:**
+- The intrinsic column cannot be reproduced from the public gist: the 'intrinsic' module's exported _memcpy body just returns 0 and was swapped for memory.copy only by the author's unpublished V8 hack, so running memcpy.js on a stock engine times empty calls; the gist's data initialisation and 'Value mismatch' verification are commented out and each cell is a single timed pass (one-tenth warm-up, no repeats).
+- Units are mislabelled: the table says 'Gib/s', but the gist computes (bytes copied x 1000) / (ms x 1024^3), so the numbers are gibibytes per second; the unexplained drop from 29.994 at 512 KiB to 11.760 at 1 MiB comes from one run on a machine with no CPU model, engine version or flags stated.
+- Every row only touches a 1 MiB source and 1 MiB destination window with aligned, non-overlapping offsets, so the Emscripten loop's misaligned byte path and the overlap path were never exercised.
+- Since 2019 (spec PR #123, after issue #111) memory.copy checks bounds before writing and traps on out-of-bounds even for zero length; Emscripten's memcpy and memmove therefore skip the instruction when n is 0.
+
+**Status:** Finished: merged into the WebAssembly core spec 2.0 (WG vote 2021-02-10) and the repository archived 2021-11-03; the instruction is now the default lowering of memcpy in Emscripten 4.0.0+ and Rust 1.87+, so it is reference material, not code to copy.
+
+[repo](https://github.com/WebAssembly/bulk-memory-operations) · [benchmark](https://github.com/WebAssembly/bulk-memory-operations/blob/master/proposals/bulk-memory-operations/Overview.md)
+
+##### Apex memmove (Trevor Herselman): SSE2 memcpy and memmove for x86 and x64  `C`  `no license`  `abandoned`  `Tier D`
+
+Unlicensed 2016 mirror of Trevor Herselman's 2014 SSE2 memcpy/memmove with CPUID dispatch. Claims to beat the C library but ships no numbers.
+
+**Beats:** C library memcpy and memmove (the README names no baseline; the repo's source has no comparison) — Nothing is measured in the repository. The README says only 'The fastest memcpy/memmove on x86/x64 ... EVER (according to the author)'. The CodeProject article with the original methodology does not resolve from here, nor does the PostgreSQL 2016 thread where Alvaro Herrera asked for real-workload gains. The only number known, 3.55 ms vs 4.37 ms against the MSVC CRT memcpy in one Core i7 run, comes from a search snippet of a 2020 Ultimate++ forum post (snippet only, block size and flags unknown).
+
+**Known shortcoming:** No benchmark, numbers or baseline in the repo and no licence (reference only); the only number is a snippet of a 2020 Ultimate++ forum post (one MSVC run on a Core i7, 3.55 ms vs 4.37 ms CRT memcpy); the dispatcher sets memcpy = memmove; an abandoned 2016 mirror, 14 stars.
+
+**Known shortcoming:** Correctness bug found by reading the code (not run): in tiberium's backward overlap path for 113 bytes to 256 KiB, 'size = -size;' runs before the 'size > 32' and 'size > 48' tests (apex_memmove.c lines 377-382, .cpp 379-382); size is unsigned, so the tests always pass, and when n mod 64 is 17-47 the tail writes up to 31 bytes before dst (memmove(buf+10, buf, 150) clobbers buf[0..9] plus 16 bytes before buf). tiberium runs on x86-64 without SSE4.2, 32-bit SSSE3-only CPUs and non-MSVC/GCC/Clang x86-64 builds; kryptonite (SSE4.2) is clean. No sfence after the non-temporal stores used at 256 KiB and up. No licence in the mirror; the CodeProject original is reportedly CPOL (snippet only).
+
+**Independent measurement:** verifier batch-97 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Copies of 112 bytes or less go through a branch tree with no loop. It loads every 16-byte SSE2 block plus an overlapping 8- or 16-byte tail before it stores anything, so a single path handles overlap. Larger copies use a 64-byte loop (tiberium) or a 32-byte loop (kryptonite) of unaligned SSE2 loads and stores, counting a negative offset up to zero. At 256 KiB and above, the copy aligns the destination to 16 bytes and prefetches 4 KiB ahead with _MM_HINT_NTA. It then writes with non-temporal _mm_stream_si128 stores, running forward or backward depending on overlap. No AVX, ERMS or rep movsb path exists.
+
+**Use it when:**
+- Studying a compact C-intrinsics design for overlap-safe small copies: load-everything-then-store branch trees for sizes 0-112 bytes.
+- Benchmarking against the CPUs it was tuned on (2014-era Core i, Core 2, Pentium 4), or keeping its history in a memcpy survey.
+- Copying ideas into your own licensed code after independent testing; copying the files themselves is not possible because the mirror carries no license (see status note).
+
+**Skip it when:**
+- Any production use. No license, no tests and no benchmark are in the repository, and the tiberium variant has the out-of-bounds write described under gotchas.
+- Modern CPUs with AVX2, AVX-512, ERMS or FSRM. The code is SSE2-only, and current libc memcpy implementations use wider vectors and rep movsb, which this code predates.
+- Copies between 256 KiB and a few MB whose destination is read right afterwards. The 256 KiB non-temporal threshold is hard-coded, so such copies bypass the cache.
+- Small fixed-size copies (struct copies, memcpy-based type punning). An indirect call through a function pointer replaces what the compiler would otherwise inline as a single move.
+- Non-x86 targets, where it only forwards to libc memcpy and memmove.
+
+**Vs siblings:** Rarely. Agner Fog's asmlib and DPDK's rte_memcpy are x86 copy routines with documented measurements against glibc, and AOCL-LibMem covers AMD Zen with a benchmark tool. Pick apex-memmove only as a short, readable C-intrinsics reference for overlap-safe SSE2 small-size copies.
+
+**Gotchas:**
+- Correctness bug found by reading the code; it was not run, since building is outside this task. In tiberium's backward (overlapping, dst > src) path for 113 bytes to 256 KiB, `size = -size;` runs before the `size > 32` and `size > 48` tests (apex_memmove.c lines 377-382, apex_memmove.cpp lines 379-382). size is an unsigned size_t, so both tests always pass. When n mod 64 is 17-47, the tail loads from src-32 and src-48 and stores to dst-32 and dst-48 relative to the 17-47-byte remainder. That writes up to 31 bytes before dst and reads up to 31 bytes before src. Example: memmove(buf+10, buf, 150) overwrites buf[0..9] (source bytes outside the destination) and the 16 bytes before buf with the bytes that lie 10 positions earlier. kryptonite and mithril test before negating and are not affected. tiberium runs on x86-64 CPUs without SSE4.2 (Core 2, AMD K8/K10), on 32-bit SSSE3-only CPUs, and on every x86-64 build from a compiler other than MSVC, GCC or Clang.
+- Copies of 256 KiB and up use _mm_stream_si128 non-temporal stores and never issue _mm_sfence (no sfence appears anywhere in the source). Another thread that sees a later ordinary flag store may still read stale destination data.
+- Unaligned accesses through casts to long long*, int* and short* are formally undefined behaviour under C alignment and strict-aliasing rules. They work on x86 with current compilers, but sanitizers will flag them.
+- The .c and .cpp files are near-identical copies (the C++ one adds namespace apex). A fix to one must be repeated in the other.
+
+**Status:** Abandoned mirror (three commits, all on 2016-09-22, 14 stars, no issues filed). It is reference only: the mirror carries no license, and a PostgreSQL list post (search snippet only) says the CodeProject original is under the Code Project Open License. Its tiberium variant also has an out-of-bounds write on backward overlapping moves.
+
+[repo](https://github.com/rukkal/apex-memmove) · [benchmark](https://github.com/rukkal/apex-memmove)
+
+#### assemblers-and-asm-tooling
+
+##### z88dk (Z80 development kit: C compilers, z80asm assembler and assembly libraries)  `C`  `Clarified Artistic License (SPDX ClArtistic: FSF-libre and GPL-compatible but not OSI-approved per the SPDX license list), 'unless otherwise stated in the appropriate file'`  `active`  `Tier C`
+
+Z80/8080-family C toolchain (sccz80, zsdcc, z80asm) whose assembly C and maths libraries run 1.1-5.4x fewer cycles than stock SDCC 4.6.0.
+
+**Beats:** SDCC 4.6.0 (also HI-TECH C 3.09 and 7.80 and IAR Z80 V4.06A in the same tables) — The project's wiki tables give exact Z80 cycle counts from z88dk-ticks for programs built by SDCC 4.6.0 #16608 (sdcc -mz80 --max-allocs-per-node200000) and by z88dk's zsdcc 4.6.0 #16639 and sccz80 builds, with every command line public under support/benchmarks. Against SDCC (ratios derived from page data): n-Body 1.94x with math48 and 5.07-5.40x with math32, Whetstone 2.02x and 5.13x, Fasta 1.71x and up to 3.34x, Pi 1.80x on newlib small and 3.62x on classic sccz80, Binary-Trees 1.30x (classic), Dhrystone 1.13x, Sieve 1.15x, Fannkuch 1.06x. The gains come mainly from the assembly float and 32-bit libraries.
+
+**Known shortcoming:** Gains come mostly from the assembly float and integer libraries; the NEW library is 34x slower on Binary-Trees and z88dk loses or barely wins on Sieve and Fannkuch (HI-TECH 7.80 fastest there); Pi and Dhrystone rows are against SDCC_NEW; weak category fit. Clarified Artistic License is not OSI-approved per SPDX (reference).
+
+**Known shortcoming:** Harness flaw in the baseline rows: all eight SDCC readmes hand-derive TIMER_START and TIMER_STOP addresses, and none of the documented sums match the addresses passed to z88dk-ticks (n-Body 0xd83/0xdcc derived vs 0d7a/0dc0 used; Pi 0x213/0x32e vs 0214/0363; Whetstone stop 0xbde vs 09ca); ticks.c resets the count at every start hit and halts at the first end hit, so the baseline windows cannot be verified without rebuilding. Whetstone and Fasta SDCC builds lack the -DSTATIC that every z88dk build uses, Pi *_FAST rows need newlib rebuilt with __CLIB_OPT_IMATH=75, the wiki's Pi sccz80 newlib rows cite April 2020 counts although slower April 2022 remeasures exist (1,766,815,709 vs 1,696,878,309), and math32 is not strict IEEE (denormals flushed, add/sub not round-to-nearest-even).
+
+**Independent measurement:** verifier batch-51 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Most of the speed comes from the libraries, not the compilers. The C standard library and the float and 32-bit integer runtimes are hand-written Z80 assembly, while SDCC ships C-implemented float and long routines (the wiki blames SDCC's losses on these). math32 is an assembly IEEE-754 single-precision package. It uses an unrolled 32_24x8 software mantissa multiply on a plain Z80, the hardware multiplies on Z80N, Z180, eZ80 and Rabbit, and a Quake magic-number seed plus three Newton-Raphson steps for sqrt. Its add and subtract use a cheaper jam-sticky rounding rule instead of round-to-nearest-even. The newlib 'fast integer' build reduces most 32-bit divides to 16-bit divides. zsdcc also uses the __z88dk_callee and __z88dk_fastcall calling conventions to pass arguments to library calls more cheaply.
+
+**Use it when:**
+- Float-heavy C on a Z80 (physics, Whetstone-style maths). With math32, n-Body runs in 0.81-0.86 G cycles against 4.36 G for SDCC 4.6.0 (5.1-5.4x) and 1.60 G for HI-TECH C 7.80 (about 2x).
+- 32-bit integer arithmetic such as bignum-style division loops. The classic sccz80 library runs Pi in 1.99 G cycles against SDCC's 7.22 G (3.6x) in the default configuration.
+- Retro and homebrew machines (ZX Spectrum, Spectrum Next, CP/M, MSX, RC2014, RomWBW, Game Boy), where z88dk's built-in targets, CRTs and appmake output formats save porting work.
+- 8080 and 8085 targets, where sccz80 and 80cc are the supported compilers (zsdcc is Z80-only) and math32_8085 and mbf32 cores exist.
+- Mixed C and assembly projects that want one assembler, linker and librarian (z80asm) with sections, macros and multi-CPU fat libraries.
+
+**Skip it when:**
+- Allocation-heavy code on the newlib library. Binary-Trees takes 6.57 G cycles against SDCC's 0.19 G (about 34x slower) because newlib malloc's first-fit search walks allocated blocks too. Issue #113 has been open since 2017; use the classic library (149 M cycles, 1.30x faster than SDCC) for such code.
+- Tight integer loop code compiled with sccz80. On Sieve its builds take 4.67-4.96 M cycles against SDCC's 4.22 M, and on Fannkuch 67-77 M against 55.7 M. Only zsdcc with newlib wins, by 1.15x and 1.06x, and HI-TECH C 7.80 is fastest on Fannkuch.
+- Code-size-critical builds that assume z88dk is always smaller. SDCC is smallest on Sieve and Dhrystone, HI-TECH C is smallest on Fannkuch, and math32 rows are larger than the older 48-bit rows.
+- Projects that need strict IEEE-754 float semantics. math32 flushes denormals to signed zero, does not use round-to-nearest-even on add and subtract, and does not propagate NaN payloads.
+- Projects that need an OSI-approved licence. The Clarified Artistic License is FSF-free but not OSI-approved, and individual files may carry other licences.
+
+**Vs siblings:** Rasm is the only other Z80 sibling, a standalone cross-assembler with an assembly-throughput claim. Pick z88dk when you need C compilers plus optimised Z80 runtime libraries, not just fast assembly of large .asm sources. The x86 siblings (Zydis, iced, Keystone, JWasm, UASM) cover other ISAs and do not compete.
+
+**Gotchas:**
+- Harness flaw in the baseline rows. All eight SDCC readmes (n-Body, Pi, Whetstone, Dhrystone, Fasta, Binary-Trees, Sieve, Fannkuch) derive TIMER_START and TIMER_STOP from .sym and .map values by hand, and in every one the documented arithmetic gives a different address from the one passed to z88dk-ticks. Examples: n-Body works out to 0xd83/0xdcc but ran with 0d7a/0dc0; Pi to 0x213/0x32e but ran with 0214/0363; Whetstone's stop to 0xbde but ran with 09ca, a window 532 bytes shorter. z88dk-ticks (cpu_run in src/ticks/ticks.c) resets its counter every time PC equals -start and halts the first time PC equals -end, so a wrong address silently changes the measured window. The z88dk rows look up the symbols from the map file (-x map -start TIMER_START), which avoids this. The counts are not at the -counter cap and their sizes look plausible, but the baseline windows cannot be checked without rebuilding.
+- Rows are not all like for like. Whetstone and Fasta were timed with SDCC built without -DSTATIC, while every z88dk build used -DSTATIC (static rather than stack locals). Unlabelled z88dk float rows use 48-bit genmath or math48, which zsdcc narrows to 4 bytes. The newlib *_FAST Pi rows need the z80 library rebuilt with __CLIB_OPT_IMATH=75, which is not the default. The wiki's sccz80 newlib Pi rows quote April 2020 counts (4,012,440,735 and 1,696,878,309) even though the readme has slower April 2022 remeasures (4,028,061,102 and 1,766,815,709).
+- Since v2.5, -lm links math32 instead of genmath (classic) or math48 (newlib). Old build lines therefore change float width and precision silently; use --genmath, --math48 or --mbf64 to get the wider formats back.
+- All cycle counts come from the project's own z88dk-ticks emulator, and the wall-clock columns are cycles divided by 4 MHz. The HI-TECH C and IAR rows were also run by the z88dk project, and HI-TECH C 7.80 is disqualified on Fasta for wrong output.
+
+**Status:** Very active: 26,468 commits, eight commits on 2026-10-11 alone, 178 open issues and nightly builds. Usability is reference-grade because the Clarified Artistic License is not OSI-approved, but the toolchain is free to use and the benchmark sources and command lines are public, so a rebuild with symbol-based TIMER addresses for SDCC would settle the baseline windows.
+
+[repo](https://github.com/z88dk/z88dk) · [benchmark](https://github.com/z88dk/z88dk/wiki/Benchmarks)
+
+##### ai-kernel-optimizer  `Python`  `MIT`  `active`  `Tier D`
+
+Python driver that prompts an AI for x86-64 asm and races it against GCC -O3; winning kernels unpublished.
+
+**Beats:** GCC -O3 compiled C reference kernels (scalar 256-byte-LUT base64 decode, LZ4 1.10.0 fast-path decode, Redis 7.x SipHash 1-2) — Self-reported and not reproducible from the repo: an AI-written SSSE3 base64 decoder ran 4.80x (64 B), 6.23x (1 KiB) and 6.26x (16 KiB) faster than a scalar 256-byte-LUT C decoder built with gcc -O3 -march=native (about 1.8 GB/s versus 8.5-11.6 GB/s). The CPU and GCC version are unnamed, and each figure is one back-to-back run. The LZ4 fast-path row is a tie at an implausible 2.5 ns per call, and the Redis SipHash 1-2 rewrite is 1-4% slower than GCC.
+
+**Known shortcoming:** The assembly, harness.c, C reference and build_and_test.sh are not in the repo (404; the initial commit holds optimize.py plus three case-study reports), so nothing is rerunnable or copyable; base64 4.80-6.26x is against a naive scalar LUT decoder using the known SSSE3 pshufb technique with no input validation and no SIMD library compared; the LZ4 row (about 2.5 ns per 4 KiB block, derived) is impossible and a tie anyway; SipHash is 0.96-0.99x (GCC wins); CPU model and GCC version unstated, single run, no warmup; MIT in README only, no LICENSE file; 2 stars.
+
+**Known shortcoming:** Enricher: the published optimize.py verify harness (gen_harness) treats non-const non-struct pointer outputs such as uint8_t *dst as inputs, passes the same array to both versions and never compares it (only return values and struct outputs are checked), so for the b64 signature the fuzz compares only src_len*3/4 and wrong output bytes pass; the generated fuzz ignores kernel contracts (random lengths 0-255, unrelated end-pointer arrays); the bench fixes scalars at 42 and runs each version once back to back with no warm-up; the LZ4 row (2.5 ns per 4 KiB call) is implausible; the SipHash report contradicts itself (2 vs 3 finalisation rounds); no LICENSE file. Retiered to D.
+
+**Independent measurement:** verifier batch-99 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The one real win, base64 decode, swaps a scalar 256-byte lookup-table decoder for the SSSE3 vector technique: pshufb on the high nibble picks a per-range offset (with a pcmpeqb fix-up for '/'), then pmaddubsw, pmaddwd and pshufb pack 16 ASCII bytes into 12 output bytes per iteration. This is the published Mula-Lemire style vector base64 approach (arXiv 1704.00605, seen as a search result), here without input validation or padding. The LZ4 attempt only widens the match copy to one 16-byte vmovdqu and merges pointer arithmetic into LEA (noise-level). The SipHash attempt reschedules SIPROUND and loses to GCC.
+
+**Use it when:**
+- As a starting scaffold for experiments with LLM-written x86-64 assembly on Linux and GCC: it extracts gcc -O3 -march=native disassembly and a SysV-ABI prompt for a pure C function.
+- To triage a C file for side-effect-free candidate kernels (no I/O, allocation or globals) with scan's heuristic score before hand-optimizing.
+- As a template for C-versus-.S differential testing, but only after rewriting the harness so it compares output buffers and feeds inputs that respect the kernel's contract.
+
+**Skip it when:**
+- As a source of fast base64, LZ4 or SipHash code: none of the benchmarked assembly is in the repo; use a maintained SIMD base64 library (the record names aklomp/base64 and simdutf) or upstream LZ4.
+- As evidence that a kernel is correct: the published verify/compete harness never compares plain pointer outputs (see gotchas), so its '100K PASS' proves little for kernels that write into a buffer.
+- For benchmarks you need to trust: the generated benchmark is one back-to-back run per version on a fixed input, with no warmup or repeats, and a 2% threshold decides the verdict.
+- Off Linux x86-64 with GCC and GNU binutils (objcopy, objdump), or for kernels with more than six register arguments, struct-by-value parameters or code the regex parser misreads (it takes the first non-static function matching a simple pattern).
+
+**Vs siblings:** Pick it only as a small, readable Linux/GCC scaffold for trying LLM-written assembly on one function. STOKE (stochastic superoptimizer with verification), SuperCoder (LLM assembly superoptimization evaluated on a benchmark suite) and SLOTHY (scheduler for crypto and DSP kernels) are research tools with published evaluations, while this repo publishes neither its winning kernels nor a verifier that checks output buffers.
+
+**Gotchas:**
+- Harness flaw in the published verifier: gen_harness classifies every non-const pointer parameter without a struct type (for example uint8_t *dst or int *src_consumed) as an input, fills it with random bytes, passes the same array to both versions and never compares it; only return values and struct-pointer outputs are checked. Generated here for the base64 signature b64_decode_kern(const uint8_t *src, size_t src_len, uint8_t *dst): the 100,000-iteration fuzz compares only the return value src_len*3/4, so a decoder that writes wrong bytes passes. The case studies' '100K PASS' came from separate, unpublished harness.c files.
+- The generated fuzz uses random bytes and random lengths 0-255 regardless of the kernel's contract (base64 needs valid characters and a length divisible by 4; LZ4's end pointers must point into the same buffer, but each pointer parameter gets its own unrelated array). The generated benchmark fixes every scalar at 42 and fills inputs with j*7+13, then times GCC and AI once each, back to back.
+- The LZ4 row cannot measure the stated workload: 10M iterations in 0.024-0.027 s is about 2.5 ns per call for a 4096-byte block, so the kernel probably returned after a few sequences. The report text is also unreliable in detail: SipHash 1-2 is described as having 2 finalization rounds and then the AI version as using 'all 3 finalization rounds', and a VEX vmovdqu is called an SSE copy.
+- The analyze prompt tells the model 'no error checking, inputs valid', so AI kernels drop validation a production decoder needs. 'Provably outperforms GCC -O3' and 'generates optimized x86-64 assembly' overstate a tool that prints a prompt and runs fuzz tests. MIT appears only in the README; there is no LICENSE file and GitHub shows no license.
+
+**Status:** Three commits (2026-02-15 initial release and blog post, 2026-05-17 FUNDING.yml), 2 stars, 0 forks, no releases. MIT is claimed only in the README, so reuse rights are unclear, and only the Python driver is copyable; none of the benchmarked kernels are published.
+
+[repo](https://github.com/cleonard2341/ai-kernel-optimizer) · [benchmark](https://raw.githubusercontent.com/cleonard2341/ai-kernel-optimizer/HEAD/case_studies/base64/REPORT.md)
+
+##### aron  `Rust`  `MPL-2.0`  `abandoned`  `Tier D`
+
+Incomplete Rust x86-64 Intel-syntax assembler emitting Mach-O; a startup-bound hello-world test ran 12.9x faster than macOS as.
+
+**Beats:** macOS as (Apple's system assembler, not GNU as) — One README screenshot of `hyperfine -N --warmup 10` on an unnamed macOS machine (Apple clang 13.1.6 toolchain, Rust 1.60.0, aron 0.1.0) assembling a 31-line, 15-instruction clang -O0 hello-world: aron 3.9 ms against `as` 49.8 ms, 12.94 +/- 2.34x. That is process startup, the author calls it 'not empirical by any means', the objects were never compared, and aron's object omits the unwind, alignment and build-version data that `as` emits.
+
+**Known shortcoming:** Downgraded C to D: the only number is a hyperfine run on a 31-line hello-world (3.9 ms vs 49.8 ms for macOS as, 12.94x) where process startup dominates; the author calls it not empirical; no CPU named, no output check; 2 stars.
+
+**Known shortcoming:** Code bugs: Register::try_from skips 9, so r9 panics and r10-r15 encode one register low; REX.R and REX.B are swapped; no SIB byte, so [rsp] and [r12] are misencoded and a bare [rbp] becomes RIP-relative; no SSE/AVX, nop or endbr64; -f elf is ignored (main.rs always writes Mach-O); the output is opened without truncate; hex immediates turn into symbol relocations. Harness flaw: it drops .cfi_*, .p2align, .build_version and .subsections_via_symbols, so it does less work than as on top of the startup-dominated timing. Usability moved to reference.
+
+**Independent measurement:** verifier batch-02 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** There is no assembly-speed technique: the generated matcher (encodings.rs, which its generator script calls 'a very naive matching algorithm') tries all 918 instruction templates on every line and encodes each successful candidate to keep the shortest. The measured gap is process startup of one small Rust binary against Apple's `as`, which the verifier notes is a driver that hands off to clang's integrated assembler. aron also does less work on the test file: it drops the `.cfi_*`, `.p2align`, `.build_version` and `.subsections_via_symbols` directives that `as` turns into unwind info, alignment and Mach-O load-command data.
+
+**Use it when:**
+- Studying a small, readable example of a table-driven x86-64 encoder: a Python script turns a CSV of opcodes into Rust match functions, and the `object` crate handles Mach-O and relocations.
+- Assembling tiny clang -O0 Intel-syntax files on macOS that use only rax-rdi, rbp- or rip-relative addressing and general-purpose integer instructions, in a loop where about 45 ms of `as` driver startup per file matters (for example a toy compiler's test suite).
+- Forking a teaching assembler under MPL-2.0, as long as you are prepared to fix the encoder bugs listed under gotchas first.
+
+**Skip it when:**
+- Any real build: the table has no SSE/AVX instructions at all (no movaps, pxor, cvtsi2sd), no nop, endbr64 or movabs, and memory operands are only `[reg]` or `[reg +/- disp]` with no index*scale, so typical -O1 and higher clang output fails or misassembles.
+- Code that uses r8-r15 (r9 makes the assembler panic, and other extended registers are encoded as the wrong register), or that addresses through rsp, r12, or [rbp] with no displacement.
+- Linux/ELF targets: `-f elf` is parsed, but main.rs hard-codes ObjectFileType::MachO, and AT&T syntax (the GNU as default) is not parsed.
+- Functions that need unwinding (C++ exceptions, debuggers, profilers): `.cfi_*` directives are dropped, so the object carries no unwind info.
+- Large files: there is no measurement beyond a 15-instruction file, and every line is matched linearly against 918 templates.
+
+**Vs siblings:** Pick minias for a small assembler whose README says it often beats GNU as and the clang assembler, or Keystone for an embeddable assembler library with LLVM MC's instruction coverage. aron makes sense only as reading material, since it emits Mach-O only, has no SSE/AVX, and misencodes r8-r15.
+
+**Gotchas:**
+- Register numbering bug: `TryFrom<i32> for Register` (instructions.rs) maps 8 to R8 and then 10 to R9 through 16 to R15, skipping 9. Every generated matcher calls `Register::try_from(reg as i32).unwrap()` on the ModRM reg operand, so any line where r9 could fill that field panics the assembler, and r10-r15 in that field encode as r9-r14.
+- Instruction::encode swaps REX.R and REX.B: the r/m register's high bit goes to bit 2 and the reg register's to bit 0. Mixing a legacy register with r8-r15 therefore encodes the wrong registers. No SIB byte is ever written, so `[rsp+...]` and `[r12...]` operands are misencoded, and `[rbp]` without an offset becomes RIP-relative. Narrowing immediates goes through `unwrap_unchecked` (undefined behaviour on overflow).
+- Unknown directives are silently ignored (`.p2align`, `.cfi_*`, `.byte/.long/.quad/.zero`, `.text/.data`), so data written through them vanishes without an error, and section alignment is hard-coded to 4. Immediates parse only as decimal: `0x10` becomes a relocation against a symbol named '0x10', and a negative hex value panics.
+- Output and symbols: the output file is opened without truncate, so overwriting a larger existing file (both benchmark commands write a.out) leaves stale trailing bytes. Every non-.globl label, L_ temporaries included, is emitted as a linkage-unit (private extern) symbol. The label iterator stops at the first `.globl` name with no definition in that section, which drops the rest of the symbols in random HashMap order.
+
+**Status:** Abandoned since 2022-10-11 (21 commits, 2 stars, no releases, not on crates.io). The MPL-2.0 source is small enough to read, but the encoder bugs (r9 panic, swapped REX.R/REX.B, no SIB) make it unusable beyond toy -O0 files, so treat it as reference material rather than copyable code.
+
+[repo](https://github.com/Not-Nik/aron) · [benchmark](https://github.com/Not-Nik/aron)
+
+#### assemblyscript-and-wasm-langs
+
+##### JavaScript-vs-WebAssembly-Comparative-Analysis (Rust wasm matrix multiply)  `Rust`  `no license`  `active`  `Tier C`
+
+Master's-thesis harness timing a naive Rust-to-WebAssembly matrix multiply against the same JavaScript loop in Chromium.
+
+**Beats:** JavaScript matrix multiplication (same naive i-k-j loop over Float32Array, TypeScript served by the Vite dev server) in Chromium via Playwright; the matrix sweeps were run only in Chromium (npm scripts exist only for sweep:*-matrix:chromium); Firefox scripts exist only for the particle demo — Medians of 20 timed calls per page load in Playwright's bundled Chromium (version, CPU and OS not stated): JavaScript 3.45, 28.85 and 218.05 ms versus Rust wasm (wasm-pack --release, no SIMD) 2.20, 15.65 and 136.10 ms at n = 128, 256 and 512, i.e. 1.57x, 1.84x and 1.60x; equal at n = 64; means give 1.46-1.69x. The WASM inputs were not the seeded matrices because of the pointer bug, and results were never cross-checked.
+
+**Known shortcoming:** Harness bug: wasm-bridge.ts casts a Float32Array to a raw pointer, so the Rust kernel copies its inputs from address 0 rather than the seeded matrices and the result is never checked against JavaScript (same work on zero data); no CPU or browser version, no licence (reference); matrix runs are Chromium only; README figures are medians (means 1.46-1.69x).
+
+**Known shortcoming:** Enricher: confirms the verifier's bug (wasm-bridge.ts passes a Float32Array as a raw pointer that coerces to 0, so Rust reads from address 0 and the result is never checked against JS); the 'P95' is sorted[floor(reps*0.95)], index 19 of 20, so it is the maximum sample and measures the cold first call; the README's 'cache pressure' explanation for worse WASM P95 at n>=256 is unsupported (likely V8 Liftoff first call without wasm OSR, inference); the n=64 row mixes rep counts with timer-resolution noise.
+
+**Independent measurement:** verifier batch-66 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** No special technique: both sides run the same scalar O(n^3) loop with no SIMD (no simd128 target feature, no .cargo config). Any gain comes from Rust/LLVM ahead-of-time code at opt-level 3 plus wasm-opt versus V8's JIT. Plausible contributors, not analysed in the repo, are that the wasm loop does f32 arithmetic while JavaScript computes in f64 and rounds on each Float32Array store, and that V8 typed-array accesses keep their own bounds checks.
+
+**Use it when:**
+- As a reference data point for scalar, non-SIMD Rust wasm versus plain JavaScript on a naive matmul in Chromium: about 1.5-1.8x on medians at n = 128 to 512, none at n = 64.
+- As a starting template for a Playwright-driven browser benchmark (seeded inputs, query-string parameters, a __dumpResults() hook), after fixing the bridge described under gotchas.
+- To show that a GPU-bound frame loop (PixiJS particles at about 60 FPS) hides a 1.7-2.8x faster physics step.
+
+**Skip it when:**
+- As a library: there is no licence (the README says academic and educational purposes only), no API beyond a demo kernel, one commit, 0 stars.
+- As evidence of WASM tail latency: the 'P95' column is the slowest of the 20 reps, not a 95th percentile, so it mostly measures the first, cold call.
+- For real matrix work: the naive scalar triple loop is far from a blocked, SIMD or BLAS kernel; jeromewu/wasm-perf shows wasm SIMD reaching about 23x over JavaScript on a similar task.
+- For cross-browser conclusions: the matrix sweeps exist only for Chromium, and no CPU, OS or browser version is recorded (docs/ENV.md is linked but missing).
+
+**Vs siblings:** Pick it over jeromewu/wasm-perf (Emscripten SIMD intrinsics, Node.js) or azeemba/wasm-runtime-performance (boost::graph Floyd-Warshall) when you want an in-browser, Playwright-automated, scalar Rust-versus-JavaScript data point. Those siblings measure SIMD or library-level gains, while this one isolates plain AOT-versus-JIT codegen on the same loop, with the data-input bug caveat.
+
+**Gotchas:**
+- Harness bug: apps/wasm-matrix/src/wasm-bridge.ts calls the raw instance export set_a/set_b(ptr: *const f32, len) with the Float32Array itself ('buf as any as number'); JavaScript's ToInt32 turns the array into NaN and then 0, so Rust's slice::from_raw_parts reads n*n floats from linear-memory address 0 (UB on a null pointer) instead of the seeded matrices. With Rust's stack-first wasm layout that region is probably mostly zeroed stack (inference). The WASM side therefore multiplies different data, and nothing checks C against the JavaScript result (only C[0] is read as a 'checksum'). Timing is probably still representative because the loop does the same n^3 scalar multiply-adds, but the 'identical computation' claim fails.
+- The 'P95' metric is sorted[floor(reps*0.95)], which for 20 reps (and for 5) is index reps-1, the maximum. matrix_charts.py then averages these per-run maxima. The README's 'WASM 28-31% higher P95 at n>=256 due to cache pressure' therefore compares cold first calls; the likelier cause (inference) is that V8 runs the first long wasm call in its Liftoff baseline tier with no on-stack replacement, while JavaScript can tier up mid-loop, which fits WASM's max/median ratio of 2.6-3.2x against 1.3x for JavaScript.
+- Each page load times all 20 reps with no warm-up separation, so medians include JIT and Liftoff tier-up effects. The n=64 row aggregates runs with different rep counts (reps column 12.5) and sits at performance.now()'s roughly 0.1 ms coarsened resolution, so its 1.00x median and 1.49x mean are both noise.
+- Raw per-run JSON is gitignored; only aggregated CSV and Markdown are committed, so the number of runs per size cannot be checked.
+
+**Status:** Single-commit master's-thesis snapshot (2025-11-30, 0 stars, no issues) with no licence, so reference only. Useful as a reproducible-looking browser harness once the set_a/set_b bridge is fixed (pass a pointer into wasm memory, or take &[f32] and use the wasm-bindgen glue as the particle bridge does).
+
+[repo](https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis) · [benchmark](https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis)
+
+##### MoonBit  `MoonBit`  `Apache-2.0`  `active`  `Tier C`
+
+Standard library of MoonBit, a Wasm/JS/native-targeting language; vendor benchmark shows its JS output 7.7-7.9x faster than idiomatic JS.
+
+**Beats:** Plain JavaScript in Node v22.0.0 (V8): an idiomatic Array flatMap/filter/map/reduce chain and the same chain on JS Iterator Helpers, plus the json5 npm library's parse; vendor snippets also compare wasm output against Rust and Go compiled to WebAssembly — Vendor benchmark (moonbit-community/benchmark-202404, tinybench, Node v22.0.0 on an Apple M2 Max, MoonBit JS backend built with 'moon build --target js', compiler version not stated, April 2024). Results: an iterator pipeline over 189 records ran at 2,953,032 ops/s against 383,701 for a JS Array chain (7.7x) and 117,733 for JS Iterator Helpers (25.1x); MoonBit core's JSON5 parser ran at 22,908 ops/s against 2,887 for json5 npm (7.9x). All ratios are derived from page data, and no Wasm-backend numbers are in the repo.
+
+**Known shortcoming:** Vendor benchmark repo moonbit-community/benchmark-202404 (Node v22.0.0, Apple M2 Max): iter 7.7x vs plain JS and 25.1x vs JS Iterator Helpers, json5 7.9x; but the JS baseline is an eager array chain, the json5 parse result is never checked, the JS backend (not wasm) was measured and the MoonBit compiler version is unstated. Compiler licence is the non-OSI MoonBit Public License (usability mixed).
+
+**Known shortcoming:** Harness flaw: the compiled MoonBit output is plain JavaScript with fused while-loops, so the 7.7x iter figure measures loop fusion against an eager Array chain with no hand-written JS loop baseline; the dataset is 189 records with result 8, discarded; the '25x' is the ratio to the Iterator Helpers row only. The benchmarked json5 package is gone from core and Iter switched to external iterators in 0.7.1, so the April 2024 numbers are stale; the json5 parse result is never checked (a static read says the lexer covers the input's features). Record correction: the compiler README says the Wasm backend has been open-sourced (MoonBit Public License).
+
+**Independent measurement:** verifier batch-20 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** On the iterator benchmark the compiler inlined the whole as_iter/flat_map/filter/map/fold chain and its closures into two nested while loops with an int counter (the committed target/js/release/build/bench_iter.js), so no intermediate arrays or per-element callbacks remain, while the JS baseline's Array flatMap/filter/map chain allocates a new array per stage. The JSON5 row compares MoonBit core's hand-written char-dispatch lexer and recursive-descent parser (compiled to JS) with the json5 npm package's parser.
+
+**Use it when:**
+- New code that must ship as both a JavaScript module and a Wasm/Wasm-GC module (or native binary) from one source, such as parsers, format converters and data transforms.
+- Iterator-heavy data processing destined for the JS backend, where compiler fusion turns a combinator chain into one loop (338 ns versus 2,606 ns per run over 189 records in the vendor test).
+- Porting a slow pure-JS parser to a compiled language while still exposing a JS API (JSON5: 22,908 versus 2,887 ops/s on a 6.3 KB config in the vendor test).
+- Projects that can track a pre-1.0 language and accept toolchain-driven API changes.
+
+**Skip it when:**
+- To speed up existing JavaScript: the MoonBit output that won is itself plain JS loops, so rewriting a hot Array chain as a for loop gets the same effect without a new language.
+- When you need the benchmarked code as it was measured: the json5 package is no longer in core, and Iter was migrated to external-iterator semantics in 0.7.1, so the April 2024 numbers describe a library that has since changed.
+- Compute-bound Wasm where Rust is the alternative: the vendor's own fib(46) figures (snippet only) put MoonBit at 177.9 ms against Rust's 160.8 ms.
+- Organisations that need an OSI-licensed compiler or plan commercial compiler modifications: the compiler is under the MoonBit Public License (relaxed SSPL, modifications for non-commercial purposes only).
+- Code that needs a stable API: the core README says the library is experimental and the API is subject to change; the CHANGELOG lists breaking changes up to 0.10.x.
+
+**Vs siblings:** Choose MoonBit for new code that should target JS and Wasm-GC from one small, fast-compiling language, as svgo.mbt did; for existing Kotlin, Scala or OCaml code use Kotlin/Wasm, the Scala.js WebAssembly backend or wasm_of_ocaml, and use AssemblyScript-based libraries such as json-as when the team already writes TypeScript.
+
+**Gotchas:**
+- Harness flaw: the iter workload is 5 classes and 189 members (the expected answer is 8), the return value is discarded, and the only JS baselines are an eager Array chain and the Iterator Helpers chain; there is no hand-written JS loop, which is what the MoonBit compiler emitted, so 7.7x measures loop fusion rather than language speed.
+- The '25x faster than JS' headline is the ratio to the slowest JS row (Iterator Helpers, 117,733 ops/s); against the ordinary Array chain the figure is 7.7x (derived from page data), and Kotlin/JS ran at 155,935 ops/s.
+- The json5 row compares two different parsers with different outputs (MoonBit builds a JsonValue, inserting each key with @map.insert; json5 npm builds JS objects) and never checks that MoonBit's parse returned Ok. From reading the lexer (not executed), it handles every feature in the 6,294-byte input: one line comment, unquoted keys, trailing commas, plain decimals, no escapes.
+- Licensing is split: core is Apache-2.0, but the compiler is under the MoonBit Public License (artifacts can be licensed freely; compiler modifications only for non-commercial purposes). The compiler README says the Wasm backend has been open-sourced, which contradicts the record's 'wasm backend not open-sourced'.
+
+**Status:** Actively developed (last commit 2026-10-11, 5,141 commits, 95 open issues, still pre-1.0 at 0.10.13); usability is mixed because core is Apache-2.0 but the compiler is source-available under a non-OSI licence, and the measured json5 package and push-style Iter no longer exist in core.
+
+[repo](https://github.com/moonbitlang/core) · [benchmark](https://github.com/moonbit-community/benchmark-202404)
+
+##### tinymt-wasm-typescript-benchmark (minimal AssemblyScript TinyMT32)  `AssemblyScript`  `no license`  `active`  `Tier C`
+
+Benchmark repo: hand-scalarised AssemblyScript TinyMT32 beats a TypeScript port 1.25-1.42x on ints and Emscripten C++ slightly.
+
+**Beats:** TypeScript TinyMT32 running in V8 (Node 24.18.0) and C++ TinyMT32 compiled with Emscripten and embind — First-party vitest bench on Node 24.18.0 (CPU and OS not stated): minimal AssemblyScript 15.30M calls/s vs C++/Emscripten 14.22M vs TypeScript 12.24M at 10 ints per call (1.25x over TypeScript), 21,602 vs 19,316 vs 15,175 hz at 10,000 ints (1.42x); floats at 10,000 per call 20,544 vs 17,688 vs 234.66 hz, an 87x gap caused by the TypeScript port allocating an ArrayBuffer, Uint8Array and DataView per float. Native rows (clang++ -O3 -Oz with nanobench) come from an unseeded all-zero generator and are not comparable.
+
+**Known shortcoming:** No CPU or OS and no licence (reference); the TypeScript float path allocates on every call and the C++ baseline is built -Oz and called through embind.
+
+**Known shortcoming:** Harness flaw: src/cpp/main.cpp never calls seed() (a local 'uint32_t seed = 44983921329;' shadows the function), so the global TinyMT stays all-zero, a fixed point of next_state, and every native u32() returns 0; the README's 'native C++ 2-4x faster than Wasm' rows time a degenerate generator, and the C++/Emscripten contender is the same build. The exported int() returns a signed i32; the TypeScript port keeps its state in a number[] while the winning AssemblyScript build uses four scalar globals (array-based AssemblyScript builds lose to TypeScript 3.7-5.1x); the committed C++ artifacts (12,350 and 25,519 bytes) do not match the size table.
+
+**Independent measurement:** verifier batch-68 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The fast build keeps TinyMT's 128-bit state in four u32 Wasm globals instead of an array, so nextState/temper compile to straight-line i32 ops with no linear-memory loads, bounds checks or runtime library, and the module is 591 bytes. Float output uses a single f32 reinterpret of the bit pattern (reinterpret<f32>) where the TypeScript port allocates an ArrayBuffer, Uint8Array and DataView per call, which is the whole source of the 44-87x float gap.
+
+**Use it when:**
+- As a worked example of how to write AssemblyScript that actually beats V8-JIT TypeScript: scalar locals and globals only, no Array, StaticArray or string.
+- When you need a tiny (about 1.3 KB wasm plus glue) seeded TinyMT32 stream in a browser or Node and are willing to copy the pattern rather than the code (no licence).
+- When choosing between AssemblyScript and Emscripten for small hot kernels and output size matters: 1,260 bytes vs 36,445 bytes for C++/embind here.
+- When a TypeScript hot path converts integer bit patterns to floats through ArrayBuffer/DataView allocations; the float rows show what that allocation costs.
+
+**Skip it when:**
+- As a dependency: there is no licence file, no package and five commits, so it is reference material only.
+- If your AssemblyScript code needs arrays or other stdlib types: the Array and StaticArray builds are 3.7-5.1x slower than TypeScript (2.70-3.23M vs 12.24M hz at 10 ints per call, derived from page data) and 4.6-5x larger.
+- As proof that Wasm beats JavaScript generally: the integer win is 1.25-1.42x against a TypeScript port that keeps state in a number[] array, and the float win disappears if the TS port reuses one shared typed-array view instead of allocating per call.
+- When you need multiple independent streams: state lives in module globals, so each generator needs its own Wasm instance.
+- When native code is an option: the README's native rows are 2.4-3.4x faster than the best Wasm build, though see the gotcha on how they were measured.
+
+**Vs siblings:** Pick it over xoroshiro128starstar (an AssemblyScript PRNG measured at about 1.10x Math.random) or superfasthash (about 1.21x over its JS twin) only as a teaching reference for what AssemblyScript style wins and loses, since it measures one algorithm across AssemblyScript, Emscripten C++ and TypeScript side by side; for a usable seeded PRNG package take a licensed sibling.
+
+**Gotchas:**
+- Harness flaw behind the native rows: src/cpp/main.cpp declares a local 'uint32_t seed = 44983921329;' that shadows the seed() function and never calls it, so the global TinyMT inst stays all-zero; that is a fixed point of next_state, so every native u32() returns 0 and f32() returns 0.0f. The README's 'native C++ is 2-4x faster than Wasm' rows therefore time a degenerate generator (temper branch always untaken), not the seeded workload the Wasm and TypeScript rows run. The native build also uses -O3 -Oz, so -Oz applies.
+- Exported int() is typed i32, so roughly half of the outputs come back negative in JavaScript; the repo's own Wasm test needs int() >>> 0 to match the reference values, while the TypeScript and C++/embind versions return unsigned numbers.
+- Uneven contenders: the C++ build is size-optimised (em++ -O3 -Oz, last flag wins) and every call crosses an embind JS invoker plus an indirect call, while AssemblyScript exports are called directly; the TypeScript port stores its state in a number[] array while the winning AssemblyScript build uses four scalar globals (the array-based AssemblyScript builds lose to TypeScript 3.7-5.1x). The bench callbacks also discard return values, leaving V8 free to drop the TypeScript tempering step (not checked).
+- The README's native x10,000 table prints 19,315.69 hz for AssemblyScript, which is the C++/Emscripten figure (AssemblyScript measured 21,602.44), and the committed C++ artifacts (tinymt.wasm 12,350 bytes, tinymt.js 25,519 bytes) do not match the size table (12,143 and 24,302).
+
+**Status:** Five commits on 2026-09-21/22, 0 stars, no licence and no issues; reference only, useful as a write-up rather than as code to vendor.
+
+[repo](https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark) · [benchmark](https://github.com/matthewtolman/tinymt-wasm-typescript-benchmark)
+
+##### webgpu-shaders-study (AssemblyScript SIMD particle loop vs JavaScript)  `AssemblyScript (WebAssembly SIMD), Rust (WebAssembly SIMD), JavaScript, WGSL`  `no license`  `active`  `Tier C`
+
+Browser particle demo: the same 16-attractor loop in scalar JavaScript, AssemblyScript and Rust Wasm SIMD, and WebGPU.
+
+**Beats:** plain JavaScript loop on the CPU in the browser (V8 assumed, browser not stated) — Heavy mode (16 attractors), unnamed Apple Silicon Mac and browser, whole-frame rates averaged over the last 30 requestAnimationFrame frames: scalar JavaScript 33 fps at 1M and 8 fps at 4M particles against AssemblyScript f32x4 Wasm (asc 0.28.20) 40 and 37 fps (about 1.2x and 4.6x, derived from page data), with Rust Wasm 60/41/11 and WebGPU 60/60/~48 fps at 1M/4M/16M; every CPU variant includes the same WebGL upload and draw of at most 1M points.
+
+**Known shortcoming:** Frame rates on an unnamed Apple Silicon Mac in an unnamed browser, no licence (reference), 1 commit, 0 stars; only 1.2x JavaScript at 1M particles with the gain mostly SIMD against scalar JavaScript; the AssemblyScript row scales oddly (40 fps at 1M, 37 fps at 4M).
+
+**Known shortcoming:** Enricher: shared/ui.js clears the sample window on a count change but not lastFrame, so the first window includes the allocation and seed stall and the overview keeps the last saved reading; the AssemblyScript 1M row (40 fps) is internally inconsistent, leaving the 4M pair (8 vs 37 fps, about 4.6x, a lower bound on the step-time ratio) as the only usable comparison; the JavaScript baseline computes in f64 and rounds per store while the Wasm builds compute in f32 SIMD; no licence file.
+
+**Independent measurement:** verifier batch-119 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The AssemblyScript step (2-wasm/assembly/index.ts) keeps x, y, vx and vy as separate f32 arrays (structure of arrays) and updates 4 particles per instruction with f32x4 load, sub, mul, div and store, against JavaScript's scalar loop that does the same maths one particle at a time in f64. Built with asc 0.28.20 (binaryen 131 nightly per package-lock.json) using --optimize --noAssert --runtime stub, so there are no bounds checks or GC runtime in the hot loop. Most of the gap is therefore SIMD width plus f32 arithmetic, not AssemblyScript as a language.
+
+**Use it when:**
+- Learning or teaching where browser compute time goes: the same kernel side by side in JS, Wasm SIMD (AssemblyScript and Rust) and WebGPU, with a per-step CPU-time bar in each demo.
+- Deciding whether a compute-heavy per-element f32 loop (about 16 divisions per element per frame) at 1M to 4M elements is worth porting from JavaScript to Wasm SIMD.
+- As a template for loading an AssemblyScript or Rust (no wasm-bindgen) module through plain exports and sharing arrays with JavaScript via typed-array views into Wasm memory.
+
+**Skip it when:**
+- As code to vendor: the repository has no licence file, so reuse is not granted.
+- If you need trustworthy numbers: the README reports only frame rates on an unnamed Apple Silicon Mac in an unnamed browser, capped at 60 fps, with no Light-mode figures and none of the per-step sim timings the HUD displays.
+- If you are choosing AssemblyScript for speed: the project's own table has its Rust Wasm build ahead of AssemblyScript at every size (60/41/11 fps against 40/37/6) and the README puts Rust's step about 15% faster in Light mode.
+- For millions of particles at interactive rates: only the WebGPU variant holds 60 fps at 4M (about 48 at 16M); every CPU variant also pays a CPU-to-GPU copy each frame.
+- Browsers without Wasm SIMD (simd128) or WebGL 2.
+
+**Vs siblings:** Pick it over wasm-perf (Emscripten C SIMD matrix multiply against Node) or AutoZig (Zig SIMD image filter) when you want an in-browser, AssemblyScript-specific comparison that also shows the Rust Wasm and WebGPU alternatives on the same kernel; for measured, scriptable numbers those siblings' command-line benchmarks are easier to reproduce.
+
+**Gotchas:**
+- The JavaScript baseline computes in f64 and rounds on each Float32Array store, while both Wasm builds compute in f32 SIMD, so trajectories differ slightly from the JS demo; the README's 'identical results' refers to AssemblyScript against Rust only.
+- The AssemblyScript row is internally inconsistent (40 fps at 1M against 37 fps at 4M for four times the work, while JS and Rust scale with work), so the 1M reading, and the 1.2x ratio derived from it, is unreliable; the 4M pair (8 against 37 fps, about 4.6x) is the usable comparison and is a lower bound on the step-time ratio because both frames include the same 1M-point upload and draw.
+- Harness flaw in shared/ui.js: changing the particle count clears the sample window but not lastFrame, so the first frame after a switch carries the whole allocation and re-seeding pause; the overview page shows whichever reading was saved last (saved at most once a second once 10 samples exist), so a reading taken soon after a switch understates fps.
+- The AssemblyScript module uses --runtime stub with hand-managed pointers after __heap_base: memory grows but is never freed, and JavaScript must rebuild its typed-array views after every alloc because memory.grow replaces the buffer (wasm-demo.js does this).
+
+**Status:** Single-commit study repository (2026-10-09, 0 stars) with no licence file, so it is a reference to read rather than code to copy; both compiled .wasm files are checked in and contain the expected f32x4 SIMD instructions.
+
+[repo](https://github.com/anshullaikar/webgpu-shaders-study) · [benchmark](https://github.com/anshullaikar/webgpu-shaders-study)
+
+##### friendly-pow (Friendly Captcha proof-of-work solver in AssemblyScript)  `AssemblyScript`  `Friendly Captcha License (source-available)`  `abandoned`  `Tier D`
+
+Friendly Captcha's BLAKE2b proof-of-work solver in AssemblyScript WASM, claimed an order of magnitude faster than its own JS fallback.
+
+**Beats:** the library's own JavaScript fallback solver — The README's 'order of magnitude faster in most browsers' has no numbers. First-party figures exist only in issues and tests, never on one machine: issue #1 (2020) gives about 3M hashes/s for WASM on a powerful desktop vs 170k hashes/s as the slowest JS fallback seen and says WASM could cut solve time 5-10x on an old phone; PR #2 (Node 12.13.1) took the WASM solver from about 2.25M to 4.0M hashes/s after MaxGraey's unrolling; a test comment records 2.3M/s on a Ryzen 3900X.
+
+**Known shortcoming:** README "order of magnitude" line only, no numbers or benchmark code; source-available Friendly Captcha License, reference only.
+
+**Known shortcoming:** Enricher: no same-machine JS vs WASM measurement anywhere (issue #1: WASM about 3M hashes/s on desktop vs 170k for the slowest JS seen; PR #2 took WASM from 2.25M to 4.0M hashes/s on Node 12.13.1; the test hash-rate floors are thresholds, not measurements); the WASM end = start + n wraps u32 with the default n (zero attempts when the start counter is nonzero; the friendly-challenge wrapper resets the buffer), --runtime stub never frees memory, the JS fallback needs a global ASC_TARGET, and the 'can solve over and over' test is degenerate (999 of 1,000 calls hit on the first try).
+
+**Independent measurement:** verifier batch-56 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The WASM path (src/blake2b/blake2b64.ts) runs BLAKE2b on native i64 adds and rotr with the 16 working words held in locals, the G function unrolled for all 8 column/diagonal mixes, SIGMA read from a static memory segment, unchecked loads and --noAssert -O3. Per attempt it only resets the 8-word chain value and compresses a single final block read straight from the caller's buffer as 16 u64 loads, with no allocation. The JS fallback (src/blake2b/blake2b.ts, adapted from dcposch's CC0 blake2b.js) must emulate every 64-bit add and rotate with pairs of 32-bit words in Uint32Arrays and re-reads the 128-byte block byte by byte each attempt, which is where the WASM build's advantage comes from.
+
+**Use it when:**
+- You are integrating or auditing Friendly Captcha v1 (friendly-challenge) and need to know which solver a client ran (diagnostics byte 0: 1 = JS fallback, 2 = WASM).
+- You want a compact reference for a single-block BLAKE2b PoW inner loop in AssemblyScript, using native i64 and locals instead of 32-bit word-pair emulation.
+- Browser or web-worker PoW where the input is exactly one 128-byte block and only a 4-byte counter changes per attempt.
+- Studying how much a 64-bit-arithmetic hash gains from WASM over JS: the repo holds both implementations plus a 32/64-bit equivalence test (test/blake2b64.astest.ts).
+
+**Skip it when:**
+- As a general BLAKE2b library: the solver path assumes an unkeyed, single 128-byte block and skips buffer resets ('Danger: ... only possible because our input is exactly 128 bytes').
+- When you need an OSI licence: the README states 'Friendly Captcha License; source-available only' and there is no LICENSE file at the root.
+- When you need maintained tooling: last commit 2022-12-01, pinned to AssemblyScript ^0.16.1 with a hand-pruned loader, and the README warns an upgrade needs loader changes.
+- Browsers or hardened modes without WebAssembly or with the JIT off: the JS fallback is the path that runs there, and it is the slow one (maintainer's slowest JS figure: 170k hashes/s).
+- When you need published, reproducible speed numbers: the WASM vs JS ratio has never been measured on one machine in the repo.
+
+**Vs siblings:** Pick it over long.js (also a WASM fast path behind its own JS fallback with a no-numbers 'twice as fast' claim) only if your workload is BLAKE2b proof-of-work. superfasthash and galois carry actual measured WASM-vs-JS tables (1.21x and about 9x on additions), so they are better evidence of what AssemblyScript buys; friendly-pow is the production-deployed example with no measured ratio.
+
+**Gotchas:**
+- WASM loop bound wraps: solverWasm.ts computes end = start + n in u32, so with the API default n = 4294967295 any nonzero starting counter in bytes 124-127 makes end < start and the call returns an empty 'no solution' array after zero attempts. friendly-challenge is unaffected because the wrapper copies the caller's untouched buffer (counter 0) into WASM memory each call; direct callers resuming from a nonzero counter are not.
+- Built with --runtime stub, so nothing is ever freed: every solve call allocates a fresh Context (including an unused 128-byte b buffer) and a result array, and __release is a no-op, so memory grows with each call in a long-lived instance. The returned solution and hash are views into WASM memory and are overwritten by the next call; copy them first.
+- The JS solver checks a global ASC_TARGET (friendly-challenge sets self.ASC_TARGET = 0 before use); without it, reaching a solution throws a ReferenceError. It also writes the nonce through new DataView(input.buffer) at offset 124, ignoring byteOffset, so a subarray input gets the wrong bytes overwritten.
+- The only speed evidence in the repo is test assertions: WASM must exceed 1,250,000 hashes/s ('I hit 2.3M/s on Ryzen 3900X', test/solver.astest.ts) and JS must exceed 50,000 hashes/s (test/solver.test.ts, no machine). These are pass thresholds, not measurements, and their 25x ratio is not a speedup. The 'Can solve over and over' test is degenerate: after the first call the input keeps the found nonce, so 999 of 1,000 calls succeed on their first attempt.
+
+**Status:** Abandoned since 2022-12-01 (two dependabot PRs left open) and source-available under the Friendly Captcha License, so reference only. The evidence stays directional because no same-hardware JS-vs-WASM hash rate was ever published, though issue #1 and PR #2 give first-party absolute WASM hash rates.
+
+[repo](https://github.com/FriendlyCaptcha/friendly-pow) · [benchmark](https://github.com/FriendlyCaptcha/friendly-pow)
+
+##### wasm-i128-div-bench (reciprocal 128-bit division for the Wasm wide-arithmetic proposal)  `Rust`  `no license`  `active`  `Tier D`
+
+Rust research benchmark: Moeller-Granlund reciprocal 128-bit division vs __udivti3, native and Wasm wide-arithmetic; wins mainly with hoisted divisors.
+
+**Beats:** Rust u128/i128 division operators lowering to compiler-builtins __udivti3/__umodti3 (compiler-rt libcall) on wasm32 — Criterion slope estimates (300 samples, 3 s) on an Intel Core i9-9880H under macOS 15.7.7, rustc 1.98.0-nightly opt-level 3 with fat LTO: with the reciprocal hoisted out of a 5,000-iteration loop, the reciprocal path took 18.24 vs 29.67 us under d8 15.1.52, 13.97 vs 52.51 us under wasmtime 45.0.1 and 9.73 vs 134.44 us natively against Rust's u128 operators, but that loop only produces quotients 0 and 1; single general divisions favour the builtin on V8 (18.27 vs 24.38 ns for udivrem128), tie on wasmtime, and favour the reciprocal natively (17.18 vs 27.86 ns).
+
+**Known shortcoming:** Wasm wins only with a loop-invariant divisor; single operations are slower on V8 (+19.6% to +33.4%), each single-op bench times one fixed operand pair, the loop workload is narrow with tiny quotients, and the native -92.8% row probably reflects a slow native __udivti3. No licence (reference); loose category fit.
+
+**Known shortcoming:** Harness flaw behind the loop-invariant headline: the divisor is the dividend's own high word with the top bit cleared, and reproducing the seeded operands (rand 0.10.1 Xoshiro128PlusPlus, checked against rand's test vector) shows 3,144 of 5,000 iterations (62.9%) with quotient 0 that leave the reciprocal path through its Y > X shortcut with no multiply, and the other 1,856 with quotient 1; the Wasm builtin (compiler-builtins trifecta) also early-outs every iteration (d8 5.93 ns per iteration vs 18.27 ns for a single general op). So the -38.5% (d8) and -73.4% (wasmtime) rows compare libcall overhead on trivial quotients, the native -92.8% is 5,000 hardware DIVs (26.9 ns per iteration, the same as a single op) against a mostly-shortcut kernel, and the hoisting benefit for general quotients is unmeasured. Single-op benches use one operand pair (unsigned quotient 9, signed |quotient| 1); the 2-by-1 path is never benchmarked.
+
+**Independent measurement:** verifier batch-52 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Division by an invariant integer via a precomputed reciprocal (Moeller and Granlund, 'Improved division by invariant integers'): a 256-entry u16 table seeds Algorithm 2's Newton steps to get floor((2^128-1)/d) - 2^64, then 2-by-1 (64-bit divisor) or 3-by-2 (full-width divisor) kernels replace the divide with a multiply-high, a multiply-low and at most two correction steps. Splitting the reciprocal (recip128) from the divide (divrem_recip128) lets a caller compute it once outside a loop, which the opaque libcall cannot do. Shortcuts return early when the divisor's high word exceeds the dividend's (quotient 0) or when the divisor is already normalised (quotient 0 or 1).
+
+**Use it when:**
+- Designing or evaluating Wasm engine or toolchain support for 128-bit division on top of the wide-arithmetic proposal; the report and the i64.recip128 / i64.divrem_recip128 sketch are the point of the repo.
+- Native x86_64 code that divides many 128-bit values by one fixed divisor on a CPU where the 128/64 DIV instruction is slow (the measured machine is a Coffee Lake i9-9880H): port the 2-by-1/3-by-2 kernels and hoist recip128.
+- Wanting a readable, unit-tested Rust reference of Moeller-Granlund reciprocal division (500,000-case random and edge-value tests against the native operators).
+
+**Skip it when:**
+- One-off 128-bit divisions in Wasm: the builtin libcall is faster on V8 (reciprocal 19.6% to 33.4% slower) and about equal on wasmtime (-0.7% to +10.3%).
+- Production code: no LICENSE file (raw LICENSE returns 404), not a library crate, nightly-only (edition 2024, #![feature(likely_unlikely)], cargo-features profile-rustflags, build-std).
+- Stock Node or browsers: the d8 script notes that stock Node rejects the wide-arithmetic opcodes; V8 needs --experimental-wasm-wide-arithmetic and wasmtime needs -W wide-arithmetic=y (45 or later).
+- Expecting the loop-invariant speedups for general quotients: the benchmarked loop only produces quotients 0 and 1 (see gotchas), so throughput with a hoisted reciprocal on large quotients is unmeasured.
+- Other microarchitectures: all numbers come from one macOS laptop with an Intel Core i9-9880H; no aarch64 or newer x86 runs are reported.
+
+**Vs siblings:** No sibling covers 128-bit division: long.js gives a Wasm fast path for 64-bit multiply/divide from JavaScript and galois does finite-field arithmetic in AssemblyScript, so use this only as the reference when you need 128-bit divide in Rust-to-Wasm or are arguing for engine support.
+
+**Gotchas:**
+- Harness flaw in the headline loop-invariant bench: the divisor is the dividend's own high word with the top bit cleared, and the dividends only flip its low 13 bits (i < 5,000). Reproducing the seeded operands (rand 0.10.1 Xoshiro128PlusPlus::seed_from_u64(0x9E3779B97F4A7C15), checked against rand's own seed_from_u64(0) test vector) gives d_hi = 0x59a28c5de09aec48: 3,144 of 5,000 iterations (62.9%) have quotient 0 and leave the reciprocal path through its Y > X shortcut with no multiply, and the other 1,856 have quotient 1.
+- On Wasm the builtin __udivti3 is compiler-builtins' trifecta algorithm (selected for target_family wasm in the current rust-lang/rust source), whose div_lz <= duo_lz branch returns quotient 0 or 1 after one compare; divisor and every dividend here have one leading zero, so every builtin iteration takes that early-out (5.93 ns per iteration on d8 vs 18.27 ns for a single general udivrem128, derived from page data). The -38.5% (d8) and -73.4% (wasmtime) therefore compare libcall overhead on a trivial quotient against a mostly-shortcut inlined kernel, not hoisted-reciprocal division on real quotients.
+- Native -92.8%: on x86_64 compiler-builtins (with its arch feature) uses the asymmetric algorithm, which issues a hardware 128/64 DIV for any divisor with a nonzero high word and has no quotient-0/1 early-out; the native builtin costs 26.9 ns per loop iteration, the same as its single-op cost (26.7 to 27.9 ns), versus 1.95 ns for the reciprocal path (derived from page data).
+- Single-op benches time one fixed operand pair shared by all six ops: unsigned quotient 9 (3-by-2 kernel, shift 3) and signed |quotient| 1 (negative dividend, positive divisor); the 2-by-1 path for 64-bit divisors is never benchmarked.
+
+**Status:** Active research repo (39 commits, last 2026-06-09, report regenerated in that commit) but unlicensed with 0 stars, so reference only; its loop-invariant headline was measured on a degenerate quotient-0-or-1 workload where 62.9% of iterations skip the division entirely and the Wasm builtin takes its own early-out, so the hoisting benefit for general quotients is unproven.
+
+[repo](https://github.com/MaxGraey/wasm-i128-div-bench) · [benchmark](https://github.com/MaxGraey/wasm-i128-div-bench/blob/main/report/RESULTS-4db0b805.md)
+
+##### wasm-runtime-performance (boost::graph Floyd-Warshall via Emscripten)  `C++ (Boost.Graph, std::priority_queue) compiled to WebAssembly with Emscripten`  `no license`  `abandoned`  `Tier D`
+
+2017 browser benchmark: Boost.Graph Floyd-Warshall compiled to wasm by Emscripten versus graphlib.js; std::priority_queue loses to JS heaps.
+
+**Beats:** graphlib.js alg.floydWarshall (JavaScript, in the browser JS engine) — In one unnamed 2017 browser on unstated hardware, averaged over 100 runs, building a 100-vertex, 500-edge graph and running Floyd-Warshall took 10.16 ms with Boost.Graph compiled by emcc -O3 versus 61.11 ms with graphlib.js (about 6.0x, derived from page data), but the JS side actually processed a 111-vertex graph because of newline characters in the digit source, and the two sides computed different paths. In the same setup, 300,000 std::priority_queue inserts took 58.44 ms (51.99 ms with the loop inside wasm) versus 9.86 ms for FastPriorityQueue.js and 13.42 ms for Heap.js.
+
+**Known shortcoming:** 2017 single-run study with no CPU, browser or emsdk version and no licence (reference); mixed result (Boost Floyd-Warshall 6.0x at -O3 but std::priority_queue in wasm 4-6x slower on inserts); graphlib.js stores its graph in string-keyed objects; the README's "3 orders of magnitude" from -O0 to -O3 is about 122x.
+
+**Known shortcoming:** Enricher: unequal workloads: pi_minus_3.js's String.raw literal keeps newlines, so the JS graphlib graph gets 111 vertices (11 ids containing a newline, 25 of 500 edges) while the wasm side's parseInt maps them back to 100, about 1.37x more JS work (like-for-like ratio about 4.4x, not 6.0x, derived); the undirected graphlib with the default outEdges edge function makes JS solve a one-way orientation rather than the undirected graph Boost solves; results are never compared (wasmLargest unused). Retiered to D.
+
+**Independent measurement:** verifier batch-119 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The wasm side runs boost::floyd_warshall_all_pairs_shortest_paths over an int boost::multi_array distance matrix, a contiguous N x N array of machine integers, while graphlib's runFloydWarshall walks an object of objects keyed by string node ids, allocates a {distance, predecessor} object per pair and loops with nested forEach closures. The gain is data layout plus ahead-of-time optimisation by emcc -O3; without -O3 the same wasm is about 20x slower than the JS. The priority-queue test shows the opposite: per-element JS-to-wasm calls and even an all-in-wasm loop lose to JIT-compiled JS heaps.
+
+**Use it when:**
+- As a historical data point (2017, wasm MVP, Emscripten fastcomp era) on porting an O(V^3) dense graph kernel from a generic JS library to C++ in wasm.
+- As a template for wiring Boost.Graph or STL containers into a browser page through EMSCRIPTEN_KEEPALIVE exports and Module.cwrap.
+- To show that -O3 is not optional for Emscripten builds of template-heavy C++ (about 122x between the unoptimised and -O3 builds, derived from page data).
+- As a cautionary example that fine-grained JS-to-wasm calls (one call per heap push or pop) can make wasm slower than a good JS data structure.
+
+**Skip it when:**
+- As evidence of current wasm versus JS speed: browser, JS engine, CPU and emsdk version are not stated, and engines and toolchains have changed since 2017.
+- As a graph library: it handles one global graph, exposes only Floyd-Warshall, and returns only the largest finite distance.
+- For priority-queue workloads: std::priority_queue in wasm was 3.9-5.9x slower on inserts and 1.02-1.46x slower on peek+pop than FastPriorityQueue.js and Heap.js in the README run (derived from page data).
+- Where licensing matters: the repository has no licence file, so reuse rights are unclear.
+- For sparse graphs or large V, where Dijkstra or Johnson per source beats any O(V^3) Floyd-Warshall in either language.
+
+**Vs siblings:** Prefer wasm-perf (Emscripten SIMD matmul versus JS, Node 16, stated versions) or JavaScript-vs-WebAssembly-Comparative-Analysis (median of 20 reps in Chromium) for numeric kernels with stated environments; this repo is only of interest for STL and Boost data-structure code under Emscripten, and like Speedy.js it documents 2017-era engines.
+
+**Gotchas:**
+- Harness flaw, unequal graphs: pi_minus_3.js stores the digits in a String.raw template literal that begins with a newline and keeps its line breaks, so node ids read two characters at a time that straddle a break ('\n1', '6\n', and so on) become 11 extra graphlib nodes. The JS run therefore solves a 111-vertex graph (25 of the 500 edges touch the extra nodes), while the wasm side parseInt()s the same strings back into vertices 0-99. graphlib's triple loop does 111^3 / 100^3, about 1.37x, as many relaxations, so a like-for-like ratio would be nearer 4.4x than 6.0x (estimate derived from the code, assuming time scales with V^3).
+- Harness flaw, different answers: the JS graph is created with {directed: false}, but alg.floydWarshall is called without an edgeFn, so it uses g.outEdges, which for an undirected graphlib graph lists each edge only under its lexicographically smaller endpoint. The JS run therefore computes paths in a one-way orientation of the graph, not in the undirected graph Boost solves. Neither result is checked: wasmLargest is computed but never printed or compared with the JS 'largest'.
+- Both timed regions include graph construction (string slicing of the pi digits, 500 setEdge calls in JS versus 500 cwrap addEdge calls into wasm) and a pass over the result, and doFloydWarshall takes the Boost graph by value, so each wasm iteration also copies the graph.
+- The README's '3 orders of magnitude' from -O0 to -O3 is about 122x (1235.41 ms to 10.16 ms), and each published number is one pasted console run with no variance reported.
+
+**Status:** Abandoned since 7 May 2017 (10 commits, no licence file, 6 stars); a reference data point with the harness flaws above, not reusable code, and its 6.0x headline compares unequal graph sizes and different path problems, which may justify a downgrade to D.
+
+[repo](https://github.com/azeemba/wasm-runtime-performance) · [benchmark](https://github.com/azeemba/wasm-runtime-performance)
+
+#### hand-written-asm-kernels
+
+##### gocrack (wa7nt)  `Go (hand-written AVX2 assembly kernels)`  `no license`  `active`  `Tier C`
+
+Go program with hand-written 8-way AVX2 multi-buffer MD5/SHA-1 compression kernels; beats single-stream crypto/md5 and crypto/sha1 on aggregate throughput.
+
+**Beats:** Go standard library crypto/md5 and crypto/sha1 (single-stream hashing) — First-party README table on an Intel Core i5-7360U (Skylake, AVX2, no AVX-512/SHA-NI), Go 1.26 darwin/amd64, no repeat statistics: md5x8 compression kernel 48 MH/s vs crypto/md5 5.7 MH/s (about 8.4x, derived; but compression-only vs full md5.Sum), whole MD5 brute-force pipeline 38 MH/s on 1 core (about 6.7x over stdlib) and 151 MH/s on 4 threads; sha1x8 22 MH/s vs a crypto/sha1 4.1 MH/s row that has no harness in the repo. Kernels reported at 88-90% of a measured per-machine ALU-op ceiling.
+
+**Known shortcoming:** The kernel row times compression of a constant prebuilt buffer against the full md5.Sum, so the 8.4x is overstated (pipeline about 6.7x, internal/md5x8/bench_test.go); no SHA-1 stdlib harness; no licence (reference); 1 star, 2 commits.
+
+**Known shortcoming:** Harness flaw: internal/md5x8 TestBenchmarkReport times compression only on one constant reused buffer against a full md5.Sum (init, pad, finalize), so 48 vs 5.7 MH/s (8.4x) overstates; the whole pipeline at 38 MH/s (about 6.7x) is the fairer figure. The crypto/sha1 4.1 MH/s row has no harness in the repo (sha1x8's bench times kernels only). 8-lane multi-buffer vs a single stream, one 2-core laptop, no repeat statistics, no LICENSE.
+
+**Independent measurement:** verifier batch-71 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Standard SIMD multi-buffer hashing: 8 independent single-block messages are transposed so word w of every lane is one VMOVDQU, and the scalar MD5/SHA-1 round functions run on whole YMM registers as pure bitwise identities (e.g. F(b,c,d)=d^(b&(c^d))), avoiding byte shuffles. State registers are statically assigned across all 64/80 steps by rotating lane roles rather than moving data. The input buffer itself is the counter: internal/cand writes brute-force candidates directly into the transposed layout with a precomputed (carry, character) table, which the author reports cut generation from 28.3 to 4.97 ns per input. The author measured both kernels at 88-90% of a machine-specific ALU-op ceiling (md5x8 640 ops/block at 3.8 ops/ns; sha1x8 1404 at 3.9).
+
+**Use it when:**
+- You need to study a clean, heavily-commented example of an 8-lane AVX2 multi-buffer hash compression kernel written in Go's Plan 9 assembler, with an unusually detailed account of the assembler traps and A/B measurement methodology.
+- Aggregate throughput over many independent short (<=55 byte) one-block inputs matters more than per-message latency, on an AVX2 x86-64 CPU.
+- You want the compare-in-kernel idea (return a lane bitmask, skip digest stores on a miss) as a reference for a filter or matching workload.
+- Go 1.24+ and an AVX2 core (it falls back to nothing: there is no scalar path in the kernels, only the avx2Enabled guard).
+
+**Skip it when:**
+- You need a maintainable, importable dependency: it is a program with internal/ packages (not go-get-able), has no LICENSE file (all-rights-reserved by default, so not copyable), 1 star, and two commits all dated 2026-09-28.
+- Messages longer than 55 bytes, multi-block inputs, or any keyed/iterated KDF (bcrypt, scrypt, PBKDF2): rejected or out of scope; only MD5 and SHA-1 single-block are implemented.
+- Per-message latency: a multi-buffer kernel needs 8 inputs in flight and does not speed up a single hash.
+- Non-x86-64 or AVX2-less hardware: no AVX-512, SHA-NI, or NEON path; no portable fallback kernel.
+- You want a like-for-like replacement for crypto/md5 or crypto/sha1: the API is a program, not a Hash, and the baselines are single-stream scalar assembly while this is 8-lane aggregate.
+
+**Vs siblings:** The closest catalogued sibling is minio/md5-simd, which is also an 8-lane AVX2/AVX-512 multi-buffer MD5 in Go assembly beating crypto/md5 (3.31x aggregate on 4 vCPUs) but is a maintained, importable, licensed package; prefer minio/md5-simd for production and gocrack only as a readable single-file-per-kernel reference that also covers SHA-1 and documents the Go-assembler pitfalls. Against the hashing siblings lukechampine/blake3, zeebo/blake3 and animetosho/md5-optimisation, gocrack is the one to read specifically for multi-buffer transposed-layout MD5/SHA-1 and compare-in-register matching.
+
+**Gotchas:**
+- Benchmark-methodology flaw on the kernel row: internal/md5x8/bench_test.go TestBenchmarkReport times md5x8 doing compression only, on one pre-built constant transposed buffer reused every iteration (the same 8 'cand-000N' inputs), against md5.Sum([]byte("cand-0000")) which also pays digest init, padding and finalization each call. So the headline 48 vs 5.7 MH/s (about 8.4x) overstates the per-compression advantage; the whole-pipeline 1-core figure (38 MH/s, generator included) against 5.7 MH/s, about 6.7x, is the fairer comparison.
+- The crypto/sha1 4.1 MH/s baseline row has no harness in the repository: internal/sha1x8/bench_test.go benchmarks only sha1x8 (digest) and sha1x8msg (match), never crypto/sha1, so that ratio is not reproducible from the repo. The README also never states which command produced its throughput table.
+- The baselines (Go crypto/md5 and crypto/sha1 on amd64) are themselves hand-written scalar assembly running one stream; this is 8-lane multi-buffer vs single-stream, i.e. a throughput-vs-latency comparison, not instruction-for-instruction.
+- Single machine (i5-7360U, 2 physical cores), single run, no repeat/variance statistics reported; the author notes the clock drifts enough between runs to invert a 12% result, and mitigates it only inside the same-process A/B step-form harness, not for the headline table.
+
+**Status:** Active but brand-new and tiny (1 star, two commits 2026-09-28) with no LICENSE file, so it is reference-only, not copyable; treat the numbers as directional first-party measurements from a single 2-core laptop.
+
+[repo](https://github.com/wa7nt/gocrack) · [benchmark](https://github.com/wa7nt/gocrack)
+
+##### seelabs/nasm (AVX2 hex encoder and decoder for 256-bit values in NASM)  `C++`  `no license`  `abandoned`  `Tier C`
+
+Learning-project NASM AVX2 kernels that hex-encode 32 bytes and hex-decode 64 digits 5.6x and 8.4x faster than rippled's scalar C++.
+
+**Beats:** reference C++ hex encode and decode routines taken from rippled (compiled with g++ -O3 according to build.sh) — Author's single run on a Xeon E3-1505M v6 at 3.00 GHz (Kaby Lake, AVX2), 100 million calls on one constant input, compiler and flags unrecorded (build.sh says g++ -O3 without -mavx2): encode 32 bytes 1790 ms for the scalar rippled-style C++ vs 319 ms for AVX2 assembly (5.6x; about 3.2 ns per call, roughly 10 GB/s of input, derived from page data), decode 64 digits 4694 vs 561 ms (8.4x; about 11.4 GB/s of hex input, derived from page data); the README's 'about 10x' rounds both up.
+
+**Known shortcoming:** README says 10x but its own table shows 5.6x/8.4x; the committed main.cpp returns before the hex benchmark and build.sh is out of sync with the sources; no compiler version; no licence (reference).
+
+**Known shortcoming:** Both kernels read: no correctness bug. Harness flaws favour the C side (inlined scalar reference, output never read, one constant input, the asm called out of line), so the 5.6x and 8.4x look conservative; the comparison is AVX2 SIMD against scalar C built without -mavx2, not hand assembly against the best compiler output. Record correction: rippled 1.0.0's SetHexExact is also fixed-size (base_uint) and the harness reference loop is a fixed 32 iterations, so the earlier 'specialisation' caveat was wrong; the harness drops rippled's terminator check. The README's '87' letter offset does not match the code (55); a Win64 port would clobber callee-saved xmm6-xmm11.
+
+**Independent measurement:** verifier batch-115 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Both kernels replace per-character table lookups and branches with 32-lane AVX2 byte arithmetic. The encoder zero-extends each byte to a 16-bit word (vpmovzxbw), splits the nibbles with masks and shifts, then adds 48 or 55 per lane chosen by a vpcmpgtb/vpblendvb mask. The decoder upcases letters by clearing bit 5, rejects bad digits with two vptest checks, subtracts 48 or 55 by blend, merges nibble pairs with a 16-bit shift-by-12 and add, and compacts the odd bytes with vpshufb plus vextracti128/vinserti128 lane moves; each call is about 20-30 instructions with no loop.
+
+**Use it when:**
+- Reading material: a compact, commented example of table-free AVX2 hex encoding and validating hex decoding, including the lane-crossing fix-up that vpshufb needs.
+- As a design reference when writing your own fixed-width (32-byte hash, 64-digit) hex codec for transaction or block IDs on AVX2 x86-64 Linux, where the input length is always known.
+- Comparing hand-written AVX2 against an intrinsics or auto-vectorised port of the same algorithm; the repo gives the algorithm, not a reusable library.
+
+**Skip it when:**
+- Anything you ship: there is no LICENSE file, so the code cannot legally be copied, and the author calls it a learning exercise that is 'not well tested'.
+- Variable-length data: only exactly 32 bytes in and 64 digits out (or the reverse) are handled; use a general SIMD hex codec instead.
+- Windows or non-AVX2 CPUs: there is no CPU-feature dispatch (SIGILL before Haswell) and the code uses the System V registers RDI/RSI; a Win64 port must also save xmm6-xmm11, which are callee-saved there and clobbered by decode.asm.
+- Lowercase output or strict rippled semantics: the encoder emits uppercase only, and unlike rippled's SetHexExact the decoder does not require a NUL after the 64th digit.
+
+**Vs siblings:** Pick it only as a teaching reference: tmthrgd/go-hex (sibling, Go SSE/AVX assembly, any length, 25.6x encode and 24.8x decode at 1 KB vs encoding/hex) is a usable library, and for C or C++ the catalogued zbjornson/fast-hex (AVX2, any length, about 11.5x encode and 12.5x decode over scalar) covers the same job with a licence.
+
+**Gotchas:**
+- The committed driver cannot reproduce the README table: in the only commit (2018-05-22) main() returns right after test_base58(), so the hex tests and benchmarks are unreachable; build.sh (g++ -O3, no -mavx2) and CMakeLists.txt (clang, Debug default, -ggdb) disagree, and no compiler version is recorded.
+- Harness detail: each benchmark loop reruns one constant input 100 million times and never reads the output; the scalar reference is inlined while the assembly is an out-of-line call, so dead-store elimination, perfect branch prediction and call overhead all favour the C side. The 5.6x and 8.4x look conservative, not inflated, but they compare a SIMD algorithm with scalar table-lookup C built without -mavx2, not hand assembly with the best compiler output.
+- Correction to the record's caveat: the benchmark's reference loop is fixed at 32 iterations, just as rippled's SetHexExact is fixed by base_uint's size, so the gap is not from fixed-size specialisation; the harness copy even drops rippled's final terminator check, which slightly helps the C side.
+- No correctness bug found on reading both kernels: the decoder's two error masks reject every byte outside 0-9, A-F and a-f (including bytes 0x80-0xFF), and the vpshufb compaction and lane merge place all 32 output bytes in order. The README's prose giving 87 as the letter offset does not match the code, which upcases first and subtracts 55. The separate base58 experiment (decode58.asm, vpgatherdd over a 256-dword alphabet table) gained only about 6% overall per the README.
+
+**Status:** Abandoned single-commit learning repo from May 2018 with 1 star and no licence, so it is reference-only: read the 73- and 165-line kernels for the technique but do not copy them.
+
+[repo](https://github.com/seelabs/nasm) · [benchmark](https://github.com/seelabs/nasm)
+
+##### memcpy_benchmark (AVX-256, AVX-512 and rep movsb NASM memcpy)  `C / NASM assembly`  `Unlicense`  `abandoned`  `Tier D`
+
+Toy NASM AVX/AVX-512/rep movsb copy loops timed against libc memcpy on one huge buffer; not a usable memcpy.
+
+**Beats:** libc built-in memcpy (glibc version not stated) — On an Intel Xeon Platinum 8269CY cloud VM, one 512 MiB single-threaded copy took min 0.2711 s with the AVX-256 routine versus 0.3494 s with the prebuilt libc memcpy (glibc version unknown), about 1.29x, with AVX-512 at 0.2854 s and rep movsb at 0.3020 s; on an AMD A8-6410 the AVX routine and plain rep movsb both ran at about 0.445 s versus 0.546 s for libc (about 1.2x). Timings include first-touch page faults on the destination, and an earlier run of the same AVX-256 code on the same Xeon showed no gain over libc.
+
+**Known shortcoming:** Downgraded A to C: no compiler or glibc version; Avg is 11 runs divided by 10 so Avg exceeds Max; the timed copy includes page faults on a fresh 512 MiB destination; plain rep movsb matches AVX on the A8; single-threaded, seconds per 512 MiB copy.
+
+**Known shortcoming:** Enricher: both AVX routines (and gen_avx_memcpy.php) dispatch with 'cmp rcx, 512' followed by an unconditional jmp, comparing the running offset rather than the remaining length, so every call copies whole 512/2048-byte blocks and any length that is not a non-zero multiple overruns both buffers until it faults (the 128/512 MiB benchmark buffers hide it); the routines return the source pointer and lack vzeroupper; result.txt at commits 8be9917/a955014 shows libc 0.3486 vs AVX-256 0.3464 s (a tie) before commit 7d431e0 wrote the current 1.29x, the AVX-512 row was measured on two different routines, and the result commits built the harness with gcc -O0. Retiered to D, reference only; only the rep movsb routine is safe to reuse.
+
+**Independent measurement:** verifier batch-36 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The AVX routines are fully unrolled block copies: 16 ymm loads then 16 ymm stores per 512-byte block (AVX-256), or 32 zmm per 2048-byte block (AVX-512; 16 zmm per 1024-byte block in the version that was timed), each block preceded by prefetcht1 on every source and destination line. memcpy_movsb is just rep movsb, relying on the CPU's ERMS microcode. There is no alignment handling, no non-temporal stores and no size dispatch.
+
+**Use it when:**
+- As a reading example of how an unrolled AVX/AVX-512 register-block copy and a bare rep movsb compare on very large buffers.
+- As a starting harness for your own large-copy experiments, after fixing the averaging and page-fault issues listed under gotchas.
+- Only memcpy_movsb is safe to lift as-is (any length, returns dst); it suits large copies on CPUs with ERMS/FSRM.
+
+**Skip it when:**
+- As a drop-in memcpy: memcpy_avx256 and memcpy_avx512 are correct only for non-zero lengths that are exact multiples of 512 and 2048 bytes; any other length overruns both buffers (see gotchas).
+- Small or medium copies: there is no small-size path, and every call issues at least one full 512- or 2048-byte block.
+- Non-x86-64 targets, or the AVX-512 routine on CPUs without AVX-512F (it faults with an illegal instruction; the harness has no CPUID check).
+- When you need a measured win: on the AMD A8 rep movsb alone matches the AVX routine, and on the Xeon the author's own earlier run with identical AVX-256 code tied libc.
+- Production use of the multithreaded mode: memcpy_mt_exec drops the len % 4 tail and coordinates workers with plain bools and unfair mutex hand-offs.
+
+**Vs siblings:** Pick it only to study block-unrolled AVX copies versus rep movsb at the 512 MiB scale; for a usable faster memcpy, FastMemcpy (skywind3000) has real size dispatch and covers small and medium sizes, and asmlib (abiiranathan) benchmarks against a stated glibc 2.44.
+
+**Gotchas:**
+- Correctness bug in both AVX routines (and in the gen_avx_memcpy.php generator): the size dispatch is 'cmp rcx, 512' followed by an unconditional 'jmp .jge_512' (not jge), and it compares the running offset rcx rather than the remaining length rdx. Every iteration therefore copies a full 512-byte (AVX-512: 2048-byte) block and loops until rdx reaches exactly zero; for any length that is not a non-zero multiple of the block size, rdx wraps negative and the loop runs past both buffers until it faults. The benchmark's 128/512 MiB buffers are exact multiples, so its memcmp check passes and hides the bug.
+- Both AVX routines start with 'mov rax, rsi', so they return the source pointer, not dst as memcpy must; neither executes vzeroupper before returning, so callers' later SSE code can pay AVX-SSE transition penalties.
+- Harness flaws behind result.txt: 11 timed copies are averaged over 10 (every Avg exceeds its Max); each copy writes to a freshly malloc'd, never-touched destination, so roughly 131,072 first-touch page faults per 512 MiB run are inside the timed region (derived copy rates of only about 1.5-2.0 GB/s on the Xeon); timing uses gettimeofday. At the result commits the Makefile built the harness with 'gcc -Wall -O0', not the -O3 now in the Makefile (the libc memcpy baseline is prebuilt, so this does not change it).
+- The Xeon headline is not stable: result.txt at commits 8be9917 and a955014 (same memcpy_bench.c, Makefile and byte-identical memcpy_avx256.asm) recorded libc min 0.3486 s vs AVX-256 min 0.3464 s (a tie; AVX avg 0.3844 vs libc 0.3838) on the same Xeon 8269CY VM; commit 7d431e0 replaced it with the current libc 0.3494 vs AVX-256 0.2711 s (1.29x). The AVX-512 row was also measured on two different routines (1024-byte blocks, then 2048-byte blocks). The AMD A8 rows were consistent across runs (about 1.2x for both AVX and rep movsb).
+
+**Status:** Abandoned since 2020-09-22 (24 commits in four days, no issues or releases) and Unlicense public domain, but the AVX routines have an out-of-bounds bug for any length that is not a non-zero multiple of 512/2048 bytes, so treat it as reference material rather than copyable code; only the rep movsb routine is safe to reuse.
+
+[repo](https://github.com/ammarfaizi2/memcpy_benchmark) · [benchmark](https://raw.githubusercontent.com/ammarfaizi2/memcpy_benchmark/HEAD/result.txt)
+
+#### simd-intrinsics-libraries
+
+##### bilinear_filter_simd  `C++`  `no license`  `abandoned`  `Tier C`
+
+Demo SSE4, AVX2 and AVX-512 bilinear sampler for packed 24-bit BGR images; 1.2-2.3x over its own scalar loop.
+
+**Beats:** plain scalar C++ bilinear filter in the same repo ('No SIMD') — The repo's Google Benchmark driver times its own fixed-point scalar loop against SSE4, AVX2 and AVX-512 versions of the same sampler on a rotated 3x-downscale map of a 3840x2160 photo (1280x720 output), Release build with -march=native and an unstated GCC. Readme.md (2020-08-09): Xeon Platinum 8124M on a c5.4xlarge, single thread 13.3 ms scalar vs 7.33 ms AVX-512 (1.81x) and multi-thread 1.25 vs 0.822 ms (1.52x); Core i7-8700, 7.64 vs 4.26 ms AVX2 (1.79x); the later Benchmarks.md run (2020-08-11) reached 5.87 ms (2.27x) and 0.743 ms (1.66x), all ratios derived from page data.
+
+**Known shortcoming:** No licence (reference); the baseline is its own scalar path only (no cv::resize timing), gains 1.2-2.3x; compiler unstated; the 2020 numbers predate the 2021 alignment fix and the 2023 out-of-bounds fix.
+
+**Known shortcoming:** The timed workload is not a plain downscale: the sampling map is a 3x-downscale grid rotated 0.314 rad by cv::warpAffine with constant border, so about 27% of outputs sample the cache-hot pixel (0,0) (derived from src/common.hpp). mats_equivalent allows a difference of 3 per channel, not equality. The 2020 numbers predate commit b333369 (alignas crash fix) and d0f0187 (ptr_below branch added to the hot path); no post-fix numbers exist. An out-of-bounds read remains after d0f0187: its own test coordinate (2159, 3839) reads 3 bytes past the image buffer in the scalar path and 5 bytes in the SIMD 8-byte loads. cv::remap is never timed.
+
+**Independent measurement:** verifier batch-110 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** For 4 (AVX2) or 8 (AVX-512) output pixels at once it computes the four bilinear weights in 16-bit fixed point: floor, scale the fractions by 256, convert and pack, multiply x and y weights with mullo/mulhi and patch the 256*256 overflow case with a blend. Each 2x2 neighbourhood is fetched as two unaligned 8-byte loads (top row and the row below), pshufb spreads the 24-bit pixels into 16-bit lanes, and pmaddwd plus phaddd form the weighted sums before packus narrows back to bytes and one 8+4-byte store writes 4 pixels. Coordinates are read with streaming loads. The gain stays modest because every output pixel still costs two scattered loads from a 24 MB source image; row threading gives about 10x where SIMD gives 1.2-2.3x.
+
+**Use it when:**
+- As a reference for vectorising bilinear sampling of packed 24-bit BGR on x86 with pshufb/pmaddwd (study only: the repo has no licence).
+- Arbitrary per-pixel sampling maps (rotation, affine warp, undistortion) on x86-64 with AVX2, with output widths that are multiples of 4 (8 for AVX-512).
+- Single-threaded loops, where the SIMD gap over a fixed-point scalar loop is largest (1.8-2.3x on AVX-512, about 1.8-1.9x on AVX2).
+- As a starting point for your own benchmark against cv::remap on your real maps before committing to a hand-written kernel.
+
+**Skip it when:**
+- Production code: there is no LICENSE file, so the code cannot be reused as is, and the demo has been inactive since 2023-07-08.
+- Maps that touch or leave the image edge: x is never clamped and negative coordinates are not checked, so a sample at x >= cols-1 blends in the first pixel of the next row and the 8-byte loads can run past the buffer.
+- Plain image resizing or when OpenCV is already linked: cv::resize and cv::remap (both SIMD and multithreaded) were never timed against these kernels.
+- Non-x86 targets (no NEON or scalar-portable SIMD path), RGBA, planar, 16-bit or float images, or output widths that are not a multiple of 4 or 8.
+- Multi-threaded pipelines: with threads the SIMD kernels add only 1.25x (i7-8700, AVX2) to 1.5-1.7x (Xeon, AVX-512) because the gather is memory-bound.
+
+**Vs siblings:** It is the only bilinear image-sampling kernel among the catalogued SIMD entries, so pick it as worked x86 code for 24-bit BGR gather-and-blend; to write your own portable kernel use a licensed abstraction such as EVE or the Vector Class Library, and for ARM image kernels see ARM NEON Compositor. Pure SIMD shows the same per-pixel pattern with a larger (about 9.4x) gain on compute-bound shading.
+
+**Gotchas:**
+- The validation is not an equality check: mats_equivalent() in src/common.hpp accepts per-channel differences up to 3 (a TODO blames rounding). The SIMD paths round the scaled fractions with cvtps and multiply 16-bit weights, while the scalar baseline truncates float weights, so outputs are not bit-identical.
+- The timed workload is a rotated remap, not the downscale the record describes: sampling_coordinates() rotates a 3x-downscale grid with cv::warpAffine and its default constant border, so about 27% of the 1280x720 outputs get coordinate (0,0) and all read the same cache-hot top-left pixel (share derived from the transform in src/common.hpp, not printed by the repo). That flatters every variant against a real full-image warp.
+- Harness flaw behind the numbers: all published results (2020) predate commit b333369 (2021, alignas on the AVX2/AVX-512 stack store buffers that could crash) and commit d0f0187 (2023-07-08, 'Fix out of bounds access'), which added a compare-and-branch to ptr_below() in every variant's hot path; no post-fix numbers exist. The fix clamps only the row: its own test coordinate (2159, 3839) still makes the scalar path read pixel[1] 3 bytes past the image buffer and the SIMD 8-byte loads read 5 bytes past it (weight 0, so the output is unaffected, but it is an out-of-bounds read).
+- Each timed iteration also allocates the 2.7 MB output cv::Mat3b, the multi-thread rows depend on an unstated OpenCV parallel_for_ backend, and the compiler used for the runs is never named.
+
+**Status:** Abandoned demo (last commit 2023-07-08, 10 stars, no issues ever filed) with no licence file, so reference only; every published number comes from August 2020 code that predates the 2021 alignment fix and the 2023 bounds fix, and no OpenCV cv::remap or cv::resize baseline was ever timed.
+
+[repo](https://github.com/jviney/bilinear_filter_simd) · [benchmark](https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Readme.md)
+
+##### ParallelReductionsBenchmark  `C++`  `no license`  `stale`  `Tier C`
+
+Educational benchmark of float-array sum kernels (unrolled, SIMD, threaded, GPU) against serial std::accumulate on a 1 GB array.
+
+**Beats:** std::accumulate (serial) — With GCC 12 at effective -O2 -march=native, one thread summing 1 GB of 1.0f: the plain 8-accumulator unrolled loop reaches 14.74 (f64) and 28.23 (f32) GB/s on Graviton4 and 34.02/35.15 GB/s on Zen4 m7a, against serial std::accumulate's 5.58 and 4.88 GB/s (about 2.6-7.2x, derived from page data; only f64 is exact). The single-accumulator AVX2/NEON/SVE kernels land between the two, and multithreaded libstdc++ std::reduce<par> on oneTBB (368-550 GB/s) is the fastest CPU row.
+
+**Known shortcoming:** Raised C to A on the Graviton4 table (GCC 12, CMake -O2 -march=native -fopenmp, reduce_bench.cpp public; same basis as the wave 11 Intel Parallel STL entry), but no LICENSE (reference); the std::accumulate baseline is latency-bound with no single-thread std::reduce row; hand-written AVX2/AVX-512/NEON/SVE kernels are slower than the plain unrolled loop on Zen4 and Graviton4; all f32 rows are 50-94% wrong (2^24 saturation) and only f64/Kahan rows are exact (f64 2.6x Graviton4, 7.0x Zen4); the multithreaded std::reduce figure belongs to libstdc++.
+
+**Known shortcoming:** Enricher: the harness fills the array with 1.0f and checks only against n, which hides three reduction bugs in current main (confirmed by a transcription test on patterned data): avx2_f64_t's double _mm256_hadd_pd drops the upper lane (1 instead of 16384), avx512_f32unrolled_t counts fwd5/rev5 twice and drops fwd6/rev6 (20480 vs 16384), avx512_f32interleaving_t skips every other 64-byte line and drops acc4 (0 vs 16384); the Zen4 1 GB AVX-512 rows (including the 26.84 GB/s interleaving figure) predate commit a301c39 'Fix: Measuring AVX-512 throughput' whose old kernels read half the array, so their 50% error is that skip, not saturation; unlicensed, reference only. Retiered to C.
+
+**Independent measurement:** verifier batch-41 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The single-thread gain over std::accumulate comes from breaking the serial floating-point add chain: std::accumulate must fold left to right, so each add waits for the previous one, while unrolled_gt keeps 8 independent accumulators that GCC can also vectorize. The hand-written kernels add SIMD lanes (one accumulator per kernel for SSE/AVX2/NEON/SVE, 2-16 ZMM accumulators with bidirectional traversal and non-temporal loads for AVX-512). Multicore variants split the array into cache-line-rounded per-core chunks with over-aligned partial sums, on huge pages and NUMA-bound memory.
+
+**Use it when:**
+- Learning or teaching why a reassociating multi-accumulator loop beats std::accumulate by 2.6-7x on a memory-bound float sum (GCC 12, -O2 -march=native).
+- Measuring the memory-bandwidth ceiling of a many-core box: the multithreaded rows reach 368-550 GB/s on Zen4 and Graviton4 with std::reduce<par> or fork_union.
+- Comparing thread-pool dispatch latency on tiny inputs (PARALLEL_REDUCTIONS_LENGTH=1536): fork_union, Taskflow, OpenMP and std::thread, plus Rayon/Tokio/smol on the Rust side.
+- Starting point for your own reduction when you need f64 or Kahan accumulation over more than 2^24 elements, and will write your own tests on non-uniform data.
+
+**Skip it when:**
+- As a dependency: there is no LICENSE file (raw LICENSE 404, none in the sidebar), no API and no package, so the code cannot legally be copied.
+- Copying avx2_f64_t, avx512_f32unrolled_t or avx512_f32interleaving_t: all three return wrong sums on non-uniform input (see gotchas); the harness only ever feeds 1.0f, so the bugs never show in its error column.
+- Summing more than 2^24 values into a float accumulator: every f32 row in the README is wrong by 50-94% because each lane saturates at 16,777,216.
+- Expecting hand-written intrinsics to beat the compiler: on Zen4 and Graviton4 the plain unrolled loop is faster than the single-accumulator AVX2, NEON and SVE kernels.
+- As a source of AVX-512 numbers: the Zen4 1 GB AVX-512 rows were measured on kernels that read only half the array.
+
+**Vs siblings:** Pick this over marcelcases/simd or Vectis when you care about a memory-bound 1 GB reduction across many backends (threads, std::reduce, CUDA/CUB) rather than an L1-resident single-core kernel. Vectis's scalar-4acc and -ffast-math rows are the better single-thread control, and EVE or VCL are the libraries to actually ship SIMD reductions with.
+
+**Gotchas:**
+- The harness fills the array with 1.0f and checks only against n, which hides three reduction bugs in current main (confirmed by a self-written transcription test on patterned data): avx2_f64_t's double _mm256_hadd_pd returns 2*(lane0+lane1) and drops the upper 128-bit lane (1 instead of 16384 when only lane 3 is set); avx512_f32unrolled_t's combine adds fwd5/rev5 twice and drops fwd6/rev6 (20480 vs 16384); avx512_f32interleaving_t loads acc3 from it_begin+32 instead of +16 and acc4 from the same address as acc2, so it never reads every other 64-byte line, then drops acc4 and counts acc2 twice (0 vs 16384).
+- The Zen4 1 GB table predates commit a301c39 (2025-01-24, 'Fix: Measuring AVX-512 throughput'): at 9a5a61a the AVX-512 kernels advanced 32 floats per 16-float ZMM load, so they read half the array while bytes/s credited all of it. The 50% error on every avx512 row is that skip, not f32 saturation, so avx512<f32streamed> 19.27, <f32unrolled> 22.28 and <f32interleaving> 26.84 GB/s are invalid. Only the small-array latency-hiding table was re-run after the fix.
+- The f32 rows' error column comes from accumulator saturation at 2^24: std::accumulate<f32> 93.75%, unrolled/avx2 f32 50%, NEON/SVE 75%. Only f64, Kahan and std::reduce rows are exact, and the f64 SIMD rows are exact only because every lane holds the same value.
+- The AVX-512 kernels use aligned and non-temporal loads at both ends (it_end - 16*k), so both ends must be 64-byte aligned: lengths that are not a multiple of 16 floats can fault. USE_INTEL_TBB is defined as 0 or 1, so '#if defined(USE_INTEL_TBB)' always pulls in the oneTBB headers. Clang builds get no -march=native, so the AVX2 and AVX-512 kernels compile out.
+
+**Status:** Stale since 2025-07-22 (119 stars, not archived) and unlicensed, so it is reference only. The multi-accumulator f64 loop is sound teaching material, but avx2_f64_t, avx512_f32unrolled_t and avx512_f32interleaving_t give wrong sums on non-uniform data, and the Zen4 AVX-512 1 GB rows come from pre-fix kernels that read half the array.
+
+[repo](https://github.com/ashvardanian/ParallelReductionsBenchmark) · [benchmark](https://github.com/ashvardanian/ParallelReductionsBenchmark)
+
+##### recip_rsqrt_benchmark (fast vectorized reciprocal and rsqrt)  `C++`  `no license`  `abandoned`  `Tier C`
+
+SSE recipes for approximate 1/x and 1/sqrt(x) (rcpps/rsqrtps, optional Newton-Raphson) that beat divps and sqrtps+divps throughput 2-13x.
+
+**Beats:** the repo's own 'ieee' variants in routines_sse.h: _mm_div_ps(1, x) and _mm_div_ps(1, _mm_sqrt_ps(x)) (and the _pd forms), i.e. the divps/sqrtps instructions a compiler emits for 1.0f/x and 1.0f/sqrtf(x) — On an Intel Core i7-3770 (Ivy Bridge) built with MSVC 2013 x64 (flags not stated), the README's single run measures rcpps at 1.13 TSC ticks per 4-float call versus 7.30 for divps (about 6.5x) and rsqrtps at 1.12 versus 14.46 for sqrtps+divps (about 12.9x), with max relative error about 3e-4. One Newton-Raphson step gives 3.69 and 5.52 ticks (about 2.0x and 2.6x) at 1.5e-7 and 3.1e-7. Double rows go through float: rsqrt estimate 3.38 versus 28.21 ticks (about 8.3x), and the series variants recip r5 and rsqrt r5 reach 2.2e-16 and 3.2e-16 error at about 1.35x and 2.1x (ratios derived from page data). The baseline is the repo's own exact SSE variant, not a library.
+
+**Known shortcoming:** No licence (reference); 2015 Ivy Bridge run with MSVC 2013 and flags unstated; approximate results (about 3e-4 error); the metric is throughput, not latency.
+
+**Known shortcoming:** Harness flaw: the 'exhaustive' double range is only [1, 1 + 2^-29], and all 8.4M of those doubles round to the float 1.0, so the double max-error column rests on the 16.8M random samples only. Special values are untested: the NR variants return NaN for 0 and +inf, and the double variants return 0 or NaN outside the float range. Since the 2018 commit 505a8fc an unconditional <intrin.h> breaks the Linux GCC/Clang build (code reading, not built). The arrays (about 168 and 201 MB) exceed cache, so the fast rows may be memory-bound and the speedups understated, not inflated; the metric is throughput, not latency.
+
+**Independent measurement:** verifier batch-111 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** The fast rows use the hardware estimate instructions rcpps and rsqrtps (about 12-bit accuracy, max error about 3e-4 in the sample run) instead of the slow divider and square-root unit. The nr1/nr2 rows add one or two Newton-Raphson steps (x(2 - ax) for 1/x, x(3 - ax^2)/2 for 1/sqrt(x)). The r3-r5 double rows evaluate a truncated series x*poly(r) with r = 1 - ax (or 1 - ax^2), so one correction reaches 2.2e-16 to 3.2e-16 error. Double variants convert to float, take the float estimate and refine in double precision.
+
+**Use it when:**
+- Float SIMD inner loops (vector normalisation, lighting, physics, softmax-style scaling) bound by divps or sqrtps throughput, where about 3e-4 (raw estimate) or about 1.5e-7 to 3.1e-7 (one Newton-Raphson step) relative error is acceptable
+- Older x86 cores of the Ivy Bridge era, where the sample run shows 6.5x (recip) and 12.9x (rsqrt) for the raw estimate and 2.0x and 2.6x with one refinement step
+- Double 1/x or 1/sqrt(x) on inputs that stay well inside float range (about 1.2e-38 to 3.4e38), where recip_double2_r5 (2.2e-16, 10.51 vs 14.17 ticks, about 1.35x) or rsqrt_double2_r5 (3.2e-16, 13.51 vs 28.21 ticks, about 2.1x) gives near-full precision faster (derived from page data)
+- As a reference table of precision versus cost before you write your own estimate-plus-refinement code or choose a math library
+
+**Skip it when:**
+- You need correctly rounded IEEE results or reproducible bit-exact output; every non-ieee variant is approximate
+- Inputs can be 0, +inf, denormal or outside the tested 2^-20 to 2^20 range, or are doubles beyond float range: the refined variants return NaN or 0 there (see gotchas)
+- Current Intel and AMD cores: dividers and square-root units are much faster than on Ivy Bridge (general knowledge, not measured here), and a search snippet of LLVM review D5658 says LLVM limited rsqrt estimates to AMD btver2 because Intel Core sqrt/divide units were 'just too fast' for estimate plus refinement to pay off; re-measure first
+- Your compiler can already do this: GCC -mrecip (and -ffast-math for 1.0f/sqrtf) emits rcpps/rsqrtps with one Newton-Raphson step when -funsafe-math-optimizations, -ffinite-math-only and -fno-trapping-math are on (GCC documentation via search snippet)
+- You need AVX, AVX-512 or Arm NEON versions or a licensed library: only 128-bit SSE code is here and the repo has no licence file
+
+**Vs siblings:** Pick this over math_intrinsics, corvus or LitMath only when the hot spot is plain 1/x or 1/sqrt(x) on SSE registers and you want to choose an exact precision/cost point and hand-copy a few lines; those siblings are maintained vector-math function sets (trig, exp, log) with stated libc or framework baselines, and this repo is a licence-less reference.
+
+**Gotchas:**
+- Special values are not handled and never tested: the harness only feeds positive finite values (all floats in [1, 2] plus exp2 of uniform(-20, 20)). From code reading, recip_float4_nr1(+inf) computes inf*0 and returns NaN instead of 0; rsqrt_float4_nr1(0) computes 0*inf*inf and returns NaN instead of +inf. The double variants round to float first, so a double above about 3.4e38 becomes inf and recip_double2_nr1 returns 0 (true value about 1e-300 for x = 1e300). A double below about 1.2e-38 becomes 0 or a float denormal, which rcpps treats as 0, so the refined result is NaN.
+- Harness flaw in the precision column: the 'exhaustive' double range is enum_all_floats(1.0, 1.0 + DBL_EPSILON * (1<<23)), that is [1, 1 + 2^-29]. All of those 8.4M doubles round to the same float 1.0 before rcpps or rsqrtps, so the double max-error figures rest on the 16.8M random exp2 samples only. For float rsqrt, the exhaustive sweep covers [1, 2] only and the [2, 4) half of the mantissa-exponent space is sampled randomly. The 'ieee' rsqrt reference is div after sqrt (two roundings), so the 3.2e-16 to 5e-14 rsqrt figures are measured against a reference that is itself not correctly rounded.
+- Timing is one unrepeated rdtsc pass (TSC reference ticks, not core cycles) over about 168 MB of floats and about 201 MB of doubles (sizes derived from main.cpp), far larger than cache. The 1.1-tick fast float rows move about 3.5 bytes per tick, about 12 GB/s at a nominal 3.4 GHz TSC (derived), so they may be partly memory-bound; that would understate, not inflate, the fast-row speedups. Each value goes through 4 chained calls in 4 interleaved streams, so the figure is a throughput measure, not latency as the catalog metric says.
+- Build: the 2018 'Fixed compilation on MSVC2017' commit (505a8fc) added an unconditional #include <intrin.h>, an MSVC/MinGW header, so main.cpp as checked in will not compile with GCC or Clang on Linux (from code reading, not built). There is no build file and the optimisation flags are not stated. test_values_double is declared as vector<double, aligned_allocator<float, ...>>, a value_type mismatch that only works through the allocator's rebind.
+
+**Status:** Abandoned since 2018-12-05 (11 commits, 11 stars, no licence file), so reference only: read the five-line recipes and reimplement them, and re-measure on a current CPU before relying on the 2015 Ivy Bridge ratios.
+
+[repo](https://github.com/stgatilov/recip_rsqrt_benchmark) · [benchmark](https://raw.githubusercontent.com/stgatilov/recip_rsqrt_benchmark/HEAD/README.md)
+
+##### SIMD_TriangleAABB (SIMD triangle-box overlap test)  `C++`  `no license`  `abandoned`  `Tier C`
+
+SSE version of Akenine-Moeller's triangle-vs-AABB SAT overlap test; about 2x on full tests, 20x with an added early exit.
+
+**Beats:** Moeller's scalar triangle-box overlap code ('old code', and the 'new, faster code' variant) from Tomas Akenine-Moeller's page — One rdtsc run per scenario by the author on an unnamed Windows PC (Visual Studio 2008 Win32 Release project with /O2 /arch:SSE2 /fp:fast; compiler version and CPU not stated), 16384 triangles per scenario, compared with his lightly edited copy of Akenine-Moeller's 'old' scalar tribox code. Results: 1.99x when every test runs (worst case), 2.90x on no-hit, 3.30x on the mixed set, and 20.6x in the best case, which comes from the added v0-inside-box exit rather than SIMD width. Against the 'new, faster' variant the ratios are 2.6-26.2x, because that variant ran slower on his machine.
+
+**Known shortcoming:** VS2008 flags (/O2 /arch:SSE2 /fp:fast /GL, Win32) with no CPU and single-shot rdtsc timing; the 20x best case comes from an extra early exit absent from the Moeller baseline; no licence (reference).
+
+**Known shortcoming:** Latent correctness bug: LoadU is _mm_loadu_ps on a 12-byte Point, so every vertex load reads 4 bytes past the struct (the harness itself reads past the end of gTris), and the 4-lane DotV feeds that garbage w lane into the plane test, so a NaN or Inf there silently disables rejection and gives false overlaps; hit counts matched in the author's run, so the published numbers stand. Harness: one rdtsc sample per scenario with no warm-up, all scalar runs before the SIMD ones; the scalar best case costs 5072 vs 3773 for the worst case on the same code path, so the 1.99x worst-case row is the clean SIMD figure; the early exit checks v0 only, not 'triangle fully inside' as the README says. A licensed, maintained copy exists as NVIDIA PhysX Gu::intersectTriangleBox_Unsafe (GuIntersectionTriangleBox.cpp, V4Dot3; BSD-3 in NVIDIAGameWorks/PhysX, Apache-2.0 SPDX in NVIDIA-Omniverse/PhysX).
+
+**Independent measurement:** verifier batch-112 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Each group of SAT axes is evaluated in one 128-bit SSE register: the triangle's AABB against the box on x, y, z at once (minps/maxps plus one movemask), the plane test with sign-masked extents, and the 9 'class III' edge axes as three calls that each test 3 axes for all three vertices. Data-dependent min/max swap branches of the scalar code become minps/maxps, while early exits are kept (cheap AABB and plane rejections first, edge axes last). An extra first exit returns 'overlap' when vertex v0 lies strictly inside the box (abs, subtract, sign-bit movemask), which accounts for the 20x best case.
+
+**Use it when:**
+- Mesh-vs-box queries in collision detection, BVH or octree builds and voxelization on x86 with SSE2, one triangle per call.
+- Workloads where many triangles have their first vertex inside the box (small triangles against larger boxes or cells), where the added exit costs about 15 rdtsc ticks per test against about 317 for the scalar code on the author's machine (derived from page data).
+- Vertex buffers you control and can pad so that 16 bytes are readable at every vertex, box centre and extents address.
+- As a known-good reference when writing or checking your own SIMD triangle-box test; its author notes that most other SIMD ports he benchmarked were slower than the scalar code.
+
+**Skip it when:**
+- You need a licence: the repo has none (only a tip-jar link). The same routine ships, maintained and licensed, as Gu::intersectTriangleBox_Unsafe in NVIDIA PhysX (BSD-3 header in NVIDIAGameWorks/PhysX 4.x, SPDX Apache-2.0 in the current NVIDIA-Omniverse/PhysX source).
+- Tightly packed 12-byte vertices whose last element ends at the buffer end, or vertices followed by non-float data: every load reads 4 bytes past the Point.
+- Non-x86 targets: raw SSE intrinsics with no NEON or scalar fallback (PhysX's version goes through its portable aos vector layer).
+- Large batches where a structure-of-arrays kernel testing 4-16 triangles per instruction (ISPC, AVX2 or AVX-512) would use the lanes better: here the w lane is idle and only 3 axes are tested per vector op.
+- Exact boundary semantics: the early exit uses a strict inside test, and the benchmark was built with /fp:fast and flush-to-zero.
+
+**Vs siblings:** No sibling solves triangle-box overlap: the catalogued neighbours are general SIMD toolkits (EVE, Vector Class Library, ISPC) that you would use to write a batched, many-triangles-per-call version. Pick this for a ready single-call SSE SAT test, and take the PhysX copy (portable, 3-lane dot, licensed) for shipping code.
+
+**Gotchas:**
+- Out-of-bounds read: LoadU is _mm_loadu_ps(&v.x) on a 12-byte Point, so every vertex, centre and extents load reads 4 extra bytes. The harness itself does this on the last vertex of gTris = new Point[16384*3], reading past the heap allocation. PhysX names its copy intersectTriangleBox_Unsafe and notes 'all params must be safe to V4LoadU'.
+- Latent correctness bug: DotV sums all four lanes, so the plane test includes the garbage w lanes. If those 4 bytes after a vertex or the centre hold NaN or Inf, or their products overflow, the dot products become NaN and the plane test silently never rejects, giving false 'overlap' results. PhysX's version uses a 3-lane V4Dot3 instead. Hit counts matched in the author's run, so the published numbers are not affected.
+- The added early exit fires when v0 alone is strictly inside the box, not 'when the box fully contains the triangle' as the README says. That is still a correct overlap answer, but only vertex slot 0 is checked; the 'worst case' generator places v0 outside on purpose. PhysX's version uses an inclusive (>=) comparison.
+- Harness: each scenario is one cpuid+rdtsc sample (Time/1024 over 16384 tests) with no warm-up or repetition, and all scalar runs come before the SIMD ones. The scalar best case costs 5072 units against 3773 for the worst case, although both follow the same no-early-exit path, which suggests vertex-order-dependent branch mispredictions in the baseline. The 1.99x worst-case row (about 236 vs 119 ticks per test, derived from page data) is the clean SIMD-only figure.
+
+**Status:** Abandoned upload (6 commits, all on 2021-09-08, of code first released on the author's codercorner blog), with no licence, so reference only. A maintained and licensed descendant with the w-lane dot fixed lives in NVIDIA PhysX as Gu::intersectTriangleBox_Unsafe.
+
+[repo](https://github.com/Pierre-Terdiman/SIMD_TriangleAABB) · [benchmark](https://raw.githubusercontent.com/Pierre-Terdiman/SIMD_TriangleAABB/HEAD/README.md)
+
+##### vectorized_find (AVX2 find experiments)  `C++`  `no license`  `stale`  `Tier C`
+
+Personal AVX2 experiment: a 2x-unrolled cmpeq/movemask find for int and float, about 3.2x std::find on 4096 L1-resident ints.
+
+**Beats:** std::find on a raw array and on std::vector (plus a naive loop) — With Google Benchmark on an unnamed machine whose perf stat output shows 24 CPUs, an unstated compiler and standard library (CMake flags: GCC -Ofast -march=native -funroll-loops, or Clang -O3 -ffast-math), searching 4096 ints with the target in the last slot: the AVX2 intrinsic_find runs at ~24.9 G-elements/s against std::find at ~7.7 (raw pointer) and ~8.1 (std::vector), about 3.2x (derived from page data). The 49.7 G-elements/s Intrinsic2Find headline is a buggy full-array count, not a find, and is not a valid speedup.
+
+**Known shortcoming:** Real claim is IntrinsicFind about 3.2x std::find (24.9 vs 7.7, derived); the Intrinsic2Find 49.7 row is not a valid speedup (full-scan count with lower_bound semantics and a reduction bug returning twice the sum of lanes 0-3, 4096 instead of 4095); intrinsic_find reads past the buffer for sizes not divisible by 16; no CPU, compiler unstated; no licence (reference).
+
+**Known shortcoming:** Harness flaws: the ~49.7 G-elements/s Intrinsic2Find headline is a full-array count whose reduction returns 4096 instead of 4095; compare_find (the ~32.2 row) is off by one (counter starts at -1, returns 4094); intrinsic_find has no tail loop and over-reads, and the small-size rows count 8 items; nothing validates results; the 16 KiB array is L1-hot only. The 3.2x holds only against libstdc++'s scalar std::find (libc++ routes it to wmemchr, the MSVC STL to __std_find_trivial_4).
+
+**Independent measurement:** verifier batch-113 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** It broadcasts the target with _mm256_set1_epi32 (or _mm256_set1_ps), loads two unaligned 256-bit chunks (16 elements) per iteration, compares with _mm256_cmpeq_epi32 (or _mm256_cmp_ps), collapses each comparison with movemask and finds the hit with __builtin_ctz; the 2x unroll was tuned on the author's CPU. That is one branch per 16 elements, against libstdc++'s std::find for int, which is a scalar `#pragma GCC unroll 4` loop (libstdc++ only switches to memchr for 1-byte types). The even faster Intrinsic2Find and CompareFind rows drop the early exit and count elements below the target over the whole array, which is a different algorithm, not a faster find.
+
+**Use it when:**
+- As a compact reading example of the cmpeq + movemask + ctz find idiom for 32-bit int or float on an AVX2 x86-64 machine.
+- Repeated scans of short-to-medium unsorted int32 or float arrays (up to a few thousand elements, L1-resident, which is all the benchmark covers) when your toolchain is GCC with libstdc++, whose std::find for 4-byte types is scalar.
+- As a starting harness for benchmarking your own find kernel; the Google Benchmark file is short and easy to extend.
+
+**Skip it when:**
+- Buffers whose length is not a multiple of 16: there is no tail loop, so intrinsic_find reads up to 15 elements past the end and can return an out-of-range index if that stray memory holds the target.
+- With libc++ on Linux or with MSVC STL: libc++ routes std::find on 4-byte trivially comparable types to wmemchr (glibc has an AVX2 wmemchr) and MSVC STL dispatches to the vectorized __std_find_trivial_4, so the 3.2x baseline gap does not carry over; the repo never measured those standard libraries.
+- Non-x86, pre-AVX2 CPUs or MSVC builds: it uses AVX2 intrinsics, the GCC/Clang-only __m256i_u type and __builtin_ctz, with no scalar fallback or runtime dispatch.
+- Sorted lower_bound-style searches: the Intrinsic2Find and CompareFind variants look like that but return wrong counts (see gotchas); use std::lower_bound or a tested branchless search instead.
+- Production code in general: no licence, no tests, 0 stars, int sizes rather than size_t, and only int and float overloads.
+
+**Vs siblings:** FastArrayOps (komrad36) covers contains/find for 8- to 64-bit integers and float/double, reports about 12x on 32-bit ints and is the better source to copy; libhat and the Rust memchr crate cover byte-pattern and substring search. Pick vectorized_find only as a minimal, readable AVX2 int32/float find to study or adapt (after adding a tail loop). If you only need a faster std::find for int, moving to libc++ or MSVC STL gives a vectorized std::find with no new code.
+
+**Gotchas:**
+- Over-read: intrinsic_find always loads 16 elements per step with no tail loop. The benchmark itself bumps sizes 2 and 4 up to 8 and then reads 8 ints past an 8-int malloc at sizes 2, 4 and 8; it also counts 8 items processed for the 2- and 4-element cases, which inflates the small-size throughput rows of the intrinsic variants.
+- The ~49.7 G-elements/s headline row (intrinsic2_find) is not a find. It counts elements below the target over the whole array (equal to lower_bound only on sorted input), and its reduction, _mm256_extract_epi32(sum,0) + _mm256_extract_epi32(sum,1) after two in-lane _mm256_hadd_epi32, returns twice the sum of lanes 0-3 and ignores lanes 4-7. On the benchmark input (4095 zeros, then the target) it returns 4096 instead of 4095. No benchmark checks the returned index, so the bug went unnoticed.
+- compare_find (the ~32.2 G-elements/s row, which already beats the AVX2 find) is a branchless count with no early exit that GCC auto-vectorizes. Its counter starts at -1, so on the benchmark input it returns 4094 instead of 4095, off by one even as a lower_bound. Its worst-case speed says nothing about inputs where the target appears early.
+- Harness limits: every row is a worst case on an all-zero array of at most 4096 ints (16 KiB, L1-resident) that is rescanned in a loop, and no result is validated. The std::find array is 64-byte aligned via aligned_alloc while the intrinsic arrays use malloc. The README's std::find and Intrinsic2 rows have no raw output in the repo, and the archived docs/perf_results/results.txt (older BM_ names) gives IntrinsicFind/4096 at 21.06 G/s, not ~24.9.
+
+**Status:** Stale personal experiment (35 commits, last on 2025-09-29, 0 stars, no issues) with no licence file, so it is reference-only: learn the idiom, do not vendor the code.
+
+[repo](https://github.com/sbstndb/vectorized_find) · [benchmark](https://raw.githubusercontent.com/sbstndb/vectorized_find/HEAD/README.md)
+
+#### wasm-libraries-and-apps
+
+##### BenchmarkingWebAssembly (Understanding the Performance of WebAssembly Applications)  `C (PolyBenchC and CHStone) compiled by Cheerp to WebAssembly and JavaScript; Python test scripts`  `no license`  `abandoned`  `Tier C`
+
+IMC 2021 study artifact timing Cheerp-compiled WebAssembly against Cheerp-compiled JavaScript on PolyBenchC and CHStone in three browsers.
+
+**Beats:** JavaScript produced from the same C programs by Cheerp 2.0 — The README (abstract of the IMC 2021 paper, DOI 10.1145/3487552.3487827) reports Cheerp 2.0 WebAssembly averaging 26.99x and 8.22x faster than Cheerp's JavaScript output on 41 PolyBenchC and CHStone programs at extra-small and small inputs, with 18 of 41 slower at medium input, in Chrome 79, Firefox 71 and Edge 79 on unstated desktop and mobile hardware, 5 cold runs averaged; the small-input gap is dominated by JavaScript warm-up, and the shipped WebAssembly loaders cannot reproduce the timings because they stop the clock before the module runs.
+
+**Known shortcoming:** Raised C to B on the IMC 2021 paper (DOI 10.1145/3487552.3487827, snippet only): a study artifact whose baseline is Cheerp-generated JS; WASM is slower on 18 of 41 programs at medium input; no hardware stated; manual timing; no licence (reference).
+
+**Known shortcoming:** Enricher: every shipped compiled_benchmarks/*_load.js reads t1 right after starting fetch() while WASM compile, instantiate and the kernel run later in promise callbacks, so the shipped artifact times nothing for WASM while the JS files run main before t1; the published CSVs scale with kernel cost, so they came from other loaders with the timing scope undocumented; C timers are commented out; JS time is one cold run, so the small-input 26.99x is mostly JIT warm-up; memory is a post-run heap snapshot (JS about 885 KB even with over 100 MB arrays), so '3.39-6.20x more memory' is retained memory, not peak; auto.py counts ReferenceError runs as -1 in its average; no licence. Retiered to C.
+
+**Independent measurement:** verifier batch-21 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Nothing in the repo is a speed technique; the WebAssembly-over-JavaScript gap it reports comes from the engines. WebAssembly modules are compiled ahead of execution (Liftoff/TurboFan in Chrome, Baseline/Ion in Firefox) and use typed linear memory, while the Cheerp JavaScript output starts in the engine's interpreter and must warm up its JIT in a single cold run, which dominates the extra-small and small inputs where the 26.99x and 8.22x averages come from. At medium and larger inputs the warm-up share vanishes and the two converge or JavaScript wins (18 of 41 benchmarks at medium; gemm LARGE in input_size.csv is 1,499 ms JS vs 4,789 ms WASM).
+
+**Use it when:**
+- Citing evidence that WebAssembly's lead over JavaScript depends heavily on input size and is largest for short, cold, run-once kernels.
+- Needing PolyBenchC or CHStone sources already patched to compile under Cheerp (malloc instead of posix_memalign, calloc-free timer init) as a starting point for your own browser benchmarks.
+- Comparing browser engines' relative WebAssembly vs JavaScript behaviour circa Chrome 79, Firefox 71 and Edge 79, desktop and mobile, from the raw CSVs.
+- Looking for input-size tables (input_size.md) mapping PolyBench MINI..EXTRALARGE and CHStone sizes to concrete dimensions.
+
+**Skip it when:**
+- Choosing a WebAssembly library for production: there is nothing to link, and the repo has no license, so the patched sources cannot be reused legally.
+- Judging hand-written or modern JavaScript: the baseline is Cheerp 2.0's machine-generated JS, and the engines are from late 2019.
+- Reproducing the published numbers from compiled_benchmarks as shipped: the WebAssembly loaders stop the timer before the module even runs (see gotchas).
+- Drawing peak-memory conclusions: the memory columns are post-run heap snapshots, not peak usage.
+- Expecting maintenance: last commit 2021-05-28, 3 stars, 24 commits, no releases.
+
+**Vs siblings:** Pick this when you need a cross-browser, input-size-swept study of WebAssembly versus compiler-generated JavaScript rather than a component; for a usable component with a JS-backend comparison the TensorFlow.js WebAssembly backend is the catalogued choice, and iswasmfast is the smaller hands-on micro-benchmark that also includes a native N-API addon.
+
+**Gotchas:**
+- Harness flaw in the shipped artifact: every compiled_benchmarks/*_load.js (File Ver 200531 2200; checked 3mm and covariance at all five sizes and CHStone dfsin XXXL) starts t0, calls fetchBuffer(...).then(WebAssembly.instantiate).then(... i.exports.bX()), then takes t1 = performance.now() synchronously and logs (t1-t0)/1000. The fetch, compilation, instantiation and the benchmark's main all run in later promise callbacks, so the logged WebAssembly time excludes the benchmark entirely, while the .js files call main synchronously before t1. The repo's CSVs scale with kernel cost (gesummv medium 0.0005 s vs 3mm 0.15 s), so the published data were not produced by these loaders, and the repo does not document what scope the published WebAssembly times covered.
+- Asymmetric scope even in the best case: the JavaScript time covers the whole script from its first statement in one cold page load per run (init_array, interpreter and JIT warm-up, kernel), and the PolyBench C timer calls (polybench_start/stop_instruments) are commented out in the modified sources although the README still compiles with -DPOLYBENCH_TIME. The 26.99x extra-small average is mostly JavaScript warm-up on microsecond kernels (gesummv MINI: 0.229 ms JS vs 0.008 ms WASM).
+- Memory figures are heap snapshots taken after the program finished: JavaScript reads 877-889 KB at every size, including covariance EXTRALARGE whose arrays alone exceed 100 MB, because the typed arrays were already garbage-collected, while WebAssembly linear memory never shrinks. The '3.39-6.20x more memory' claim compares retained memory after the run, not peak use.
+- auto.py counts failed runs: a ReferenceError run is stored as -1 and included in the average (sum over non-zero entries divided by their count), it sleeps a fixed 1 s and parses only the first console message, and it is hard-wired to the MEDIUM -O2 files and to Windows process killing via wmi.
+
+**Status:** Abandoned study artifact (last commit 2021-05-28, 3 stars) with no license, so reference only; its data and figures are useful context, but treat the speedups as cold-start, compiler-generated-JS results and do not reuse the shipped loaders for timing.
+
+[repo](https://github.com/benchmarkingwasm/benchmarkingwebassembly) · [benchmark](https://github.com/BenchmarkingWasm/BenchmarkingWebAssembly)
+
+##### swisseph-wasm  `Rust FFI over C (Swiss Ephemeris 2.10.03) compiled to WebAssembly`  `MIT for the wrapper (LICENSE, Cargo.toml, deno.json), but the WASM compiles in Swiss Ephemeris 2.10.03 C sources (vendor/swisseph submodule of aloistr/swisseph), which are dual-licensed AGPL-3.0 or Swiss Ephemeris Professional License (the README calls it 'GPL/Commercial')`  `active`  `Tier C`
+
+Swiss Ephemeris 2.10.03 C compiled to WASM through a Rust wasm-bindgen shim; beats astronomy-engine on Moon positions only (1.44x).
+
+**Beats:** astronomy-engine 2.1.19 (pure-JavaScript astronomy library; version pinned in deno.json and benches/browser_bench.html) — The first-party README tables (no hardware or versions) show swe_calc_ut for the Moon at about 182,000 iter/s vs astronomy-engine 2.1.19 GeoVector at about 126,000 iter/s in deno bench (1.44x). For the Sun it loses: about 319,000 vs 577,000 ops/s in Chrome and 178,000 vs 434,000 in Deno, with 100,000 iterations timed by performance.now(). All rows are one fixed date, and the WASM side runs the Moshier fallback twice per call.
+
+**Known shortcoming:** Wins the Moon row only (1.44x) and loses the Sun rows; src/lib.rs stubs fopen to NULL, so SEFLG_SWIEPH probably falls back to Moshier and computes twice per call (source reading); MIT wrapper around the AGPL-3.0 or commercial Swiss Ephemeris (mixed).
+
+**Known shortcoming:** Enricher: confirms the verifier's finding against the vendored sweph.c 2.10.03 (the fopen stub forces the Moshier fallback, swe_calc_ut recomputes on flag mismatch and the save-area cache never hits, so two Moshier computations per timed call); the build.rs NO_MOSHIER define is a no-op, the sprintf stub blanks all warnings and errors so the fallback is silent, qsort is a no-op, bsearch returns NULL, atof/atoi return 0 and swe_fixstar_ut cannot work (source reading); each call costs 7 Reflect::set boundary imports, explaining the Sun losses; 26 commits 2026-01-06 to 01-12, dormant since.
+
+**Independent measurement:** verifier batch-121 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** There is no algorithmic trick: the C library is compiled with clang for wasm32-unknown-unknown (build.rs sets warnings and the target but no -O flag; the libc is replaced by Rust shims over libm and a header-tagged malloc), and calls go through wasm-bindgen. The Moon win comes from running compiled C for the lunar series instead of JIT-compiled JavaScript. On cheap calls the binding cost dominates: each swe_calc_ut builds its result with Object::new plus seven Reflect::set imports across the WASM/JS boundary, which is why the Sun rows lose to pure JS.
+
+**Use it when:**
+- You already use Swiss Ephemeris conventions (swe_* calls, SE_/SEFLG_ constants, sidereal modes, ayanamsa) and need them in a browser or Deno/Node without a native addon.
+- Moon-heavy batch work (e.g. lunar tables) where the README's Deno bench shows about 182,000 vs 126,000 iter/s over astronomy-engine.
+- Astrology-style output (apparent ecliptic longitude/latitude with daily speeds) where Moshier-level precision is enough; swemmoon.c quotes at most 7 arcsec longitude error for the Moshier Moon over -3000 to +3000.
+- AGPL-3.0-compatible projects, or projects holding a Swiss Ephemeris Professional License.
+
+**Skip it when:**
+- Sun and other cheap per-call positions: the README itself shows astronomy-engine faster (about 577,000 vs 319,000 ops/s in Chrome, 434,000 vs 178,000 in Deno).
+- When you need the SE1 file ephemerides or JPL files: fopen, fread and stat are stubbed (src/lib.rs) and swe_set_ephe_path is not exported, so every SEFLG_SWIEPH call silently falls back to Moshier.
+- Fixed stars: swe_fixstar_ut needs sefstars.txt, which can never be opened in this build (per source reading, not run).
+- Closed-source or permissively licensed products: the MIT label covers only the wrapper; the bundled Swiss Ephemeris is AGPL-3.0 or commercial.
+- Production use needing maturity: 4 stars, 26 commits all from 2026-01-06 to 2026-01-12, tests that only range-check the Sun longitude (275-285 degrees) and Moon latitude.
+
+**Vs siblings:** No astronomy siblings are catalogued; the closest pattern is hash-wasm (C compiled to WASM behind a JS API). Unlike hash-wasm, this one wins only on its heavier call (Moon) and loses on light calls, so use it for Swiss Ephemeris API parity rather than speed.
+
+**Gotchas:**
+- Harness flaw behind the numbers (per source reading of src/lib.rs and vendored sweph.c 2.10.03, not run): the benchmarks request SEFLG_SWIEPH, but fopen returns NULL, so each call first tries the file path, falls back to Moshier, and then swe_calc_ut sees the returned ephemeris flag differ from the requested one and recomputes with a new delta T. The save-area cache never hits because the saved flags (MOSEPH) never equal the requested ones (SWIEPH). Every measured iteration therefore does two Moshier computations; requesting SEFLG_MOSEPH would likely be faster, and the README's 'more accurate' claim describes Moshier, not the SE1 files.
+- The fallback is silent: the C stubs make sprintf write an empty string and printf/fprintf no-ops, so Swiss Ephemeris warnings and error texts (including 'not found in PATH ... using Moshier') come back blank. Check rc_flags & 4 (SEFLG_MOSEPH) yourself. qsort is a no-op, bsearch returns NULL and atof/atoi/sscanf return 0, so any code path that parses or sorts data is broken.
+- build.rs defines NO_MOSHIER with the comment 'Use JPL ephemeris only', but neither the vendored sweph.c nor sweph.h references that macro, so it does nothing: Moshier is the only ephemeris that can run.
+- The workloads differ: Swiss Ephemeris returns apparent ecliptic-of-date coordinates with speeds, while astronomy-engine GeoVector returns a J2000 equatorial vector without velocity. comparison.ts also parses a Date string inside every astronomy-engine iteration, deno_throughput.ts warms up only astronomy-engine, every row uses one fixed date (2000-01-01 12:00 UT), and no CPU, Deno, Chrome or compiler flags are stated.
+
+**Status:** A one-week project (26 commits, 2026-01-06 to 2026-01-12) with no activity since and a single open self-PR, so it is dormant rather than active. Usability is mixed: the wrapper is MIT, but shipping the WASM binary carries Swiss Ephemeris AGPL-3.0 or commercial terms.
+
+[repo](https://github.com/fusionstrings/swisseph-wasm) · [benchmark](https://github.com/fusionstrings/swisseph-wasm)
+
+##### sax-wasm  `Rust`  `MIT`  `active`  `Tier D`
+
+Rust/WebAssembly streaming SAX parser for XML, HTML, JSX and Angular templates with positions; claims to beat saxes and sax-js, but only measured with no events subscribed.
+
+**Beats:** sax-js and saxes (JavaScript streaming XML parsers) — The README times one parse of the bundled 2.99 MB xml.xml written in 64 KiB chunks (mean of 10 runs, no warm-up, Node v25.6.1, macOS arm64, chip not stated, sax-wasm 3.1.4): sax-wasm 6.80 ms vs saxes 11.00 ms and sax-js 26.99 ms. But sax-wasm ran with no events subscribed, so the figure is tokenization only, and no like-for-like number is published. This session reproduced the direction under the README setup (15.9 vs 34.6 ms) and a reversal with four event types and handlers on both parsers (117.9 vs 46.8 ms, Node 22.22.0 on an Intel Xeon VM).
+
+**Known shortcoming:** benchmark.mjs builds SAXParser() with the default events=0, so the wasm parser only tokenizes (no events built or sent to JavaScript) while saxes builds text, attributes and tags and checks well-formedness: no like-for-like run exists (tier D); the README's "100 internal runs" are not in the script and the numbers predate the October 2026 rewrites.
+
+**Known shortcoming:** Not faster in a like-for-like run (this session, npm 3.1.4, Node 22.22.0, 2.99 MB xml.xml, 64 KiB chunks, median of 20): with 4 events subscribed and names and values read, sax-wasm took 117.9 ms vs saxes 6.0.0 46.8 ms, about 2.5x slower; the README's no-events setup reproduced 15.9 vs 34.6 ms. Memory bug confirmed: write() copies each chunk to wasm address 4 inside the 1 MiB stack-first region, so chunks of 1,048,000 bytes silently produce wrong results (27,625 vs 27,637 open tags), 1,060,000 bytes raise 'RuntimeError: memory access out of bounds' and the whole file raises 'RangeError: offset is out of bounds' (issue #141 closed with a workaround only; HEAD still writes at 4). More README harness flaws: the ltx row passes a raw SaxesParser so no tree is built, the node-xml link points at the wrong package, and prepareWasm(Uint8Array) ignores byteOffset and byteLength.
+
+**Independent measurement:** verifier batch-87 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** A byte-oriented state machine in Rust walks the UTF-8 input (a grapheme iterator tracks line and column) and only materialises ('hydrates') strings for the event types set in the bitmask. Event payloads are written as descriptors into wasm linear memory, and the JS Reader objects decode fields lazily with TextDecoder on first access, so fields you never read cost nothing. The unreleased next major on HEAD (PRs #160 and #164, October 2026) adds wasm SIMD128 scans (i8x16_eq/bitmask) that skip ASCII runs up to the next delimiter and pools event descriptors; PR #160 reports only about 5% faster full decoding than the previous build. The release build uses opt-level 3, fat LTO, codegen-units 1 and wasm-opt -O4.
+
+**Use it when:**
+- You need source positions (line/character and UTF-8 byte offsets) for every tag, attribute and text node, for example in LSP servers, linters or codemods over XML, HTML, JSX or Angular templates.
+- You need one tolerant tokenizer for JSX fragments, Angular bindings and unquoted HTML attributes, which strict XML parsers such as saxes reject.
+- You stream UTF-8 bytes from fetch() or fs streams in a browser or Node in chunks of about 64 KiB, subscribe to one or two event types and read few fields per event, which is where lazy decoding helps most (this case was not measured).
+- You want a parser whose memory stays bounded by chunk size rather than document size, with no DOM built.
+
+**Skip it when:**
+- Throughput-critical XML ingestion that consumes tags, attributes and text. In this enrichment session's check (npm 3.1.4, Node 22.22.0, a 4-vCPU Intel Xeon 2.1 GHz cloud VM, the repo's 2.99 MB xml.xml in 64 KiB chunks, median of 20 runs after 3 warm-ups), sax-wasm with OpenTag|CloseTag|Text|Attribute subscribed and names/values read took 117.9 ms, against 46.8 ms for saxes 6.0.0 with equivalent handlers (about 2.5x slower). Even with a no-op handler it took 72.0 ms. The README's own setup (no events) reproduced its 'faster' result: 15.9 vs 34.6 ms.
+- Feeding whole documents or large ReadableStream chunks: any chunk near or above 1 MiB silently corrupts results or crashes (see gotchas), and the README gives no size limit.
+- You need validation, namespace events, DTD/entity expansion or strict well-formedness errors: it is non-validating ('emits what it sees') and reports namespaces only as attributes.
+- You need whitespace-only text nodes between elements: they are deliberately not emitted.
+- You need a stable event ABI: the next major release (on HEAD, unreleased as of 2026-10-11) changes the event format and rejects older wasm binaries. The 2025 history also includes lost tags, text and attributes in large or chunked input (#113, #117, #119) and truncated leading zeros in text (#142), all since closed.
+
+**Vs siblings:** Against libxml2-wasm (the catalogued wasm XML sibling): pick sax-wasm when you need a small streaming tokenizer with byte and line positions that tolerates HTML, JSX and Angular syntax. Pick libxml2-wasm when you need a conformant parser with DOM, XPath or schema validation. For plain XML throughput where you consume events, the pure-JS baseline saxes was faster in this session's like-for-like check.
+
+**Gotchas:**
+- Memory-safety bug in chunk handling, confirmed in this session on npm 3.1.4. write() copies each chunk to wasm linear-memory address 4 (`writeBuffer.set(chunk, 4)`), but the Rust module's own 17-page memory is laid out stack-first: __stack_pointer starts at 1,048,576, static data runs to 1,050,616 and the heap follows. On the repo's xml.xml, chunks of 64 KiB to 1,040,000 bytes gave identical results (27,637 open tags). 1,048,000-byte chunks silently produced 27,625 tags and a different content hash, with no error. 1,060,000 and 1,100,000-byte chunks raised 'RuntimeError: memory access out of bounds', and a 2.99 MB single write raised 'RangeError: offset is out of bounds'. Issue #141 hit the RangeError and was closed with a 'feed 64 KiB slices' workaround; the silent-corruption window is undocumented, and HEAD's src/js/saxWasm.ts still writes at address 4 (HEAD itself not re-tested). Slice inputs to 64 KiB yourself.
+- Harness flaws behind the README table: sax-wasm runs with `new SAXParser()` (events = 0), so it hydrates nothing and never calls into JS, while saxes and sax-js build names, attributes and text and node-expat emits every event. The 'ltx (using Saxes as the parser)' row passes the raw SaxesParser instead of ltx's lib/parsers/saxes.js adapter, so ltx's startElement/endElement listeners land on an `undefined` property (saxes maps unknown event names that way), no tree is built, and the row is just saxes plus a no-op text callback. The README links node-xml to dylang/node-xml, an XML builder, while the script runs robrighter's 2012 node-xml 1.0.2 SAX parser. And despite the README's '100 internal runs per parser', the script does 10 single cold-inclusive runs.
+- Event details are lazy views over wasm memory: they are overwritten by the next write(), so call toJSON() to keep anything. Memory also grows with chunk size: about 2.5 MB of wasm memory with 64 KiB chunks against 21.8 MB with 1,000,000-byte chunks in this session's run.
+- prepareWasm(Uint8Array) passes `saxWasm.buffer` (the whole underlying ArrayBuffer) to WebAssembly.instantiate, ignoring byteOffset and byteLength. A Uint8Array view into a larger buffer (a bundle slice or a pooled Buffer) therefore fails; pass a standalone copy, a Response or a compiled WebAssembly.Module. The shared env.memory the wrapper constructs is never used, because the module defines and exports its own memory.
+
+**Status:** Actively maintained (commits through 2026-10-10, next major in progress) and MIT-licensed. The evidence stays at D: the only published comparison is degenerate, a like-for-like run in this session found it about 2.5x slower than saxes, and npm 3.1.4 silently corrupts or traps on chunks near or above 1 MiB, so slice input to 64 KiB if you adopt it.
+
+[repo](https://github.com/justinwilaby/sax-wasm) · [benchmark](https://github.com/justinwilaby/sax-wasm#benchmarks)
+
+##### WXInlinePlayer  `JavaScript with C/C++ FLV demuxer and H.264/H.265 decoders compiled by Emscripten to WebAssembly and asm.js`  `Anti-996 License 1.0 (draft; non-OSI); package.json says ISC`  `abandoned`  `Tier D`
+
+Browser FLV player that soft-decodes H.264/H.265 in WebAssembly/asm.js; claims lower CPU than FFmpeg-based wasm players.
+
+**Beats:** FFmpeg-based wasm/asm.js H.264/H.265 web players: WASMVideoPlayer and the Taobao (Shoutao) and Huajiao implementations — First-party only: a README screenshot (images/benchmark.png) of H.265 FLV playback on the developer's own machine shows mean CPU 64% and memory 162 MB versus 91-102% and 174-202 MB for WASMVideoPlayer and the Taobao and Huajiao FFmpeg-based players, with clip, resolution, browser and hardware unstated and no benchmark code. The code shows the H.265 decoder skips deblocking and SAO, so the gain is partly from producing a lower-quality, non-conforming picture rather than from a faster equivalent decoder.
+
+**Known shortcoming:** The metric is CPU and memory use (H.265 CPU 64% vs 91-102%, memory 162 vs 174-202 MB from benchmark.png), not throughput, and the H.265 gain comes from reduced deblocking, so the output is not shown to be equal; Anti-996 licence (non-OSI, reference only).
+
+**Known shortcoming:** Enricher: the H.265 build sets DE265_DECODER_PARAM_DISABLE_DEBLOCKING and DISABLE_SAO (lib/codec/src/codec/codec.h), skipping both in-loop filters so the output is non-conforming with drift and the 30% CPU gain over FFmpeg players is unequal work (the README says only 'reduced deblock'); unchecked FLV/NAL lengths (Buffer::slice has no bounds check, read_uint8 has an off-by-one assert); open #118 memory-safety report unanswered, #48/#84 'memory access out of bounds'; 8-bit 4:2:0 only. Retiered to D.
+
+**Independent measurement:** verifier batch-90 (wave 13)
+
+**Independent measurement:** enricher (wave 13 pass, 2026-10-12)
+
+**How:** Instead of a slimmed FFmpeg build (the README cites about 2 MB, 600 KB gzipped), it links small single-purpose decoders (TinyH264 about 180 KB, OpenH264 about 260 KB, libde265 about 210 KB gzipped) behind its own C++ FLV demuxer, built with Emscripten -O3, Closure and --llvm-lto 3. The H.265 bundle's speed gain comes mainly from doing less work: lib/codec/src/codec/codec.h sets DE265_DECODER_PARAM_DISABLE_DEBLOCKING and DE265_DECODER_PARAM_DISABLE_SAO to true, so both HEVC in-loop filters are skipped. Rendering uses WebGL YUV-to-RGB on the main thread while decoding stays in a worker.
+
+**Use it when:**
+- Inline or autoplaying H.264 FLV clips in the WeChat WebView or other mobile browsers that hijack the native video element (ad, marketing or animation clips).
+- Low-latency HTTP-FLV live streams at modest settings; the README reports smooth playback of 1280x720, 1024 kbps, 24 fps on mid- to high-end phones and 1-2 s lower latency than MSE-based video.
+- Pages that are sensitive to decoder download size and only need Baseline-profile H.264 (the TinyH264 bundle).
+- As reference code for wiring an Emscripten-built decoder, a C++ FLV demuxer and a WebGL YUV renderer together.
+
+**Skip it when:**
+- When picture fidelity matters for H.265: with deblocking and SAO disabled the decoder is not conforming, and because both are in-loop filters the errors propagate through inter-predicted frames until the next random-access picture.
+- Untrusted or malformed FLV input: the demuxer does not validate NAL length fields, and open issue #118 (June 2026) reports a reproducible memory-safety bug in FLV video-tag parsing with no maintainer reply.
+- 10-bit (Main10) HEVC or non-4:2:0 content: the H.265 output path sizes and copies frames as 8-bit 4:2:0.
+- Projects that need an OSI licence: the code is under the draft 'Anti 996' License 1.0 (package.json still says ISC).
+- Anything needing seek, MP4/HLS/DASH containers or active maintenance: seek is a stub (try2seek returns 0), the roadmap items after V1.4 never shipped, and the last commit was 2022-03-26.
+
+**Vs siblings:** Among the catalogued wasm media entries, TurboRes targets ProRes decoding and Pare targets encoding against ffmpeg.wasm; pick WXInlinePlayer only when the job is playing H.264/H.265 FLV (especially live HTTP-FLV) inline inside WeChat or similar WebViews.
+
+**Gotchas:**
+- The H.265 build turns off both deblocking and SAO (codec.h: DE265_DECODER_PARAM_DISABLE_DEBLOCKING and DE265_DECODER_PARAM_DISABLE_SAO set true) and does not suppress faulty pictures; the README only says 'reduced deblock'. The 30% H.265 advantage over FFmpeg-based players therefore compares unequal work: FFmpeg's HEVC decoder runs both in-loop filters.
+- FLV/NAL parsing trusts length fields: Buffer::slice has no bounds check, read_uint8 asserts offset <= length (off by one), and the H.265 path slices each NAL by a 32-bit length read from the stream; issues #48 and #84 report 'memory access out of bounds' on real HTTP-FLV streams and #118 reports a sanitizer-reproducible memory-safety bug.
+- H.265 frames are copied as width*height*3/2 bytes of 8-bit 4:2:0 and tagged with the FLV tag timestamp of the packet that released them, not the picture's own presentation time, so reordered or high-bit-depth streams can show wrong timing or garbage.
+- Production builds keep Emscripten ASSERTIONS=1, and H.265 in FLV relies on the Kingsoft (ksvc) FLV extension, so standard FFmpeg cannot mux it without the ksvc patch.
+
+**Status:** Abandoned since 2022-03-26 (231 commits, 1.5k stars, 14 open issues including an unanswered memory-safety report) and under the non-OSI draft Anti-996 licence, so reference only; pin Emscripten 1.38.45 if you must rebuild it.
+
+[repo](https://github.com/ErosZy/WXInlinePlayer) · [benchmark](https://github.com/ErosZy/WXInlinePlayer)
 
 ### compression-and-encoding
 
@@ -5991,6 +7475,704 @@ GPU SpGEMM (C = A*B, FP64 CSR) that sizes output rows with HyperLogLog estimates
 **Status:** Recently published (10 commits, last 2026-04-21, 7 stars, no issues) and buildable with CUDA 12.4+, but with no license it is reference-only; read it for the HyperLogLog-estimation idea rather than vendoring it.
 
 [repo](https://github.com/CornellHPC/Ocean-SpGEMM) · [benchmark](https://arxiv.org/abs/2604.19004)
+
+### other-languages-faster-than-c-cpp-asm
+
+#### concurrency-runtimes
+
+##### Rayon vs OpenMP (CMU 15-618 project)  `Rust`  `no license`  `abandoned`  `Tier C`
+
+2019 CMU course study timing Rust+Rayon against C++/OpenMP on four kernels; Rayon wins only large parallel stable sorts.
+
+**Beats:** C++ with OpenMP (and GNU parallel-mode sort) for Mandelbrot, matrix multiplication, sorting and reduction; C++ compiled with GCC per the report — Data.xlsx (best of three runs, unnamed x86-64 Linux machine, threads 1-16) shows Rayon 1.0.3 par_sort on 100M random u64 at 1380 ms with 12 threads and 1226 ms with 16, against 1534.1 and 1476.2 ms for GNU parallel-mode stable sort of 100M int built with g++ 4.8.5 -O3 (about 1.11x and 1.20x, derived from page data); C++ was faster at 1-8 threads and serially (8467.6 vs 10908 ms). The matmul 'wins' are invalid because the C++ kernel computes a different product, and OpenMP won every reduction.
+
+**Known shortcoming:** Same harness flaws: Tokio 30.7 s vs the untuned libuv docs example 43.6 s in single runs from different dates with the cargo profile unstated, and it loses to Asio (29.5 s); tier D.
+
+**Known shortcoming:** From the committed binaries: Rust was built with rustc 1.33.0 for x86_64-unknown-linux-musl (static musl) while the C++ sort was built with GCC 4.8.5 on glibc; quicksort-rust has par_mergesort but no rayon quicksort symbol, so the Data.xlsx unstable-parallel numbers cannot come from the committed binary or source. The verifier's wrong C++ matmul kernel (B indexed by i) is confirmed, and the C++ serial script uses an undefined ${serial_cc}. Only the parallel stable sort at 12-16 threads stands.
+
+**Independent measurement:** verifier batch-31 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Where Rayon comes out ahead it is the library algorithm, not the language: Rayon's par_sort is a parallel merge sort (rayon::slice::mergesort with par_merge) that reached 8.9x self-speedup at 16 threads on 100M u64, against 6.1x for GNU parallel mode's multiway mergesort (parallel_sort_mwms) on 100M int (derived from Data.xlsx). The serial unstable-sort lead is pdqsort (Rust sort_unstable) against introsort. Rayon's work-stealing join gives dynamic load balancing, but on uniform reductions OpenMP's static schedule won at every thread count. The authors attribute the matmul result to GCC vectorizing the inner loop while LLVM did not, but that comparison rests on a wrong C++ kernel (see gotchas).
+
+**Use it when:**
+- As a dated, qualitative reference on Rayon versus OpenMP ergonomics: parallel iterators that refuse to compile racy sharing versus pragmas (the report notes OpenMP segfaults during development).
+- As a hint, to be re-measured on current versions, that a work-stealing parallel merge sort can out-scale libstdc++ parallel mode on 100M-element sorts at 12-16 threads.
+- As teaching material on how decomposition (pixel versus row) and Rayon's adaptive splitting change speedup curves.
+- Never as a dependency: adopt Rayon or OpenMP themselves.
+
+**Skip it when:**
+- As evidence that Rust/Rayon beats C++/OpenMP at matrix multiplication: the C++ kernels compute a different product (B indexed by row i), so those rows are not same-work.
+- For reductions or embarrassingly parallel loops: OpenMP was faster at every thread count on the reductions, and Mandelbrot was C++-faster serially and within about 1% multithreaded.
+- As a current comparison: Rayon 1.0.3, rustc 1.33.0 (2019-02-28) and GCC 4.8.5 (2015); Rust's std sorts and Rayon have since been rewritten, and open issue #1 (2024-08-12) asks for an update.
+- As copyable code: the repository has no licence.
+- When you need the hardware: the CPU model is never stated (thread sweep to 16, 'compute bound at 8 threads').
+
+**Vs siblings:** NPB-Rust (GMAP) is the better-controlled Rayon-versus-OpenMP comparison (full NAS kernels against the group's own C++ port); use this repository only for its small-kernel observations and the single surviving data point, parallel stable sort at 12-16 threads.
+
+**Gotchas:**
+- Matmul harness is broken on the C++ side: matmul_serial2 and matmul_par_row compute c += A[iOff + k] * B[RM(k, i, size)], indexing B by the row i instead of the column j, so every j of a row re-reads one cache-resident column of B and the result is a different matrix; all-ones inputs and no result check hide it, while the Rust kernel walks B[index][col] correctly. The C++ 'par_outer' block calls matmul_par_row again without resetting minThread, and the C++ serial script passes an undefined ${serial_cc}, so those runs also execute both 16-thread parallel variants after the serial timing.
+- New binary-level finding: the committed Rust binaries (rust/bin/quicksort-rust and mandelbrot-rust) are release builds by rustc 1.33.0 (2aa4c46cf 2019-02-28) for x86_64-unknown-linux-musl, statically linked against musl (musl malloc and memcpy) with Ubuntu 16.04 GCC 5.4.0 startup objects, while the C++ sort binary was built by GCC 4.8.5 (Red Hat 4.8.5-36) against glibc, so the two sides differ in libc and allocator. quicksort-rust contains rayon::slice::mergesort::par_mergesort but no rayon quicksort symbol, so its '[sort-unstable par]' loop runs the stable par_sort exactly as the committed source does; the Data.xlsx unstable-parallel numbers (for example 684 ms at 16 threads for 100M) cannot have come from the committed binary or source.
+- Sort comparisons are uneven: Rust sorts Vec<u64> (8-byte keys) while the C++ binary sorts std::vector<int> (4-byte keys), which handicaps Rust; the C++ 'unstable' parallel path is also multiway mergesort (parallel_sort_mwms<false>), not quicksort; and the Rust serial times in Data.xlsx are one value (10908 ms stable, 3611 ms unstable for 100M) copied into every thread row.
+- The report's prose overstates its data: 'Rayon performs better for all cases of threads for size 2048' fails at 8 threads (2501.7 vs 2277.6 ms), and its Mandelbrot time comparison (Figure 3) sets Rust pixel-parallel against C++ row-parallel, where the C++ pixel version uses schedule(static) and the row version schedule(dynamic).
+
+**Status:** Abandoned since 2019-11-01 (open issue #1 asks to update OpenMP and Rayon), no licence and 56 stars: a dated reference for reading, not code to copy, with harness defects (wrong C++ matmul kernel, Rust sort numbers not reproducible from the committed source or binary, musl-versus-glibc builds) that leave only the parallel stable-sort result standing.
+
+[repo](https://github.com/trsupradeep/15618-project) · [benchmark](https://raw.githubusercontent.com/trsupradeep/15618-project/HEAD/project_docs/15618-Project-Final.pdf)
+
+#### numerics-and-arrays
+
+##### hpla-rs (Rust faer-based CSR SpMV and Lanczos exp(-A)b) against Eigen, PETSc, oneMKL and PSBLAS  `Rust`  `MIT declared in the Cargo.toml license field only; the repo has no LICENSE file`  `active`  `Tier C`
+
+Benchmark repo: Rust faer CSR SpMV and Lanczos exp(-A)b beat Eigen on one core but lose to oneMKL and PETSc.
+
+**Beats:** Eigen CSR and CSC sparse matrix-vector product (C++); also PETSc CSR (C), Intel oneMKL inspector-executor CSR and CSC (C) and PSBLAS (C++/Fortran), single core — On one taskset-pinned core of a Xeon Gold 6418H (Criterion, 50 samples, 100 s window), faer/csr built with rustc nightly-2026-04-14 (fat LTO, target-cpu=native) was compared against wrappers built with clang 22 -O3 -march=native -flto and Spack-built PETSc, oneMKL (sequential) and PSBLAS. Geomean SpMV over 28 SuiteSparse matrices: 1.12x faster than Eigen CSR and 1.20x faster than Eigen CSC, parity with PSBLAS CSR (1.02x), but 0.81x of oneMKL CSR and 0.82x of PETSc CSR. Lanczos exp(-A)b: 1.04x Eigen and 0.84x PETSc one-pass, 1.04x Eigen and 0.82x PETSc two-pass. All re-derived here from python/data/summary.csv.
+
+**Known shortcoming:** Mixed result: loses to oneMKL and PETSc, parity with PSBLAS (13 of 28 cases); the Eigen wrappers are built without -DNDEBUG and use y += A*x without noalias(); the Rust side is the authors' tuned faer fork; MIT in Cargo.toml only, no LICENSE file; arXiv 2606.19213 unopened.
+
+**Known shortcoming:** Harness flaw: the Eigen SpMV wrapper does y += A*x without .noalias(), and Eigen 3.4.0 and 5.0.0 sources confirm a temporary vector per call; the Eigen Lanczos wrappers use noalias, where the gap is 1.04x against 1.12x for SpMV. The Rust Lanczos fuses axpy and dot while the Eigen wrapper does not; the MKL mv hint is commented out; Eigen, PETSc and MKL are unpinned, psblas@develop, no spack.lock; eigen.cpp's comment says -ffast-math but build.rs does not use it. codeberg.org and arxiv.org blocked, so the fork kernel and paper went unread.
+
+**Independent measurement:** verifier batch-79 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The Rust SpMV is faer's sparse_dense_matmul with Accum::Add and Par::Seq. According to src/lib.rs, faer 0.24 reinterprets a CSR matrix as a transposed CSC matrix and dispatches to dense_sparse_csc_matmul, giving one dot product per row; the fork specialises that CSR path, but its code and the paper's analysis could not be read here (Codeberg and arXiv blocked). It is built with fat LTO, codegen-units=1 and target-cpu=native (AVX-512 on Sapphire Rapids). The Eigen 3.4.0 row-major kernel it beats is a single-accumulator scalar loop (Eigen 5.0 uses two accumulators), and the Eigen SpMV wrapper also pays for a temporary vector (see gotchas). In Lanczos, the Rust recurrence fuses w -= beta*v_prev with the alpha dot product into one pass over the vectors and reuses preallocated workspaces.
+
+**Use it when:**
+- You need reference numbers for single-core Rust sparse kernels against C, C++ and Fortran libraries on standard SuiteSparse matrices, with code, flags and CPU stated.
+- You already use faer in Rust and need CSR SpMV: the fork's faer/csr is 1.11x faster than faer/csc (geomean, 21 of 28 matrices) and 1.12x faster than Eigen CSR (19 of 28), derived from summary.csv.
+- Memory-bound Krylov matrix-function evaluation (exp(-A)b) where the basis does not fit: the two-pass Lanczos keeps O(n) storage at twice the SpMV count, and the Rust version is 1.04x Eigen and 1.11x PSBLAS here.
+- You want a template for fair cross-language benchmarking: build.rs checks that clang's LLVM major matches rustc's for cross-language LTO, setup stays outside the timed loop, and Criterion runs 50 samples over 100 s.
+
+**Skip it when:**
+- Fastest single-core CSR SpMV on x86: oneMKL inspector-executor is 1.24x faster (faer wins 4 of 28) and PETSc MatMultAdd 1.23x faster (5 of 28); per-matrix PETSc ratios run from 0.54x to 1.47x.
+- Lanczos where PETSc is an option: PETSc is 1.19x faster one-pass (faer wins 2 of 15) and 1.22x faster two-pass (4 of 15).
+- Multi-threaded or distributed SpMV: everything is Par::Seq on one taskset-pinned core, and there are no parallel results.
+- You need a dependency you can ship: there is no LICENSE file (only license = "MIT" in Cargo.toml), the kernel lives in an unreleased git fork pinned to commit 009ac1eb, and nightly Rust is required.
+- Machines without Spack: build.rs hard-requires spack-located LLVM 22, GCC 14.3.0, oneMKL, PETSc, Eigen, PSBLAS and OpenMPI, even for cargo check.
+
+**Vs siblings:** No sibling in this category covers sparse SpMV or Krylov methods (TriangularSolve.jl and Gaius.jl are dense, Clarabel.rs is a conic solver). Use upstream faer (catalogued separately as sarah-quinones/faer-rs) as the dependency, and this repo to reproduce or extend the Rust-versus-C/C++ sparse comparison.
+
+**Gotchas:**
+- Eigen SpMV baseline flaw: ffi/spmv/eigen.cpp runs '*(ctx->y) += A * x' without .noalias(). In both Eigen 3.4.0 and 5.0.0, evaluator_assume_aliasing<Product<Lhs, Rhs, DefaultProduct>> is true and call_assignment builds a plain temporary ('tmp(src)') before adding it. So each Eigen call allocates, fills and re-reads an nrows-long vector that the faer, PETSc MatMultAdd and MKL paths do not pay. The Eigen Lanczos wrappers do use .noalias(), and the Eigen gap shrinks there from 1.12x to 1.04x; the cost was confirmed in source, not measured. The missing -DNDEBUG matters less, because Eigen's sparse inner loop calls coeff(), which has only an internal assert.
+- The Lanczos rows compare implementations as well as languages: the Rust recurrence (src/lanczos/algorithms/mod.rs) fuses w -= beta*v_prev with the alpha dot product, while the Eigen wrapper makes separate passes. On the MKL side, mkl_sparse_set_mv_hint is commented out in ffi/spmv/mkl.c, so MKL optimises without a call-count hint and still wins.
+- Baseline library versions are not recorded: spack.yaml leaves eigen, petsc and intel-oneapi-mkl unpinned, psblas@develop tracks a branch, and no spack.lock is committed. Which Eigen ran (3.4.x with a one-accumulator loop, or 5.0.x with two) is unknown. The eigen.cpp header comment says -ffast-math, but build.rs has that flag commented out on every wrapper.
+- The CSR specialisation behind the faer/csr rows is in the Codeberg fork, not in this repo or upstream faer, and could not be inspected here; x is all ones and y accumulates across iterations by design (bench comment: values do not affect a memory-bound kernel).
+
+**Status:** Research companion repo (58 commits, last 2026-06-18, 4 stars, no releases) with no LICENSE file, so reference use only. Reproducing it needs nightly Rust, an unreleased faer fork on Codeberg and a full Spack HPC stack. The Rust-beats-Eigen result is partly a harness artifact (the Eigen SpMV wrapper builds a temporary on every call), and Rust loses to oneMKL and PETSc throughout.
+
+[repo](https://github.com/lukefleed/hpla-rs) · [benchmark](https://raw.githubusercontent.com/lukefleed/hpla-rs/HEAD/python/data/summary.csv)
+
+##### Chapel in Fourmilab floating_point_benchmarks: fbench  `Chapel`  `CC-BY-SA-4.0`  `abandoned`  `Tier D`
+
+Chapel 1.16 port of John Walker's trig-heavy fbench lens ray tracer, timed at 0.53x the run time of a GCC 5.4 -O3 C build on one laptop.
+
+**Beats:** C fbench (src/c/fbench.c, glibc libm trig functions) built with GCC 5.4.0 'gcc -Wall -O3 -lm' (src/c/Makefile, no -march), 166,051,660 iterations, mean 296.536 s, 1.7858 us per iteration on the same Dell laptop under Xubuntu. The fbench.html table labels the C row 'GCC 3.2.3 -O3', but the 2017 Chapel and JavaScript notes (src/chapel/README, src/javascript/README) both use this GCC 5.4.0 run. — In October 2017 on an eight-core Dell laptop under Xubuntu (CPU not named), the serial Chapel 1.16.0 build (chpl --fast, one runtime thread) averaged 0.9427 us per iteration over five 250M-iteration runs. The C reference built with GCC 5.4.0 'gcc -Wall -O3 -lm' averaged 1.7858 us per iteration over five 166M-iteration runs, for a ratio of 0.528. The 0.0314 row is 64-thread Chapel on a different 64-core server against serial C.
+
+**Known shortcoming:** Baseline is GCC 5.4.0 -O3 (src/chapel/README shares the C run with the JavaScript notes), not 3.2.3; flags unequal since chpl --fast adds -march=native under Chapel 1.16 defaults; same glibc libm on both sides with the mechanism unexplained; CPU not named; the 64-thread row is not comparable. CC-BY-SA-4.0, reference usability.
+
+**Known shortcoming:** The author's own data contradicts the 1.9x: on Pallas the pariter=32 build on 1 thread ran 1.84 us per iteration against static C's 1.81 (derived), so no Chapel edge; the C baseline is likely an outlier (Firefox JS runs at 0.372 of the same C run; a glibc 2.23 AVX slowdown, Launchpad 1663280, is a candidate, untested). Code bug in fbench.chpl's pariter path: validation never runs (n never reaches iterations), so the 0.0314 row is unvalidated, and extras go to a nonexistent task i==0 and are dropped; the flat-surface port bug is confirmed (dead code).
+
+**Independent measurement:** verifier batch-80 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Nothing in the repository explains it: the author never examined the generated code and gives no mechanism. Both programs make the same glibc libm calls (sin, asin, tan, cos) per iteration. The documented differences are in the build: chpl --fast compiles the generated C at -O3 with -march=native (Chapel 1.16 GNU defaults), while the C Makefile uses plain -O3. The Chapel loop also discards each iteration's result except the last, while C stores into static globals. Which of these produces the 1.9x is not established.
+
+**Use it when:**
+- As one data point that Chapel's C backend can produce scalar double-precision code at least as fast as straightforward C when built with chpl --fast, for a trig-heavy kernel that cannot be vectorised.
+- Iteration-farm parallelism: the pariter=n build split 250,000,000 independent iterations over coforall tasks, 235.68 s serial to 48.57 s on 8 laptop threads, and 459.76 s to 17.17 s with 32 threads in the same pariter=32 build on the 64-core server Pallas.
+- As a portable, self-validating floating-point kernel for comparing compilers and libm builds across languages; the repository holds the same algorithm in about 30 languages.
+
+**Skip it when:**
+- As evidence that Chapel beats C in general: the comparison is one laptop run with unequal flags, and the same Chapel code on one thread ran no faster than C on Pallas (see gotchas).
+- Fine-grained task parallelism: partrace=true, with four cobegin tasks per iteration, took 16.92 s on one thread against 9.49 s serial for 10,000,000 iterations, and 64.29 s on 8 threads.
+- Serial runs with the default runtime: Chapel 1.16 still started two threads (about 200% CPU, 170 s of system time per 250M iterations) until CHPL_RT_NUM_THREADS_PER_LOCALE=1 was set.
+- Current toolchains: the port was written for Chapel 1.16.0 (2017) and the repository has not changed since 2021; it has not been checked against current Chapel.
+- Reusing the code: CC BY-SA 4.0 is not an OSI software licence, and the flat-surface branch carries a latent port bug (below).
+
+**Vs siblings:** Pick it only as a trig-dominated scalar data point. For array or compute claims with reproducible harnesses, look at the gfortran plb2 matmul entry (about 6% over clang C) or the D matmul in kostya/benchmarks. The CBQN CRLF and Mojo Mandelbrot entries are SIMD wins with named compilers, while this entry rests on one laptop run on an unnamed CPU.
+
+**Gotchas:**
+- The author's own data contradicts the 1.9x. On Pallas, which by his check runs the C program at the laptop's speed (static C binary 301.43 and 300.92 s for 166,051,660 iterations, 1.81 us per iteration), the pariter=32 Chapel build on one thread took 459.76 s for 250,000,000 iterations, 1.84 us per iteration (derived from src/chapel/README). The same per-iteration work showed no Chapel advantage on the second machine.
+- The baseline is the likely outlier. The same GCC 5.4.0 C run (1.7858 us per iteration) is 2.7x slower than Firefox 55's JavaScript (0.372 on fbench.html), and the author wrote that a recent C maths library seemed to slow trig by up to a factor of two. GCC 5.4.0 is the Ubuntu 16.04 compiler, and glibc 2.23 there had a known 2-4x maths-function slowdown on AVX machines caused by _dl_runtime_resolve's AVX register saves (Launchpad 1663280, fixed in glibc 2.25; search snippet only). A -march=native build like Chapel's may avoid part of that penalty, but this was not tested.
+- Benchmark-code bug in the parallel path: runBenchmark's pariter branch only validates when n == iterations, which cannot happen when n counts to iterations/pariter, so the 0.0314 (64-thread) row was never checked against the reference output. Leftover iterations go to task i == 0, which does not exist in 1..pariter, so counts that are not a multiple of pariter silently drop work. The published 250,000,000 runs divide evenly by 8, 32 and 64.
+- Latent port bug: the marginal-ray flat-surface branch computes -(asin(n1/n2))*sin(a), where C has -asin((n1/n2)*sin(a)). It is dead code for the all-curved Wyld lens, so results still validate, but a design with a plane surface would trace wrong.
+
+**Status:** Abandoned reference material: last commit 2021-09-24 (5 commits, 6 stars), Chapel port and numbers from 2017, CC BY-SA 4.0; the C and Chapel sources are short enough to re-run, and a re-run with matched -march flags and a current glibc is needed before the 1.9x can be trusted.
+
+[repo](https://github.com/Fourmilab/floating_point_benchmarks) · [benchmark](https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/Web_pages/fbench.html)
+
+##### JavaScript (browser JIT engines and Node.js) in Fourmilab floating_point_benchmarks: fbench  `JavaScript`  `CC-BY-SA-4.0`  `abandoned`  `Tier D`
+
+2017 run of John Walker's fbench: Firefox 55 beat GCC 5.4.0 -O3 C by 2.7x through SpiderMonkey's trig memo cache, while the V8 engines lost to C by 1.33-1.50x.
+
+**Beats:** C fbench (src/c/fbench.c, glibc libm trig functions) built with GCC 5.4.0 'gcc -Wall -O3 -lm' (src/c/Makefile, no -march), 166,051,660 iterations, mean 296.536 s, 1.7858 us per iteration on a Dell laptop under Xubuntu (src/javascript/README says the comparisons were made against GCC 5.4.0; the fbench.html table labels the C row 'GCC 3.2.3 -O3'). — In October 2017, on a Dell laptop under Xubuntu (CPU not named), fbench.js in Firefox 55.0.2 averaged 0.6641 us per iteration (five runs of 457,577,013 iterations, about 304 s each). The C version built with GCC 5.4.0 'gcc -Wall -O3 -lm' averaged 1.7858 us, for a ratio of 0.372 (about 2.7x). Chrome 61, Chromium 60, Brave 0.18.36 and Node.js v6.11.3 (all V8) were 1.33-1.50x slower than C, and Safari 11's 0.424 is a 2008 Mac Pro run rescaled by a Perl speed ratio.
+
+**Known shortcoming:** The Firefox 2.7x comes from SpiderMonkey 55's MathCache memoising repeated trig arguments (jsmath.h, MCallOptimize.cpp, CodeGenerator.cpp at FIREFOX_55_0_2_RELEASE), a cache hit rather than computation (wazero precedent, kept as D); the Safari 2.4x is a cross-machine estimate scaled by a Perl run; V8 engines are 1.33-1.50x slower than C. CC-BY-SA-4.0, reference usability.
+
+**Known shortcoming:** The Firefox 0.372 is SpiderMonkey 55's MathCache (jsmath.h, 4096 entries; CodeGenerator visitMathFunctionD) hitting about 71 identical trig arguments per iteration, confirmed in source; the Safari row is a cross-machine estimate. The C baseline is suspect: Chapel's 0.528 on the same laptop and a glibc 2.23 slowdown (Launchpad 1663280, snippet only). The iteration count is passed as a string, so a number-versus-string compare runs each loop (hurts JS). README typos: Rhino, 393.863.
+
+**Independent measurement:** verifier batch-80 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The speedup comes from memoisation, not code generation. Firefox 55's SpiderMonkey sends Math.sin, cos, tan and asin through a 4096-entry direct-mapped MathCache keyed on the input double, and that includes Ion-compiled calls: CodeGenerator::visitMathFunctionD calls the cached *_impl variant whenever the MIR node carries a cache. A miss calls the same system sin that C uses. Every fbench iteration traces the same three marginal rays through the same lens, so its roughly 71 trig calls per iteration (3 traces x 4 curved surfaces x 5-6 calls, plus 2; derived from fbench.js) repeat identical arguments and hit the cache from the second iteration on. Safari's 0.424 is an estimate rescaled from another machine, and no mechanism was examined for it.
+
+**Use it when:**
+- As a cautionary example when reading JIT-versus-C claims on maths-heavy code: check whether the engine memoises transcendental functions and whether the benchmark repeats its arguments.
+- As a small, self-validating, trig-heavy test of a JavaScript engine's Math accuracy: fbench.js compares its output with the C reference strings and reports any mismatch.
+- To compare JavaScript engines with each other on one machine: on the 2017 laptop the four V8-based engines (Brave, Chrome, Chromium, Node.js) landed within 1.33-1.50x of C.
+
+**Skip it when:**
+- As evidence that JavaScript JITs beat C on floating-point code: the only same-machine win is Firefox 55's cache hits, and every V8 engine was slower than C.
+- For current engines: every number is from October 2017 (Firefox 55.0.2, Chrome 61, Safari 11, Node.js v6.11.3), and the repository has not been touched since 2021.
+- For workloads that do not repeat their arguments: a 4096-entry cache keyed on exact doubles does not help real ray tracing over varied rays.
+- As a comparison against tuned C: the baseline is 'gcc -Wall -O3 -lm' with no -march, linked against a glibc 2.23-era libm on an unnamed CPU.
+- When you need a permissive software license: the code is CC BY-SA 4.0, which is share-alike and not an OSI license.
+
+**Vs siblings:** The Chapel fbench sibling (0.528) uses the same suspect GCC 5.4.0 C run, and its win is also unexplained. For a credible numeric win over C, look at the same-machine, named-compiler entries such as the gfortran plb2 matmul or the Mojo SIMD Mandelbrot. Use this entry only as a historical, memoisation-inflated JavaScript data point.
+
+**Gotchas:**
+- Harness flaw behind the headline: the Firefox 0.372 row measures SpiderMonkey 55's MathCache, not JavaScript speed. Identical sin, asin and tan arguments recur every iteration, so after the first iteration the trig work the C side does is skipped (4096-entry table, SizeLog2 = 12, in FIREFOX_55_0_2_RELEASE js/src/jsmath.h; the Ion path is in jit/CodeGenerator.cpp visitMathFunctionD). The results are still correct, which is why the entry stays at D instead of being rejected under the MQF/wazero cache precedent.
+- The Safari 0.424 is not a measurement on the same machine: 1.6865 us per iteration on a 2008 Mac Pro was multiplied by a Perl-derived speed ratio of 0.4487, and macOS libm is not glibc.
+- The C baseline looks slow. At 1.7858 us per iteration, at most about 25 ns per trig call including arithmetic (derived from page data). Serial Chapel, which compiles through C, ran 0.528 on the same laptop, and the author blames a slow new libm. GCC 5.4.0 points to Ubuntu 16.04 with glibc 2.23, which has a 2-4x slowdown of sin, cos and other libm functions on Sandy Bridge to Broadwell CPUs from AVX register saves in _dl_runtime_resolve (Launchpad 1663280, fixed in glibc 2.25; search snippet only). fbench.html also labels the C row 'GCC 3.2.3 -O3', while the README run used GCC 5.4.0.
+- Port details: both the HTML page (a form .value) and the node.js main (process.argv[2]) pass the iteration count as a string, so 'itercount < niter' compares a number with a string on every outer iteration. This works against JavaScript, by an amount nobody measured. The README calls Firefox's engine Rhino (it is SpiderMonkey) and prints the Firefox mean as 393.863 s, where the listed runs average 303.863 s.
+
+**Status:** Abandoned reference material: 5 commits, the last on 2021-09-24, 6 stars, one open PR from 2021, JavaScript numbers from 2017 never re-run, CC BY-SA 4.0. The JS file is small and self-validating, so re-running it on current engines is easy, but the published win is a cache artefact.
+
+[repo](https://github.com/Fourmilab/floating_point_benchmarks) · [benchmark](https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/Web_pages/fbench.html)
+
+##### Julia Base sort! in LilithHafner/InterLanguageSortingComparisons  `Julia`  `no license`  `abandoned`  `Tier D`
+
+Julia 1.9 Base sort! (LSD radix sort on Float64 bit patterns) timed against std::sort and qsort built at -O0; not a valid C++ comparison.
+
+**Beats:** C++ std::sort on std::vector<double> (src/script.cpp, Apple clang 13 under the g++ name) and C qsort with a comparator callback (src/script.c), same suite — On a 2019 MacBook Air (1.6 GHz dual-core i5), one trial per size, sorting 3^14 = 4,782,969 uniform Float64 values took 35.1 ns per element with Julia 1.9.0-beta3 (radix sort) and 92.5 with Julia 1.8.5 (QuickSort), against 207.6 for C++ std::sort and 307.2 for C qsort, both built by Apple clang 13 at -O0; Rust 1.67 sort_unstable_by at --release took 68.5 and glidesort 79.4. Only the Rust row is an optimized native comparison, and Julia 1.9 beats it by about 1.95x (derived from page data).
+
+**Known shortcoming:** C and C++ rows built at -O0 (data.txt commands) and the C++ row is total time times 0.85 rather than sort time; no license; last commit 2023-02-17.
+
+**Known shortcoming:** The crippled -O0 C and C++ baselines are confirmed from the plot.jl build commands (Apple clang 13, no -O flag), and the C++ row is not even a sort time: script.cpp prints total runtime times a fixed 0.85 as the author's workaround for a 'strange bug' (issue #1), allocates a fresh vector and a default-seeded engine per repetition, and stops at 3^14. The only optimised native comparison on the page is Rust --release (pdqsort) 68.5 ns per element vs Julia 1.9 35.1 ns, about 1.95x (derived from page data); Julia 1.8.5's QuickSort (92.5 ns) is slower than Rust. Julia 1.9's Float64 sort is an LSD radix sort on uint-mapped bits from about 729 elements (six passes of 10 bits at 3^14), still the default in base/sort.jl on master. Open issues #9 (NaN undefined behaviour in std::sort) and #11 (radix-versus-comparison fairness).
+
+**Independent measurement:** verifier batch-39 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** From Julia 1.9 the default sort for Float64 is no longer a comparison sort: IEEEFloatOptimization moves NaNs to the end, splits by sign and reinterprets the values as UInt64, then ConsiderRadixSort picks a stable least-significant-digit RadixSort when bits+70 < 22*log(n), after subtracting the minimum so fewer bits are radixed (base/sort.jl, v1.9.0-beta3 and still on master). For uniform [0,1) data that switch happens from about 3^6 = 729 elements; at 3^14 the range spans 57 bits, sorted in 6 counting passes of 10 bits with an n-element scratch buffer. Julia 1.8.5 still used an unstable QuickSort with integer comparisons, which is why its 92.5 ns per element at 3^14 trails Rust's optimized pdqsort-based sort_unstable_by (68.5 ns) in the same table.
+
+**Use it when:**
+- You are already in Julia and sort large plain vectors of Float64, Float32 or machine integers (thousands to tens of millions of elements): default sort! picks radix sort with no code change; 35.1 ns per element at 4.78M doubles on a 1.6 GHz i5 in this run.
+- As a hint for C++ work: a sort-bound step on large float or integer keys gains more from an LSD radix sort over the uint-mapped bit pattern than from tuning a comparison sort; on the same laptop Julia 1.9's radix sort was about 1.95x faster than Rust's release-built sort_unstable_by (35.1 vs 68.5 ns per element, derived from page data).
+- When NaNs may appear: Julia's default sort! is defined for every Float64 (NaNs go to the end), while std::sort with operator< on data containing NaN violates strict weak ordering (undefined behaviour, the repo's issue #9).
+- As a starting harness for a fair re-run: the generate, sort, dot-product, subtract-control design is easy to port; fix the C and C++ build lines first.
+
+**Skip it when:**
+- As evidence that Julia beats optimized C++ std::sort: the C and C++ rows were built with 'gcc script.c' and 'g++ -std=c++11 script.cpp' (Apple clang 13, no -O flag, so -O0; plot.jl confirms the commands), while Rust used --release, so the 5.9x (Julia 1.9) and 2.2x (Julia 1.8) leads over C++ are mostly a build artifact.
+- As a comparison-sort result: the gap is algorithmic (radix sort against introsort and qsort); the open issue #11 objects to exactly this reading, and the author replies that the repo only gives 'a rough idea of performance across languages'.
+- For sorts with a custom lt, a by key, structs or strings: those inputs are not UIntMappable and fall back to ScratchQuickSort, so nothing here applies.
+- When memory is tight: the radix path allocates an n-element scratch buffer (plus a 2^chunk_size count array) where std::sort is in place.
+- Below a few hundred elements: radix sort is not chosen and the per-element numbers at 3^1 to 3^5 are dominated by noise and JIT effects (Julia 1.9 row 1 is 145.2 ns, including compilation).
+
+**Vs siblings:** Pick this only to learn which algorithm Julia's default Float64 sort uses and roughly how fast it is; for a Julia-versus-C++ sort measurement with optimized C++ builds the LangArena Sort::Self sibling (Julia 1.13 against std::sort at -O2 and -O3) is the better-evidenced entry, and the radix-versus-comparison confound applies there too.
+
+**Gotchas:**
+- Crippled baseline: C and C++ were compiled at -O0 (no -O flag on Apple clang 13), while Rust ran cargo --release; the C++ figure is also not a sort time: script.cpp prints total runtime (allocation, generation, sort, dot product) times a fixed 0.85 because the author saw negative differences ('strange bug', issue #1), and it stops at 3^14 while other languages run to 3^15.
+- script.cpp allocates a fresh std::vector<double>(n) and constructs a default-seeded std::default_random_engine for every repetition, so every repetition of one size sorts identical data and pays allocation and zero-fill inside the timed region; the C row times qsort through a function-pointer comparator compiled at -O0.
+- Each data point is a single trial (README), on a dual-core laptop; the owner later said a reporter on a Xeon Gold 6254 measured Julia about 4x slower relative to clock than on her machine and guessed at slower memory bandwidth (issue #1), so radix-sort gains depend on cache and memory behaviour.
+- No LICENSE file in the benchmark repo, so its scripts are reference only; Julia Base itself is MIT.
+
+**Status:** Abandoned benchmark (last commit 2023-02-17, open issues on NaN undefined behaviour in the C++ script and on comparison-sort fairness, no license) kept as reference at tier D; the radix-sort default it showcases ships in every Julia release since 1.9 and is still the dispatch in base/sort.jl on master.
+
+[repo](https://github.com/LilithHafner/InterLanguageSortingComparisons) · [benchmark](https://github.com/LilithHafner/InterLanguageSortingComparisons)
+
+#### runtime-jit-beats-aot
+
+##### Java HotSpot vs g++ -O3 virtual-call microbenchmark (gist)  `Java`  `no license`  `abandoned`  `Tier C`
+
+2009 gist: HotSpot Java 6 runs an alternating two-class virtual-call loop 2.3x faster than 32-bit g++ 4.0.1 -O3.
+
+**Beats:** C++ virtual dispatch compiled with g++ 4.0.1 -O3 -fomit-frame-pointer -march=pentium4 — On a 2x 2.8 GHz Xeon Mac (8 cores, Mac OS X 10.5), 400 million alternating virtual calls took 1651.8-1796.2 ms in C++ built by Apple g++ 4.0.1 -O3 -fomit-frame-pointer -march=pentium4 (32-bit i686) against 716-1036 ms in Java 1.6.0_07 on the 64-bit HotSpot Server VM (716-717 ms after warm-up), so about 2.3x faster at steady state and 1.7x on the first Java run (derived from page data); Scala 2.7.3 on the same JVM reached 716-717 ms.
+
+**Known shortcoming:** 2009 microbenchmark: g++ 4.0.1 targeting 32-bit pentium4 against a 64-bit JVM, no CPU model, no licence (reference).
+
+**Known shortcoming:** The published C++ source does not match the numbers: the latest gist 87516 shows five bench() calls (without semicolons) while the results list ten C++ timings, which most likely come from an earlier 10-iteration revision. The Java numbers were first posted under 'java Bench -J-Server' (the flag passed to Bench as an ignored argument) and later relabelled 'java -server Bench' (cosmetic: already a 64-bit Server VM). The C++ static int counter overflows INT_MAX in the third call (UB). The mechanism is probably bimorphic inlining (about 11.6 vs 5 cycles per iteration, derived).
+
+**Independent measurement:** verifier batch-26 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The author gives no mechanism. The likely one is HotSpot's profile-guided bimorphic inlining: the call site's type profile records exactly two receiver classes, so C2 compiles a class check plus both inlined perform() bodies instead of a virtual call. g++ 4.0.1 has no devirtualization or profile feedback here, so each iteration is a real indirect call through the vtable, in a 32-bit i686 build that passes this on the stack. Derived from page data: about 11.6 cycles per iteration for C++ (1651.8 ms / 400M at 2.8 GHz) against about 5 cycles for Java at steady state (716 ms).
+
+**Use it when:**
+- As a minimal, easy-to-read demonstration that a JIT with type profiles can beat an ahead-of-time indirect call at a hot call site that sees exactly two receiver types.
+- When arguing whether to move hot polymorphic Java code to C++ through JNI: a plain C++ virtual call without devirtualization can lose to HotSpot's inlined dispatch, so a port needs templates, final classes, a type switch or PGO to pay off.
+- As a starting point for a modern re-run (current GCC or Clang at -O2/-O3, with and without -fprofile-use, 64-bit target, against a current JDK) before quoting any ratio.
+
+**Skip it when:**
+- As evidence that Java beats current C++: the C++ side is Apple g++ 4.0.1 (2005-era compiler) building 32-bit code tuned with -march=pentium4 for a Xeon, against a 64-bit HotSpot VM, and no modern compiler, PGO or LTO build was measured.
+- For megamorphic call sites (three or more receiver types), where HotSpot falls back to a vtable or itable call and the inlining advantage this loop shows does not apply.
+- For short-lived processes or code that runs once: the first two Java iterations took 967 and 1036 ms (1015 and 955 ms in the gist's first revision) before settling around 716-769 ms.
+- For C++ code that can already avoid the indirect call (templates or CRTP, std::variant with std::visit, final classes, or a manual type switch); those were not measured here.
+- As a general language comparison: one call site, a global counter update as the only work, no memory traffic beyond that counter, and one author's single run per variant.
+
+**Vs siblings:** Prefer the LangArena and benchLANG HotSpot entries (GCC 16 and Clang 22 baselines, many C/C++ configurations) or xemantic/java-2-times-faster-than-c for current evidence; pick this gist only as the smallest isolated example of a JIT's bimorphic inlining beating an un-devirtualized C++ virtual call.
+
+**Gotchas:**
+- The published C++ source does not match the posted numbers: gist 87516 went from four bench() calls (29 March) to a 10-iteration loop and then, in its latest revision, five bench() lines that the page shows without semicolons, while the results gist lists ten C++ timings in one block from its first revision. The ten numbers most likely come from one run of the 10-iteration revision, not from two runs of the five-call version as the verifier assumed; the kernel (400M-iteration loop, A/B classes, (i & 1) alternation, clock() timing) never changed.
+- The Java command line was edited after the measurement: revision 5 of the results gist posted the 967/1036/769/... numbers under 'java Bench -J-Server', which passes '-J-Server' to Bench.main as an ignored program argument rather than to the VM, and a later revision only relabelled it 'java -server Bench'. The effect is cosmetic because the reported VM is the 64-bit HotSpot Server VM and the first revision's plain 'java Bench' run (1015, 955, then 716-754 ms) shows the same steady state.
+- The C++ counter is a signed 'static int' that receives 1,000,000,000 per bench() call, so it overflows INT_MAX during the third call, which is undefined behaviour in C++ (Java's int wraps by definition); the printed final count is meaningless and is not a cross-language checksum, though the overflow is unlikely to have changed the timing.
+- C++ is timed with clock() (process CPU time) and Java with System.currentTimeMillis() (wall time, which includes JIT compilation during the first iterations); 'PowerMac' in the hardware line is presumably an Intel Mac Pro, since the gcc target is i686-apple-darwin9, and the CPU model is not stated.
+
+**Status:** Abandoned since 30 March 2009, no license, reference-only; the code is trivial to re-run, and any use of the 2.3x figure should be preceded by a re-measurement with a current 64-bit GCC or Clang build (ideally with and without PGO).
+
+[repo](https://gist.github.com/87746) · [benchmark](https://gist.github.com/87746)
+
+##### LuaJIT vs C and C++ hash-table word count (spion gist)  `Lua`  `no license`  `abandoned`  `Tier C`
+
+2012 gist where LuaJIT's plain table counts words from a 19-word sentence faster than naive C and std::unordered_map versions.
+
+**Beats:** C (hand-written chained hash table, gcc -O3) and C++ (std::unordered_map<string,int> with a custom hash, g++ -O3 -std=gnu++0x) — One `time` run each in 2012 on an unnamed Linux machine, with unstated gcc, g++ and LuaJIT versions: 19M increments into a 17-key string table took 0.161 s in LuaJIT, 0.234 s in C (gcc -O3, first-letter chained table) and 0.321 s in C++ (g++ -O3 -std=gnu++0x, libstdc++ std::unordered_map with an s[0] hash). That is 1.45x and 1.99x (derived from page data). The author's 2020 rerun (no versions or hardware) gave 0.08 s vs 0.173 s and 0.36 s, and at 10x the iterations 0.76 s vs 1.44 s and 3.35 s, so process startup does not explain the gap.
+
+**Known shortcoming:** The author calls the benchmark misleading: the C/C++ versions hash by the first letter only while Lua interns strings with a cached hash, and the author's own note says LuaJIT probably optimises away the dictionary lookups; one time run each with no CPU or versions; the jh3141 fork reaching 90 ms replaced the hash table with a vector. No licence (reference). Last revision 2015-08-18, 72 stars.
+
+**Known shortcoming:** The gap comes from LuaJIT's interned, pre-hashed string keys against C strcmp chains and libstdc++ std::unordered_map overhead, not from JIT versus AOT; the 10x rerun (0.76 vs 1.44 s) rules out start-up cost, and nobody checked the 'optimizes away lookups' claim with -jdump (about 4-8.5 ns per word fits real lookups). In the comment thread ayosec's Rust 0.104 s ran 100,000 passes against C's 1,000,000 (10x less work), and marcomagdy's pointer-keyed unordered_map still took 0.495 s against LuaJIT's 0.186 s. test.c uses implicit int, so it fails to build on GCC 14+ and Clang 16+ by default. No licence.
+
+**Independent measurement:** verifier batch-27 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** LuaJIT interns every string, so equal words are the same object with a hash computed once at creation. A table lookup is a masked hash on that cached value plus a pointer compare, and the trace compiler inlines it into the loop. The C baseline instead calls strcmp on heap copies for every chain probe, and the C++ baseline compares std::string contents after libstdc++'s modulo-by-prime bucket step and node walk. That LuaJIT also folds the three map[text[i]] accesses per iteration into one lookup is an inference from its alias analysis; nobody published a -jdump. So the gap measures interned versus content-compared string keys more than JIT versus AOT compilation.
+
+**Use it when:**
+- As a teaching example of why string interning and cached hashes matter for small, fixed string-keyed tables.
+- As evidence that std::unordered_map<std::string,int> with a weak first-character hash is a poor fit for a tiny hot dictionary; jh3141's fork shows pointer keys plus a small linear table beat LuaJIT (90 ms vs 95 ms).
+- In Lua code that counts tokens from a small vocabulary of strings that already exist, where a plain LuaJIT table needs no tuning.
+- As a starting point for a discussion of micro-benchmark pitfalls, which is how the author now frames it.
+
+**Skip it when:**
+- As evidence that LuaJIT beats C or C++ at hash tables in general. The author says real text, larger dictionaries and un-split words (each new word must be allocated and interned) would change the result.
+- As a template for a C or C++ word counter. Both baselines are weak: a first-letter hash with strcmp in C, and std::string keys in a node-based std::unordered_map in C++.
+- For large dictionaries in LuaJIT. joeatbayes (2015) reports long pauses above 1 GB and the 2 GB heap limit on a Wikipedia-scale word count, which forced FFI or C hash tables.
+- As copyable code: the gist has no licence.
+
+**Vs siblings:** Use this gist only as the historic, minimal three-file illustration of interned string keys. For a string-keyed hash-table comparison with named toolchains, the LuaJIT 2.1 k-nucleotide entry in kostya/jit-benchmarks (g++ 12.2.0 -O3, std::unordered_map<std::string,int>) and the LangArena Etc::Words entries (g++ 16 and clang++ 22 in 16 configurations) are better evidence.
+
+**Gotchas:**
+- Unverified optimisation claim. test.lua's 2013 comment says 'luajit probably optimizes away all dictionary lookups', and the author's 2020 comment says 'only luajit is doing super-clever (unrealistic) optimizations'. Neither was checked with -jdump. The about 4 ns (2020) to 8.5 ns (2012) per word that LuaJIT takes is consistent with one real interned-key lookup per word (inference), not with the work being removed.
+- The baselines collide by design. Four first-letter pairs share a C bucket (at/a, lazy/lake, over/of, near/new) and pay a full strcmp per probe on strdup'd copies. The C++ hash s[0] puts the same pairs in one libstdc++ bucket chain. The C malloc per counter runs only 17 times, not per increment, so Zack24's complaint about allocation in the loop does not explain the gap.
+- Several comment-thread numbers do not measure the same work. ayosec's Rust 0.104 s loop runs range(0u32, 100000), 100,000 passes, against C's 1,000,000-pass 0.179 s, so it did a tenth of the work. Zack24's (0.003 s) and mbossX's (C 0.001 s, LuaJIT 1.774 s) C programs index an array and do no hashing. marcomagdy's pointer-keyed std::unordered_map was still 0.495 s against LuaJIT 0.186 s on craigbarnes' machine, so most of the C++ cost is the container, not string comparison.
+- test.c declares fht_put without a return type (C89 implicit int) and never returns a value. GCC 14+ and Clang 16+ reject implicit int by default in C99 and later modes, so rebuilding needs -std=gnu89 or -fpermissive. The bucket index is a plain char, which would go negative and index out of bounds for non-ASCII first bytes where char is signed.
+
+**Status:** Abandoned gist (code from 2012, a comment edit in 2013, a warning file added 2015-08-18) with no licence, so it is a reference only; the author himself labels it misleading.
+
+[repo](https://gist.github.com/spion/3049314) · [benchmark](https://gist.github.com/spion/3049314)
+
+##### Julia vs C++11 random-walk Monte Carlo (jlapeyre/ranwalk-Julia-vs-Cxx)  `Julia`  `no license`  `stale`  `Tier D`
+
+2014 toy random-walk benchmark: Julia 0.3's dSFMT-backed randbool() beats libstdc++ mt19937 plus bernoulli_distribution(0.5) about 3x.
+
+**Beats:** C++11 std::mt19937 with std::bernoulli_distribution(0.5), compiled with c++ -std=c++11 -O3 (Debian gcc 4.9.1) — Single 'typical' timings from 2014-2015 on an undocumented CPU: 3e8 coin flips took 3.88 s in C++ (Debian gcc 4.9.1, -std=c++11 -O3, libstdc++ std::mt19937 with std::bernoulli_distribution(0.5), std::clock CPU time) against 1.27 s in Julia 0.3 (randbool(), one ccall into C dSFMT per flip) and 1.68 s in Julia 0.4 (rand(Bool) from a dSFMT-filled buffer). That is about 3.1x and 2.3x, or about 12.9 ns versus 4.2 ns per flip (derived from page data).
+
+**Known shortcoming:** Unequal work: C++ bernoulli_distribution takes two mt19937 draws per flip via generate_canonical while Julia rand(Bool) uses dSFMT; no CPU model; the author disclaims a language win; no licence (reference only).
+
+**Known shortcoming:** Harness flaw: Julia 0.3's randbool() is ((dsfmt_randui32() & 1) == 1) and dsfmt_gv_genrand_uint32 is a ccall into libdSFMT, so the 1.27 s 'Julia' time is a loop calling the C dSFMT library 3e8 times, not JIT code; the C++ side pays two mt19937 calls plus a division per flip (gcc 4.9 libstdc++ generate_canonical<double,53>, k=2). C++ bugs affecting only the output: new int[] is never zeroed and it frees with delete instead of delete[]. The scripts at HEAD (2024) are not the code that was timed.
+
+**Independent measurement:** verifier batch-57 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Almost all of the time is random-number generation. In Julia 0.3, randbool() is ((dsfmt_randui32() & 1) == 1), and dsfmt_gv_genrand_uint32 is a ccall into the C library libdSFMT, which returns one 64-bit word per call from a state block that dSFMT (SIMD-oriented Fast Mersenne Twister) regenerates in bulk every 382 draws. In Julia 0.4, rand(Bool) is rand_ui52_raw(r) % Bool, an inlined pop from a Julia buffer filled in bulk by dsfmt_fill_array_close1_open2!. The C++ side calls std::bernoulli_distribution, which in gcc 4.9's libstdc++ goes through __detail::_Adaptor and generate_canonical<double, 53>: two mt19937 calls, a floating-point multiply-add and a division per flip, then a compare with p. The gap is one dSFMT word per flip against two MT19937 words plus floating point, not JIT versus AOT code generation.
+
+**Use it when:**
+- As a cautionary example that libstdc++ std::bernoulli_distribution(0.5) costs two 32-bit engine calls plus a floating-point division per bit; for coin flips in C++, take bits from one engine output instead (one bit per draw, or 32 flips per mt19937 word).
+- As a historical data point that Julia's 2014 global RNG (C dSFMT) was a faster Boolean source than GNU libstdc++ <random> on gcc 4.9.1.
+- As a minimal teaching pair showing that the RNG and its front end, not loops or function calls, dominate a simple Monte Carlo kernel, which is what the README itself concludes.
+
+**Skip it when:**
+- As evidence that a JIT beats ahead-of-time C++: in Julia 0.3 every flip is a ccall into compiled C (libdSFMT), so the faster side's inner work is AOT C code, and the README says the result does not support 'Julia is faster than C++'.
+- As a current benchmark: Julia 0.3/0.4 and gcc 4.9.1 are obsolete, Julia 1.7+ defaults to Xoshiro256++, and the September 2024 script update was not re-timed.
+- As copyable code: the repository has no licence file.
+- As a statistics reference: the C++ histogram array is never zeroed (see gotchas).
+
+**Vs siblings:** Do not pick it for a decision; it is the weakest evidence in runtime-jit-beats-aot. For a JIT language beating C++ on comparable code with named toolchains, the kostya/LangArena entries (Julia 1.13 Sort::Self, Java and C# rows) or the Julia no-BLAS matmul entry in kostya/benchmarks are better; keep this one only as an RNG-overhead example.
+
+**Gotchas:**
+- Harness flaw: the 'Julia' side's hot path is C. Julia 0.3 base/random.jl defines randbool() = ((dsfmt_randui32() & 1) == 1), and base/dSFMT.jl defines dsfmt_gv_genrand_uint32() as ccall((:dsfmt_gv_genrand_uint32, :libdSFMT), Uint32, ()). The 1.27 s figure times a Julia loop around 3e8 calls into compiled C dSFMT, so it is evidence about RNG libraries, not about a runtime JIT beating AOT compilation.
+- Unequal work per flip: libstdc++ 4.9 bernoulli_distribution::operator() builds an _Adaptor whose operator() calls generate_canonical<double, 53>; with a 32-bit engine k = (53 + 32 - 1) / 32 = 2, so the C++ program makes 6e8 mt19937 calls plus 3e8 divisions against 3e8 dSFMT words in Julia 0.3. The README concedes a faster C++ program is possible; none was tried with one engine call per flip.
+- C++ correctness bugs (output only, not timing): counts_on_lattice_sites is allocated with new int[] and never zeroed, so the printed histogram adds to indeterminate values (Julia uses zeros()), and it is freed with delete instead of delete[], which is undefined behaviour.
+- The scripts at HEAD are not the timed code: the 2015 rwtest_simple.jl called randbool() and println(STDERR, ...), the 2024 commit 'Update Julia scripts from 2014 to 2024' replaced them with rand(Bool) and stderr, which do not run on Julia 0.3. Timers also differ (std::clock CPU time in C++, @elapsed wall time in Julia), and the README gives one 'typical' time per language with no CPU model.
+
+**Status:** Stale toy repository (code from 2014-2015, Julia scripts ported to Julia 1.x syntax in September 2024 without new timings) with no licence, so reference only; the measured gap is libstdc++ <random> front-end overhead against the C dSFMT generator, and it supports neither a JIT nor a Julia-over-C++ claim.
+
+[repo](https://github.com/jlapeyre/ranwalk-Julia-vs-Cxx) · [benchmark](https://raw.githubusercontent.com/jlapeyre/ranwalk-Julia-vs-Cxx/master/README.md)
+
+##### Visual Basic .NET (CLR JIT) vs C: Fourmilab fbench  `Visual Basic .NET`  `CC-BY-SA-4.0`  `abandoned`  `Tier D`
+
+A 2005-era VB.NET port of John Walker's fbench ran in 0.866 of C's time, but its trig code differs from the C build's.
+
+**Beats:** The C version of fbench built with GCC 3.2.3 -O3 on Linux (the table's reference row, relative time 1) — fbench.html's language table gives Visual Basic .NET ('All optimisations, Windows XP') a relative time of 0.866 against C = 1 (labelled GCC 3.2.3 -O3, Linux), about 1.15x faster (derived from page data). VB6 on the same OS is 1.132. Each language was run for about five minutes and divided by the C time per iteration on the same, unnamed, machine, and no CPU, .NET version or date is given beyond the port's July 2005 header.
+
+**Known shortcoming:** Unequal work: the VB.NET project times fbench's own polynomial sin/cos/atan while the C reference calls libm (INTRIG off); VB.NET ran on Windows XP against GCC 3.2.3 on Linux.
+
+**Known shortcoming:** Harness flaw confirmed: the VB.NET timed loop uses the fSin polynomial and the internal aTan with Math.Sqrt, and only tan comes from the library (35 polynomial sines, 24 internal arcsines and 12 Math.Tan calls per iteration), while the C reference uses libm for all, so the mix matches neither C mode. Latent port bugs in VB.NET and VB6: LibInitialise is never called (the atanc table stays all zero), atanc(4) has the wrong value, aInt rounds instead of truncating, and aTan is wrong for arguments of 0.25 or more (the fbench lens never reaches that). The port has no automatic result check.
+
+**Independent measurement:** verifier batch-85 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** No mechanism is published, and the source points to different work rather than a better compiler. The timed loop in modFBENCH.vb takes the file's #Else branch (INTRIG is not defined there), so sines come from fSin. fSin is the benchmark's own range-reduced polynomial in fbench_lib.vb. Arcsines go through the internal rational aTan plus System.Math.Sqrt (that file sets #Const INTRIG = True), and only cotangents call the .NET library (1 / System.Math.Tan). Per iteration that is about 35 polynomial sines, 24 internal arcsines and 12 library tangents (derived from the code; all four lens surfaces are curved, so the flat-surface System.Math.Cos path never runs). The C reference row instead calls libm for all of them. The plausible reason for 0.866, inferred and not measured, is that this mix of cheap polynomials plus a library square root costs less than both C modes. C INTRIG also replaces tan and uses a Newton-Raphson square-root loop.
+
+**Use it when:**
+- As a historical data point: a straight VB6-to-VB.NET translation, JIT-compiled by an early CLR, landed in the same range as compiled C on a trig-heavy loop, and ahead of the VB6 native-code build of the same port (1.132).
+- As a cautionary example when reading cross-language tables: check which math library each port's hot loop actually calls before comparing ratios.
+- As a readable VB.NET reference of the fbench algorithm, for example to port it to modern .NET and rerun it against C on one machine.
+
+**Skip it when:**
+- As evidence that the .NET JIT beats C on floating-point code: the two sides evaluate sine and arcsine differently, ran on different OSes, and the C build, CPU and date behind the 0.866 are not named.
+- For current .NET performance: the project is a Visual Studio .NET 7.0 file (ProductVersion 7.0.9955), which implies .NET Framework 1.x (inference), and it needs conversion before a modern SDK can build it.
+- Outside Windows: it is a System.Windows.Forms app that P/Invokes kernel32 GetTickCount and references Microsoft.VisualBasic.Compatibility.
+- When you need a permissive licence: the repository is CC BY-SA 4.0, which is share-alike and not an OSI software licence.
+
+**Vs siblings:** Do not pick it as evidence. Like the JavaScript fbench sibling (Firefox's trig memo cache) and the xemantic Java Math.sin-versus-libm sibling, the win comes from different math work rather than better code generation. For current .NET JIT-versus-C++ evidence with the same algorithm on both sides, use the LangArena C# rows (Distance::NGram, Graph::AStar) or the benchLANG .NET binary-trees entry.
+
+**Gotchas:**
+- Harness flaw behind the number: the VB.NET loop computes sine with fSin and arcsine with the internal aTan2/aTan, with Math.Sqrt as the only library call, while the C reference row (src/c/Makefile 'gcc -Wall -O3 -lm', -DINTRIG commented out) uses libm for sin, asin and tan. The page's own Pentium 4 row shows the two C modes differ by 1.25x (0.00862 vs 0.01074 s per 1000 iterations), and the VB.NET mix matches neither mode, so 0.866 is not a same-work ratio.
+- Latent correctness bugs in the port's maths library (fbench_lib.vb, also in the VB6 original). LibInitialise, which fills the atanc arctangent table, is never called, so the table stays all zeros. The table also stores 0.982793723247329 in atanc(4) where its own comment says 1.1071487177940905. And aInt converts with VB's round-half-even Integer conversion instead of truncating. aTan therefore returns wrong values for any argument of 0.25 or more, which means any arcsine of an argument above about 0.2425. The fbench lens never reaches that range, so the published results are still correct, but any other lens or steeper ray would give wrong results without warning.
+- There is no automatic accuracy check. Unlike fbench.c, which compares its output with reference strings, the VB.NET app only lists the numbers, and fbench.html says such ports leave the comparison to the user.
+- The comparison crosses machines and toolchains. The C row is labelled 'GCC 3.2.3 -O3, Linux' while the VB.NET row ran on Windows XP. The page says each language was compared with C on the same machine, but it names neither the machine nor the C compiler used on Windows. Timing is GetTickCount, which is fine for the page's roughly five-minute runs.
+
+**Status:** Abandoned (last commit 2021-09-24, page last updated the same day) and CC BY-SA 4.0. The VB.NET project is a 2002/2003-era WinForms upgrade-wizard conversion, so this is a reference data point only, with nothing to adopt.
+
+[repo](https://github.com/Fourmilab/floating_point_benchmarks) · [benchmark](https://github.com/Fourmilab/floating_point_benchmarks/blob/master/Web_pages/fbench.html)
+
+#### string-and-text
+
+##### zrep (grep-zg, Zig grep clone)  `Zig`  `no license`  `unknown`  `Tier C`
+
+Hobby multithreaded AVX2 grep in Zig (zrep); self-reported 9.6x faster than GNU grep 3.12 on one log, near ripgrep.
+
+**Beats:** GNU grep 3.12 (C); the same table also lists ripgrep 15.1.0 — Self-reported README numbers, read only through search summaries: on a 205 MB log with 706K matches of 'debug', warm cache, zrep 32.7 ms vs ripgrep 38.4 ms vs GNU grep 3.12 314 ms for normal output (about 9.6x over GNU grep, derived), -v 121 ms vs 353 ms vs 770 ms, -c 38.0 ms vs 38.1 ms vs 288 ms; CPU reported only as 28 cores, Zig build mode and GNU grep build and locale not stated.
+
+**Known shortcoming:** Snippets only (Codeberg proxy 403, zff.dev unreachable, no GitHub mirror) that disagree on the corpus for the 32.7/38.4/314 ms row (/usr/include vs a 205 MB log); 28 threads against single-threaded GNU grep; license unknown.
+
+**Known shortcoming:** Snippet only (confidence 0.25): codeberg.org (proxy CONNECT 403, ENOTFOUND), zff.dev, besthub.dev and Software Heritage were all unreachable, so the README, licence, code and benchmark method were never opened. Further snippet rows: -v 121/353/770 ms and -c 38.0/38.1/288 ms (zrep/ripgrep/GNU grep); ripgrep is faster on -n and -o; the 9.6x over GNU grep is mostly parallelism (AVX2 plus line-aligned chunks across all cores) and only 1.17x over ripgrep. zrep -c (38.0 ms) is slower than its plain print row (32.7 ms), so the output sink may differ between rows (unverified).
+
+**Independent measurement:** verifier batch-94 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Per the README feature list (seen only through search-result summaries), it splits each file into line-aligned chunks and searches all chunks on every core at once with an AVX2-vectorised scanner. That is within-file parallelism, which GNU grep (single-threaded) and ripgrep (one thread per file, so one thread on a single large file) do not do. The source was not readable, so the exact substring algorithm (memchr-style first-byte filter, two-byte SIMD prefilter or other) and how output order is preserved across threads are unknown.
+
+**Use it when:**
+- Experimenting with within-file parallel search of one very large, warm-cache log on a many-core x86-64 machine with AVX2, where the README's -v row (121 ms vs ripgrep 353 ms vs GNU grep 770 ms on a 205 MB log) shows the largest gap.
+- Reading as a compact Zig example of chunked, line-aligned multithreaded scanning with SIMD, if you can reach Codeberg or its zff.dev mirror.
+- Ad-hoc literal searches where only the standard -v, -c, -n, -o modes are needed and GNU grep compatibility does not matter.
+
+**Skip it when:**
+- As a GNU grep replacement in scripts: option coverage, regex syntax (BRE/ERE/PCRE), locale and binary-file handling, exit codes and context flags are not documented in anything reachable here.
+- When ripgrep is available: on the README's own 205 MB log ripgrep is faster with -n (33.6 ms vs 36.5 ms) and -o (33.4 ms vs 36.7 ms), ties with -c (38.1 ms vs 38.0 ms) and is only about 15% slower for plain output (38.4 ms vs 32.7 ms); ripgrep also has .gitignore handling, mature Unicode regex and a long track record.
+- Recursive searches over many small files (source trees): the single-file chunking is the advertised advantage, and no directory-walk numbers were readable this session.
+- Non-AVX2 CPUs or non-x86 platforms: the README advertises an AVX2 search and any fallback is not documented.
+- Production use generally: a hobby project with no visible release history, license contents not seen, and no independent measurement.
+
+**Vs siblings:** Among catalogued grep-like tools, fastgrep (Rust, 3.7-9.9x over GNU grep 3.12 with a warm trigram index) and The Platinum Searcher are better documented, and xerg only beats BSD grep; pick zrep only to study or try within-file parallel scanning of a single huge log, and otherwise prefer ripgrep or fastgrep.
+
+**Gotchas:**
+- Every figure here comes from search-engine summaries of the README: codeberg.org (proxy CONNECT 403 and DNS failure), its zff.dev mirror and the besthub.dev article were all unreachable this session, and there is no GitHub mirror, so the benchmark script, corpus, CPU model, zrep's Zig release mode and GNU grep's build and locale were never inspected.
+- The summaries attribute the 32.7 / 38.4 / 314 ms row to a 205 MB log with 706K matches of 'debug', while an earlier summary described a recursive /usr/include search, and a second table (271 MB, 2.5M-line log, output piped through cat to avoid GNU grep's /dev/null shortcut: zrep 76 ms vs ripgrep 198 ms vs GNU grep 248 ms) also exists; which methodology applies to which row is unverified.
+- In the 205 MB table zrep's count mode (-c, 38.0 ms) is slower than its full printing mode (32.7 ms), which is unusual since counting does strictly less work; it may mean the printing row's output sink differs (for example /dev/null or a pipe) from the count row, but the harness could not be read to check.
+- The headline gap over GNU grep compares a tool using all cores (the earlier summary says 28) within a single file against single-threaded GNU grep, so most of the 9.6x is parallelism rather than a better single-core matcher; against ripgrep, which is also effectively single-threaded on one file, the gap shrinks to 1.17x or reverses.
+
+**Status:** Maintenance status unknown (last commit, release history and license text not reachable; a LICENSE file exists per search summaries); a hobby, reference-only project hosted on Codeberg with a zff.dev mirror, so treat its numbers as unverified until the README and benchmark script can be opened.
+
+[repo](https://codeberg.org/imal/grep-zg) · [benchmark](https://codeberg.org/imal/grep-zg)
+
+##### zigmark (Zig CommonMark parser and renderer)  `Zig`  `PolyForm-Noncommercial-1.0.0`  `active`  `Tier D`
+
+Zig CommonMark+GFM parser and HTML/Typst renderer; README shows it ahead of cmark only through a shell-wrapped baseline.
+
+**Beats:** cmark and cmark-gfm (C); the same table also lists lowdown and discount (C) and pandoc (Haskell). — One process per run converting the repo's own 27 KB README.md to HTML, hyperfine -N mean over 500 runs on an unstated machine: zigmark ReleaseFast 2.4 ms against cmark 5.3 ms and cmark-gfm 5.6 ms (nixpkgs builds, versions unstated), but the cmark rows include an extra /bin/sh process; the directly spawned C tools lowdown (2.2 ms) and discount (2.7 ms) tie or beat zigmark, so no valid win over C is shown.
+
+**Known shortcoming:** Crippled baseline: the flake.nix bench runs cmark and cmark-gfm through a /bin/sh wrapper (exec cmark "$@" > /dev/null, about 1 ms per spawn on 2-5 ms runs, and the cmark RSS rows include the shell) while zigmark, lowdown and discount are spawned directly; unwrapped C lowdown (2.2 ms) beats zigmark (2.4 ms) and discount (2.7 ms) is within noise. PolyForm Noncommercial license, reference only.
+
+**Known shortcoming:** Shell-wrapper flaw confirmed in flake.nix: cmark and cmark-gfm run through /bin/sh while zigmark runs directly. Workloads differ too: zigmark runs with GFM and the mermaid hook on against plain cmark without -e. The README table is stale (dated 2026-06-04, v0.7.0, 27 KB input while the README is now about 33 KB, and it lacks the mermaid table the current bench app writes). The C ABI (src/root.zig zigmark_parse) uses std.heap.page_allocator, so each allocation is a page-sized mmap; the inline scanner is O(n^2) (SECURITY.md); 16 MiB default input cap. lowdown still beats every zigmark build.
+
+**Independent measurement:** verifier batch-64 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Two passes: a first scan of every line collects link reference definitions into a hash map, then a block pass (mecha parser combinators plus hand-written line classifiers over a pre-split line array) and a hand-written inline state machine implement the CommonMark delimiter algorithm. Plain-text runs inside inlines are skipped with a `@Vector` byte-compare scan for the special characters (`*_~[!`<\` and newline, plus `@` under GFM), with a lookup-table scalar tail. Renderers stream into an 8 KiB buffered writer instead of building the output string. Nothing in the code points to a structural advantage over cmark: the README's lead over cmark comes from a harness asymmetry (see gotchas).
+
+**Use it when:**
+- Zig projects that want an in-process CommonMark+GFM parser with a typed AST, block mutation and frontmatter editing in one module.
+- Markdown-to-Typst/PDF pipelines (eisvogel-style preamble driven by frontmatter, mermaid fences rendered to SVG through the lazy pozeiden dependency).
+- Noncommercial or internal tooling that wants a small static CLI (about 2 MB peak RSS on a 27 KB file) or a WASM build of about 81 KiB.
+- Doc-site tooling that needs to query or rewrite sections of many Markdown files (the Library query API, --set-block, --section-start/--section-end).
+
+**Skip it when:**
+- Commercial products or paid client work: PolyForm Noncommercial 1.0.0 forbids it without a separate licence from SC2 (solo practitioners using it as a tool are exempted in the README).
+- When raw conversion speed is the goal: on the repo's own unwrapped comparison lowdown (2.2 ms) beats every zigmark build and discount (2.7 ms) is within one standard deviation of ReleaseFast (2.4 ms); no throughput test on large inputs exists.
+- Untrusted input without limits: SECURITY.md documents O(n^2) worst-case behaviour of the inline scanner on unmatched brackets, bounded only by the input cap, whereas cmark is built to stay linear on pathological input.
+- Inputs over 16 MiB: Parser.max_input_bytes defaults to 16 MiB and the CLI uses the default, so larger files fail with error.InputTooLarge.
+- Toolchains other than Zig 0.16.0 or later; 0.x API that has changed across 11 minor releases since 2025.
+
+**Vs siblings:** rushdown (Rust) is the closer CommonMark sibling and its make-bench numbers beat cmark in-process without a wrapped baseline; pick zigmark only when you need a Zig-native or C-ABI library with Typst output and frontmatter/AST editing, and your use is noncommercial.
+
+**Gotchas:**
+- Harness flaw behind the headline: flake.nix's bench app runs cmark and cmark-gfm through a generated `#!/bin/sh` wrapper (`exec cmark "$@" > /dev/null`) while zigmark, lowdown and discount are spawned directly under `hyperfine -N`, so every cmark run pays an extra shell start on a 2-5 ms start-up-dominated workload (hyperfine's `--output=null` would have made it symmetric), and the cmark peak-RSS rows include the shell. The work also differs: the zigmark CLI parses with GFM extensions on and a mermaid hook, while plain `cmark`/`cmark-gfm` (no -e flags) render CommonMark only.
+- The README table is stale: it is dated 2026-06-04 (the v0.7.0 release that added the bench app) and says README.md was 27 KB, but README.md is now about 33 KB and the current bench app also writes a 'mermaid-heavy input' table that the README lacks, so the numbers predate releases 0.8.0 to 0.11.1 and the current harness. No CPU or baseline versions are given.
+- The C ABI (`zigmark_parse`, `zigmark_render_*` in src/root.zig) allocates every AST node and string with `std.heap.page_allocator`, i.e. a page-granular mmap/munmap per allocation, so C callers get a much slower and more memory-hungry path than the CLI's general-purpose allocator; `zigmark_free_string` recovers the length by scanning for the NUL terminator.
+- The separate `nix run .#benchmark` app (benchmark.md) is a zigmark-only self-comparison whose command `./zig-out/bin/zigmark ./Readme.md > /dev/null` runs under hyperfine -N, so `>` and `/dev/null` are passed as arguments rather than a redirect, and the file name differs in case from README.md.
+
+**Status:** Active (162 commits, v0.11.1 on 2026-08-07, 3 open issues, two of them Zig 0.16 migration bugs in the terminal renderer and spec-runner timing) and passes all 652 CommonMark and 24 GFM spec tests, but PolyForm Noncommercial licensing makes it reference-only for commercial users and the only speed evidence comes from a harness that shell-wraps the cmark baselines.
+
+[repo](https://github.com/sc2in/zigmark) · [benchmark](https://raw.githubusercontent.com/sc2in/zigmark/HEAD/README.md)
+
+#### systems-and-safety
+
+##### dumac (Rust parallel du -sh for macOS)  `Rust`  `no license`  `stale`  `Tier C`
+
+macOS-only Rust du -sh clone: parallel getattrlistbulk walk, about 5.7x faster than BSD du on a warm synthetic tree.
+
+**Beats:** macOS du -sh (BSD du, C); diskus is also compared — First-party hyperfine (warmup 3, 5 runs, warm cache) on a synthetic 12-level binary tree (4,095 directories, 100 files of 70 bytes each, 409,500 files) on the author's Apple M1 Pro (named in his blog post, not the README): dumac 563.1 ms vs macOS BSD du -sh 3.186 s (5.66x) and diskus 1.834 s (3.26x). The win comes from batched metadata syscalls plus multithreading, not from Rust: the author's own Go plus cgo build of the same getattrlistbulk loop ran 564.6 ms in the first blog run.
+
+**Known shortcoming:** No license, Mac model unstated, warm cache only; the win is rayon parallelism plus getattrlistbulk, not Rust; output not tested against du; diskus is listed (wave 11); the blog (unreachable) reports 6.4x for an earlier tokio version.
+
+**Known shortcoming:** Parser bug: when an entry errors, the kernel packs ATTR_CMN_ERROR before NAME (xnu get_error_attributes, getattrlistbulk(2)) but dumac reads NAME first, so the entry is skipped with a garbled name and bogus error code. Issue #2: the earlier tokio build undercounted $HOME by 35% (870.8G vs du 1.4T) from fd exhaustion, fixed 2025-08-05; the blog's 6.4x/2.58x were measured on that pre-fix build while the README 5.66x is the post-fix rayon build; the du baseline swings 2.484-3.330 s across README revisions (4.58x-6.39x). Symlinks are charged one block (open PR #7: 255.1M vs du 253.3M); inode dedup ignores the device; exit 0 on subtree errors. The author's Go+cgo build of the same C loop ran 564.6 ms, so the speed is not from Rust.
+
+**Independent measurement:** verifier batch-107 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Each directory is read with getattrlistbulk(2) into a 128 KiB buffer, which returns name, object type, inode (ATTR_CMN_FILEID) and ATTR_FILE_ALLOCSIZE for a batch of entries per syscall, so there is no lstat per file as in fts-based du. Subdirectories are recursed with a rayon work-stealing pool (available_parallelism threads, capped at 224) with 16 MiB stacks. Hard-link dedup uses 128 parking_lot-mutex-sharded HashSets keyed by inode >> 8, so runs of sequentially allocated APFS inodes from one directory land in one shard (the author measured lock collisions dropping from 176.66 to 4.66 per run).
+
+**Use it when:**
+- Interactive or scripted total-size queries on large local APFS trees (node_modules, build caches, home folders) on a multi-core Apple Silicon Mac, where wall-clock time matters more than CPU time.
+- Trees with many small files per directory, where per-file lstat dominates BSD du's runtime and batching metadata reads pays off most.
+- As a reference implementation of correct getattrlistbulk parsing in Rust (RETURNED_ATTRS bitmap, attrreference_t name offsets, read_unaligned field walk) to copy the technique into your own scanner, keeping in mind the code has no license.
+
+**Skip it when:**
+- Anything that must match du byte for byte: directories' own blocks are not added (Apple du adds them in its FTS_DP case), every symlink is charged one 512-byte block although APFS keeps short targets inline at 0 blocks (open PR #7 measured 255.1M vs du 253.3M on /usr/share, 3,556 symlinks), and the human-readable rounding differs (870.8G vs du's 1.4T style).
+- Linux, BSD or Windows: it calls getattrlistbulk and libc::__error, so it only builds on macOS (10.10 or later for the syscall).
+- Trees that span volumes (scans of /, /Volumes, mounted images): inode dedup ignores the device id and applies to every file, while Apple du only dedups files with st_nlink > 1 keyed by (st_dev, st_ino), so files on different volumes with colliding inode numbers can be silently dropped.
+- Scripts that rely on exit status or deep paths: errors below the root (EACCES, EMFILE, ENAMETOOLONG once a joined path passes PATH_MAX because it calls open() on full path strings rather than openat) are printed to stderr, the subtree counts as 0, and the process still exits 0; du sets exit status 1.
+- Battery- or CPU-constrained use: it trades total CPU for wall time (user+system 2.27 s vs du 1.43 s in the README run).
+
+**Vs siblings:** Pick dumac on macOS for a single total; on Linux the catalogued walkers (c-blake's cligen/dents du replacement, minifind, fd for find-style searches) apply instead, and for copy or delete of large trees the FUC tools (cpz, rmz) are the analogues. diskus (already listed) is portable and closer to du's semantics, but on the author's benchmark it used about 10 s of system time to dumac's 2.2 s.
+
+**Gotchas:**
+- Error-entry parsing bug: per getattrlistbulk(2) and xnu get_error_attributes(), an entry that failed is packed as RETURNED_ATTRS, ERROR, then NAME, but dumac reads NAME before ERROR. On such entries it builds the name from the error word and takes the name's attr_length as the error code, so the entry is still skipped but the message shows a garbled or missing name and a bogus error number. Successful entries are parsed correctly because the kernel omits ATTR_CMN_ERROR when RETURNED_ATTRS is requested.
+- Earlier versions undercounted real trees by about 35 percent (issue #2: 870.8G vs du 1.4T on a $HOME) because a per-directory semaphore let open file descriptors grow past ulimit -n; fixed 2025-08-05 (931ac28, cap 224 in 03846c1). The author's first blog post figures (6.4x vs du, 2.58x vs diskus) were measured on that pre-fix tokio build, and hyperfine discards stderr, so skipped subtrees would not have been visible. The README figures (5.66x, 3.26x) come from the later rayon build, which holds at most one directory fd per thread.
+- Run-to-run swing is large and the headline ratio moves with the du run: README revisions show du -sh at 3.330 s (2025-07-31), 2.484 s (2025-08-05, 4.58x) and 3.186 s (2025-08-07, 5.66x), and the second blog post timed the rayon build at 711.9 and 731.6 ms on the same tree versus 563.1 ms in the README. Only the deep tree is reported; setup_benchmark.py also builds a 'wide' tree (500 directories x 500 files) whose results are not published.
+- Unlike Apple du, it does not set vfs.nspace.prevent_materialization (rdar://44903941 in du.c), so walking dataless File Provider or iCloud directories may materialize them. It also has no hard-linked-directory check (du's dirlinkchk) and does not cross-check its totals against du in tests (the three tests only assert lower bounds and hard-link dedup).
+
+**Status:** Stale since 2025-08-07 (19 commits, 65 stars), an open symlink-sizing PR (#7, 2026-08-04) has no maintainer response, and there is no LICENSE file or Cargo license field, so it is reference-only: read it for the getattrlistbulk technique, do not vendor it.
+
+[repo](https://github.com/healeycodes/dumac) · [benchmark](https://raw.githubusercontent.com/healeycodes/dumac/HEAD/README.md)
+
+##### libbzip2-rs (libbz2-rs-sys, Rust port of libbzip2)  `Rust`  `bzip2-1.0.6`  `active`  `Tier C`
+
+Memory-safe Rust port of libbzip2 exposing the same C API; about 11% fewer compression cycles than C libbzip2 on x86-64.
+
+**Beats:** libbzip2 (C, original bzip2 library) — In the project's own CI data (libbzip2-rs-bench, latest run at commit ac73367 on 2026-10-06, 20 repetitions per command), one harness binary calling libbz2-rs-sys versus libbzip2 1.0.8 (bzip2-sys, built with clang at -O3) used 10.1-12.3% fewer CPU cycles compressing the 15.7 MB silesia-small.tar at levels 1-9 and 3.4-7.4% fewer decompressing six bzip2 files on an AMD Ryzen 9 9900X. On an Apple M2 compression was 3.3-4.2% faster in user time but decompression was 0.1-9.5% slower on five of six files.
+
+**Known shortcoming:** Public bench data in libbzip2-rs-bench (Ryzen 9 9900X, Apple M2): x86 compression 10-12% fewer cycles and decompression 3-7%, but on the M2 decompression is up to 9.5% slower; -enable-dfa-jump-thread is given to the Rust build only; the blog snippet numbers match no published run; the bzip2-1.0.6 licence is not OSI-approved, so usability is reference (wave 9 precedent).
+
+**Known shortcoming:** Flag asymmetry: -enable-dfa-jump-thread is given to the Rust build only, and the toolchains are unpinned. Run-to-run noise: the version-bump-only commit c6b9b3d shows level 1 at -10.17% against -8.11% for its parent; three of the six decompression files are tiny (sample3.bz2 is 235 bytes); on the large files x86 is -4.3%/-4.1% while M2 is +4.8%/+1.0%. Bug: 0.2.3 and 0.2.4 abort with internal error 1002 on some inputs of about 600 KB or more (issue #137, fixed in 0.2.5, old versions not yanked). Rust runs 5-8% more instructions when compressing; M2 compression is only faster than C from the 2026-04 runs on.
+
+**Independent measurement:** verifier batch-68 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Same algorithm as libbzip2 (Burrows-Wheeler block sort with mainSort/fallbackSort and the workFactor budget, MTF/RLE, multi-table Huffman); the code began as a c2rust translation and was then rewritten into safe Rust (compress.rs, decompress.rs and blocksort.rs carry #![forbid(unsafe_code)]; unsafe is confined to the C-API layer in bzlib.rs). Visible implementation changes: the bit writer (LiveWriter) copies bs_buff, bs_live and num_z into locals and writes them back on Drop instead of updating EState fields through a pointer on every bsW call, and the decoder is a c2rust-style `'state_machine: loop { match current_block }` that the benchmark builds with LLVM's -enable-dfa-jump-thread pass. No SIMD or target-specific code. The Rust build executes 5-8% more instructions than C when compressing silesia-small.tar yet takes fewer cycles (derived from page data), so the gain is higher IPC, not less work; the project's own explanation is only that zlib-rs experience was applied (blog post not reachable, search snippet only).
+
+**Use it when:**
+- Rust projects using the bzip2 crate: libbz2-rs-sys is already its default backend since 0.6.0, and it needs no C compiler when cross-compiling.
+- Compression-heavy bzip2 work on x86-64: about 10-12% fewer CPU cycles at every level 1-9 on a 15.7 MB tar in the project's CI on a Ryzen 9 9900X.
+- Replacing system libbz2 to get a memory-safe decoder for untrusted .bz2 input when speed parity, not a large speedup, is the goal.
+- Reproducible archives that must match libbzip2 output byte for byte (tests assert identical output at level 9).
+- Embedded or no_std targets: the cdylib builds without std using the c-allocator feature or caller-supplied bzalloc/bzfree.
+
+**Skip it when:**
+- Decompression-heavy work on Apple Silicon: on the Apple M2 runner the Rust decoder is slower than C on five of six files (+0.1% to +9.5% user time in the 2026-10-06 run), consistently since 2025.
+- When you need a large bzip2 speedup: the gains are 3-12%; a parallel bzip2 or a different codec moves throughput far more, and the Zig bzip2z sibling claims 1.79x single-threaded compression.
+- Builds pinned to libbz2-rs-sys 0.2.3 or 0.2.4: a blocksort logic error aborts compression with internal error 1002 on some inputs of about 600 KB or more (issue #137, fixed in 0.2.5 on 2026-05-16; the bad versions are not yanked on crates.io).
+- Need for features beyond libbzip2 1.0.x (multithreading, bzip3): none are implemented; issue #139 asking for bzip3 is open.
+- Projects that require an OSI-listed licence: it ships under the bzip2-1.0.6 licence (permissive, BSD-style, no patent grant).
+
+**Vs siblings:** Pick libbzip2-rs over bzip2z (Zig, SA-IS block sort, 1.79x faster single-threaded compression but 0.97x decompression and a new codebase) when you need the libbzip2 C API, byte-identical output and a widely deployed memory-safe drop-in (42.8M crates.io downloads); pick bzip2z when raw compression speed matters more than compatibility.
+
+**Gotchas:**
+- Harness flag asymmetry: the CI builds the Rust side with RUSTFLAGS=-Cllvm-args=-enable-dfa-jump-thread while the C side (bzip2-sys build.rs via the cc crate, CC=clang, -O3) gets no such flag; the decoder is exactly the switch-in-a-loop state machine this pass targets, so part of the 3-7% x86 decompression gain may come from the pass rather than the port. Toolchains are unpinned (rustup stable, runner clang), and run-to-run drift exceeds within-run noise: within-run CV is 0.2-1.3%, but the version-bump-only commit c6b9b3d measured the x86 level-1 compression delta at -10.17% against -8.11% for its parent 7fe0c34, the level-1 delta ranged from -8.9% to -12.3% across 2026 runs, and the sample3.ref compression delta went -10.8%, -0.2%, -1.1%, +1.1%, -5.5% over the last five runs (2026-04-07 to 2026-10-06: a blocksort fix, a version bump and two clippy-fix commits).
+- Three of the six decompression rows are tiny inputs (sample3.bz2 is 235 bytes, sample1.bz2 32 KB, sample2.bz2 74 KB; 0.5-4 ms per process), so whole-process cycles there are dominated by startup and stream initialisation; only zip64support.tar.bz2 and re2-exhaustive.txt.bz2 are large (about 2.2e9 and 1.8e9 cycles), showing -4.3% and -4.1% on x86 but +4.8% and +1.0% on the M2. On the M2, level-1 compression was 1.7-5.9% slower than C in every 2025 run and only turned 3-4% faster from the 2026-04-06 run onward.
+- Internal asserts mirror libbzip2: with the std feature an internal error prints the report and calls std::process::exit(3), killing the host process; 0.2.3 and 0.2.4 hit this (error 1002) because a commit replaced the highest-set-bit loop for the quadrant shift in mainSort with count_ones().
+- Rust executes more instructions than C (+5-8% compressing silesia-small.tar, +21-24% decompressing the three small files on x86; derived from page data), so the cycle win depends on the microarchitecture, which matches the weaker M2 results.
+
+**Status:** Actively maintained (last commit 2026-10-06, v0.2.5 released 2026-05-16 with the error-1002 fix) and the default backend of the bzip2 crate; the bzip2-1.0.6 licence is permissive but not OSI-listed, and the benchmark has a Rust-only -enable-dfa-jump-thread flag, unpinned toolchains and tiny decompression inputs, so treat the decompression gain as unproven and the x86 compression gain of about 11% as the solid result.
+
+[repo](https://github.com/trifectatechfoundation/libbzip2-rs) · [benchmark](https://raw.githubusercontent.com/trifectatechfoundation/libbzip2-rs-bench/main/metrics-linux-x86.json)
+
+##### Rewrite it in Rust: A Computational Physics Case Study (Veytsman, Zhai, Ding, Sefkow)  `Rust`  `no license`  `unknown`  `Tier C`
+
+University of Rochester preprint: a CBET laser-plasma simulation written in Rust ran up to 5.6x faster than the group's C++ version.
+
+**Beats:** The authors' C++ implementation of the same physics simulation (compiler and flags not seen) — Per search snippets only, the Rust CBET simulation ran at least 1.6x as fast as the authors' C++ version on smaller meshes and up to 5.6x faster on a large mesh (2500 x 2500 is the mesh named in one figure caption) on an AMD EPYC machine of unknown model, with compilers and flags unknown; a parallel Rust version was faster still, and whether the 5.6x figure is sequential is disputed in discussion.
+
+**Known shortcoming:** Preprint seen as a search snippet only (arXiv 2410.19146 blocked; at least 1.6x on small cases, 5.6x on a large mesh on EPYC) with no code found, flags and algorithm match unknown, probably a rewrite effect.
+
+**Known shortcoming:** Snippet-only entry: arxiv.org, ar5iv, alphaxiv, ADS and the other mirrors are unreachable here and no code was found on github.com. Per a Lobsters snippet the C++ uses struct-of-arrays and the Rust array-of-structs, and the C++ was edited to resemble the Rust code, so this is a rewrite effect. Unresolved: a Hacker News commenter reads the sequential port as about 1.6x with the 5.6x needing parallel Rust, while the abstract implies 5.6x is sequential; a figure caption mentions a 2500 x 2500 mesh. Enricher confidence 0.3; paper-access retier pending.
+
+**Independent measurement:** verifier batch-15 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Not documented in anything readable here: the paper (arxiv.org abs, html, pdf), its ResearchGate copy and every mirror tried are unreachable, so the authors' explanation was not read. The only concrete design difference reported, through search snippets of the Lobsters discussion, is data layout: the C++ version uses struct-of-arrays and the Rust version array-of-structs, and the authors argue this alone does not explain the gap. The same discussion says both versions were fresh implementations and that the C++ code was modified to resemble the Rust code, so any speedup mixes language, compiler (rustc versus an unnamed C++ compiler) and implementation choices.
+
+**Use it when:**
+- As an anecdote when weighing a C++ to Rust port of a mesh-based scientific code: a small group reported the Rust version was not slower, and was at least 1.6x faster on smaller cases per snippets.
+- As a pointer that safe parallel Rust (the paper's parallel version) can speed a sequential physics kernel up further with little effort, if you plan to parallelise during the port anyway.
+- Not as a library: there is nothing to link or vendor, so it only informs a language decision.
+
+**Skip it when:**
+- As evidence that Rust is generally faster than C++: same-algorithm studies point the other way (ASE 2022 'Towards Understanding the Runtime Performance of Rust' found Rust about 1.77x slower than C on average; arXiv 2209.09127 'Is Rust C++-fast?' found near parity with a small Rust deficit).
+- To predict the gain for your own code: compilers, flags, CPU model, per-case runtimes and the reason for the gap were not seen, and no code exists to rerun it.
+- As peer-reviewed evidence: it is an arXiv preprint; no journal or conference version was found.
+- As a comparison of tuned C++: the C++ version was the group's own and was changed to resemble the Rust code (Lobsters snippet), so a tuned C++ implementation with its own data layout was never the baseline.
+
+**Vs siblings:** Cite it only as a scientific-computing anecdote; for reproducible Rust-versus-C++ evidence prefer ckmeans (vendored Ckmeans.1d.dp C++ baseline, Criterion runs) or ixy-languages (same driver design in C and Rust, cycle counts), whose code and baselines can be checked.
+
+**Gotchas:**
+- Harness flaw: the two versions do not share a data layout (C++ struct-of-arrays, Rust array-of-structs, per a Lobsters comment summarised in a search snippet), so the measured gap is partly an implementation effect rather than a language effect; the authors reportedly argue layout alone does not explain it.
+- Unresolved: the abstract (search snippet) says some test cases showed up to a 5.6x increase and that parallel Rust 'can further improve' performance, but a Hacker News commenter (snippet) read the paper as about 1.6x from the near-identical sequential port with the larger gain coming from the parallel Rust version. If 5.6x compares parallel Rust with sequential C++, it is not a language comparison at all.
+- A Lobsters commenter (snippet) found the paper unclear about who wrote which implementation and saw no code link; two earlier searches and this pass (github.com topics 'cbet' and 'laser-plasma', author user pages) found no repository.
+- A 1.6x to 5.6x gap between equally optimised sequential C++ and Rust is unusual; without flags (for example -O2 versus -O3, -ffast-math, aliasing assumptions) it cannot be attributed.
+
+**Status:** Reference-only arXiv preprint (2024) with no public code; the paper, its ResearchGate copy, the Lobsters and Hacker News threads and the authors' pages were all unreachable here, so this entry rests on search snippets and stays a candidate for a paper-access retier.
+
+[benchmark](https://arxiv.org/abs/2410.19146)
+
+#### web-and-serving
+
+##### routez  `Zig`  `no license`  `active`  `Tier C`
+
+nginx-style edge server in pure Zig (HTTP/1.1, TLS 1.3, HTTP/3, proxy); beats nginx on fixed, proxied and TLS keep-alive rows.
+
+**Beats:** nginx 1.30.5 (C) and HAProxy 3.2.23 (C) — First-party wrk runs (256 keep-alive connections, 3 workers per server, pinned cores, median of 3 x 10 s) on Docker Desktop on an Apple M-series Mac, 20 Sep 2026, routez 53d2011 built ReleaseFast -Dcpu=native with Zig 0.17.0 against nginx 1.30.5 and HAProxy 3.2.23 packages on OpenSSL 3.5: fixed response 627k vs nginx 529k (1.19x), keep-alive proxy 262k vs 208k (1.26x), TLS fixed response 582k vs 324k (1.8x), TLS 10 KB file 208k vs 152k (1.37x), resumed TLS new connections 17k vs 13k; the plain 10 KB static file is a tie and many other rows lose.
+
+**Known shortcoming:** Public harness (bench/run.sh, Dockerfile, tuned nginx.conf) but run in a Docker Desktop VM on an unnamed Apple M-series Mac with 90% run-to-run drift admitted in the README; routez built -Dcpu=native against the generic nginx.org package; many losing rows; no LICENSE (reference).
+
+**Known shortcoming:** No correctness bug behind the headline rows; both sides use epoll (quic-zig picks libxev Epoll on Linux, not io_uring). bench.sh's gate checks status and body only, rate.sh checks status 200 only, and the held rate is 0.5x the slowest server's peak from a separate 4 s wrk pass. Still no LICENSE; quic-zig's README says 'Not production-ready'.
+
+**Independent measurement:** verifier batch-20 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Each worker thread runs its own libxev event loop (quic-zig selects libxev's epoll backend on Linux, the same readiness model nginx uses) on its own SO_REUSEPORT listener. Static files go through a per-worker open-file cache and, when the page cache holds the data (openat2 RESOLVE_CACHED, RWF_NOWAIT or mincore), are served inline on the worker; plain-HTTP bodies over 32 KiB use sendfile and layer-4 bulk traffic uses splice(2). TLS is quic-zig's sans-IO TLS 1.3 in Zig using hardware AES-128-GCM when built with -Dcpu=native(+aes+sha2). The README gives no profile that explains the fixed-response and TLS keep-alive wins.
+
+**Use it when:**
+- Small-response or keep-alive HTTP/1.1 front ends where the author's rows show it ahead of nginx: fixed responses (627k vs 529k req/s) and proxying to a keep-alive upstream (262k vs 208k).
+- TLS 1.3 termination of keep-alive traffic with ECDSA or Ed25519 certificates: TLS fixed response 582k vs 324k and TLS 10 KB file 208k vs 152k in its table.
+- Many idle WebSocket tunnels where memory per connection matters (5.3 KB vs nginx 17.8 KB at 50k connections in its ws suite).
+- Experiments or study of a modern edge server whose benchmark harness gates response bodies and TLS parameters before measuring and publishes its losing rows.
+
+**Skip it when:**
+- Anything you need to ship or modify: the repo has no LICENSE file, so it is reference only.
+- RSA certificates, handshake-heavy traffic or TLS 1.2 clients: full RSA-2048 handshakes run 1.0k/s vs nginx 3.6k/s, ECDSA 7.1k vs HAProxy 8.8k, and TLS 1.2 is not supported.
+- HTTP/3 serving, on-the-fly gzip or large proxied responses: it trails on HTTP/3 10 KB (94k vs 247k) and 1 MB files, gzip through the proxy (5.5k vs HAProxy 15k) and 1 MB proxied responses (4.7k vs 7.5k).
+- Tail-latency-sensitive proxying or frequent reloads: held-rate proxied p99 4.30 ms vs HAProxy 1.79 ms, 27% vs 56% throughput kept under a connection storm, and 74 failed requests vs 0 with a reload every 2 s.
+- Production deployments generally: 6 stars, one author, and its TLS/QUIC dependency quic-zig says 'Not production-ready' in its README.
+
+**Vs siblings:** Pick routez over proxy-only claimants such as rproxy, Arc or Spire when you want static files, TLS, HTTP/3 and ACME in one process and a harness that gates identical bodies and TLS parameters and publishes its losses; the HttpArena entries (zeemo, zix, vanilla) are application servers with custom handlers, not nginx replacements. The missing license rules it out wherever code must be reused.
+
+**Gotchas:**
+- No license: the repo has no LICENSE file and GitHub shows none, so code cannot be copied; quic-zig, which it needs at build time, is MIT.
+- Benchmark caveats from the harness code: the bench.sh gate compares status and body only (headers are not compared, though routez does send Server and Date like nginx), and the held-rate suite (rate.sh, oha at half the slowest server's peak from a separate 4 s wrk pass) checks only for status 200. All rows come from Docker Desktop on an unnamed Apple M-series Mac, where the author saw 90% drift between separate runs, and the 10 KB static row reads 308k vs 312k (a tie) in the main table but '343k/s, 10% ahead' in the 'come off this list' table.
+- routez is built -Dcpu=native (native+aes+sha2 on arm64) while nginx and HAProxy are generic distribution packages; their OpenSSL 3.5 selects AES and SHA instructions at run time, so this mainly affects non-crypto code. Zig 0.16 builds inside VMs could miss AES entirely and run TLS about 10x slower.
+- The open-file cache is on by default: within valid_ms (1 s) a file edited in place is served with its old length and ETag, so a truncated file cuts the response short and a grown one omits the extra bytes.
+
+**Status:** Actively developed (192 commits, last 2026-10-03) by one author with 6 stars and 0 forks; no license, so reference only, and it depends on quic-zig, which describes itself as not production-ready.
+
+[repo](https://github.com/endel/routez) · [benchmark](https://raw.githubusercontent.com/endel/routez/HEAD/README.md)
+
+##### rproxy  `Rust`  `no license`  `active`  `Tier C`
+
+Rust io_uring HTTP/1.1 filtering reverse proxy; first-party 1.24x nginx-as-proxy throughput on a 2-byte keep-alive response.
+
+**Beats:** nginx as a reverse proxy (version and config not stated); HAProxy 2.8.5 (vendored build) as a second row — On the author's i5-12450H laptop-class box (wrk -t4 -c100 -d10s keep-alive over loopback, nginx backend returning a 2-byte 'OK'), the June run with 2 pinned workers each gave rproxy 189,810 req/s against an nginx reverse proxy at 153,484 (1.24x), median of 3; a later unpinned run reported 323,035 vs nginx 282,032 (1.15x) and HAProxy 2.8.5 266,603 (1.21x), but those are best-of-3 with unequal worker counts. nginx's version and build flags are not stated; rproxy is built with fat LTO, codegen-units 1 and opt-level 3.
+
+**Known shortcoming:** haproxy_baseline.sh keeps the best of 3 while claiming a median, pins nothing and needs a bench_config.yml missing from the repo; the June nginx config is unpublished (the repo copy proxies to itself); both runs predate the first public commit; HAProxy statements contradict each other; 2-byte body; no license, 0 stars.
+
+**Known shortcoming:** bench/haproxy_baseline.sh labels best-of-3 as 'median-of-3' and pins no cores; the backend nginx and the nginx proxy each get worker_processes 4; HAProxy runs default threads (no nbthread); rproxy reads its worker count from a missing bench_config.yml, and if that count is under 12 CPUs its cpu_affinity auto pins its workers while nginx stays unpinned, so the August 1.15x/1.21x is not equal-resource. The script also needs a root haproxy.cfg and haproxy-2.8.5/, neither published; the June run had a system nginx already running on the box; bench/rproxy.yaml uses log_level debug and is not the measured config. No LICENSE.
+
+**Independent measurement:** verifier batch-52 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** Each worker is a forked single-threaded monoio (io_uring) process accepting through SO_REUSEPORT, so there are no locks or cross-thread hand-offs; per-request state lives in thread_local! structures and pooled buffers, and the README says the hot path allocates nothing at log level info. The response head is rebuilt in one pass from httparse output and, for small bodies, written together with the body in a single write; the June results file attributes the jump from 0.88x to 1.24x of nginx to that head+body coalescing, removing a double parse and a load-balancer fix. Backend connections are kept alive in a per-worker pool, and backend liveness and counters live in a MAP_SHARED region read without locks.
+
+**Use it when:**
+- You already run nginx (or a load balancer) for TLS and static files and want JWT, IP ACL, rate-limit and request-validation policy in one YAML file instead of nginx if/location blocks or Lua.
+- Linux hosts with io_uring (kernel 5.6+, 5.11+ recommended) serving HTTP/1.1 keep-alive API traffic with small responses, the shape where its measured lead over nginx appeared.
+- You need ACL-safe path canonicalisation (/x/../admin, //admin, /%61dmin) applied identically to routing, filters, cache key and the forwarded request.
+- Small internal deployments where per-worker rate limits and caches (limit roughly multiplied by worker count) are acceptable.
+
+**Skip it when:**
+- As a front-line edge proxy replacing nginx or HAProxy: the author positions it only as a filter behind one, and it has no HTTP/2 or HTTP/3, no config reload on SIGHUP and no graceful drain on SIGTERM.
+- When you need global rate limits or a shared cache: rate_limit, the LRU cache, the backend pool and leastconn counts are all per worker.
+- TLS-heavy paths: the only TLS number is rproxy alone at 134,168 req/s against a plaintext backend ceiling, with no nginx or HAProxy TLS row to compare.
+- Anything that needs a licence: the repository has no LICENSE file, so it can only be studied, not legally reused.
+- Production-critical use: 0 stars, 2 public commits (2026-08-18 and 2026-08-25), one author, no releases.
+
+**Vs siblings:** Pick rproxy over routez, Arc or monolake when the job is a policy filter (JWT, ACL, rate limit, validation, canonical paths) behind an existing nginx rather than a general reverse proxy; routez publishes a broader nginx and HAProxy comparison (1.26x as a keep-alive reverse proxy), and monolake uses the same monoio io_uring runtime with a larger team and history.
+
+**Gotchas:**
+- Harness flaw in the August three-proxy run: bench/haproxy_baseline.sh prints 'median-of-3' but keeps the best of three wrk runs, pins no cores, and gives the backend nginx and the nginx proxy worker_processes 4 each while HAProxy runs its default thread count (bench/haproxy.cfg sets no nbthread) and rproxy reads its worker count from bench_config.yml, which is not in the repo; when that count is below the 12 allowed CPUs rproxy's cpu_affinity 'auto' policy (src/platform.rs) pins each worker to its own core while nginx stays unpinned, so the August 1.15x and 1.21x ratios are not equal-resource comparisons. The script also expects haproxy.cfg and a built haproxy-2.8.5/ at the repo root, neither of which is published (the config is at bench/haproxy.cfg), so it cannot run as published.
+- Only the June 2026-06-27 run (bench/BENCHMARK_RESULTS.md: median of 3 after a warmup, 2 workers each on pinned cores 2-3) is close to like-for-like; its nginx proxy config was not published, and the repo's bench/nginx_proxy.conf listens on 8081 and proxies to 8081 (a self-loop) while bench/backend_nginx.conf listens on 8080, the rproxy port, so none of the checked-in configs is what was measured. A pre-existing system nginx was running on the box during the June run (the first nginx-proxy attempt collided with it on :8082).
+- Both measured runs predate the first public commit (2026-08-18), the README contradicts itself (a measured HAProxy row, then 'HAProxy was not measured on the current rig'), and bench/rproxy.yaml sets log_level: debug, which the README says enables per-request logging and allocation; it listens on 8083 and was evidently not the measured config.
+- Unknown YAML keys are silently ignored, so a typo disables a filter without an error; rate_limit is per worker, so the effective global limit is about rate_limit x workers.
+
+**Status:** Active (last commit 2026-08-25) but a 0-star, 2-commit solo project with no LICENSE file, so reference only; the most comparable benchmark (June) used configs and code not in the public history, and the published three-proxy script reports best-of-3 as a median on unpinned, unequal worker counts.
+
+[repo](https://github.com/PipelineDude/rproxy) · [benchmark](https://github.com/PipelineDude/rproxy)
+
+##### Go net/http vs nginx on localhost (yosssi gist)  `Go`  `no license`  `abandoned`  `Tier D`
+
+2014 loopback wrk transcript: a Go net/http empty handler beats nginx 1.96x, but no row shows Go serving the same file faster.
+
+**Beats:** nginx (C); version and configuration not shown — On an unspecified 2014 Mac over loopback (wrk -t12 -c400 -d2s), nginx (unknown version and config) served about 31,781 req/s of a small file; Go net/http with GOMAXPROCS=2 reached 62,315 req/s with an empty handler that sends no file (1.96x, derived), 16,088 req/s with http.FileServer (0.51x, derived), and 59,517 and 25,581 req/s for the two go-fileserver cache variants, which this check finds returned empty bodies, so no measured row shows Go serving the same content faster than nginx.
+
+**Known shortcoming:** The headline 1.96x row is not like-for-like and 2 of 3 file-serving rows are slower; unequal connect errors (155 vs 0); sections 2 and 3 of the gist print identical output; nginx worker count unknown vs GOMAXPROCS=2; gist last updated 2014-06-23.
+
+**Known shortcoming:** Harness bug invalidates the 'like-for-like 1.87x' row: yosssi/go-fileserver (commits 3966915, 21d1e12, HEAD 73806fe) reads the file to EOF via http.ServeContent and then io.Copy fills the cache, so the cache is always empty; bytes per response (MB read over requests) are 116.1 for the io.Copy row, the same as the empty handler's 116, and 183.1 for the ServeContent row, a header-only reply with Content-Length 0, while nginx (294.0) and http.FileServer (242.8) each carry the about 59-byte body. The only valid file row is Go 16,088 vs nginx 31,781 req/s (0.51x). The cache map is written without locking (data race).
+
+**Independent measurement:** verifier batch-95 (wave 14)
+
+**Independent measurement:** enricher (wave 14 pass, 2026-10-12)
+
+**How:** The gist gives no explanation, and the fast Go rows do less work than nginx. Dividing each run's 'MB read' by its request count (derived from page data) gives 294 bytes per nginx response (a body of roughly 59 bytes plus nginx's headers) against 116 bytes for the Go empty handler, which is exactly a 2014 Go header-only 200 response; the Hello run comes out at 121 bytes, 5 more, which confirms the arithmetic. The two cached go-fileserver rows (59,517 and 25,581 req/s) are fast because they send no file at all (see gotchas).
+
+**Use it when:**
+- As a historical anecdote that Go's net/http could already answer about 60k empty requests per second on two cores of a 2014 Mac over loopback.
+- As a worked example for auditing server benchmarks: divide Transfer/sec by Requests/sec and check every row returns the same bytes before comparing throughput.
+- Not as a basis for picking Go over nginx for static files or proxying; use a current, configured comparison instead.
+
+**Skip it when:**
+- Static file serving: the only valid file-serving row, Go http.FileServer at 16,088 req/s, is about half of nginx's 31,781 req/s (0.51x, derived from page data).
+- Do not use yosssi/go-fileserver: its cache stores an empty copy of every file (bug described in gotchas), and handlers write the shared cache map without a lock, which is a data race under concurrent requests.
+- Any version- or tuning-sensitive decision: Go version, nginx version, nginx.conf (worker_processes, sendfile, keep-alive), served file and CPU are all unstated, and each run lasted 2 seconds with wrk on the same machine.
+- Modern stacks: the code and numbers are from June 2014 and have not been rerun.
+
+**Vs siblings:** Never as evidence: kawipiko (a Go static server) documents its NGINX config and measures matched Hello World serving, and the HttpArena entries (raw tokio, Kestrel, ioxide) compare against a known nginx 1.31.4 -O3 build doing the same endpoints. This gist is only a 2014 anecdote, and its one valid file-serving row favours nginx.
+
+**Gotchas:**
+- Harness flaw that invalidates the record's 'closest like-for-like' 1.87x row: go-fileserver (commits 3966915 'Add files' with io.Copy and 21d1e12 with http.ServeContent, both 2014-06-23, matching gist sections 6 and 5) serves a cache miss with http.ServeContent(w, r, ..., f), which reads f to EOF, and only then runs io.Copy(&buf, f) to fill the cache, so the cached data is always empty. Every later request gets an empty body: section 6 averages 116.1 bytes per response, the same as the empty handler's 116, and section 5 averages 183.1 bytes, exactly a header-only ServeContent reply with Content-Length: 0 and Content-Type text/html (derived from page data), while http.FileServer (242.8 bytes) and nginx (294.0 bytes) each sent a body of about 59 bytes. The current HEAD (73806fe, 2014-06-24) keeps the bug and also never stores the file size, so Content-Length stays 0.
+- The gist's section 6 shows the same code as section 5 (commenter Azareal, 2016-12-03); the io.Copy version exists only in the go-fileserver history. Section 3's first run is a byte-for-byte copy of section 2's output; its second run (60,837.67 req/s) is the real Hello result.
+- Effective concurrency differs: nginx and Go sections 2-4 report 'connect 155' socket errors (about 245 of 400 connections opened, consistent with a default 256 open-file limit on macOS, inference), while sections 5 and 6 report connect 0. nginx's worker count is unknown; the stock nginx.conf runs 1 worker against GOMAXPROCS=2 for Go.
+- A commenter asked for the nginx version and configuration in 2018 and got no answer; the gist has no licence, so its code is reference only.
+
+**Status:** Abandoned since 2014-06-23, no licence (reference only), and the evidence for the record's file-serving win is invalid (the cached server sent empty responses, as in the stb-zip and Pipa precedents), so the record should be rejected or at least moved to tier D with the claim corrected to 'Go slower than nginx on the only valid file-serving row'.
+
+[repo](https://gist.github.com/yosssi/4d719cccdf185259ea1d) · [benchmark](https://gist.github.com/yosssi/4d719cccdf185259ea1d)
 
 ### parsing-and-text
 
