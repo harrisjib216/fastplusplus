@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/markreedz/mrloop",
+  "one_liner": "Tiny single-threaded C event loop on io_uring; README echo test shows 1.51x an unnamed epoll server.",
+  "what_it_does": "A callback event loop for Linux C programs built on liburing: TCP server and client sockets, timerfd timers, delayed callbacks (mr_call_after, mr_call_soon) and file readv/writev all go through one io_uring. The application gets an accept callback that returns a per-connection context and hands back its own read buffer, a read callback per completed read, and queues replies with mr_writev or mr_writevcb. It is a different API from epoll, libev or libuv, not a drop-in.",
+  "how_it_is_fast": "Completion-based I/O through io_uring: a readiness POLL_ADD is re-armed per connection, then a readv is submitted into the connection's buffer, and reply writevs are queued without a syscall and sent in the same io_uring_enter that re-arms the next poll (or once more than 64 SQEs are pending). The saving over a classic epoll_wait/read/write loop comes from coalescing the write and the poll re-arm into one submission. It does not use later io_uring features such as multishot poll or recv, provided buffers, registered files or SQPOLL, and it handles one completion per loop iteration.",
+  "when_to_use": [
+    "A small single-threaded Linux (kernel 5.4.1+) C server with a strict request/response (ping-pong) protocol and well under 1,000 concurrent connections.",
+    "Learning or prototyping how an io_uring readiness-plus-readv event loop is structured; the whole library is one ~570-line C file and one header.",
+    "Programs that want socket I/O, file readv/writev at an offset and timers driven by one ring without pulling in libuv or Boost.Asio.",
+    "Vendoring a starting point for your own io_uring loop that you are prepared to harden yourself."
+  ],
+  "when_not_to_use": [
+    "More than about 1,018 open file descriptors: per-connection event slots are fixed arrays of MAX_CONN 1024 indexed by fd with no bounds check.",
+    "Pipelined or streaming protocols, or anything that must handle short writes or write errors: completions of mr_writev are discarded unread.",
+    "Multi-threaded or multi-loop programs: the submit counter, the last-accepted fd and the client read buffer are file-level statics shared by every loop.",
+    "Portable code (non-Linux), IPv6 servers (mr_tcp_server and mr_connect are AF_INET only) or production use: the todo file still lists 'Add tests' and notes completion-queue drops on overflow.",
+    "Workloads where io_uring is known to tie or lose to epoll at high connection counts; the README's own gnet row shows mrloop at 0.87x of a Go epoll loop."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "liburing (the Makefile unpacks /usr/lib/liburing.a into libmrloop.a)",
+    "min_toolchain": "C99 (for-loop declarations); built with gcc -O3; Linux kernel 5.4.1+ per README; header has extern \"C\" guards for C++",
+    "platforms": "Linux only (io_uring, timerfd); IPv4 TCP only",
+    "thread_safety": "Not documented; not thread-safe in practice because num_sqes, mrfd and the 32 KB client read buffer are static globals in mrloop.c shared by all loops.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Memory-safety bug: loop->read_events[fd] and loop->read_data_events[fd] are arrays of MAX_CONN 1024 inside mr_loop_t, indexed by the raw accepted or connected fd with no bounds check (the 2019 source even has the check '//if (cfd >= MAX_CONN) { close(cfd); break; }' commented out), so fd 1024 and above aliases or overruns neighbouring fields.",
+    "mr_writev, mr_writevcb and mr_readvcb only call io_uring_submit once more than 64 SQEs are queued; a lone write leaves the process only when something else submits (the next poll re-arm in the read path) or the caller uses mr_flush or mr_writevf. Issue #4 ('echo_server does not echo') and issues #6 and #7 trace back to this; the owner closed them in April 2024 saying the need to flush 'has been documented', but neither the README nor mrloop.h says so. io_uring_get_sqe results are not NULL-checked on the write paths of a 128-entry ring.",
+    "Harness caveat behind the numbers: the echo example reads into and writes from the same 64 KB buffer and ignores short reads, short writes and nread < 0 (issue #5). That is safe only because rust_echo_bench is strict ping-pong (one message in flight per connection, length-only check). The gnet row was produced with gnet-benchmarks, whose echo load generator is tcpkali (streaming, content not verified), where a pending writev can be overwritten by the next readv into the same buffer; whether that run echoed correct bytes was not shown.",
+    "_accept calls exit() on any accept or fcntl error (EAGAIN, EMFILE) and accepts one connection per POLLIN with a listen backlog of 32; the fcntl uses F_GETFD instead of F_GETFL; mr_add_timer truncates fractional seconds at or above 1 s (1.5 becomes 1)."
+  ],
+  "pick_this_over_siblings_when": "Pick mrloop over the Asio io_uring backend, Condy or uring_exec only when you want a tiny dependency-light C loop to read or vendor; those siblings are maintained and C++, and frevib/io_uring-echo-server is the better-documented io_uring-vs-epoll echo comparison. For portable production use, libhv or libev remain the safer choices.",
+  "verified_claims_summary": "The 1.51x row (288,169 vs 191,011 responses/s) dates from the 2019-11-20 README: examples/echo_server.c on io_uring against an epoll echo server that is not named or published, driven by haraldh/rust_echo_bench (one client thread per connection, ping-pong, length check only) with connection count, message size, kernel, compiler version and CPU unstated (the tool defaults are 50 connections, 512 bytes, 60 s). The gnet row (mrloop 2,128,669 vs gnet 2,438,766 R/s, 0.87x) was added on 2024-03-26 with a different harness (gnet-benchmarks: tcpkali, Go servers in multi-threaded mode, 1,000 to 10,000 connections) and an unstated configuration, so the two rows are separate runs more than four years apart.",
+  "status_note": "Stale since 2024-04-13 (27 commits, 48 stars, all five issues closed without code changes in April 2024) but MIT-licensed and small enough to vendor; fix the fd-table bounds, write-completion handling and submission flushing before production use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/README.md",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/mrloop.h",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/mrloop.c",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/examples/echo_server.c",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/todo",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/HEAD/Makefile",
+    "https://github.com/MarkReedZ/mrloop/issues?q=is%3Aissue",
+    "https://github.com/MarkReedZ/mrloop/issues/4",
+    "https://github.com/MarkReedZ/mrloop/issues/5",
+    "https://github.com/MarkReedZ/mrloop/issues/6",
+    "https://github.com/MarkReedZ/mrloop/issues/7",
+    "https://github.com/MarkReedZ/mrloop/commits",
+    "https://github.com/MarkReedZ/mrloop/commits/master/README.md",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/99814f2adfd8321af11fa3ef94e96ec40a60723d/README.md",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/2ccddb253eab96500c752a42f6690bc169a84133/README.md",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/47ad1e5f4865959f58a9ddfc9847dd7dc2231824/README.md",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/47ad1e5f4865959f58a9ddfc9847dd7dc2231824/mrloop.c",
+    "https://raw.githubusercontent.com/MarkReedZ/mrloop/47ad1e5f4865959f58a9ddfc9847dd7dc2231824/examples/echo_server.c",
+    "https://raw.githubusercontent.com/haraldh/rust_echo_bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/haraldh/rust_echo_bench/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/gnet-io/gnet-benchmarks/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

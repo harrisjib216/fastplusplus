@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/komrad36/fastthreadpool",
+  "one_liner": "183-line header: an unbounded MPMC work queue of plain function pointers with spin-bit locking; no benchmark against any thread pool.",
+  "what_it_does": "Despite the name, FastThreadPool is only the shared work queue of a thread pool: AddWork(void f()) enqueues a plain function pointer and RemoveWork() dequeues one or returns nullptr when the queue is empty. It creates no threads, has no worker loop, no futures, no task arguments and no captures, so the caller writes the worker threads, the idle policy and any data passing (globals or captureless lambdas only). It is not a drop-in for std::async, boost::asio::thread_pool or BS::thread_pool.",
+  "how_it_is_fast": "It is a singly linked FIFO in the style of the Michael-Scott two-lock queue, with the two locks folded into the pointers: producers claim the tail by CAS-setting bit 0 of m_pTail, consumers claim the head by CAS-swapping m_pHead to the sentinel value 1, and waiters spin with _mm_pause. Head and tail sit on separate 64-byte cache lines (alignas(64)), so producers and consumers mostly touch different lines and an uncontended enqueue or dequeue is one CAS plus a couple of stores. Nothing in the repository measures how fast this is.",
+  "when_to_use": [
+    "You are writing your own worker threads on x86-64 and want a tiny, dependency-free MPMC queue of void(*)() jobs to read and adapt rather than a full pool.",
+    "Teaching or study material: a compact example of a two-lock linked-list queue with tag-bit locks and annotated (but unproven) memory orders.",
+    "Jobs are global functions with no arguments and no results, and you already have your own sleep/wake policy for idle workers."
+  ],
+  "when_not_to_use": [
+    "You need a real thread pool (worker threads, std::function or move-only callables, arguments, futures, wait-for-all): use BS::thread_pool, dp::thread_pool, riften::Thiefpool or inkooboo/thread-pool-cpp instead.",
+    "ARM, POWER or other weakly ordered CPUs: the consumer reads the tail with relaxed loads before reading the old head's next pointer, so the C++ memory model does not guarantee it sees the link the producer published (see gotchas); only x86 TSO hides this.",
+    "Latency-sensitive systems where a preempted thread must not stall others: a producer holding the tail tag or a consumer holding the head sentinel blocks everyone else, so despite the README it is not lock-free in the formal sense.",
+    "Allocation-sensitive hot paths: every AddWork does a new and every RemoveWork a delete, with no allocator hook or node pooling.",
+    "Anything that needs a measured speedup: there is no benchmark, test or comparison in the repository."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library <atomic>, <cstdint>; <emmintrin.h> when __SSE2__ is defined)",
+    "min_toolchain": "C++11 (std::atomic, alignas); not documented beyond that",
+    "platforms": "any target with std::atomic; the _mm_pause spin hint is emitted only when __SSE2__ is defined (GCC/Clang on x86), so on ARM and under MSVC the spin loops have no pause or yield; memory ordering is only safe on x86 (see gotchas)",
+    "thread_safety": "AddWork and RemoveWork may be called concurrently from any number of threads; construction and destruction must happen with no concurrent callers (the destructor walks and deletes the list without synchronization)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Memory-ordering flaw (analysis of fast_thread_pool.h, not reproduced): in RemoveWork the consumer loads m_pTail with memory_order_relaxed (L4, and relaxed CAS failure ordering) and, on seeing a tail different from the node it holds, reads pHead->m_next with acquire. The relaxed tail read creates no happens-before with the producer's release store of m_next (S4), so on ARM or POWER the consumer can see the new tail yet read a null next pointer, set m_pHead to nullptr and strand every queued and future item (RemoveWork then returns nullptr forever and the nodes leak). Making the L4 loads acquire would close it; x86 TSO never reorders the two loads.",
+    "The head hand-off store (S9) is relaxed, so a later consumer's acquire CAS on m_pHead synchronizes with nothing and its read of the plain (non-atomic) m_f field is formally a data race under the C++ memory model; it works in practice on x86 and through address dependencies on ARMv8, but sanitizers such as TSan may flag it.",
+    "MSVC does not define __SSE2__, so on Windows MSVC builds Pause() compiles to nothing and the spin loops busy-wait without a pause hint; RemoveWork on an empty queue returns nullptr immediately, so the caller's idle loop decides whether workers spin (the README's TODO says they should sleep).",
+    "AddWork takes void f() (a function pointer): lambdas with captures, std::function, member functions and arguments are not accepted, and new can throw std::bad_alloc out of AddWork."
+  ],
+  "pick_this_over_siblings_when": "Pick it over inkooboo/thread-pool-cpp, nexus or BS-style pools only when you want a few dozen lines of queue code to vendor into your own x86-only worker design; every catalogued sibling (thread-pool-cpp, nexus, dp::thread_pool, riften::Thiefpool) ships worker threads, callable wrappers and at least a first-party benchmark, which this repository lacks.",
+  "verified_claims_summary": "Nothing was measured: the README's only claim is 'a super fast lock-free (though not always wait-free) thread pool', with no baseline, compiler, hardware or benchmark code, and no comparison against std::async, boost::asio::thread_pool or BS::thread_pool exists.",
+  "status_note": "Abandoned after five commits on 2021-10-18 and 2021-10-19 (the last one, 'update consume operations', made m_next atomic and added the acquire load), with no issues, tests or releases; MIT-licensed and small enough to vendor, but the tail loads in RemoveWork need acquire ordering before use on ARM.",
+  "sources_read": [
+    "https://github.com/komrad36/FastThreadPool",
+    "https://github.com/komrad36/FastThreadPool/issues",
+    "https://github.com/komrad36/FastThreadPool/commits/master",
+    "https://github.com/komrad36/FastThreadPool/commit/55670cf",
+    "https://raw.githubusercontent.com/komrad36/FastThreadPool/HEAD/README.md",
+    "https://raw.githubusercontent.com/komrad36/FastThreadPool/HEAD/fast_thread_pool.h"
+  ],
+  "confidence": 0.75
+}

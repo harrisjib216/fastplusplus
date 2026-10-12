@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/tidwall/redcon.c",
+  "one_liner": "Small C framework for Redis-protocol (RESP) servers on epoll/kqueue; its toy clone outruns Redis 6.0.6 under deep pipelining.",
+  "what_it_does": "redcon.c parses RESP and inline telnet commands off the socket and hands each command to one user callback as an argument vector, with helpers to write RESP replies (string, error, int, bulk, array, null). You supply the command table and the data store; the library provides the server, connection handling, a periodic tick hook and a sync hook that runs before replies are flushed. It is a C port of tidwall's Go redcon, runs single-threaded via redcon_main or across threads via redcon_main_mt, and is not a drop-in Redis replacement.",
+  "how_it_is_fast": "The event loop is tidwall/evio.c: level-triggered epoll (kqueue on macOS/BSD), each readable socket drained into a 16 KB stack buffer until EAGAIN, commands parsed in place when no partial packet is pending, and argument buffers reused per connection so steady-state parsing does not allocate. Replies are appended to a per-connection buffer and flushed with one write() after the batch of events, so a 128-command pipeline costs a few syscalls. The big pipelined gains in the README come mostly from the example clone doing far less per command than Redis (a Robin Hood hashmap of single-allocation key/value pairs, no command-table ACL checks, stats, keyspace notifications or persistence).",
+  "when_to_use": [
+    "Building a custom service that speaks the Redis protocol (cache front, proxy, embedded store, test double) so existing Redis clients and redis-cli can talk to it.",
+    "Pipelined workloads (pipeline depth 8 and up) where a minimal command path should beat a general-purpose server; the README shows 1.4x to 2.1x over Redis 6.0.6 at depths 8 to 128.",
+    "Single-threaded C servers on Linux or macOS that want RESP parsing and reply encoding without writing them by hand.",
+    "Prototyping a multi-threaded RESP server with redcon_main_mt, provided you bring your own locking."
+  ],
+  "when_not_to_use": [
+    "As a Redis replacement: the example clone only does SET/GET/DEL/KEYS/TTL/PING/FLUSHDB/DBSIZE/QUIT with no persistence, replication, other data types, ACLs, pub/sub or scripting.",
+    "Unpipelined request/response traffic: at pipeline 1 the README shows parity with Redis (about 114.5k req/s each), so there is no speedup to collect.",
+    "Windows (evio.c has only epoll and kqueue back ends) or TLS-terminated endpoints (no TLS support in the library).",
+    "Untrusted clients without review: a negative bulk length crash path was only fixed on 2026-06-29, there is no test suite in the repo and the library has 58 stars.",
+    "When you only need an event loop: libev, libhv or picoev give the loop without RESP framing."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "evio.c v0.5.3 and buf.c (imported with tidwall's pkg.sh from the .package manifest); the example clone also uses tidwall/hashmap.c; pthreads for redcon_main_mt",
+    "min_toolchain": "C99-compatible C compiler (README builds with plain 'cc *.c'); not otherwise documented",
+    "platforms": "Linux (epoll), macOS and BSD (kqueue); no Windows",
+    "thread_safety": "Single-threaded by default; redcon_main_mt runs one evio loop per thread with connections spread across them, and the command callback must synchronize shared state itself (the example clone uses one pthread rwlock when built with -DUSEMT).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The benchmark table dates from the first commit (2020-07-27, evio.c v0.3.2) and was never re-run: the args move to the connection, multithread support, five evio.c updates and the 2026 parser fix all came later, Redis 6.0.6 was the only Redis tested, the build line has no -O flag, Redis's persistence settings are not stated (its default save points can trigger BGSAVE during the 87-second pipeline-1 run), and redis-benchmark with default 3-byte values ran on the same 8-vCPU c5.2xlarge as the server.",
+    "Race in the optional -DUSEMT clone build (PR #2, merged 2026-06-29): evio runs the tick hook on one thread, and the clone's tick() deletes expired keys from the shared hashmap and writes server->now without taking the rwlock while other threads run GET and SET; it also drops expired pairs without pair_free, which leaks them in every build.",
+    "The README's quick-start clone declares 'int vallen' and passes &vallen to redcon_args_at, whose length parameter has been size_t * since 2021-01-26; that writes 8 bytes into a 4-byte int (GCC 14 rejects the incompatible pointer by default) and the sample also stores keys as NUL-terminated strings, so keys are not binary safe. example/clone.c handles both correctly.",
+    "MAXARGSZ allows 512 MB bulk arguments, but the clone stores key and value lengths in 29-bit signed bitfields (maximum 268,435,455), so values between 256 MB and 512 MB overflow the stored length."
+  ],
+  "pick_this_over_siblings_when": "Pick redcon.c over a bare loop such as libev, libhv, picoev or mrloop when the wire protocol is RESP and you want parsing, reply encoding and write coalescing done for you; pick tidwall's Go redcon or redcon.rs when the rest of the service is in those languages.",
+  "verified_claims_summary": "The author's July 2020 run on one AWS c5.2xlarge (Intel Xeon 3.6 GHz, model not named) drove both the single-threaded example clone and stock Redis 6.0.6 with redis-benchmark -t set,get -r 1000000 -n 10000000 at pipeline depths 1 to 128 on the same host. The clone matched Redis at pipeline 1 and reached 2,122,295 vs 990,307 SET/s (2.14x) and 2,230,151 vs 1,208,751 GET/s (1.85x) at pipeline 128, which measures a minimal key/value command path against full Redis, not the event loop on equal work; compiler, flags and the Redis configuration are not given.",
+  "status_note": "Light maintenance (25 commits, last on 2026-06-29 with a parser fix and a merged multithreaded clone build), MIT-licensed and two small C files plus evio.c, so easy to vendor, but the benchmark is six years old and untested against current Redis or Valkey.",
+  "sources_read": [
+    "https://github.com/tidwall/redcon.c",
+    "https://github.com/tidwall/redcon.c/commits",
+    "https://github.com/tidwall/redcon.c/commits/main/README.md",
+    "https://github.com/tidwall/redcon.c/issues?q=is%3Aissue",
+    "https://github.com/tidwall/redcon.c/issues/1",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/redcon.c",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/redcon.h",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/.package",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/example/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/HEAD/example/clone.c",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/51b431aa6e3c4cfedda2d9242da4e6192be96ba6/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/51b431aa6e3c4cfedda2d9242da4e6192be96ba6/example/README.md",
+    "https://raw.githubusercontent.com/tidwall/redcon.c/51b431aa6e3c4cfedda2d9242da4e6192be96ba6/.package",
+    "https://raw.githubusercontent.com/tidwall/evio.c/HEAD/evio.c"
+  ],
+  "confidence": 0.75
+}
