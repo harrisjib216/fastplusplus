@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/klauspost/reedsolomon",
+  "one_liner": "Go Reed-Solomon erasure coder with generated SSSE3/AVX2/AVX-512/GFNI, NEON/SVE and ppc64le kernels; 5-19x its own pure-Go path.",
+  "what_it_does": "Computes parity shards over GF(2^8) for k data + m parity byte slices and reconstructs up to m missing shards (Encode, Verify, Reconstruct, ReconstructData, ReconstructSome), with Split/Join helpers, a streaming io.Reader/io.Writer API, progressive EncodeIdx/DecodeIdx and Update. It is a Go port of Backblaze's JavaReedSolomon (same Vandermonde matrix and output), with Cauchy, Jerasure-compatible, PAR1, XOR-only and custom matrices as options. Above 256 total shards (or on request) it switches to a Leopard-RS-compatible O(N log N) FFT codec in GF(2^8) or GF(2^16) for up to 65,536 shards.",
+  "how_it_is_fast": "The x86 kernels use the split-nibble table method from 'Screaming Fast Galois Field Arithmetic' (two 16-entry tables applied with PSHUFB/VPSHUFB), and on AVX-512/AVX GFNI CPUs a GF2P8AFFINEQB 8x8 bit-matrix per coefficient instead of table lookups. avo programs in _gen generate one fused kernel per (inputs x outputs) shape up to 10x10 (mulAvxTwo_10x4_64, mulGFNI_..., mulNeon_10x10), so every input block is loaded once and all parity outputs stay in registers; larger shapes are tiled in 10x10 blocks sized to L1/L2 (perRound from cpuid cache sizes). CPU features are detected at run time through klauspost/cpuid, and the Leopard mode replaces O(k*m) matrix multiplication with additive FFTs.",
+  "when_to_use": [
+    "Go storage or transport code (object stores, backup, FEC over UDP) that needs k+m erasure coding with k+m up to 256 and shards of tens of KB or more, where it runs at tens to hundreds of GB/s per encoder.",
+    "amd64 servers with AVX2, and especially AVX-512 plus GFNI, where the GFNI kernels reach 241-274 GB/s on the README's 5+2, 8+8 and 10+4 rows.",
+    "arm64 servers (Graviton, Kunpeng, Apple) via generated NEON and SVE kernels, and ppc64le via its own assembly (about 9x over pure Go in the README).",
+    "Very wide codes (hundreds to 65,536 shards) via the Leopard GF16 mode, or 20+ shards via WithLeopardGF(true) when encode speed matters more than reconstruction speed.",
+    "When byte compatibility with Backblaze JavaReedSolomon, reed-solomon-erasure (Rust) or the Jerasure matrix layout is required."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: this is a Go package with Go-ABI assembly; the README links reedsolomon-c (a compatible C port) but makes no comparison with Intel ISA-L (intel/isa-l, catalogued separately), the usual C baseline.",
+    "Platforms without its assembly (riscv64, s390x, wasm, 386) or builds with -tags=noasm: these run the pure-Go table path, which for fewer than 20 total shards lazily builds a 32 MiB two-byte multiplication table (mulTable16, 256 x 65536 uint16).",
+    "Reconstruction-heavy Leopard workloads: Leopard GF16 encodes 5.6-27 GB/s but recovers only 1.2-3.2 GB/s in the README table, and the reconstruction-matrix cost cannot be cached at high shard counts.",
+    "Data-integrity detection: the encoder cannot tell which shard is corrupt; callers must hash each shard and pass known-bad ones as nil.",
+    "Short-lived encoders: New() builds matrices and pools, and issue #319 (Kunpeng-920) showed a 33% throughput drop with one encoder per call under heavy concurrency; the maintainer says encoders are meant to be reused."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/klauspost/cpuid/v2 (golang.org/x/sys indirect); avo only to regenerate the amd64 assembly (_gen module)",
+    "min_toolchain": "Go 1.24 (go.mod go 1.24); CI tests Go 1.24.x, 1.25.x and 1.26.x",
+    "platforms": "amd64 (SSE2/SSSE3/AVX2/AVX-512/GFNI, runtime dispatch), arm64 (NEON, SVE), ppc64le (assembly); pure Go elsewhere (CI runs 386 tests). CI covers Linux, macOS, Windows and ubuntu-24.04-arm.",
+    "thread_safety": "Not stated in the README or Encoder doc; the repo's BenchmarkParallel and the maintainer's reply in issue #319 share one encoder across goroutines, and the inversion cache is guarded by an RWMutex. Encode itself fans out to internal goroutines (WithMaxGoroutines, WithAutoGoroutines).",
+    "drop_in_for_baseline": "partial: the pure-Go path is the same package with SIMD switched off (WithAVX2(false) and similar), so the speedup is automatic; it does not replace other erasure-coding libraries unless their matrix layout matches (Backblaze, Jerasure and custom matrices are supported)."
+  },
+  "gotchas": [
+    "Harness asymmetry behind the README table: New() caps the goroutines that split one Encode call at codeGenMaxGoroutines = 8 when the AVX2 code-gen path is usable and at gfniCodeGenMaxGoroutines = 4 when GFNI is, while the pure-Go and SSSE3 paths get maxGoroutines sized by WithAutoGoroutines (rounded up to a multiple of GOMAXPROCS and usually 2x GOMAXPROCS, so 64 at the table's 32 threads). So '32 threads' describes GOMAXPROCS, not the workers each column used, and the per-core gain of AVX2/GFNI over pure Go is larger than the 5-19x wall-clock ratios. This favours the baseline, so the claim is not inflated, but the columns are not equal-thread comparisons.",
+    "Methodology gaps: no CPU model, Go version or command line is given (README benchmark names carry a -32 GOMAXPROCS suffix and a New() comment tunes a switchover 'for Zen5', but neither names the test CPU); MB/s counts data plus parity bytes, so data throughput is lower by k/(k+m); the same 7-70 MB of buffers are re-encoded in place, so the 5+2, 8+8 and 10+4 rows may be cache-resident on a large-L3 part while 50+20 (70 MB) is memory-bound, which fits GFNI gaining only 7% over AVX2 there. The README also does not say whether the AVX2 column disabled the separate AVX+GFNI path (-no-avx-gfni).",
+    "Several releases were retracted or patched for crashes, not wrong output: v1.11.6 slice-bounds panic in codeSomeShardsAVXP (issue #240), v1.12.2 Graviton4 build (PR #283), a ReconstructSome segfault from PR #267 fixed in PR #303 (issue #302), an arm64 NEON out-of-bounds read in mulNeon_10x10 fixed in v1.13.3 (#329), a SIGILL on GFNI CPUs without AVX-512 fixed in v1.13.2 (#325), and a GFNI-on-non-GFNI-CPU test crash reported by Debian fixed in v1.14.2 (#343/#344).",
+    "The checked-in amd64 assembly cannot currently be regenerated from scratch (issue #346, open: deleting galois_gen_amd64.s breaks go generate), and -tags=nopshufb (the README's patent mitigation) removes the PSHUFB kernels, so CPUs without GFNI fall back to the pure-Go path with its 32 MiB table."
+  ],
+  "pick_this_over_siblings_when": "The Go-assembly siblings (cespare/xxhash, lukechampine/blake3, zeebo/blake3, go-and, pospop, minio/md5-simd) solve hashing, bitwise and popcount problems; pick this one when a Go program needs erasure coding, where it is the de facto SIMD implementation. Like those siblings its headline ratio is asm versus the same package's pure-Go path, not versus a C library such as ISA-L.",
+  "verified_claims_summary": "The README Performance table, refreshed in PR #336 (2026-04-21), encodes 1 MB random shards with GOMAXPROCS 32 on an unnamed x86 CPU with an unstated Go version: pure Go 3.5-40.7 GB/s versus AVX2 44.7-202 GB/s (4.97x for 5+2 up to 12.7x for 50+20) and AVX-512 GFNI 47.7-274 GB/s (5.94x to 19.1x), with throughput counted over data plus parity bytes (ratios derived from page data). Per-call goroutine caps (8 for AVX2, 4 for GFNI, about 2x GOMAXPROCS for pure Go) mean the SIMD columns used fewer cores than the baseline.",
+  "status_note": "Actively maintained (v1.14.2 released in August 2026, last commit 2026-09-25, CI on three Go versions and four OS targets) and MIT-licensed; widely used, with a history of crash fixes and retracted releases but no reported wrong-parity bug in the issues reviewed.",
+  "sources_read": [
+    "https://github.com/klauspost/reedsolomon",
+    "https://github.com/klauspost/reedsolomon/commits",
+    "https://github.com/klauspost/reedsolomon/releases",
+    "https://github.com/klauspost/reedsolomon/issues?q=is%3Aissue",
+    "https://github.com/klauspost/reedsolomon/pull/336",
+    "https://github.com/klauspost/reedsolomon/pull/283",
+    "https://github.com/klauspost/reedsolomon/issues/240",
+    "https://github.com/klauspost/reedsolomon/issues/284",
+    "https://github.com/klauspost/reedsolomon/issues/302",
+    "https://github.com/klauspost/reedsolomon/issues/319",
+    "https://github.com/klauspost/reedsolomon/issues/328",
+    "https://github.com/klauspost/reedsolomon/issues/343",
+    "https://github.com/klauspost/reedsolomon/issues/346",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/README.md",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/go.mod",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/benchmark/main.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/reedsolomon.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/reedsolomon_test.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/options.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_amd64.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_noasm.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_nopshufb_amd64.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_gen_nopshufb_amd64.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_gen_switch_amd64.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/galois_arm64.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/inversion_tree.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/leopard8.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/unsafe.go",
+    "https://raw.githubusercontent.com/klauspost/reedsolomon/HEAD/.github/workflows/go.yml"
+  ],
+  "confidence": 0.82
+}

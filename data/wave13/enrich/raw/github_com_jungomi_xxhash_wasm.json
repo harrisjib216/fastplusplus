@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/jungomi/xxhash-wasm",
+  "one_liner": "Hand-written WebAssembly XXH32/XXH64 for browsers and Node, tens to hundreds of times faster than pure-JS xxhashjs.",
+  "what_it_does": "Computes xxHash XXH32 and XXH64 (the classic algorithms, not XXH3 or XXH128) from JavaScript. You await one instantiation (`await xxhash()`, about 1-2 ms), then call synchronous `h32`/`h64` on strings, `h32Raw`/`h64Raw` on Uint8Arrays, the `*ToString` hex variants, or a crypto-like streaming API (`create32`/`create64` with `update`/`digest`). XXH32 returns a u32 number and XXH64 returns a BigInt, so the API differs from xxhashjs, which returns cuint objects and splits 64-bit seeds.",
+  "how_it_is_fast": "The kernel is a hand-written WAT module (src/xxhash.wat, optimised with binaryen `wasm-opt -O4`) that uses native wasm `i64.mul`/`i64.rotl` for the four-lane xxHash stripe loop, where xxhashjs emulates 64-bit arithmetic with cuint objects. Strings are UTF-8 encoded straight into wasm linear memory with `TextEncoder.encodeInto`, and the 64-bit seed and result cross the JS/wasm boundary as BigInt through the wasm BigInt integration, so no hi/lo splitting or extra copies happen. The streaming state lives in a small JS-held blob that is copied into linear memory around each wasm call, and bulk-memory `memory.copy` handles the partial-stripe buffer. There is no SIMD.",
+  "when_to_use": [
+    "You need a fast non-cryptographic 32- or 64-bit hash (cache keys, content fingerprints, dedup, ETags) in a browser, Node, Deno or Cloudflare Workers, and you control both producer and consumer of the hash.",
+    "You must stay compatible with existing XXH32/XXH64 digests produced by native xxHash, for example matching hashes computed server-side in C, Go or Rust.",
+    "You are replacing xxhashjs: one-shot 4-byte XXH64 drops from about 1.9 us to about 40 ns, and 1 MiB inputs run near 11-16 GB/s instead of 28-37 MB/s in the third-party harness.",
+    "Bundle size matters: about 2.3 kB gzipped with the wasm embedded, against 10.3 kB for xxhashjs.",
+    "You hash large inputs incrementally (file uploads, streams) with 4 KiB or larger chunks through `create64().update()`."
+  ],
+  "when_not_to_use": [
+    "You need XXH3 or XXH128, the variants native xxHash recommends for speed: they are not implemented (issue #29, open since January 2022), whereas hash-wasm ships both.",
+    "Your engine lacks BigInt-in-wasm, bulk memory or TextEncoder.encodeInto: Chrome before 85, Firefox before 79, Safari before 15, Node before 15, and some embedded WebViews (issue #34: 'references are not enabled' in an Excel-for-Mac WKWebView). The maintainer's advice is to pin 0.4.2, which is 3-4x slower.",
+    "Your keys are tiny and per-call latency is critical: in the haya32x64 harness the pure-JS haya32x64 hashes 4-byte keys in 22.9 ns versus 39.4 ns, and hash-wasm's own Chrome benchmark puts hash-wasm about 2.1x ahead at 32 bytes (derived from page data).",
+    "You stream in very small chunks: each `update` copies the state blob in and out of wasm memory, so 64-byte chunks reach only 1,130 MB/s on EPYC 9R45 versus 16,863 MB/s with 64 KiB chunks.",
+    "You need a cryptographic or keyed hash: xxHash offers no collision resistance against adversarial input."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (the wasm binary is embedded in the ESM, CJS and UMD bundles; a separate .wasm file is used for the workerd build)",
+    "min_toolchain": "Chrome 85, Edge 79, Firefox 79, Safari 15, Node 15 (needs BigInt-in-wasm, bulk memory and TextEncoder.encodeInto); rebuilding needs binaryen wasm-opt and rollup",
+    "platforms": "any JavaScript engine meeting those features; browsers, Node (ESM or CommonJS), Cloudflare Workers through the 'workerd' export condition",
+    "thread_safety": "Each `await xxhash()` creates its own wasm instance; JavaScript runs one thread per realm, so use one instance per Worker. Streaming hashers on one instance save and restore their state around every call (src/xxhash.js), so interleaving several streams is safe.",
+    "drop_in_for_baseline": "partial: same XXH32/XXH64 outputs as xxhashjs, but a different API (async instantiation, then synchronous calls returning number/BigInt instead of cuint objects; 64-bit seed is one BigInt, not two 32-bit halves)"
+  },
+  "gotchas": [
+    "Wasm linear memory only grows: one-shot APIs copy the whole input into it (strings reserve 3x their length for encodeInto; Raw APIs `memory.set` the Uint8Array, with no zero-copy offset/length variant, issue #40), and the instance keeps that memory for its lifetime. Hashing one 100 M-character string leaves about 300 MB attached to the instance, so use streaming or a short-lived instance for large inputs.",
+    "The 64-bit APIs take and return BigInt: `h64(str, 0)` with a Number seed throws a TypeError, and results need `.toString(16).padStart(16, '0')` or `h64ToString` for hex output. The README says the string conversion can cost up to 20% on small inputs.",
+    "First-party harness flaw (minor): bench/index.js runs `.toString(16)` on every xxhashjs result but returns raw numbers/BigInt for xxhash-wasm, adding work to the baseline at small sizes; the README prose ('up to 90x/350x') also understates its own table (up to about 141x/678x, derived from page data). The third-party haya32x64 harness consumes both digests without string conversion, and its numbers stand.",
+    "Multi-chunk streaming is barely tested: the known-answer vectors (inputs up to 74 bytes plus one 65,537-byte string) go through a single `update`, and the only split-input tests hash 'helloworld' (10 bytes), below one 16/32-byte stripe. So the buffered path that carries partial stripes across `update` calls has no known-answer test in the repo, and the haya32x64 benchmark does not check digests."
+  ],
+  "pick_this_over_siblings_when": "Against hash-wasm (the only catalogued sibling hashing xxHash): pick xxhash-wasm when you want only XXH32/XXH64 with synchronous calls returning numbers/BigInt and the smallest bundle. Pick hash-wasm when you need XXH3/XXH128 or other algorithms, or the fastest small-input XXH64: its README shows 101.66 vs 47.58 MB/s at 32 bytes and a tie at 1 MB (Chrome v131, Ryzen 9 7900X).",
+  "verified_claims_summary": "The third-party thevilledev/haya32x64 harness (Node 24.18.0, V8 13.6, public APIs, median of nine 150 ms samples, EC2 c8a.2xlarge AMD EPYC 9R45 and c8g.2xlarge Neoverse V2, pinned to one CPU) timed xxhash-wasm 1.1.0 XXH64 against xxhashjs 0.2.2. One-shot 4-byte keys took 39.4 vs 1,939.3 ns (about 49x) on EPYC and 63.9 vs 2,691.0 ns on Neoverse; 1 MiB throughput was 15,973 vs 37 MB/s and 10,738 vs 28 MB/s; 8-character strings took 59.2 vs 2,437.8 ns (ratios derived from page data). The first-party Benchmark.js table (x64 MacBook Pro, Node 17.3, CPU not stated) shows the same order of magnitude, with no native-C baseline in either harness.",
+  "status_note": "Stale since v1.1.0 (2024-11-19; the maintainer closed most open issues that day and declined a native-baseline benchmark), but MIT-licensed, dependency-free, about 2 kB, and implementing a frozen algorithm, so it is safe to vendor; no correctness bug was found behind the measured numbers.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/src/index.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/src/xxhash.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/src/xxhash.wat",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/src/index.workerd.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/rollup.config.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/types.d.ts",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/test/index.test.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/bench/index.js",
+    "https://raw.githubusercontent.com/jungomi/xxhash-wasm/HEAD/bench/package.json",
+    "https://github.com/jungomi/xxhash-wasm/issues?q=is%3Aissue",
+    "https://github.com/jungomi/xxhash-wasm/issues/27",
+    "https://github.com/jungomi/xxhash-wasm/issues/30",
+    "https://github.com/jungomi/xxhash-wasm/issues/31",
+    "https://github.com/jungomi/xxhash-wasm/issues/34",
+    "https://github.com/jungomi/xxhash-wasm/issues/40",
+    "https://registry.npmjs.org/xxhash-wasm/latest",
+    "https://raw.githubusercontent.com/thevilledev/haya32x64/main/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/thevilledev/haya32x64/main/bench/js.mjs",
+    "https://raw.githubusercontent.com/thevilledev/haya32x64/main/bench/package.json",
+    "https://raw.githubusercontent.com/Daninet/hash-wasm/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

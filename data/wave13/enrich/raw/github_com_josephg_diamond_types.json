@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/josephg/diamond-types",
+  "one_liner": "Rust Eg-walker text CRDT (wasm npm builds) merging editing histories 22-404x faster than Automerge and mostly faster than Yjs.",
+  "what_it_does": "Diamond-types is a collaborative plain-text data type: replicas record every insert and delete in an event graph (ListOpLog) and check out a document (ListBranch) at any version, so peers can edit offline and merge without a central server. The Rust API exposes ListOpLog/ListBranch. The wasm builds (npm diamond-types-node and diamond-types-web) expose OpLog with ins/del/checkout/toBytes/decode-and-add plus Branch.merge/get, so it is a different interface from Yjs or Automerge, not a drop-in. Only plain text is supported on master; JSON-style types live on the more_types branch.",
+  "how_it_is_fast": "It implements the Eg-walker algorithm (Gentle and Kleppmann, EuroSys 2025). Instead of keeping CRDT metadata in memory, it replays the event graph and builds temporary CRDT state only for concurrent sections, then discards it. Critical versions (points where all prior events precede all later ones) let it skip transformation entirely for sequential runs; that fast-forward path is why S1 takes 1.77 ms with it on versus 9.81 ms with it off. Records are run-length encoded and stored in an order-statistic B-tree (range tree) plus an ID-to-leaf B-tree, so position/ID mapping is O(log n). Loading for editing reads a cached copy of the final text rather than the history.",
+  "when_to_use": [
+    "Collaborative plain-text editors whose history is mostly sequential or turn-taking. The paper's S1-S3 traces merged in 1.77-3.58 ms vs Automerge 620-1,444 ms and Yjs 57-85 ms.",
+    "Apps that must open big documents instantly and keep steady-state memory to the text itself. Reloading the cached text took 0.012-0.12 ms, versus CRDTs whose load equals a full merge.",
+    "Offline or branch-heavy asynchronous workflows (A1, A2), where it was about 10x and 3.2x faster than Yjs and OT took up to an hour on A2.",
+    "Rust-native code or JS via wasm when you also need index-based (OT-style) positional updates to interoperate with simple peers."
+  ],
+  "when_not_to_use": [
+    "Highly concurrent real-time editing. On C1/C2 it took 56.1 and 82.6 ms, slower than Yjs on C2 (55.2 ms), 4.8x and 9.5x slower than Yrs 0.20 in the same artifact, and over a 16 ms frame budget.",
+    "Rich text, JSON/maps, or built-in undo/redo. Master is plain text only, and issues #3 (undo) and #11 (rich text) are open.",
+    "Projects that need a released, stable API. crates.io 1.0.0 (2022-08-25) and npm 1.0.2 (2023-05-15) predate the benchmarked code, v2.0.0 is unreleased (issues #44, #45), and master needs Rust 1.96.",
+    "Ingesting untrusted peer bytes without isolation. OpLog::load_from panicked on malformed input in 1.0.0 (issue #50, open), and master only gained a decode fuzzer and some panic fixes on 2026-07-31.",
+    "Teams wanting an ecosystem of network providers, persistence adapters and editor bindings comparable to Yjs or Automerge."
+  ],
+  "integration": {
+    "form": "crate (git master; crates.io 1.0.0 is outdated) or npm packages diamond-types-node / diamond-types-web built with wasm-pack",
+    "dependencies": "smartstring, str_indices, smallvec 2.0.0-alpha, rle (in-repo crate), bumpalo, jumprope, humansize, num_enum, crc, libc; lz4_flex optional (default feature)",
+    "min_toolchain": "Rust 1.96 for master (Cargo.toml rust-version); the paper used rustc 1.78; wasm-pack for the npm builds",
+    "platforms": "any Rust target including wasm32 (Node and browser packages); the artifact was tested on Linux only",
+    "thread_safety": "not documented; a merge or checkout is single-threaded work on one ListOpLog/ListBranch",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry behind the merge ratios. In egwalker-paper tools/diamond-types/crates/bench/src/main.rs, ListOpLog::load_from(&bytes) runs once outside Criterion's b.iter, and only oplog.checkout_tip() is timed. Automerge (AutoCommit::load in tools/paper-benchmarks/src/convert1.rs), Yrs (Update::decode_v2 plus apply_update) and Yjs (Y.applyUpdateV2 in tools/bench-yjs/bench-remote.js) are timed including parsing their serialized documents. DT's own decode time is not reported, so the ratios against CRDTs are overstated by an unknown amount, most on S1-S3 where DT's timed work is only 1.8-3.6 ms.",
+    "The flat Yjs/Yrs times are explained, not a bug. Their inputs are GC-enabled encode_state_as_update_v2 snapshots (yrs Options::default, deleted content dropped, runs merged), and the traces were duplicated to similar sizes (608k-947k keystrokes), so the Yjs 'merge' is a compacted-state load of comparable size per trace. Yrs 0.20.0 (8-13 ms) beats DT on C1, C2 and A2 even with DT's decode excluded.",
+    "Build and version drift. The paper footnote claims -C target-cpu=native, but no RUSTFLAGS or .cargo/config is in the artifact scripts, so a reproduction gets a generic build unless set by hand. The lockfile pins automerge 0.5.11 and yrs 0.20.0 against the paper's Automerge v0.5.9, and the README says results were regenerated with Rust 1.80 and Node v21 against the footnote's 1.78 and v22.2.0.",
+    "The 0.012-0.12 ms 'load' is reading the cached final text into a JumpRope from a temp file (opt_load bench), not loading the event graph. Any merge of concurrent remote edits still has to load and replay from the last critical version. No wasm build was benchmarked anywhere."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Automerge (Rust core to wasm) when load time, steady-state memory and merge speed on mostly sequential text dominate (22-404x faster merges in the native artifact). Prefer Yjs/ywasm or Loro when you need rich text, JSON types, a mature ecosystem, or mostly concurrent editing, where Yrs was faster than diamond-types in the same artifact.",
+  "verified_claims_summary": "The EuroSys 2025 Eg-walker artifact (Ryzen 7950x, native Rust release build with Criterion pinned to one core, Yjs 13.6 on Node) replayed each full editing trace into an empty document. Diamond-types took 1.77-82.6 ms vs Automerge's Rust load at 485-24,636 ms, which is 22-404x, derived from results/timings.json. Yjs took 55-88 ms, so diamond-types ranged from 32.5x faster on S1 to 0.67x (slower) on C2. Diamond-types' time excludes decoding its own file while the competitors' times include decoding theirs, and the wasm npm builds were never measured.",
+  "status_note": "Active (fuzz-driven fixes through 2026-09-02) and ISC-licensed, but still marked WIP: the published crate (1.0.0, 2022) and npm wasm packages (1.0.2, 2023) predate the benchmarked code, v2.0.0 is unreleased, and master requires Rust 1.96.",
+  "sources_read": [
+    "https://github.com/josephg/diamond-types",
+    "https://github.com/josephg/diamond-types/issues",
+    "https://github.com/josephg/diamond-types/issues/50",
+    "https://github.com/josephg/diamond-types/pull/54",
+    "https://github.com/josephg/diamond-types/commits/master",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/README.md",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/bench.sh",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/build_wasm.sh",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/INTERNALS.md",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/crates/dt-wasm/src/lib.rs",
+    "https://raw.githubusercontent.com/josephg/diamond-types/HEAD/crates/dt-wasm/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/README.md",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/step2b-benchmarks.sh",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/Makefile",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/collect.js",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/results/timings.json",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/results/dataset_stats.json",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/eg-walker.tex",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/bench-yjs/bench-remote.js",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/bench-yjs/package.json",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/paper-benchmarks/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/paper-benchmarks/Cargo.lock",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/paper-benchmarks/src/main.rs",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/paper-benchmarks/src/benchmarks.rs",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/paper-benchmarks/src/convert1.rs",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/diamond-types/crates/bench/src/main.rs",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/diamond-types/crates/bench/Cargo.toml",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/diamond-types/src/list/oplog.rs",
+    "https://raw.githubusercontent.com/josephg/egwalker-paper/HEAD/tools/diamond-types/src/list/merge.rs",
+    "https://crates.io/api/v1/crates/diamond-types",
+    "https://registry.npmjs.org/diamond-types-node"
+  ],
+  "confidence": 0.82
+}

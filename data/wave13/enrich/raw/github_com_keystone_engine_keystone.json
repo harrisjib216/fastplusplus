@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/keystone-engine/keystone",
+  "one_liner": "Embeddable multi-architecture assembler library cut down from LLVM 3.9's MC layer; claims over 10x smaller footprint than full LLVM.",
+  "what_it_does": "A C library (ks_open, ks_option, ks_asm, ks_free, ks_close) that turns a string of assembly into machine-code bytes in-process for Arm/Thumb, AArch64, MIPS, PowerPC, SPARC, SystemZ, Hexagon, x86 (16/32/64-bit), RISC-V and a lookup-table EVM mode, returning a malloc'd byte buffer plus a statement count. It is the assembler companion to disassembler and emulator libraries, aimed at binary patching, shellcode and exploit tooling, emulators and instrumentation, with a kstool CLI and bindings for Python, Rust, Go, Java, .NET, Ruby, NodeJS, Haskell, OCaml and others. It is not a drop-in for llvm-mc or GNU as: it emits raw bytes at a caller-given base address rather than object files, and resolves undefined symbols through an optional callback.",
+  "how_it_is_fast": "It is not faster at assembling: the core is LLVM 3.9.0svn's MC layer (lexer, generic asm parser, per-target AsmParser and MCCodeEmitter tables, renamed to namespace llvm_ks) with IR, optimisers, code generators and the other LLVM subsystems removed, so the library and its build shrink while the per-instruction work stays LLVM's. The footprint claim (more than 10x smaller in size and memory, 30 s versus 15 min to build) follows from that scope cut. Each ks_asm call builds a fresh MCContext, code emitter, object streamer and parser (and re-initialises NASM directives every call, a TODO in ks.cpp), so setup cost dominates when assembling one instruction per call.",
+  "when_to_use": [
+    "Assembling text to bytes inside a process (binary patchers, shellcode and exploit tooling, fuzzers, emulator front-ends, debugger plugins) for several ISAs through one C API or a scripting-language binding",
+    "When linking all of LLVM just to reach the MC assembler is too heavy: the PyPI 0.9.2 manylinux x86_64 wheel carrying every backend is 1.77 MB compressed (1.37 MB on win_amd64), and LLVM_TARGETS_TO_BUILD trims architectures further",
+    "Shellcode-style input that mixes code and data in one section, or NASM-flavoured x86 syntax, which the project page says llvm-mc handles poorly",
+    "Batch assembly of whole snippets per call at a known base address, with KS_OPT_SYM_RESOLVER supplying addresses of external symbols"
+  ],
+  "when_not_to_use": [
+    "Assembly throughput: no timing against llvm-mc, GNU as, NASM or AsmJit exists, and per-call setup makes one-instruction-per-call loops (JIT-style emission) slow by design",
+    "Recent ISA extensions: the x86, Arm and AArch64 tables come from LLVM 3.9 (2016); RISC-V was backported from LLVM 9.0.1 in March 2023 and is in no tagged release (the last is 0.9.2 from June 2020; issue #598 asks for one)",
+    "MASM sources: keystone.h marks KS_OPT_SYNTAX_MASM 'unsupported yet', so the MASM-compatible assemblers (JWasm, UASM, Asmc) are the right tools",
+    "Untrusted or fuzzed input without process isolation: open segfault, crash and assertion reports from short kstool inputs (#171, #181, #198, #220, #288, #307, #316, #394) and a null dereference in the EVM path (#602)",
+    "Closed-source products without a paid licence: GPLv2-only with a FOSS-only client exception, and the commercial-licence and contact links point to keystone-engine.org, which issue #604 reports now redirects to a gambling site after the domain apparently expired"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake via make-lib.sh / make-share.sh); also a vcpkg port and PyPI wheels",
+    "dependencies": "none at run time; building needs CMake 3.10+ and a C++ compiler (the stripped LLVM 3.9 MC sources are bundled)",
+    "min_toolchain": "CMake 3.10+; LLVM 3.9-era C++11 code base; commit #600 (2026-07-18) fixed builds with CMake 4, GCC 15 and MSVC",
+    "platforms": "hosts: Windows, Linux, macOS, *BSD, Solaris; targets: Arm/Thumb, AArch64, MIPS, PowerPC, SPARC, SystemZ, Hexagon, x86-16/32/64, RISC-V (unreleased), EVM (single opcodes only)",
+    "thread_safety": "README says 'thread-safe by design', but in ks.cpp the one-time target registration is guarded by an unsynchronised static bool and ks_asm/ks_option mutate the handle (source buffers, radix, comment string), so use one handle per thread and let one ks_open finish before going concurrent",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Found this session in llvm/keystone/ks.cpp: ks_option() calls MAI->setRadix(16) on entry for every option type, before checking the option or the architecture, so selecting AT&T, GAS or Intel syntax without the RADIX16 flag, or only installing a symbol resolver, makes unprefixed numbers hexadecimal ('12(%esp)' becomes 0x12; issues #569 and #571, open since December 2023). The same unconditional line runs on EVM handles, which is consistent with the null-pointer report #602. Write immediates with an explicit 0x prefix or suffix after any ks_option call.",
+    "ks_asm is documented to return 0 or -1, but its out-of-memory paths return KS_ERR_NOMEM (1) without setting ks_errno, so callers testing for -1 miss those failures; test for non-zero.",
+    "The EVM mode is a whole-string, case-insensitive mnemonic lookup that returns one byte (EVMMapping.cpp): PUSH immediates, several statements per call and labels are not supported. keystone.h still labels KS_ARCH_PPC 'currently unsupported' although the README and ChangeLog list PowerPC.",
+    "The 10x size and memory figure and the 30 s versus 15 min build time compare a 2016 build of Keystone with an entire LLVM build (optimisers, code generators, tools), not with llvm-mc's assembler code, and give no version, machine or method; the only concrete size data found are the 1.32-2.95 MB PyPI 0.9.2 wheels, each holding the full multi-architecture library."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are mostly disassemblers (Zydis, iced, bddisasm, Intel XED) and standalone assemblers (minias, aron, JWasm, UASM, Asmc); pick Keystone when you need text-to-bytes assembly as a library call across many ISAs from C or a scripting language, and pick JWasm, UASM or Asmc for MASM sources or minias or aron for command-line x86-64 assembly where speed claims exist.",
+  "verified_claims_summary": "Nothing about assembling speed was measured. The only claim is the project's own statement, written for the initial 2016 version, that Keystone is more than 10 times smaller in binary size and memory use than LLVM and builds in 30 seconds on a laptop versus 15 minutes for LLVM, with no LLVM version, flags, machine or method; the gap comes from removing everything except the MC assembler.",
+  "status_note": "Maintenance only: one build-fix commit (2026-07-18, #600) after a three-year gap since May 2023, 217 open issues, last release 0.9.2 in June 2020, and the official website domain lost (#604, #609); GPLv2-only with a FOSS exception, but easy to obtain through vcpkg, PyPI and crates.io bindings.",
+  "sources_read": [
+    "https://github.com/keystone-engine/keystone/commits",
+    "https://github.com/keystone-engine/keystone/issues",
+    "https://github.com/keystone-engine/keystone/issues/604",
+    "https://github.com/keystone-engine/keystone/issues/571",
+    "https://github.com/keystone-engine/keystone/issues?q=is%3Aissue+thread",
+    "https://github.com/keystone-engine/keystone/issues?q=is%3Aissue+crash",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/README.md",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/docs/beyond_llvm.md",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/docs/COMPILE.md",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/docs/COMPILE-NIX.md",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/COPYING",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/EXCEPTIONS-CLIENT",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/SPONSORS.TXT",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/CREDITS.TXT",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/include/keystone/keystone.h",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/llvm/CMakeLists.txt",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/llvm/keystone/ks.cpp",
+    "https://raw.githubusercontent.com/keystone-engine/keystone/HEAD/llvm/keystone/EVMMapping.cpp",
+    "https://pypi.org/pypi/keystone-engine/json"
+  ],
+  "confidence": 0.75
+}

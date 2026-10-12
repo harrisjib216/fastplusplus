@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/jviney/bilinear_filter_simd",
+  "one_liner": "Demo SSE4, AVX2 and AVX-512 bilinear sampler for packed 24-bit BGR images; 1.2-2.3x over its own scalar loop.",
+  "what_it_does": "Samples a packed 8-bit BGR image (cv::Mat3b data wrapped in a non-owning interpolate::BGRImage) at a precomputed float (y, x) coordinate per output pixel, which is what cv::remap with INTER_LINEAR does, minus border handling. The kernels are small headers in src/interpolate/ (bilinear_plain, bilinear_sse4, bilinear_avx2, bilinear_avx512) that fill 2, 4 or 8 output pixels per call; src/benchmark/ shows single-thread loops and row-parallel loops over cv::parallel_for_. It is a benchmark demo, not a library: there is no resize() entry point, no tail loop and no border mode. The benchmark map is a 3x-downscale grid of a 3840x2160 photo rotated by 0.314 rad with cv::warpAffine, so the timed workload is a rotated remap, not a plain resize.",
+  "how_it_is_fast": "For 4 (AVX2) or 8 (AVX-512) output pixels at once it computes the four bilinear weights in 16-bit fixed point: floor, scale the fractions by 256, convert and pack, multiply x and y weights with mullo/mulhi and patch the 256*256 overflow case with a blend. Each 2x2 neighbourhood is fetched as two unaligned 8-byte loads (top row and the row below), pshufb spreads the 24-bit pixels into 16-bit lanes, and pmaddwd plus phaddd form the weighted sums before packus narrows back to bytes and one 8+4-byte store writes 4 pixels. Coordinates are read with streaming loads. The gain stays modest because every output pixel still costs two scattered loads from a 24 MB source image; row threading gives about 10x where SIMD gives 1.2-2.3x.",
+  "when_to_use": [
+    "As a reference for vectorising bilinear sampling of packed 24-bit BGR on x86 with pshufb/pmaddwd (study only: the repo has no licence).",
+    "Arbitrary per-pixel sampling maps (rotation, affine warp, undistortion) on x86-64 with AVX2, with output widths that are multiples of 4 (8 for AVX-512).",
+    "Single-threaded loops, where the SIMD gap over a fixed-point scalar loop is largest (1.8-2.3x on AVX-512, about 1.8-1.9x on AVX2).",
+    "As a starting point for your own benchmark against cv::remap on your real maps before committing to a hand-written kernel."
+  ],
+  "when_not_to_use": [
+    "Production code: there is no LICENSE file, so the code cannot be reused as is, and the demo has been inactive since 2023-07-08.",
+    "Maps that touch or leave the image edge: x is never clamped and negative coordinates are not checked, so a sample at x >= cols-1 blends in the first pixel of the next row and the 8-byte loads can run past the buffer.",
+    "Plain image resizing or when OpenCV is already linked: cv::resize and cv::remap (both SIMD and multithreaded) were never timed against these kernels.",
+    "Non-x86 targets (no NEON or scalar-portable SIMD path), RGBA, planar, 16-bit or float images, or output widths that are not a multiple of 4 or 8.",
+    "Multi-threaded pipelines: with threads the SIMD kernels add only 1.25x (i7-8700, AVX2) to 1.5-1.7x (Xeon, AVX-512) because the gather is memory-bound."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Kernels: none beyond <immintrin.h> and <stdint.h>. Demo driver: OpenCV 4 (imread, warpAffine, parallel_for_), google/benchmark (git submodule), CMake 3.16.",
+    "min_toolchain": "C++17, GCC >= 8 per the README; built with -march=native (the 2023 bounds fix also uses the C++20 [[likely]] attribute inside the C++17 build). Docker image: ubuntu:23.04 build-essential.",
+    "platforms": "x86-64 only: SSE4.1 path, AVX2 required by the README, AVX-512 (F and BW intrinsics) path compiled only when __AVX512F__ is defined.",
+    "thread_safety": "Kernels read const input and write disjoint output pixels, so row-partitioned calls are safe (the demo uses cv::parallel_for_); otherwise not documented.",
+    "drop_in_for_baseline": "partial — same call shape as the repo's scalar plain::interpolate_multiple<4> and output within 3 levels per channel of it, but not a drop-in for cv::remap or cv::resize (no border modes, no tail handling, BGR8 only)."
+  },
+  "gotchas": [
+    "The validation is not an equality check: mats_equivalent() in src/common.hpp accepts per-channel differences up to 3 (a TODO blames rounding). The SIMD paths round the scaled fractions with cvtps and multiply 16-bit weights, while the scalar baseline truncates float weights, so outputs are not bit-identical.",
+    "The timed workload is a rotated remap, not the downscale the record describes: sampling_coordinates() rotates a 3x-downscale grid with cv::warpAffine and its default constant border, so about 27% of the 1280x720 outputs get coordinate (0,0) and all read the same cache-hot top-left pixel (share derived from the transform in src/common.hpp, not printed by the repo). That flatters every variant against a real full-image warp.",
+    "Harness flaw behind the numbers: all published results (2020) predate commit b333369 (2021, alignas on the AVX2/AVX-512 stack store buffers that could crash) and commit d0f0187 (2023-07-08, 'Fix out of bounds access'), which added a compare-and-branch to ptr_below() in every variant's hot path; no post-fix numbers exist. The fix clamps only the row: its own test coordinate (2159, 3839) still makes the scalar path read pixel[1] 3 bytes past the image buffer and the SIMD 8-byte loads read 5 bytes past it (weight 0, so the output is unaffected, but it is an out-of-bounds read).",
+    "Each timed iteration also allocates the 2.7 MB output cv::Mat3b, the multi-thread rows depend on an unstated OpenCV parallel_for_ backend, and the compiler used for the runs is never named."
+  ],
+  "pick_this_over_siblings_when": "It is the only bilinear image-sampling kernel among the catalogued SIMD entries, so pick it as worked x86 code for 24-bit BGR gather-and-blend; to write your own portable kernel use a licensed abstraction such as EVE or the Vector Class Library, and for ARM image kernels see ARM NEON Compositor. Pure SIMD shows the same per-pixel pattern with a larger (about 9.4x) gain on compute-bound shading.",
+  "verified_claims_summary": "The repo's Google Benchmark driver times its own fixed-point scalar loop against SSE4, AVX2 and AVX-512 versions of the same sampler on a rotated 3x-downscale map of a 3840x2160 photo (1280x720 output), Release build with -march=native and an unstated GCC. Readme.md (2020-08-09): Xeon Platinum 8124M on a c5.4xlarge, single thread 13.3 ms scalar vs 7.33 ms AVX-512 (1.81x) and multi-thread 1.25 vs 0.822 ms (1.52x); Core i7-8700, 7.64 vs 4.26 ms AVX2 (1.79x); the later Benchmarks.md run (2020-08-11) reached 5.87 ms (2.27x) and 0.743 ms (1.66x), all ratios derived from page data.",
+  "status_note": "Abandoned demo (last commit 2023-07-08, 10 stars, no issues ever filed) with no licence file, so reference only; every published number comes from August 2020 code that predates the 2021 alignment fix and the 2023 bounds fix, and no OpenCV cv::remap or cv::resize baseline was ever timed.",
+  "sources_read": [
+    "https://github.com/jviney/bilinear_filter_simd",
+    "https://github.com/jviney/bilinear_filter_simd/commits",
+    "https://github.com/jviney/bilinear_filter_simd/commits/master",
+    "https://github.com/jviney/bilinear_filter_simd/tree/master/src",
+    "https://github.com/jviney/bilinear_filter_simd/tree/master/src/interpolate",
+    "https://github.com/jviney/bilinear_filter_simd/tree/master/src/benchmark",
+    "https://github.com/jviney/bilinear_filter_simd/issues?q=is%3Aissue",
+    "https://github.com/jviney/bilinear_filter_simd/commit/d0f018735917c5fa6bdfe97818f0c27b661439cd",
+    "https://github.com/jviney/bilinear_filter_simd/commit/b333369f1718b972143eea7d9f788c019244f551",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Benchmarks.md",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/docker-compose.yml",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/common.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/interpolate/types.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/interpolate/bilinear_plain.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/interpolate/bilinear_sse4.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/interpolate/bilinear_avx2.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/interpolate/bilinear_avx512.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/benchmark/bilinear_plain_single_thread.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/benchmark/bilinear_plain_multi_thread.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/benchmark/bilinear_sse4_multi_thread.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/benchmark/bilinear_avx2_single_thread.hpp",
+    "https://raw.githubusercontent.com/jviney/bilinear_filter_simd/HEAD/src/benchmark/bilinear_avx512_multi_thread.hpp"
+  ],
+  "confidence": 0.8
+}

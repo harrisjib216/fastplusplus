@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/kelindar/simd",
+  "one_liner": "Go package of clang auto-vectorised Sum/Min/Max and element-wise Add/Sub/Mul/Div kernels, 2-80x over scalar Go loops.",
+  "what_it_does": "Gives Go programs typed slice functions (SumUint8s, MinFloat32s, AddInt16s and so on for int8..int64, uint8..uint64, float32 and float64) plus generic Sum/Min/Max wrappers that dispatch by type switch. Reductions return a value; element-wise ops write into a caller-supplied dst slice and return it. On amd64 with AVX2+FMA3 and on arm64 (NEON, separate Apple build) it calls generated Plan9 assembly; otherwise, or with the noasm build tag, it runs plain generic Go loops. It is not a drop-in for any Go standard-library call: the closest stdlib equivalents (slices.Min, the min/max builtins, hand loops) are not what it benchmarks against.",
+  "how_it_is_fast": "Each kernel is a plain C loop marked '#pragma clang loop vectorize(enable) interleave(enable)', compiled by clang -O3 and translated to Go Plan9 assembly with kelindar/gocc, so the speed comes from LLVM's loop vectoriser rather than hand-written intrinsics. On amd64 the uint8 sum, for example, runs four 32-byte vpaddb accumulators per 128-byte iteration and finishes with vpsadbw; float32 sum likewise keeps four vaddps accumulators. Go's own compiler does not auto-vectorise, which is why reductions and narrow integer types show 10-80x; 64-bit integer min/max (about 2x) and all integer division (lane-by-lane idiv, 0.7-1.2x) gain little or lose.",
+  "when_to_use": [
+    "Go code that sums, mins, maxes or adds whole slices of 8-, 16- or 32-bit integers or float32, where the README shows 10-80x on 256-16384 elements (i7-13700K and Apple M3 Pro).",
+    "L1/L2-resident batches (a few KB to a few hundred KB) inside analytics or columnar loops, on amd64 with AVX2 or on arm64.",
+    "When you want an MIT-licensed, dependency-light package (klauspost/cpuid only) with an automatic pure-Go fallback for other architectures.",
+    "Float32 element-wise work: division about 5x on the i7-13700K, add 4.95x there and 7.39x on the M3 Pro at 16384 elements."
+  ],
+  "when_not_to_use": [
+    "Integer division of any width: the README shows 0.69x to 1.2x, slower than scalar Go for int8 and for uint16 at 16384 elements.",
+    "When float sums must match a sequential loop bit for bit: the vectorised float32/float64 Sum reorders the additions (four vaddps accumulators), so rounding differs from the Go fallback on real data.",
+    "Slices with 2^31 or more elements: the C loops use 'i < (int)size' and the assembly tests the 32-bit size register, so a 2 GiB-plus slice is silently processed as empty or truncated.",
+    "Untrusted or mismatched slice lengths: the asm path uses len(dst) for input1 and input2 without checks and takes &input[0], so shorter inputs are read out of bounds and an empty slice panics (the Go fallback returns 0 for an empty Sum).",
+    "[]int, []uint or named element types through the generic Sum/Min/Max: the type switch only matches the ten fixed-width slice types, so these fall back to the scalar loop."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/klauspost/cpuid/v2 (runtime AVX2/FMA3 detection); testify for tests only",
+    "min_toolchain": "Go 1.18 (go.mod); CI runs Go 1.25. Regenerating the assembly needs clang and kelindar/gocc, whose versions are not documented (open issue #7).",
+    "platforms": "amd64 with AVX2 and FMA3; arm64 (NEON, separate darwin/Apple build); pure-Go fallback on every other GOARCH or with -tags noasm",
+    "thread_safety": "Functions are stateless and safe to call concurrently on disjoint dst slices; the package-level 'hardware' switch is a plain variable that only the tests toggle. Otherwise not documented.",
+    "drop_in_for_baseline": "partial — same results as its own generic Go loops for integer types on valid inputs, but not for empty slices (panic), mismatched lengths (out-of-bounds reads), slices of 2^31+ elements, or float sums (different rounding)."
+  },
+  "gotchas": [
+    "Length handling differs between paths: Add/Sub/Mul/Div pass len(dst) to the assembly without checking input1/input2, while the Go fallback loops over len(input1) and panics on a short dst or input2; Sum/Min/Max on an empty slice panic on &input[0] in the asm path.",
+    "The C kernels loop with 'for (int i = 0; i < (int)size; ...)' and the amd64 assembly opens with 'test edx, edx; jle', so for slices of 2^31 elements or more the fast path returns 0 or processes only the low 32 bits of the length, with no error.",
+    "Test gaps rather than benchmark flaws: the equality tests use one 70-element vector, shorter than one 128-byte unrolled AVX2 iteration of the 8-bit kernels, so their main vector loop is only exercised by benchmarks that assert NotZero; and input1 and input2 are identical (pattern (i % 100) + 1), so Sub (all zeros) and Div (all ones) tests cannot catch swapped operands. The integer-valued data also sums exactly in float32, hiding the reordered float summation.",
+    "Before PR #6 (2026-03-07) the amd64 assembly clobbered the BP frame pointer without restoring it (issue #5, possible crashes during stack unwinding); the regenerated assembly now pushes and pops rbp, and the README tables were regenerated in the same commit, so use a commit from 2026-03-07 or later (there are no tagged releases)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over vek when you need integer types (int8 to uint64) on both amd64 and arm64 rather than vek's wider float32/float64 math set, and over tphakala/simd when a tiny Sum/Min/Max/Add API is enough and you do not need its hand-written fused kernels; segmentio/asm covers different functions (ASCII, bswap, sorting) and does not overlap.",
+  "verified_claims_summary": "The README's SPEEDUP column is the package's own generic Go loop (hardware=false) divided by the assembly path on the same call, on 256-, 4096- and 16384-element slices filled with (i % 100) + 1, measured on an i7-13700K under Windows and an Apple M3 Pro with an unstated Go version. On the i7-13700K uint8 Sum at 16384 elements runs 58.88 ns (52.57x), uint16 Min 110.94 ns (84.12x), uint32 Add 1975.68 ns (5.06x), uint64 Min 1.96x and integer Div 0.69x to 1.20x.",
+  "status_note": "Active but small (13 commits, 34 stars, last commit 2026-03-07 regenerating all assembly and fixing the frame-pointer ABI bug), MIT-licensed and copyable; one open issue asks for reproducible codegen because generate.sh ships with its gocc lines commented out.",
+  "sources_read": [
+    "https://github.com/kelindar/simd",
+    "https://github.com/kelindar/simd/commits/main",
+    "https://github.com/kelindar/simd/tree/main/codegen",
+    "https://github.com/kelindar/simd/issues?q=is%3Aissue",
+    "https://github.com/kelindar/simd/issues/5",
+    "https://github.com/kelindar/simd/issues/7",
+    "https://github.com/kelindar/simd/pulls?q=is%3Apr",
+    "https://github.com/kelindar/simd/pull/6",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/go.mod",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd_funcs.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd_stub.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd_avx2_amd64.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd_avx2_amd64.s",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/bench_test.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/simd_test.go",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/codegen/generate.sh",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/codegen/README.md",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/codegen/simd_avx2_amd64.c",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/codegen/simd_neon_arm64.c",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/codegen/simd_apple_arm64.c",
+    "https://raw.githubusercontent.com/kelindar/simd/HEAD/.github/workflows/test.yml"
+  ],
+  "confidence": 0.85
+}

@@ -580,5 +580,105 @@
       "https://github.com/jhjourdan/SIMD-math-prims/blob/master/simd_math_prims.h",
       "https://github.com/jhjourdan/SIMD-math-prims/commits/master"
     ]
+  },
+  {
+    "id": "https://github.com/jonicho/simd-radix-sort",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: harness fair, no bug behind the numbers; the thesis build (commit f5ec7f9, 2022-07-14) used -std=c++17 and no -mavx512vbmi, and the code was refactored afterwards without re-measurement. Public harness, compiler, flags and CPU: A stays with the build record corrected.",
+    "corrections": {
+      "compiler_and_flags": "gcc 12.1.0 (thesis section 7.4); thesis-time Makefile at commit f5ec7f9 (2022-07-14): -std=c++17 -O3 -mavx512f -mavx512bw -mavx512dq -mavx512vl -mavx512vbmi2 with always_inline functions; the current Makefile is -std=c++20 -O3 -mavx512f -mavx512bw -mavx512dq -mavx512vl -mavx512vbmi -mavx512vbmi2 and describes code refactored in December 2023 (54eced8 removed always_inline; radixSort.hpp created 2024-03-12) that was never re-measured.",
+      "caveats": "Bachelor's thesis benchmark (not peer reviewed) with the author's own harness (src/perf-thesis.cpp with src/sort_methods.hpp). The measured code is the 2022-07-14 commit f5ec7f9, not the shipped header (refactored December 2023, never re-measured). STLSort is std::sort over DataElement structs with std::less (libstdc++ implied by gcc 12.1.0 on Manjaro). Each figure averages max(1, 2^22/n) runs (16 at 2^18) after max(1, 2^18/n) warm-ups, timed with CLOCK_PROCESS_CPUTIME_ID; every dataset defaults to seed time(NULL), so runs in the same second sort identical keys. AoS/SoA conversion is excluded for all methods and std::sort compares keys only, so the comparison is fair; the perf harness checks only sortedness and the test program checks key presence but not multiplicity. The cross-algorithm comparison covers only 2^18 elements. Not faster everywhere: in appendix B RadixSIMD loses to std::sort in 19 of 56 key/distribution cases (sorted, reverse-sorted, almost-sorted, Zero and ZeroOne inputs with payloads or double keys) because every recursion level is a full SIMD pass on one bit and shared prefix bits are not skipped; it is slower than IPPRadix, BramasSort and BlacherSort on the headline cases. The header is wrapped in #ifdef __AVX512F__ and needs VBMI2 (no Skylake-SP or Cascade Lake); the thesis i7-12700K had AVX-512 enabled in the BIOS, which Intel later fused off."
+    },
+    "urls_opened": [
+      "https://github.com/jonicho/simd-radix-sort/blob/f5ec7f9/Makefile",
+      "https://github.com/jonicho/simd-radix-sort/commit/54eced8",
+      "https://github.com/jonicho/simd-radix-sort/blob/master/src/perf-thesis.cpp"
+    ]
+  },
+  {
+    "id": "https://github.com/josephg/diamond-types",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the egwalker-paper bench loads the diamond-types oplog outside Criterion's timed closure and times only checkout_tip, while Automerge, Yrs and Yjs are timed including decoding their documents, so the published ratios are overstated by an unknown amount (asymmetric-harness precedent: TensorFlow DLPerf, LC); the paper's -C target-cpu=native flag appears in no artifact script (flags absent from public sources). A to C.",
+    "corrections": {
+      "caveats": "All measured numbers are for the native Rust library; no wasm build was ever benchmarked, and the npm packages diamond-types-node and diamond-types-web (1.0.2, 2023-05-15) predate the benchmarked May-2024 code. Harness asymmetry: in egwalker-paper tools/diamond-types/crates/bench/src/main.rs, ListOpLog::load_from runs once outside Criterion's b.iter and only oplog.checkout_tip() is timed, while Automerge (AutoCommit::load), Yrs (Update::decode_v2 plus apply_update) and Yjs (Y.applyUpdateV2) are timed including parsing their serialized documents; DT's own decode time is not reported, so the ratios against the CRDTs are overstated by an unknown amount, most on S1-S3 where DT's timed work is only 1.8-3.6 ms. The flat Yjs/Yrs times are GC-enabled snapshots of traces duplicated to 608k-947k keystrokes, not a bug; Yrs 0.20.0 (8-13 ms) beats DT on C1, C2 and A2 even with DT's decode excluded, and DT is slower than Yjs on C2 (82.6 vs 55.2 ms). Build drift: the paper footnote claims -C target-cpu=native but no RUSTFLAGS or .cargo/config exists in the artifact; the lockfile pins automerge 0.5.11 and yrs 0.20.0 against the paper's 0.5.9; the README says results were regenerated with Rust 1.80 and Node v21. The 0.012-0.12 ms 'load' reads the cached final text from a temp file, not the event graph. load_from panic issue #50 is open."
+    },
+    "urls_opened": [
+      "https://github.com/josephg/egwalker-paper/blob/master/tools/diamond-types/crates/bench/src/main.rs",
+      "https://github.com/josephg/egwalker-paper/blob/master/tools/paper-benchmarks/src/convert1.rs",
+      "https://github.com/josephg/egwalker-paper/blob/master/tools/bench-yjs/bench-remote.js",
+      "https://github.com/josephg/egwalker-paper/blob/master/Cargo.lock"
+    ]
+  },
+  {
+    "id": "https://github.com/jviney/bilinear_filter_simd",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the timed workload is a rotated remap whose outputs sample the cache-hot pixel (0,0) about 27% of the time, validation tolerates a difference of 3 per channel, and the 2020 numbers predate the 2021 alignment and 2023 out-of-bounds fixes with no re-measurement. First-party, C stays with corrections.",
+    "corrections": {
+      "workload": "1280x720 output from a 3840x2160 source through a per-pixel coordinate map: a 3x-downscale grid rotated 0.314 rad with cv::warpAffine and its default constant border, so about 27% of output pixels map to coordinate (0,0) and read the same cache-hot source pixel (derived from the transform in src/common.hpp); each timed iteration also allocates the 2.7 MB output cv::Mat3b.",
+      "caveats": "No licence file in the repo, so the code is reference only. A demo project whose benchmarks (August 2020) predate commit b333369 (2021, alignas on the AVX2/AVX-512 stack buffers that could crash) and commit d0f0187 (2023-07-08, 'Fix out of bounds access', which added a compare-and-branch to ptr_below() in every variant's hot path); no post-fix numbers exist, and an out-of-bounds read remains after the fix (its own test coordinate (2159, 3839) reads 3 bytes past the image buffer in the scalar path and 5 bytes in the SIMD 8-byte loads). The timed workload is a rotated remap, not a plain downscale (about 27% of outputs sample the cache-hot pixel (0,0)), which flatters every variant against a real full-image warp. Validation is not an equality check: mats_equivalent() accepts per-channel differences up to 3 (the SIMD paths round with cvtps and 16-bit weights while the scalar baseline truncates float weights). The only baseline is the author's own scalar code built with -march=native; cv::remap and cv::resize are never timed. SIMD gains are modest: 1.2x to 2.3x single-thread and 1.5x to 1.7x multi-threaded; the multi-thread rows depend on an unstated OpenCV parallel_for_ backend; the compiler used for the runs is never named."
+    },
+    "urls_opened": [
+      "https://github.com/jviney/bilinear_filter_simd/blob/master/src/common.hpp",
+      "https://github.com/jviney/bilinear_filter_simd/commit/d0f0187",
+      "https://github.com/jviney/bilinear_filter_simd/commit/b333369"
+    ]
+  },
+  {
+    "id": "https://github.com/iximeow/yaxpeax-x86",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: upstream athre0z/disas-bench October 2025 charts (submodule 681262f) show yaxpeax-x86 fastest in both decode and decode+format on an i9-13900K (run by the Zydis co-author) and a Ryzen 9 9950X (run by the yaxpeax author); the 2021 fork numbers stand as the reproducible table. A stays with the stale 'trails iced and diStorm' caveat replaced.",
+    "corrections": {
+      "claimed_speedup": "icedland/disas-bench fork (June 2021, i5-6600K): decode only 182.08 MB/s vs Zydis 34.19, XED 55.39, bddisasm 35.48, diStorm 92.17 (about 5.3x Zydis, 3.3x XED, derived from page data); decode+format 40.05 MB/s vs Capstone 14.02, Zydis 22.24, XED 15.67, bddisasm 16.00 (about 2.9x Capstone, derived). Upstream athre0z/disas-bench October 2025 charts (submodule 681262f, after yaxpeax's formatting rework; values read from chart pixels): i9-13900K (GCC 14.2, run by athre0z) decode about 406 vs iced 390 and XED 73 MB/s, decode+format about 192 vs iced 165; Ryzen 9 9950X (GCC 13.3, run by the yaxpeax author) decode about 462 vs iced 363, decode+format about 198 vs iced 160, so yaxpeax-x86 is fastest in both modes on both machines. Repo README: 'roughly 250mb/s decode throughput and on some hardware is the fastest software x86 decoder available', 'an average of 58 cycles on a zen2 core'.",
+      "caveats": "The 2021 table comes from the iced author's disas-bench fork (i5-6600K, yaxpeax-x86 submodule of March 2021), one run per configuration with the C drivers timing CPU time via clock() and the Rust drivers wall time in milliseconds; the upstream athre0z/disas-bench October 2025 runs (newer yaxpeax with its formatting rework, no LTO) reverse the 2021 decode+format ordering and put yaxpeax ahead of iced and diStorm in both modes, with the Ryzen run contributed by the yaxpeax author (first-party) and the i9-13900K run by the Zydis co-author. The README's 'roughly 250mb/s' and 'fastest on some hardware' claims give no hardware or date, and the README calls the in-repo benchmark 'so unrealistic as to be unuseful'. Release builds rely on unsafe unreachable_unchecked and get_unchecked on hot paths (earlier releases had reachable panics fixed in 1.1.2-1.1.4; fuzzed with mishegos and cargo fuzz). The FFI has no headers, needs nightly and lacks the promised examples directory (issue #33 open since February 2024); the author calls it 'kinda useless and awful'. The 2026 releases 2.1-2.2 are not benchmarked; Cargo.toml at HEAD still says 2.2.0. Intel-style output prints relative branch targets as $+0xNN unless AbsoluteAddressFormatter or DisplayRules (2.2.0) are used. Disassembly throughput, not assembly speed against GNU as, NASM or MASM."
+    },
+    "urls_opened": [
+      "https://github.com/athre0z/disas-bench",
+      "https://github.com/athre0z/disas-bench/blob/master/bench-intel.png",
+      "https://github.com/athre0z/disas-bench/blob/master/bench-amd.png",
+      "https://github.com/iximeow/yaxpeax-x86/issues/33"
+    ]
+  },
+  {
+    "id": "https://github.com/jackmott/linqfaster",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the SumFastSIMDParallel 3.7074 us row was measured at commit 5c5403e, where the SumSP task lambdas captured the shared loop variable and late-starting tasks summed nothing (wrong result; fixed in 11a5421 and then found slow, never re-measured), so that row is struck (stb-zip precedent); the remaining first-party rows keep C with the like-for-like checked Sum ratio noted.",
+    "corrections": {
+      "claimed_speedup": "README sample benchmarks (100000 elements, .NET Framework 4.x, BenchmarkDotNet): MinLinq 548.9181 us vs MinFastSIMD 14.5291 us (about 37.8x, derived from page data); SumLinq 541.3823 us vs SumFastSIMD 9.7636 us (about 55.4x, derived; SumS is unchecked while LINQ Sum is overflow-checked, and the checked SumF gives about 10x); OrderByLinq 24,436.0135 us vs OrderByFast 5,612.7712 us (about 4.4x, derived; OrderByF is not a stable sort). The README's SumFastSIMDParallel 3.7074 us row is struck: it was measured at commit 5c5403e (2017-03-31), when the SumSP task lambdas captured the shared loop variable and late-starting tasks summed nothing, so the result was wrong; the fix (11a5421) was followed by 'parallel simd sum fixed but now is slow :D' (e8eb1d7) and the row was never re-measured.",
+      "caveats": "The README itself says that as of .NET 9 the library is mostly unnecessary because runtime LINQ received most of these optimizations; the baseline is .NET Framework 4.x LINQ, far slower than modern .NET LINQ. The benchmark methods for these rows are commented out in Benchmarks/Benchmarks.cs at HEAD and TEST_SIZE there is 1000000 (data i % 2); Benchmarks.md data is random ints in [-100, 100) at f729004, so the published 100000-element run is not reproducible as checked in. The SumFastSIMDParallel row measured a broken implementation (shared loop variable captured by the task lambdas at 5c5403e) and is struck. SumS and SumSP sum without overflow checking while LINQ Sum on int throws OverflowException (the checked SumF gives about 10x); OrderByF is not a stable sort while LINQ OrderBy is. Correctness bug at HEAD: ContainsS skips the last full vector when Length % Vector<T>.Count == 0, so new[]{1,2,3,4,5,6,7,8}.ContainsS(5) returns false (issue #31, open since April 2022); SumS(selectorSIMD) drops leftover elements unless the scalar selector is also passed; SequenceCompareS is only correct for 32-bit element types. Library code unchanged since 2019-07-12; on nuget.org LinqFaster stops at 1.0.0 (2018) and LinqFaster.SIMD at 1.0.3 (2019), so the Span<T> overloads appear unpublished."
+    },
+    "urls_opened": [
+      "https://github.com/jackmott/LinqFaster/commit/5c5403e",
+      "https://github.com/jackmott/LinqFaster/commit/11a5421",
+      "https://github.com/jackmott/LinqFaster/commit/e8eb1d7",
+      "https://github.com/jackmott/LinqFaster/issues/31"
+    ]
+  },
+  {
+    "id": "https://github.com/kexibq-official/cafs-lib",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: the benchmark passes a pdqsort fallback while the default and bindings use std::sort, the natural hash-count-sort comparator (dense_map_sort) and spreadsort are implemented but never registered, and the row count is the default grid cut at N = 3e7; the public harness, compiler, flags and CPU still make the table reproducible, so A stays with corrections.",
+    "corrections": {
+      "caveats": "Very new single-author repo (7 commits, 2026-05-09 to 2026-08-07, 32 stars); all numbers from one Windows 11 desktop (i5-12400F, AVX2 path only, no AVX-512 run of vqsort); std::sort is libstdc++ (inferred from g++ 13.2). Timings are best of 2 runs per (N, K) point with high_resolution_clock on uint64 keys drawn uniformly from a K-value palette spread over the 64-bit range; the 592,770 rows are the driver's default grid cut at N = 3e7 (98,795 (N, K) cases x 6 algorithms over 58 sizes), the heatmap script drops FAIL rows, and the raw CSV is not in the repo. Harness gaps: main_bigdata.cpp passes pdqsort as the CAFS fallback while the default and the C, Python, Rust and Go bindings fall back to std::sort, which the same table puts about 3.47x slower in the K = 8.4e6-1.7e7 bin (derived from page data), so default users past the dispatcher's cutoff get a slower sort than the one measured; competitors.hpp implements dense_map_sort (hash-count sort with ankerl::unordered_dense, the plain technique CAFS should be compared against) and Boost spreadsort, but neither is registered, so the table only pits an O(N + K log K) histogram method against comparison and radix sorts. The K estimate reads every (N/1024)-th element, so periodic inputs alias (N = 1,048,576 with data[i] = key[i % 1024] sizes the table at its minimum and spills about 97% of elements); skewed inputs were not benchmarked; the 4-slot Fibonacci-hash buckets have no rehash, and an enricher simulation with the benchmark's own arithmetic-progression palette at K = 100,000 spilled 4,635 keys against 18 for random keys. arXiv 2605.25040 is not peer reviewed; the README is internally inconsistent about std::sort parity at K = 1.7e7. Only the u64 path is benchmarked."
+    },
+    "urls_opened": [
+      "https://github.com/kexibq-official/cafs-lib/blob/main/benchmark/main_bigdata.cpp",
+      "https://github.com/kexibq-official/cafs-lib/blob/main/benchmark/competitors.hpp",
+      "https://github.com/kexibq-official/cafs-lib/blob/main/include/cafs2.hpp"
+    ]
+  },
+  {
+    "id": "https://github.com/justinwilaby/sax-wasm",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher like-for-like run (npm 3.1.4, Node 22.22.0, 2.99 MB xml.xml, 64 KiB chunks, median of 20, 4 events subscribed with names and values read): sax-wasm 117.9 ms vs saxes 6.0.0 46.8 ms, about 2.5x slower, while the README's no-events setup reproduced (15.9 vs 34.6 ms); a confirmed memory-safety bug corrupts results for chunks of about 1 MB. D stays (not faster in real use) with corrections.",
+    "corrections": {
+      "usability": "reference",
+      "caveats": "Harness flaw: benchmark.mjs runs sax-wasm with zero subscribed events (constructor default), so the Rust parser skips hydration, event emission and every JS boundary crossing, while saxes and sax-js build text, attribute and tag values and node-expat delivers each event to JavaScript. Like-for-like run in this session (npm 3.1.4, Node 22.22.0, 2.99 MB xml.xml, 64 KiB chunks, median of 20) with 4 events subscribed and names and values read: sax-wasm 117.9 ms vs saxes 6.0.0 46.8 ms, about 2.5x slower; the README's no-events setup reproduced at 15.9 vs 34.6 ms. The 'ltx (using Saxes as the parser)' row passes a raw SaxesParser instead of ltx's adapter, so no tree is built; the node-xml link points at dylang's XML builder while the script runs robrighter node-xml 1.0.2; the README says 10 batches of 100 runs but the script does 10 single parses with no warm-up. Memory-safety bug confirmed on npm 3.1.4: write() copies each chunk to wasm linear-memory address 4 inside the 1 MiB stack-first region, so chunks of 1,048,000 bytes silently produce wrong results (27,625 vs 27,637 open tags), 1,060,000-byte chunks raise 'RuntimeError: memory access out of bounds' and the whole file raises 'RangeError: offset is out of bounds' (issue #141 closed with a workaround only; HEAD glue still writes at 4). prepareWasm(Uint8Array) ignores byteOffset and byteLength; event details are lazy views overwritten by the next write(). Numbers predate the October 2026 parser rewrites (#160, #164); CPU model not stated; first-party."
+    },
+    "urls_opened": [
+      "https://github.com/justinwilaby/sax-wasm/blob/master/benchmark.mjs",
+      "https://github.com/justinwilaby/sax-wasm/blob/master/src/js/saxWasm.ts",
+      "https://github.com/justinwilaby/sax-wasm/issues/141",
+      "https://github.com/justinwilaby/sax-wasm/blob/master/src/js/index.ts"
+    ]
   }
 ]

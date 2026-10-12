@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/justinwilaby/sax-wasm",
+  "one_liner": "Rust/WebAssembly streaming SAX parser for XML, HTML, JSX and Angular templates with positions; claims to beat saxes and sax-js, but only measured with no events subscribed.",
+  "what_it_does": "An event-based (SAX) tokenizer written in Rust and compiled to wasm, with a TypeScript wrapper. You construct `new SAXParser(eventBitmask)` and `await prepareWasm(bytes | Response | WebAssembly.Module)`, then either `write(Uint8Array)` chunks with an `eventHandler(event, detail)` callback or iterate the async generator `parse(reader)` over a ReadableStream reader. Tag, Attribute, Text and ProcInst details carry zero-based line/character positions and UTF-8 byte offsets. The parser is non-validating and also accepts JSX, Angular template syntax and unquoted HTML attributes. It is not API-compatible with sax-js or saxes: events are a bitmask, input must be UTF-8 bytes, and detail objects are only valid inside the callback.",
+  "how_it_is_fast": "A byte-oriented state machine in Rust walks the UTF-8 input (a grapheme iterator tracks line and column) and only materialises ('hydrates') strings for the event types set in the bitmask. Event payloads are written as descriptors into wasm linear memory, and the JS Reader objects decode fields lazily with TextDecoder on first access, so fields you never read cost nothing. The unreleased next major on HEAD (PRs #160 and #164, October 2026) adds wasm SIMD128 scans (i8x16_eq/bitmask) that skip ASCII runs up to the next delimiter and pools event descriptors; PR #160 reports only about 5% faster full decoding than the previous build. The release build uses opt-level 3, fat LTO, codegen-units 1 and wasm-opt -O4.",
+  "when_to_use": [
+    "You need source positions (line/character and UTF-8 byte offsets) for every tag, attribute and text node, for example in LSP servers, linters or codemods over XML, HTML, JSX or Angular templates.",
+    "You need one tolerant tokenizer for JSX fragments, Angular bindings and unquoted HTML attributes, which strict XML parsers such as saxes reject.",
+    "You stream UTF-8 bytes from fetch() or fs streams in a browser or Node in chunks of about 64 KiB, subscribe to one or two event types and read few fields per event, which is where lazy decoding helps most (this case was not measured).",
+    "You want a parser whose memory stays bounded by chunk size rather than document size, with no DOM built."
+  ],
+  "when_not_to_use": [
+    "Throughput-critical XML ingestion that consumes tags, attributes and text. In this enrichment session's check (npm 3.1.4, Node 22.22.0, a 4-vCPU Intel Xeon 2.1 GHz cloud VM, the repo's 2.99 MB xml.xml in 64 KiB chunks, median of 20 runs after 3 warm-ups), sax-wasm with OpenTag|CloseTag|Text|Attribute subscribed and names/values read took 117.9 ms, against 46.8 ms for saxes 6.0.0 with equivalent handlers (about 2.5x slower). Even with a no-op handler it took 72.0 ms. The README's own setup (no events) reproduced its 'faster' result: 15.9 vs 34.6 ms.",
+    "Feeding whole documents or large ReadableStream chunks: any chunk near or above 1 MiB silently corrupts results or crashes (see gotchas), and the README gives no size limit.",
+    "You need validation, namespace events, DTD/entity expansion or strict well-formedness errors: it is non-validating ('emits what it sees') and reports namespaces only as attributes.",
+    "You need whitespace-only text nodes between elements: they are deliberately not emitted.",
+    "You need a stable event ABI: the next major release (on HEAD, unreleased as of 2026-10-11) changes the event format and rejects older wasm binaries. The 2025 history also includes lost tags, text and attributes in large or chunked input (#113, #117, #119) and truncated leading zeros in text (#142), all since closed."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime, but you must ship or serve lib/sax-wasm.wasm yourself and pass it to prepareWasm()",
+    "min_toolchain": "npm 3.1.4: Node >=18.20.5 (ESM and CJS); repo HEAD (unreleased next major): Node >=24.3.0 and TypeScript 7 tooling; building needs Rust stable (version not pinned) with the wasm32-unknown-unknown target and binaryen wasm-opt",
+    "platforms": "Node and modern browsers with WebAssembly. HEAD's parser uses wasm SIMD128 intrinsics and the build enables SIMD, bulk memory and sign-ext, so engines without wasm SIMD cannot run HEAD builds (inference from source; minimum browser versions not documented).",
+    "thread_safety": "Single-threaded: each SAXParser owns one wasm instance holding a global static parser. Detail objects are only valid inside the handler or generator iteration, and calling write() from inside the handler risks overwriting live memory (README).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Memory-safety bug in chunk handling, confirmed in this session on npm 3.1.4. write() copies each chunk to wasm linear-memory address 4 (`writeBuffer.set(chunk, 4)`), but the Rust module's own 17-page memory is laid out stack-first: __stack_pointer starts at 1,048,576, static data runs to 1,050,616 and the heap follows. On the repo's xml.xml, chunks of 64 KiB to 1,040,000 bytes gave identical results (27,637 open tags). 1,048,000-byte chunks silently produced 27,625 tags and a different content hash, with no error. 1,060,000 and 1,100,000-byte chunks raised 'RuntimeError: memory access out of bounds', and a 2.99 MB single write raised 'RangeError: offset is out of bounds'. Issue #141 hit the RangeError and was closed with a 'feed 64 KiB slices' workaround; the silent-corruption window is undocumented, and HEAD's src/js/saxWasm.ts still writes at address 4 (HEAD itself not re-tested). Slice inputs to 64 KiB yourself.",
+    "Harness flaws behind the README table: sax-wasm runs with `new SAXParser()` (events = 0), so it hydrates nothing and never calls into JS, while saxes and sax-js build names, attributes and text and node-expat emits every event. The 'ltx (using Saxes as the parser)' row passes the raw SaxesParser instead of ltx's lib/parsers/saxes.js adapter, so ltx's startElement/endElement listeners land on an `undefined` property (saxes maps unknown event names that way), no tree is built, and the row is just saxes plus a no-op text callback. The README links node-xml to dylang/node-xml, an XML builder, while the script runs robrighter's 2012 node-xml 1.0.2 SAX parser. And despite the README's '100 internal runs per parser', the script does 10 single cold-inclusive runs.",
+    "Event details are lazy views over wasm memory: they are overwritten by the next write(), so call toJSON() to keep anything. Memory also grows with chunk size: about 2.5 MB of wasm memory with 64 KiB chunks against 21.8 MB with 1,000,000-byte chunks in this session's run.",
+    "prepareWasm(Uint8Array) passes `saxWasm.buffer` (the whole underlying ArrayBuffer) to WebAssembly.instantiate, ignoring byteOffset and byteLength. A Uint8Array view into a larger buffer (a bundle slice or a pooled Buffer) therefore fails; pass a standalone copy, a Response or a compiled WebAssembly.Module. The shared env.memory the wrapper constructs is never used, because the module defines and exports its own memory."
+  ],
+  "pick_this_over_siblings_when": "Against libxml2-wasm (the catalogued wasm XML sibling): pick sax-wasm when you need a small streaming tokenizer with byte and line positions that tolerates HTML, JSX and Angular syntax. Pick libxml2-wasm when you need a conformant parser with DOM, XPath or schema validation. For plain XML throughput where you consume events, the pure-JS baseline saxes was faster in this session's like-for-like check.",
+  "verified_claims_summary": "The README times one parse of the bundled 2.99 MB xml.xml written in 64 KiB chunks (mean of 10 runs, no warm-up, Node v25.6.1, macOS arm64, chip not stated, sax-wasm 3.1.4): sax-wasm 6.80 ms vs saxes 11.00 ms and sax-js 26.99 ms. But sax-wasm ran with no events subscribed, so the figure is tokenization only, and no like-for-like number is published. This session reproduced the direction under the README setup (15.9 vs 34.6 ms) and a reversal with four event types and handlers on both parsers (117.9 vs 46.8 ms, Node 22.22.0 on an Intel Xeon VM).",
+  "status_note": "Actively maintained (commits through 2026-10-10, next major in progress) and MIT-licensed. The evidence stays at D: the only published comparison is degenerate, a like-for-like run in this session found it about 2.5x slower than saxes, and npm 3.1.4 silently corrupts or traps on chunks near or above 1 MiB, so slice input to 64 KiB if you adopt it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/js/__test__/benchmark.mjs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/js/__test__/xml.xml",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/scripts/benchmark-performance.mjs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/js/saxWasm.ts",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/sax/parser.rs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/sax/grapheme_iterator.rs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/sax_wasm.rs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/src/sax/mod.rs",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/package.json",
+    "https://raw.githubusercontent.com/justinwilaby/sax-wasm/HEAD/package-lock.json",
+    "https://github.com/justinwilaby/sax-wasm/commits",
+    "https://github.com/justinwilaby/sax-wasm/pull/160",
+    "https://github.com/justinwilaby/sax-wasm/issues?q=is%3Aissue",
+    "https://github.com/justinwilaby/sax-wasm/issues/141",
+    "https://github.com/justinwilaby/sax-wasm/issues/113",
+    "https://registry.npmjs.org/sax-wasm",
+    "https://registry.npmjs.org/sax-wasm/-/sax-wasm-3.1.4.tgz",
+    "https://raw.githubusercontent.com/lddubeau/saxes/HEAD/src/saxes.ts",
+    "https://registry.npmjs.org/saxes/-/saxes-6.0.0.tgz",
+    "https://registry.npmjs.org/xmlchars/-/xmlchars-2.2.0.tgz",
+    "https://registry.npmjs.org/ltx",
+    "https://registry.npmjs.org/ltx/-/ltx-3.1.2.tgz",
+    "https://raw.githubusercontent.com/xmppjs/ltx/main/src/Parser.js",
+    "https://raw.githubusercontent.com/xmppjs/ltx/HEAD/package.json",
+    "https://registry.npmjs.org/node-xml",
+    "https://registry.npmjs.org/node-xml/-/node-xml-1.0.2.tgz",
+    "https://raw.githubusercontent.com/dylang/node-xml/HEAD/package.json"
+  ],
+  "confidence": 0.8
+}
