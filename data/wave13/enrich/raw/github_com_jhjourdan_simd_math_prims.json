@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/jhjourdan/simd-math-prims",
+  "one_liner": "One MIT header of polynomial sin/cos/exp/log approximations that compilers auto-vectorise; 21-36x over scalar libm floats, about 1e-5 error.",
+  "what_it_does": "simd_math_prims.h defines plain scalar C functions (sinapprox, cosapprox, expapprox, logapprox, plus double-precision _d versions added after the 2015 README run) that you call inside an ordinary loop; with -O3 -march=native GCC or Clang vectorises the loop, which it cannot do for calls to libm's sinf/expf without -ffast-math and a vector libm. They are not drop-in replacements: sin and cos are only correct in [-pi, pi], exp flushes to 0 below about -87 and returns inf above about 88.7, and log is accurate only for normal positive inputs. test_fun.cpp prints error statistics against libm and a throughput benchmark.",
+  "how_it_is_fast": "Each function is branch-free arithmetic the auto-vectoriser can map to SIMD lanes: Remez minimax polynomials generated in Sollya (degree 9 odd for sin, degree 8 even for cos, degree 4 for exp's and degree 5 for log's mantissa terms), with exp and log built on IEEE-754 bit manipulation (exp writes the scaled argument into the exponent field, log reads the exponent field and approximates log of the mantissa in [1, 2)). There is no range reduction, table lookup or special-case branching, which is where both the speed and the restricted domains come from.",
+  "when_to_use": [
+    "Large float arrays of exp/log in simulation or ML inner loops (the author's motivation was a Metropolis-Hastings sampler) where about 1e-5 relative or absolute error is acceptable",
+    "sin/cos of angles you already keep in [-pi, pi] (phases, rotations, oscillators) when you want vectorised code with no intrinsics and no dependency",
+    "Toolchains where you cannot use -ffast-math plus glibc libmvec, SLEEF or SVML, but GCC or Clang auto-vectorisation is available",
+    "As a short, readable starting point for your own Sollya-fitted kernels: the Sollya commands are in the header comments"
+  ],
+  "when_not_to_use": [
+    "Arguments outside [-pi, pi]: there is no range reduction, so sinapprox(10) returns about 896 and sinapprox(100) about 2.1e12 (float re-evaluation of the current coefficients); reduce the angle yourself first",
+    "Code that needs IEEE special cases or subnormals: logapprox returns -inf for NaN, a finite 88.72 for +inf and about -88.02 for 1e-40 (true -92.10); expapprox returns 0 below about -87.3 and is documented as invalid for NaN",
+    "Results that must be exact at anchor points: logapprox(1.0) is about 1.0e-5, not 0 (the approxmath port documents the same effect, 4.5e-9 for its double log)",
+    "MSVC or other compilers that do not auto-vectorise the union bit tricks (issue #3 reports Visual Studio 2017 did not vectorise exp and log); the double exp/log versions vectorise only with AVX-512DQ according to the header",
+    "Choosing between this and a vector libm: no glibc libmvec (in glibc since 2.22, used with -ffast-math), SLEEF or SVML numbers exist, and glibc 2.27's NEWS lists optimised generic sinf, cosf, expf and logf, a release later than the README's 2015 run, so the scalar baseline is dated as well"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (math.h, stdint.h); icsilog.h in the repo is only for the benchmark and is GPL-2.0-or-later",
+    "min_toolchain": "C++11 per the Makefile (g++ -O3 -std=c++11 -march=native); usable from C via the extern \"C\" block; vectorisation needs GCC or Clang auto-vectorisation",
+    "platforms": "any IEEE-754 target; float versions vectorise wherever the compiler auto-vectorises (SSE2/AVX2/NEON class); double exp/log need AVX-512DQ to vectorise",
+    "thread_safety": "not documented; the functions are pure apart from reading two mutable globals per precision (exp_cst1_f/exp_cst2_f, exp_cst1_d/exp_cst2_d)",
+    "drop_in_for_baseline": "partial: same float-in float-out signature as sinf/cosf/expf/logf, but restricted domains, no special-value semantics and about 1e-5 error"
+  },
+  "gotchas": [
+    "Header defines non-const, non-static globals (float exp_cst1_f = 2139095040.f; exp_cst2_f; exp_cst1_d; exp_cst2_d) as a 'workaround' for gcc, so including it from two translation units gives multiple-definition link errors; in C the plain 'inline' functions follow C99 inline rules and can fail to link at -O0. Make them static or const, and static inline, when vendoring.",
+    "Harness flaw in the current test_fun.cpp (does not touch the README numbers, which are float-only): main() fills only vals_test, never vals_test_d, so every double benchmark (sin, cos, log, exp and the _d approximations) runs on 1024 zeros, timing sin(0), cos(0), exp(0) and log(0) = -inf.",
+    "The README output is from the 2015 code: the cos and exp coefficients changed in 2017 (cos(0) = 1, exp(0) = 1 commits) and the benchmark loop gained its __asm__ barrier in 2019 (5c3caea), and nothing was re-measured; the mipac fork's README and older header are an identical 2015 snapshot. A numpy float32 re-evaluation of today's coefficients (no FMA, 2M points) gave max abs error 6.2e-6 for sin and 4.6e-5 for cos in [-pi, pi], 9.1e-6 max relative error for exp in [-10, 10] and 1.3e-5 for log in [1e-10, 10], versus the README's 5.9e-6, 4.0e-5, 8.6e-6 and 9.1e-6.",
+    "Throughput inputs are 1024 floats uniform in [0, 1) for every function, which keeps libm on its easiest small-argument paths and says nothing about the restricted-domain behaviour above."
+  ],
+  "pick_this_over_siblings_when": "Pick it over math_intrinsics, corvus or EVE when you want a 229-line, dependency-free MIT header that the compiler vectorises for any ISA and your inputs already sit in [-pi, pi] or the normal float range; pick those siblings when you need explicit AVX2/NEON code, more functions or full-range arguments, since this header has no range reduction.",
+  "verified_claims_summary": "README output 'on my computer' (CPU, compiler version and libm not stated; Makefile g++ -O3 -std=c++11 -march=native), 2015 code, float, 1024 inputs in [0, 1) looped 1e5 times for libm and 1e6 times for the approximations, timed with clock(): sinf 213.3 vs sinapprox 6238.5 M evaluations/s (about 29x), cosf 226.7 vs 7380.7 (33x), logf 115.2 vs 4112.9 (36x), expf 111.3 vs 2366.8 (21x), ratios derived from page data. It compares a vectorised approximation against scalar, correctly rounded libm, not against a vector libm.",
+  "status_note": "Abandoned since 2020-04-19 (23 commits, 106 stars, one open question), but MIT-licensed and a single short header that is easy to vendor once the global-variable and inline linkage issues are fixed; a Python/NumPy port exists as approxmath (brendanashworth/approxmath).",
+  "sources_read": [
+    "https://github.com/jhjourdan/SIMD-math-prims",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/README.md",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/test_fun.cpp",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/simd_math_prims.h",
+    "https://raw.githubusercontent.com/jhjourdan/SIMD-math-prims/HEAD/icsilog.h",
+    "https://github.com/jhjourdan/SIMD-math-prims/commits/master",
+    "https://github.com/jhjourdan/SIMD-math-prims/commit/5c3caea",
+    "https://github.com/jhjourdan/SIMD-math-prims/issues?q=is%3Aissue",
+    "https://github.com/jhjourdan/SIMD-math-prims/issues/3",
+    "https://github.com/jhjourdan/SIMD-math-prims/issues/5",
+    "https://github.com/jhjourdan/SIMD-math-prims/forks",
+    "https://raw.githubusercontent.com/mipac/SIMD-math-prims/HEAD/README.md",
+    "https://raw.githubusercontent.com/mipac/SIMD-math-prims/HEAD/simd_math_prims.h",
+    "https://raw.githubusercontent.com/bminor/glibc/master/NEWS",
+    "https://pypi.org/pypi/approxmath/json",
+    "https://gallium.inria.fr/blog/fast-vectorizable-math-approx/ (unreachable: ENOTFOUND; WebSearch snippet only: logapprox 7.5x faster than icsi_log in tight loops, exp relative error bounded by 1e-5, log absolute error 7e-5 in an earlier version, denormals excluded)"
+  ],
+  "confidence": 0.75
+}

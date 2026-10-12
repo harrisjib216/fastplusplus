@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/ije/md4w",
+  "one_liner": "md4c Markdown parser plus a Zig HTML writer compiled to WebAssembly; renders 2.7-11.6x faster than markdown-it in JavaScript runtimes.",
+  "what_it_does": "Renders CommonMark (plus GFM tables, strikethrough and task lists) to HTML inside any JavaScript runtime with WebAssembly: after an async init(), mdToHtml(stringOrUint8Array, {parseFlags}) returns an HTML string, mdToReadableHtml() returns a ReadableStream of HTML chunks, and mdToJSON() returns a JSON element tree. It is not a drop-in for markdown-it: there is no plugin system, token stream or renderer-rule override; the only hooks are md4c parse flags and a code-block highlighter callback.",
+  "how_it_is_fast": "Parsing is done by md4c, a single-pass SAX-style C parser that fires enter/leave block, enter/leave span and text callbacks without building an AST. md4w replaces md4c-html.c with its own HTML (and JSON) writer in Zig that appends into a buffer in wasm linear memory and flushes it to JavaScript in chunks through one imported function, so each call costs one copy in, one copy out and one TextDecoder pass. md4w-fast.wasm is built with Zig ReleaseFast for wasm32-freestanding with std.heap.wasm_allocator; markdown-it, by contrast, builds a token array with regex-driven rules and concatenates JavaScript strings.",
+  "when_to_use": [
+    "Server, build-time or edge rendering of trusted Markdown (docs sites, static site generators, CMS previews) in Node.js, Deno or Bun when markdown-it plugins are not needed.",
+    "Medium to large documents: third-party runs show the gap widening with size (ox-content CI: 8.1x over markdown-it at 48.7 KB, 11.6x at about 1 MB for parse plus render).",
+    "Runtimes that cannot load native addons (Cloudflare Workers, browsers) where an N-API Markdown engine is not an option.",
+    "HTTP handlers that want to stream HTML out in fixed-size chunks (mdToReadableHtml, 4 KB default buffer), as long as the whole Markdown input fits in memory.",
+    "Pipelines that need a lightweight element tree (mdToJSON) rather than markdown-it's flat token list."
+  ],
+  "when_not_to_use": [
+    "Untrusted input without a separate HTML sanitizer: raw HTML passes through under the default flags, link and image URLs are only percent-escaped (no javascript:/data: scheme filtering like markdown-it's validateLink), and the NO_HTML shorthand is broken (see gotchas).",
+    "When you need CommonMark reference output or byte-stable HTML: the custom Zig renderer appends heading anchors, writes <hr>/<br>, leaves entities undecoded, and the ox-content conformance column scores md4w at 91.7% of CommonMark examples against 99.5% for md4x and 100% for markdown-it; md4w's own test only checks three substrings of the spec render.",
+    "When you rely on markdown-it plugins, typographer, linkify options or custom link rendering (issue #16 asking for link-render customization is open).",
+    "When raw speed on Node.js is the goal: the md4x benchmark has md4x's N-API build 2.36x faster than md4w and its wasm build 1.15x faster, and ox-content and satteri also beat md4w on HTML render there.",
+    "Browser or CDN use expecting the benchmarked speed: from a CDN (and for workerd/unwasm since v0.2.6) init() loads the 28 KB md4w-small.wasm (ReleaseSmall), whose speed is not documented; the published numbers are for the 270 KB md4w-fast.wasm."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (npm package md4w ships prebuilt md4w-fast.wasm and md4w-small.wasm; md4c is vendored as a git submodule pinned at 481fbfb, March 2024)",
+    "min_toolchain": "A JavaScript runtime with ES modules and WebAssembly whose i64 values map to BigInt (the glue decodes pointer/length pairs from BigInt); rebuilding needs Zig 0.11.0 (build.zig uses the 0.11 build API)",
+    "platforms": "wasm32: Node.js, Deno, Bun, browsers, Cloudflare Workers (workerd and unwasm entry points in package.json)",
+    "thread_safety": "Not documented. One wasm instance per module realm with a module-level emit callback, so calls are not re-entrant (a code highlighter that itself calls mdToHtml would clobber the output sink); each Web Worker must call init() itself.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "NO_HTML is defined wrongly in js/md4w.js as 0x00200 | 0x0040 (STRIKETHROUGH | NO_HTML_SPANS) instead of md4c's MD_FLAG_NOHTML = 0x0020 | 0x0040, so the README's parseFlags [\"DEFAULT\", \"NO_HTML\"] still passes raw HTML blocks (a line-start <script> or <iframe>) through verbatim; pass \"NO_HTML_BLOCKS\" and \"NO_HTML_SPANS\" explicitly and still sanitize output.",
+    "parseFlags given as an array replaces the defaults unless it includes \"DEFAULT\", and unknown names are silently dropped: the README calls the task-list flag TASK_LISTS but the accepted key is TASKLISTS.",
+    "Release-build edge cases in src/md4w.zig: invalid UTF-8 lead bytes in a heading (possible only with Uint8Array input; strings go through TextEncoder) hit an 'unreachable' in the slug code, which is undefined behaviour in ReleaseFast/ReleaseSmall; <ol start> is formatted into a 4-byte buffer, so list start numbers of 10000 or more hit 'catch unreachable' in bufPrintIntToSlice; render() returns a slice of the output buffer after its deferred free, which works only because Zig's WasmAllocator stores its free-list link at the end of the slot and the JS glue copies the bytes before the next allocation.",
+    "Code-highlighter output is inserted without escaping, heading anchor ids are not de-duplicated (two identical headings share one id), and open issue #13 reports init() silently leaving the module unset when the wasm import matches neither expected shape, so the first render throws."
+  ],
+  "pick_this_over_siblings_when": "Pick md4w over markdown-wasm (same md4c core, about 1.14x slower in md4w's bench) when you also want streaming HTML or a JSON tree; pick sparkdown instead when you need an mdast tree for the remark/unified ecosystem, and md4x (catalogued under md4c) when you want more speed and better conformance from the same parser lineage.",
+  "verified_claims_summary": "The author's deno bench (test/benchmark.js, Apple M1, Deno 1.40.5, Zig 0.11.0 ReleaseFast) rendered the CommonMark spec file in 1.89 ms/iter against 5.19 ms for markdown-it 14.0.0 (2.7x) and 2.16 ms for markdown-wasm (1.14x), with the wasm libraries fed a Uint8Array and markdown-it a decoded string and no output-equality check. Third-party runs with string input on both sides agree or show more: md4x's mitata bench (i7-10700K, Bun 1.4.2) 17.40 vs 72.68 us/iter (4.2x, derived from page data) and ox-content's CI (AMD EPYC, Node v26.8.1, median of 7) 2,361 vs 293 ops/s at 48.7 KB (8.1x) and 116 vs 10 ops/s at about 1 MB.",
+  "status_note": "Stale: last commit and v0.2.7 on npm are from 2025-05-28 (packaging only; vendored md4c unchanged since March 2024), MIT and small enough to use as-is for trusted Markdown, but the NO_HTML flag bug and open init issue #13 are unfixed.",
+  "sources_read": [
+    "https://github.com/ije/md4w",
+    "https://github.com/ije/md4w/commits/main",
+    "https://github.com/ije/md4w/issues?q=is%3Aissue",
+    "https://github.com/ije/md4w/issues/13",
+    "https://github.com/ije/md4w/tree/main/vendor",
+    "https://github.com/ije/md4w/tree/main/test",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/README.md",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/test/benchmark.js",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/test/test.js",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/build.zig",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/package.json",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/js/index.js",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/js/md4w.js",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/js/md4w.d.ts",
+    "https://raw.githubusercontent.com/ije/md4w/HEAD/src/md4w.zig",
+    "https://raw.githubusercontent.com/mity/md4c/481fbfbdf72daab2912380d62bb5f2187d438408/src/md4c.h",
+    "https://raw.githubusercontent.com/ziglang/zig/0.11.0/lib/std/heap/WasmAllocator.zig",
+    "https://registry.npmjs.org/md4w",
+    "https://github.com/unjs/md4x",
+    "https://raw.githubusercontent.com/unjs/md4x/HEAD/packages/md4x/bench/index.mjs",
+    "https://github.com/ubugeeei-prod/ox-content"
+  ],
+  "confidence": 0.8
+}

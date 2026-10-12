@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/inkeliz/go_inkwasm",
+  "one_liner": "Go js/wasm binding generator and runtime replacing syscall/js calls; about 2x faster on DOM and localStorage micro-benchmarks.",
+  "what_it_does": "Lets Go code compiled with GOOS=js GOARCH=wasm call browser APIs without going through syscall/js. You declare bodyless Go functions annotated //inkwasm:func, //inkwasm:get, //inkwasm:set or //inkwasm:new with a JS path (for example globalThis.localStorage.getItem, or .bufferData on an inkwasm.Object), then run `go run github.com/inkeliz/go_inkwasm build .`, which generates Go stubs, assembly trampolines and per-function JavaScript glue merged with Go's wasm_exec.js into a wasm-build folder. A runtime API (inkwasm.Global().Get(...).Invoke(...)) resembling syscall/js is also provided, using an inkwasm.Object value that must be freed by hand; NewObjectFromSyscall converts an existing js.Value.",
+  "how_it_is_fast": "Each declared function becomes its own //go:wasmimport gojs import whose generated JavaScript reads the typed arguments straight off the Go stack (DataView loads, TextDecoder for strings, zero-copy typed-array views for slices), evaluates the fixed JS expression and writes the result back to the stack, so one Go call is one boundary crossing with no js.Value boxing. JS values held by Go live in a plain JS array indexed by an int with a free list instead of finalizer-tracked references, which is why the README rows show 0-1 allocs/op for the generated bindings against 2-11 for syscall/js.",
+  "when_to_use": [
+    "Go (gc toolchain) browser apps whose frame time is dominated by many small JS calls, such as WebGL/WebGPU command streams; the Gio fork that swapped syscall/js for InkWasm cut frame time 13-37%.",
+    "Hot call sites with a fixed JS target and simple argument types (integers, floats, bools, strings, numeric slices, Objects): DOM construction, localStorage, canvas or GL calls in a loop.",
+    "When garbage-collector pressure from syscall/js conversions shows up in profiles (11 allocs/op for the syscall/js DOM loop against 1 for the generated binding).",
+    "Teams willing to vendor the generator, pin a Go toolchain and check the generated code into version control."
+  ],
+  "when_not_to_use": [
+    "Go 1.24 or newer without patching: the build, test and bench subcommands look for $GOROOT/misc/wasm/wasm_exec.js, which Go 1.24 moved to lib/wasm, so they fail with 'failed to find $GOROOT/misc/wasm/wasm_exec.js driver'.",
+    "TinyGo, Go-to-JS callbacks or exports: TinyGo is unsupported, function arguments are not supported, and exporting Go functions still needs syscall/js js.FuncOf (go:wasmexport is not supported).",
+    "Plain property reads: the location.hostname row is 23% slower than syscall/js (2,442 vs 1,979 ns/op), and the README says results vary with how each API is used.",
+    "Codebases where tools must not rewrite sources: the README warns the generator changes files of the current package and of imported packages.",
+    "Code that needs argument checking or automatic lifetime management: unsupported argument types silently become undefined and every Object must be freed by hand."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Go standard library at run time; the generator uses golang.org/x/tools and golang.org/x/sync, and its test and bench commands drive a local Chrome through chromedp",
+    "min_toolchain": "Main branch: go.mod declares go 1.22 (PR #2 made it Go 1.21+ compatible; the README says 1.20+); Go 1.18-1.20 use tag v0.1.20; build/test/bench break on Go 1.24+ until the wasm_exec.js path is patched",
+    "platforms": "GOOS=js GOARCH=wasm with the gc compiler, in browsers (the generated glue extends go.importObject.gojs from wasm_exec.js); TinyGo unsupported; Node.js not documented",
+    "thread_safety": "Not documented. Go js/wasm runs on one thread; the JS-side object table is a single array with a free list shared by all goroutines.",
+    "drop_in_for_baseline": "partial — the runtime API mirrors syscall/js (Global, Get, Call, Invoke, New) but returns inkwasm.Object values that need explicit Free, and the fast path requires generator-declared bodyless functions"
+  },
+  "gotchas": [
+    "The README's BytesRandom row (1,026 vs 1,808 ns/op) measures no work: the binding is declared //inkwasm:get globalThis.TestObject_GetRandom with a []byte argument, and parser/binder.go turns a get with one argument into an index expression (TestObject_GetRandom[<Uint8Array>]), so crypto.getRandomValues never runs, while the syscall/js side calls it and runs CopyBytesToGo. In your own code, too, a get directive with an argument means property indexing, not a call.",
+    "Object lifetime is manual and unchecked: Free only pushes the id onto a free list (inkwasm/wasm_js.js Internal.Free) without clearing the table slot, there is no finalizer, so a missed Free leaks the JS value for good, and freeing two copies of the same Object puts its id on the free list twice, after which two new Objects share one slot and silently alias.",
+    "PR #5 (May 2024) removed argument verification and marked call/callVoid/invoke/invokeVoid/newObj //go:noescape: unsupported Go types (maps, funcs, chans, complex numbers) arrive in JS as undefined with no error unless you call VerifyArgs, and slices reach JS as zero-copy typed-array views over Go memory, so JS must not keep a passed []byte or []float32 after the call returns.",
+    "The published micro-benchmark table predates the go:wasmimport rewrite (PR #2, May 2024) and names no browser, Go version or machine (the bench runner opens a non-headless Chrome via chromedp); re-measure on your own toolchain before relying on the 2x figure."
+  ],
+  "pick_this_over_siblings_when": "No other Go interop library is catalogued; zaw and wasm-bindgen address the same JS-boundary cost for Rust, so pick InkWasm only when the app is written in Go for js/wasm and interop calls, not compute, dominate the profile.",
+  "verified_claims_summary": "A first-party Go benchmark table (inkwasm/tests_js_test.go; browser, Go version and machine not stated; run before the May 2024 changes) has generated bindings against syscall/js at 11,462 vs 23,550 ns/op for create-and-append-a-div (2.05x), 6,312 vs 11,796 for localStorage.setItem (1.87x) and 3,300 vs 7,356 for getItem (2.23x), but 2,442 vs 1,979 for location.hostname (slower); the BytesRandom row is invalid. In a Gio fork whose InkWasm commit (baf7d94) sits directly on gioui.org@bed59024 and swaps the GL/JS bindings, frame time drops from about 4.65 to 3.02 ms (Chrome 98, Ryzen 3900X), 31.91 to 20.03 ms (Chrome 98, Xiaomi Note 9) and 5.58 to 4.84 ms (Safari 15, MacBook Air).",
+  "status_note": "Stale since 2024-05-19 (11 commits, 38 stars) and experimental by its own README; MIT and small enough to copy the generated-glue pattern, but its build tooling needs a one-line path fix for Go 1.24+ and it has no TinyGo or export support.",
+  "sources_read": [
+    "https://github.com/inkeliz/go_inkwasm",
+    "https://github.com/inkeliz/go_inkwasm/issues?q=is%3Aissue",
+    "https://github.com/inkeliz/go_inkwasm/pulls?q=is%3Apr",
+    "https://github.com/inkeliz/go_inkwasm/pull/5/files",
+    "https://github.com/inkeliz/go_inkwasm/tree/master/inkwasm",
+    "https://github.com/inkeliz/go_inkwasm/tree/master/build",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/go.mod",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/main.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/build/build.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/build/test.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/tests_js_test.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/tests_js_test.js",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/wasm_js.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/wasm_js.js",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/inkwasm_js.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/inkwasm_js.js",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/inkwasm_js.s",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/args_js.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/funcs_js.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/inkwasm/globals_js.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/parser/binder.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/parser/parser.go",
+    "https://raw.githubusercontent.com/inkeliz/go_inkwasm/HEAD/bind/bind.go",
+    "https://github.com/Inkeliz/gio/commit/baf7d943e5d50debf354d4cd5f951d442d4d9b4e",
+    "https://raw.githubusercontent.com/golang/go/go1.24.0/lib/wasm/wasm_exec.js",
+    "https://raw.githubusercontent.com/golang/go/go1.24.0/misc/wasm/wasm_exec.js",
+    "https://raw.githubusercontent.com/golang/go/go1.23.0/misc/wasm/wasm_exec.js",
+    "https://raw.githubusercontent.com/golang/go/go1.25.0/src/cmd/compile/internal/ssagen/abi.go",
+    "https://raw.githubusercontent.com/golang/go/go1.24.0/src/cmd/compile/internal/noder/noder.go"
+  ],
+  "confidence": 0.75
+}

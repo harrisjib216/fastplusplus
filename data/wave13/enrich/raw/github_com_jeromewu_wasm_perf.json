@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/jeromewu/wasm-perf",
+  "one_liner": "Blog demo: 64x64 int32 matrix multiply in C compiled to Wasm SIMD128 by Emscripten, timed against a plain JavaScript loop.",
+  "what_it_does": "A three-file benchmark (mul_mats.js, mul_mats.c, mul_mats_intrin.c) plus a Dockerfile that builds the C kernel with Emscripten 3.1.18 under six flag combinations and with GCC 12.2.0 natively, then times 10,000 multiplications of two 64x64 matrices in Node.js. It accompanies the author's 2022 post 'Improving performance using WebAssembly SIMD Intrinsics'. There is no library API: the reusable part is one function, multiply_mats(int* out, int* in_a, int* in_b, int n), which computes out = A x B^T on int32 data with wasm_simd128.h intrinsics.",
+  "how_it_is_fast": "Most of the gain comes from compiling with -O3 (no-SIMD Wasm -O3 is 2.9x faster than the repo's JS) and enabling -msimd128 so LLVM auto-vectorises the dot-product loop into i32x4.mul/i32x4.add (a further 7x). The intrinsics kernel writes that dot product by hand: a v128 accumulator over four int32 lanes, loads from row i of A and row j of pre-transposed B, and a two-shuffle horizontal reduction at the end of each output element. B is stored transposed so both operands are read with unit stride.",
+  "when_to_use": [
+    "As a short, MIT-licensed starting point for writing wasm_simd128.h intrinsics in C with Emscripten (load, i32x4 mul/add, shuffle-based horizontal sum).",
+    "To show a team the size of the gap between unoptimised emcc output (-O0, slower than JS) and emcc -O3 -msimd128 for a compute-bound integer loop.",
+    "Small dense int32 dot-product or matrix kernels where the dimension is a multiple of 4 and wraparound int32 arithmetic is acceptable.",
+    "Checking whether your own runtime (Node, a browser, a standalone Wasm VM) has working SIMD128 and how it compares with scalar Wasm."
+  ],
+  "when_not_to_use": [
+    "As evidence of how much faster Wasm is than JavaScript: the JS baseline never fills its inputs (it multiplies undefined by undefined and produces NaN) and uses generic double arrays with a store on every inner iteration; an Int32Array plus Math.imul version is about 2.3x faster than the repo's JS, so the honest gap is roughly 10-15x (verifier estimate about 10x, 13-15x in a re-run here), not 23.5x.",
+    "As evidence that hand-written intrinsics beat auto-vectorisation: rebuilt here with clang 18 -O3 -msimd128 on Node 22.22.0, the auto-vectorised scalar loop (best 0.288 s) was faster than the intrinsics kernel (best 0.332-0.344 s).",
+    "Floating-point or non-multiple-of-4 matrices: the intrinsics loop steps k by 4 with no tail and only does int32 multiplies.",
+    "Real matrix multiplication work: there is no blocking, packing, threading or float support; use a BLAS or a Wasm-targeted linear-algebra library instead.",
+    "Anything that needs maintenance: 13 commits, all between 2022-08-26 and 2022-09-01, no issues, no releases."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Build: Docker 19.03+ with buildx, using the emscripten/emsdk:3.1.18 and gcc:12.2.0 images; run: Node.js. The kernel itself needs only wasm_simd128.h.",
+    "min_toolchain": "Emscripten 3.1.18 as tested (any clang with -msimd128 and wasm_simd128.h; clang 18.1.3 compiled the kernel unchanged here); Node.js 16.16.0 as tested",
+    "platforms": "Any WebAssembly runtime with the SIMD128 feature (measured only in Node.js); the Docker build and make run-all target Linux, and the README warns some runs may fail elsewhere; native rows are x86-64, one built with -mavx2",
+    "thread_safety": "Single-threaded demo; the kernel keeps no global state but this is not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The result check is blind to indexing bugs: inputs are all ones and the program only prints a message if the sum differs from 64^3 (exit code stays 0). The pre-fix kernel (before commit fa08bf6, 2022-09-01) loaded &in_a[i] and &in_b[j] instead of &in_a[i*n+k] and &in_b[j*n+k], still passed this check, and was published as 0.062 s (-99%). Re-run here: on all-ones data the pre-fix kernel gives 262144 like the fixed one, on varied data it gives -16 against the correct 584, and it runs in 0.062-0.106 s, matching the withdrawn figure.",
+    "mul_mats.js is not the C algorithm in JavaScript: in_a.arr and in_b.arr are never filled, the transpose loop writes to the wrapper objects instead of .arr, every product is NaN and the output is never checked. It also does double arithmetic, while the C/Wasm side does wrapping int32.",
+    "The README row labelled mul_mats_intrin-wasm-simd-O3.js is built as dist/mul_mats_intrin-wasm-O3-simd.js (make run-wasm-O3-simd-intrin). The non-O3 intrinsics row (4.718 s) was measured on the pre-fix kernel and never re-run. Rows without -O3 are emcc -O0 debug builds, so 'Wasm slower than JS' there is a build-flag artifact.",
+    "Native GCC rows: -O3 targets baseline x86-64 (SSE2, no pmulld), so the blog's 'Wasm SIMD is faster than C' line compares against crippled native code; gcc -O3 -mavx2 (0.119 s) is about 2x faster than the best Wasm row. Each row is one run with no repetition, timed by clock() in C and console.time in JS."
+  ],
+  "pick_this_over_siblings_when": "Pick it for a minimal C/Emscripten intrinsics example; for a fairer JS-vs-Wasm matrix comparison (typed-array JS baseline, per-size sweep, 1.0-1.8x) see JavaScript-vs-WebAssembly-Comparative-Analysis, and for production Wasm SIMD code with real baselines see tape-sha256 or sha2-wasm.",
+  "verified_claims_summary": "On an i5-1135G7 with Node.js 16.16.0 and Emscripten 3.1.18, 10,000 64x64 int32 multiplies took 0.245 s with the -O3 -msimd128 intrinsics kernel, 0.278 s auto-vectorised and 2.012 s at -O3 without SIMD, against 5.768 s for a JavaScript loop that computes NaN on unfilled arrays. Re-run here (Node 22.22.0, Xeon @ 2.10GHz, kernel rebuilt with clang 18.1.3, best of 7): intrinsics 0.332-0.344 s, auto-vectorised 0.288 s, no-SIMD -O3 1.435-1.464 s, repo JS 10.03-11.21 s, Int32Array JS with Math.imul 4.29-4.66 s, so Wasm SIMD is about 13-15x faster than idiomatic JS (derived, different toolchain and machine).",
+  "status_note": "Abandoned since 2022-09-01 (13 commits over one week, 13 stars, no issues); MIT-licensed blog demo whose only reusable piece is a 20-line int32 kernel, and whose headline numbers rest on a broken JS baseline and an all-ones result check that missed a published indexing bug.",
+  "sources_read": [
+    "https://github.com/jeromewu/wasm-perf",
+    "https://github.com/jeromewu/wasm-perf/commits/main",
+    "https://github.com/jeromewu/wasm-perf/commit/fa08bf608c5b6e3264faba63de268bb8617c33d0",
+    "https://github.com/jeromewu/wasm-perf/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/README.md",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/mul_mats.js",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/mul_mats.c",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/mul_mats_intrin.c",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jeromewu/wasm-perf/edf01fe0f06b8b5f73281b03d338b731fff4af82/mul_mats_intrin.c",
+    "https://github.com/jeromewu/jeromewu.github.io",
+    "https://github.com/jeromewu/jeromewu.github.io/tree/master/content/blog",
+    "https://raw.githubusercontent.com/jeromewu/jeromewu.github.io/master/content/blog/improving-performance-using-webassembly-simd-intrinsics/index.md"
+  ],
+  "confidence": 0.85
+}

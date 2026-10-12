@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/jvdd/argminmax",
+  "one_liner": "Rust crate: argmin and argmax indices in one SIMD pass, 2.4-21x faster than its own scalar loop.",
+  "what_it_does": "argminmax returns the index of the minimum and the maximum element of a slice in a single pass, via extension traits (`ArgMinMax`, `NaNArgMinMax`, plus `*Masked` variants that skip Arrow-null elements in 0.7.0) on `&[T]`, `Vec<T>`, 1-D ndarray arrays and arrow `PrimitiveArray`. It covers i8-i128, u8-u128, f16 (feature `half`), f32 and f64; `ArgMinMax` ignores NaNs, `NaNArgMinMax` returns the first NaN's index. It is not a drop-in for anything in std: you call `arr.argminmax()` (or `argmin()`/`argmax()`) and get `(usize, usize)`.",
+  "how_it_is_fast": "The core keeps a vector of running minima, a vector of running maxima and matching index vectors, compares each loaded vector against them and blends with the comparison mask, so the inner loop has no data-dependent branches; a horizontal reduction at the end picks the value and the lowest index on ties. Unsigned ints and f16 (and floats in the NaN-returning variant) are bit-transformed into ordered signed integers so integer compare instructions can be used, which is why 8- and 16-bit types get the largest speedups. Index lanes have the data's width, so 8- and 16-bit inputs are processed in overflow-safe chunks. Since 0.7.0 the loop reduces each group of 4 vectors to one candidate before touching the running min/max, shortening the loop-carried dependency chain (PR #88); the instruction set (SSE4.1, AVX, AVX2, AVX-512, NEON) is chosen by runtime CPU feature detection on every call.",
+  "when_to_use": [
+    "Rust code that needs both the argmin and the argmax (or either one) of large primitive arrays, such as time-series downsampling, plotting or columnar analytics; the published rows use 102,400-element arrays.",
+    "8- and 16-bit integer or f16 data, where the integer-mapped SIMD kernels gave about 10-21x over the scalar loop on a Ryzen 7 4800U.",
+    "Shipping one binary to heterogeneous x86-64 machines: runtime dispatch picks SSE4.1, AVX2 or AVX-512 without `-C target-cpu`.",
+    "Arrow or Polars columns with validity bitmaps: the masked variants skip nulls and return `None` when nothing is valid (0.7.0)."
+  ],
+  "when_not_to_use": [
+    "64-bit integers on x86 CPUs without AVX2 (Xeon E5-2650 v2 in the results file): dispatch falls back to scalar because SSE was slower than scalar (i64 140.98 vs 98.20 us), so there is no gain; the f64 low end on a Ryzen 7 4800U is 2.9x and u64 2.4x.",
+    "Short arrays: PR #88's Apple M5 measurements show the newer code ranging 0.88-1.43x of the old at 32 elements, and no published number covers small inputs against the scalar loop.",
+    "When an empty input must not panic: the functions assert a non-empty slice (and the arrow impls panic when every value is null); issue #27 asking for `Option` returns is still open.",
+    "32-bit ARM on stable Rust: NEON there needs nightly plus the `nightly_simd` feature, otherwise the scalar path runs; i128 and u128 are always scalar.",
+    "Pinned to 0.6.x (Polars main pins 0.6.3): that line lacks the October 2026 fixes for NaN-returning -0.0/0.0 ties (#98, #100), NaN-ignoring results when only infinities remain (#97, #102), and an illegal-instruction dispatch of 16-bit types to AVX-512 on CPUs with AVX512F but no AVX512BW (#84, reachable with `nightly_simd`)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "num-traits; optional half 2.7 (f16), ndarray 0.17, arrow (any version, `>0`)",
+    "min_toolchain": "Rust 1.89 for 0.7.0 (AVX-512 kernels on stable since that release); 0.6.x builds on older stable but uses AVX-512 only on nightly with `nightly_simd`; v0.4.0, which produced the published results, required nightly unconditionally",
+    "platforms": "x86 and x86-64 (SSE4.1, AVX, AVX2, AVX-512F/BW, runtime-detected), aarch64 NEON, 32-bit ARM NEON on nightly; scalar fallback elsewhere",
+    "thread_safety": "not documented; the functions take `&[T]` and keep no state beyond std's CPU-feature detection cache",
+    "drop_in_for_baseline": "partial — replaces a hand-written min/max index loop with a trait method returning (argmin, argmax); returns the first index on ties, panics on empty input, and float NaN handling depends on which trait you call"
+  },
+  "gotchas": [
+    "The benchmark baseline is the crate's own branchy scalar loop (`if v < low {..} else if v > high {..}` over `get_unchecked`), run on uniformly random data where min/max updates are rare and branches predict well; no third-party baseline (std iterators, NumPy) is measured, and the worst-case-order benches exist in the v0.4.0 bench files but are commented out of `criterion_group!`.",
+    "benches/results is from v0.4.0 (2023), which required nightly (`#![feature(stdsimd)]` at the top of lib.rs) and always enabled AVX-512. In 0.6.x on stable, AVX-512 is gated behind `nightly_simd`, so the i7-1185G7 'impl' rows (for example f32 8.0x, derived from page data) do not apply there; the same CPU's AVX/AVX2 rows are f32 2.5x, i64 1.3x and u64 2.1x over scalar (derived from page data). Current 0.7.0 kernels are up to 1.8x faster than before PR #88, so the file is stale in both directions. Data alignment was not controlled (open issue #95).",
+    "For 8-bit types, x86 dispatch deliberately prefers SSE4.1: in the results AVX-512 was slower than SSE for i8 on the i7-1185G7 (10.49 vs 6.78 us), because 8-bit index lanes force short overflow-safe chunks.",
+    "`ArgMinMax` on an all-NaN float array returns index 0, and `NaNArgMinMax` does not guarantee the first NaN when several NaN bit patterns are present (README limitations)."
+  ],
+  "pick_this_over_siblings_when": "Pick it in Rust whenever you need indices rather than values: numpy-minmax returns only min and max values for NumPy, and kelindar/simd, vek and FastArrayOps cover min/sum/find in Go and C++. It is also the only one here with NaN-policy variants, Arrow null masks and runtime dispatch from SSE4.1 to AVX-512 and NEON.",
+  "verified_claims_summary": "First-party criterion runs at v0.4.0 (2023, unstated nightly rustc, no target-cpu flags) on 102,400 uniformly random elements, comparing the dispatched SIMD path with the crate's own scalar loop: on a Ryzen 7 4800U, 2.4x (u64) and 2.9x (f64) up to 10.5x (i8), 16.6x (i16) and 21.2x (f16); 64-bit types were no faster than scalar on a Xeon E5-2650 v2 (no AVX2) and on the Raspberry Pi 3B and 4B. These numbers predate 0.7.0's kernel changes and its float-path correctness fixes.",
+  "status_note": "Very actively maintained (0.7.0 released 2026-10-09 after a burst of correctness, NEON i64/u64 and performance PRs), MIT, about 15.4M crates.io downloads, almost all on 0.6.x through Polars; adopt 0.7.0 on Rust 1.89+ and treat the 2023 results file as directional for the current code.",
+  "sources_read": [
+    "https://github.com/jvdd/argminmax/issues?q=is%3Aissue",
+    "https://github.com/jvdd/argminmax/pulls?q=is%3Apr",
+    "https://github.com/jvdd/argminmax/pull/83",
+    "https://github.com/jvdd/argminmax/pull/84",
+    "https://github.com/jvdd/argminmax/pull/88",
+    "https://github.com/jvdd/argminmax/pull/98",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/README.md",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/benches/results",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/benches/bench_i16.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/src/scalar/generic.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/src/simd/generic.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/HEAD/dev_utils/src/config.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/74436c9/benches/bench_f32.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/74436c9/benches/bench_i16.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/74436c9/src/scalar/generic.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/74436c9/src/lib.rs",
+    "https://raw.githubusercontent.com/jvdd/argminmax/74436c9/Cargo.toml",
+    "https://crates.io/api/v1/crates/argminmax",
+    "https://raw.githubusercontent.com/pola-rs/polars/main/Cargo.toml"
+  ],
+  "confidence": 0.8
+}

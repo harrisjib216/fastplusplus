@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/jnettlet/cortex_a72_memcpy",
+  "one_liner": "LD_PRELOAD AArch64 memcpy/memmove/memset from Arm optimized-routines, re-tuned for Cortex-A72; ties glibc except small aligned copies.",
+  "what_it_does": "A two-file assembly library (memcpy.S, memset.S) built into libmemcpy.so that interposes the C library's memcpy, memmove and memset through LD_PRELOAD or /etc/ld.so.preload. Its stated purpose is to fix copies from user space into memory-mapped device memory such as framebuffers (or SPDK buffers) by changing store order; performance parity or better with glibc on the Arm benchmark is a secondary claim. The API is the standard libc signatures, so applications need no source change.",
+  "how_it_is_fast": "It is Arm optimized-routines' integer ldp/stp memcpy (2012-2020 code) with the medium-copy path cut from 128 to 96 bytes, so 97-128 byte copies go to the 64-byte software-pipelined loop with a 16-byte-aligned destination; small sizes use branchless overlapping head/tail copies, and one entry point handles memmove overlap by choosing a backwards loop. The January 2024 rework adds nop padding and 16-byte alignment of loops and branch targets to avoid taken-branch fetch penalties, and the backwards-copy tail stores its last 64 bytes in ascending order where upstream stores them descending. memset is Arm's NEON memset with DC ZVA zeroing for zero fills of 160 bytes and up, with the DCZID_EL0 block-size check compiled out.",
+  "when_to_use": [
+    "Linux AArch64 systems with Cortex-A72 cores (the author is at SolidRun, whose HoneyComb LX2 uses 16 Cortex-A72 cores; the benchmark board is not stated) where a GPU framebuffer or PCIe BAR mapping is corrupted by the system memcpy's store order.",
+    "Workloads dominated by small aligned copies of 8-64 bytes on Cortex-A72, where the README shows 1.36-1.75x over the libc row and 1.18-1.50x over __memcpy_aarch64.",
+    "Unaligned copies around 128 bytes: 10.42 bytes/ns vs 7.77 for libc and 7.42 for __memcpy_aarch64, because the 96-byte cut-over sends them to the aligned-destination loop.",
+    "Quick experiments: LD_PRELOAD one .so per process without rebuilding the application or glibc."
+  ],
+  "when_not_to_use": [
+    "Any core other than Cortex-A72: memset assumes a 64-byte DC ZVA block (SKIP_ZVA_CHECK), and the tuning targets A72 fetch behaviour; glibc already IFUNC-selects good routines elsewhere.",
+    "Copies of 512 bytes and up, random-size mixes and 1K-64K copies: the README shows these within about 1-2% of glibc and Arm's routine, so there is nothing to gain.",
+    "Strongly ordered Device-nGnRE mappings: the code still issues unaligned and overlapping head/tail stores in every size class, and DC ZVA on Device memory raises an alignment fault; only one store-order pattern was changed.",
+    "System-wide /etc/ld.so.preload on production machines: 5 stars, no tests, no CI, no release, last commit 2024-01-07, and the published numbers predate the current code."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none (GNU make, a C compiler driver for .S files; asmdefs.h is in the repo)",
+    "min_toolchain": "GCC or Clang that assembles AArch64 .S with Advanced SIMD; the Makefile passes only -fPIC -g -fno-builtin style flags and no -march; Debian packaging files from PR #1",
+    "platforms": "aarch64 Linux only (LP64; ILP32 argument sanitising macros present); tuned for Cortex-A72, memset requires a 64-byte DC ZVA block",
+    "thread_safety": "Reentrant leaf routines with no global state (from the source); not documented otherwise",
+    "drop_in_for_baseline": "partial — exports memcpy, memmove and memset with the libc ABI for preloading, but calls that reach glibc as __memcpy_chk/__memset_chk (FORTIFY_SOURCE) or glibc-internal copies are not interposed (inference from the exported symbols)."
+  },
+  "gotchas": [
+    "Hazard in memset.S: the January 2024 commit added '#define SKIP_ZVA_CHECK', which compiles out the DCZID_EL0 read that upstream uses to confirm a 64-byte DC ZVA block before zeroing; on a core with a larger block (e.g. 128 or 256 bytes) memset(p, 0, n >= 160) would zero memory past the buffer, a smaller block would leave gaps, and if DC ZVA is prohibited (DZP=1) it faults. Safe on Cortex-A72's 64-byte block, which makes /etc/ld.so.preload on mixed hardware or images moved to another SoC risky.",
+    "Benchmark caveats: the README tables (July 2022) were measured before the January 2024 rework of both files, on an unstated A72 board, compiler and glibc, with a locally modified Arm string/bench/memcpy.c (the __memcpy_a72 and memcpy_call rows are not in upstream) that is not published.",
+    "The small-copy win over __memcpy_aarch64 is not algorithmic: for 8-32 B the current code runs the same instructions as optimized-routines v21.02 (one add moved), and in the unaligned table the two tie (1.95 vs 1.91, 4.40 vs 4.40, 8.80 vs 8.80 bytes/ns), so the aligned 1.44-1.50x gap most likely comes from code placement in a 100-million-iteration loop of one fixed size (inference). The libc 'memcpy' row is also slower than the author's 'memcpy_call' row at 8-32 B (1.17 vs 1.60), which suggests the baseline row's call path, not the copy code, sets part of the libc gap (inference).",
+    "The headline backwards-memmove 64K result (11.69 vs 6.54 for libc) is shared by Arm's __memcpy_aarch64 (11.67), and unaligned 64 B (8.46 vs 9.35) and backwards memmove 1K-8K are slightly slower than libc."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Arm Optimized Routines only when you need an LD_PRELOAD drop-in on Cortex-A72 for the device-memory store-order problem; for library use, Arm's __memcpy_aarch64 (the code it is derived from) is maintained, checks the ZVA size, and runs within 1-2% of it beyond 64 bytes. copies-and-fills and tinymembench target 32-bit ARM boards and are not alternatives on AArch64.",
+  "verified_claims_summary": "The author's run of Arm optimized-routines' memcpy benchmark on an unnamed Cortex-A72 (compiler, glibc and clock unstated) shows __memcpy_a72 at 1.95/4.40/8.79/12.80 bytes/ns for aligned 8/16/32/64-byte copies against 1.17/2.51/5.03/9.38 for the libc memcpy row and 1.35/2.93/5.86/10.83 for __memcpy_aarch64, with random (2.01 vs 1.97 average) and 1K-64K copies within 1-2%; those numbers were taken in July 2022 on code that was reworked in January 2024.",
+  "status_note": "Stale since January 2024, MIT (Solidrun 2021; memset.S carries Arm's MIT OR Apache-2.0 WITH LLVM-exception header) and small enough to vendor, but the current memset hard-codes a 64-byte DC ZVA block (SKIP_ZVA_CHECK), so it is only safe on Cortex-A72-class cores.",
+  "sources_read": [
+    "https://github.com/jnettlet/cortex_a72_memcpy",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/README",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/COPYING",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/memcpy.S",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/memset.S",
+    "https://raw.githubusercontent.com/jnettlet/cortex_a72_memcpy/HEAD/asmdefs.h",
+    "https://github.com/jnettlet/cortex_a72_memcpy/commits",
+    "https://github.com/jnettlet/cortex_a72_memcpy/commit/f60303d",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/v21.02/string/aarch64/memcpy.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/v21.02/string/aarch64/memset.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/master/string/aarch64/memcpy.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/master/string/aarch64/memset.S",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/v21.02/string/bench/memcpy.c",
+    "https://raw.githubusercontent.com/ARM-software/optimized-routines/master/string/bench/memcpy.c",
+    "WebSearch: libmemcpy.so HoneyComb LX2 memcpy framebuffer (no project hits; LKML 2018 thread 'framebuffer corruption due to overlapping stp instructions on arm64', snippet only)"
+  ],
+  "confidence": 0.6
+}

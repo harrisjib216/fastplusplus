@@ -484,5 +484,101 @@
       "https://github.com/higan-emu/libco/issues/45",
       "https://github.com/higan-emu/libco/issues/43"
     ]
+  },
+  {
+    "id": "https://github.com/jlongster/absurd-sql",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: raw-IndexedDB write timings include an unawaited clear() transaction from the previous run while the SQLite clear runs before its timer; read baseline is the slowest cursor pattern with asymmetric timers; charts are images only. First-party, C stays with the harness flaw documented.",
+    "corrections": {
+      "caveats": "First-party only; the headline 'up to 10x' is the only number in text and the chart images (user-images.githubusercontent.com) could not be opened, so per-test values were not read; readBench/writeBench loop over 100 to 100,000 rows on a 2015 MacBook Pro in Chrome with no CPU model or browser version. Harness flaw on writes: main.worker.js populate() calls q.clear(db) without awaiting it, and raw IndexedDB clear() opens its own readwrite transaction, so the timed populate transaction waits for that clear to commit and every raw-IndexedDB write timing includes deleting the previous run's rows, while the SQLite clear (DROP/CREATE TABLE) runs synchronously before its timer. Read baseline is the slowest raw-IndexedDB pattern: sumAll walks openCursor one continue() per row while absurd-sql reads about a hundred rows per 4 KB block; the SQLite timer starts after db.prepare() with performance.now(), the raw timer includes transaction creation and uses millisecond Date.now(), so the 100- to 1,000-row points are mostly noise. Nolan Lawson's follow-up 'Speeding up IndexedDB reads and writes' (2021-08-22) argued batched getAll()/getAllKeys() and relaxed durability close much of the gap. Requires the author's sql.js fork (@jlongster/sql.js, memory leak #53), SharedArrayBuffer with COOP/COEP headers and a worker; open bug #72 (IDBCursor advance after the transaction finished); a storage-layer win over the IndexedDB API, not a wasm compute win. Abandoned since 2023-08-06."
+    },
+    "urls_opened": [
+      "https://github.com/jlongster/absurd-sql/blob/master/src/examples/bench/main.worker.js",
+      "https://github.com/jlongster/absurd-sql/blob/master/src/examples/bench/queries-raw-idb.js",
+      "https://github.com/jlongster/absurd-sql/issues/72"
+    ]
+  },
+  {
+    "id": "https://github.com/jnettlet/cortex_a72_memcpy",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: README numbers (July 2022) predate the January 2024 rework that hard-codes a 64-byte DC ZVA block (SKIP_ZVA_CHECK), the 8-32 B code matches Arm optimized-routines v21.02 so the aligned small-copy gap is likely code placement, and the libc row carries call-path overhead; first-party, C stays with corrections.",
+    "corrections": {
+      "caveats": "The repo's stated purpose is a device-memory fix (re-ordered stores in the 96-byte path for framebuffers/SPDK); the code is an initial import of Arm optimized-routines memcpy loaded via LD_PRELOAD. README tables (July 2022) give no compiler, flags, board, SoC, glibc or clock, were measured with a locally modified, unpublished Arm string/bench/memcpy.c, and predate the January 2024 rework of both files. The small-copy win over __memcpy_aarch64 is not algorithmic: for 8-32 B the code runs the same instructions as optimized-routines v21.02 (one add moved) and the two tie in the unaligned table (4.40 vs 4.40, 8.80 vs 8.80 bytes/ns), so the aligned 1.44-1.50x gap most likely comes from code placement in a 100-million-iteration loop of one fixed size; the libc 'memcpy' row is slower than the author's own 'memcpy_call' row at 8-32 B (1.17 vs 1.60), so part of the libc gap is call-path overhead. Real gain at unaligned 128 B (10.42 vs 7.77 bytes/ns libc); random and large copies are within 1-2%; the backwards-memmove 64K win is shared by Arm's __memcpy_aarch64 (11.67); unaligned 64 B and backwards memmove 1K-8K are slightly slower than libc. Hazard: commit f60303d (January 2024) defines SKIP_ZVA_CHECK in memset.S, compiling out the DCZID_EL0 check, so memset(p, 0, n >= 160) on a core with another DC ZVA block size zeroes past the buffer, leaves gaps or faults (DZP=1); safe only on Cortex-A72-class cores, risky in /etc/ld.so.preload on mixed hardware. Licences per file (MIT Solidrun 2021; memset.S MIT OR Apache-2.0 WITH LLVM-exception)."
+    },
+    "urls_opened": [
+      "https://github.com/jnettlet/cortex_a72_memcpy/blob/master/memset.S",
+      "https://github.com/jnettlet/cortex_a72_memcpy/blob/master/memcpy.S",
+      "https://github.com/jnettlet/cortex_a72_memcpy/commit/f60303d"
+    ]
+  },
+  {
+    "id": "https://github.com/justrach/dhi",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the 12-75x rows build the schema inside the timed closure and mostly time Zod 4's schema construction; the 7 hoisted-schema rows give about 2.9x; a parity bug in the email fast path and a README that still advertises WASM and N-API paths the npm package no longer ships. First-party, C stays with corrected claim and caveats.",
+    "corrections": {
+      "claimed_speedup": "README (release 1.3.1, bun run benchmarks/benchmark-vs-all.ts): 13.8x faster than Zod 4 on the full suite (arithmetic mean of per-row ratios); docs/benchmarks/benchmark-results.json (2026-03-18, Bun, 25 rows, arithmetic mean 27.3x, geometric mean 16.4x derived from page data): z.email() 15.9x, z.url() 13.8x, z.ipv4() 12.2x, z.int() 54.3x, z.float64() 61.8x, z.coerce.boolean() 74.5x, Object (valid) 4.4x, Nested Object 3.7x, Array<number> 7.8x, Union 1.6x, DiscriminatedUnion 2.1x, Optional 2.2x, Nullable 2.0x. The 12-75x rows construct a new Zod schema on every iteration; the 7 rows with schemas built once (objects, arrays, unions, modifiers) give about 2.9x (1.6-7.8x, derived from page data). The README's own 1.3.1 table has IPv4 at 1.1x.",
+      "caveats": "First-party; CPU, Bun version and the script that produced benchmark-results.json are not published (no repo script writes it, and its 2026-03-18 timestamp predates the v1.6.0 core rewrite). Harness flaw: the 12-75x rows build the schema inside the timed closure (zod.email().safeParse(...), zod.int(), zod.coerce.boolean()), so they mostly time Zod 4's schema construction (Zod does 0.42M ops/s on that z.email() row but 1.9M ops/s on a hoisted 3-field object with an email check); benchmark-vs-all.ts does the same for its number and coercion rows; each row runs dhi then Zod once in one process with results discarded; three summary figures (13.8x README, 27.3x JSON, 29.7x chart) come from different runs. Parity bug: fastValidateEmail accepts a local part ending in an apostrophe (o'@example.com), which Zod 4's email regex rejects (reproduced in Node 22; tests/test-zod-parity.ts only covers o'neil@example.com). Despite the 'SIMD WASM' description the TypeScript path is mostly plain JavaScript: v1.1.20 called WASM only for url, ipv4 and ISO datetime, v1.5.2 only for ISO datetime, and since v1.6.0 (2026-08-30) the default entry is a runtime-agnostic TypeScript core with no WASM; package.json exports no dhi/napi entry although the README advertises it. Runs on Bun (JavaScriptCore), not V8."
+    },
+    "urls_opened": [
+      "https://github.com/justrach/dhi/blob/main/js-bindings/benchmarks/benchmark-vs-all.ts",
+      "https://github.com/justrach/dhi/blob/main/docs/benchmarks/benchmark-results.json",
+      "https://github.com/justrach/dhi/blob/main/js-bindings/src/schema-core.ts",
+      "https://github.com/justrach/dhi/blob/main/js-bindings/package.json"
+    ]
+  },
+  {
+    "id": "https://github.com/jvdd/argminmax",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the published results come from v0.4.0 on nightly with AVX-512 always on, which 0.6.x on stable does not use; own branchy scalar baseline; correctness fixes only in 0.7.0. First-party, C stays with corrections.",
+    "corrections": {
+      "caveats": "First-party criterion results in benches/results from v0.4.0 (2023), which required nightly and always enabled AVX-512; in 0.6.x on stable AVX-512 sits behind the nightly_simd feature, so the i7-1185G7 8.0x f32 row does not apply to stable builds (that CPU's AVX/AVX2 rows give 2.5x f32, 1.3x i64, 2.1x u64). The baseline is the crate's own branchy scalar loop on random data; the worst-case benches are commented out; no comparison with a C++ -O3 baseline. 0.6.x users (Polars main pins 0.6.3) lack the 0.7.0 fixes of 2026-10-09: -0.0/0.0 tie mismatches (#98, #100), infinities-only NaN-ignore results (#97, #102) and an AVX512F-without-BW illegal instruction on 16-bit types (#84)."
+    },
+    "urls_opened": [
+      "https://github.com/jvdd/argminmax/tree/main/benches/results",
+      "https://github.com/jvdd/argminmax/blob/main/CHANGELOG.md",
+      "https://github.com/jvdd/argminmax/issues/98",
+      "https://github.com/jvdd/argminmax/issues/84"
+    ]
+  },
+  {
+    "id": "https://github.com/jeromewu/wasm-perf",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the all-ones result check cannot catch indexing bugs (the withdrawn 0.062 s kernel passed it), the intrinsics advantage over auto-vectorisation did not reproduce (0.332-0.344 vs 0.288 s), and against typed-array JS the gap is about 13-15x; first-party demo with a broken JS baseline, C stays with corrections.",
+    "corrections": {
+      "caveats": "Baseline defect: mul_mats.js allocates in_a.arr and in_b.arr with new Array(size) and never fills them, so the timed loop multiplies undefined*undefined = NaN in holey arrays and the output is never checked; JS uses doubles while C/Wasm use int32. Reruns on Node 22.22.0 (Intel Xeon @ 2.10GHz, different machine): repo JS 10.03-10.34 s (sum NaN), Int32Array with local accumulator 4.29-4.58 s, so the untyped, store-every-iteration JS understates JS by about 2.3x and the real gap is about 13-15x, not 23.5x. The result check uses all-ones inputs and only prints a message if the sum differs from 64^3: the pre-fix kernel (before fa08bf6, 2022-09-01, loads from &in_a[i] and &in_b[j]) passed it and was published as 0.062 s; on varied data it returns -16 against the correct 584 (reproduced). The fix re-measured the two -O3 SIMD rows (0.062 s became 0.245 s) but not the non-O3 intrinsics row (4.718 s). Enricher rerun (clang 18 -O3 -msimd128, best of 7): intrinsics 0.332-0.344 s vs auto-vectorised 0.288 s, so the intrinsics advantage over -O3 -msimd128 auto-vectorisation is not reproduced. Non-O3 Wasm rows are emcc -O0 debug builds; native GCC -O3 rows target baseline x86-64 (SSE2, no pmulld) and gcc -O3 -mavx2 (0.119 s) is about 2x faster than the best Wasm row; each row is one run with no repetition. Single 64x64 int32 matrix-multiply microbenchmark from a 2022 Node 16 / Emscripten 3.1.18 blog demo, abandoned since 2022-09-01."
+    },
+    "urls_opened": [
+      "https://github.com/jeromewu/wasm-perf/blob/main/mul_mats_intrin.c",
+      "https://github.com/jeromewu/wasm-perf/commit/fa08bf6",
+      "https://github.com/jeromewu/wasm-perf/blob/main/mul_mats.js",
+      "https://github.com/jeromewu/wasm-perf/blob/main/Makefile"
+    ]
+  },
+  {
+    "id": "https://github.com/jetbrains/kotlin",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the chart's own harness (commit a82a6cb) runs Kotlin/JS under Node 21 V8 canary and Kotlin/Wasm under d8 11.9.125 with no browser runner, so the published bars compare different V8 hosts (cross-run precedent: PostgreSQL, MySQL, ODB); five of twelve bars are single samples (iterations = 1); values exist only as pixel readings of a 2023 screenshot. No like-for-like measurement is documented, so D.",
+    "corrections": {
+      "caveats": "Numbers exist only as two PNG screenshots committed 2023-12-07 (commit a82a6cb, Kotlin 1.9.20), read by eye (+-3 points), predating Kotlin 2.x and current V8. Cross-host baseline: the build script committed with the screenshots runs Kotlin/JS under nodejs() on Node 21.0.0-v8-canary202309167e82ab1fa2 and Kotlin/Wasm under d8() on d8 11.9.125 (plus both on a 2023-09-21 SpiderMonkey nightly shell) and has no browser runner, while the Kotlin docs say the results come from Google Chrome, so which run produced the chart and whether both sides ran in one V8 host is undocumented. CD, Havlak, JSON, nBody and Mandelbrot sit in the slowMacro configuration with one measured invocation (iterations = 1) after warm-up, so five bars rest on a single sample; the fast set uses 5 x 50 ms iterations. Whether the chart shows Dev or Prod builds, or the plain or Binaryen-optimised Wasm variant, is not stated. No CPU, engine version or Kotlin version stated; baseline is Kotlin/JS compiler output, not hand-written JS; JSON is about 1.7x slower and Mandelbrot level. Open issue #30 (2026-10-05): the WasmEdge and Wasmtime tasks can silently benchmark a stale wasmWasi binary. The current harness (Kotlin 2.3.20-RC, Node 26.2.0, d8/V8 15.0.45, Binaryen 129) has no published results; the README's run instructions describe 2023 targets the build no longer registers. The Compose chart comes from a separate compose-multiplatform benchmark branch. The entry id points at the whole Kotlin compiler repo."
+    },
+    "urls_opened": [
+      "https://github.com/Kotlin/kotlinx-benchmark",
+      "https://github.com/JetBrains/kotlin-wasm-benchmarks/commit/a82a6cb",
+      "https://github.com/JetBrains/kotlin-wasm-benchmarks/blob/main/build.gradle.kts",
+      "https://github.com/JetBrains/kotlin-wasm-benchmarks/issues/30"
+    ]
+  },
+  {
+    "id": "https://github.com/jhjourdan/simd-math-prims",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: README numbers come from 2015 code whose cos/exp coefficients changed in 2017 and gained an asm barrier in 2019 without re-measurement; the double benches run on zeros (float rows unaffected); first-party, C stays with corrections.",
+    "corrections": {
+      "caveats": "First-party README output from the 2015 code: cos and exp coefficients changed in 2017 and an asm barrier was added in 2019, never re-measured (the mipac fork is an identical 2015 snapshot). Harness flaw: test_fun.cpp never fills vals_test_d, so all double benches run on 1024 zeros; the README rows are float-only and unaffected. Baseline is scalar libm from before glibc 2.27 (no libmvec) with no SLEEF or other vector-math comparison, and the approximations trade accuracy for speed: no range reduction (sinapprox(10) about 896), logapprox gives -inf for NaN, 88.72 for +inf and wrong results for subnormals. The header defines non-static globals (exp_cst1_f etc.), so a second including translation unit fails to link. icsilog.h is GPL-2.0+ (bench only); the library itself is MIT."
+    },
+    "urls_opened": [
+      "https://github.com/jhjourdan/SIMD-math-prims/blob/master/test_fun.cpp",
+      "https://github.com/jhjourdan/SIMD-math-prims/blob/master/simd_math_prims.h",
+      "https://github.com/jhjourdan/SIMD-math-prims/commits/master"
+    ]
   }
 ]
