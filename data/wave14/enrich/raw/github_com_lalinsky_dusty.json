@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/lalinsky/dusty",
+  "one_liner": "Zig HTTP/1.1 server and client framework on the zio coroutine runtime; ties nginx and beats Drogon in HttpArena.",
+  "what_it_does": "Dusty is an HTTP/1.0 and HTTP/1.1 client and server library written against Zig's std.Io interface: a generic Server(Context) with a router (path parameters, wildcards), handlers of the form fn(*Request, *Response) !void, response helpers (print, render, encode, json), opt-in gzip, Server-Sent Events, static and embedded files, WebSocket upgrade, server and client TLS with mTLS, and a pooled HTTP client with Unix-socket support. It runs on any std.Io implementation, but the author recommends injecting the zio runtime for production. It is a library you build an application with, not a drop-in replacement for an nginx configuration or a Drogon controller.",
+  "how_it_is_fast": "Handlers run as stackful coroutines that zio schedules across work-stealing executor threads, with socket I/O through io_uring on Linux (epoll fallback), so blocking-style handler code does not cost an OS thread per connection. Release 0.4.0 added the main throughput work: response bodies are written into arena-backed segments and sent with vectored writes, request read buffers and arenas are pooled in a sharded pool and kept across keep-alive requests, and each listener runs several accept loops (log2 of the cgroup-visible CPUs, at least two). Request parsing is done by the vendored llhttp C parser from Node.js, gzip by vendored C zlib 1.3.2, and the response head is minimal (status line, handler headers, Content-Length; no Date or Server header).",
+  "when_to_use": [
+    "A Zig service that wants one dependency covering router, gzip, SSE, static files, WebSocket, HTTPS with mTLS and an HTTP client.",
+    "Many concurrent keep-alive connections whose handlers call other services (PostgreSQL, Redis, NATS): zio coroutines keep blocking-looking calls cheap.",
+    "JSON APIs behind gzip or TLS where the alternative is Drogon with jsoncpp: 3.11x on HttpArena json-comp-4096 and 3.91x on json-tls-4096 (derived from page data).",
+    "Small-response HTTP/1.1 throughput at nginx level from a framework rather than a hand-written C module: 3,309,488 vs 3,284,513 req/s on baseline-4096."
+  ],
+  "when_not_to_use": [
+    "Peak HTTP/1.1 throughput: h2o (3,641,609), mongoose (3,707,598), libreactorng (4,377,377) and several catalogued siblings above 4.3M req/s beat it on the same baseline-4096 profile.",
+    "Connection churn or TLS-heavy traffic: behind nginx on limited-conn-4096 (1,930,687 vs 2,626,297) and json-tls-4096 (989,946 vs 1,313,755); TLS is a pure-Zig tls.zig fork, not OpenSSL, and certificates cannot be reloaded without a restart (issue #132).",
+    "Pipelined traffic: Drogon does 7,801,404 req/s vs dusty 4,379,900 on pipelined-4096; in-order pipelining only arrived in 0.4.0 (earlier versions closed the connection).",
+    "HTTP/2 or HTTP/3: not implemented (issue #38 is a wishlist item; vendored nghttp2 sits behind use_http2, which defaults to off).",
+    "Production on std.Io.Threaded: the README says that backend needs an OS thread per connection plus a watchdog thread per connection while timeouts are enabled; use zio. Also expect API churn: 0.3.0 and 0.4.0 both moved server configuration."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "libc (vendored llhttp C sources are compiled in); tls.zig fork (lazy, on by default, -Duse_tls=false removes it); zlib.zig with vendored zlib 1.3.2 (lazy, on by default, -Duse_zlib=false removes it); zio recommended for production and injected by the application; nghttp2 vendored but off by default",
+    "min_toolchain": "Zig 0.16.0 (also builds with Zig 0.17)",
+    "platforms": "Linux (io_uring with epoll fallback through zio), macOS and BSDs (kqueue), Windows (iocp); CHANGELOG 0.4.0 says CI covers Linux, macOS and Windows on both Zig releases",
+    "thread_safety": "Handlers run as coroutines on zio's multi-threaded work-stealing executors; each request has its own arena; WebSocket sends are serialized so concurrent tasks cannot interleave frames, and the client connection pool is safe to share across tasks (CHANGELOG 0.3.0). Other guarantees not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No Date or Server header: Response.sendHeader writes only the status line, handler headers, Connection: close when needed and Content-Length or Transfer-Encoding. HttpArena's bandwidth/rps gives about 81 bytes per baseline response for dusty vs about 142 for nginx and 141 for Drogon (derived from page data), so the small-response profiles compare unequal response heads; RFC 9110 requires an origin server with a clock to send Date, so add it yourself if caches or clients need it.",
+    "The JSON-profile wins over Drogon are mostly a serializer gap, not a language one: HttpArena's Drogon /json handler deep-copies a jsoncpp Json::Value per item on every request (its Dockerfile notes jsoncpp allocates a node per value and preloads jemalloc to soften it), while dusty encodes plain structs with the compile-time-specialized json.zig. The hot path is also partly C: HTTP parsing is the vendored llhttp parser and gzip is vendored zlib 1.3.2 at the default level with a window sized to the body.",
+    "HttpArena rows are best-of-N 5-second runs taken on different dates: dusty at commit ae164fa ('Fix tls.zig compat', just after v0.4.0) saved 2026-10-07 in PR #1529 by the dusty author, nginx last saved 2026-08-30, so the +0.8% over nginx is a tie.",
+    "Servers are bounded by default (30 s request timeout, 60 s keep-alive, max_connections); the HttpArena build raises max_connections to 65,536, so long-lived or high-fan-in deployments need the same tuning."
+  ],
+  "pick_this_over_siblings_when": "Pick dusty over the raw HttpArena servers in this category (zix 4,442,329, zeemo 4,422,489, libxev 4,381,919, tokio-uring 3,565,878 req/s on baseline-4096) when you need a complete Zig web framework with an HTTP client, TLS, gzip and WebSocket rather than the fastest HTTP/1.1 loop; among general frameworks on the same profile it is ahead of actix-web (2,775,120) and ntex (2,168,712).",
+  "verified_claims_summary": "In HttpArena's baseline profile (GET/POST summing query parameters and body, 4096 connections, gcannon load generator, AMD Ryzen Threadripper PRO 3995WX with the server pinned to 32 cores plus SMT siblings), dusty 0.4 built with Zig 0.16 --release=fast for x86_64_v3 musl served 3,309,488 req/s against nginx 1.31.4 with a custom C module at -O3 -march=native (3,284,513, a tie) and Drogon (2,022,710, 1.64x). It also beats Drogon 3.91x on json-tls-4096 and 3.11x on json-comp-4096 but trails nginx on limited-conn and json-tls and trails h2o, mongoose and libreactorng on baseline; rows come from separate runs on the same machine.",
+  "status_note": "Active (last commit 2026-10-11, v0.4.0 released 2026-10-06, 148 stars, 10 open issues, none labelled bug) and MIT-licensed, so copyable, but a young pre-1.0 library tied to Zig 0.16/0.17 whose server API changed in 0.3.0 and again in 0.4.0.",
+  "sources_read": [
+    "https://github.com/lalinsky/dusty",
+    "https://github.com/lalinsky/dusty/tree/main/src",
+    "https://github.com/lalinsky/dusty/issues",
+    "https://github.com/lalinsky/dusty/commits",
+    "https://github.com/lalinsky/dusty/commit/ae164fac083fa09b9d38a1c0e0390334fca73268",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/README.md",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/build.zig",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/CLAUDE.md",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/src/response.zig",
+    "https://raw.githubusercontent.com/lalinsky/dusty/HEAD/src/server.zig",
+    "https://raw.githubusercontent.com/lalinsky/zlib.zig/HEAD/README.md",
+    "https://raw.githubusercontent.com/lalinsky/zlib.zig/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/lalinsky/zio/HEAD/README.md",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/dusty/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/dusty/meta.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/dusty/build.zig",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/dusty/build.zig.zon",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/dusty/src/main.zig",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/dusty.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/nginx.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/results/drogon.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/site/data/current.json",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/benchmark.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/profiles.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/scripts/lib/framework.sh",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/nginx/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/drogon/Dockerfile",
+    "https://raw.githubusercontent.com/MDA2AV/HttpArena/HEAD/frameworks/drogon/main.cc",
+    "https://github.com/MDA2AV/HttpArena/commits/main/frameworks/dusty"
+  ],
+  "confidence": 0.8
+}

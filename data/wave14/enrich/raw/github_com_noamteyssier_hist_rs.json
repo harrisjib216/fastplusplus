@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/noamteyssier/hist-rs",
+  "one_liner": "Hash-counting Rust replacement for 'sort | uniq -c | sort -n'; 5.3x faster than the LC_ALL=C pipeline (first-party).",
+  "what_it_does": "hist reads lines from a file or stdin, counts each distinct line and prints 'count<TAB>line' sorted by count (ascending by default; -d descending, -n by line, -S unsorted), with -m/-M count filters, -k to keep the top k plus an 'other lines' summary, and regex include (-i), exclude (-e) and substitution (-s) applied before counting. With -u it instead streams each line's first occurrence in input order, like awk '!seen[$0]++'. It is a standalone binary, not a library, and its output format is not the same as uniq -c.",
+  "how_it_is_fast": "Every line goes through one hashbrown HashMap<&[u8], usize> lookup via the raw-entry API; a new line is copied once into a bumpalo arena, and only the distinct entries are sorted, by an integer count with sort_unstable. The pipeline it replaces sorts every input line (n log n string comparisons, locale collation by default), pipes them through uniq and sorts again, across three processes. Lines are read as raw bytes with bstr's for_byte_line, so there is no UTF-8 validation on input. The gain is algorithmic (hash aggregation instead of sort-based grouping), not a language effect.",
+  "when_to_use": [
+    "Histogram of repeated values (log fields, tokens, k-mers, FASTQ headers or sequences) where the distinct set fits comfortably in RAM.",
+    "Replacing 'sort | uniq -c | sort -n' in shell pipelines when you only need counts ordered by abundance, not the stable tie order of sort.",
+    "Count with filtering or normalisation in one pass (regex include, exclude or substitution before counting) instead of chaining grep and sed.",
+    "Order-preserving dedup of a stream (-u) of plain-text lines that contain no commas, double quotes or carriage returns."
+  ],
+  "when_not_to_use": [
+    "Inputs whose distinct lines may not fit in memory: everything goes into an in-memory arena and hash table with no spill to disk, while sort does an external merge and -S bounds its memory.",
+    "Pipelines that parse uniq -c output: hist prints count<TAB>line through a CSV writer, so lines containing a tab, double quote or CR are quoted, and ties come out in hash order that can change between runs.",
+    "Data that may not be valid UTF-8 (Latin-1 logs, binary records): writing a non-UTF-8 line returns an error and aborts the run.",
+    "Very large single files on many cores: hist is single-threaded (multi-threading is open issue #16 and PR #17), while GNU sort uses several threads by default and cuniq has --threads and --memmap.",
+    "CSV or FASTQ dedup with -u: see the quoting gotcha below."
+  ],
+  "integration": {
+    "form": "binary (crate hist-rs on crates.io, binary name hist)",
+    "dependencies": "hashbrown 0.16, bumpalo 3, bstr 1, csv 1.4, regex 1.12, clap 4.5, anyhow",
+    "min_toolchain": "Rust 1.88+ in practice (edition 2024 and let-chains in main.rs; no rust-version declared on crates.io)",
+    "platforms": "any platform Rust supports; no platform-specific code",
+    "thread_safety": "single-threaded process",
+    "drop_in_for_baseline": "partial: same counts as sort | uniq -c | sort -n, but a different output format (count<TAB>line, CSV quoting), unstable tie order, CR LF folded into LF and errors on non-UTF-8 lines"
+  },
+  "gotchas": [
+    "Dedup mode quotes data: 'hist -u' writes each first-seen line through csv::Writer with the default ',' delimiter, so any line containing a comma, double quote, CR or LF is wrapped in double quotes with inner quotes doubled, and an empty line becomes \"\". Deduplicating a CSV file or real FASTQ (Phred+33 quality strings include ',' and '\"') therefore changes the data. The benchmark input (nucgen headers, ACGT sequences, '+' and '?' quality strings) contains none of these bytes, so the published numbers are unaffected.",
+    "Counting mode uses a tab-delimited CSV writer, so lines containing a tab or double quote are quoted; lines ending in CR LF and in LF are counted as the same line because bstr's for_byte_line strips both terminators.",
+    "The headline 24.35x compares against sort in the default locale (export LC_ALL= then sort | uniq -c | sort -n); the final sort -n then orders about 2M count-1 ties by full-line locale collation, work hist does not do. With LC_ALL=C the gap is 5.27x, against single-threaded uutils sort 3.84x, and an independent run in issue #3 (pixelb, Linux GNU sort, LC_ALL=C, 10M FASTQ records) measured 12.864 s vs 36.238 s, about 2.8x (derived from page data).",
+    "The repo's .cargo/config.toml adds -C target-cpu=native, but cargo install ignores project-level config, so 'cargo install hist-rs' as the README instructs produces a generic build; the README does not say which build was benchmarked."
+  ],
+  "pick_this_over_siblings_when": "Pick hist over huniq (12.16x slower on this workload) and cuniq (2.43x slower) for single-threaded in-memory counting sorted by abundance with regex prefiltering; pick cuniq for multi-gigabyte files where its --memmap and --threads modes matter, and runiq when dedup must run in bounded memory.",
+  "verified_claims_summary": "First-party hyperfine runs (10 warmups) on a MacBook M3 Pro over a 1M-record FASTQ (4M lines, about 2M distinct) from nucgen: hist 231.5 ms vs default-locale 'sort | uniq -c | sort -n' 5637.6 ms (24.35x), LC_ALL=C 1219.5 ms (5.27x), uutils sort --parallel 1 890.1 ms (3.84x) and awk 1265.4 ms (5.47x); dedup mode 180.6 ms vs awk '!seen[$0]++' 1307.1 ms (7.24x). The sort, uniq and awk binaries' implementations and versions are not stated, and an independent Linux run in issue #3 puts the like-for-like (LC_ALL=C) gap near 2.8x.",
+  "status_note": "Active through December 2025 (54 commits, 120 stars, hist-rs 0.1.8 on crates.io with 1,318 downloads, an open multi-threading PR #17); MIT is declared in Cargo.toml but the repo has no LICENSE file (the README badge links a missing LICENSE.md); fine as a CLI for in-memory counting, but -u mangles lines containing commas or quotes.",
+  "sources_read": [
+    "https://github.com/noamteyssier/hist-rs",
+    "https://github.com/noamteyssier/hist-rs/commits",
+    "https://github.com/noamteyssier/hist-rs/issues?q=is%3Aissue",
+    "https://github.com/noamteyssier/hist-rs/issues/3",
+    "https://github.com/noamteyssier/hist-rs/issues/14",
+    "https://github.com/noamteyssier/hist-rs/issues/16",
+    "https://github.com/noamteyssier/hist-rs/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/justfile",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/noamteyssier/hist-rs/HEAD/src/cli.rs",
+    "https://crates.io/api/v1/crates/hist-rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-csv/master/csv-core/src/writer.rs",
+    "https://raw.githubusercontent.com/BurntSushi/rust-csv/master/src/writer.rs",
+    "https://raw.githubusercontent.com/BurntSushi/bstr/master/src/io.rs",
+    "https://raw.githubusercontent.com/rust-lang/hashbrown/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/orlp/foldhash/master/README.md"
+  ],
+  "confidence": 0.75
+}

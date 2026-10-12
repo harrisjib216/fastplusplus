@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/matteo-grella/fucina",
+  "one_liner": "Pure-Zig CPU tensor/autograd runtime and GGUF LLM engine; outruns llama.cpp's CPU backend on most dense Qwen3 prefill shapes.",
+  "what_it_does": "Fucina is an eager tensor and autograd library in Zig 0.16 with axis names checked at compile time. In-tree applications built on it run GGUF models: Qwen3 dense and MoE, Qwen3.5, Gemma 4, DeepSeek V2/V3/V4 Flash and GLM-4.5, plus speech and vision ports, LoRA and evolution-strategies fine-tuning, and an OpenAI-compatible server (lmserve). You consume it as a Zig package (zig fetch, modules fucina, fucina_models, fucina_serving) or through its zig build CLIs. It reads the same GGUF files as llama.cpp but has no llama.h-style C API.",
+  "how_it_is_fast": "Hand-written Zig @Vector kernels are specialised at compile time for the host ISA (NEON/sdot on Apple Silicon, AVX2/AVX-VNNI on x86). Quantized weights are repacked into interleaved RHS layouts (for example Q5_Kx8) whose arithmetic is byte-exact with ggml's block formats, f16 GEMMs accumulate in f32, and attention is query-tiled with an online softmax. MoE layers use a 'phased chain' scheduler over routed token-expert pairs (engaged from 64 pairs) with small-m column chunking, and experts are copied into resident packed buffers at load instead of read through mmap. Execution is eager with a reusable buffer pool and no graph or fusion pass. On the M1, part of the prefill margin is llama.cpp's own switch to Accelerate/AMX at batch >= 32, which costs it heavily at pp32-129.",
+  "when_to_use": [
+    "CPU-only Qwen3 dense GGUF inference (0.6B-1.7B measured) on Apple Silicon or AVX2/AVX-VNNI x86, where prompt prefill at 1-256 tokens dominates: dense prefill geomeans 1.18-1.81x on M1 Max and per-format medians 1.32-1.95x on an i9-13950HX",
+    "Zig projects that want an in-process tensor, autograd and LLM stack with no C/C++ build system and no Python runtime",
+    "CPU training and fine-tuning experiments on the same weights you serve (LoRA on a quantized Qwen3 GGUF at about 932 ms/step for 0.6B on M1 Max, per README)",
+    "MoE checkpoints larger than RAM through --moe-stream (README: Qwen3-235B and DeepSeek V4 Flash decode on a 64 GB machine)",
+    "Copy-heavy generation (grounded copy, code edits), where its draft-free lossless speculative decoding gave 1.12-2.3x"
+  ],
+  "when_not_to_use": [
+    "GPU serving: the runtime is eager and offloads to Metal or CUDA only at the GEMM seam, and the README says it will never reach TensorRT-class GPU throughput",
+    "MoE decode or Q4_K-expert models: llama.cpp stays ahead on MoE decode (0.87-0.95x on M1, 0.971-0.972x on x86) and on pp256 with Q4_K-transcoded experts (about 15-17% behind); Gemma-4-26B small-batch prefill is 0.85-0.99x on x86, and mid-batch prefill on M1 is listed as an open gap at 0.72-0.91x",
+    "Architectures outside its model list; llama.cpp covers far more families and backends",
+    "Code that needs a stable API or toolchain: pre-1.0 ('Expect churn') and pinned to Zig 0.16.0 exactly",
+    "Memory-tight hosts: experts are copied into resident packed buffers rather than mmap'd, and dense Q5_K weights are held twice (GGUF blocks plus the Q5_Kx8 pack)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none required (build.zig.zon has no dependencies); optional BLAS (Accelerate default on macOS; MKL, OpenBLAS or BLIS auto-detected on native Linux), optional Metal or CUDA offload (cuBLAS loaded with dlopen, vendored PTX), optional vendored llguidance (-Dllguidance=true)",
+    "min_toolchain": "Zig 0.16.0 exactly (minimum_zig_version in build.zig.zon; README: other versions will not build)",
+    "platforms": "Tuned for aarch64 NEON/dotprod (Apple Silicon) and x86-64 AVX2/AVX-VNNI; a scalar reference backend covers other CPUs; CI runs ubuntu-latest and macos-15; the build targets the host CPU, so cross builds need -Dcpu",
+    "thread_safety": "Not documented beyond a thread-safe reusable buffer pool (README Design) and a bounded worker team (default 8, build-time ceiling 1-64)",
+    "drop_in_for_baseline": "partial — it reads the same GGUF files and lmserve speaks the OpenAI chat-completions and responses API, but there is no llama.h-compatible C API and only the listed model families load"
+  },
+  "gotchas": [
+    "Harness asymmetry on MoE rows: tools/bench_gate.py feeds Fucina a 4-token seed repeated to length N (ids_repeated), while llama-bench feeds uniformly random token IDs (std::rand() % n_vocab in test_prompt). Dense compute does not depend on token content, but MoE routing does. BENCHMARK.md's own profile counters saw only about 52 of 128 Qwen3-30B-A3B experts active per pp256 batch on that prompt, where uniform routing predicts about 124. Fucina therefore streams fewer expert matrices and runs fuller per-expert GEMMs than llama.cpp does on its random prompt, so the MoE prefill ratios (Qwen3-30B-A3B 1.44-2.09x on M1, x86 Q5_K_M pp64-256 1.24-1.30x, Gemma-4-26B) are likely flattered by an unquantified amount; the dense rows are unaffected.",
+    "The 'biases every ratio against Fucina' note is overstated. benchOnePass stops the prefill timer before the sampler runs, and the last layer computes only the last query row. llama-bench's generation loop requests logits for every token (batch.add(..., true) in test_gen). The only extra work on Fucina's side is one greedy sample per decode step.",
+    "Build defaults matter. -Dmax-threads is a compile-time ceiling defaulting to 8 workers (FUCINA_MAX_THREADS can only lower it), so rebuild for bigger CPUs. Native Linux builds auto-link MKL, OpenBLAS or BLIS when ldconfig lists one, although BENCHMARK.md calls -Dblas=none the default off macOS, so pass -Dblas=none to reproduce the no-BLAS x86 record. Binaries are tuned to the build host, and a bare -Dtarget silently drops the fast kernels.",
+    "M1 protocols are mixed. The Gemma-4 and Qwen3.5 rows are Fucina best-of against llama means, and Gemma ran a fresh Fucina process per length against one warm llama process. The Gemma mid-batch scoreboard (1.17-2.15x) comes from a session where llama ran below its own best (pp16 58.4 vs 82.1 tok/s), while the open-gaps list gives 0.72-0.91x."
+  ],
+  "pick_this_over_siblings_when": "Pick Fucina over mistral.rs when inference is CPU-only or you want a Zig-native library that also trains: mistral.rs's record is CUDA against llama.cpp's CUDA backend, while Fucina's is ggml's CPU backend. For NVIDIA GPU serving, mistral.rs is the better fit.",
+  "verified_claims_summary": "Author-run paired comparisons against llama.cpp build 30af6e2 (llama-bench -ngl 0, same GGUF, 8 threads), snapshot 2026-07-04 with 2026-07-10 updates. On an M1 Max (llama.cpp with Accelerate) Fucina led in 221 of 236 prompt-length and decode cells, with dense Qwen3 prefill geomeans of 1.18-1.81x (partly llama's Accelerate switch at batch 32) and dense decode up to +15%. On an i9-13950HX with no BLAS on either side, dense Qwen3-0.6B per-format medians were 1.32-1.95x, while MoE decode, Q4_K-expert pp256 and small-batch Gemma prefill still favour llama.cpp.",
+  "status_note": "Active: v0.5.1, last commit 2026-09-09, 684 commits, 21 stars, no issues filed. MIT except tools/gen_optim_goldens.py (CC-BY-NC-4.0). The API is pre-1.0 and tied to Zig 0.16.0, and the README says development leans heavily on coding agents with human review.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/README.md",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/docs/BENCHMARK.md",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/tools/bench_gate.py",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/tools/fetch_refs.sh",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/build.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/apps/qwen3/bench.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/apps/qwen3/main.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/apps/qwen3/generate.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/apps/qwen3/options.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/src/models/qwen3/model.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/src/models/qwen3/runner.zig",
+    "https://raw.githubusercontent.com/matteo-grella/fucina/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/llama-bench/llama-bench.cpp",
+    "https://github.com/matteo-grella/fucina",
+    "https://github.com/matteo-grella/fucina/tree/main/apps/qwen3",
+    "https://github.com/matteo-grella/fucina/commits/main",
+    "https://github.com/matteo-grella/fucina/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.8
+}

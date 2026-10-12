@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/luncliff/comparison-go-cpptbb",
+  "one_liner": "2017 study: Go goroutines vs Intel TBB tasks on tiled optimal-BST dynamic programming; Go won only at N=4096, by 1.003-1.15x.",
+  "what_it_does": "Research code for a KIPS conference paper: two command-line programs (Go and C++/TBB) that fill the (N+1)x(N+1) cost and root tables of a static optimal binary search tree, either with a plain sequential sweep or split into VP x VP tiles that run in parallel on NP processors, and print the elapsed milliseconds as JSON. Each tile depends on its left and lower neighbour. In Go every tile is a goroutine that blocks on two buffered channels; in C++ every tile is a low-level tbb::task with reference count 2 that is spawned when its last predecessor decrements the count. It is a benchmark, not a library: there is no reusable API.",
+  "how_it_is_fast": "There is no Go-specific technique behind the result. Both programs gain from tiling, which acts as cache blocking for the strided column reads cost[k+1][col] (stride N+1 doubles) that the row-by-row sequential sweep does not have, and from running tiles of the dependency wavefront on several cores. The Go program's sequential code is 2.03x (N=2048) and 1.39x (N=4096) slower than the MSVC build, so the narrow Go wins appear only at N=4096, where the table no longer fits in cache and both sides are memory-bound. The paper speculates that TBB's depth-first execution helps locality and that Go's channel waits trigger extra scheduling, but names no mechanism for the Go wins.",
+  "when_to_use": [
+    "As a worked example of mapping a 2-D dynamic-programming wavefront onto goroutines plus channels and onto TBB tasks with atomic reference counts, side by side.",
+    "As raw data for Go-versus-TBB task-graph scaling on a 4-core/8-thread Skylake laptop: docs/N2048.xlsx and docs/N4096.xlsx hold all five runs of every NP x VP cell.",
+    "To choose a tile count for a blocked DP: both runtimes were fastest at VP 128-512 (tiles of 4-32 cells per side) and both lost ground at VP=2048.",
+    "As the 2017 replication of Serfass and Tang (2012), when citing how the Go-versus-TBB gap narrowed with Go 1.7."
+  ],
+  "when_not_to_use": [
+    "As evidence that Go beats C++: TBB was faster in all 96 N=2048 cells (best versus best 1.37x) and in 82 of 96 N=4096 cells, and the sequential C++ code was 1.39-2.03x faster.",
+    "Fine-grained graphs with millions of nodes: the Go program starts every tile goroutine up front, and at VP=2048 it took 15.6-80.5 s at N=2048 against TBB's 2.3-7.1 s, with bimodal run-to-run times.",
+    "On a current toolchain without porting: the C++ side uses the low-level tbb::task API (allocate_root, set_ref_count, spawn_and_wait_for_all), which oneTBB removed, and the Go side is a pre-modules GOPATH layout for Go 1.7.4.",
+    "As copyable code: the licence is CC-BY-4.0 (not a software licence), the C++ project is a Windows-only Visual Studio 2015 vcxproj that uses printf_s, and the repository has been archived since 2018."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Go: standard library only (GOPATH layout with packages obst, matrix, research, watch). C++: Intel TBB 2017 Update 3 prebuilt binaries (tbb.lib and tbb.dll for vc14) and CmdParser (git submodule under lib/).",
+    "min_toolchain": "Go 1.7.4 as measured (GOPATH build, no go.mod); MSVC v140 (Visual Studio 2015 Update 3), C++14 (std::make_unique, decltype(auto)); TBB 2017 or another pre-oneTBB release that still has tbb::task",
+    "platforms": "C++ build: Windows x64 (Visual Studio project, printf_s); Go code is portable; measured only on Windows 10 with an Intel Core i7-6700HQ",
+    "thread_safety": "Not applicable (benchmark programs). Tiles write disjoint cells of shared matrices; reads of neighbour tiles are ordered by a channel receive (Go) or by the reference count reaching zero (TBB).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The raw timings are in the repository after all: docs/N2048.xlsx and docs/N4096.xlsx at release commit d503e57 hold five runs per cell for NP 1-8 x VP 1-2048. From them, Go was faster in 14 of 96 N=4096 cells (VP 128-1024, NP 3-7, 1.003-1.149x) and in none of 96 N=2048 cells. Best against best at N=4096 is Go 25,574.2 ms (NP=4, VP=512) against TBB 28,655.2 ms (NP=5, VP=256), 1.12x (derived from page data); the draft conclusion's 1.15 is the matched NP=4, VP=512 cell. The 6,255.4 and 12,689.6 ms quoted at N=2048 are the sequential runs, and the sheet has 12,698.6 for Go.",
+    "The self speed-ups mix tiling with parallelism. On one processor the tiled code already beats the sequential sweep: at N=2048, TBB at VP=128 took 4,180.6 ms against 6,255.4 ms (1.50x) and Go at VP=32 took 7,260 ms against 12,698.6 ms (1.75x); at N=4096 the one-thread gains are Go 1.47x and TBB 1.12x (derived from page data). So the 'superlinear' Go figures are partly a cache-blocking effect on a slower Go sequential baseline. They also do not contradict each other: 6.53 and 4.41 are the N=2048, NP=4, VP=128 cells, while 6.28 and 3.95 are the N=4096, NP=4 cells.",
+    "No result validation: Go's Tree.Equal and C++'s operator== are never called, and both are inverted (they return false as soon as any compared root or cost pair matches), so the parallel output was never checked against the sequential sweep. My reading of the tile wiring (left and lower predecessors; lower-triangle channels left nil) found no race.",
+    "The timed regions differ by design: Go's includes a blocking runtime.GC() after the parallel run, and C++'s includes constructing and destroying tbb::task_scheduler_init. The inputs differ too: Go uses math/rand with its default seed (Float64), while C++ uses mt19937 seeded from the clock (integers mod 2^20). The amount of work does not depend on the data. Go starts all VP(VP+1)/2 goroutines (about 2.1 million at VP=2048) before any can run, whereas TBB spawns a task only when it becomes ready; the VP=2048 Go averages mix runs of about 11 s and 70 s (N=2048, NP=2)."
+  ],
+  "pick_this_over_siblings_when": "Cite this entry, and not the SCOOP/Qs thread-ring entries for Go and Erlang (whose 'C++/TBB' column is really 503 Boost.Asio-woken pthreads), when you need a compute-bound task graph in which TBB's own task scheduler is the baseline. Its answer is that TBB wins almost everywhere. For data-parallel loops, the Rayon versus OpenMP study is the closer sibling.",
+  "verified_claims_summary": "On one Intel Core i7-6700HQ laptop (Windows 10, five runs averaged), Go 1.7.4 goroutines beat Intel TBB 2017 Update 3 built with MSVC 2015 (Release /Ox inferred from the vcxproj) only at N=4096: 26,256.6 against 29,365.8 ms (1.12x) at VP=256 and 25,574.2 against 29,381 ms (1.15x) at VP=512, both with NP=4. TBB was faster in every N=2048 cell (1,417.2 against 1,946 ms at NP=4, VP=128, 1.37x) and in 82 of the 96 N=4096 cells.",
+  "status_note": "Archived 2018-08-24 (56 commits, 3 stars, no issues). The CC-BY-4.0 research code is tied to Go 1.7 GOPATH builds and the removed tbb::task API, so it is a reference only. Its raw spreadsheets support the record but correct three of its caveats: the raw data is public, Go won 14 cells rather than 2, and the two speed-up pairs come from different problem sizes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/README.md",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/master/README.md",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/master/%5BFinal%5DComparison%20of%20Go%20and%20C%2B%2B%20TBB%20on%20Parallel%20Processing.pdf",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/tree/d503e5796589cc8a9fb4dc132146082e89162998",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/tree/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/research",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/tree/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/obst",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/tree/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/tree/d503e5796589cc8a9fb4dc132146082e89162998/docs",
+    "https://github.com/luncliff/Comparison-Go-CppTBB/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/main.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/obst/tree.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/research/evaluate.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/research/channels.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/research/config.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/matrix/matrix.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/Go/src/watch/watch.go",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/main.cpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/Tree.cpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/Tree.h",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/ChunkTask.hpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/Evaluate.cpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/Alias.h",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/research/Config.cpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/utils/Matrix.h",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/src/utils/Watch.hpp",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/TBB/TBB.vcxproj",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/docs/N2048.xlsx",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/docs/N4096.xlsx",
+    "https://raw.githubusercontent.com/luncliff/Comparison-Go-CppTBB/d503e5796589cc8a9fb4dc132146082e89162998/docs/Draft.md",
+    "https://raw.githubusercontent.com/uxlfoundation/oneTBB/master/doc/main/tbb_userguide/Migration_Guide/Task_API.rst"
+  ],
+  "confidence": 0.75
+}

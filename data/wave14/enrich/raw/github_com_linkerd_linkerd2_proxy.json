@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/linkerd/linkerd2-proxy",
+  "one_liner": "Rust sidecar micro-proxy of the Linkerd mesh; vendor benchmarks show 6-9x less per-proxy memory than Istio's Envoy.",
+  "what_it_does": "The transparent proxy that Linkerd injects into every meshed Kubernetes pod. It intercepts inbound and outbound TCP, detects HTTP/1.1 and HTTP/2, and adds automatic mutual TLS, Prometheus metrics, latency-aware load balancing, authorization policy and a tap API. There is no user-facing config file: the injector's environment variables and the Linkerd control plane configure it, and the README lists only DNS and the linkerd2 Destination gRPC API for discovery. It is therefore not a general reverse proxy and cannot stand in for Envoy under another control plane such as Istio's.",
+  "how_it_is_fast": "It does one job: a single pod's sidecar, about 30 KLOC against Envoy's 172 KLOC of C++ (vendor's 2020 count). It is built from Tokio (async I/O), hyper and h2 (HTTP) and tower middleware stacks. The runtime is single-threaded by default: linkerd/workers Workers::cores returns 1 unless LINKERD2_PROXY_CORES, _CORES_MAX or _CORES_MAX_RATIO is set. Other choices: jemalloc as the global allocator on x86-64 Linux glibc, LTO release builds, rustls on aws-lc-rs for mTLS, and power-of-two-choices balancing over EWMA latency (linkerd/pool/p2c, linkerd/ewma). The vendor credits the narrow design for the resource gap; no Rust-versus-C++ effect is isolated.",
+  "when_to_use": [
+    "Choosing a sidecar service mesh for Kubernetes where per-pod proxy memory matters (many small pods): in the vendor runs at 2,000 RPS the largest Linkerd proxy peaked at 17.8-26.3 MB against 154.6-156.2 MB for Istio's Envoy.",
+    "You want mTLS, golden metrics and latency-aware load balancing between pods with no proxy configuration to write or maintain.",
+    "A memory-safe data plane is a requirement: the binary crate is #![forbid(unsafe_code)], the proxy is fuzzed, and it had a third-party fuzzing audit (Ada Logics, 2021).",
+    "Meshed traffic that is sensitive to tail latency at moderate load: the vendor runs report 42-47 ms of added max latency against about 253-350 ms for Istio at 2,000 RPS, measured at the client."
+  ],
+  "when_not_to_use": [
+    "Anything outside Linkerd: it needs Linkerd's Destination, identity and policy services and has no standalone configuration. Use Envoy, nginx or a sibling proxy for ingress, edge or gateway roles.",
+    "You need Envoy's breadth (Wasm or Lua filters, extensive header and route manipulation, rate limiting, the xDS ecosystem) or must stay on Istio.",
+    "You need supported stable builds without a subscription: since February 2024 the open-source project ships only edge releases, which may break at any point. Stable builds come from Buoyant Enterprise for Linkerd, which is free only for non-production use or companies under 50 employees (WebSearch snippet only).",
+    "Long-lived HTTP/1.1 keep-alive traffic where slow memory growth would hurt: linkerd2 issue #11012 ('Proxy memory leak over HTTP 1') has been open and pinned since June 2023 with no root cause, and #14204 reported higher proxy memory after 2.18.",
+    "Hosts other than Linux containers: the README says it 'may also work' on other Unix-like systems but targets Linux in Kubernetes."
+  ],
+  "integration": {
+    "form": "static binary shipped in Linkerd's proxy container image and injected as a Kubernetes sidecar; the workspace crates are not published (publish = false)",
+    "dependencies": "Linkerd control plane (Destination, identity, policy); crates tokio, hyper 1, h2, tower, tonic/prost, rustls on aws-lc-rs (optional FIPS feature), tikv-jemallocator on x86-64 Linux glibc",
+    "min_toolchain": "Rust 1.90.0 pinned in rust-toolchain.toml (edition 2021); built with just and cargo or the provided dev container",
+    "platforms": "Linux containers on amd64 and arm64 (Dockerfile); other Unix-like systems such as macOS 'may also work' (README)",
+    "thread_safety": "Not a library. The binary runs a current-thread Tokio runtime by default, or a multi-threaded one when the LINKERD2_PROXY_CORES variables raise the worker count (capped by the cgroup-aware CPU count).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness asymmetry in the memory metric: the Kinvolk suite script (scripts/run_benchmarks.sh) deploys 60 emojivoto namespaces, and Istio ran its 'minimal' profile with no Sidecar resources. Istio's documented default (quoted in a Cisco post, WebSearch snippet only) programs every sidecar with configuration for every workload in the mesh, and Cisco measured about 40% less Envoy memory once namespaces were isolated. Part of the 6-9x per-proxy memory gap is therefore Istio's default config fan-out, not Rust against C++. The posts do not state how many app instances Buoyant deployed.",
+    "Metric and reporting quirks: the figures are the maximum memory and maximum CPU time of any single proxy, not totals or cores, and the May 2021 post itself says cumulative cost would be more representative. Outlier runs were dropped by maximum latency; in Nov 2021, at 2,000 RPS, the worst run per mesh was 'manually discarded' because of deadline constraints. The Nov 2021 'Winner' lines at 20 and 200 RPS compare Linkerd's added median latency (8 ms) with Istio's total median (26 ms; its added median is 20 ms). The May 2021 summary says Linkerd delivered '75% of the additional median latency', but its own 9 ms vs 15 ms is 60%.",
+    "The numbers are sensitive to configuration: moving to jemalloc in Linkerd 2.11.1 raised the largest proxy's memory from about 17 MB (2.11.0) to 26.3 MB in the same harness. The proxy core count, which drives both CPU time and memory, is not stated for either mesh. In current code the default is one worker thread, while the main.rs comment still says 'the number of available CPUs'.",
+    "The CPU lead is not stable: 8.8x in May 2021 but 1.86x in Nov 2021, and in the 2019 Buoyant-commissioned Kinvolk study Linkerd's data plane used 15% more CPU than Istio's at 600 RPS (though Istio could not sustain that rate)."
+  ],
+  "pick_this_over_siblings_when": "Orion Proxy and Spire are the catalogued Rust challengers to Envoy as standalone proxies, judged on throughput and latency; pick linkerd2-proxy only when Linkerd is your mesh, since it is that mesh's only data plane and its evidence is per-sidecar memory and client-side latency rather than requests per second. For an edge proxy or gateway, look at those siblings or the nginx challengers such as monolake.",
+  "verified_claims_summary": "Buoyant ran Kinvolk's open harness (wrk2 against emojivoto, mTLS on) on Equinix Metal Xeon 4214 nodes. At 2,000 RPS the largest Linkerd 2.10.2 proxy peaked at 17.8 MB and 10 ms of CPU time against 154.6 MB and 88 ms for Istio 1.10.0's Envoy (May 2021); in Nov 2021, Linkerd 2.11.1 against Istio 1.12.0, it was 26.3 MB and 36 ms against 156.2 MB and 67 ms, with lower added client-side latency. These compare two meshes in vendor-chosen configurations, not a Rust proxy against a C++ proxy.",
+  "status_note": "Actively developed (2.1k stars, 4,145 commits, last commit 2026-10-05) and Apache-2.0, but usable only as Linkerd's data plane; since February 2024 the open-source project ships edge releases only, and stable builds come through Buoyant Enterprise for Linkerd (WebSearch snippet only).",
+  "sources_read": [
+    "https://github.com/linkerd/linkerd2-proxy",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/README.md",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/Cargo.toml",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/Dockerfile",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/justfile",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/linkerd2-proxy/Cargo.toml",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/linkerd2-proxy/src/main.rs",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/linkerd2-proxy/src/rt.rs",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/linkerd/workers/src/lib.rs",
+    "https://raw.githubusercontent.com/linkerd/linkerd2-proxy/main/linkerd/rustls/Cargo.toml",
+    "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2021/0527-linkerd-vs-istio-benchmarks/index.md",
+    "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2021/1129-linkerd-vs-istio-benchmarks/index.md",
+    "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2020/1203-why-linkerd-doesnt-use-envoy/index.md",
+    "https://raw.githubusercontent.com/linkerd/website/main/linkerd.io/content/blog/2019/0518-linkerd-benchmarks/index.md",
+    "https://raw.githubusercontent.com/kinvolk/service-mesh-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/kinvolk/service-mesh-benchmark/master/scripts/run_benchmarks.sh",
+    "https://github.com/kinvolk/service-mesh-benchmark/tree/master/configs/emojivoto/templates",
+    "https://raw.githubusercontent.com/kinvolk/service-mesh-benchmark/master/configs/emojivoto/templates/deployment.yaml",
+    "https://raw.githubusercontent.com/kinvolk/service-mesh-benchmark/master/configs/benchmark/values.yaml",
+    "https://github.com/linkerd/linkerd2/issues?q=is%3Aissue+proxy+memory+leak",
+    "https://github.com/linkerd/linkerd2/issues/11012"
+  ],
+  "confidence": 0.7
+}

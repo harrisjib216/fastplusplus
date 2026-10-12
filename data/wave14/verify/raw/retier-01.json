@@ -876,5 +876,210 @@
     "urls_opened": [
       "enricher record data/wave14/enrich/raw/github_com_koraa_huniq.json"
     ]
+  },
+  {
+    "id": "https://github.com/matyushkin/djvu-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the warm render rows reuse djvu-rs's cached background and mask while DjVuLibre recomputes them per call, so the render ratios are overstated (claim annotated).",
+    "corrections": {
+      "claimed_speedup": "README table (Apple M1 Max) matching BENCHMARKS_RESULTS.md 'Comparison with DjVuLibre 3.5.29', 2026-10-03 run, djvu-rs warm Criterion render_pixmap vs libdjvulibre render-only on an already decoded page: boy.djvu @72 dpi 61.7 us vs 124 us (2.0x), watchmaker about 1.4x, cable about 1.6x as printed; the warm rows let djvu-rs reuse its cached RGB background and JB2 mask while DjVuLibre redoes IW44 reconstruction and the JB2 blit each call, so like-for-like estimates from page data are about 1.16-1.27x (watchmaker) and about 1.4x (cable), with the boy 2.0x mostly cache reuse.",
+      "caveats": "The warm render rows reuse djvu-rs's per-page cached RGB background (bg_rgb_s1/s2/s4) and cached JB2 mask while DjVuLibre's ddjvu_page_render calls bg44->get_pixmap and fgjb->get_bitmap on every call, so the render ratios compare cached reuse with recomputation. SECURITY.md says the crate forbids unsafe, but djvu-iw44 has #[allow(unsafe_code)] NEON, AVX2 and simd128 kernels; the render cache budget is 256 MiB by default; whether the 2026-10-03 run enabled the parallel feature is unclear."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_matyushkin_djvu_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/mbhall88/rasusa",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (parity with seqtk; filtlong does different work).",
+    "corrections": {
+      "caveats": "Two seqtk processes per hyperfine command against one rasusa process gives rasusa a small fixed edge. Coverage mode uses a u32 index vector (undefined over 2^32 reads); the default modes open the input path twice, so no pipe input; the FASTX path is single-threaded."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_mbhall88_rasusa.json"
+    ]
+  },
+  {
+    "id": "https://github.com/lightpanda-io/browser",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (vendor numbers measured on a crawler later fixed for an infinite loop and a deadlock); serve loads no images or CSS while Chrome does.",
+    "corrections": {
+      "caveats": "serve loads no images or CSS by default (src/Config.zig LoadResources all false) while Chrome loads style.css plus images before Campfire's load event and makes a fresh context per run; each Amiibo page sets a PNG on raw.githubusercontent.com that only Chrome downloads. The numbers come from crawler f2f0a8a (2026-01-19), later fixed for an infinite loop (7b56aae) and a deadlock (2767600); the old dispatch could idle workers for both browsers, so the scaling rows are suspect."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_lightpanda_io_browser.json"
+    ]
+  },
+  {
+    "id": "https://github.com/linkerd/linkerd2-proxy",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (vendor); Istio ran without Sidecar scoping, so part of the memory gap is configuration fan-out.",
+    "corrections": {
+      "caveats": "The Kinvolk suite deploys 60 emojivoto namespaces and Istio minimal ran with no Sidecar scoping, so every Envoy carries configuration for the whole mesh (about 40% less memory with isolation per a Cisco snippet); part of the 6-9x memory gap is config fan-out, not C++. The November 2021 'Winner' lines compare Linkerd's added median 8 ms with Istio's total 26 ms; the May 2021 '75%' summary contradicts its own 9 vs 15 ms (60%); the worst run per mesh at 2,000 RPS was manually discarded. The current proxy defaults to 1 worker thread; open HTTP/1 leak #11012."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_linkerd_linkerd2_proxy.json"
+    ]
+  },
+  {
+    "id": "https://github.com/lalinsky/dusty",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; response-size and serializer asymmetries recorded.",
+    "corrections": {
+      "caveats": "dusty sends no Date or Server header, about 81 bytes per baseline response against nginx's 142 and Drogon's 141. The Drogon JSON wins (3.91x json-tls, 3.11x json-comp) are mostly a serializer gap (HttpArena's Drogon /json deep-copies a jsoncpp Json::Value per item; dusty uses compile-time json.zig). The hot path is partly C (vendored llhttp, zlib 1.3.2 gzip); the nginx tie is cross-run."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_lalinsky_dusty.json"
+    ]
+  },
+  {
+    "id": "https://github.com/lesismal/fib",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: HttpArena publishes fib's Dockerfile build flags and the machine (Threadripper PRO 3995WX), so its HttpArena rows against nginx (h2c 5.25x, h2 1.65x, h3 1.25x, static-tls 1.71x, pipelined 5.05x; json-tls 0.59x, json-h2c 0.64x) meet the basis on which dusty, wtx and cutelyst are A; the first-party GitHub Actions rows stay as single-run caveats. C to A (reference usability: no LICENSE).",
+    "corrections": {
+      "claimed_speedup": "HttpArena (Threadripper PRO 3995WX; fib under prefork, 32 child processes; ratios derived from page data): over nginx baseline-h2c 5.25x, baseline-h2 1.65x, baseline-h3 1.25x, static-tls 1.71x, pipelined 5.05x (reference-only profile); behind nginx on json-tls (0.59x) and json-h2c (0.64x); agensio (C++) ahead. First-party go-http1-benchmark (single GitHub Actions run, 10,000 connections, 1 KiB): fib 194,671 TPS vs Sogou workflow (C++) 150,407 (1.29x), memory 32 MB vs 14 MB.",
+      "hardware": "HttpArena: AMD Ryzen Threadripper PRO 3995WX (site/data/current.json). First-party rows: GitHub Actions ubuntu-24.04 runner (the container got 4 vCPUs instead of the wanted 8).",
+      "caveats": "HttpArena rows are cross-run against nginx's (different dates) and agensio is ahead; the entry runs prefork with 32 child processes (GOMAXPROCS=2 each) because one process with 64 Ps stalls on Go's shared heap lock and GC. First-party rows are single runs on a shared 4-vCPU runner with client and server on one VM, workflow at its stock 2 pollers plus 20 handler threads with strftime Date per response, and the TLS pipeline rate-driven. No LICENSE; the author says not production-proven (issue #1); object reuse is on by default (fasthttp rule); no http.Hijacker."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_lesismal_fib.json"
+    ]
+  },
+  {
+    "id": "https://github.com/luncliff/comparison-go-cpptbb",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands; the raw per-cell timings are in docs/N2048.xlsx and docs/N4096.xlsx, and the claim is corrected to them (Go faster in 14 of 96 N=4096 cells, best against best 1.12x).",
+    "corrections": {
+      "claimed_speedup": "From docs/N4096.xlsx and docs/N2048.xlsx (d503e57, 5 runs per cell): Go faster than TBB in 14 of 96 N=4096 cells (1.003-1.149x) and in 0 of 96 at N=2048; best configuration against best at N=4096 Go 25,574.2 ms vs TBB 28,655.2 ms (1.12x, derived from page data). Paper: at N=4096 and 4 processors Go ran faster than TBB at VP=256 and VP=512 (TBB/Go 1.12 and 1.15); best speed-up over each language's own sequential code 6.53 (Go) vs 4.41 (TBB) at N=2048 and 6.28 vs 3.95 at N=4096.",
+      "caveats": "The tiled code on one thread already beats the sequential baseline (TBB 1.50x, Go 1.75x at N=2048), so Go's 'superlinear' speed-up is partly cache blocking; Equal/operator== is never called and is inverted, so the parallel output is never checked. 6255.4/12689.6 are sequential times (the sheet says 12698.6)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_luncliff_comparison_go_cpptbb.json"
+    ]
+  },
+  {
+    "id": "https://github.com/manishrjain/zroar",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the ported CRoaring iteration harness makes 4 C calls per value against bench.cpp's 2 and ToArray64 adds a cardinality call, inflating the largest wins by an unmeasured amount, and the Contains rows probe in ascending order where zroar's thread-local hint short-circuits (random probes 0.92-1.85x). Asymmetric-harness precedent: A to C.",
+    "corrections": {
+      "caveats": "The IterateAll64 port makes 4 C calls per value against CRoaring bench.cpp's 2 (the wrapper's next() repeats has_value and adds value) and ToArray64 adds a get_cardinality call, inflating the 6.50-19.11x by an unmeasured amount. The Contains rows probe in ascending order, which zroar's thread-local hint short-circuits; random probes give 0.92-1.85x. 'Cold' means bytes hot in cache."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_manishrjain_zroar.json"
+    ]
+  },
+  {
+    "id": "https://github.com/lsk569937453/spire",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the jemalloc note is corrected (global allocator mimalloc) and the CFS-quota thread oversubscription explains the baseline tails.",
+    "corrections": {
+      "caveats": "docker cpus: 4.0 is a CFS quota, so the defaults give HAProxy 2.7 nbthread and Envoy 1.22.8 --concurrency about 20 host threads inside a 4-CPU quota while nginx is pinned to 4 workers and Tokio honours the cgroup quota (inferred, fits the 40-51 ms tail clusters). The compose JEMALLOC_SYS_WITH_MALLOC_CONF is a no-op; the global allocator is mimalloc (also at 0cac057). Third-party holmofy/proxy-benchmark (2024-09): Silverwind 19,352 vs HAProxy 17,826 req/s (1.09x) with a different echo backend image (80 vs 169 bytes per response) and 280 MB vs HAProxy's 85 MB."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_lsk569937453_spire.json"
+    ]
+  },
+  {
+    "id": "https://github.com/lukefleed/hpla-rs",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: the Eigen SpMV wrapper omits .noalias() and so allocates a temporary vector per call (Eigen 3.4.0 and 5.0.0 sources), crippling the headline baseline (the noalias Lanczos wrappers show a 1.04x gap against 1.12x), with Eigen, PETSc and MKL unpinned. Crippled-baseline precedent: A to C.",
+    "corrections": {
+      "caveats": "The Eigen SpMV wrapper does y += A*x without .noalias(), so Eigen 3.4.0 and 5.0.0 build a temporary vector per call; the Eigen Lanczos wrappers use noalias, where the gap is 1.04x against 1.12x for SpMV. The Rust Lanczos fuses axpy and dot while the Eigen wrapper does not; the MKL mv hint is commented out; Eigen, PETSc and MKL are unpinned, psblas@develop, no spack.lock; eigen.cpp's comment says -ffast-math but build.rs does not use it."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_lukefleed_hpla_rs.json"
+    ]
+  },
+  {
+    "id": "https://github.com/masonprotter/gaius.jl",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; 2020 numbers from code since reworked, with the README's REPL lines now calling LinearAlgebra on both sides.",
+    "corrections": {
+      "caveats": "The numbers are 2020 blocked_mul! code on Julia 1.4.0-rc2 (commit 2892760); a later README edit made both REPL lines unqualified mul!, which Gaius does not export, so as written both call LinearAlgebra. The code has since been reworked (#57, #63, #83, #88); the covector _mul! takes k = 1, so v'*A is never blocked or threaded (#79 open); the complex adjoint path negates the input A in place. Issue #11: at n=9737 Gaius 5.516 s vs OpenBLAS 0.891 s."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_masonprotter_gaius_jl.json"
+    ]
+  },
+  {
+    "id": "https://github.com/matteo-grella/fucina",
+    "evidence_tier_final": "A",
+    "tier_reason": "Enricher: A stands for the dense rows; the MoE prefill rows feed Fucina a repeated 4-token seed against llama-bench's random IDs, so they are not like-for-like (claim annotated).",
+    "corrections": {
+      "caveats": "MoE prefill rows are not like-for-like: bench_gate.py feeds Fucina a 4-token seed repeated (ids_repeated) while llama-bench feeds random IDs (std::rand() % n_vocab); the document's own counters show about 52 of 128 experts active at pp256 against about 124 under uniform input, so those ratios are likely flattered (dense rows unaffected). The 'biased against Fucina' note is overstated: the prefill timer stops before the sampler. The native Linux build auto-links MKL, OpenBLAS or BLIS; the thread ceiling is 8 at build time."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_matteo_grella_fucina.json"
+    ]
+  },
+  {
+    "id": "https://github.com/monochromegane/the_platinum_searcher",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the README's ack and ag rows were reused from an earlier run while only the pt row was re-measured (cross-run), the 8% gap over ag is within single-run noise, and the independent ripgrep README shows pt 24x slower than ag on a regex search; cross-run precedent: C to D.",
+    "corrections": {
+      "caveats": "The README kernel numbers date from 2015-12-07 (commit a86ecd3, about v2.0.x) and predate the v2.2.0 grep rewrite; the January 2014 'faster than ag' commit 374b952 changed only the pt row and reused the ack and ag rows (cross-run). The independent ripgrep 0.8.0 README has pt -w -e '[A-Z]+_SUSPEND' at 14.208 s against ag's 0.589 s. bufio.Scanner's 64 KiB limit with scanner.Err() unchecked makes -e, -i, -S, -w and context paths silently drop the rest of a file (#168 open); log.Fatalf on any open error aborts the run (#106, #192). Abandoned since 2018."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_monochromegane_the_platinum_searcher.json"
+    ]
+  },
+  {
+    "id": "https://github.com/msaelices/mojo-regex",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the Rust comparison uses mismatched inputs, patterns or operations on 13 of 71 rows (matched-input geomean 2.77x, not 3.47x) and the '.*' shortcut is a correctness bug; claim corrected.",
+    "corrections": {
+      "claimed_speedup": "Page (mojo-regex 0.13.0, comparison.md): Mojo vs Python re geomean 24.54x over 76 shared benchmarks (Mojo wins 74, Python 1); Mojo vs Rust regex geomean 3.47x over 71 rows as printed, but 13 of those rows use a different input, pattern or operation on the Rust side, and the matched-input geomean over the remaining 58 rows is 2.77x (derived from page data). CHANGELOG v0.20.0: the Mojo 1.0 build is about 13% slower than the published v0.13.0.",
+      "caveats": "The Rust harness (bench_engine.rs, lib.rs) uses a different input, pattern or operation from Mojo on 13 of 71 rows: literal_match_short/long bury 'hello' 10x deeper for Rust (Rust about 2.5x/1.4x faster per byte); range_lowercase, range_digits and predefined_digits match 3 bytes at offset 0-3 on Rust's text, so Rust's 3 wins are artefacts; group_alternation uses (a|b)* vs (a|b); match_all_simple 'a' vs 'hello'; texts 10-50x shorter on 4 more rows. The '.*' shortcut returns the whole text across newlines (correctness bug)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_msaelices_mojo_regex.json"
+    ]
+  },
+  {
+    "id": "https://github.com/mtsch/ripserer.jl",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (parity tool); the dense table compares against Ripser's auto-sparse mode, Ripser is timed as a subprocess, and the sparse loader shifts edge lengths by 1.0.",
+    "corrections": {
+      "caveats": "The docs' 'dense' table pits Ripserer's dense mode against Ripser, which picks sparse mode itself below max distance (ripser.cpp 286d369); sparse=true is the like-for-like mode. Ripser is timed as a subprocess (launch, stdout capture) against in-process Ripserer after BenchmarkTools warm-up. RipsererBenchmarks.jl's load_sparse adds 1.0 to every Alpha-Rips edge length, so Ripserer gets different filtration values than Ripser (probably timing-neutral; outputs never cross-checked). Mod{M} reruns a trial-division is_prime on every operation for M != 2; the docs claim Julia 1.0+ while Project.toml needs 1.6."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_mtsch_ripserer_jl.json"
+    ]
+  },
+  {
+    "id": "https://github.com/nciibi/allox",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the zeroed-large 86.63x row is an artefact of skipped zeroing plus a 1-byte touch and is struck, and the build script can benchmark a stale binary.",
+    "corrections": {
+      "claimed_speedup": "Linux x86-64 (Ryzen 5 1600) direct-call table, ops/s: tight-small 1T 52.52 M/s vs glibc 44.77, mimalloc 48.00, snmalloc 41.54 (1.09x vs best); mixed-small 8T 196.03 M/s vs system 37.17, mimalloc 40.42, snmalloc 57.87 (3.39x vs best); large-only 1T 7.36 M/s vs system 340 K/s, mimalloc 2.52 M/s. The zeroed-large row (86.63x) is struck: a recycled block gets madvise(MADV_DONTNEED) with the memset skipped while the bench touches 1 byte, so the zeroing cost is never paid.",
+      "caveats": "The zeroed-large 86.63x is an artefact: a recycled 5-8 MiB block gets madvise(MADV_DONTNEED) and the memset is skipped (alloc_large_ex known_zeroed) while the bench writes 1 byte, so the zeroing becomes page faults that are never triggered; the same 1-byte touch applies to all large rows, and snmalloc's 1-22 K/s implies it zeroes or touches whole blocks. scripts/app_bench.sh's build check is inverted under set -o pipefail, so a failed build counts as built and a stale binary is benchmarked silently. The direct-call harness measures only the Layout-routed sized free; the C ABI allox_free header path is unmeasured."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_nciibi_allox.json"
+    ]
+  },
+  {
+    "id": "https://github.com/nixigaj/wut-server",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the wut-server wrk output violates Little's law (38,110 req/s at 45 ms average latency needs about 1,715 requests in flight on 996 connections), so the headline is not one plain run as shown; a single non-interleaved first-party run with no valid measurement: C to D.",
+    "corrections": {
+      "caveats": "The wut-server wrk output fails Little's law: 38,110.60 req/s at 45.00 ms average latency needs about 1,715 requests in flight, but wrk opened 996 connections, so about 22,100 req/s is the maximum at that latency; either an unshown pipelining script or not one plain run. The nginx run is consistent (about 720 in flight); bytes per response check out (90 vs 114). The server log counts connections, not requests. Cargo.lock pins h2 0.3.24 (RUSTSEC-2024-0332)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_nixigaj_wut_server.json"
+    ]
+  },
+  {
+    "id": "https://github.com/noamteyssier/hist-rs",
+    "evidence_tier_final": "B",
+    "tier_reason": "Enricher: an independent run in issue #3 by pixelb (Linux GNU sort, LC_ALL=C, 10M records: 12.864 s vs 36.238 s, about 2.8x) is a stated-setup measurement by a coreutils maintainer, so the LC_ALL=C comparison holds independently. C to B.",
+    "corrections": {
+      "claimed_speedup": "README table (MacBook M3 Pro, hyperfine): hist 231.5 ms vs naive 'sort | uniq -c | sort -n' 5637.6 ms (24.35x), with LC_ALL=C 1219.5 ms (5.27x), awk count pipeline 1265.4 ms (5.47x), uutils sort 3.84x. Independent run in issue #3 (pixelb, Linux GNU sort, LC_ALL=C, 10M records): hist 12.864 s vs 36.238 s, about 2.8x (derived from page data).",
+      "caveats": "hist -u writes via csv::Writer with a ',' delimiter, so lines with a comma, quote or CR get quoted and empty lines become \"\" (CSV and real FASTQ dedup altered; benchmark input unaffected); counting mode quotes tab and quote lines, merges CRLF with LF and aborts on non-UTF-8. cargo install ignores the repo's target-cpu=native."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/github_com_noamteyssier_hist_rs.json"
+    ]
   }
 ]

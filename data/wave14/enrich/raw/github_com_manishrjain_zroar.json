@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/manishrjain/zroar",
+  "one_liner": "Zig 64-bit Roaring bitmap whose in-memory buffer is its serialized form; 2.2x faster than CRoaring roaring64 on warm operations.",
+  "what_it_does": "zroar is a Roaring bitmap of u64 values that keeps the sorted (high48, offset) key index and every array or bitmap container in one flat, 8-byte-aligned buffer. toBuffer() hands that buffer out as is, and fromBuffer() opens stored bytes in place (by borrowing them with copy-on-write, or by taking ownership) after checking only the format version and the size. The API is its own Zig interface (set, contains, iterator, toArray, And/Or, the in-place and/or/andNot variants, fused and/or/andNot cardinality, compact), not a CRoaring-compatible one, and it cannot read or write CRoaring's portable format.",
+  "how_it_is_fast": "It uses offsets instead of pointers. A lookup is a search over the contiguous sorted key pairs plus an add into the same buffer, where CRoaring walks an adaptive radix tree (ART) and three more pointer hops to separately malloc'd containers, five to six dependent loads. Containers sit next to each other, so scans walk memory forward for the hardware prefetcher; container headers cache cardinality; and set operations, container searches and array extraction use portable @Vector SIMD. A thread-local hint remembers the last key index, so ascending lookups cost two compares (1.4 ns against 21 ns for a bisection on a million-key node, per keys.zig). Because the buffer is also the serialized form, opening a bitmap costs nanoseconds.",
+  "when_to_use": [
+    "Posting lists or secondary indexes stored as bytes (on disk, in a KV store, over the network) and opened per query: opening is a pointer cast, and the cold-open rows average 6.92x against CRoaring portable and 3.44x against frozen.",
+    "Read-heavy 64-bit set work in Zig: contains, iteration, cardinality and pairwise intersection or cardinality on real data sets (2.20x geometric mean warm; ComputeCardinality64 12.2-13.4x).",
+    "Append-mostly maintenance with increasing row ids, or batched writes sorted first: MixedOLTP (90% contains, 10% append) is 1.94-4.65x against portable, and the README reports sorted inserts 1.3-4x faster.",
+    "Ordered probe streams (merges, range checks, ordered id scans), which the thread-local neighbour hint turns into constant-time key lookups."
+  ],
+  "when_not_to_use": [
+    "Random interleaved inserts and removes across many keys: CRoaring is about 2.5-3x faster (0.33-0.40x on the key-index masks, 0.39x by total time), because a growing container in the middle of the buffer has to move.",
+    "Run-heavy data: zroar has no run containers, and the data sets built to show them off were left out of the benchmark. Even on the included sets, CRoaring's portable encoding is 0.85-0.96x the size of compacted zroar, and its frozen encoding 0.95-0.97x.",
+    "When you need 32-bit values, CRoaring portable-format interop, or use from C, C++ or any language other than Zig: none of these exist.",
+    "On untrusted buffers: beyond the version and size checks, buffer contents are validated only by debug assertions, so a corrupt buffer in ReleaseFast can read out of bounds. Checksum the bytes in the layer above.",
+    "When you need a stable dependency: the library is pre-1.0 with calendar versioning (API changes between release series), one author, 27 commits since 2026-08-10, and big-endian targets are rejected at compile time."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none for the library (Zig std only); the benchmark and difftest need a CRoaring checkout (bench/fetch_croaring.sh pins v5.0.0) and libc",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon)",
+    "platforms": "little-endian targets only (x86-64, ARM64, RISC-V and WASM per DESIGN.md; big-endian is a compile error); SIMD through portable @Vector, with no intrinsics and no runtime CPU dispatch",
+    "thread_safety": "Not documented as a guarantee. Read methods take *const Bitmap, and the lookup hint is thread-local and re-checked before use. Mutation (including the copy-out of a borrowed buffer) changes the bitmap, so writers need external synchronisation.",
+    "drop_in_for_baseline": "partial — it replaces CRoaring's roaring64_bitmap_t for 64-bit array and bitmap workloads in Zig, but the API differs, there are no C bindings, no run containers, no 32-bit variant and no CRoaring serialized-format compatibility"
+  },
+  "gotchas": [
+    "Harness deviation in IterateAll64 (6.50-19.11x) and ColdIterateAll64 (6.80-17.55x): CRoaring 5.0.0's bench.cpp loop makes two library calls per value (roaring64_iterator_has_value and roaring64_iterator_advance). The Zig port loops on hasValue() and then calls the wrapper's next(), which calls has_value, value and advance again: four calls into C per value that cannot be inlined, so CRoaring does double the per-value calls of its own benchmark. ToArray64 likewise adds a roaring64_bitmap_get_cardinality call per bitmap that CRoaring's body does not make, while zroar's side allocates per bitmap. These rows overstate zroar's margin by an unmeasured amount; the docs' claim that the bodies are 'copied line for line' does not hold for these rows.",
+    "The ContainsHit and ContainsMiss rows (2.95-3.01x geometric mean) probe keys in ascending order, faithfully ported from CRoaring's synthetic_bench.cpp. That is exactly the pattern zroar's thread-local neighbour hint short-circuits, while the plain roaring64_bitmap_contains has none (zroar's own comment points to CRoaring's caller-held bulk context as the equivalent, which is not used here). With random probes (ContainsRandom) the result is 0.92-1.85x.",
+    "'Cold' means re-opened from in-memory bytes inside the timed loop, which runs one warm-up call and then 500 ms of calls; the bytes stay in cache, so it is not cache-cold or disk I/O. The Deserialize and cold rows set zroar's pointer cast plus version check against CRoaring's bounds-checked portable_deserialize_safe and frozen_view, so the 615x, 259x and up to 286x figures measure skipped parsing and validation.",
+    "On the build side, Zig compiles CRoaring at -O2 rather than its CMake -O3, with no cross-language inlining, and CRoaring's realdata bitmaps are run_optimize'd as in CRoaring's bench.h, so its cardinality and iteration paths cross run containers that zroar does not have. BENCHMARKS.md was generated on 2026-08-20, before the 'Optimize Iteration' commit (2026-08-21) and the compact change in v0.2608.1 (2026-08-25)."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling in systems-and-safety is a compressed bitmap or posting-list structure, so the real choice is against the baseline, CRoaring roaring64. Pick zroar in Zig code that stores bitmaps as bytes and reads far more than it writes at random. Keep CRoaring for cross-language format interop, 32-bit sets, run-heavy data and random-write workloads.",
+  "verified_claims_summary": "The author ported CRoaring 5.0.0's own bench.cpp and synthetic_bench.cpp roaring64 rows to Zig 0.16.0 (ReleaseFast, with CRoaring compiled in the same build at -O2) and ran them on a Ryzen 9 5950X fixed at 4.00 GHz and pinned to one core. Geometric means of CRoaring time over zroar time: 2.20x on warm real data (zroar ahead in 31 of 36 cells), 6.92x and 3.44x on cold opens against the portable and frozen formats, 2.18x on synthetic operations, and 615x and 259x on serialize plus deserialize. CRoaring wins random interleaved insert/remove (0.60x typical, 0.39x by total time) and synthetic Insert by total time (0.89x).",
+  "status_note": "Active (created 2026-08-10; 27 commits, last 2026-08-25 at v0.2608.1). Apache-2.0 and small (about 2,000 lines of library code), with CI that runs the unit and property tests in Debug, ReleaseSafe and ReleaseFast plus a five-minute differential soak against CRoaring. Copyable as a Zig module, but pre-1.0, single-author and 17 stars.",
+  "sources_read": [
+    "https://github.com/manishrjain/zroar",
+    "https://github.com/manishrjain/zroar/commits/main",
+    "https://github.com/manishrjain/zroar/tree/main/src",
+    "https://github.com/manishrjain/zroar/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/README.md",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/DESIGN.md",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/build.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/fetch_croaring.sh",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/run_all.sh",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/bench.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/roaring64.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/bench/datasets.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/src/zroar.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/src/keys.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/src/iterator.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/src/container.zig",
+    "https://raw.githubusercontent.com/manishrjain/zroar/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/RoaringBitmap/CRoaring/v5.0.0/microbenchmarks/bench.cpp",
+    "https://raw.githubusercontent.com/RoaringBitmap/CRoaring/v5.0.0/microbenchmarks/synthetic_bench.cpp"
+  ],
+  "confidence": 0.8
+}

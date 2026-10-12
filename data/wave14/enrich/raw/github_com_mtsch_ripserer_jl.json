@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/mtsch/ripserer.jl",
+  "one_liner": "Pure-Julia reimplementation of the Ripser persistent-homology algorithm; matches C++ Ripser on thresholded Rips, beats it only on very sparse inputs.",
+  "what_it_does": "Computes persistent homology (barcodes / persistence diagrams) of Vietoris-Rips, sparse Rips, edge-collapsed Rips, alpha, cubical (image, any dimension) and user-defined filtrations. The API is a Julia function, ripserer(Rips(points or distance matrix; threshold, sparse); dim_max, modulus, alg, reps), returning a vector of PersistenceDiagram objects, optionally with representative cocycles or cycles, critical simplices and merge trees. It is not a command-line or C/C++ drop-in for Ripser; it replaces Ripser for people working inside Julia.",
+  "how_it_is_fast": "It ports Ripser's tricks: an implicit coboundary matrix (simplices indexed by the combinatorial number system and generated on the fly instead of stored), cohomology with the clearing (twist) optimization, apparent-pair and emergent-pair shortcuts, union-find for dimension 0, and binary-heap column addition over a small prime field (Mod{2} has a bit-mask fast path). Julia's type specialisation compiles the reduction for each filtration and field type, which is what lets it land near the C++ code; nothing here is a new algorithm, so the speed is parity rather than an algorithmic win.",
+  "when_to_use": [
+    "You already work in Julia and need Rips persistent homology of point clouds or distance matrices with a threshold: with sparse=true it ran 0.993-0.998x of Ripser's time on o3_1024 and o3_4096.",
+    "Very sparse inputs such as the 1-skeleton of a Delaunay triangulation (alpha-style graphs) passed as a SparseMatrixCSC: 0.74-0.94x of Ripser's time on four of five such sets.",
+    "You need things Ripser does not give you: representative cycles (alg=:involuted or :homology), critical simplices, custom filtrations, or cubical homology of images with more than 4 dimensions.",
+    "Representative-cycle work where the alternative is Eirene.jl: 0.07-0.92x of Eirene's time on five of six sets in the author's runs."
+  ],
+  "when_not_to_use": [
+    "Dense Rips with sparse=false (the default) on thresholded data: 1.04-1.99x slower than Ripser on five of six sets (o3_4096 151.5 s vs 76.2 s).",
+    "Cubical homology of 2-D or 3-D images: Cubical Ripser is faster on four of five sets (up to 2.6x on lena512, 2.1x on bonsai128), and Ripserer ran out of 8 GB on 256^3 volumes.",
+    "Memory-tight or short-lived jobs: peak heap includes the Julia runtime (111 MiB vs 1.1 MiB for Ripser on random16), and a fresh Julia session pays JIT compilation before the first result, which the benchmarks exclude.",
+    "Callers outside Julia (C++, Rust, a shell pipeline): there is no C ABI or CLI, so embedding Julia costs more than calling Ripser or ripser.py.",
+    "Workloads that need multiple cores: the reduction is single-threaded; the maintainer reported mixed results from multithreading experiments (issue #168)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages: Compat, DataStructures, Distances, Graphs, IterTools, MiniQhull (qhull, for Alpha), PersistenceDiagrams, ProgressMeter, RecipesBase, StaticArrays, TupleTools, MLJModelInterface; stdlib LinearAlgebra and SparseArrays",
+    "min_toolchain": "Julia 1.6 (Project.toml compat; CI tests '1', 'lts' and nightly on Linux plus a Windows job). The docs still say Julia 1.0 onward, which is stale.",
+    "platforms": "any platform Julia runs on (CI: ubuntu-latest and windows-latest); Alpha filtrations need MiniQhull's qhull build",
+    "thread_safety": "not documented; computation is single-threaded",
+    "drop_in_for_baseline": "partial — same algorithm and the same barcodes as Ripser, but a Julia API returning PersistenceDiagram objects instead of the ripser CLI/text output; no C or C++ interface"
+  },
+  "gotchas": [
+    "Default sparse=false keeps a dense matrix even when a threshold is set, while Ripser switches itself to a sparse distance matrix whenever the threshold (or enclosing radius) is below the maximum distance (ripser.cpp main at 286d369). The docs' 'dense' table therefore compares Ripserer's slower mode with Ripser's sparse mode; pass sparse=true to get Ripser-equivalent behaviour.",
+    "Harness asymmetries in RipsererBenchmarks.jl: Ripser is timed as an external process (read(cmd): process launch, text parse, stdout capture), while Ripserer runs in-process after BenchmarkTools' warm-up call, so Julia JIT compile time is excluded; this favours Ripserer most on the ms-scale rows (random16 8 ms vs 10 ms, alpha_dragon_2000 56 ms vs 76 ms). Also, load_sparse in src/utils.jl adds 1.0 to every edge length it reads (V = table[:, 3] .+ 1), so on the Alpha-Rips rows Ripserer's filtration values differ from the file Ripser reads; the edge order and pairing are unchanged except for Float32 rounding ties, so the timings are probably unaffected, but the outputs were never cross-checked.",
+    "Prime fields: Mod{M} arithmetic calls mod_prime, which runs is_prime(M) by trial division on every +, - and * for any M other than 2, and moduli above 3037000499 are rejected after an overflow report (issue #170, open). Small primes are cheap; large moduli were never benchmarked. Custom filtrations with many vertices need Custom{Int128} to avoid an OverflowError in simplex indices (issue #175).",
+    "The published numbers are from Ripserer v0.15 in 2020 on an i5-4200U laptop with unstated Julia and C++ compiler versions; the package is now v0.17.0 and has not re-run them."
+  ],
+  "pick_this_over_siblings_when": "No sibling covers persistent homology. Like NonuniformFFTs.jl against FINUFFT, Ripserer is a parity-level pure-Julia rewrite of a C++ tool, so pick it to stay in Julia with generic filtrations and representatives, not for the large wins NativeMinuit.jl claims over Minuit2.",
+  "verified_claims_summary": "On the author's laptop (Intel i5-4200U, 8 GB), Ripserer v0.15 with sparse=true took 0.93-1.30x of the time of C++ Ripser (commit 286d369, built -Ofast by its Makefile, compiler unstated) on six Rips datasets, and 0.74-1.06x on five Delaunay-skeleton sparse inputs, with parse time included and the minimum of five runs reported; in its default dense mode it was 1.04-1.99x slower on five of six sets. Against Cubical Ripser it was faster only on bonsai64 (0.96) and up to 2.6x slower elsewhere.",
+  "status_note": "Maintained at a slow pace (v0.17.0, last commits 2026-06-29 fixing involuted homology generators), MIT-licensed and registered in Julia's General registry; useful as a Julia-native Ripser equivalent, not as a faster replacement for it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/README.md",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/benchmarks.md",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/docs/src/index.md",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/Project.toml",
+    "https://github.com/mtsch/Ripserer.jl/tree/master/src",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/Ripserer.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/filtrations/rips.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/filtrations/utils.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/computation/ripserer.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/computation/cohomology.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/computation/reducedmatrix.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/computation/zerodimensional.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/base/simplex.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/src/base/primefield.jl",
+    "https://raw.githubusercontent.com/mtsch/Ripserer.jl/master/.github/workflows/Test.yml",
+    "https://github.com/mtsch/Ripserer.jl/issues?q=is%3Aissue",
+    "https://github.com/mtsch/Ripserer.jl/issues/170",
+    "https://github.com/mtsch/Ripserer.jl/issues/175",
+    "https://github.com/mtsch/Ripserer.jl/issues/168",
+    "https://github.com/mtsch/Ripserer.jl/issues/159",
+    "https://github.com/mtsch/Ripserer.jl/commits/master",
+    "https://github.com/mtsch/RipsererBenchmarks.jl/tree/master/src",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/README.md",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/run_everything.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/RipsererBenchmarks.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/benchmarks.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/benchmarksuites.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripser.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/ripserer.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/utils.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/src/report.jl",
+    "https://raw.githubusercontent.com/mtsch/RipsererBenchmarks.jl/master/datasets/alpha_torus_10_000.spdist",
+    "https://raw.githubusercontent.com/Ripser/ripser/286d369/ripser.cpp"
+  ],
+  "confidence": 0.75
+}

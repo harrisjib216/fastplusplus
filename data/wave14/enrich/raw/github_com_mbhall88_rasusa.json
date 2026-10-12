@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/mbhall88/rasusa",
+  "one_liner": "Rust CLI that randomly subsamples reads to a target coverage, base count or read count; it matches seqtk sample -2 on speed and is far faster than filtlong, which does a different job.",
+  "what_it_does": "`rasusa reads` randomly keeps reads from FASTA or FASTQ (plain or compressed) or unaligned SAM/BAM/CRAM until it reaches a target coverage (given a genome size), a base count, a read count or a fraction. Paired files keep mates in sync. `rasusa aln` caps per-position depth in a coordinate-sorted BAM/CRAM. It is a standalone command-line tool with its own flags, not a drop-in for the `seqtk sample` or filtlong command lines.",
+  "how_it_is_fast": "It makes two streaming passes with the needletail FASTX parser (decompression through niffler). The first pass collects per-read lengths, or only counts reads in --num/--frac mode. A PCG64-seeded selection then marks the reads to keep in a Vec<bool>: a full shuffle of u32 indices for --coverage/--bases, and O(k) `rand::seq::index::sample` for --num/--frac since v5.0.0. The second pass writes only the marked records through a BufWriter. Its large lead over filtlong comes from doing less work (no per-read length and windowed-quality scoring). Against seqtk's equivalent two-pass mode, the run time is the same.",
+  "when_to_use": [
+    "Downsampling FASTQ/FASTA to a target coverage or base count when you know the genome size and do not want to work out a read count first.",
+    "Paired-end downsampling in one command, so both outputs hold the same read IDs.",
+    "Long-read datasets that need an unbiased random subset (for example assembly-at-depth experiments), rather than filtlong's subset biased toward length and quality.",
+    "Capping per-position depth in a sorted BAM/CRAM with `rasusa aln` (stream strategy, a single pass for unpaired data).",
+    "Keeping a few reads out of a huge run with --num/--frac (selection memory scales with reads kept since v5.0.0), or a streaming --one-pass/-p subsample when an approximate fraction is acceptable."
+  ],
+  "when_not_to_use": [
+    "Raw speed over seqtk for a fixed read count: rasusa 0.950 s against `seqtk sample -2` 0.963 s is parity, and only seqtk's one-pass reservoir mode is slower (1.19x).",
+    "Filtering by read quality or length: filtlong is the right tool, and the 34.9x figure compares random sampling with filtlong's scoring, not the same task.",
+    "Input from a pipe or process substitution in the default modes: they open the input path twice. Only --one-pass reads it once.",
+    "--coverage/--bases on more than 4,294,967,296 reads: the shuffle uses a u32 index vector, documented as undefined behaviour. Memory in that mode grows by about 9 bytes per input read (u32 length, u32 shuffled index, bool flag; derived from the code).",
+    "Multi-threaded FASTQ throughput: the FASTX path is single-threaded, --threads only drives BAM BGZF (de)compression, and the multi-threading request (#55) has been open since 2022."
+  ],
+  "integration": {
+    "form": "CLI binary from the `rasusa` crate (cargo install, bioconda, Homebrew, ghcr.io containers, prebuilt binaries via install.sh). The crate also exposes library modules (Fastx, SubSampler), but the CLI is the documented interface.",
+    "dependencies": "clap, needletail (compression), niffler, noodles (bam, cram, sam), noodles-util, noodles-bgzf with the libdeflate feature (bundles the C libdeflate), rand and rand_pcg, rayon, rustc-hash, regex, anyhow, thiserror, log and env_logger",
+    "min_toolchain": "not documented (edition 2018, no rust-version in Cargo.toml; CI and the benchmark workflow build with current stable Rust)",
+    "platforms": "Linux and macOS (install script detects OS and architecture; bioconda, Homebrew and containers); Windows not documented",
+    "thread_safety": "not applicable (CLI). FASTX subsampling runs on one thread; -@/--threads adds BAM (de)compression threads only.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Seeded output changes across major versions. v3.0.0 (rand 0.8 to 0.10) changed every seeded subset, and v5.0.0 changed which reads --num/--frac select for a given --seed (--coverage/--bases are unchanged since v3). Pin the version when reproducibility matters.",
+    "--coverage/--bases keep adding shuffled reads until the target is reached, so the result can overshoot by one (possibly very long) read. Without --strict, an unreachable target only warns and returns everything possible.",
+    "Benchmark harness: the filtlong row measures a different algorithm (filtlong scores every read on length and windowed quality), and the like-for-like seqtk -2 row is parity. The seqtk rows also run two processes inside one hyperfine shell command against one rasusa process, a small fixed cost in rasusa's favour. Tool versions and the Rust toolchain are unpinned, and the runner CPU is not stated.",
+    "`rasusa aln` in paired mode subsamples read 1 at half the requested coverage and then recovers mates, so depth fluctuates around the target rather than being capped exactly."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling subsamples reads. mosdepth, sambamba and mako replace htslib-based C tools for depth calculation, BAM processing and sorting, so pick rasusa for random downsampling to a coverage, base or read target and use mosdepth to check the resulting depth.",
+  "verified_claims_summary": "These are first-party hyperfine tables regenerated by benches/update_readme.sh on a GitHub Actions ubuntu-24.04 runner (CPU not stated), with rasusa built in release mode with LTO on stable Rust and filtlong and seqtk from unpinned bioconda packages. A 2.9 GB long-read FASTQ subsampled to 50x of a 4.41 Mbp genome took 0.740 s against filtlong's 25.84 s (34.9x, but a different algorithm). Paired 179 MB files cut to 140,000 reads took 0.950 s against 1.132 s for seqtk one-pass (1.19x) and 0.963 s for seqtk -2 (1.01x, parity).",
+  "status_note": "Actively maintained (v5.1.0 on 2026-07-31, last commit 2026-10-01, only two open enhancement issues), MIT-licensed, described in JOSS (2022) and Gigabyte (2026) papers and packaged everywhere. Choose it for its coverage-targeted interface and paired handling, not for a speed edge over seqtk, which is parity in the like-for-like mode.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/README.md",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/benches/update_readme.sh",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/.github/workflows/benchmark.yaml",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/paper/paper.md",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/subsampler.rs",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/cli.rs",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/reads.rs",
+    "https://raw.githubusercontent.com/mbhall88/rasusa/HEAD/src/fastx.rs",
+    "https://github.com/mbhall88/rasusa/issues"
+  ],
+  "confidence": 0.75
+}

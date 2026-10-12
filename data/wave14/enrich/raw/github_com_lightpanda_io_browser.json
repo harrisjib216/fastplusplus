@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/lightpanda-io/browser",
+  "one_liner": "Zig headless browser (V8 JS, no rendering) for CDP automation; vendor crawl 9.7x faster, 16x less memory than headless Chrome.",
+  "what_it_does": "A headless browser written from scratch (not a Chromium or WebKit fork): libcurl fetches pages, html5ever parses HTML, a Zig DOM holds the tree and V8 runs page JavaScript, including XHR and fetch. It exposes a CDP websocket server (Puppeteer, Playwright and chromedp connect through browserWSEndpoint instead of launching Chrome), WebDriver BiDi, a `fetch` CLI that dumps HTML or Markdown, an MCP server and an LLM-driven agent mode. It implements a subset of CDP and the Web APIs, so it replaces Chrome only for scripts that stay inside that subset.",
+  "how_it_is_fast": "It skips most of what headless Chrome still does: no style, layout, paint or compositing, no GPU process and no per-site renderer processes, and `serve` by default fetches no images, stylesheets, iframes or workers (LoadResources defaults to all false in src/Config.zig). One small process holds the DOM and a V8 isolate, and release builds embed a V8 startup snapshot and are built ReleaseFast with a linker orderfile (.github/workflows/release.yml). JavaScript runs on the same V8 engine as Chrome, so the gain comes from doing less work in a lighter process model, not from Zig code generation.",
+  "when_to_use": [
+    "Crawling or scraping pages whose DOM is filled by JavaScript (XHR or fetch), when you need the DOM after scripts run and never need pixels.",
+    "Dense automation fleets where Chrome's memory is the limit: the vendor table shows 27.2 MB peak PSS for one Lightpanda process against 1.3 GB for Chrome with one tab.",
+    "One short-lived browser per worker or task: the vendor crawler forks one Lightpanda process per worker, with startup inside the timed region, and still finished first.",
+    "LLM-agent and MCP pipelines that want page text as Markdown or DOM dumps (`fetch --dump markdown`, `lightpanda mcp`).",
+    "Linux (glibc) or macOS on x86-64 or aarch64, from the nightly binaries or the Docker image."
+  ],
+  "when_not_to_use": [
+    "Screenshots, visual regression, PDF fidelity or anything needing computed styles or geometry: there is no rendering engine, and `--dump png/pdf` is a text-only rendering.",
+    "Sites outside its Web API and CDP coverage: the vendor built a homemade benchmark page because Lightpanda 'is not yet fully compliant', and anti-bot widgets such as Cloudflare Turnstile fail (issue #1869).",
+    "Scripts that open several browser contexts or pages on one connection: issue #882 ('multi contexts and multi pages is not supported', open since July 2025); the benchmark itself ran N processes instead of N tabs.",
+    "Proprietary products that embed it or offer it as a network service without meeting AGPL-3.0 terms; contributions require a CLA.",
+    "musl (Alpine), Android or native Windows: no binaries for them (Windows only through WSL2)."
+  ],
+  "integration": {
+    "form": "standalone binary (CDP, WebDriver BiDi and MCP servers, fetch CLI); no embeddable library API documented",
+    "dependencies": "V8 (prebuilt archive from lightpanda-io/zig-v8-fork), libcurl, html5ever (Rust); building needs Rust, clang, make, pkg-config and glib dev headers",
+    "min_toolchain": "Zig 0.15.2 exactly (README), plus a Rust toolchain for html5ever",
+    "platforms": "Linux x86-64 and aarch64 (glibc only), macOS x86-64 and aarch64; Windows only through WSL2; no musl or Android build",
+    "thread_safety": "One browser context and page per session (issue #882); scale with processes. Current serve accepts up to 16 CDP connections by default (cdp_max_connections), and the MCP HTTP mode documents independent sessions per connection; per-connection CDP isolation is not documented.",
+    "drop_in_for_baseline": "partial: Puppeteer, Playwright and chromedp scripts connect over the CDP websocket unchanged, but only a subset of CDP and Web APIs exists, nothing is rendered, and multi-context or multi-page scripts fail (#882)"
+  },
+  "gotchas": [
+    "Harness asymmetry in the vendor benchmark beyond 'no rendering': Lightpanda's serve loads no images or stylesheets by default (src/Config.zig LoadResources), while Chrome does. In the Campfire test, Puppeteer's page.goto waits for the load event, which in Chrome includes style.css and the logo, cart and loading images from the local server; Lightpanda skips them. Chrome's Campfire loop also creates a fresh browser context and page every iteration, so the 185 ms vs 16 ms mixes context and renderer-process creation with page work. In the crawl, the sampled Amiibo page (03000502.json) sets an img src to a PNG on raw.githubusercontent.com that only Chrome downloads.",
+    "The published numbers (BENCHMARKS.md commits of 2026-01-19 to 2026-01-26) were taken with crawler f2f0a8a, whose dispatch loop offered queued URLs only right after a result arrived; later commits fixed an infinite loop (7b56aae, 2026-03-27) and a deadlock (2767600, 2026-08-21). The old loop could leave pool workers idle for both browsers, and the flat curves (Lightpanda 4.81 s at 25 processes vs 5.23 s at 100; Chrome 45.6-46.7 s from 5 to 25 tabs) fit a dispatch or network ceiling rather than browser saturation. That is not proven, but the scaling rows are not clean browser-throughput numbers.",
+    "The README headline table says '100 pages' and m5.large, but its 5 s / 123 MB vs 46 s / 2 GB are the 25-way rows of the 933-page crawl on m5.xlarge; one process versus one tab is only 1.6x faster (51.68 s vs 82.83 s). There is one run per configuration over the live internet, the Lightpanda build mode is not stated, and the CPU sampler's `ps aux | grep lightpanda` also counts the crawler process in fork mode (its command line contains ../../lightpanda).",
+    "Usage telemetry is on by default (set LIGHTPANDA_DISABLE_TELEMETRY=true); there are no versioned releases, only a rolling nightly build."
+  ],
+  "pick_this_over_siblings_when": "No other headless browser is catalogued; the Zig siblings (ziggit, zroar, zipir) are unrelated tools. Pick Lightpanda only when you need page JavaScript executed into a DOM at high density and can do without rendering. It is not evidence that Zig beats C++, because both browsers run V8.",
+  "verified_claims_summary": "Vendor-run in January 2026 on one AWS m5.xlarge: a Go chromedp crawler fetched the 933-page Amiibo demo site over the internet, and 25 Lightpanda processes (commit 7b1f157) took 4.81 s at 123 MB peak PSS versus 46.70 s and 2.0 GB for headless Chrome 143 with 25 tabs; one process versus one tab was 51.68 s vs 82.83 s (1.6x, derived from page data). A local Campfire page loaded 100 times through Puppeteer averaged 16 ms vs 185 ms, with Chrome also fetching CSS and images that Lightpanda skips by default.",
+  "status_note": "Very active (36.3k stars, 10,489 commits, 65 open issues, rolling nightly builds, no versioned releases); AGPL-3.0 with a CLA, fine as a standalone service binary but copyleft for embedding. The headline speedup is vendor-measured on unequal work (no rendering, no image or CSS loading) with a crawler later fixed for an infinite loop and a deadlock.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lightpanda-io/browser/main/README.md",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/README.md",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/chromedp/crawler/main.go",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/f2f0a8a/chromedp/crawler/main.go",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/puppeteer/cdp.js",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/puppeteer/helpers.js",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/public/amiibo/index.html",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/public/amiibo/load.js",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/public/amiibo/03000502.json",
+    "https://raw.githubusercontent.com/lightpanda-io/demo/main/public/campfire-commerce/index.html",
+    "https://raw.githubusercontent.com/lightpanda-io/browser/main/src/Config.zig",
+    "https://raw.githubusercontent.com/lightpanda-io/browser/main/Makefile",
+    "https://raw.githubusercontent.com/lightpanda-io/browser/main/.github/workflows/release.yml",
+    "https://github.com/lightpanda-io/demo/commits/main/chromedp/crawler/main.go",
+    "https://github.com/lightpanda-io/demo/commits/main/BENCHMARKS.md",
+    "https://github.com/lightpanda-io/browser",
+    "https://github.com/lightpanda-io/browser/issues?q=is%3Aissue+is%3Aopen+crash",
+    "https://github.com/lightpanda-io/browser/issues/882"
+  ],
+  "confidence": 0.7
+}
