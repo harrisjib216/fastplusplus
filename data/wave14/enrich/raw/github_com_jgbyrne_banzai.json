@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/jgbyrne/banzai",
+  "one_liner": "Pure-Rust bzip2 encoder using linear-time SA-IS for the BWT; bounds bzip2's worst case but is slower on average.",
+  "what_it_does": "A bzip2 compressor library (encoder only) plus the bnz command-line tool, whose flags (-c, -k, -r, -1..-9, --fast, --best, '-' for stdin) mimic bzip2(1). The API is a single function, encode(reader: impl BufRead, writer: BufWriter<W>, level: 1..=9) returning the number of input bytes consumed, plus an encode_file(in, out) helper fixed at level 9. Output is a standard .bz2 stream; decompression needs another library such as bzip2-rs or libbzip2.",
+  "how_it_is_fast": "It is not faster on average; its advantage is a worst-case bound. The Burrows-Wheeler transform is computed with SA-IS (Nong, Zhang and Chan's induced-sorting suffix array construction), which is linear time on any input, run on the block concatenated with itself to obtain bzip2's wrap-around rotation order. The C reference sorts blocks with a comparison-based main sort and falls back to a slower algorithm on highly repetitive data, which is the case where banzai's linear bound helps; Huffman table selection follows the reference closely, so ratios are about the same.",
+  "when_to_use": [
+    "Producing .bz2 output from Rust without linking libbz2 or another C toolchain dependency (the crate's only dependency is crc).",
+    "Inputs that are highly repetitive or adversarial, where the reference encoder's fallback sort makes compression time spike and a linear-time bound on block sorting matters more than average speed.",
+    "Memory-safety-sensitive tools that must write bzip2 and can accept slower typical compression.",
+    "Small single-threaded jobs where compression speed is not the bottleneck (archiving logs or exports at level 9)."
+  ],
+  "when_not_to_use": [
+    "Throughput-sensitive compression of ordinary data: the author states average runtime is worse than the C reference, and an earlier README revision put it at roughly twice the reference runtime.",
+    "Anything that needs decompression; there is no decoder.",
+    "Multi-core compression: encoding is single-threaded, so lbzip2 or pbzip2 style block parallelism is not available.",
+    "Production pipelines that need a hardened encoder: the README calls it alpha software that is not battle-hardened, there is no CI, and the code has not changed since September 2022."
+  ],
+  "integration": {
+    "form": "crate (library banzai plus binary crate bnz)",
+    "dependencies": "crc 3.0",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85 or newer) as of 0.3.2; no rust-version field in the manifest",
+    "platforms": "any target with usize of at least 32 bits (bwt panics otherwise)",
+    "thread_safety": "Not documented; encode is a single-threaded function over owned buffers with no global state in the code read",
+    "drop_in_for_baseline": "partial — the output is a standard bzip2 stream readable by bzip2 -d, but the library is encoder-only with a Rust API, and bnz covers only the compression side of bzip2(1)"
+  },
+  "gotchas": [
+    "The README says banzai is 'written entirely in safe Rust' (an earlier revision said it 'has no usage of unsafe'), but lib/bwt.rs Array::split contains an unsafe block that reinterprets the tail of the i32 suffix-array buffer as &mut [u32] via slice::from_raw_parts_mut; it is sound (same size and alignment, every bit pattern valid) but audits that require forbid(unsafe_code) will flag it.",
+    "Invalid levels panic: encode and write_stream_header use assert!(1 <= level && level <= 9) instead of returning an io::Error.",
+    "Memory per block: bwt appends a copy of the block to itself and allocates a 2n-entry i32 suffix array, about 1.8 MB plus 7.2 MB at level 9, plus the buckets and the output buffers.",
+    "Performance evidence is a sentence, not a measurement: the 2022-09-20 README said runtime 'tends to be approximately twice as long' as the reference except for highly repetitive inputs; the 2022-09-26 'readme updates' commit replaced that with 'worse average runtime but better worst-case runtime', and the commit titles in between show no performance work, so the 2x figure probably still describes the current code. Correctness rests on unit tests and a cargo-fuzz round_trip target that decodes with the bzip2 0.4 crate (libbzip2); 0.3.0 was yanked on crates.io."
+  ],
+  "pick_this_over_siblings_when": "Pick banzai over libbzip2-rs (a Rust port of libbzip2 with measured wins over C in both directions) only when you want an independent encoder with a linear-time worst case and no ported C code; for speed, libbzip2-rs, or the Zig bzip2z (also SA-IS-based, measured 1.79x faster than system bzip2 1.0.8 compression in its README), is the better choice.",
+  "verified_claims_summary": "There is no benchmark: the README compares banzai with the bzip2 C reference only qualitatively (similar compression ratios, worse average runtime, better worst-case runtime), with no hardware, compiler or data named, and an older README revision estimated the average runtime at about twice the reference's.",
+  "status_note": "Effectively dormant: the roughly 2,100-line library has been unchanged since 2022-09-26 apart from a 2026-07-28 edition-2024 bump (0.3.2); it is MIT-licensed, has about 28k crates.io downloads and three reverse dependencies (bnz, weavatrix-search, melodium-loader), and is small enough to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/README.md",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/bnz/Cargo.toml",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/bnz/src/main.rs",
+    "https://github.com/jgbyrne/banzai/tree/master/lib",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/lib.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/bwt.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/rle.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/crc32.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/out.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/huffman.rs",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/lib/mtf.rs",
+    "https://github.com/jgbyrne/banzai/tree/master/fuzz",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/HEAD/fuzz/Cargo.toml",
+    "https://github.com/jgbyrne/banzai/issues?q=is%3Aissue",
+    "https://github.com/jgbyrne/banzai/commits/master",
+    "https://github.com/jgbyrne/banzai/commits/master/README.md",
+    "https://github.com/jgbyrne/banzai/commit/be361f8f536653bbe13f8316d6d2a8110a074486",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/40a1bbfb7ef35a182c94b82ae3d103b199dd79e4/README.md",
+    "https://raw.githubusercontent.com/jgbyrne/banzai/6f89a12dc3248f5f76a2b98f600829311002a0a7/README.md",
+    "https://crates.io/api/v1/crates/banzai",
+    "https://crates.io/api/v1/crates/banzai/reverse_dependencies",
+    "WebSearch snippets: '\"banzai\" bzip2 encoder Rust SA-IS benchmark compression speed' (docs.rs crate pages, blocked here)"
+  ],
+  "confidence": 0.82
+}
