@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/edouardberge/rasm",
+  "one_liner": "Single-file C Z80 cross-assembler (Amstrad CPC, ZX Spectrum) claiming tens of millions of instructions/s; SjasmPlus comparison unpublished.",
+  "what_it_does": "Command-line Z80 cross-assembler aimed at very large demo and game projects: macros, loops, structures, modules, banked memory beyond 64K, and direct output of CPC cartridges, snapshots (up to 4M), EDSK floppies, HFE images, tapes and ZX snapshots. It can crunch INCBIN data or assembled sections on the fly (LZ4, LZ48/49, ZX0, ZX7, Exomizer 2, AP-Ultra, LZSA1/2) and relocate the code that follows. Besides the CLI, rasm.h exposes an embedding API (RasmAssemble, RasmAssembleInfo, RasmAssembleInfoIntoRAM/ROM) that emulators and IDEs such as CPCSyntaxError and Arkos Tracker use. It is not a drop-in for another assembler's syntax, though it has compatibility modes for old MAXAM, AS80, UZ80 and Pasmo sources.",
+  "how_it_is_fast": "Sources are tokenised once into a word list; each word is dispatched to its directive or mnemonic through a fastmatch[first char][length] table into the keyword array (sorted by length, then name) and a 32-bit key compare before any strcmp, so most words cost one table lookup, one integer compare and one short string compare. Labels, variables and aliases are indexed by a cheap 32-bit key (an XOR of the name's 4-byte chunks, called 'CRC' in the code) through a 65,536-entry top table and two 256-way radix levels, with strcmp only inside the final bucket. Forward references are queued as expressions and resolved in one batch (PopAllExpression) rather than by a second full pass. The optional 'superfast' builds add mimalloc or tcmalloc for the many small allocations and compile with -DSUPERFAST, which removes several duplicate-name and reserved-word checks (see gotchas).",
+  "when_to_use": [
+    "Large Amstrad CPC or ZX Spectrum projects (hundreds of thousands of source words, 512K cartridges, multi-bank snapshots) where assembler turnaround dominates the edit-build-run loop.",
+    "Build pipelines that want one tool to assemble, crunch (ZX0, LZSA, AP-Ultra, Exomizer) and emit a cartridge, snapshot, EDSK or tape image without separate packer and disk-image steps.",
+    "Embedding an assembler in an emulator, tracker or IDE through the RasmAssemble* C API (one process, sequential assemblies).",
+    "Retro-scene toolchains that need a self-contained C source with no external library beyond libm, buildable on Linux, macOS, Windows, MS-DOS and MorphOS."
+  ],
+  "when_not_to_use": [
+    "Anything that is not Z80-family: it does not replace GNU as, NASM, MASM or the x86/ARM assemblers in this category.",
+    "Projects written for SjasmPlus, z88dk's z80asm or VASM syntax: no compatibility mode exists for them (only old MAXAM, AS80, UZ80 and Pasmo), so porting is manual.",
+    "Choosing on speed alone: there is no published benchmark, corpus or competitor run; the 100x (CPCWiki) and 30x (Haiku depot) ratios contradict each other and could not be checked.",
+    "Concurrent assembly from several threads of one host process: the embedding API mutates and re-sorts the global instruction table on every call.",
+    "Label-heavy sources on memory-tight hosts: each distinct label key can allocate up to three radix nodes of 256 pointers (about 2 KB each), trading memory for lookup speed (derived from the struct definitions in rasm.c)."
+  ],
+  "integration": {
+    "form": "source-drop (single rasm.c of about 35,000 lines plus rasm.h, built into a CLI binary or linked with -DINTEGRATED_ASSEMBLY as an embedded library)",
+    "dependencies": "libm; bundled cruncher sources (apultra, lzsa with libdivsufsort, salvador ZX0, z80-master for autotests); optional mimalloc or tcmalloc for the superfast targets; 'make third' builds without the third-party crunchers",
+    "min_toolchain": "Any C compiler (cc/gcc, clang, recent MSVC, MSVC 15 for Windows XP, mingw-w64); no language standard stated; the superfast targets call clang explicitly",
+    "platforms": "Linux x64 and ARM (including Raspberry Pi), macOS Intel and ARM, Windows 32/64-bit, MS-DOS, MorphOS (README); output targets are Z80 machines (Amstrad CPC/Plus, ZX Spectrum)",
+    "thread_safety": "Not documented. The CLI assembles single-threaded (optional RASM_THREAD only parallelises crunching); the embedding API rewrites and qsorts the global instruction[] keyword table inside every PreProcessing call and keeps a static counter, so concurrent calls race.",
+    "drop_in_for_baseline": "partial: a different assembler with its own directive set; it does not accept SjasmPlus syntax, and offers compatibility only with old MAXAM, AS80, UZ80 and Pasmo sources"
+  },
+  "gotchas": [
+    "The 'make superfastmi' / 'make superfasttc' builds the README recommends for extra speed on Linux define SUPERFAST, which compiles out the checks that a label is not a reserved register name (A, BC, HL, IX, IXL ...) and that labels, variables and aliases do not collide; invalid sources that the normal build rejects are accepted silently. Which build produced the 'around 100 millions instructions per second' peak is not stated.",
+    "Every makefile target compiles with -march=native, so a binary built from the makefiles is tied to the build machine's CPU; rebuild without it for distributable binaries.",
+    "The embedding API aborts the host process on fatal conditions: dozens of exit() calls outside the autotest code (unreadable include or INCBIN file, thread creation failure, overlapping replace strings, missing input file) bypass the error structure returned to the caller.",
+    "Label lookup keys XOR the name's 4-byte chunks, so names whose chunks repeat or are permuted (for example 'ABCDEFGH' and 'EFGHABCD') share a bucket and fall back to linear strcmp; correctness holds but generated label sets can lose the fast path (derived from GetCRC in rasm.c)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when the target is a Z80 machine and you want assembler, cruncher and disk/cartridge image output in one fast tool; z88dk (with its z80asm) is the better choice when the project mixes C and assembly through SDCC/zsdcc, and the x86 entries (Asmc, UASM, JWasm, minias, aron) do not cover Z80 at all.",
+  "verified_claims_summary": "Only first-party absolute figures exist: the README claims a peak of about 100 million instructions per second and 'tens of millions' on a modern CPU, with no hardware, build, input or competitor stated; CPCWiki (1 million lines in 0.03 s, 100x SjasmPlus) and the Haiku depot (30x the 'best challenger') were seen as search snippets only and disagree. No timing harness, corpus or SjasmPlus version is in the repository.",
+  "status_note": "Actively maintained (v3.3.2 dated 04/10/2026 in rasm.h, last commit 2026-10-06, 638 commits, 2 open issues) and MIT-licensed; usable as a production CLI or embedded C source, but its speed advantage is unmeasured by anyone else and the fastest build drops some error checks.",
+  "sources_read": [
+    "https://github.com/EdouardBERGE/rasm",
+    "https://raw.githubusercontent.com/EdouardBERGE/rasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/EdouardBERGE/rasm/HEAD/makefile",
+    "https://raw.githubusercontent.com/EdouardBERGE/rasm/HEAD/Makefile.linux",
+    "https://raw.githubusercontent.com/EdouardBERGE/rasm/HEAD/rasm.h",
+    "https://raw.githubusercontent.com/EdouardBERGE/rasm/HEAD/rasm.c",
+    "https://github.com/EdouardBERGE/rasm/issues?q=is%3Aissue",
+    "https://github.com/EdouardBERGE/rasm/issues?page=2&q=is%3Aissue",
+    "https://github.com/EdouardBERGE/rasm/issues/14",
+    "WebSearch: rasm Z80 assembler speed benchmark sjasmplus \"million lines\" seconds (CPCWiki and Haiku depot snippets only)",
+    "https://oldwiki.cpcwiki.eu/index.php/RASM (failed: ENOTFOUND)"
+  ],
+  "confidence": 0.65
+}
