@@ -1,0 +1,98 @@
+[
+  {
+    "id": "lang:haskell/atemerev/skynet#skynet",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "boostorg/fiber doc/performance.qbk (Boost.Fiber author, independent of GHC) shows Haskell 0.05-0.06 us per unit at 1,000,000 units against pthread 54-73 us and std::thread 52-73 us at 10,000 threads on a stated Xeon E5-2620 v4 with gcc-6.3.1 release/speed, but the Haskell build flags, RTS options and which of the five skynet Haskell variants ran are unstated, the gain is ~870-1,460x (cap at C for >50x with unstated flags), and the two sides run at different sizes and very likely different algorithms. Not A (no Haskell flags), not B (unequal workloads, unknown variant).",
+    "corrections": {
+      "claimed_speedup": "Haskell (stack-1.4.0/ghc-8.0.1): 0.05-0.06 us per unit (average over 1,000,000) versus pthread 54-73 us, std::thread 52-73 us and std::async 106-122 us per thread (average over 10,000, because 1,000,000 OS threads exhausted resources): about 870x-1,460x lower per-unit cost (derived from page data; sizes differ). The same page shows Boost.Fiber (C++, 16C/32T, work stealing, tcmalloc) at 0.05-0.09 us per fiber, so C++ user-space fibers match the Haskell row.",
+      "compiler_and_flags": "C++ side (page): gcc-6.3.1, Boost.Build variant=release optimization=speed (-O3), pthreads created with 8 kB stacks, std::thread with the system default 1-2 MB stacks, glibc malloc or tcmalloc (-ltcmalloc). Haskell side (page): stack-1.4.0 / ghc-8.0.1 only. The skynet repo's haskell/skynet.cabal sets ghc-options -O2 -threaded -rtsopts and its README runs 'stack exec skynet +RTS -N', but the Boost page does not say which Haskell variant or RTS options it used.",
+      "caveats": "Variant mismatch (main finding): atemerev/skynet haskell/src/Main.hs runs five implementations under criterion (Parallel, MVar, Chan, TBQueue, Unagi); its own comments give, on an i7-4930K with +RTS -N6, Parallel 0.017 s and MVar 1.7 s per 1,000,000-leaf run. The Boost row (0.05-0.06 us x 1,000,000 = 50-60 ms) matches the Parallel variant's order of magnitude, not the forkIO+MVar one (inference; the page does not name the variant). Parallel.hs computes a pure tree sum with parMap rpar: it creates sparks (work-stealing pool entries the parent may evaluate itself), no forkIO threads and no channel messages, whereas the C++ port (boostorg/fiber performance/thread/skynet_pthread.cpp) creates about 11,110 detached pthreads for its 10,000 leaves and passes every value through a mutex/condition-variable buffered_channel. So the comparison is sparks (or green threads) against kernel threads, not the same work, and the win is the runtime's, not Haskell codegen's. Scale differs (1,000,000 units for Haskell, 10,000 for pthread/std::thread). The skynet README's own Haskell (GHC 7.10.3) results range from 41-44 ms (i7-4771, Ubuntu) to 2820-6181 ms (Windows, OS X), consistent with different variants being run. Toolchains date from 2017 (go1.8.1, ghc-8.0.1, erts-8.3, gcc-6.3.1). The baseline is OS threads, not the idiomatic C++ answer for massive concurrency; Boost.Fiber on the same page reaches 0.05-0.09 us. No Haskell benchmark code lives in boostorg/fiber (performance/ holds only fiber/ and thread/). The repo_url is the GHC mirror (gitlab.haskell.org/ghc/ghc is upstream); the skynet sources are MIT, last commit 2023-11-10. GHC's licence file is the Glasgow Haskell Compiler License (BSD-3-Clause text).",
+      "same_algorithm": false,
+      "why_faster": "Runtime, from the sources: the probable Parallel variant uses parMap rpar sparks (entries in GHC's work-stealing spark pool, evaluated by any capability or by the parent, with no thread or channel per unit); GHC's forkIO threads (MVar variant) are heap-allocated green threads scheduled by the RTS on +RTS -N capabilities. The C++ side pays pthread_create plus a kernel thread with an 8 kB stack (std::thread: 1-2 MB) and mutex/condition-variable channel traffic per unit.",
+      "baseline_stdlib": [
+        "libstdc++"
+      ]
+    },
+    "notes": "Downgrade B to C: numbers are on the Boost.Fiber page, but the Haskell row very likely measured the parMap/rpar spark variant (no threads, no channels) against one detached pthread per unit, at different sizes (1M vs 10k) and with Haskell flags unstated. Shortcomings to record: different algorithm (sparks vs kernel threads), unequal workload sizes, Haskell variant/flags/RTS options unstated, 2017 toolchains, C++ fibers on the same page match Haskell so no language-level win. baseline_stdlib set to libstdc++ (gcc-6.3.1 on Linux runs std::thread/std::async from libstdc++).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/boostorg/fiber/develop/doc/performance.qbk",
+      "https://raw.githubusercontent.com/boostorg/fiber/develop/performance/thread/skynet_pthread.cpp",
+      "https://github.com/boostorg/fiber/tree/develop/performance",
+      "https://github.com/atemerev/skynet",
+      "https://github.com/atemerev/skynet/commits/master",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/README.md",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Main.hs",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Parallel.hs",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/MVar.hs",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/src/Chan.hs",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/skynet.cabal",
+      "https://raw.githubusercontent.com/atemerev/skynet/master/haskell/stack.yaml",
+      "https://github.com/ghc/ghc",
+      "https://github.com/ghc/ghc/commits/master",
+      "https://raw.githubusercontent.com/ghc/ghc/master/LICENSE"
+    ]
+  },
+  {
+    "id": "lang:rust/gmap/npb-rust#npb-sequential",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "C",
+    "tier_reason": "arXiv 2502.15536 is unreachable here (DNS/egress blocked); the 5.59%-faster-than-C++ sequential aggregate and the Rayon-slower-than-OpenMP result were seen only in a WebSearch snippet of arxiv.org/html/2502.15536v1 (snippet only). The paper is by the same group that wrote both NPB-Rust and the NPB-CPP baseline, peer review is unconfirmed (README cites arXiv only), and hardware and compiler versions were not seen, so first-party tier C stands.",
+    "corrections": {
+      "compiler_and_flags": "Repo defaults (paper's actual compilers and flags not seen): Rust 1.85.0+, RUSTFLAGS='--cfg class=\"X\"' cargo build --release with no [profile] section in NPB-RUST/Cargo.toml (opt-level 3, no LTO, no target-cpu); C++ NPB-CPP NPB-SER/config/make.def: g++ -std=c++14 with CFLAGS -O3 -mcmodel=medium; Fortran compiler and flags unknown.",
+      "caveats": "The arXiv page (2502.15536) is blocked in this environment and was not opened; the numbers come from WebSearch snippets of arxiv.org/html/2502.15536v1 (snippet only), so venue, peer-review status, hardware, compiler versions and per-kernel results are unconfirmed; a verifier with paper access should retier. The GitHub repo has no performance numbers. The only win over C++ is the sequential aggregate (5.59%, a small margin); Rayon is slower than C++ OpenMP and Fortran OpenMP, so the concurrency-runtimes category fits poorly (the win is sequential codegen, closer to numerics). The C++ baseline is the same group's NPB-CPP port (FGCS 2021, https://github.com/GMAP/NPB-CPP). Public build defaults are equivalent in optimisation level (-O3 against cargo --release opt-level 3, neither with -march=native), but the C++ default adds -mcmodel=medium; whether that or anything else explains the 5.59% is untested. The latest commit (2026-10-08, 3bb2455 'fix: adjusted tolrsd constants in LU') only assigns the 1.0e-08 tolrsd constants that were previously left at zero; with zero tolerances the early-exit residual check never fired, so the measured LU did the full iteration count and the fix does not inflate the published numbers. NPB-Rust has a --cfg safe=\"true\" switch whose default (unset) reports UNSAFE=true; which mode the paper timed is not stated.",
+      "last_commit": "2026-10-08"
+    },
+    "notes": "Confirm at C: repo, MIT licence, 31 stars and 2026-10-08 last commit check out; paper numbers seen only in a search snippet (arXiv blocked), first-party, small 5.59% aggregate sequential margin, Rayon loses to OpenMP. Shortcomings to record: snippet-only evidence, same-group C++ baseline, unknown hardware/compiler versions, weak category fit (sequential win filed under concurrency-runtimes).",
+    "urls_opened": [
+      "https://github.com/GMAP/NPB-Rust",
+      "https://github.com/GMAP/NPB-Rust/commits/main",
+      "https://github.com/GMAP/NPB-Rust/commit/3bb24558f49af2028fda283e5e3b1b5ce05c5788",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/README.md",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/Cargo.toml",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RAYON/Cargo.toml",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/src/cg.rs",
+      "https://raw.githubusercontent.com/GMAP/NPB-Rust/HEAD/NPB-RUST/src/lu.rs",
+      "https://raw.githubusercontent.com/GMAP/NPB-CPP/HEAD/NPB-SER/config/make.def"
+    ]
+  },
+  {
+    "id": "https://github.com/tokio-rs/tokio",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Xavorim/cpp_tasks_bench README lists the exact peak-RSS figures (/usr/bin/time) for tokio, concurrencpp, Asio and libunifex at 1, 10k, 100k and 1M tasks on an i7-8550U under WSL; code is public (asio_bench/main.cpp, concurrencpp_bench/main.cpp, tokio_bench/src/main.rs) and CMakeLists.txt fixes Release and cargo --release, but the C++ compiler is not named and the C++ libraries are unpinned, so not A; a 4-star one-person repo is not a well-known independent suite, so C.",
+    "corrections": {
+      "compiler_and_flags": "C++20, CMAKE_BUILD_TYPE Release set in CMakeLists.txt (-O3 -DNDEBUG with GCC or Clang), compiler not named; Asio and concurrencpp fetched by FetchContent with no GIT_TAG (default-branch HEAD at build time, June 2023), libunifex GIT_TAG main; tokio_bench built by 'cargo build --release' from CMakeLists.txt (opt-level 3), tokio 1.28.2 per Cargo.lock, #[tokio::main] multi-thread runtime.",
+      "caveats": "Independent hobby replication (4 stars, 6 commits all on 2023-06-24) of the pkolaczk 'How Much Memory Do You Need to Run 1 Million Concurrent Tasks?' benchmark, not the tokio authors' work; the README notes the original methodology was criticised. Memory only (peak RSS from /usr/bin/time), no timing; run count not stated; WSL Ubuntu 20.04 on a laptop i7-8550U with 8 GB. C++ compiler unnamed and Asio/concurrencpp versions unpinned. Workloads match logically (N tasks each awaiting a 10 s timer, all alive at once), but the C++ programs differ in structure: Asio builds a vector of N lazily-started awaitables and then co_spawns each on one io_context thread; concurrencpp copies two shared_ptrs into every coroutine frame and uses one worker_thread_executor plus its timer_queue; tokio spawns each task on the default multi-thread runtime and keeps the JoinHandles. Tokio is the largest at 1 task (3,092 KB vs Asio 1,668 KB) and only pulls ahead from 10k tasks. Libunifex hangs at 100k and 1M. The tokio repo itself makes no comparison to C++ runtimes.",
+      "same_opt_level": true,
+      "why_faster": "Memory, plausible mechanism from the sources (no per-allocation breakdown was measured): a Rust async block compiles to a fixed-size state machine stored inline in one tokio task allocation together with its Sleep timer entry, while each C++20 coroutine heap-allocates its own frame and Asio's co_spawn adds launcher state plus a steady_timer per task, and concurrencpp adds shared_ptr copies, a result state and a timer object per task."
+    },
+    "notes": "Confirm at C: numbers match the benchmark README exactly (1M tasks: tokio 214,136 KB vs concurrencpp 605,972 KB and Asio 853,144 KB, about 2.8x and 4.0x less, derived); same -O3-equivalent Release builds per CMakeLists.txt; tokio metadata (MIT, 33.4k stars, last commit 2026-10-11) checks out. Shortcomings to record: one-person 2023 hobby benchmark, compiler unnamed, unpinned C++ library versions, memory-only single-run figures on WSL, tokio larger at 1 task, library-level not language-level claim.",
+    "urls_opened": [
+      "https://github.com/Xavorim/cpp_tasks_bench",
+      "https://github.com/Xavorim/cpp_tasks_bench/commits/main",
+      "https://github.com/Xavorim/cpp_tasks_bench/tree/main/asio_bench",
+      "https://github.com/Xavorim/cpp_tasks_bench/tree/main/tokio_bench",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/README.md",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/asio_bench/main.cpp",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/concurrencpp_bench/main.cpp",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/unifex_bench/main.cpp",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/tokio_bench/src/main.rs",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/tokio_bench/Cargo.toml",
+      "https://raw.githubusercontent.com/Xavorim/cpp_tasks_bench/HEAD/tokio_bench/Cargo.lock",
+      "https://github.com/tokio-rs/tokio",
+      "https://github.com/tokio-rs/tokio/commits/master"
+    ]
+  }
+]
