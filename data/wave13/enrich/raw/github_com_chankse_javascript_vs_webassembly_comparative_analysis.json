@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/chankse/javascript-vs-webassembly-comparative-analysis",
+  "one_liner": "Master's-thesis harness timing a naive Rust-to-WebAssembly matrix multiply against the same JavaScript loop in Chromium.",
+  "what_it_does": "Twin browser apps run the same i-k-j triple loop for n x n Float32 matrix multiplication (n = 64 to 512), once as TypeScript over Float32Array and once as a Rust kernel built with wasm-pack (web target) and called through a thin bridge; a second pair of apps runs a PixiJS particle simulation. Playwright opens each page, the page times 20 multiply calls with performance.now(), and Python scripts aggregate medians, means and 'P95'. It is a study, not a library: the Rust kernel keeps A, B and C in thread_local Vecs behind init/set_a/set_b/multiply exports.",
+  "how_it_is_fast": "No special technique: both sides run the same scalar O(n^3) loop with no SIMD (no simd128 target feature, no .cargo config). Any gain comes from Rust/LLVM ahead-of-time code at opt-level 3 plus wasm-opt versus V8's JIT. Plausible contributors, not analysed in the repo, are that the wasm loop does f32 arithmetic while JavaScript computes in f64 and rounds on each Float32Array store, and that V8 typed-array accesses keep their own bounds checks.",
+  "when_to_use": [
+    "As a reference data point for scalar, non-SIMD Rust wasm versus plain JavaScript on a naive matmul in Chromium: about 1.5-1.8x on medians at n = 128 to 512, none at n = 64.",
+    "As a starting template for a Playwright-driven browser benchmark (seeded inputs, query-string parameters, a __dumpResults() hook), after fixing the bridge described under gotchas.",
+    "To show that a GPU-bound frame loop (PixiJS particles at about 60 FPS) hides a 1.7-2.8x faster physics step."
+  ],
+  "when_not_to_use": [
+    "As a library: there is no licence (the README says academic and educational purposes only), no API beyond a demo kernel, one commit, 0 stars.",
+    "As evidence of WASM tail latency: the 'P95' column is the slowest of the 20 reps, not a 95th percentile, so it mostly measures the first, cold call.",
+    "For real matrix work: the naive scalar triple loop is far from a blocked, SIMD or BLAS kernel; jeromewu/wasm-perf shows wasm SIMD reaching about 23x over JavaScript on a similar task.",
+    "For cross-browser conclusions: the matrix sweeps exist only for Chromium, and no CPU, OS or browser version is recorded (docs/ENV.md is linked but missing)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Rust with wasm-bindgen 0.2 and wasm-pack; Node.js with Vite 5, TypeScript 5.6, Playwright ^1.56; PixiJS 8 for the rendering demo; Python with pandas, numpy and matplotlib for charts",
+    "min_toolchain": "Rust 1.90.0+, wasm-pack 0.13.1+, Node.js 18+ (per QUICKSTART.md)",
+    "platforms": "Any browser with WebAssembly; the matrix results come from Playwright's bundled Chromium only",
+    "thread_safety": "Single-threaded; kernel state lives in thread_local RefCell globals, one matrix set per instance",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness bug: apps/wasm-matrix/src/wasm-bridge.ts calls the raw instance export set_a/set_b(ptr: *const f32, len) with the Float32Array itself ('buf as any as number'); JavaScript's ToInt32 turns the array into NaN and then 0, so Rust's slice::from_raw_parts reads n*n floats from linear-memory address 0 (UB on a null pointer) instead of the seeded matrices. With Rust's stack-first wasm layout that region is probably mostly zeroed stack (inference). The WASM side therefore multiplies different data, and nothing checks C against the JavaScript result (only C[0] is read as a 'checksum'). Timing is probably still representative because the loop does the same n^3 scalar multiply-adds, but the 'identical computation' claim fails.",
+    "The 'P95' metric is sorted[floor(reps*0.95)], which for 20 reps (and for 5) is index reps-1, the maximum. matrix_charts.py then averages these per-run maxima. The README's 'WASM 28-31% higher P95 at n>=256 due to cache pressure' therefore compares cold first calls; the likelier cause (inference) is that V8 runs the first long wasm call in its Liftoff baseline tier with no on-stack replacement, while JavaScript can tier up mid-loop, which fits WASM's max/median ratio of 2.6-3.2x against 1.3x for JavaScript.",
+    "Each page load times all 20 reps with no warm-up separation, so medians include JIT and Liftoff tier-up effects. The n=64 row aggregates runs with different rep counts (reps column 12.5) and sits at performance.now()'s roughly 0.1 ms coarsened resolution, so its 1.00x median and 1.49x mean are both noise.",
+    "Raw per-run JSON is gitignored; only aggregated CSV and Markdown are committed, so the number of runs per size cannot be checked."
+  ],
+  "pick_this_over_siblings_when": "Pick it over jeromewu/wasm-perf (Emscripten SIMD intrinsics, Node.js) or azeemba/wasm-runtime-performance (boost::graph Floyd-Warshall) when you want an in-browser, Playwright-automated, scalar Rust-versus-JavaScript data point. Those siblings measure SIMD or library-level gains, while this one isolates plain AOT-versus-JIT codegen on the same loop, with the data-input bug caveat.",
+  "verified_claims_summary": "Medians of 20 timed calls per page load in Playwright's bundled Chromium (version, CPU and OS not stated): JavaScript 3.45, 28.85 and 218.05 ms versus Rust wasm (wasm-pack --release, no SIMD) 2.20, 15.65 and 136.10 ms at n = 128, 256 and 512, i.e. 1.57x, 1.84x and 1.60x; equal at n = 64; means give 1.46-1.69x. The WASM inputs were not the seeded matrices because of the pointer bug, and results were never cross-checked.",
+  "status_note": "Single-commit master's-thesis snapshot (2025-11-30, 0 stars, no issues) with no licence, so reference only. Useful as a reproducible-looking browser harness once the set_a/set_b bridge is fixed (pass a pointer into wasm memory, or take &[f32] and use the wasm-bindgen glue as the particle bridge does).",
+  "sources_read": [
+    "https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis",
+    "https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/commits",
+    "https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/issues",
+    "https://github.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/tree/master/wasm-kernels",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/README.md",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/QUICKSTART.md",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/package.json",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/vite.config.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/wasm-kernels/Cargo.toml",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/wasm-kernels/kernels/matrix/Cargo.toml",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/wasm-kernels/kernels/matrix/src/lib.rs",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/wasm-matrix/src/wasm-bridge.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/wasm-matrix/src/main.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/wasm-matrix/src/seeded-rng.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/wasm-matrix/index.html",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/js-matrix/src/main.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/js-matrix/src/matmul.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/wasm-rendering/src/wasm-bridge.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/apps/shared/seeded-rng.ts",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/tools/bench-runner/index.mjs",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/tools/bench-runner/matrix-sweep.mjs",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/tools/charts/matrix_charts.py",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/results/figures/matrix/matrix_agg.csv",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/results/figures/matrix/matrix_js_vs_wasm.csv",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/results/figures/matrix/matrix_results_table.md",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/results/figures/matrix/p95_compact_summary.md",
+    "https://raw.githubusercontent.com/Chankse/JavaScript-vs-WebAssembly-Comparative-Analysis/master/docs/ENV.md (404)"
+  ],
+  "confidence": 0.6
+}

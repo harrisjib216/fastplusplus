@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/charltoncr/strstr.c",
+  "one_liner": "15-line public-domain scalar C strstr; author reports it ties or beats 18 variants, libc included, on English text.",
+  "what_it_does": "A single C function with the standard signature char *strstr(const char *s1, const char *s2): it returns a pointer to the first occurrence of s2 in s1, NULL when there is none, and s1 for an empty needle. The repo holds only strstr.c, the README and Competitors/strstrFunctions.c, which collects 20 historical strstr versions (BSD/Torek, Plauger, Dale Moore's variants, SunOS, Visual C, GNU coreutils 5.3.0) and slots that call the compiler's library strstr. No timing program, corpus or tests are published.",
+  "how_it_is_fast": "It is a naive first-character scan: a strchr-like loop unrolled by two finds the needle's first byte, checks for the terminator on every byte, and then compares the rest of the needle byte by byte. If that fails it resumes one byte after the candidate. It has no setup cost (no strlen of the needle, no shift table, no strncmp call), which pays off on short haystacks and short English words where most first-byte hits fail within a character or two. There is no SIMD or word-at-a-time scanning.",
+  "when_to_use": [
+    "Short English-like needles (single words) searched in short to medium natural-language text, the workload the author timed.",
+    "Freestanding, embedded or toy-libc builds that lack strstr or ship a naive one (SunOS-style strlen-per-step or strncmp-per-position versions), where 15 lines of CC0 code are easy to vendor.",
+    "When you need a strstr that never reads past either string's terminator and has no SIMD block reads, for example under strict sanitizers or on unusual memory maps.",
+    "Hot loops with many tiny haystacks, where the setup work of two-way or Horspool-style library strstr (strlen, strnlen, shift tables) dominates."
+  ],
+  "when_not_to_use": [
+    "Long haystacks where the needle's first character is rare: the author's own competitor-file note says the versions that call the library's SIMD strchr are about 6.5x faster than the others, this one included. glibc's generic strstr also starts with strchr, and x86-64 glibc selects __strstr_sse2_unaligned on CPUs with fast unaligned loads.",
+    "Adversarial or repetitive inputs (for example, a run of 'a' searched for 'aaa...ab'): the scan-and-compare loop is O(n*m), while glibc's strstr is linear (short-needle special cases, a bigram-hash Horspool for needles up to 256 bytes, Two-Way beyond) and musl uses dedicated 2-, 3- and 4-byte searches plus Two-Way.",
+    "When you need evidence of a speedup on your platform: the only numbers are README prose against an unnamed libc (probably macOS, from 2023 comments in the competitor file), with no harness, CPU, compiler or flags.",
+    "C++17 or later translation units: the code uses the register storage class, which C++17 removed (clang rejects it by default), so compile it as C or delete the keyword."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (includes <string.h> only for declarations)",
+    "min_toolchain": "C99 (uses // comments); compile as C, not C++17, because of 'register'",
+    "platforms": "any (portable byte-at-a-time C)",
+    "thread_safety": "Reentrant pure function with no state; safe from any thread",
+    "drop_in_for_baseline": "partial: same signature and semantics as strstr, but the file defines the reserved name strstr itself. Rename it (for example strstr_rc) and call it explicitly; otherwise the compiler may treat calls as the builtin, and in a dynamically linked ELF program the definition interposes over libc's strstr for every shared library too."
+  },
+  "gotchas": [
+    "Defining a function named strstr is undefined behaviour in ISO C (reserved external identifier). With GCC or Clang, calls with constant arguments may be folded or turned into strchr/libc calls by builtin handling, so benchmark it under a different name or with -fno-builtin-strstr.",
+    "After a partial match runs into the end of the haystack it does not stop early; it keeps scanning byte by byte from the next position. That is correct but wasted work on near-miss tails.",
+    "Licence wording differs: LICENSE.md and the header text say CC0 1.0, but the header links the Public Domain Mark URL. CC0 has no patent grant, and Competitors/strstrFunctions.c contains GPL-2.0+ (coreutils) and unlicensed USENET code that is not covered.",
+    "The competitor file contradicts itself on strchr. Its header credits the library's SIMD strchr for a 6.5x win on rare first characters, while a 2023-05-01 note on strstr7 says calling macOS clang's strchr 'is slower here', so how the library strstr was built and called in the timings is unclear."
+  ],
+  "pick_this_over_siblings_when": "Pick it over WojciechMula/toys strstr (SWAR and SIMD Rabin-Karp, needs SSE/AVX-class hardware for its gains, no published results) or AOCL-LibMem's Zen-tuned strstr when you need a dependency-free, portable, public-domain scalar fallback and your workload is short-word search in natural-language text. For long haystacks on x86-64, a SIMD sibling or the platform libc will usually win.",
+  "verified_claims_summary": "Only author prose, with no harness, corpus list, CPU, compiler or flags published. Searching English words in English text (the competitor file mentions mobyThesaurus.txt), it ties GNU coreutils 5.3.0's strstr (within 0.5% on English and French text and word lists), and 17 other versions, including the compiler's library strstr (probably Apple's libc under macOS clang), are 10.5% to 348% slower. The author also reports that strchr-based versions are about 6.5x faster than it when the needle's first character is rare.",
+  "status_note": "Small CC0 file, last touched 2026-06-21 (README wording only; the code was reverted to the 'original fast code' on 2024-02-29 after two tuning attempts). It has 3 stars, no issues and no tests, but is trivial to vendor under a non-reserved name.",
+  "sources_read": [
+    "https://github.com/charltoncr/strstr.c",
+    "https://github.com/charltoncr/strstr.c/commits",
+    "https://github.com/charltoncr/strstr.c/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/charltoncr/strstr.c/HEAD/README.md",
+    "https://raw.githubusercontent.com/charltoncr/strstr.c/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/charltoncr/strstr.c/HEAD/strstr.c",
+    "https://raw.githubusercontent.com/charltoncr/strstr.c/HEAD/Competitors/strstrFunctions.c",
+    "https://raw.githubusercontent.com/bminor/glibc/master/string/strstr.c",
+    "https://raw.githubusercontent.com/bminor/glibc/master/sysdeps/x86_64/multiarch/strstr.c",
+    "https://raw.githubusercontent.com/kraj/musl/master/src/string/strstr.c",
+    "https://raw.githubusercontent.com/bminor/musl/master/src/string/strstr.c (404)",
+    "https://raw.githubusercontent.com/apple-oss-distributions/Libc/main/string/FreeBSD/strstr.c (404)",
+    "https://raw.githubusercontent.com/apple-oss-distributions/Libc/HEAD/string/FreeBSD/strstr.c (404)"
+  ],
+  "confidence": 0.6
+}
