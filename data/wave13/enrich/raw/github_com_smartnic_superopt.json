@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/smartnic/superopt",
+  "one_liner": "K2: stochastic superoptimizer for eBPF bytecode that shrinks clang -O1/-O2/-O3 BPF output with SMT-checked equivalence.",
+  "what_it_does": "K2 (SIGCOMM 2021) is an offline command-line compiler (main_ebpf.out) that takes an already compiled BPF program and searches for a shorter or faster equivalent that should still pass the kernel verifier. It accepts BPF C-macro listings (.bpf), its own K2 instruction format (.k2) or a clang-built BPF object file, and writes the result back in the same format; for .o input the artifact calls the output a drop-in replacement for the original file. It is a post-pass on clang output, not a replacement for clang.",
+  "how_it_is_fast": "It runs STOKE-style Markov chain Monte Carlo search: proposals rewrite a random operand, a random instruction, two consecutive instructions, or turn an instruction into a NOP, scored by an error cost on test inputs plus a performance cost (program length or an estimated runtime, per main.cc). Candidates are proved equivalent to the input with Z3 over a first-order-logic model of BPF, with domain-specific speedups (artifact Table 3 shows 415x to 35,107x less equivalence-checking time with all four enabled) and windowed modular verification to scale. The runtime gain comes from fewer executed instructions (for example two byte loads plus shift and or become one 16-bit load in xdp1).",
+  "when_to_use": [
+    "Small, hot XDP or socket BPF programs (tens of instructions; the paper says it cannot optimize 200+ instruction programs quickly) where a few instructions per packet matter.",
+    "Programs close to the verifier's size or complexity limits, where cutting 6-17% of instructions (artifact Table 1) can get them accepted.",
+    "Programs loaded with CAP_SYS_ADMIN, where the kernel verifier strips the goto +0 placeholders K2 leaves behind, so the instruction savings are realized.",
+    "Offline builds that can spend seconds to about 26 minutes per program (artifact Table 1: socket-0 30 s overall, sys_enter_open 1564 s) and can load-test every candidate variant."
+  ],
+  "when_not_to_use": [
+    "Throughput-bound pipelines: per-core throughput gains are -0.03 to 5% (submission) or 0 to 4.75% (camera-ready, search snippet), within the artifact's Tx-rate resolution on xdp_fwd.",
+    "Programs using tail calls, ld_abs/ld_ind packet loads or bpf_get_prandom_u32: open issues #90, #92 and #91 say these are modelled as always-successful tail calls, plain input memory and a limited helper, so the equivalence proof does not cover the real semantics.",
+    "Large programs (200+ instructions per the paper snippet) or anything needing a fast build: the search is stochastic, outputs differ between runs, and compile time is minutes to tens of minutes.",
+    "Production use that needs a maintained tool: last commit 2021-09-16, no releases, install-only README ('Todo: add more instructions soon'), Ubuntu 18.04 / macOS 10.15 build against a pinned 2020-era Z3 commit, 33 open issues; support for later BPF features is not documented."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Z3 built from source at commit 1c7d27bdf31ca038f7beee28c41aa7dbba1407dd in a sibling ../z3 directory (hard-coded paths, issue #88); for object files libelf and smartnic/bpf-elf-tools; llvm for objdump; benchmarks in smartnic/superopt-input-bm; a prebuilt Docker image on Google Drive",
+    "min_toolchain": "C++11 (g++ -std=c++11); tested on Ubuntu 18.04 and macOS 10.15.2",
+    "platforms": "Host Linux or macOS; output is Linux eBPF bytecode (XDP, socket and tracepoint programs in the benchmarks)",
+    "thread_safety": "not documented (search talks to a separate z3server process over a port; issue #97 reports zombie z3server processes)",
+    "drop_in_for_baseline": "partial — the optimized .o replaces clang's BPF object in place, but deleted instructions stay as goto +0 padding (issue #102) and some variants fail the kernel verifier"
+  },
+  "gotchas": [
+    "Size savings are counted without the padding: K2 patches the ELF in place and fills removed slots with goto +0 (artifact 2.3: xdp1 'perf cost' 61 to 59, yet the output still has 61 slots; issue #102), and the Linux v5.4 verifier removes ja 0 only when is_priv = capable(CAP_SYS_ADMIN) (opt_remove_nops), so unprivileged loads keep every slot.",
+    "Not every output is loadable: artifact Table 7 shows 35 of 38 K2 variants accepted by the kernel checker (4 of 5 for xdp2, xdp_router_ipv4 and xdp_redirect), so each variant must be load-tested.",
+    "The latency and throughput comparison picks the best of up to five stochastic K2 variants (k0 to k4) after measurement against the best of three clang levels, with three trials and MLFFR read off at the Tx-rate step resolution (xdp_fwd: all variants about 4.9 Mpps; latency at MLFFR 57 us for -O2 against 50 us for k2); the paper (snippet) also says its latency cost function is a weak predictor of real latency.",
+    "Build quirks: the final link line compiles every source except main.cc with plain 'g++ -std=c++11' and no -O flag, so the published search times come from a largely unoptimized build; issue #87 reports a segfault when -n is omitted."
+  ],
+  "pick_this_over_siblings_when": "Pick K2 over STOKE when the target is eBPF rather than x86-64: it applies the same MCMC superoptimization idea with a BPF semantics model and kernel-verifier safety checks; pick SLOTHY instead for hand-written Arm or RISC-V kernels where you want scheduling without instruction changes.",
+  "verified_claims_summary": "Against the best of clang -O1/-O2/-O3 BPF builds (clang version not stated), the artifact's 11-program table shows 6.25-16.67% fewer instructions (sys_enter_open 24 to 20, xdp_devmap_xmit 36 to 30), and the paper reports 6-26% smaller code. Latency and throughput come from a TRex generator on CloudLab (AMD d6515 in the submission, Intel xl170 in the artifact rerun; CPU models not named): 13-85 us lower latency and -0.03 to 5% throughput in the submission, 1.36-55.03% lower average latency and 0-4.75% throughput in the camera-ready abstract (snippet only), and in the artifact examples xdp_map_access reaches about 15.5 against 15 Mpps.",
+  "status_note": "Abandoned since 2021-09-16 (MIT, 30 stars, research prototype with no releases); usable as an offline post-pass on small XDP programs if you load-test each variant, but the published size gain counts goto +0 padding as removed (only privileged loads strip it), the speed gains are a best-of-five post-hoc pick near measurement resolution, and the equivalence model has open gaps for tail calls and ld_abs/ld_ind.",
+  "sources_read": [
+    "https://github.com/smartnic/superopt",
+    "https://raw.githubusercontent.com/smartnic/superopt/HEAD/README.md",
+    "https://raw.githubusercontent.com/smartnic/superopt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/smartnic/superopt/HEAD/Makefile",
+    "https://raw.githubusercontent.com/smartnic/superopt/HEAD/main.cc",
+    "https://github.com/smartnic/superopt/issues?q=is%3Aissue",
+    "https://github.com/smartnic/superopt/issues/90",
+    "https://github.com/smartnic/superopt/issues/92",
+    "https://github.com/smartnic/superopt/issues/102",
+    "https://github.com/smartnic/superopt/issues/112",
+    "https://raw.githubusercontent.com/smartnic/sigcomm21_artifact/HEAD/README.md",
+    "https://raw.githubusercontent.com/smartnic/sigcomm21_artifact/HEAD/install.sh",
+    "https://github.com/smartnic/throughput-experiments",
+    "https://raw.githubusercontent.com/torvalds/linux/v5.4/kernel/bpf/verifier.c",
+    "https://raw.githubusercontent.com/torvalds/linux/master/kernel/bpf/verifier.c",
+    "WebSearch snippet: arXiv 2103.00022 (camera-ready abstract and conclusion; paper not opened)"
+  ],
+  "confidence": 0.6
+}

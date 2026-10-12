@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/simonjhall/copies-and-fills",
+  "one_liner": "ARMv6 assembly memcpy and memset for the original Raspberry Pi, LD_PRELOADed over the generic libc versions.",
+  "what_it_does": "Two hand-written 32-bit ARM assembly routines, memcpy.S and memset.S, built into libcofi_rpi.so and injected with LD_PRELOAD (Raspbian later loaded it system-wide from /etc/ld.so.preload, per issue #4). Signatures and return values match the C library, so programs need no source change. The repo contains nothing else: no memmove, memcmp, strlen or __aeabi_memcpy/__aeabi_memset entry points, no tests and no benchmark harness.",
+  "how_it_is_fast": "memcpy byte-aligns the destination to 4 bytes, steps a word at a time to 32-byte destination alignment, then moves 32 bytes per iteration with paired 4-register LDMIA/STMIA and a PLD issued 128 bytes ahead of the source, which the README calls the key to the gain on the single-issue ARM1176 core. A misaligned source is read as aligned words and merged with LSR/ORR shifts in three specialised loops (offset 1, 2 or 3; the inner loop is derived from the glibc ARM port). memset replicates the byte into a word, aligns the destination the same way and writes 32 bytes per iteration as two 16-byte STMIAs, which the README measured at 1300-1400 MB/s against 1000-1100 MB/s for one 32-byte store.",
+  "when_to_use": [
+    "32-bit Linux on an ARM1176 board (original Raspberry Pi; the README names no model) where a profile shows memcpy or memset on buffers well above ~150 bytes",
+    "Copies from uncached or streaming source buffers, where the README says the 2-3x gain shows up",
+    "Large fills: memset reaches libc parity at about 100 bytes and peaked at 1390 MB/s in the author's runs",
+    "Old Buildroot or Exherbo images that already package libcofi, as a no-recompile speedup",
+    "As compact reference code (about 440 lines of assembly) for LDM/STM plus PLD copy loops on in-order ARM cores"
+  ],
+  "when_not_to_use": [
+    "Raspberry Pi 2 and later, other ARMv7 cores or AArch64: the code is tuned for the single-issue ARM1176 and is 32-bit only; Raspbian and Arch Linux ARM moved to bavison/arm-mem",
+    "Workloads dominated by small copies: every size below 32 bytes except exactly 4 and 8 goes through a backward byte-at-a-time loop, and the README puts parity with libc at about 150 bytes for memcpy",
+    "When you need memmove, memcmp, strlen or the EABI __aeabi_* entry points: only memcpy and memset exist",
+    "When you need reproducible evidence: the modified ssvb-membench harness, result tables, libc version and board model were never published",
+    "Statically linking into proprietary code: the source is LGPL-2.1 (no 'or later'), and there is no LICENSE file in the repo"
+  ],
+  "integration": {
+    "form": "shared lib (libcofi_rpi.so via LD_PRELOAD or /etc/ld.so.preload); also usable as a source-drop of two .S files",
+    "dependencies": "none (GNU as and a C compiler driver to link the .so)",
+    "min_toolchain": "GNU binutils assembling in ARM (not Thumb) mode with pre-UAL conditional mnemonics such as ldrgtb/strgeb; ARMv5TE+ for PLD, ARMv6 hardware unaligned access for the 4- and 8-byte paths",
+    "platforms": "32-bit ARM Linux, tuned for ARMv6 ARM1176 (BCM2835); no AArch64, no x86",
+    "thread_safety": "Reentrant: no global state, registers and stack only (from the source)",
+    "drop_in_for_baseline": "partial — same memcpy/memset signatures and return value via LD_PRELOAD, but only calls bound through the dynamic memcpy/memset symbols are redirected; compiler-inlined copies, __aeabi_memcpy/__aeabi_memset and memmove are untouched"
+  },
+  "gotchas": [
+    "4- and 8-byte copies use plain LDR/STR on possibly unaligned pointers ('we're relying on the cpu misalignment support here'); this needs the ARMv6 hardware unaligned mode Linux enables and is unsafe on bare metal in legacy alignment mode or on device memory.",
+    "Sizes 1-31 bytes (other than 4 and 8) are copied backwards one byte at a time with no prefetch, so the small-copy path is slower than libc by the author's own parity figures.",
+    "The libcofi_rpi.so Raspbian preloaded by default included a third-party fork's memcmp that crashed under QEMU (issue #4; a 2014 QEMU list thread, search snippet only, blames SETEND, which this repo never uses), so emulated Raspbian images commonly commented out /etc/ld.so.preload.",
+    "Harness flaw: the README admits that enabling the pld path in the libc source 'certainly does improve' libc, so part of the 2-3x and 7x gaps may reflect a distribution libc built without prefetch rather than a better algorithm; the figures are peak MB/s ('speeds of up to'), not averages, and the harness is not public."
+  ],
+  "pick_this_over_siblings_when": "Pick it over bavison/arm-mem only if you want the smallest LGPL two-function replacement for an ARM1176 board or readable reference code; arm-mem is its successor on Raspbian, also covers memmove, memcmp and strlen, and has ARMv7 variants (neither publishes numbers against glibc). tinymembench is the benchmark family its harness came from, not a library, and hglm/test-arm-kernel-memcpy targets the kernel's copies rather than userland libc.",
+  "verified_claims_summary": "The 2012 README reports runs of a modified, unpublished ssvb-membench (random sizes and source/destination alignments) on an unnamed Raspberry Pi against the distribution's generic libc memcpy and memset (version not stated). memcpy reaches parity at about 150 bytes and gains 2-3x later, peaking at 680 MB/s (339 MB/s effective copy); memset reaches parity at about 100 bytes and peaks at 1390 MB/s, about 7x libc. There are no tables, no compiler details and no CPU model.",
+  "status_note": "Abandoned since 2012-08-03 (13 commits, 4 closed issues); LGPL-2.1, two small .S files that are easy to vendor, but superseded on Raspbian and Arch Linux ARM by bavison/arm-mem.",
+  "sources_read": [
+    "https://github.com/simonjhall/copies-and-fills",
+    "https://github.com/simonjhall/copies-and-fills/commits",
+    "https://github.com/simonjhall/copies-and-fills/issues?q=is%3Aissue",
+    "https://github.com/simonjhall/copies-and-fills/issues/1",
+    "https://github.com/simonjhall/copies-and-fills/issues/4",
+    "https://raw.githubusercontent.com/simonjhall/copies-and-fills/HEAD/README.md",
+    "https://raw.githubusercontent.com/simonjhall/copies-and-fills/HEAD/Makefile",
+    "https://raw.githubusercontent.com/simonjhall/copies-and-fills/HEAD/memcpy.S",
+    "https://raw.githubusercontent.com/simonjhall/copies-and-fills/HEAD/memset.S",
+    "https://github.com/ssvb/ssvb-membench",
+    "WebSearch: libcofi_rpi.so raspbian ld.so.preload replaced by libarmmem arm-mem (snippets from archlinuxarm.org forum, forum.snapcraft.io and a lore.kernel.org QEMU thread; archlinuxarm.org and lore.kernel.org fetches failed with ENOTFOUND)"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/shd101wyy/markdown_yo",
+  "one_liner": "Markdown-to-HTML converter in the Yo language (native and WebAssembly) that outputs markdown-it-compatible HTML 4.5-7.6x faster natively.",
+  "what_it_does": "A from-scratch Markdown renderer that follows markdown-it's parsing rules and HTML output (checked against markdown-it's fixture files) with built-in extensions: tables, strikethrough, footnotes, math, emoji, wikilinks, admonitions, callouts, definition lists, abbreviations, critic markup and source-line maps. It ships as a native CLI (markdown_yo file.md), a Yo package (markdown_to_html(src, opts)) and an npm WebAssembly package where you await createRenderer() once and then call md.render(src, options) synchronously. It is not an API drop-in for markdown-it: options are a fixed set of booleans mapped to a bitmask, and there is no plugin, token-stream or renderer-rule interface.",
+  "how_it_is_fast": "md4c-style SAX design: block rules call HtmlRenderer methods directly instead of building markdown-it's Token array, and inline rules push ~40-byte value-type tokens into a reused buffer before resolving emphasis delimiters. Text is handled as zero-copy slices of the source, block starts and inline specials go through 128/256-byte dispatch tables, HTML escaping scans 8 bytes at a time against a lookup table, and the output buffer is preallocated at about 1.5x the input. Yo transpiles to C, so the native build is clang -O3 -flto output and the WASM build is the same C through Emscripten.",
+  "when_to_use": [
+    "Batch or CLI conversion of large Markdown files (1 MB and up) where you want markdown-it-style HTML without running Node.",
+    "Node or browser jobs that render multi-megabyte documents in one call: the WASM CLI measured 2.1x at 1 MB rising to 6.0x at 20 MB over markdown-it.",
+    "Editor previews that already spawn an external renderer (the author wires it into Crossnote / Markdown Preview Enhanced as a binary path) and need the built-in extensions without loading markdown-it plugins.",
+    "Projects already written in Yo that want a Markdown renderer as a package dependency."
+  ],
+  "when_not_to_use": [
+    "Small documents through the WASM CLI: whole-process WASM time is about 12.9 ms at 64 KB versus 1.6 ms for markdown-it, and the in-process npm API that would avoid that startup has no published benchmark.",
+    "Code that depends on markdown-it plugins, token streams, custom renderer rules or linkify: none of these exist, and no linkify switch is exposed in the CLI or npm flags.",
+    "Inputs needing full CommonMark Unicode behaviour: reference labels are matched with ASCII case folding only, and IDN/Punycode autolinks are not decoded (both listed as skipped in issues/skipped-fixture-tests.md).",
+    "Long-lived, security-sensitive hosts that cannot tolerate a young codebase: it is pre-1.0 (0.0.16), single-author, built on a compiler whose own README says 'WIP NOT READY', and a heap buffer overflow plus a per-render leak were only fixed on 2026-10-01."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime for the npm WASM package or the native binary; building needs the Yo compiler, a C compiler (clang) and Emscripten for the WASM targets",
+    "min_toolchain": "Yo 0.2.58 (pinned in .yo-version since 2026-10-10) plus clang; npm package needs a JS runtime with WebAssembly and TextEncoder/TextDecoder",
+    "platforms": "Native macOS, Linux and Windows (lld on Windows); WebAssembly in browsers and Node.js",
+    "thread_safety": "not documented; the WASM API keeps the last result length in a global, Yo reference counting is non-atomic, and lookup tables are lazily initialised shared singletons, so treat it as single-threaded",
+    "drop_in_for_baseline": "partial: HTML output is meant to match markdown-it (default preset with tables and strikethrough on, html off), but the API differs (async createRenderer, boolean option flags) and there is no plugin system"
+  },
+  "gotchas": [
+    "The README table (2026-04-09) was measured on code whose hot escape path, escape_html_buf, wrote escape sequences through raw pointers into space reserved as input + 12.5% + 64 bytes; issues/escape-dense-text-overflows-the-output-buffer.md records this as a critical heap overflow on quote-heavy text, fixed 2026-10-01. The synthetic benchmark block is escape-light, the author reports benchmark/run.js unchanged after the fix, and escape-dense text got slower (10.9 to 12.8 ms).",
+    "Throughput depends on the document: the benchmark repeats one ~1.2 KB block, while the author's own Crossnote measurements on x86_64 Linux (issue #5) give about 53 ms render-only for a 1 MB file, roughly 11x the README's 4.8 ms for 1 MB on an Apple M4.",
+    "Every markdown_to_html call leaked a 256-byte table until 2026-10-01 (issues/inline-special-table-leaks-on-every-render.md), so long-running WASM hosts on the April 2026 npm releases (0.0.3-0.0.5) grow without bound; 0.0.9 was published the same day as the fix, so use 0.0.10 or later.",
+    "The '98.7% CommonMark (815/826)' figure comes from a runner that compares the native binary with markdown-it and skips every fixture where markdown-it itself fails; WASM output is not checked by that runner, and the benchmark does not compare outputs at all."
+  ],
+  "pick_this_over_siblings_when": "Like svgo.mbt (a MoonBit rewrite of svgo), it is a new-language rewrite of a popular JS tool with a large native and a smaller WASM win; pick it for markdown-it-compatible HTML on large inputs, but for small documents rendered in-process the older md4c-based markdown-wasm and md4w (catalogued under wasm-libraries-and-apps) are the safer choice.",
+  "verified_claims_summary": "On an Apple M4 with macOS, the native CLI (Yo ReleaseFast to C, clang -O3 -flto) was 4.5-7.6x faster than markdown-it 14 render() on Node 22 for one synthetic block repeated to 64 KB-20 MB, and the Emscripten WASM CLI was 2.1-6.0x faster only at 1 MB and above (0.1x at 64 KB, 0.5x at 256 KB). The Yo-side times are whole child processes divided by 20 (startup included, so conservative), the Yo, clang, Emscripten and Node versions were not recorded, and the table has not been re-run since the October 2026 fixes and Yo migrations.",
+  "status_note": "Active single-author project (116 commits since 2026-04-01, npm 0.0.16 published 2026-10-11, recent commits mostly mechanical Yo-language migrations); MIT is declared only in yo.toml and npm/package.json with no LICENSE file, and the toolchain it needs is self-described as not ready.",
+  "sources_read": [
+    "https://github.com/shd101wyy/markdown_yo",
+    "https://github.com/shd101wyy/markdown_yo/commits/master",
+    "https://github.com/shd101wyy/markdown_yo/issues?q=is%3Aissue",
+    "https://github.com/shd101wyy/markdown_yo/issues/5",
+    "https://github.com/shd101wyy/markdown_yo/tree/master/issues",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/README.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/benchmark/run.js",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/benchmark/generate_samples.js",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/build.yo",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/yo.toml",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/.yo-version",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/package.json",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/npm/package.json",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/npm/index.js",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/npm/index.d.ts",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/docs/WASM.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/src/main.yo",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/src/types.yo",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/src/wasm_api.yo",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/src/lib.yo",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/scripts/run_fixture_tests.js",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/devenv.nix",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/PLAN.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/profile_output.txt",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/issues/escape-dense-text-overflows-the-output-buffer.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/issues/inline-special-table-leaks-on-every-render.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/issues/skipped-fixture-tests.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/HEAD/issues/wasm-empty-output-missing-trailing-newline.md",
+    "https://raw.githubusercontent.com/shd101wyy/markdown_yo/885e989/src/common/utils.yo",
+    "https://registry.npmjs.org/markdown_yo",
+    "https://github.com/shd101wyy/Yo"
+  ],
+  "confidence": 0.75
+}

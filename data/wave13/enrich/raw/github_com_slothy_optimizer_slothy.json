@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/slothy-optimizer/slothy",
+  "one_liner": "Constraint-solver superoptimizer that reschedules, register-allocates and software-pipelines hand-written Arm and RISC-V assembly for one core.",
+  "what_it_does": "SLOTHY takes a kernel you wrote as readable, unscheduled assembly and returns assembly with the same instructions and data flow, reordered, register-renamed and (for loops) software-pipelined for one microarchitecture model. You drive it from Python (slothy.Slothy(arch, target), load_source_from_file, optimize or optimize_loop, write_source_to_file) or from the slothy-cli script; the output replaces the optimized region in your .s file and is then assembled by your normal toolchain. It does not do instruction selection: that stays with the developer, which matters for constant-time cryptography.",
+  "how_it_is_fast": "The input is lifted to a data-flow graph, and the scheduling, register renaming and periodic loop interleaving choices are encoded as a constraint model that Google OR-Tools CP-SAT solves while minimizing predicted stalls. The microarchitecture model holds issue width, latencies, throughputs, forwarding paths and execution-unit counts, so the gain is in-order pipeline latency hiding. Software pipelining moves loads into the previous iteration and peels a preamble and postamble; address offset fixup rewrites immediate offsets so post-increment loads and stores can be reordered.",
+  "when_to_use": [
+    "You maintain hand-written Neon, Helium or RISC-V assembly for crypto or DSP kernels (NTTs, FFTs, field arithmetic) and want scheduled code without hand-interleaving it.",
+    "In-order targets with accurate models: Cortex-A55, Cortex-M55 and Cortex-M85; the paper artifact says result variation is smaller on these than on the heuristic Cortex-A72 model.",
+    "Straight-line blocks or loop bodies under about 150 instructions (seconds to minutes under 50, minutes to hours up to 150, per the README); larger kernels with the splitting heuristic.",
+    "Code that must stay auditable or formally verified: the clean source carries the logic and the optimized output keeps the same data-flow graph, which s2n-bignum then checks in HOL Light.",
+    "Retargeting existing assembly to a new core (the pqm7 Cortex-M7 migration study) by re-running the solver with another model."
+  ],
+  "when_not_to_use": [
+    "You want a faster C or C++ build: SLOTHY never sees compiler output unless you feed it assembly, and it does not choose instructions.",
+    "Out-of-order cores where the model is experimental (Cortex-A72, Cortex-X/Neoverse-V, Apple M1): the scheduling gain may be small and results vary between CP-SAT runs.",
+    "Large monolithic kernels: the splitting heuristic gives up optimality, is incompatible with register allocation on symbolic registers (allocate first), and crashes with software pipelining in open issue #94 (AttributeError in Heuristics.periodic on a 292-instruction Dilithium loop).",
+    "Builds that must be reproducible bit for bit: CP-SAT is non-deterministic, so re-optimization gives different schedules and timings.",
+    "x86-64 targets: there is no x86 model (only AArch64, Armv8.1-M, Armv7-M and RISC-V directories under slothy/targets)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python package pinned to ortools==9.15.6755, sympy==1.14.0, unicorn==2.1.4; LLVM llvm-mc, llvm-nm and llvm-readobj for the selftest, llvm-mca (LLVM 18+) for optional estimates; output is plain assembly with no runtime dependency",
+    "min_toolchain": "Python 3.10 to 3.14 (3.11+ for development); PyPI slothy 0.2.2 (2026-06-12); used on Ubuntu 21.10+ and macOS 12.6+",
+    "platforms": "Output targets: Armv8.1-M+Helium (Cortex-M55, M85), Armv7-M (Cortex-M4, M7 models), AArch64 (Cortex-A55; experimental Cortex-A72, Cortex-X/Neoverse-V, Apple M1 Firestorm/Icestorm), RISC-V RV32/64 IMB (XuanTie C908)",
+    "thread_safety": "not documented (offline tool run before the build)",
+    "drop_in_for_baseline": "partial — the optimized .s replaces your hand-written kernel region with the same symbols and registers you reserve, but SLOTHY itself is an offline Python tool, not a library you link"
+  },
+  "gotchas": [
+    "The built-in selfcheck only proves the output DFG is isomorphic to the input DFG; config.py and the tutorial say it is blind to address offset fixup and to missing reserved_regs or output registers, the most common cause of code that passes the selfcheck but is functionally wrong.",
+    "unsafe_address_offset_fixup is on by default for backwards compatibility, and config.py says it is UNSOUND unless address registers are used only by loads and stores; out-of-range immediates after fixup can also make the output fail to assemble (paper/README.md: re-run the script).",
+    "The empirical selftest (randomized unicorn emulation) is disabled with only a warning when llvm-mc, llvm-nm or llvm-readobj is missing, and it does not handle register-offset loads and stores (#276) or literal-pool loads (#381), both open; #382 (open) says the ld2 lane model is wrong for .S/.H lanes and can over-constrain schedules.",
+    "No SLOTHY-attributable measurement was reachable: the TCHES 2024 tables (eprint 2022/1303) and slides are blocked, the only in-repo number is an LLVM-MCA model estimate (31 to 21 cycles per iteration on a toy Cortex-A55 loop), and pqax/pqmx stub out cycle counts unless built with CYCLES=PMU or PERF on real boards."
+  ],
+  "pick_this_over_siblings_when": "Pick SLOTHY over STOKE when you target Arm or RISC-V and must keep your own instruction choice (constant-time crypto), since STOKE searches over x86-64 instruction sequences; pick it over Unison when your kernel is hand-written assembly rather than LLVM back-end output, and over MaxAs or KeplerAs when the target is a CPU core rather than an NVIDIA GPU.",
+  "verified_claims_summary": "The README and TCHES 2024 abstract say SLOTHY-optimized NTT, FFT and X25519 code matches or beats prior hand-optimized code on Cortex-A55, A72, M55 and M85, with no numbers reachable here; a TCHES slide seen only as a search snippet lists 'Ours clean 1914' against 'Ours SLOTHY 891' for an unlabelled workload. The adoption figure is real but not SLOTHY's alone: AWS-LC PR #1478 (merged 2024-03-06; the README links the closed PR #1469) reports 12,867.1 to 22,361.9 X25519 ops/sec (74%, bssl speed, Graviton 2 c6g.16xlarge), but that replaces s2n-bignum's previous code with Lenngren's unsaturated base-25.5 integer/SIMD algorithm, was measured on Graviton 2 rather than the Cortex-A55 the paper's X25519 targets, and the PR notes the _alt forms remain faster on their target microarchitectures.",
+  "status_note": "Actively maintained (last commit 2026-10-02, monthly PyPI releases from 0.1.0 in July 2025 to 0.2.2 in June 2026, used by s2n-bignum, mlkem-native and CMSIS-DSP via Arm EndpointAI), MIT-licensed, beta per its classifier; no harness bug found, but correctness rests on the user's reserved_regs/output configuration, the default-on unsound address offset fixup and a selftest that silently turns off without LLVM, and the speed claim has no reachable SLOTHY-attributable measurement.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/README.md",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/paper/README.md",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/paper/artifact/README.md",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/docs/source/tutorial/README.md",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/slothy/core/config.py",
+    "https://raw.githubusercontent.com/slothy-optimizer/slothy/HEAD/slothy/targets/README.md",
+    "https://github.com/slothy-optimizer/slothy/tree/main/slothy/targets",
+    "https://github.com/slothy-optimizer/slothy/tree/main/slothy/targets/arm_v7m",
+    "https://github.com/slothy-optimizer/slothy/tree/main/slothy/targets/riscv",
+    "https://github.com/slothy-optimizer/slothy/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/slothy-optimizer/slothy/issues?q=is%3Aissue+incorrect",
+    "https://github.com/slothy-optimizer/slothy/issues/165",
+    "https://github.com/slothy-optimizer/slothy/issues/382",
+    "https://github.com/slothy-optimizer/slothy/issues/94",
+    "https://pypi.org/pypi/slothy/json",
+    "https://github.com/aws/aws-lc/pull/1478",
+    "https://github.com/dop-amin/ches2025-slothy-tutorial",
+    "https://github.com/mupq/pqm7",
+    "https://raw.githubusercontent.com/mupq/pqm7/HEAD/README.md",
+    "https://raw.githubusercontent.com/mupq/pqm7/HEAD/benchmarks.md",
+    "https://eprint.iacr.org/2022/1303.pdf (blocked: ENOTFOUND)",
+    "https://icscm.ub.rub.de/index.php/TCHES/article/view/11241 (blocked: ENOTFOUND)",
+    "https://iacr.org/submit/files/slides/2024/tches/tches2024/1_11/slides.pdf (blocked: ENOTFOUND; snippet only via WebSearch)"
+  ],
+  "confidence": 0.6
+}

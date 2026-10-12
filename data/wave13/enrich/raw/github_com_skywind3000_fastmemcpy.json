@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/skywind3000/fastmemcpy",
+  "one_liner": "Header-only SSE2/AVX intrinsics memcpy from 2015 that beat the gcc 4.9 and MSVC 2012-era memcpy but not modern glibc.",
+  "what_it_does": "FastMemcpy.h (SSE2) and FastMemcpy_Avx.h (AVX) each define a static memcpy_fast(dst, src, size) with memcpy's signature and return value. You call it by name: it does not override the libc symbol, and it has no runtime CPU dispatch, so the instruction set is fixed at compile time. The header calls no libc functions (it includes only stddef.h, stdint.h and the intrinsics header). FastMemcpy.c and FastMemcpy_Avx.c are the benchmark drivers.",
+  "how_it_is_fast": "Sizes up to 128 bytes (256 for AVX) go through a switch jump table with one case per size, using overlapping unaligned 16/32/64-byte vector moves plus 2/4/8-byte integer moves for the tail. Larger copies store a 16-byte (or 32-byte) unaligned head, align the destination, then move 128 bytes (256 for AVX) per iteration with eight vector loads and stores and a PREFETCHNTA 256 or 512 bytes ahead. Above a hard-coded 2 MiB 'cachesize' it switches to non-temporal MOVNTDQ stores ending with SFENCE, following AMD's block-prefetch paper cited in the README.",
+  "when_to_use": [
+    "x86 builds tied to an old or slow C runtime (MSVC 2012-era CRT, MSVCRT.DLL under MinGW, gcc 4.9-era toolchains), the setting the README numbers come from",
+    "Hot copies of small sizes known at compile time (up to 128/256 B) where an always-inline jump-table copy avoids a libc call; independent runs show only parity to modest gains here (issue #4, gcc 5.4: 32-64 B 42-44 vs 48-65 ms)",
+    "Freestanding or no-libc x86 code (engines, custom runtimes) that needs an MIT, header-only memcpy built from C intrinsics without an assembler",
+    "Multi-megabyte copies whose destination will not be read soon, where streaming stores avoid polluting the cache"
+  ],
+  "when_not_to_use": [
+    "Linux with a modern glibc: independent runs in issues #4 (gcc 5.4), #6 (gcc 10.2.1, Clear Linux) and #7 (gcc 9.3, Ubuntu 20.04) show glibc memcpy faster from 512 B to 8 KiB (1 KiB: 82-91 vs 41-44 ms) and on the random-size test (600 vs 531 ms, 802 vs 662 ms); a ClickHouse perf test found glibc about 0.5% better on average (issue #6)",
+    "Copies above 2 MiB whose destination is read right afterwards: the non-temporal stores bypass the cache, and the 2 MiB threshold is hard-coded rather than taken from the CPU's cache sizes",
+    "Non-x86 targets (ARM64 support was requested in issue #10 and never answered) or binaries that must pick SSE2 or AVX at run time",
+    "Overlapping buffers: there is no memmove variant",
+    "Code that needs maintenance or tests: last commit 2017-12-11, no test suite, 6 open issues and 2 unmerged PRs"
+  ],
+  "integration": {
+    "form": "header-only (one static function per translation unit)",
+    "dependencies": "none (emmintrin.h for SSE2, immintrin.h for AVX)",
+    "min_toolchain": "C compiler with SSE2 or AVX intrinsics; README builds with gcc 4.9 (-O3 -msse2 or -O3 -mavx) and MSVC 2012 (/arch:SSE2 or /arch:AVX /O2); the bench drivers compile only on Windows or __unix",
+    "platforms": "x86 and x86-64 with SSE2 (AVX header needs AVX); no ARM, no runtime dispatch",
+    "thread_safety": "Reentrant: no mutable state (the only static is the read-only 2 MiB threshold)",
+    "drop_in_for_baseline": "partial — memcpy-compatible signature and return value, but it is a separately named static function; call sites must be edited or macro-redirected, and the CPU feature level is fixed at build time"
+  },
+  "gotchas": [
+    "Harness flaw: FastMemcpy.c never writes its source buffers (fresh malloc for the fixed-size rows, a static 11 MiB .bss array for the random test). On Linux, reads of untouched anonymous pages map the kernel's shared zero page, so the 1-8 MiB rows and the random-access row copy from a cache-resident page rather than DRAM, which makes the source prefetching moot (inference from the code; the OS of the README run is not stated).",
+    "Harness flaw: 71 of the 74 timings in the result block at the end of FastMemcpy.c fall within 1.6 ms of a multiple of 15.625 ms, the default Windows timeGetTime tick (the driver never calls timeBeginPeriod), so the small rows (62-125 ms) carry roughly 12-25% quantisation error. Other harness problems: the same size and buffers on every call (hot cache, perfectly predicted branches), only power-of-two sizes, and a non-noinline benchmark() that lets gcc -O3 constant-propagate size into the static memcpy_fast (issues #2 and #6).",
+    "The README baseline costs 16.7 ns per 32-byte memcpy (281 ms for 16,777,216 copies), about 4.5-10x slower than glibc in later independent runs (29-63 ms in issues #4, #6 and #7). The 3.5-4x small-size wins therefore reflect a slow 2015 baseline (MSVC CRT, or MSVCRT.DLL through MinGW's import thunk per PR #1) rather than a technique that still wins. The gcc 7.5 run in issue #4 (fast version 3-8x slower everywhere, about 608 ns per L1-resident 4 KiB copy) looks like an unoptimised build, like issue #5 (inference; flags not stated).",
+    "Both headers use the same include guard __FAST_MEMCPY_H__ and define the same memcpy_fast, so only one can be included per translation unit. The tiny path uses type-punned unaligned uint16/32/64 accesses, which are undefined behaviour in C (UBSan alignment reports) though fine on x86. The 129-case and 257-case always-inline jump tables cost code size."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the NASM kernels in ammarfaizi2/memcpy_benchmark or abiiranathan/asmlib only if you need an MIT, header-only memcpy written in C intrinsics that builds under both MSVC and GCC without an assembler. Those siblings target large-buffer AVX/rep movsb copies or report wins against a current glibc (2.44), which FastMemcpy no longer achieves.",
+  "verified_claims_summary": "The 2015 README reports gcc 4.9 (-O3 -msse2) on an unnamed x86 CPU with an unnamed C library ('msvc 2012 got a similar result'). It times total milliseconds for repeated fixed-size copies from 32 B to 8 MiB in four alignment combinations, plus 8 million random 1-2048 B copies. memcpy_fast wins 35 of 36 fixed rows (32 B 81 vs 281 ms; 8 MiB 287 vs 421 ms; it loses at 1 MiB aligned, 181 vs 165 ms) and the random test (487 vs 1000 ms). The 2017 AVX version has no published numbers, and independent runs against glibc on gcc 5.4-10.2 reverse most of these results.",
+  "status_note": "Abandoned since 2017-12-11 (15 commits), MIT and header-only so trivial to vendor, but it is slower than current glibc in independent runs, and its own harness reads an uninitialised (zero-page on Linux) source and published one result set on a 15.6 ms Windows timer tick.",
+  "sources_read": [
+    "https://github.com/skywind3000/FastMemcpy",
+    "https://github.com/skywind3000/FastMemcpy/commits",
+    "https://github.com/skywind3000/FastMemcpy/issues?q=is%3Aissue",
+    "https://github.com/skywind3000/FastMemcpy/issues/2",
+    "https://github.com/skywind3000/FastMemcpy/issues/4",
+    "https://github.com/skywind3000/FastMemcpy/issues/6",
+    "https://github.com/skywind3000/FastMemcpy/issues/7",
+    "https://github.com/skywind3000/FastMemcpy/pulls?q=is%3Apr",
+    "https://github.com/skywind3000/FastMemcpy/pull/1",
+    "https://github.com/skywind3000/FastMemcpy/pull/9",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/README.md",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/FastMemcpy.c",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/FastMemcpy.h",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/FastMemcpy_Avx.c",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/FastMemcpy_Avx.h",
+    "https://raw.githubusercontent.com/skywind3000/FastMemcpy/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}

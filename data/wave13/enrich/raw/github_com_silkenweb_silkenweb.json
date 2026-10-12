@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/silkenweb/silkenweb",
+  "one_liner": "Rust/Wasm signals-based web UI library (no VDOM); about 1.6x faster than React 19.2 hooks in js-framework-benchmark, not faster than vanilla JS.",
+  "what_it_does": "Silkenweb builds reactive single-page web apps in plain Rust: elements are created with builder calls (div().class(..).child(..)) instead of a macro DSL or JSX, and state lives in futures-signals Mutable/MutableVec values that are bound to text, attributes, classes and child lists. It also covers routing, server-side rendering with hydration, CSS Modules scoping, shadow-DOM components and Tauri. It is a different programming model and language from React, not a drop-in replacement.",
+  "how_it_is_fast": "Fine-grained push reactivity instead of a virtual DOM: a signal change goes straight to the one DOM call it affects, and a MutableVec emits VecDiff operations (the benchmark's swap is two move_from_to diffs, i.e. two DOM moves) so no tree diff runs. The benchmark rows use the Template DOM (row_template.freeze(), on_instantiate), which builds the row once and instantiates it with cloneNode(true) plus per-row initialisation closures, the same template-cloning idea Solid uses. The measured build also enables the weak-refs feature (event closures handed to the JS GC via Closure::into_js_value instead of tracked in Rust), wasm-bindgen string interning, reference types, wasm-opt -O4, LTO, codegen-units=1 and panic=abort.",
+  "when_to_use": [
+    "You want a Rust/Wasm front end and care about DOM update cost: in the 2026-10 krausest snapshot it is the fastest keyed Rust framework measured (geometric mean 0.622x React's time vs Dominator 0.681, Leptos 0.684, Dioxus 0.698, Sycamore 0.711, Yew 0.819; derived from page data), behind only the hand-written wasm-bindgen implementation (0.584).",
+    "Large keyed lists with reorders: swap 1,000 rows 11.7 ms vs React hooks 89.7 ms, and create 10,000 rows 246 ms vs 401 ms (derived from page data).",
+    "You prefer plain Rust builder syntax (rustfmt, rust-analyzer completion, rustc errors) over a macro DSL, and want SSR with hydration, CSS Modules or Tauri in the same codebase.",
+    "Sharing Rust domain logic between server and browser, with futures-signals as the state model."
+  ],
+  "when_not_to_use": [
+    "You need the fastest possible page: vanilla JS and Solid 1.9.3 are faster (Silkenweb is 1.133x vanillajs-keyed's time, Solid 1.105x; derived from page data), and Wasm start-up costs show in first paint (217 ms vs 52 ms for Solid and 54 ms for vanilla JS) and ready memory (1.76 MB vs 0.60 MB for Solid).",
+    "Typical React workloads without big reorders: excluding swap the gain over React drops to 0.756x, and create 1,000 rows is a tie (23.5 vs 23.6 ms).",
+    "You need an ecosystem and momentum: one maintainer, no rendering-speed benchmark of its own, last release 0.10.0 on 2025-05-24, the 20 most recent commits (2026-03-09 to 2026-04-23) are dependency bumps, and 10 dependabot PRs have sat unmerged since May 2026.",
+    "Strict Content-Security-Policy deployments: the suite flags the implementation with issue 1139 (does not pass strict CSP).",
+    "Bundle size matters more than update speed: 44.3 kB compressed vs 4.5 kB for Solid and 9.7 kB for Svelte 5 in the same run."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "futures-signals, wasm-bindgen, web-sys, js-sys and other crates (crossbeam, indexmap, html-escape, lightningcss/parcel_selectors via silkenweb-macros); tokio when built for non-wasm SSR; trunk (or wasm-bindgen CLI) to build for the browser",
+    "min_toolchain": "not documented (Rust 2021 edition, no rust-version set; wasm32-unknown-unknown target; benchmark pins wasm-bindgen =0.2.99 and wasm-opt version_121)",
+    "platforms": "Browsers via wasm32-unknown-unknown (weak-refs feature needs JS WeakRef support); native targets for server-side rendering and Tauri",
+    "thread_safety": "Single-threaded browser model: the DOM types use Rc/RefCell and are not Send; SSR runs per tokio task with a task-local microtask queue (changelog 0.5.0)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The measured configuration is not the default one: the benchmark uses the weak-refs cargo feature plus data-weak-refs and data-reference-types in trunk, wasm-bindgen enable-interning, and opt-level 3, while the repo's own workspace release profile uses opt-level \"z\" (size). With weak-refs enabled but wasm-bindgen's weak references not turned on, every event listener is created with Closure::into_js_value, which wasm-bindgen documents as a memory leak that can 'overwhelm the page quickly and crash the wasm'.",
+    "The benchmark rows are built with the lower-level Template DOM (freeze() and on_instantiate), which the changelog describes as an optimisation for hot code paths; idiomatic builder code as in the README is not what was measured.",
+    "Selection is wired as one selected_row signal that every row subscribes to, so selecting a row wakes all rows' class signals (O(n)); it still measured 3.3 ms vs Solid 3.2 ms at 4x CPU slowdown, so this is a design note, not a flaw in the numbers.",
+    "No harness defect found: the krausest implementation performs each operation the suite specifies (swap(1, 998) as two keyed moves, every 10th label appended with ' !!!', retain-based remove, clear resets selection). The measured Wasm is a prebuilt bundle from silkenweb 0.9.0 (2025-01-14) checked into the suite; crates.io's latest is 0.10.0, which has breaking API changes (prelude removed, TextParentElement split out)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Leptos, Sycamore, Dioxus or Yew when you want the fastest keyed DOM updates of the Rust frameworks in this snapshot and plain-Rust builder syntax; pick Dominator for a smaller bundle and faster first paint (40.1 kB, 179.6 ms) at similar speed, and Leptos or Dioxus for a larger ecosystem and server functions.",
+  "verified_claims_summary": "In krausest/js-framework-benchmark's Chrome 154 development snapshot (MacBook Pro 14 with Apple M4, 14/20 cores, 48 GB, OSX 26.6.2), the prebuilt silkenweb 0.9.0 keyed implementation had medians of total time across the 9 CPU benchmarks with an unweighted geometric mean 0.622x React 19.2 hooks' (about 1.61x faster) and 1.133x vanillajs-keyed's; most of the gain comes from swap rows (11.7 vs 89.7 ms) and create 10,000 rows (246 vs 401 ms), and these figures were recomputed from the raw run arrays in results.ts (derived from page data).",
+  "status_note": "The library is labelled active but is in maintenance mode: one maintainer, last release 0.10.0 on 2025-05-24, last commit 2026-04-23 (a dependency bump), and dependabot PRs unmerged since May 2026. It is MIT OR Apache-2.0 and usable from crates.io, and no harness defect was found behind the suite numbers.",
+  "sources_read": [
+    "https://github.com/silkenweb/silkenweb",
+    "https://github.com/silkenweb/silkenweb/commits",
+    "https://github.com/silkenweb/silkenweb/issues?q=is%3Aissue",
+    "https://github.com/silkenweb/silkenweb/issues/26",
+    "https://github.com/silkenweb/silkenweb/pulls",
+    "https://github.com/silkenweb/silkenweb/tree/main/packages/silkenweb/src/dom",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/README.md",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/Cargo.toml",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/src/lib.rs",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/src/dom.rs",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/src/dom/template.rs",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/src/dom/wet.rs",
+    "https://raw.githubusercontent.com/silkenweb/silkenweb/HEAD/packages/silkenweb/src/dom/private.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/src/main.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/README.md",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/Trunk.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/silkenweb/package.json",
+    "https://raw.githubusercontent.com/Pauan/rust-signals/HEAD/src/signal_vec.rs",
+    "https://raw.githubusercontent.com/wasm-bindgen/wasm-bindgen/0.2.99/src/closure.rs",
+    "https://crates.io/api/v1/crates/silkenweb"
+  ],
+  "confidence": 0.8
+}

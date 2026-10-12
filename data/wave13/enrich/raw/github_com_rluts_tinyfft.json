@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/rluts/tinyfft",
+  "one_liner": "no_std Rust radix-4 FFT shipped as 16 KB SIMD wasm; 1.2-1.4x fft.js complex-FFT throughput in Node.",
+  "what_it_does": "Power-of-two 1D and 2D complex FFTs in single precision for browsers, Node and Deno, shipped on npm as an ES module plus a raw ~16 KB tinyfft.wasm. You call TinyFft.load(), create plan1d(n), write interleaved [re, im] floats into plan.view (a Float32Array over wasm memory) and call forward()/inverse() in place; the inverse divides by N. One-shot fft.forward(buf) and forward2d() exist for convenience and copy the result out. It is not a drop-in for fft.js: Float32Array instead of a plain f64 Array, in place instead of out of place, and no real-input transform.",
+  "how_it_is_fast": "It runs an iterative Cooley-Tukey radix-4 FFT, with one leading radix-2 stage when log2 N is odd, on a planar (split real/imag) layout. Each wasm simd128 step does four consecutive butterflies with contiguous v128 loads and stores and vertical f32x4 complex multiplies, with no shuffles. plan1d precomputes the all-stage twiddle table and the base-4 digit-reversal map once and folds the permutation into the de-interleave gather, so a transform costs one gather, the butterfly stages and one re-interleave. Working in f32 also moves half the bytes of fft.js's f64 arrays, which helps most at N=65536.",
+  "when_to_use": [
+    "Repeated same-size complex FFTs that reuse one plan (STFT, spectrograms, FFT convolution or overlap-add) in a browser, Node or Deno, at N of about 1024 to 65536, where the sample run measured 1.2-1.4x over fft.js",
+    "Workloads where f32 precision is enough: audio analysis, visualisation, image filtering",
+    "When bundle size and dependencies matter: one ~16 KB wasm with no runtime dependencies and the same code path in every engine",
+    "Small 2D transforms (up to about 512x512 with the default 8 MiB arena) for frequency-domain image filtering, if convenience matters more than speed (the 2D path is not plan-cached or benchmarked)"
+  ],
+  "when_not_to_use": [
+    "You need double precision or high dynamic range: f32 only, and the README gives round-trip relative error of about 1e-4 to 1e-3 (fft.js is f64, ~1e-14)",
+    "Real-valued input such as audio frames: there is no real-to-complex transform, while fft.js's realTransform is claimed 25-40% faster than its complex transform, which could erase the 1.2-1.4x margin (not measured by the project)",
+    "Non-power-of-two lengths, or N above 2^18: plans are bump-allocated from a fixed 8 MiB arena at about 28 bytes per point, so larger sizes need ARENA_BYTES edited and a rebuild",
+    "Runtimes without wasm SIMD: only the simd128 build ships on npm, and the bench-only scalar build is slower than fft.js at every size",
+    "Small transforms (N=256 forward was a tie, ~262 vs ~258 MSamples/s) or one-shot calls, which rebuild the cos/sin and permutation tables on every call"
+  ],
+  "integration": {
+    "form": "module (npm package: ESM JS wrapper + raw .wasm); the repo is also a no_std Rust crate (cdylib/rlib)",
+    "dependencies": "none at runtime; the Rust build uses the libm crate; binaryen wasm-opt is optional",
+    "min_toolchain": "Node >= 18 (package.json engines); building needs Rust with the wasm32-unknown-unknown target (version not documented; the source uses &raw mut, stable since Rust 1.82); the runtime needs wasm simd128",
+    "platforms": "any WebAssembly engine with simd128 (browsers, Node, Deno, edge runtimes per README); the SIMD kernel exists only for wasm32, and host Rust builds use the scalar path",
+    "thread_safety": "Not thread-safe within one instance: a single static mut bump arena per wasm instance, documented single-threaded; load a separate TinyFft instance per worker",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Plans live in a fixed 8 MiB bump arena per instance: fft.reset() invalidates every existing plan and view, and mark()/release() frees only in LIFO order. plan2d does not cache tables: fft_2d_in_place calls the one-shot fft_in_place for every row and column, rebuilding the twiddle and permutation tables each time, so 2D throughput will not match the 1D plan numbers.",
+    "Robustness bug in src/lib.rs: total_twiddle_len (also used by fft_in_place) shifts `size <<= 2` on 32-bit wasm usize. For n = 2^30 or 2^31 the shift wraps to 0, so `while size <= n` never ends. The TypeScript isPow2 check lets those sizes through, so plan1d(2**30) hangs instead of throwing an arena error. Sizes that fit the arena are not affected. plan1d(1) throws a misleading 'fft_plan_create failed ... (arena ...)' error because the plan path rejects n < 2.",
+    "Harness review (bench/run.mjs): the forward rows re-seed tinyfft's buffer with a 2N-float copy each iteration and fft.js pays nothing similar, which biases against tinyfft. The round-trip rows are copy-free on both sides. fft.js is called through its documented complex transform() on plain Arrays. Correctness is checked against a naive DFT at N=256 before timing. I found no flaw that inflates tinyfft's numbers. The remaining caveats: f32 against f64, one sample run of 500 ms per cell with no repeats or variance, and an unnamed Apple Silicon chip.",
+    "The Rust unit tests run only on the host (scalar path); the SIMD kernel is exercised only by the Node smoke test (N=16), vitest and the benchmark's N=256 check."
+  ],
+  "pick_this_over_siblings_when": "No other FFT is catalogued in this wasm category. Essentia.js includes FFTs inside a large audio-analysis toolkit, and Ubique (nalgebra in wasm) targets linear algebra, so pick tinyfft when you only need a small power-of-two f32 complex FFT. For f64 or arbitrary lengths, compile RustFFT (wave 8 fft entry, optional wasm SIMD) to wasm yourself.",
+  "verified_claims_summary": "First-party sample run of bench/run.mjs on Node 25 and an unnamed Apple Silicon machine; the Rust version is not stated (release profile opt-level 3, LTO, codegen-units 1, wasm-opt -O3). With persistent plans, the simd128 build did ~124 vs ~97 MSamples/s complex round trip at N=1024 and ~79 vs ~57 at N=65536 against fft.js 4.x (pure JS, f64). Forward was ~250 vs ~207 at N=1024 and ~262 vs ~258 (a tie) at N=256. The scalar wasm build lost to fft.js at every size. Ratios are derived from page data.",
+  "status_note": "Young single-author project, active: 28 commits, last on 2026-07-26, npm 0.2.1 (first published 2026-05-08), 1 star, no issues filed. It is MIT and about 1,150 lines of Rust including tests, so it is easy to vendor. The benchmark harness is sound; its biases (f32 against f64, a re-seed copy on tinyfft's side only) are documented in bench/README.md. It has a minor hang bug for plan sizes 2^30 and 2^31.",
+  "sources_read": [
+    "https://github.com/rluts/tinyfft",
+    "https://github.com/rluts/tinyfft/tree/main/src",
+    "https://github.com/rluts/tinyfft/commits",
+    "https://github.com/rluts/tinyfft/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/README.md",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/bench/run.mjs",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/bench/build-scalar.mjs",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/bench/package.json",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/package.json",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/ts/index.ts",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/ts/build.mjs",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/ts/smoke-test.mjs",
+    "https://raw.githubusercontent.com/rluts/tinyfft/HEAD/.github/workflows/ci.yml",
+    "https://registry.npmjs.org/tinyfft",
+    "https://github.com/indutny/fft.js",
+    "https://github.com/JorenSix/pffft.wasm"
+  ],
+  "confidence": 0.8
+}
