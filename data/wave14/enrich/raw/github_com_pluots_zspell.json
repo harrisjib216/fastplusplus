@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/pluots/zspell",
+  "one_liner": "Pure-Rust Hunspell-format spellchecker that pre-expands affixes for near-constant 47-63 ns word checks, about 4-27x faster than Hunspell on en_US.",
+  "what_it_does": "zspell loads Hunspell .aff and .dic files and answers whether words or whole strings are spelled correctly, with a Rust library (builder().config_str().dict_str().build(), then check, check_word, check_indices and an entry API for stems and morphological info), a CLI and beta Python bindings. It reads the same dictionary files as Hunspell but has its own API rather than Hunspell's C/C++ interface, and suggestions are unstable (behind a feature flag) while compound words and number handling are not implemented.",
+  "how_it_is_fast": "At build time it applies every prefix and suffix rule to every stem and stores all resulting surface forms in hashbrown hash maps (main, nosuggest and forbidden word lists), so a check is a few hash lookups of the word and its lowercase form instead of Hunspell's runtime affix stripping and flag checks. The README frames this as optimizing for the common case that most words are correct and that a compiled word list fits in memory (about 20 MiB by its estimate). The library is #![forbid(unsafe_code)].",
+  "when_to_use": [
+    "Checking large volumes of mostly correct text against a simple dictionary such as en_US, where per-word latency matters and tens of MB of RAM are acceptable.",
+    "Rust or Python programs that want a no-unsafe, no-C-dependency checker for Hunspell-format dictionaries without linking libhunspell.",
+    "Stemming and morphological lookups (entry API returning stems and morph info) on dictionaries whose affix rules zspell expands correctly.",
+    "Long-running processes that build the dictionary once and amortize the expansion cost over many checks."
+  ],
+  "when_not_to_use": [
+    "Morphologically rich dictionaries: the Spellbook author reports pt_BR (312,000 stems, 47 prefixes, 57 suffixes) ran over six minutes and past 100 GB of memory before being killed, versus about 100 ms for Spellbook.",
+    "When you need suggestions, compound words (COMPOUNDRULE, e.g. en_US '20000th') or numbers ('8675,309.0'); these are missing or unstable.",
+    "Memory-constrained or short-lived processes: en_US peaks at about 57 MB of heap against about 3.2 MB for Hunspell and 4.2 MB for Nuspell (DHAT, Spellbook compare doc).",
+    "Languages with stacked suffixes such as French: open issue #116 reports 'répondez' and 'projections' wrongly rejected because multiple suffix stripping does not work.",
+    "Projects that need an active upstream: no commits since 2024-07-09 (dependency bumps; last release 0.5.5 on 2024-06-13)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, dirs, hashbrown, itertools, lazy_static, regex, stringmetrics, sys-locale, unicode-segmentation, visibility, xxhash-rust",
+    "min_toolchain": "Rust 1.65 for the library (README MSRV); the CLI and test runner track newer Rust",
+    "platforms": "any Rust target (pure safe Rust); prebuilt CLI binaries and Python wheels for common platforms",
+    "thread_safety": "Not documented; the check methods take &self and dict.rs has no RefCell or Mutex, so a built Dictionary should be shareable across threads",
+    "drop_in_for_baseline": "partial — reads the same .aff/.dic files as Hunspell, but has a Rust API, no Hunspell C/C++ API, no compounds and no stable suggestions"
+  },
+  "gotchas": [
+    "Speed is bought with eager affix expansion: build time and memory scale with stems times applicable affixes, which is fine for en_US (about 57 MB peak) and unusable for pt_BR (over 100 GB before being killed, per Spellbook's compare doc).",
+    "check_word allocates a lowercase String on every call and only tries the word as given and its full lowercase form; it does not implement Hunspell's capitalization rules beyond that (for example all-caps forms of mixed-case entries are not mapped back to title case).",
+    "The current Spellbook compare doc mixes runs: its Hunspell, Nuspell and Spellbook table was re-measured with Criterion on 2026-06-07 (commit 09013cf), while the ZSpell table is the 2024-11-13 libtest ns/iter run, and the current table's word_with_suffix row uses 'earthed' where the ZSpell row uses 'earthly'. Compare ZSpell only against the 2024 table (commit ca13e83 or 781c609).",
+    "zspell's own benches/findings.md times internal collection choices only, and its Vec row is internally inconsistent (a miss, which must scan the whole list, is listed at 1.91 us against 594 us for a hit), so it says nothing about speed against Hunspell."
+  ],
+  "pick_this_over_siblings_when": "Pick Spellbook (also Rust, measured against Hunspell and Nuspell, with suggestions, compounds and about 2 MB peak heap) by default; pick zspell only when you check en_US-like dictionaries in bulk, want the stem and morph entry API, CLI or Python bindings, and can spend tens of MB for its flat 47-63 ns checks (faster than Spellbook's 2024 figures of 66-540 ns on the same words).",
+  "verified_claims_summary": "Independent numbers exist that the record missed: Spellbook's docs/compare.md (helix-editor/spellbook, written by Spellbook's author on 2024-11-13) times zspell check_word on the stock en_US dictionary at 46.86 ns ('earth'), 50.51 ns ('Earth'), 52.63 ns ('EARTH'), 54.52 ns ('unearth'), 61.13 ns ('unearthed') and 62.47 ns ('reearth', misspelled), against Hunspell at 212.30, 827.88, 1,426.46, 288.74, 448.48 and 1,175.15 ns and Nuspell at 126.97, 513.78, 280.78, 924.66, 534.85 and 520.51 ns in the same-format libtest table (Hunspell and Nuspell called through Rust FFI from the-mikedavis/ffi-dictionaries), so about 4.5x to 27x faster than Hunspell (derived from page data); hardware, compiler and zspell version are not stated, the zspell benchmark code was not found in that repository, and zspell fails the compound and number cases.",
+  "status_note": "Stale since 2024-07-09 (last release 0.5.5) but Apache-2.0 and small; the record's 'no comparison found' is superseded by Spellbook's independent 2024 measurement (a retier above D looks justified, capped by the unstated hardware and the unpublished zspell bench), while its memory blow-up on complex dictionaries and missing compounds or suggestions limit it to en_US-like bulk checking.",
+  "sources_read": [
+    "https://github.com/pluots/zspell",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/README.md",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/benches/findings.md",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/zspell/Cargo.toml",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/zspell/src/lib.rs",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/zspell/src/dict.rs",
+    "https://raw.githubusercontent.com/pluots/zspell/HEAD/zspell/benches/datastructure.rs",
+    "https://github.com/pluots/zspell/issues?q=is%3Aissue",
+    "https://github.com/pluots/zspell/issues/116",
+    "https://github.com/pluots/zspell/issues/89",
+    "https://github.com/pluots/zspell/commits/main",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/README.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/docs/internals.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/HEAD/docs/compare.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/781c609/docs/compare.md",
+    "https://raw.githubusercontent.com/helix-editor/spellbook/ca13e83/docs/compare.md",
+    "https://github.com/helix-editor/spellbook/commits/master/docs/compare.md",
+    "https://github.com/helix-editor/spellbook/commit/09013cf",
+    "https://github.com/the-mikedavis/ffi-dictionaries/tree/main/benches"
+  ],
+  "confidence": 0.65
+}

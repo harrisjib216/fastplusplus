@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/nugine/simd",
+  "one_liner": "Rust SIMD base64 (plus hex, base32, UUID) crate; made uutils base64 1.56x faster than GNU coreutils base64 end to end.",
+  "what_it_does": "base64-simd is one crate in the Nugine/simd monorepo (with hex-simd, uuid-simd, base32-simd, unicode-simd and the vsimd abstraction layer). It encodes, decodes and validates base64 with STANDARD, URL_SAFE and no-pad configurations, plus WHATWG 'forgiving' decode that strips ASCII whitespace. The API is a set of methods on a const config value (encode/decode into a caller buffer via outref::Out, encode_to_string, decode_to_vec, decode_inplace, check); it is a library, not a CLI, so it replaces a C call such as aklomp/base64 or a hand-rolled table loop, not the GNU base64 program itself.",
+  "how_it_is_fast": "Encoding loads 24 input bytes into a 256-bit register (12 into 128-bit), splits them into 6-bit fields with shuffles and multiply-shift tricks, and maps the values to ASCII with a pshufb offset lookup table, following Wojciech Mula's 0x80.pl SIMD base64 algorithm; decoding and validation use aqrit's 'alsw' lookup scheme. The vsimd dispatch macro picks AVX2, SSSE3, NEON or WASM simd128 at runtime (feature 'detect', via std::arch feature detection) or at compile time when the target already enables AVX2/NEON/simd128, with a scalar fallback. The GNU baseline uses a scalar gnulib table loop, so the measured gain is SIMD against scalar code, not a language effect.",
+  "when_to_use": [
+    "Rust programs that encode or decode large base64 payloads (MIME bodies, data URLs, JSON blobs, CLI tools) where the base64 crate or a scalar loop shows up in profiles.",
+    "x86-64 with SSSE3 or AVX2, aarch64 with NEON, or wasm32 with simd128, where the crate's vector paths exist.",
+    "Validation-heavy paths: check() verifies base64 without writing output, and decode_inplace avoids a second buffer.",
+    "Browser-compatible decoding: the forgiving_decode functions implement the WHATWG forgiving-base64 rules.",
+    "no_std targets: the crate builds without std or alloc (runtime CPU detection then needs compile-time target features instead)."
+  ],
+  "when_not_to_use": [
+    "When you want the fastest base64 available: there is no AVX-512 (VBMI) path (issue #67 open since April 2026), while C libraries such as aklomp/base64, simdutf and Turbo-Base64 ship AVX-512 kernels; no head-to-head against them was found.",
+    "When you need line wrapping (76-column MIME, GNU base64 default) built in: the crate emits one unwrapped string, and the caller must insert newlines.",
+    "When you need fixes from the repository: the crates.io release is still 0.8.0 from 2022-12-28, and every later commit (dev version 0.9.0-dev, MSRV 1.85) is unreleased.",
+    "On CPUs without SSSE3 (old x86) or on other architectures (POWER, RISC-V, s390x), where it falls back to scalar code and loses its edge.",
+    "Projects that audit unsafe code strictly: the README says the project 'relies heavily on unsafe code'."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "outref and vsimd (same repo); rayon only with the 'parallel' feature (which also needs 'unstable', i.e. nightly)",
+    "min_toolchain": "Rust 1.63 for the published 0.8.0 (crates.io rust_version); repository HEAD declares rust-version 1.85.0",
+    "platforms": "x86/x86-64 (SSSE3, AVX2), aarch64 (NEON), armv7 NEON with 'unstable', wasm32 simd128; scalar fallback elsewhere",
+    "thread_safety": "Stateless functions on const config values; runtime detection uses std's cached feature checks, so calls are safe from any thread (no shared mutable state in the API).",
+    "drop_in_for_baseline": "partial — it replaces a base64 encode/decode routine inside a program; it is not a replacement for the GNU base64 command, which uutils wraps around it"
+  },
+  "gotchas": [
+    "The 1.56x figure is the uutils base64 command, not the crate: uutils calls STANDARD.encode_to_string per chunk and then copies the String into a VecDeque (src/uucore/src/lib/features/encoding.rs), and its system time (1.937 s) is double GNU's (0.996 s), so the number mixes the crate with the uutils I/O path and understates the encoder alone.",
+    "The benchmark input is a 4 GB file containing only the letter 'A' (per the reporter in uutils issue #8574), timed on an undisclosed machine; on the reporter's i7-13620H GNU base64 took 2.461 s, half the 4.901 s the maintainer measured for GNU, and no post-fix run exists on that machine.",
+    "Open issue #78 (July 2026): building with -C target-cpu=x86-64-v2 makes unicode-simd's UTF-16/UTF-32 swap hit unreachable!() on SSSE3-only CPUs because the SSSE3 dispatch arm is not treated as SSE4.1; it shows the dispatch tables can be wrong for intermediate ISA levels, though base64-simd itself was not reported.",
+    "Open issue #43: a Rust 1.75 regression where LLVM stopped emitting vpavgb for _mm256_avg_epu8 (upstream stdarch #1477) slowed vsimd code; performance depends on the rustc version."
+  ],
+  "pick_this_over_siblings_when": "Pick it when your Rust code needs a base64 or hex codec; the uutils coreutils sibling is the CLI that embeds this crate, and the other string-and-text siblings (regex, mail-parser, sd, tuc) solve different problems.",
+  "verified_claims_summary": "A uutils maintainer (PR #8578, 2025-09-08) used hyperfine -N --warmup 3 (10 runs) to encode a 4 GB single-line file of 'A' characters with the uutils base64 command built on base64-simd 0.8: 3.146 s, against 4.901 s for /usr/bin/base64 (GNU coreutils, version and flags not stated) and 5.998 s for the previous uutils build, which is 1.56x and 1.91x faster; no CPU or compiler details were given.",
+  "status_note": "MIT-licensed and very widely used (about 165 million crates.io downloads), but in maintenance mode: no crates.io release since 0.8.0 (2022-12-28), commits since then are CI and dependency fixes (last 2026-08-30), and the author opened issue #81 'Restore project maintenance with AI assistance' on 2026-10-08.",
+  "sources_read": [
+    "https://github.com/Nugine/simd",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/Cargo.toml",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/README.md",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/src/lib.rs",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/src/multiversion.rs",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/src/encode.rs",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/base64-simd/src/forgiving.rs",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/vsimd/src/isa.rs",
+    "https://raw.githubusercontent.com/Nugine/simd/HEAD/crates/vsimd/src/lib.rs",
+    "https://github.com/Nugine/simd/commits/main",
+    "https://github.com/Nugine/simd/issues?q=is%3Aissue",
+    "https://github.com/Nugine/simd/issues/78",
+    "https://github.com/Nugine/simd/issues/81",
+    "https://github.com/Nugine/simd/issues/43",
+    "https://github.com/Nugine/simd-benches",
+    "https://github.com/uutils/coreutils/pull/8578",
+    "https://github.com/uutils/coreutils/issues/8574",
+    "https://raw.githubusercontent.com/uutils/coreutils/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/uutils/coreutils/HEAD/src/uucore/Cargo.toml",
+    "https://raw.githubusercontent.com/uutils/coreutils/HEAD/src/uucore/src/lib/features/encoding.rs",
+    "https://crates.io/api/v1/crates/base64-simd",
+    "https://crates.io/api/v1/crates/base64-simd/reverse_dependencies"
+  ],
+  "confidence": 0.6
+}

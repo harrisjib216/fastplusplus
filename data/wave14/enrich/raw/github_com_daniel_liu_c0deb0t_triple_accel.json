@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/daniel-liu-c0deb0t/triple_accel",
+  "one_liner": "Rust crate of AVX2/SSE4.1 banded Hamming, Levenshtein and restricted Damerau-Levenshtein routines; no measured win over Edlib or any C/C++ library.",
+  "what_it_does": "Computes Hamming, Levenshtein and restricted Damerau-Levenshtein distances and approximate (k-error) substring search over u8 byte strings, with optional run-length traceback and arbitrary mismatch/gap-open/gap-extend costs. Top-level calls are hamming(), levenshtein(), levenshtein_exp(), rdamerau() and the *_search iterators; lower-level *_simd_k_with_opts functions take an edit bound k and return None when the distance exceeds it. It is its own API, not a drop-in for Edlib, parasail or strsim.",
+  "how_it_is_fast": "Levenshtein runs as a Ukkonen-style banded DP (band set by the bound k, which levenshtein_exp finds by exponential search starting at k=30 and doubling) whose anti-diagonals are held in SIMD registers ('Jewel' vectors: 1, 2, 4 or 8 AVX2 registers of 8-bit cells, or wider 16-bit and 32-bit cells), updated with alignr/permute shifts, cmpeq and unsigned min. The cell width and register count are chosen at runtime from k and the string lengths, and AVX2 or SSE4.1 is picked by is_x86_feature_detected. Hamming uses a 32-byte cmpeq per step (hamming_simd_parallel), with SWAR u64/u128 variants for aligned buffers.",
+  "when_to_use": [
+    "Rust code on x86-64 that needs exact Levenshtein or Hamming distance between byte strings of tens to a few thousand bytes where the expected distance is small relative to length (the banded, exponential-search path is what pays off).",
+    "Fuzzy matching or deduplication over ASCII keys (BK-trees, spell lookups); bk-tree and editdistancek on crates.io already depend on it.",
+    "Short-read or barcode matching with unit or simple affine-ish costs where a k-bounded answer (None above k) is useful and no traceback precision with gap-open costs is needed.",
+    "Builds where a zero-dependency crate with automatic scalar fallback is preferred over FFI to Edlib or parasail."
+  ],
+  "when_not_to_use": [
+    "rdamerau or any RDAMERAU_COSTS call on the SIMD path: issue #17 (open) reports rdamerau('AL NASSER','HALA NASSER') returns 3 with SIMD and 2 with default-features = false, and levenshtein_simd_k_with_opts('warsa','was',3,RDAMERAU_COSTS) returns 3 instead of 2; the proposed fix (PR #19) is unmerged.",
+    "Tracebacks with non-zero gap-open costs: issue #9 (open since May 2022) reports inaccurate traceback.",
+    "Long sequences with high divergence: with a large bound the band covers most of the matrix and the 16-bit or 32-bit paths are used; block-aligner's own bench (via rust-bio's bounded_levenshtein wrapper) times it at about 7.8 ms for a 10 kbp pair at K=1000.",
+    "aarch64 / Apple Silicon or WASM: SIMD paths are x86-only; elsewhere every call runs the scalar fallback (maintainer in issue #11: no NEON support).",
+    "Unicode text: u8 only; levenshtein_simd_k_str maps non-ASCII chars to bytes and returns None for more than 256 distinct characters, which is indistinguishable from 'distance above k' (PR #21 open)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none at runtime (criterion 0.3 and rand 0.7.3 are dev-dependencies for benches)",
+    "min_toolchain": "Rust 2018 edition on stable; no rust-version (MSRV) declared in Cargo.toml",
+    "platforms": "any for scalar paths; SIMD only on x86 and x86-64 (AVX2 or SSE4.1, detected at runtime)",
+    "thread_safety": "not documented; the API is free functions over borrowed slices with no global mutable state in the files read",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "hamming_words_64 and hamming_words_128 are safe pub fns that cast &[u8] to u64/u128 pointers and read a whole word for the tail: issue #20 (open, Miri reproductions) shows out-of-bounds reads and misaligned loads on ordinary slices. They are only safe on buffers from alloc_str; the default hamming() uses hamming_simd_parallel with unaligned loads and is not affected.",
+    "alloc_str builds a Vec<u8> from a Vec<u128> allocation, so it frees with a different alignment than it allocated (issue #6, open; the maintainer agreed and proposed removing it) and can overflow its capacity calculation (issue #16).",
+    "hamming_search and hamming_search_simd_with_opts panic if the haystack contains a zero byte; the &str and byte APIs give no error type, only Option.",
+    "The crate's benches (benches/rand_benchmarks.rs) check each SIMD result against the naive routine before timing, but compare only against its own scalar code on random printable-ASCII strings with 5-10% edits, and levenshtein_naive is the full O(nm) DP, so that group mixes the banding gain with the SIMD gain; no results are saved in the repo (issue #8 asks for them)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over block-aligner (same author, affine-gap adaptive banding, NEON and WASM support) only when you need exact unit-cost Levenshtein or Hamming distance in a tiny dependency-free crate on x86; for pattern search against Edlib-class speed Sassy is the measured choice, and for exact global alignment of long divergent sequences A*PA2 or bitdp have published C/C++ comparisons.",
+  "verified_claims_summary": "Nothing against a C or C++ baseline was measured: the README's 20-30x line is a general remark about SIMD versus scalar code, and the crate's criterion benches compare only its own SIMD and scalar routines without published numbers. The only cross-library timing found is block-aligner's rand_scan bench (Rust, rust-bio's wrapper around triple_accel), which does different work (exact bounded Levenshtein against block-aligner's adaptive-band NW1 scoring with affine gaps), so it is not a like-for-like comparison.",
+  "status_note": "Abandoned: last commit 2022-12-05, last release 0.4.0 on 2021-06-18, with open soundness (issues #4, #6, #16, #20) and wrong-result (#9, #17) reports and five unmerged PRs; MIT-licensed and still widely pulled in (about 2.04M crates.io downloads, mostly via bk-tree and editdistancek), so pin it and avoid rdamerau and the words_* Hamming helpers.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/README.md",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/benches/rand_benchmarks.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/src/hamming.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/src/levenshtein.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/triple_accel/HEAD/src/jewel.rs",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/issues?q=is%3Aissue",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/issues/17",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/issues/20",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/issues/6",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/issues/11",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/commits",
+    "https://github.com/Daniel-Liu-c0deb0t/triple_accel/pulls",
+    "https://crates.io/api/v1/crates/triple_accel",
+    "https://crates.io/api/v1/crates/triple_accel/reverse_dependencies?per_page=10",
+    "https://pypi.org/pypi/lev-rs/json",
+    "https://raw.githubusercontent.com/KarelZe/lev/HEAD/Cargo.toml",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/tree/main/examples",
+    "https://github.com/Daniel-Liu-c0deb0t/block-aligner/tree/main/benches",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/main/benches/rand_scan.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/main/examples/nanopore_bench.rs",
+    "https://raw.githubusercontent.com/Daniel-Liu-c0deb0t/block-aligner/main/examples/nanopore_bench_global.rs"
+  ],
+  "confidence": 0.85
+}

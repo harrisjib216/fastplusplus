@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/dkorunic/bench_walk",
+  "one_liner": "Criterion shootout of Rust directory walkers; walkdir edges out a spawned GNU find, parallel ignore wins 3.7x with 8 threads.",
+  "what_it_does": "bench_walk is a one-machine benchmark that times twelve Rust directory-walking crates and the system find over a shallow clone of the Linux kernel tree. The catalogued winners are libraries, not CLIs: walkdir (BurntSushi) is a serial iterator over DirEntry values (WalkDir::new(root)), and ignore (the ripgrep crate) offers a serial iterator plus WalkBuilder::build_parallel(), which runs a per-thread visitor closure over a work-stealing walk. Neither is a drop-in for the find command line.",
+  "how_it_is_fast": "walkdir, walkdir_minimal, ignore and jwalk read each directory once and use the d_type field from readdir(3) to tell files from directories, so they never stat an entry when only paths are wanted; the README attributes the second tier (walker, fsindex and others several times slower) to a syscall per entry. ignore's parallel walker (crossbeam-deque work stealing) and jwalk/swdir spread directories over threads, giving about 2.7x over the best serial walker on 8 hardware threads because traversal is syscall-bound.",
+  "when_to_use": [
+    "Rust programs that must enumerate large trees (source checkouts, build outputs, backup scanners) and only need paths and file types: walkdir serially, ignore's build_parallel() when you can use several cores.",
+    "Tools that need gitignore, hidden-file and glob filtering during the walk: ignore applies them while walking instead of filtering a find listing afterwards.",
+    "Warm-cache traversals of tens of thousands of entries where per-entry stat calls would dominate (walker and fsindex, which stat every entry, were about 3x slower than walkdir here).",
+    "Replacing a spawned find subprocess inside a Rust service, which also removes process start-up and stdout parsing."
+  ],
+  "when_not_to_use": [
+    "As evidence that Rust walks faster than C: walkdir's own README says its speed is comparable with find and glibc nftw with no observable difference, and the 1.3x gap here sets an in-process iterator against a find subprocess whose output is piped and buffered.",
+    "Shell use as a find replacement: these are crates; for a CLI see hunt, and find's predicate language (-newer, -exec, -perm) has no equivalent here.",
+    "Workloads that need ordered output: every crate here ran with sorting disabled, and ignore's parallel visitor runs on several threads at once, so entries do not arrive in sorted order.",
+    "Cold-cache or network filesystems: every number in the table is warm page cache on local ext4 RAID-10, so disk seek behaviour was not measured.",
+    "Code that needs per-entry metadata anyway: once each entry is stat'ed, the d_type advantage that separates the top tier from walker and fsindex disappears."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "walkdir: same-file (plus winapi-util on Windows); ignore: crossbeam-deque, globset, log, memchr, regex-automata, same-file, walkdir (plus winapi-util on Windows)",
+    "min_toolchain": "walkdir: Rust 1.60.0 (README MSRV policy); ignore 0.4.33: Rust 1.88 (crates.io rust-version; 0.4.26 as benchmarked declares none)",
+    "platforms": "any std target: walkdir is described as cross-platform and both crates carry Windows-specific dependencies; the benchmark itself ran only on Linux x86-64",
+    "thread_safety": "walkdir is a single-threaded iterator; ignore's WalkParallel builds one visitor per worker thread from a factory closure and runs them concurrently, so state shared between visitors must be synchronised",
+    "drop_in_for_baseline": "partial — library replacements for the traversal part of find inside a Rust program, not for the find command or its predicates"
+  },
+  "gotchas": [
+    "Harness asymmetry behind the serial win: src/lib.rs times find as Command::new(\"find\").arg(root).output(), so the find row includes process spawn and writing every path through a pipe into a buffered Vec, while the crate rows only iterate (for _ in WalkDir::new(root) {}). walkdir's README reports parity with find and nftw on the author's own runs, so the 1.3x serial margin is most plausibly this overhead, not a faster walk; the ratio was stable at about 1.3x across the three published tables (Oct 2024: 54.98 ms vs 72.39 ms; June 2026: 69.50 vs 93.68 and 68.39 vs 90.62).",
+    "The parallel 3.7x is 8 threads (num_cpus::get() on a 4-core, 8-thread Xeon E5-1630 v3, which the README calls 8-core and '8 physical cores') against single-threaded find; the fairer parallel comparison is only among the crates.",
+    "The 'C' row closest to like-for-like, fts_walkdir, is glibc fts(3) called through the fts crate, whose wrapper copies each entry into two PathBufs (path and name), so walkdir's 1.19x margin over it also includes Rust wrapper cost.",
+    "The test tree is a fresh depth-1 clone of torvalds/linux HEAD that the bench deletes when it finishes, and the kernel commit is not recorded, so absolute times are not comparable between README versions (they rose from 55 ms to 68 ms for walkdir between the 2024 and 2026 tables); each table itself comes from one run, since every row changed in each update."
+  ],
+  "pick_this_over_siblings_when": "Use walkdir or ignore when traversal is embedded in your own Rust code; hunt is the catalogued CLI replacement for GNU find (12x on a first-match search), uutils findutils has no speed claim, and ripgrep is the listed tool that already ships the ignore walker.",
+  "verified_claims_summary": "On one Xeon E5-1630 v3 (4 cores, 8 threads), ext4 on SATA RAID-10, warm cache, shallow Linux kernel clone, Criterion 80 s warm-up and 400 s measurement: walkdir 68.39 ms against a spawned GNU find 90.62 ms (about 1.3x, derived from page data) and against glibc fts via the fts crate 81.62 ms (about 1.19x), and parallel ignore 24.73 ms with 8 threads (about 3.7x against single-threaded find). Cargo bench profile is opt-level 3, fat LTO, one codegen unit; rustc, GNU find and glibc versions are not stated.",
+  "status_note": "The shootout repo is active (last commits 2026-06-06, MIT) and the winners are healthy, widely used crates (walkdir 680M downloads, last release 2.5.0 in March 2024; ignore 189M downloads, 0.4.33 in August 2026, both Unlicense/MIT), but the serial win over find is a harness artifact and the parallel win is threads against one thread, so treat the entry as a crate recommendation rather than a language-speed result.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/HEAD/README.md",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/HEAD/benches/benchmark.rs",
+    "https://github.com/dkorunic/bench_walk/commits",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/4faf795/README.md",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/df94007/README.md",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/9f25a40/README.md",
+    "https://raw.githubusercontent.com/dkorunic/bench_walk/aa1c26e/README.md",
+    "https://raw.githubusercontent.com/BurntSushi/walkdir/HEAD/README.md",
+    "https://raw.githubusercontent.com/dalance/fts-rs/HEAD/src/fts.rs",
+    "https://raw.githubusercontent.com/dalance/fts-rs/HEAD/src/walkdir.rs",
+    "https://crates.io/api/v1/crates/walkdir",
+    "https://crates.io/api/v1/crates/ignore",
+    "https://crates.io/api/v1/crates/jwalk",
+    "https://crates.io/api/v1/crates/fts",
+    "https://crates.io/api/v1/crates/swdir",
+    "https://crates.io/api/v1/crates/walkdir/2.5.0/dependencies",
+    "https://crates.io/api/v1/crates/ignore/0.4.26/dependencies"
+  ],
+  "confidence": 0.8
+}
