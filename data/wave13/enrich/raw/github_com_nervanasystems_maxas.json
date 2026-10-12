@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/nervanasystems/maxas",
+  "one_liner": "Perl assembler for NVIDIA Maxwell SASS; its hand-scheduled SGEMM beat cuBLAS's Maxwell kernels by about 4-25%.",
+  "what_it_does": "MaxAs (bin/maxas.pl plus the MaxAs::MaxAs and MaxAs::Cubin Perl modules) assembles kernels written in the SASS dialect that cuobjdump prints and splices them into an existing cubin. You compile a CUDA C shell kernel with nvcc to get the parameters, shared memory and globals, extract it with -e, rewrite the body in SASS with register-mapping and scheduled blocks, insert it with -i and load the cubin through the driver API. It replaces ptxas for individual kernels; it is not a library and not a drop-in for cuBLAS. The speed claim belongs to the bundled SGEMM sample.",
+  "how_it_is_fast": "The assembler itself adds no speed. It exposes what ptxas hides: explicit register allocation by bank (on Maxwell the bank is the register number mod 4), automatic operand-reuse flags, hand-set control codes (stall counts, dependency barriers, dual issue) and an optional list scheduler for marked blocks. The SGEMM uses an 8x8-per-thread register blocking with 64 accumulators, double-buffered shared memory, 128-bit quad texture loads (lda/ldb divided by 4), warp-split loads where each half of the threads fetches A or B, a bank-aware C-register layout and a warp-synchronous shared-memory shuffle for coalesced C stores. The main loop issues 512 FFMAs in 520 issue slots, a 98.5% upper bound.",
+  "when_to_use": [
+    "Learning how a near-peak GPU GEMM is built at the instruction level: the SGEMM wiki walkthrough on register banks, the reuse cache, control codes and latency hiding is the project's lasting value.",
+    "Writing or patching kernels for Maxwell GPUs (measured on GM107 and GM204) when ptxas register allocation or scheduling is the bottleneck.",
+    "Disassembling a Maxwell cubin (-e), editing it and reinserting it (-i), for example to test register mappings or reuse flags on a ptxas-compiled kernel.",
+    "Microbenchmarking Maxwell instruction latencies and control-code behaviour with the bundled microbench framework."
+  ],
+  "when_not_to_use": [
+    "Volta or newer GPUs: MaxAs knows the Maxwell-era instruction grammar only; use TuringAs (Volta, Turing, Ampere) instead. Pascal support is not documented (Cubin.pm only rejects cubins older than sm_50).",
+    "Production GEMM: the measured win is over a 2014-2015 cuBLAS and is about 4% for large matrices; the 64-thread kernel falls below both cuBLAS kernels above roughly N = 5,600 on GM204 (chart).",
+    "Full SGEMM semantics: the sample kernels compute C = alpha*A*B^T only (no beta term, NT layout only), need leading dimensions that are multiples of 4 floats for the quad loads, read inputs through 1D textures and are 32-bit-address cubins (-m 32).",
+    "Low-maintenance toolchains: the wiki requires the nvdisasm from CUDA 6.5, newer cuobjdump output broke parsing (issue #10, still open), the sample harness is a Windows Visual Studio project, and the repository is archived.",
+    "Code without hand-checked memory dependencies: the assembler deliberately leaves dependency barriers for memory operations to the programmer, so a wrong control code gives a silent race rather than an error."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Perl 5.10+ (64-bit) with Carp and Data::Dumper; CUDA toolkit (nvcc for the shell cubin, cuobjdump, and the CUDA 6.5 nvdisasm); CUDA driver API to load the resulting cubin",
+    "min_toolchain": "Perl 5.10 (named regex captures, 64-bit integers); nvdisasm from CUDA 6.5 (later toolkits work only with that nvdisasm swapped in, per the wiki and issue #10)",
+    "platforms": "Host: any OS with 64-bit Perl (author worked on Windows with Visual Studio; wiki also covers Linux install). Target: NVIDIA Maxwell (sm_50/sm_52; GM107 and GM204 measured)",
+    "thread_safety": "not applicable (offline command-line assembler); not documented for the generated kernels",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw: the published sgemm/sgemm.cpp comments out every cuBLAS call (cublasCreate, the Cub64/Cub128 runs and the reference cublasSgemm), yet still runs test(C, T) against devT, which is only ever zeroed, so the accuracy check compares MaxAs output with zeros. Inputs are all-ones matrices (A[i] = B[i] = 1.0f), so every element of C equals N whatever the layout, and even with cuBLAS restored the check cannot catch indexing or transpose bugs.",
+    "The cuBLAS baseline was cuBLAS's own maxwell_sgemm_128x64_nt and 128x128_nt SASS, extracted from CUDA 6.5's Win32 cublas_device.lib into cublas_sgemm.cubin and launched outside cuBLAS (cublas_sgemm.ptx comments). That is a kernel-against-kernel test in one NT layout, not cublasSgemm with its kernel selection. The MaxAs kernels were themselves derived from studying that SASS, and the wiki blames 28 GFLOPS of cuBLAS's gap on a register-bank-conflict bug in its first FFMA.",
+    "The '25% over cublas' figure is one chart point. Reading BenchSmall.png: N = 320 gives Max64 about 3,100 against Cub128 about 2,470 GFLOPS, but the gap is about 9-10% at N = 384 and 512. BenchLarge.png shows Max256 about 6,200 against Cub256 about 5,950 GFLOPS (about 4%). sgemm.pl's size sweep sits after an 'exit;' and uses the 16-bit normalized texture format, so the fp32 runs behind the cuBLAS charts are not scripted in the repo. The original wiki images are broken (issue #13); the charts survive in the xldrx/maxas.wiki.fixed mirror.",
+    "Assembly is the source of truth: re-extracting with a newer cuobjdump can drop instructions wrapped in braces (issue #10). Register-bank and reuse tuning is specific to Maxwell's 4-bank register file and does not transfer to later architectures."
+  ],
+  "pick_this_over_siblings_when": "Choose MaxAs only for Maxwell GPUs or for its SGEMM walkthrough, the most detailed write-up among the GPU SASS assemblers catalogued; KeplerAs (PPoPP 2017 artifact, 1.15x over cuBLAS 7.0 on Kepler) covers the previous generation with a paper behind it, and TuringAs is the choice for Volta, Turing and Ampere.",
+  "verified_claims_summary": "On a GM204 (Maxwell) at a sustained 1607 MHz core clock and 8000 MHz memory, the hand-scheduled fp32 SGEMM (64- and 256-thread kernels, square NT matrices, all-ones inputs) ran up to about 25% faster than cuBLAS's own Maxwell SGEMM kernels at one small size (N = 320) and 4.8% faster at N = 4096. It reached about 96% of theoretical peak on GM204 and 98% on GM107. Per the harness comments the cuBLAS kernels were taken from CUDA 6.5 and run in the same driver-API harness; the card model and driver are not stated, and the GFLOPS appear only in chart images.",
+  "status_note": "Archived 2023-01-03 with an Intel discontinuation notice (last code commit 2016-06-10, 1.1k stars). It is MIT-licensed and still the best-documented Maxwell SASS workflow, but treat it as a reference: it does not target current GPUs, and the published harness cannot rerun the cuBLAS comparison (cuBLAS calls are commented out and the accuracy check compares against a zeroed buffer).",
+  "sources_read": [
+    "https://github.com/NervanaSystems/maxas",
+    "https://github.com/NervanaSystems/maxas/commits/master",
+    "https://github.com/NervanaSystems/maxas/issues?q=is%3Aissue",
+    "https://github.com/NervanaSystems/maxas/issues/10",
+    "https://github.com/NervanaSystems/maxas/tree/master/sgemm",
+    "https://github.com/NervanaSystems/maxas/wiki/SGEMM",
+    "https://raw.githubusercontent.com/wiki/NervanaSystems/maxas/SGEMM.md",
+    "https://raw.githubusercontent.com/wiki/NervanaSystems/maxas/Introduction.md",
+    "https://raw.githubusercontent.com/wiki/NervanaSystems/maxas/Getting-Started.md",
+    "https://raw.githubusercontent.com/wiki/NervanaSystems/maxas/Control-Codes.md",
+    "https://raw.githubusercontent.com/xldrx/maxas.wiki.fixed/master/img/BenchSmall.png",
+    "https://raw.githubusercontent.com/xldrx/maxas.wiki.fixed/master/img/BenchLarge.png",
+    "https://raw.githubusercontent.com/xldrx/maxas.wiki.fixed/master/img/BenchNormFloat.png",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/README.md",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/LICENSE",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/sgemm/sgemm.cpp",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/sgemm/sgemm.pl",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/sgemm/sgemm.cu",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/sgemm/sgemm64.sass",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/sgemm/cublas_sgemm.ptx",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/cpanfile",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/Makefile.PL",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/Changes",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/lib/MaxAs/MaxAs.pm",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/lib/MaxAs/Cubin.pm",
+    "https://raw.githubusercontent.com/NervanaSystems/maxas/master/bin/maxas.pl"
+  ],
+  "confidence": 0.8
+}

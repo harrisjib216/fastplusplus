@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/nodejs/cjs-module-lexer",
+  "one_liner": "C CommonJS export lexer compiled to Wasm; beat its own pure-JS build in 2020 Node, near parity on Node 24.",
+  "what_it_does": "Scans CommonJS source and returns the likely named exports and reexport specifiers (exports.x =, Object.defineProperty getters, module.exports = {...}, Babel/TypeScript/Rollup star-reexport output) without executing or fully parsing the code. One function, parse(source, name?) returning { exports, reexports }; the ESM entry (dist/lexer.mjs) runs the Wasm build and also exposes init() and initSync(), while require('cjs-module-lexer') returns the pure-JS lexer.js. Detection patterns are frozen by design so results stay identical across Node.js versions.",
+  "how_it_is_fast": "A single forward pass over UTF-16 code units with a tiny state machine (open-token and template stacks) instead of an AST; regex/division ambiguity is resolved by backtracking over the preceding punctuator or keyword, and export patterns are matched by fixed keyword comparisons (str_eq5 style) at token starts. The C version (src/lexer.c) works on raw uint16_t pointers in linear memory with fixed global stacks, built with wasi-sdk clang -Oz and wasm-opt -Oz; the JS wrapper copies the string into Wasm memory (Buffer utf16le write for sources of 64+ units) and reads results back through exported cursor functions. Its main measured edge is avoiding JIT warm-up: the Wasm code is compiled at init, so the first parse is fast.",
+  "when_to_use": [
+    "You need Node-compatible CommonJS named-export detection (bundlers, ESM/CJS interop shims, dev servers, browsers) with the frozen semantics Node.js core used until its January 2026 switch to merve.",
+    "Cold or one-shot lexing, such as a CLI or a dev server parsing each dependency once: the README run shows 43 ms vs 299 ms for the JS build over 3,635 kB on the first pass.",
+    "Many small modules per process: PR #131 (Node 22.23.3) measured 0.370 us per parse for the Wasm wrapper vs 0.43 us for the JS build on a two-export module.",
+    "Environments that forbid eval or string code generation: since 2.2.0 string literals are decoded without eval, and tests run under --disallow-code-generation-from-strings."
+  ],
+  "when_not_to_use": [
+    "Long-running warm workloads on current Node: the maintainers' own September 2026 numbers (PR #124, Node 24.20.0) put the JS build at 11,094.91 us vs Wasm 11,671.96 us per sweep of the same eight-file corpus, so the README's 1.5x warm advantage no longer holds.",
+    "Inside Node.js core or when you want Node's current behaviour: Node replaced this package with the C++ lexer merve (nodejs/node PR #61456, Jan 2026, shipped in 24.14.0), which reports 26.83% faster cold import-cjs; merve has had its own interop regressions (merve#49).",
+    "You need accurate exports for renamed exports objects, Object.defineProperties, computed or arrow getters, or webpack bundles: it is a heuristic lexer that both over- and under-classifies, and those cases are wontfix because patterns are frozen.",
+    "Browser main threads that cannot compile Wasm synchronously, unless you await init() first; parse() now calls initSync() automatically on first use.",
+    "Code with more than 255 star-export require bindings or nesting deeper than 2,048: see gotchas."
+  ],
+  "integration": {
+    "form": "module (npm package cjs-module-lexer; ESM entry embeds the Wasm as base64, CommonJS entry is plain JavaScript)",
+    "dependencies": "none at runtime; building the Wasm needs docker (ghcr.io/nodejs/wasm-builder v0.0.9) or the pinned wasi-sdk 21.0 and binaryen 116, plus babel and terser for dist",
+    "min_toolchain": "Node.js 18+ (engines field); browsers with WebAssembly support",
+    "platforms": "any JavaScript engine with WebAssembly (wasm32, no SIMD or threads required); pure-JS fallback runs anywhere",
+    "thread_safety": "not documented; both builds keep parser state in module-level globals (one Wasm instance per module load), so it is single-threaded per realm and each worker needs its own import",
+    "drop_in_for_baseline": "partial — same parse() API and results as the JS build, but only the ESM import resolves to the Wasm build (the exports map sends require() to lexer.js), and browsers must await init() before parse()"
+  },
+  "gotchas": [
+    "Benchmark harness (bench/index.mjs) rounds every timed parse to whole milliseconds (Math.round per call) before averaging, so per-file warm figures such as magic-string 0.64 ms vs 0.16 ms and both builds' 0 ms rows are rounding artifacts; the README results date from November 2020 with no Node version or CPU, and the 6.95x cold ratio is JIT warm-up of the JS build, not faster steady-state code.",
+    "Builds diverge on large Babel/TypeScript star-reexport files: the C lexer keeps star-export bindings in a fixed 256-entry array and silently stops recording after 255 ('gracefully overflow'), while lexer.js uses an unbounded map; reexports past that point vanish from the Wasm result (open PR #136, October 2026).",
+    "Before 2.3.0 the Wasm build wrote past its fixed 2,048-entry parser stacks on deeply nested input (issue #81, opened February 2023: 3,069 nested braces gave 'Bus error: 10' and could crash Node on import); fixed only on 2026-09-08 in PR #125, so pin 2.3.0 or later for untrusted input.",
+    "Wasm linear memory grows to about 4 bytes per source character plus heap base on the largest input parsed and is never shrunk."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling does CommonJS export detection; unlike camaro or VectorJSON, whose Wasm cores beat third-party JS parsers, this entry's speedup is against its own JS build and now shows mainly at cold start, so pick it for Node-compatible export detection rather than raw throughput, and look at the C++ merve if you can link native code.",
+  "verified_claims_summary": "The README (first-party, November 2020, Node and CPU not stated, npm run bench) times the same lexer as lexer.js and as -Oz Wasm over eight angular/d3/magic-string/rollup samples (3,635 kB): cold first pass 299 ms vs 43 ms (6.95x, derived from page data), warm average of 25 runs 40.28 ms vs 27.76 ms (1.45x), module load 4 ms vs 10 ms. The maintainers' September 2026 PR #124 on Node 24.20.0 (V8 13.6, CPU not stated) measures 11,094.91 us (JS) vs 11,671.96 us (Wasm) per sweep of a 3,629,072-code-unit corpus, so the warm gap has closed or reversed (the Wasm-only copy speedup in PR #122, 13,921.11 to 10,368.47 us, was measured on a different base and is not combined there).",
+  "status_note": "Actively maintained (2.3.0 on 2026-10-05, perf and safety fixes through 2026-10-10) and MIT-licensed, but no longer used by Node.js core since the January 2026 switch to merve, its 2020 benchmark figures are stale, and the README's 1.5x warm claim is contradicted by the maintainers' own 2026 numbers, which leave the Wasm build's measured advantage mostly at cold start.",
+  "sources_read": [
+    "https://github.com/nodejs/cjs-module-lexer",
+    "https://github.com/nodejs/cjs-module-lexer/commits",
+    "https://github.com/nodejs/cjs-module-lexer/issues",
+    "https://github.com/nodejs/cjs-module-lexer/pull/122",
+    "https://github.com/nodejs/cjs-module-lexer/pull/124",
+    "https://github.com/nodejs/cjs-module-lexer/pull/125",
+    "https://github.com/nodejs/cjs-module-lexer/pull/131",
+    "https://github.com/nodejs/cjs-module-lexer/pull/136",
+    "https://github.com/nodejs/cjs-module-lexer/issues/81",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/README.md",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/package.json",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/Makefile",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/bench/index.mjs",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/build/wasm.js",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/build/Makefile",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/build.js",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/lexer.d.ts",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/lexer.js",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/src/lexer.c",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/src/lexer.js",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/include-wasm/cjs-module-lexer.h",
+    "https://raw.githubusercontent.com/nodejs/cjs-module-lexer/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/nodejs/node/HEAD/lib/internal/modules/esm/translators.js",
+    "https://raw.githubusercontent.com/nodejs/node/HEAD/src/node_cjs_lexer.cc",
+    "https://raw.githubusercontent.com/nodejs/node/HEAD/deps/merve/merve.h",
+    "https://github.com/nodejs/node/commits/main/src/node_cjs_lexer.cc",
+    "https://github.com/nodejs/node/commit/37e4004",
+    "https://github.com/nodejs/node/pull/61456",
+    "https://github.com/nodejs/merve"
+  ],
+  "confidence": 0.8
+}

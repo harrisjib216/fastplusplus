@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/paulmillr/awasm-noble",
+  "one_liner": "WASM-SIMD (optionally multi-threaded) hashes and ciphers from Paul Miller; BLAKE3 about 8-19x single-threaded throughput of @noble/hashes in reported runs.",
+  "what_it_does": "A single npm/JSR package (@awasm/noble, v0.1.4) with SHA-1/2/3, Keccak/SHAKE, BLAKE1/2/3, RIPEMD-160, MD5, HMAC, HKDF, PBKDF2, scrypt, Argon2, ChaCha/Salsa (+Poly1305), AES (GCM, GCM-SIV, SIV, CTR, CBC, CFB, OFB, ECB, KW) and GHASH/POLYVAL/CMAC. The API follows the noble libraries (hash(msg), .create().update().digest(), .chunks(), .parallel(), .async()), with a few deliberate differences: cmac takes (msg, key), stream ciphers use cipher(key, nonce).encrypt/decrypt, and some noble features (kmac, cshake, turboshake, ff1, PRNGs) are absent. The same source compiles to six interchangeable backends (wasm, wasm_threads, js, runtime, plus noble and webcrypto wrappers), and stub.js lets a library ship one function whose backend the application swaps at run time.",
+  "how_it_is_fast": "Algorithms are written in a JS-embedded DSL and compiled by awasm-compiler to WebAssembly with 128-bit SIMD; batchFn lays out state so SIMD lanes process independent blocks: separate messages for SHA/MD/BLAKE2 (multi-buffer hashing, which is why .parallel()/.chunks() matter), and independent 1 KB chunks of one input for BLAKE3, whose Merkle tree is then folded by a parent-compression stack. The wasm_threads backend adds a Web Worker pool driven by Atomics on shared memory instead of postMessage, so BLAKE3 and parallelisable cipher modes (CTR, ECB, ChaCha20, the encryption half of GCM/SIV) split one large input across workers, and other hashes spread multiple inputs. The baseline @noble/hashes is scalar pure JavaScript, so the gain is SIMD plus wasm's predictable 32/64-bit integer code rather than a new algorithm.",
+  "when_to_use": [
+    "Browser or Node/Bun/Deno code that hashes large buffers with BLAKE3 (file checksums, content addressing) and cannot use a native addon: about 1.9 GB/s single-threaded on Apple M4 versus about 0.1 GB/s for @noble/hashes.",
+    "Hashing many independent messages at once (Merkle leaves, dedup indexes) with .parallel() or .chunks(), where multi-buffer SIMD and the worker pool apply even to SHA-256, SHA-512, SHA-3 and BLAKE2.",
+    "Bulk ChaCha20/XChaCha20-Poly1305 or AES-CTR/GCM encryption of megabyte-scale data in the browser where WebCrypto is unavailable, async-only or lacks the mode (XChaCha, GCM-SIV, AES-SIV, KW).",
+    "Libraries that want a noble-compatible API today and an opt-in faster backend later: stub.js plus the noble.js wrapper lets the application decide.",
+    "Pages that already serve COOP/COEP headers (cross-origin isolated) and can afford the worker pool, for the threaded multi-GB/s figures."
+  ],
+  "when_not_to_use": [
+    "Server-side Node for SHA-2/SHA-1/MD5 where node:crypto (OpenSSL) is available: the package's own harness benchmarks against node:crypto but publishes no result, and its single-threaded wasm SHA-256 figure is 553 MB/s on Apple M4.",
+    "Strict CSP environments: the wasm backends need 'wasm-unsafe-eval', and wasm_threads needs Cross-Origin-Opener-Policy: same-origin plus Cross-Origin-Embedder-Policy: require-corp; without them use the js or noble backend and lose the speedup.",
+    "Small messages: at 32 B the reported gain over @noble/hashes is only 3.1-3.75x, the threaded backend is no faster (94 vs 105 MB/s on M4), and blake3-wasm-rs was faster at 32 B on both CPUs.",
+    "Code that must resist cache-timing attacks with AES or GHASH: the AES rounds use T-table lookups (T0..T3 plus S-box tables, lanes fixed at 1) and GHASH uses precomputed tables; wasm has no AES or carry-less-multiply instructions.",
+    "Projects that need audited code or a stable API: version 0.1.x, about 50 commits, no published audit (the noble libraries it wraps are audited; this package is not), and SECURITY.md points to a README Security section that does not exist."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at run time for the wasm/js backends (wasm binaries are embedded as base64 in JS); optional peers @noble/hashes 2.4.0 and @noble/ciphers 2.4.0 (noble.js backend) and @awasm/compiler 0.1.5 (runtime backend)",
+    "min_toolchain": "Node.js >= 22.22.0 (package.json engines); Bun and Deno supported; browsers with WebAssembly SIMD, plus SharedArrayBuffer and Atomics for wasm_threads",
+    "platforms": "any WebAssembly-SIMD runtime (browsers, Node, Bun, Deno, Vercel example included); wasm_threads needs cross-origin isolation in browsers",
+    "thread_safety": "not documented beyond the threaded backend: one shared worker pool (bitmask of up to 31 workers) per process; Deno needs WP.stop() to exit because workers lack unref",
+    "drop_in_for_baseline": "partial: same call shapes as @noble/hashes for hashes (hash(msg), create/update/digest), but import paths differ, async methods are hash.async rather than hashAsync, cmac and stream-cipher signatures differ from @noble/ciphers, and some noble functions (kmac, cshake, turboshake, kt128, ff1, PRNGs) are missing"
+  },
+  "gotchas": [
+    "Correctness history: version 0.1.0 returned wrong BLAKE3 digests, silently, in the wasm and wasm_threads backends for input lengths in [4096k-63, 4096k-2] (62 lengths per 4 KiB band, about 1.5% of sizes) because a SIMD lane mask truncated the last-block length to its low bit (PR #2, fixed in 0.1.1 on 2026-04-20); the js backend and streaming path were unaffected. PR #1 fixed streaming digests ignoring create()'s dkLen. Pin >= 0.1.1 and cross-check against @noble/hashes in tests.",
+    "Provenance of the comparison: the Apple M4 table in UneBaguette/blake3.wasm (the source of the 8-19x figures) was added by awasm-noble's own author in PR #1 there (2026-04-22, 'readme: add awasm-noble entry'), so those numbers are first-party; only the Ryzen 7 5800X table comes from the blake3-wasm-rs author. The table's columns and sizes (32 B, 1 KB, 64 KB, 1 MB, 10 MB; old noble, wasm, threads, blake3-wasm-rs) match awasm-noble's benchmark/internal/hashes.ts, but no run log is published. In the M4 table the blake3-wasm cells at 64 KB (2,004) and 1 MB (1,893) are identical to that column in the earlier Ryzen table, so that column may be partly copied. The measured sizes fall outside the 0.1.0 bug's affected lengths.",
+    "README Speed section is stale relative to its scripts: it says 'input: 32x1mb' and 'blake3 1x100mb' and 'ciphers, input: 1gb', while benchmark/2-parallel.ts uses 48 chunks, a 1x1gb BLAKE3 case and 10 MB cipher inputs; its multi-input hash figures (e.g. sha1 11,413 MB/s, blake3 11,058 MB/s) feed the same 1 MB buffer 48 times (Array(48).fill(data)), so the data stays cache-resident and the numbers are an upper bound for 48 distinct inputs. The M4 figures also predate the 'Improve perf of single-shot hashes' (2026-06-13) and new-compiler (2026-07-20) commits.",
+    "Synchronous by default even with threads; the README does not say how a synchronous threaded call waits on a browser main thread, so test UI responsiveness and use the .async variants for large inputs."
+  ],
+  "pick_this_over_siblings_when": "Pick it over hash-wasm when you need BLAKE3 or AEAD ciphers at multi-GB/s with optional worker threads, multi-input .parallel() hashing, a noble-compatible API with swappable backends, or reproducible wasm built from auditable JS source; hash-wasm is the more established single-threaded wasm hash library and fast-noble-hashes targets SHA-2 against @noble/hashes. For small BLAKE3 inputs in Node, blake3-jit reports wins over a native addon, which awasm-noble does not claim.",
+  "verified_claims_summary": "Only BLAKE3 has a baseline comparison: in the blake3.wasm README (Node.js v24, measured with constant-filled buffers in what appears to be awasm-noble's own comparison harness), awasm-noble's single-threaded wasm backend did 843/1,898/1,943 MB/s at 1 KB/64 KB/1 MB versus 105/102/101 MB/s for pure-JS @noble/hashes on Apple M4 (rows contributed by awasm-noble's author), and 1,729 vs 52 MB/s at 64 KB on a Ryzen 7 5800X (run by the blake3-wasm-rs author); worker-thread figures reach 4.7-6.5 GB/s. awasm-noble's own README gives absolute Apple M4 numbers only (blake3 1,940 MB/s single-threaded, 6-11 GB/s threaded) with no baseline.",
+  "status_note": "Active (last commit 2026-09-12, v0.1.4, 52 stars, MIT, sole maintainer with a strong track record from the audited noble libraries), but pre-1.0, unaudited and with a BLAKE3 wrong-digest bug fixed only in 0.1.1, so pin versions and keep cross-checks; copyable as an npm/JSR dependency.",
+  "sources_read": [
+    "https://github.com/paulmillr/awasm-noble",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/README.md",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/package.json",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/1-hashes-ciphers.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/2-parallel.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/3-fastest.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/internal/hashes.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/internal/noble-hashes.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/benchmark/internal/package.json",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/test/noble-all.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/src/workers.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/src/wasm_threads.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/src/hashes.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/src/modules/hashes.ts",
+    "https://raw.githubusercontent.com/paulmillr/awasm-noble/HEAD/src/modules/ciphers.ts",
+    "https://github.com/paulmillr/awasm-noble/tree/main/src",
+    "https://github.com/paulmillr/awasm-noble/tree/main/src/modules",
+    "https://github.com/paulmillr/awasm-noble/commits/main",
+    "https://github.com/paulmillr/awasm-noble/issues?q=is%3Aissue",
+    "https://github.com/paulmillr/awasm-noble/pulls?q=is%3Apr",
+    "https://github.com/paulmillr/awasm-noble/pull/2",
+    "https://github.com/paulmillr/awasm-compiler",
+    "https://github.com/UneBaguette/blake3.wasm",
+    "https://raw.githubusercontent.com/UneBaguette/blake3.wasm/HEAD/README.md",
+    "https://github.com/UneBaguette/blake3.wasm/commits/master",
+    "https://github.com/UneBaguette/blake3.wasm/commits/master/README.md",
+    "https://github.com/UneBaguette/blake3.wasm/commit/85b27b1",
+    "https://github.com/UneBaguette/blake3.wasm/pull/1",
+    "https://github.com/UneBaguette/blake3.wasm/pull/1/files",
+    "WebSearch: \"awasm\" noble paulmillr wasm benchmark blake3 (snippets of paulmillr.com/awasm announcement: BLAKE3 10.8 GB/s multi-input, 6.3 GB/s single-input, ChaCha20 6.4 GB/s)"
+  ],
+  "confidence": 0.65
+}

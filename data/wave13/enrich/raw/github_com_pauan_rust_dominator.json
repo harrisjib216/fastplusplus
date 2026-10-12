@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/pauan/rust-dominator",
+  "one_liner": "Rust/Wasm DOM library driven by futures-signals, no virtual DOM; about 1.47x faster than React 19.2 hooks in js-framework-benchmark.",
+  "what_it_does": "A declarative UI library for browser apps written in Rust and compiled to WebAssembly: the html! macro builds real DOM nodes, and properties, classes, text and child lists are bound to futures-signals values (Mutable, MutableVec) so state changes patch the DOM directly. It replaces a JavaScript framework such as React rather than wrapping one, so adopting it means writing the UI in Rust with wasm-bindgen and web-sys underneath.",
+  "how_it_is_fast": "There is no virtual DOM or diffing pass: each signal binding is a small future that writes to the one DOM node it owns, and children_signal_vec turns MutableVec change events (VecDiff InsertAt, RemoveAt, Move, Push, Replace) straight into insertBefore and removeChild calls, which is why moving two rows (the suite's swap benchmark) costs 11.9 ms against React's 89.7 ms. Element and attribute names are interned through wasm-bindgen to cut string crossing costs, and the README says the builder API inlines down to raw DOM operations.",
+  "when_to_use": [
+    "You already want a Rust/Wasm front end and need fine-grained updates of large keyed lists (reorders, partial updates, row selection), where it beats React 19.2 hooks by 1.2x to 7.5x per operation in the suite",
+    "Apps whose state is naturally expressed as futures-signals Mutable and MutableVec values shared between Rust logic and the view",
+    "Wasm bundles where a moderate size budget is acceptable: the suite build is 40.1 kB compressed versus React's 51.4 kB, with first paint at 179.6 ms versus 226.6 ms",
+    "Long-lived single-page apps that do not need server-side rendering"
+  ],
+  "when_not_to_use": [
+    "You need the fastest DOM layer: in the same suite run it takes 1.24x the time of vanilla JavaScript, 1.13x Inferno 8.2.2 (the README's 'just as fast as Inferno' does not hold), 1.12x Solid 1.9.3, 1.05x Svelte 5.42.1, 1.17x a hand-written wasm-bindgen entry and 1.10x Silkenweb 0.9.0 (unweighted geometric means, derived from page data)",
+    "Bulk creation: creating 1,000 rows takes 26.5 ms versus React's 23.6 ms and appending 1,000 rows 30.6 ms versus 29.3 ms; clearing removes children one at a time (13.0 ms versus 8.7 ms for vanilla JS)",
+    "Server-side rendering or hydration: not supported, and the maintainer argues in issue #29 that signals make standard SSR unworkable",
+    "Memory-tight pages: ready memory 1.76 MB versus React's 1.19 MB and 2.65 MB versus 1.98 MB after five create/clear cycles in the suite",
+    "Teams that need an actively developed framework: the last release is 0.5.38 (August 2024), with one compatibility commit since (April 2026) and open issues #87 (update web-sys) and #89 (panic in Chrome 147)"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "wasm-bindgen, web-sys, js-sys, wasm-bindgen-futures, futures-signals, futures-util, futures-channel, gloo-events, once_cell, discard, pin-project",
+    "min_toolchain": "Rust 1.80 (rust-version in the current Cargo.toml; the crates.io 0.5.38 release declares none), edition 2018, plus a wasm-bindgen toolchain such as wasm-pack",
+    "platforms": "wasm32 in a browser with a DOM (web-sys); no server-side rendering",
+    "thread_safety": "Single-threaded: built on Rc, RefCell and thread_local state, and signal futures run on the wasm-bindgen-futures local executor",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The suite does not measure current dominator: build-prod is a no-op and the checked-in bundled-dist/accca9b65c226d0a493c.module.wasm embeds the author's cargo registry paths for dominator-0.5.0 (released 2019-06-21), wasm-bindgen-0.2.47 and futures-channel-preview-0.3.0-alpha.16, so the numbers come from a 2019 build that is 38 releases behind 0.5.38",
+    "Signal-driven DOM updates run inside futures spawned with wasm_bindgen_futures::spawn_local, so they are applied when the local executor polls them after Mutable::set returns, not inline with the state change",
+    "style() verifies every property by removing it, setting it and reading it back; if the browser reports an empty value it panics in builds with debug assertions ('style is incorrect') and silently does nothing in release builds; issue #89 reports this panic for style(\"border\", \"none\") in Chrome 147",
+    "Despite the README's 'updates are always O(1)', the suite implementation gives every row its own subscription to the shared selected-row signal, so one selection wakes all 1,000 row closures (still 3.1 ms versus React's 5.4 ms)"
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued Rust/Wasm frameworks it sits mid-pack in the same run: 0.96x the time of Sycamore 0.9.0-beta.2, level with Leptos 0.7.0 (0.996x) and Dioxus 0.7.2 (0.975x), 0.83x the time of Yew 0.23.0 struct components, but 1.10x the time of Silkenweb 0.9.0. Pick it when its signal-first, macro-built API without components or a virtual DOM suits you and you accept a slower release cadence; pick Leptos or Dioxus for SSR, hydration and a larger ecosystem.",
+  "verified_claims_summary": "In krausest/js-framework-benchmark's Chrome 154 run (results.ts, CPU model and Chrome flags not stated), the keyed dominator 0.5.0 entry's median total time averages 0.681x React 19.2 hooks' time over the nine CPU benchmarks (about 1.47x faster, unweighted geometric mean derived from the raw run arrays), but the swap benchmark (11.9 ms vs 89.7 ms) carries most of that: without it the geometric mean is 0.836x. It is slower than React on create 1,000 rows and append, and slower than vanilla JS, Inferno, Solid and Svelte.",
+  "status_note": "Lightly maintained: the last crates.io release is 0.5.38 (2024-08-22) and the repo's last commit, a web-sys compatibility fix, is from 2026-04-07; MIT-licensed, 1.1k stars and about 400k downloads, usable today, but the benchmark entry measures a 2019 build.",
+  "sources_read": [
+    "https://github.com/Pauan/rust-dominator",
+    "https://github.com/Pauan/rust-dominator/commits/master",
+    "https://github.com/Pauan/rust-dominator/issues",
+    "https://github.com/Pauan/rust-dominator/issues/89",
+    "https://github.com/Pauan/rust-dominator/issues/29",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/README.md",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/src/dom.rs",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/src/operations.rs",
+    "https://raw.githubusercontent.com/Pauan/rust-dominator/HEAD/src/bindings.rs",
+    "https://crates.io/api/v1/crates/dominator",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/dominator/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/dominator/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/dominator/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/dominator/src/lib.rs",
+    "https://github.com/krausest/js-framework-benchmark/tree/master/frameworks/keyed/dominator/bundled-dist",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/keyed/dominator/bundled-dist/accca9b65c226d0a493c.module.wasm",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts"
+  ],
+  "confidence": 0.8
+}
