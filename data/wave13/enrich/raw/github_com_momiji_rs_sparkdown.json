@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/momiji-rs/sparkdown",
+  "one_liner": "Zero-dependency Rust CommonMark parser shipped as SIMD WebAssembly; replaces remark-parse and beats JS markdown renderers in Node.",
+  "what_it_does": "Parses all of CommonMark 0.31.2 (652/652 spec examples) to HTML, with GFM and other extensions as opt-in Cargo features, and optionally to an mdast tree that deep-equals mdast-util-from-markdown including positions. The npm package @momiji-rs/sparkdown exposes toHtml/toHtmlSync (pure, /gfm and /full bundles) and a /mdast subpath that is a unified parser plugin, so a unified/remark/rehype pipeline can swap remark-parse for it; the Rust crate exposes to_html / to_html_with and, behind the ast feature, to_mdast.",
+  "how_it_is_fast": "A port of cmark's incremental block algorithm over zero-copy borrowed slices, SIMD byte-set matchers (simdjson-style nibble lookup on NEON/SSE, wasm v128 kernels) that skip plain text to the next significant byte, a fused SIMD HTML escaper, an intrusive first-child/next-sibling node tree and a bump arena. For mdast it builds the tree in wasm and ships it to JS as a compact binary wire format (string-pooled when positions are off) that is read into plain objects without JSON.parse.",
+  "when_to_use": [
+    "unified/remark/rehype pipelines in Node, Bun, Deno or edge runtimes where remark-parse dominates build time and plugins only walk the tree",
+    "Rendering CommonMark or GFM to HTML in JavaScript hosts that would otherwise use markdown-it or marked, with cmark-identical output",
+    "Non-JS hosts (wasmtime, wazero, Workers) that want a self-contained, WASI-free markdown .wasm module with a raw C-ABI",
+    "Native Rust code that wants a dependency-free CommonMark renderer about as fast as pulldown-cmark (0.59 vs 0.68 ms on the 198 KB spec, first-party)"
+  ],
+  "when_not_to_use": [
+    "Native Rust users already on pulldown-cmark who need its event/iterator API or ecosystem: sparkdown's lead there is about 1.15x and its wasm build is slower than native pulldown-cmark",
+    "remark pipelines that rely on syntax-extension plugins hooking micromark (math, MDX and similar): parsing happens in wasm, so only the extensions compiled into sparkdown (GFM, footnotes, frontmatter, directives, definition lists, emoji) are available",
+    "Hosts without WebAssembly SIMD support: the documented wasm build enables +simd128 and +bulk-memory",
+    "Synchronous use on the browser main thread: initSync throws there because synchronous wasm compilation is capped at about 4 KB; use the async init",
+    "Teams that need a maintained, widely reviewed parser: v0.1.0, 3 stars, 145 crates.io downloads (npm about 46k per month per the verifier's registry search), no commits since 2026-06-27"
+  ],
+  "integration": {
+    "form": "crate (rlib + cdylib) + npm module (ESM, wasm base64-inlined, four subpath bundles) + raw .wasm with a C-ABI",
+    "dependencies": "none",
+    "min_toolchain": "Rust 1.95, edition 2024; npm package declares Node >=18",
+    "platforms": "any Rust target (SIMD paths on NEON/SSE, SWAR fallback); wasm32-unknown-unknown with simd128 + bulk-memory for Node, browsers, Deno, Bun and edge runtimes",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — /mdast is a drop-in unified parser plugin for remark-parse (deep-equal on the 652 CommonMark examples including position, per README) but not for micromark syntax extensions; the HTML API is not API-compatible with markdown-it or marked"
+  },
+  "gotchas": [
+    "Harness flaw: the README's JS table (sparkdown wasm 0.90 ms vs markdown-it 4.52 ms and marked 5.20 ms) has no benchmark in the repo; harness/package.json depends on neither markdown-it nor marked, and their versions and options (markdown-it preset, html flag) are not stated, so the 5.0x/5.7x rows cannot be reproduced.",
+    "Harness flaw: harness/nopos_bench.mjs times sparkdown_to_mdast_wire_nopos_opts through an inline-string reader written in the harness (best of 20 batches of 25), while the published npm toMdast({position:false}) calls sparkdown_to_mdast_wire_fast_opts with a string-pooled reader, and the harness wasm is built with ast,wasm while the npm /mdast bundle is ast,full; the README's ~0.9 ms 'best-of-15' row therefore does not come from a script that runs the shipped entry point. The ~80x headline also pairs the no-position tree with remark, which always builds positions; like-for-like it is ~1.9 vs ~73 ms (~38x, derived from page data).",
+    "Only sparkdown vs pulldown-cmark is benchmarked in-repo (benches/vs_pulldown.rs, criterion); the rushdown, comrak, markdown-rs and cmark rows have no harness, cmark was compared CLI-to-CLI on a 16 MB document, and the wasm rows (measured in Node) sit in the same table as native in-process times.",
+    "Output is not cmark-identical in every case: the README lists fuzz-found differences (native to_html keeps a trailing tab at the end of a block where cmark strips it; mdast value of indented code with trailing blank lines keeps one fewer newline than remark; a nested blockquote closed by '>\\t' over-extends by a line)."
+  ],
+  "pick_this_over_siblings_when": "Against markdown-wasm and md4w (md4c compiled to wasm, also beating markdown-it), pick sparkdown when you need an mdast tree for the unified/remark ecosystem or GFM/extension bundles behind one API; for plain HTML rendering the three have not been measured on the same run, so md4c-based packages remain the more established choice.",
+  "verified_claims_summary": "First-party, one Apple Mac Studio (chip not stated), 198 KB CommonMark spec: native sparkdown renders HTML in 0.59 ms against pulldown-cmark's 0.68 ms (criterion, in-repo), the wasm build in 0.90-0.93 ms in Node against markdown-it 4.52 ms and marked 5.20 ms (no in-repo harness), and the wasm mdast path builds a fully materialised tree in ~1.9 ms with positions against ~73 ms for mdast-util-from-markdown (~38x; ~0.9 ms without positions).",
+  "status_note": "MIT, zero dependencies and small, but a two-week burst of work (0.0.1 to 0.1.0 between 2026-06-24 and 2026-06-27) with no commits since and no open issues; treat it as an unproven young release rather than an actively maintained project.",
+  "sources_read": [
+    "https://github.com/momiji-rs/sparkdown",
+    "https://github.com/momiji-rs/sparkdown/commits/main",
+    "https://github.com/momiji-rs/sparkdown/issues",
+    "https://github.com/momiji-rs/sparkdown/tree/main/harness",
+    "https://github.com/momiji-rs/sparkdown/tree/main/npm",
+    "https://github.com/momiji-rs/sparkdown/tree/main/benches",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/README.md",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/benches/vs_pulldown.rs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/README.md",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/package.json",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/nopos_bench.mjs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/via_mdast_bench.mjs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/e2e_bench.mjs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/harness/wasm_boundary.mjs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/npm/package.json",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/npm/README.md",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/npm/sparkdown.mjs",
+    "https://raw.githubusercontent.com/momiji-rs/sparkdown/HEAD/npm/mdast.mjs",
+    "https://crates.io/api/v1/crates/sparkdown"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/minio/md5-simd",
+  "one_liner": "Go package computing 8 (AVX2) or 16 (AVX-512) independent MD5 streams per core; 3-8x crypto/md5 aggregate throughput.",
+  "what_it_does": "A Server multiplexes many concurrent MD5 hashes onto SIMD lanes: you create one Server, then call server.NewHash() per stream and get a Hasher that implements hash.Hash plus Close(). Writes are copied into the server's 32 KB buffers and scheduled by a single server goroutine that runs up to 16 streams per round. It does not make one hash faster; it lowers total CPU when a process hashes many large objects at once (MinIO's S3 ETags; minio-go v7 depends on it directly).",
+  "how_it_is_fast": "Multi-buffer (multi-lane) SIMD: each 32-bit vector lane carries a separate MD5 state, so the serial dependency chain of one MD5 is replaced by 8 or 16 independent chains per instruction. Message words are loaded across lanes with VPGATHERDD using 32-bit offsets from one shared server buffer (masked per lane); the AVX-512 kernel also keeps intermediate words in the upper 16 ZMM registers, uses VPROLD for rotates and VPTERNLOGD to fuse the round functions. With 1-2 active streams it switches to an avo-generated scalar kernel.",
+  "when_to_use": [
+    "A Go server on x86-64 that hashes 16 or more large streams at once (object storage uploads, ETag computation, bulk checksumming) and is CPU-bound on MD5.",
+    "Objects of tens of KB and up, written in multiples of 64 bytes and ideally 32 KB (wrap writers in bufio.NewWriterSize(h, 32<<10) otherwise).",
+    "CPUs with AVX-512F and AVX-512DQ (16 lanes per core); AVX2-only CPUs still get 8 lanes per core using up to two goroutines per server round.",
+    "When MD5 output must stay bit-identical to crypto/md5 (it computes standard MD5, not a tree hash)."
+  ],
+  "when_not_to_use": [
+    "Single-stream or low-concurrency hashing: the README says one hash on a server runs at about half the throughput, and with 1-2 active streams it falls back to scalar code plus channel and copy overhead.",
+    "Small objects of a few KB: the README itself recommends crypto/md5 there.",
+    "Non-amd64 targets (arm64, riscv64, s390x) or builds with the noasm, appengine or non-gc tags: it silently becomes a crypto/md5 wrapper.",
+    "Long-lived servers that create and close hashers continuously, unless you accept the open lifecycle issues: closed clients leave entries in the server's digest map and issue #35 (throughput collapsing as hashers are created, open since 2023) has no upstream fix.",
+    "When you can change the algorithm: BLAKE3 or other modern hashes with SIMD give single-stream speed too."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/klauspost/cpuid/v2 (runtime CPU feature detection)",
+    "min_toolchain": "go.mod declares go 1.14; gc compiler only (Go assembly, build tags !noasm,!appengine,gc)",
+    "platforms": "amd64 with AVX2 (8 lanes) or AVX-512F+AVX-512DQ (16 lanes); everything else falls back to crypto/md5",
+    "thread_safety": "Server is meant to be shared by many goroutines (NewHash uses atomics and channels); each Hasher is a hash.Hash for one goroutine, and Hashers and the Server must be Closed",
+    "drop_in_for_baseline": "partial: Hashers satisfy hash.Hash, but they must come from a Server and be Closed, and the speedup appears only when many hashers write concurrently"
+  },
+  "gotchas": [
+    "The README benchmark tables were committed on 2020-04-28 (commit 4ef09e8, 'Numbers from final performance measurements'), before issue #12 ('Write operations keeps a reference to data after they return', a data race) was fixed by PR #14 on 2020-05-07. The fix made Write copy caller data into server buffers; PR #14's own runs showed BenchmarkAvx2Parallel dropping to 0.51-0.67x with the first version of the fix (32-core box), later commits clawed back 'most of the lost performance for single server', and the c5.xlarge tables were never re-measured. The AVX-512 loader was also rewritten on 2020-05-08 (32-bit offsets instead of the 64-bit VPGATHERQD pointers the README still describes).",
+    "Hasher lifecycle: in the server loop, a closed client's channel removes it from the client list but never deletes its s.digests entry (only a Reset does), so a long-lived server grows one map entry per closed hasher; un-closed hashers stay registered and each round's fill loop iterates over all registered clients. A maintained fork (soulteary/otterio-kits commit fff98c7, 2026-10-09) patches digest-state release, buffer starvation when writers hold all 48 shared buffers without waking the scheduler, and Close blocking after server exit; upstream has none of this.",
+    "Issue #38 suspects BenchmarkAvx2Parallel's b.SetParallelism((GOMAXPROCS+1)/2) inflates AVX2 results; in Go's testing package each sub-benchmark's runN resets parallelism to 1 and b.Run does not copy it, so that call has no effect on the b.Run sub-benchmarks and AVX2 and AVX-512 both run GOMAXPROCS servers.",
+    "The README's single-thread figures (BenchmarkBlock16 8228.88 MB/s, Block8 4144.80 MB/s vs CryptoMd5 687.66 MB/s) time the bare block function on the same 64 bytes in L1, with no copy, padding or finalization, against a full crypto/md5 Write+Sum; they are an upper bound, not an end-to-end ratio."
+  ],
+  "pick_this_over_siblings_when": "Pick it over gocrack's md5x8 kernel (password-candidate cracking) when you need a general hash.Hash API for many independent Go streams with arbitrary lengths, and over animetosho/md5-optimisation (a faster single-stream scalar MD5 in C/asm) when your load is many concurrent streams rather than one; if the hash is not fixed to MD5, lukechampine/blake3 or zeebo/blake3 are faster per stream.",
+  "verified_claims_summary": "First-party README benchcmp of BenchmarkParallel with GOMAXPROCS 4 on an AWS c5.xlarge (Xeon Platinum 8124M, 3.0 GHz), Go version unstated: crypto/md5 (then amd64 scalar assembly, one stream per goroutine) about 2.2 GB/s aggregate versus AVX2 7.4-9.0 GB/s (3.3-4.1x) and AVX-512 11.6-17.3 GB/s (5.2-7.9x) with 16 hashes per server per goroutine, block sizes 32 KB to 8 MB. Those numbers were taken on 2020-04-28 code that did not yet copy caller data (the zero-copy write was a data race fixed a week later at a measured throughput cost), so current-code speedups are not documented.",
+  "status_note": "Stale (last upstream commit 2025-04-02, open lifecycle issues #35 and #38) but Apache-2.0 plus BSD-3-Clause for Go-derived files, small, and still a direct dependency of minio-go (v1.1.2); vendor it with the fork's lifecycle fixes in mind and re-benchmark on your own CPU.",
+  "sources_read": [
+    "https://github.com/minio/md5-simd",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/go.mod",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5-server_amd64.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5-server_fallback.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5-digest_amd64.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/block_amd64.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5-util_amd64.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5_test.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5_amd64_test.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/block16_amd64_test.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5-util_amd64_test.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/block16_amd64.s",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/block8_amd64.s",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5block_amd64.go",
+    "https://raw.githubusercontent.com/minio/md5-simd/HEAD/md5block_amd64.s",
+    "https://github.com/minio/md5-simd/issues?q=is%3Aissue",
+    "https://github.com/minio/md5-simd/issues/38",
+    "https://github.com/minio/md5-simd/issues/35",
+    "https://github.com/minio/md5-simd/issues/33",
+    "https://github.com/minio/md5-simd/issues/12",
+    "https://github.com/minio/md5-simd/pull/14",
+    "https://github.com/minio/md5-simd/commits/master",
+    "https://github.com/minio/md5-simd/commits/master/README.md",
+    "https://github.com/minio/md5-simd/commit/4ef09e8",
+    "https://github.com/soulteary/otterio-kits/commits",
+    "https://github.com/soulteary/otterio-kits/commit/fff98c71b180dd41a2e5fd994927349cbf217d53",
+    "https://raw.githubusercontent.com/golang/go/master/src/testing/benchmark.go",
+    "https://raw.githubusercontent.com/golang/go/release-branch.go1.14/src/testing/benchmark.go",
+    "https://raw.githubusercontent.com/golang/go/master/src/crypto/md5/md5block_decl.go",
+    "https://raw.githubusercontent.com/minio/minio/HEAD/go.mod",
+    "https://raw.githubusercontent.com/minio/minio-go/HEAD/go.mod"
+  ],
+  "confidence": 0.8
+}

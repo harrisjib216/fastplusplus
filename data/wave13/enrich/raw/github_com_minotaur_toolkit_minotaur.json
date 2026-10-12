@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/minotaur-toolkit/minotaur",
+  "one_liner": "LLVM IR superoptimizer pass that synthesizes cheaper SIMD/scalar code; 1-7% faster than clang -O3 on GMP, libYUV, SPEC.",
+  "what_it_does": "Minotaur is an LLVM pass plugin (online.so) that runs after the vectorizers, cuts small loop-free DAGs ending at each SSA value out of a function, and searches for a cheaper, formally verified replacement. It is used through opt -load-pass-plugin, or through the minotaur-cc / minotaur-c++ wrappers around a patched clang with ENABLE_MINOTAUR=ON. Results are cached in Redis so later builds reuse them, and an offline mode extracts cuts during the build and runs synthesis in parallel with cache-infer.",
+  "how_it_is_fast": "Enumerative program synthesis with symbolic constants over LLVM IR plus 165 x86-64 SIMD intrinsics (pavg, pmadd.wd, psrli and so on) whose semantics the authors added to Alive2; each candidate is checked for refinement with Alive2 and Z3. Candidates are lowered to x86-64 and ranked by LLVM-MCA uOp counts, and a rewrite is applied only if it is cheaper than the original cut. Typical wins collapse zext/op/trunc chains into a narrower intrinsic, fold two pmadd.wd into one, or replace open-coded idioms (an 8-lane popcount) with a single intrinsic.",
+  "when_to_use": [
+    "Compiler engineers looking for missed LLVM peephole optimizations in vectorized or intrinsic-heavy x86-64 code; the authors reported several of its findings upstream and five were implemented.",
+    "Portable C/C++ kernels built with clang -O3 -march=native for AVX2 or AVX-512 machines where a few percent matters and builds can be done once with a warm cache (image-processing loops like libYUV, bignum C code like GMP's generic mpn).",
+    "Build farms that can run a long offline synthesis pass (cache-infer, parallel) and then ship builds that reuse the Redis cache at near-normal compile speed.",
+    "Research on verified superoptimization, where its cut extractor, Alive2 intrinsic semantics and cache are reusable."
+  ],
+  "when_not_to_use": [
+    "Everyday builds with a cold cache: per the author's evaluation, SPEC CPU 2017 took 2,337 minutes to build versus 3 for plain clang on 20 cores, libYUV 2,196 versus 1, GMP 440 versus 1.",
+    "Code that is already hand-tuned in assembly (GMP's production mpn kernels) or not LLVM IR at all; the GMP gain was measured on GMP's portable C build.",
+    "Production toolchains that need a pinned, released compiler: it requires LLVM main (unpinned shallow clone) patched and rebuilt with RTTI and exceptions, Alive2 at HEAD, Z3 4.15.4 and a running Redis server, and an LLVM 18 build fails (issue #36).",
+    "Safety-critical builds until open soundness and crash reports are resolved: issue #42 (2026-04-25, open) shows the paper's own libYUV Example 3 rewrite rejected by Alive2 as 'Target is more poisonous than source', and six crash issues remain open (#4, #6, #8, #9, #13, #18).",
+    "Non-x86 targets: the intrinsic semantics and the LLVM-MCA cost check are x86-64 only."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "patched LLVM main with clang (llvm-main-minotaur.patch, RTTI and EH enabled, shared libs), Alive2, Z3 4.15.4, Redis server and hiredis, re2c, gtest, Perl (compiler wrapper)",
+    "min_toolchain": "C++20 (CMake 3.14+, README names gcc-10/g++-10); LLVM main as cloned by the current Dockerfile (an October 2025 image used an llvmorg-20.1.8-patched branch); an LLVM 18 build fails (issue #36)",
+    "platforms": "Builds on Linux (Ubuntu 24.04 Dockerfile) and macOS (brew deps); optimizes code for x86-64 targets with AVX2 or AVX-512",
+    "thread_safety": "not documented; online synthesis runs cuts one after another, offline cache-infer runs synthesis jobs in parallel against the shared Redis cache",
+    "drop_in_for_baseline": "partial: minotaur-cc / minotaur-c++ accept normal clang options, but they invoke the patched clang, need ENABLE_MINOTAUR set and a Redis server on 127.0.0.1:6379 (default port), and a Redis error aborts compilation"
+  },
+  "gotchas": [
+    "Cached rewrites are trusted: pass/online.cpp keys Redis by the printed IR text of the cut and, on a hit, parses and applies the stored rewrite without re-running Alive2; the Minotaur/Alive2 version is not part of the key, so a cache filled by an older build (before the January 2026 poison and NaN fixes in constant synthesis) or by anyone who can write to the network-accessible Redis is applied as is.",
+    "The repo's defaults differ from the evaluated configuration: pass/online.cpp sets a 180 s SMT query timeout and 900 s per slice (a January 2026 commit is titled 'increase timeouts'), while the evaluation used 1 minute per Z3 query and 5 minutes per instruction, so compile time and the set of optimizations found will not match the paper.",
+    "The LLVM patch is not just a hook: it comments out module-ID and basic-block-predecessor printing in AsmWriter.cpp (for stable cache keys), so every tool built from that LLVM prints slightly different textual IR.",
+    "Offline mode records every extracted cut as '<no-sol>'; compiling again before cache-infer has run, or after a synthesis timeout, silently applies nothing for those cuts unless -minotaur-force-infer is passed."
+  ],
+  "pick_this_over_siblings_when": "Pick it over STOKE when you want an LLVM pass that works on whole C/C++ builds and SIMD intrinsics with every rewrite verified by Alive2, rather than stochastic search over small x86-64 binary kernels; pick SLOTHY instead for scheduling hand-written Arm/RISC-V assembly, and K2 for BPF programs.",
+  "verified_claims_summary": "The author's thesis chapter (zhengyang92/thesis, minotaur/evaluation.tex; it matches the OOPSLA 2024 paper's abstract numbers) compares LLVM 18 at -O3 -march=native with and without Minotaur, one benchmark core, turbo/boost and SMT disabled, on a Xeon Gold 6210U (Cascade Lake, 2.5 GHz) and a Ryzen 9 5950X (Zen 3, 3.4 GHz): GMPbench on GMP 6.2.1's C build geomean 1.073x Intel / 1.065x AMD (one benchmark slower on AMD), libYUV performance tests 1.022x / 1.029x (on Intel 2,312 of 2,532 faster, 148 slower, best 1.64x), and SPEC CPU 2017 speed C/C++ subset mean 1.5% / 1.2%. The evaluation scripts and the Minotaur commit used are not published in the repo.",
+  "status_note": "Active research code (last commits 2026-01-07, single main author), MIT-licensed, but heavy to build against an unpinned LLVM main and best treated as a compiler-research tool, not a production compiler pass.",
+  "sources_read": [
+    "https://github.com/minotaur-toolkit/minotaur",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/README.md",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/LICENSE",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/CMakeLists.txt",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/Dockerfile",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/llvm-main-minotaur.patch",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/pass/online.cpp",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/scripts/minotaur-cc.in",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/lib/utils.cpp",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/include/utils.h",
+    "https://raw.githubusercontent.com/minotaur-toolkit/minotaur/dev/lib/config.cpp",
+    "https://github.com/minotaur-toolkit/minotaur/issues?q=is%3Aissue",
+    "https://github.com/minotaur-toolkit/minotaur/issues/42",
+    "https://github.com/minotaur-toolkit/minotaur/issues/24",
+    "https://github.com/minotaur-toolkit/minotaur/issues/36",
+    "https://github.com/minotaur-toolkit/minotaur/issues/37",
+    "https://github.com/minotaur-toolkit/minotaur/commits/dev",
+    "https://github.com/zhengyang92?tab=repositories",
+    "https://github.com/zhengyang92/thesis",
+    "https://github.com/zhengyang92/thesis/tree/main/minotaur",
+    "https://raw.githubusercontent.com/zhengyang92/thesis/main/minotaur/evaluation.tex",
+    "https://raw.githubusercontent.com/zhengyang92/thesis/main/minotaur/intro.tex",
+    "https://raw.githubusercontent.com/zhengyang92/thesis/main/minotaur/synthesis.tex",
+    "https://raw.githubusercontent.com/zhengyang92/thesis/main/minotaur/conclusion.tex",
+    "https://github.com/zhengyang92/SPEC-configurations",
+    "https://arxiv.org/abs/2306.00229 (blocked: ENOTFOUND)",
+    "https://www-new.llvm.org/devmtg/2022-11/slides/TechTalk12-Minotaur.pdf (blocked: ENOTFOUND)",
+    "https://cdnjs.deepai.org/publication/minotaur-a-simd-oriented-synthesizing-superoptimizer (blocked: ENOTFOUND)"
+  ],
+  "confidence": 0.8
+}

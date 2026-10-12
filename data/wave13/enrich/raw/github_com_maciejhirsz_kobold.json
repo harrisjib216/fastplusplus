@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/maciejhirsz/kobold",
+  "one_liner": "Rust/Wasm UI framework with compile-time DOM templates; in js-framework-benchmark, non-keyed, near vanilla-JS speed and 0.53x keyed React's time.",
+  "what_it_does": "Kobold is a Rust library for browser UIs compiled to wasm32. Components are functions annotated `#[component]` that return `impl View`, written with a `view!` macro in HTML-like syntax. State lives in `stateful(init, |hook| ...)` with `bind!` closures (master replaces `bind!` with `event!`), and the app is mounted with `kobold::start`. It is a different language and API from React, with no JSX, no SSR and no keyed lists, so it is not a drop-in replacement.",
+  "how_it_is_fast": "There is no virtual DOM. The `view!` macro compiles each template's static elements into a generated JavaScript constructor imported through wasm-bindgen, so one benchmark row is a single JS call that creates the tr and its four tds; only the dynamic parts are passed in (class string, id and label text nodes, two handlers). Each dynamic expression keeps a typed memo: the value for integers, a String copy for &str, version plus pointer for `VString`, or a pointer for `Ref`. An update writes `textContent` only when the memo differs. Event listeners do not allocate: a JS closure calls the exported `koboldCallback` with pointers to the Rust closure and its Hook. Lists diff by position (non-keyed) over a paged `PageList` that never reallocates, and the small runtime yields a 9.7 kB compressed bundle.",
+  "when_to_use": [
+    "Rust frontends where download size matters most: in the suite the bundle is 9.7 kB compressed, the smallest of the 23 Rust entries (next is the hand-written wasm-bindgen entry at 14.5 kB; Leptos 48.8, Dioxus 114.9). First paint is 70.8 ms vs 226.6 ms for React hooks.",
+    "Tables or lists updated in place by position, where non-keyed DOM reuse is acceptable. Create 1,000, partial update, select, swap and append are all within about 10% of vanillajs-non-keyed.",
+    "Small widgets embedded in an existing page, where compile-time checks of templates and component props (rust-analyzer can rename props inside `view!`) are worth more than an ecosystem.",
+    "Apps with simple local state, where re-running a component and doing a typed diff on every change is cheap."
+  ],
+  "when_not_to_use": [
+    "When list items need stable identity (focus, animations, per-item component state): Kobold diffs lists by position only, and the suite has no keyed Kobold entry. Remove one row is 15.9 ms against 11.3 ms for React hooks.",
+    "Lists of `VString` labels that are rebuilt: an unfixed diff bug can leave stale text on screen (see gotchas).",
+    "When you need SSR, hydration, async data or a maintained ecosystem. On SSR the maintainer said it was 'not on the roadmap' and 'a major undertaking (like v2.0)' (issue #48), and the router exists only on unreleased master. The 1.0 tracking issue (#74) carries a 2024 edit that the release plan 'aged like milk'.",
+    "Pages with a strict Content-Security-Policy: the suite flags the implementation with note 1139, and events depend on a global `window.koboldCallback` set by an inline module script.",
+    "Memory-tight pages: ready memory is 1.72 MB and run memory 3.07 MB, against 0.56 and 1.77 MB for vanillajs-non-keyed. The wasm runtime has a fixed cost."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "wasm-bindgen, wasm-bindgen-futures, web-sys, itoa, console_error_panic_hook, kobold_macros; optional rlsf (TLSF allocator) and serde; build for wasm32-unknown-unknown with trunk or wasm-pack",
+    "min_toolchain": "No rust-version is declared; edition 2021. The suite's bundle was built with rustc 1.69.0, wasm-bindgen 0.2.86 and walrus 0.19.0 (read from the shipped wasm's producers section).",
+    "platforms": "Browsers with WebAssembly (wasm32-unknown-unknown); there is no native or server renderer",
+    "thread_safety": "Single-threaded on the browser main thread. State sits in a cell that throws 'Cyclic state borrowing' on re-entrant borrow. Nothing else is documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness bug behind the replace-all-rows number. The `VString` diff memo is `(ver << 32) | heap pointer`. When 'run' replaces 1,000 existing rows, the old labels are freed and the new ones (version 0) often land at the same addresses, so those rows count as unchanged and keep their old label text. I ran the suite's shipped wasm (bundled-dist/js-framework-benchmark-kobold_bg.wasm) in Node against a fake DOM I wrote; the downloaded JS glue was not executed. After the 5 warmup runs, the measured sixth 'run' left 5 to 185 of 1,000 labels stale across 9 RNG seeds, and the first row was stale every time. The suite's replace check reads only the first row's id cell, so the run passes. The 9.5 ms replace row therefore skips some label writes; the effect on the nine-benchmark geometric mean is about 1% at most. `into_memo` is unchanged on master. Create, update every 10th row, swap, remove, select, append and create 10,000 all rendered correctly in the same simulation.",
+    "The benchmark bundle is prebuilt from crates.io 0.9.1 (crate VCS sha 6ffab77, May 2023) and `build-prod` is a no-op. The documented rebuild path, `build-prod-force`, calls a nonexistent `dep:rs` script (the real name is `deps:rs`), so it fails at its first step.",
+    "Events need a global `koboldCallback`. Trunk users must add the pattern_script from the docs; without it, 0.9.1 only logs a console.error and clicks do nothing. Conditional `view!` branches need `#[component(auto_branch)]`, otherwise `if`/`match` arms are different types and do not compile.",
+    "The record says the hardware is not stated, but the suite's App.tsx gives it for this snapshot: MacBook Pro 14, Apple M4 (14/20 cores, 48 GB), OSX 26.6.2, Chrome 154.0.8037.98 arm64. App.tsx also labels the results a 'Development snapshot' that 'may mix browser versions or run counts'."
+  ],
+  "pick_this_over_siblings_when": "Delorean is the only other non-keyed Rust entry. It takes 0.977x Kobold's time but ships 36.1 kB compressed against Kobold's 9.7 kB (derived from page data). Against keyed Leptos, Sycamore and Dioxus, Kobold's bundle is 4.9-12x smaller and its first paint 3.0-7.6x earlier (derived from page data), but it has no keyed lists, no SSR and no maintenance. Pick it for tiny embedded widgets where bundle size dominates; otherwise use Leptos or Sycamore.",
+  "verified_claims_summary": "I reproduced these from results.ts in krausest/js-framework-benchmark's Chrome 154.0.8037.98 development snapshot (MacBook Pro 14, Apple M4, OSX 26.6.2 per App.tsx). Taking the unweighted geometric mean of the nine median total durations, kobold-v0.9.1-non-keyed needs 0.534x the time of keyed react-hooks-v19.2.0, a cross-mode comparison, and 0.967x Inferno non-keyed and 1.033x vanillajs-non-keyed, ranking 8th of 67 non-keyed entries. The gain over React comes from swap rows (7.9 vs 89.7 ms), replace all rows (9.5 vs 30.2 ms, helped both by non-keyed reuse and by the skipped stale labels) and create 10,000 rows (240.1 vs 401.0 ms).",
+  "status_note": "Stale: last commit 2024-05-05, last crates.io release 0.9.1 on 2023-05-26, and master's 0.10.0 was never published; 398 stars, 6 open issues. It is MPL-2.0 (file-level copyleft) and small enough to vendor, but it carries an unfixed VString stale-text bug that the suite's replace-all-rows check does not catch.",
+  "sources_read": [
+    "https://github.com/maciejhirsz/kobold",
+    "https://github.com/maciejhirsz/kobold/commits/master",
+    "https://github.com/maciejhirsz/kobold/tree/master/crates/kobold/src",
+    "https://github.com/maciejhirsz/kobold/issues?q=is%3Aissue",
+    "https://github.com/maciejhirsz/kobold/issues/48",
+    "https://github.com/maciejhirsz/kobold/issues/74",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/README.md",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/Cargo.toml",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/lib.rs",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/diff.rs",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/diff/vstring.rs",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/list.rs",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/stateful.rs",
+    "https://raw.githubusercontent.com/maciejhirsz/kobold/HEAD/crates/kobold/src/value.rs",
+    "https://crates.io/api/v1/crates/kobold",
+    "https://static.crates.io/crates/kobold/kobold-0.9.1.crate",
+    "https://github.com/krausest/js-framework-benchmark/tree/master/frameworks/non-keyed/kobold/bundled-dist",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/Cargo.toml",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/package.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/README.md",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/src/lib.rs",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/bundled-dist/index.html",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/bundled-dist/js-framework-benchmark-kobold.js",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/frameworks/non-keyed/kobold/bundled-dist/js-framework-benchmark-kobold_bg.wasm",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/results.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/App.tsx",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/releases.json",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts-results/src/helpers/issues.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts/src/benchmarksCommon.ts",
+    "https://raw.githubusercontent.com/krausest/js-framework-benchmark/HEAD/webdriver-ts/src/benchmarksPuppeteer.ts",
+    "https://github.com/krausest/js-framework-benchmark/tree/master/webdriver-ts/src"
+  ],
+  "confidence": 0.8
+}

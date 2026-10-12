@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/mengyao/complete-striped-smith-waterman-library",
+  "one_liner": "SSE2 striped Smith-Waterman C library (Farrar method) returning score, positions and CIGAR; claims ~50x over scalar SW.",
+  "what_it_does": "Local (Smith-Waterman) alignment with affine gaps and an integer substitution matrix, for DNA or protein. The C API is two calls: ssw_init builds a query profile from a numerically encoded read and an n x n matrix, then ssw_align scans an encoded reference and returns an s_align struct with the best score, a heuristic second-best score, 0-based begin/end positions and a BAM-style CIGAR (positions and CIGAR are optional through a flag). A C++ wrapper (StripedSmithWaterman::Aligner with SetReferenceSequence/Align and a Filter), a Python ctypes wrapper, a Java JNI wrapper, an R package and the ssw_test command-line tool (FASTA/FASTQ in, SAM or BLAST-like out) sit on top; it is not a drop-in for any existing API.",
+  "how_it_is_fast": "Farrar's striped Smith-Waterman (2007): the query is split into interleaved segments so one 128-bit SSE2 register updates 16 cells (unsigned saturating 8-bit lanes with a bias) or 8 cells (16-bit lanes) per instruction, with a precomputed query profile per reference residue and a lazy-F correction loop (taken from SWPS3) that usually exits after one pass. The 8-bit kernel runs first and the whole scan is redone in 16-bit lanes only when the score reaches 255 minus the bias. The begin position comes from a second striped pass over the reversed read and reference prefix that stops once the best score is reached, and the CIGAR from a scalar banded SW over just the aligned window with a doubling band, so the full-reference scan needs memory linear in read length.",
+  "when_to_use": [
+    "Aligning many short reads (tens to a few hundred bp) against a reference or contig when you need the exact local score plus position and CIGAR, e.g. a local realignment step; the paper abstract says MOSAIK, SCISSORS, TANGRAM and RZMBLR swapped in SSW for their ordinary or banded SW modules.",
+    "Protein-vs-protein local alignment with BLOSUM/PAM matrices (ssw_test -p, Blosum50 default) at single-core scale.",
+    "You want two MIT files (ssw.c, ssw.h) to vendor into a C or C++ project, with SSE2 as the only ISA requirement on x86-64 and NEON via the bundled sse2neon.h on ARM.",
+    "Scoring with small penalties (e.g. match 1, mismatch -3) so most scores fit under the 8-bit ceiling and the 16-lane kernel never falls back to 16-bit lanes.",
+    "You need a cheap second-best score (the ZS tag) for mapping-quality style uniqueness checks."
+  ],
+  "when_not_to_use": [
+    "End-to-end alignment of long sequences (genomes, contigs of tens of kb): 16-bit scores saturate at 32767 with no warning (open issue #94), the CIGAR traceback buffer grows with band width x query length, and open issue #90 reports a segfault aligning a 110,456 bp contig with -c.",
+    "You want AVX2/AVX-512 width or inter-sequence (batch) vectorization: SSW is 128-bit SSE2 only (issue #89 'avx support' is open); parasail (jeffdaily/parasail, not yet catalogued) offers more ISAs and vectorization strategies.",
+    "Global or semi-global alignment, plain edit distance or non-affine gap models: SSW does local SW only.",
+    "Custom matrices that include a stop-codon (*) row: open issue #96 reports a '*' match scored +4 instead of the matrix's +1.",
+    "Scoring schemes where the mismatch penalty is far larger than gap open: issue #93 returned CIGARs whose rescored value did not match the reported score until the 'cigar fixed' commit of 2025-11-17; check s_align.flag (1 = banded traceback failed, 2 = path may miss a part)."
+  ],
+  "integration": {
+    "form": "source-drop (ssw.c + ssw.h, optional ssw_cpp.cpp/ssw_cpp.h); the Makefile also builds libssw.so, and Debian packages it as libssw",
+    "dependencies": "none for the library (emmintrin.h, or the bundled sse2neon.h when __ARM_NEON is defined); ssw_test needs zlib",
+    "min_toolchain": "C99 (ssw.c declares variables in for loops); the C++ wrapper uses only C++98 features (std::vector, std::string, ostringstream)",
+    "platforms": "x86-64 with SSE2; ARM/aarch64 with NEON through sse2neon.h",
+    "thread_safety": "Not documented for the C API; ssw.c holds no mutable global state (only the const encoded_ops table) and ssw_align takes a const profile, so separate calls look reentrant. The README calls the Java Aligner thread-safe. Issue #66 (core dumps under std::async) was attributed to caller misuse but its backtrace pointed into banded_sw and no root cause was confirmed.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Gap cost convention: a gap of length L costs gapO + (L - 1) x gapE (the README says the gap open penalty alone is applied on opening, and cigar_alignment_score in ssw.c uses that formula), unlike tools that charge open + extend for the first base; convert penalties before comparing scores with other aligners.",
+    "ssw_init keeps the read and matrix pointers without copying them, so both must outlive the profile; with score_size 0 a score that reaches 255 makes ssw_align print a message and return NULL; the library also writes warnings to stderr (maskLen < 15, partial traceback), and score2 is heuristic (column maxima outside a masked window) and only returned when maskLen >= 15.",
+    "Code reading: banded_sw sizes its traceback buffer with the int32 product width_d * readLen * 3, which overflows once (2 x band + 1) x query length passes about 7.2e8 (a 110 kb query with a band over about 3,240), consistent with but not proven as the cause of open segfault #90; with the full-band retry added for issue #93 the buffer becomes about 3 x (2 x length) x length bytes, roughly 5.4 GB for two 30 kb sequences.",
+    "The lazy-F loop is 'revised to disallow adjacent insertion and then deletion' (ssw.c comment), and the __m128i work buffers come from plain malloc/calloc but are read with aligned _mm_load_si128, which relies on the allocator returning 16-byte-aligned blocks (true for glibc x86-64 and macOS, not guaranteed on every 32-bit platform or custom allocator)."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are generic SIMD kernels; the closest in kind is Quickenshtein, which computes only Levenshtein distance in .NET. Pick SSW when you need affine-gap local alignment with a substitution matrix and a CIGAR from C or C++; EVE or VCL would only give you the vector primitives to write such a kernel yourself.",
+  "verified_claims_summary": "The '~50 times faster than an ordinary Smith-Waterman' headline has no baseline program, data, compiler or CPU behind it in the repo; the only measured numbers are SSW's own CPU time from ssw_test (clock() around the read loop, Makefile default -O2) aligning 1000 Ion Torrent reads to the 4.94 Mbp E. coli 536 genome: about 880 s (AMD) and 960 s (Intel) with the default -m2 -x2 -o3 -e1, about 460 s and 500 s with -m1 -x3 -o5 -e2, about 40 MB. If reads average 200 bp that is roughly 1.1 billion cell updates per second (derived from page data); the PLoS ONE 2013 paper with the SSEARCH/Farrar comparison could not be opened here.",
+  "status_note": "Active (a 'cigar fixed' commit on 2025-11-17 and an MIT LICENSE.txt on 2026-01-15) and small enough to vendor, but the README speed figures are weak evidence: no ordinary-SW baseline exists in the repo, the README does not say whether -c (CIGAR) was on, the timed ssw_test loop re-opens and re-parses the whole reference FASTA for every read, and the default-penalty run is about 2x slower apparently because a 200 bp read scoring above 253 overflows the 8-bit kernel and forces a full 16-bit re-scan; open issues #94 (silent 32767 saturation), #96 (stop-codon scoring) and #90 (segfault on a 110 kb contig) remain.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/README.md",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/ssw.h",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/ssw.c",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/ssw_cpp.h",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/ssw_cpp.cpp",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/mengyao/Complete-Striped-Smith-Waterman-Library/HEAD/LICENSE.txt",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/commits/master",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues?q=is%3Aissue",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues/93",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues/94",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues/96",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues/66",
+    "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library/issues/90"
+  ],
+  "confidence": 0.75
+}

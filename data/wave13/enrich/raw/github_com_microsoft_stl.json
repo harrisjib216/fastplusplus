@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/microsoft/stl",
+  "one_liner": "MSVC STL's built-in SIMD std::search and string::find (SSE4.2, AVX2, NEON), 2-12x faster than its former scalar loop.",
+  "what_it_does": "The C++ standard library that ships with Visual Studio routes std::search, ranges::search, std::default_searcher, find_end and basic_string/basic_string_view::find to out-of-line SIMD kernels (__std_search_1/2/4/8 in stl/src/vector_algorithms.cpp) whenever both ranges are contiguous, the predicate is plain equality and the elements are 1, 2, 4 or 8-byte integers, pointers or std::byte. User code does not change: the dispatch sits in the headers and is on by default (_USE_STD_VECTOR_ALGORITHMS defaults to 1), while constant evaluation, custom predicates and other element types keep the scalar loop. Per the STL changelog, 1- and 2-byte elements were vectorized in VS 2022 17.13, 4- and 8-byte elements in MSVC Build Tools 14.50 (VS 2026 18.0), and ARM64/ARM64EC in 14.51 (VS 2026 18.6).",
+  "how_it_is_fast": "For 1-byte elements (and 2-byte elements on CPUs without AVX2) it uses the SSE4.2 PCMPESTRC/PCMPESTRI string instructions in 'equal ordered' mode, which test every alignment of a needle of up to 16 bytes against a 16-byte haystack block in one instruction and also report a partial match running off the block end; longer needles match their first 16 bytes that way and memcmp the rest. For 2-, 4- and 8-byte elements on AVX2 (SSE4.2 or NEON otherwise) it broadcasts the first needle element, compares a whole vector of haystack with PCMPEQ to find candidates, and confirms each candidate by XOR-ing one vector load against the needle kept in a register (masked TESTZ), with an inline memcmp for needles longer than a vector. The instruction set is picked per call from the CRT's __isa_enabled / __check_arch_support flags.",
+  "when_to_use": [
+    "You build with MSVC or clang-cl against the MSVC STL and search std::string, std::wstring, string_view or vector<char> for short substrings: 1-byte classic_search went from 1976 to 160 ns (12.35x) on a Ryzen 9 5950X with no code change.",
+    "Sequence search over 4- or 8-byte elements (std::u32string, vector<int>, vector<uint64_t>, vectors of pointers), which no libc strstr/memmem covers: 4.2x-7.6x (uint32_t) and 2.4x-3.0x (uint64_t) on the 5950X in PR #5484.",
+    "Windows on ARM builds with MSVC Build Tools 14.51 or later: the NEON path posted 4.1x-6.1x for 1-byte and 3.0x-4.7x for 2-byte classic_search on a Neoverse N2 (PR #6139).",
+    "Haystacks of a few hundred to a few thousand elements where the first needle element is rare enough that candidate checks stay cheap."
+  ],
+  "when_not_to_use": [
+    "You use libstdc++ or libc++: none of this applies; use a dedicated searcher (memmem, sliceslice-style first-and-last-byte filters) there.",
+    "Plain NUL-terminated byte strings where C strstr is enough: the UCRT strstr control in the same benchmark binary beat the vectorized 1-byte std::search on the 5950X (142-143 vs 160-175 ns in PR #4745).",
+    "Adversarial or highly repetitive data: the candidate-then-verify design has O(n*m) worst case and some 'evil' rows got slower (uint32_t /4 0.49x MSVC and 0.54x Clang on Neoverse N2 in #6139; uint64_t /4 0.71x on the 5950X in #5484); for a linear-time bound use std::boyer_moore_horspool_searcher or a Two-Way memmem.",
+    "Floating-point elements, custom predicates or projections, non-contiguous iterators, constant evaluation, /clr:pure or CHPE builds, or _USE_STD_VECTOR_ALGORITHMS=0: these all take the scalar path.",
+    "You need the speedup on an older toolchain: 4- and 8-byte elements need VS 2026 18.0 and ARM64 needs VS 2026 18.6."
+  ],
+  "integration": {
+    "form": "part of the toolchain: header-side dispatch plus out-of-line kernels that are linked statically from the STL import/static library (the header notes they are not exported from msvcp140.dll)",
+    "dependencies": "none beyond the MSVC C runtime (CPU-feature flags __isa_enabled / __check_arch_support)",
+    "min_toolchain": "MSVC STL from VS 2022 17.13 (1- and 2-byte elements), MSVC Build Tools 14.50 / VS 2026 18.0 (4- and 8-byte), 14.51 / VS 2026 18.6 (ARM64 and ARM64EC); std::search works from /std:c++14, ranges::search needs C++20",
+    "platforms": "Windows; x86 and x64 (SSE4.2 or AVX2 chosen at run time, scalar below SSE4.2), ARM64 and ARM64EC (NEON)",
+    "thread_safety": "Same as std::search: pure reads of caller memory; the only shared state is the CRT's read-only CPU-feature flags",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "The 1-byte regressions quoted from PR #5484 (classic_search<uint8_t> 0.76x-0.78x and the 'evil' /4 case 0.33x on the 5950X) came from an AVX2 8-bit path that PR #5519 removed five days later (merged 2025-05-22, 'Exclude AVX2 search path for 8-bit elements'); current main has the comment 'The AVX2 path for 8-bit elements is not necessarily more efficient than the SSE4.2 cmpestri path' and sends 1-byte search back to the #4745 PCMPESTRI code. #5519 posted no benchmark, so the shipping 1-byte path has no fresh measurement.",
+    "The record's 'x86 and x64 only' is out of date: _VECTORIZED_SEARCH is now on for x64, x86, ARM64 and ARM64EC, with NEON kernels from PR #6139 (merged 2026-03-10); that PR's tables give speedups only, with no baseline named and no absolute times, and its author noted an open MSVC ARM64 codegen problem (DevCom-11053447, stack spills reloaded every loop iteration).",
+    "Every eligible call goes to an out-of-line function with no size threshold in the header; haystacks below 16 bytes (32 for the AVX2 path) fall to a scalar tail inside it, so very small searches pay a non-inlined call.",
+    "The harness (benchmarks/src/search.cpp) repeats the same search on one lorem-ipsum haystack, so caches and branch predictors are warm, and the compiler version is never stated; the c_strstr control in the same binary stayed within 0.97x-1.05x across runs, which supports that the deltas are code changes, though search_default_searcher<uint64_t> moved to 0.74x in #4745 with unchanged code (attributed to loop alignment)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you are already on MSVC and want faster std::search, default_searcher or string::find with zero code change, including 2-, 4- and 8-byte element sequences that sliceslice, strstr.c, toys strstr and KmStrSearch do not cover. Pick sliceslice (Rust, AVX2) or KmStrSearch (Windows kernel strstr/wcsstr, 85.93 vs 22.66 GB/s at 1 MB) when you need a dedicated byte searcher outside the C++ standard library or more throughput on large buffers.",
+  "verified_claims_summary": "Maintainer before/after runs with Google Benchmark (benchmarks/src/search.cpp, Release /O2 /Ob2, compiler and version unstated, AMD Ryzen 9 5950X) against MSVC STL's own previous scalar std::search: 1-byte classic_search 1976 to 160 ns (12.35x) and 2-byte 4.5x-4.6x in PR #4745, then 4-byte 4.2x-7.6x and 8-byte 2.4x-3.0x in PR #5484. The UCRT strstr timed in the same binary stayed faster than the vectorized 1-byte search (142 vs 160 ns).",
+  "status_note": "Actively maintained (last commit 2026-10-06) and shipped with every Visual Studio; the kernels in stl/src/vector_algorithms.cpp are Apache-2.0 WITH LLVM-exception and could be lifted, but they are written against MSVC's intrin.h and isa_availability.h and are meant to be used through the MSVC STL.",
+  "sources_read": [
+    "https://github.com/microsoft/STL/pull/4745",
+    "https://github.com/microsoft/STL/pull/5484",
+    "https://github.com/microsoft/STL/pull/5484/commits",
+    "https://github.com/microsoft/STL/pull/5519",
+    "https://github.com/microsoft/STL/pull/6139",
+    "https://github.com/microsoft/STL/pulls?q=is%3Apr+search+vectorization+in%3Atitle",
+    "https://github.com/microsoft/STL/issues?q=is%3Aissue+search+vectorized",
+    "https://github.com/microsoft/STL/wiki/Changelog",
+    "https://raw.githubusercontent.com/microsoft/STL/main/benchmarks/src/search.cpp",
+    "https://raw.githubusercontent.com/microsoft/STL/main/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/src/vector_algorithms.cpp",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/xutility",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/algorithm",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/functional",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/__msvc_string_view.hpp",
+    "https://raw.githubusercontent.com/microsoft/STL/main/stl/inc/yvals_core.h",
+    "https://raw.githubusercontent.com/microsoft/STL/main/README.md"
+  ],
+  "confidence": 0.8
+}

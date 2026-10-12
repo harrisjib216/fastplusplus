@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/mbasso/asm-dom",
+  "one_liner": "C++ port of the snabbdom virtual DOM compiled to WebAssembly; wins pure-diff rows against snabbdom, loses where DOM writes cross into JavaScript.",
+  "what_it_does": "asm-dom lets you write a whole single-page app in C++ and compile it with Emscripten: you build trees with h(selector, Data(Attrs/Props/Callbacks), Children) (or JSX-like CPX syntax through the separate gccx tool) and call patch(oldVnode, newVnode) to update the DOM, exactly the snabbdom model. VNodes are raw heap pointers that the library frees for you on patch by default (Config.clearMemory) or that you free with deleteVNode. A JavaScript API over the same wasm core and a server-side toHTML build also exist. It is a different interface from snabbdom, not a drop-in: the app logic has to live in C++.",
+  "how_it_is_fast": "The diff is snabbdom's two-ended updateChildren algorithm rewritten in C++, with each VNode's selector, node type, key presence and attribute/child flags packed into one integer hash so sameVNode is a couple of mask compares; selectors are interned to small integers in a global table. Attribute maps are diffed in C++ (std::unordered_map<std::string,std::string>), so a patch that changes nothing never leaves wasm. DOM nodes are referenced by integer handles into a JS-side node table and every actual DOM write is an EM_ASM inline-JS call, which is why rows that touch the DOM gain little or lose.",
+  "when_to_use": [
+    "You already have a C++ codebase (model, algorithms, shared desktop/mobile logic) and want a browser UI without writing a JS binding layer.",
+    "Re-render-heavy UIs where most patches find nothing to change: the 'diff equal nodes' row (100 patches of a 100-child tree) was 4.5x faster in Firefox 67 and 1.30x in Chrome 75 than snabbdom 0.7.0.",
+    "Experiments or teaching about WASM/DOM interop, where the small (a few hundred lines per module) snabbdom-shaped core is easy to read and fork.",
+    "Server-side rendering from C++ via asm-dom-server's toHTML when the same views must also render in the browser."
+  ],
+  "when_not_to_use": [
+    "Attribute-heavy updates: the 'diff different nodes' row was 1.56x slower than snabbdom in Chrome 75 (derived from page data) because each setAttribute is an EM_ASM call that decodes two UTF-8 strings in JavaScript.",
+    "Plain JS/TS apps: rewriting into C++ for a virtual DOM gives no measured app-level win; the README's 'until 4 times faster' is a projection for app logic, not a benchmark row.",
+    "Anything needing a maintained toolchain: last commit 2022-08-28, last release v0.7.0 (2020-08-16), and issue #185 (2025) reports the C++ sources fail to compile with Emscripten 4.0.10.",
+    "Teams that want garbage-collected vnodes: you own raw VNode* memory, and mistakes (patching a freed tree with clearMemory=false, forgetting deleteVNode on unpatched trees) are use-after-free or leaks.",
+    "If you want a WASM UI framework with third-party numbers, the Rust entries measured in krausest/js-framework-benchmark are better evidenced; asm-dom was never in that suite (issue #122 asks, no answer)."
+  ],
+  "integration": {
+    "form": "source-drop (unity build of src/cpp/asm-dom.cpp compiled with emcc --bind) or npm module asm-dom 0.7.0 with prebuilt wasm/asm.js",
+    "dependencies": "Emscripten with embind (emscripten::val, EM_ASM); asm-dom's JS glue (Module.nodes table, DOM helper functions); optional gccx for CPX/JSX-like syntax",
+    "min_toolchain": "Emscripten fastcomp-era toolchain (Travis used trzeci/emscripten:sdk-incoming-64bit); C++ standard not documented (code uses C++11 features); fails with Emscripten 4.0.10 per issue #185",
+    "platforms": "Browsers with WebAssembly (asm.js fallback build), Node.js for the server-side toHTML build",
+    "thread_safety": "not documented; the library keeps global mutable state (currentNode, the selector hash table, CLEAR_MEMORY/UNSAFE_PATCH flags), so treat it as single-threaded main-thread only",
+    "drop_in_for_baseline": "partial: same h/patch model and diff algorithm as snabbdom, but the API is C++ (or a pointer-returning JS API), memory is manual, and modules/hooks differ"
+  },
+  "gotchas": [
+    "Harness flaws behind the numbers: Perf.js takes the 'median' of 10 runs with Array.prototype.sort() and no comparator (lexicographic sort of numbers, wrong whenever runs straddle a power of ten) at index 5 of 10; the asm-dom suite runs first and snabbdom second in the same page; setup bodies are eval'd from Function.toString() with 'var ' text-replaced by 'window.'; the snabbdom create-nodes loop discards every vnode it builds, so the JIT may elide work (inference), which fits its 0.0 ms Firefox row; Firefox values are whole milliseconds, so its create row (1 vs 0) is at timer resolution.",
+    "The diff rows reuse two prebuilt trees and swap them, so neither library's per-render vnode construction is timed, and asm-dom runs with clearMemory=false and unsafePatch=true; with the default clearMemory=true a real patch also recursively deletes the old tree, a cost absent from these rows. The asm-dom create row does include deleteVNode while snabbdom's teardown is left to the GC.",
+    "With the default unsafePatch=false, patch() silently does nothing and returns NULL (undefined in JS) unless oldVnode is the result of the previous patch; any app with several independent roots must set unsafePatch=true.",
+    "normalize() rewrites attributes: a value of \"false\" removes the attribute, \"true\" becomes an empty boolean attribute, and a 'key' attr is moved out of the attribute map; updateChildren also copies the old children vector by value on every call."
+  ],
+  "pick_this_over_siblings_when": "Pick asm-dom only when the UI must be written in C++ with Emscripten; Leptos, Sycamore or rust-dominator are the choice for a WASM UI in Rust, with independent js-framework-benchmark data and active maintenance, whereas asm-dom's only evidence is its own mixed four-row micro-benchmark.",
+  "verified_claims_summary": "The author's harness timed 100-iteration loops of create/patch on a 2013 MacBook Pro (2.4 GHz Core i5), asm-dom built with an unstated Emscripten version at -O3 with fastcomp flags (--llvm-lto 3, --closure 1, BINARYEN=1) against snabbdom 0.7.0 under webpack 2/Babel 6: asm-dom won diff-equal-nodes (Firefox 67 2 vs 9 ms, Chrome 75 2.395 vs 3.11 ms) and add/remove by 3-14%, and diff-different-nodes in Firefox (20 vs 23 ms), but lost diff-different-nodes in Chrome (17.795 vs 11.405 ms) and create-nodes in both browsers; first-party numbers only.",
+  "status_note": "Abandoned since 2022-08-28 (maintainer said in issue #125 he is busy elsewhere; experimental badge), MIT-licensed and small enough to vendor, but it no longer builds with Emscripten 4.0.10 (issue #185: 'extractSel = ~0 << 13' rejected as a left shift of a negative value) and its benchmark flags are fastcomp-only, so the published numbers cannot be rebuilt as written; a C++23-only fork, theo-dep/wasm-dom (3 stars, no published numbers), targets current Emscripten.",
+  "sources_read": [
+    "https://github.com/mbasso/asm-dom",
+    "https://github.com/mbasso/asm-dom/commits/master",
+    "https://github.com/mbasso/asm-dom/tree/master/src/cpp",
+    "https://github.com/mbasso/asm-dom/issues",
+    "https://github.com/mbasso/asm-dom/issues/185",
+    "https://github.com/mbasso/asm-dom/issues/186",
+    "https://github.com/mbasso/asm-dom/issues/122",
+    "https://github.com/mbasso/asm-dom/issues/125",
+    "https://github.com/theo-dep/wasm-dom",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/README.md",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/benchmarks/package.json",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/benchmarks/src/Perf.js",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/benchmarks/src/index.js",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/benchmarks/src/index.cpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/asm-dom.cpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/Config/Config.hpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/Patch/patch.cpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/Diff/diff.cpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/VNode/VNode.cpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/src/cpp/VNode/VNode.hpp",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/docs/js.md",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/Makefile",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/package.json",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/mbasso/asm-dom/HEAD/.travis.yml"
+  ],
+  "confidence": 0.75
+}
