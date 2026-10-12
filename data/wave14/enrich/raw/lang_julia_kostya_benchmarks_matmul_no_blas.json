@@ -1,0 +1,57 @@
+{
+  "id": "lang:julia/kostya/benchmarks#matmul-no-blas",
+  "one_liner": "Hand-written Julia matmul loop in kostya/benchmarks that runs 2.7x faster than the suite's strict-FP C dot-product loop.",
+  "what_it_does": "matmul/matmul.jl is the 'Julia (no BLAS)' row of kostya/benchmarks' Matmul test: it builds two 1500x1500 Float64 matrices and multiplies them with a plain triple loop instead of calling BLAS. It is a benchmark program, not a library; the only reusable part is the 8-line mul() kernel. The C baseline (matmul/matmul.c, Attractive Chaos) transposes B and computes every element as a scalar dot product.",
+  "how_it_is_fast": "The speedup comes from loop structure, not from JIT compilation. PR #318 (2021, adapted from LoopVectorization.jl's looptests) replaced Julia's earlier transpose-plus-dot-product loop with column-major axpy order (for n, for k, for m: c[m,n] += a[m,k]*b[k,n]), annotated with @inbounds, @simd ivdep and @fastmath. The inner iterations are independent, so LLVM vectorises them and contracts them to FMAs. The C inner loop is one serial floating-point add chain (t += p[k]*r[k]) that gcc may not reassociate without -ffast-math, and -std=c23 also turns FMA contraction off.",
+  "when_to_use": [
+    "As a reference for how to write a fast naive matmul in Julia: column-major axpy loop order plus @simd ivdep and @fastmath, without BLAS.",
+    "As evidence that loop order and reduction structure matter more than the language here: every plain dot-product row (C, Rust, Zig, Java, Go, Swift) lands at 3.03-3.16 s.",
+    "When teaching or measuring what @simd ivdep and @fastmath change in LLVM's vectoriser on a simple column-major kernel."
+  ],
+  "when_not_to_use": [
+    "For real matrix multiplication: Julia's own BLAS call (matmul-native.jl) takes 0.170 s with one OpenBLAS thread on the same machine, 6.5x faster than this loop (derived from page data), and C++ Eigen takes 0.081 s.",
+    "As proof that a JIT beats AOT C: D/gdc reaches 1.505 s, exactly half of C/gcc's 3.034 s, with the same transposed dot-product structure, because std.numeric.dotProduct (Phobos master source) splits the sum over two accumulators (derived from page data and the Phobos source). That is an AOT compiler showing the same reduction effect.",
+    "When bit-identical results matter: @fastmath allows FMA contraction and reassociation, so results may differ from a strict IEEE loop in the last bits.",
+    "In memory-constrained processes: the Julia process starts at about 256 MiB RSS against 2 MiB for C."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Julia base only (Sockets is used only for the harness notify call)",
+    "min_toolchain": "Julia 1.x with @simd ivdep and Threads.@threads; the README lists Julia 1.11.6, while docker/Dockerfile at HEAD pins julia-1.12.6",
+    "platforms": "any Julia platform; measured on x86-64 (Intel Xeon E-2324G)",
+    "thread_safety": "mul() allocates its own output and is safe to call concurrently; Threads.@threads splits the outer loop over columns, but the benchmark runs with Julia's default single worker thread (no -t flag or JULIA_NUM_THREADS in common/commands.mk or docker/Dockerfile)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (unequal work and optimisation level): Julia and C run different loop structures. Julia's axpy loop with @fastmath and @simd ivdep vectorises, while the C reference is a strict-FP serial reduction built with gcc -O3 -march=native -std=c23 (no -ffast-math, no restrict; issue #132 asking for restrict has been open since 2017). C/gcc's 3.034 s works out to 0.90 ns per multiply-add over 1500^3 = 3.375e9 steps, which is consistent with one dependency chain. The two-accumulator D/gdc row at 1.505 s halves it. Both figures are derived from page data, and they make the 2.7x a loop-order and reassociation effect, not a language or JIT effect.",
+    "The README Overview says algorithms should be 'similar between the languages', and Julia's own 2017 commit 'update to use pre-transpose, similar to C' once matched C. PR #318 later dropped the transpose and changed the loop order, so the Julia program now departs from the reference algorithm. The PR author reported 3.4 s to 750 ms on his machine.",
+    "Julia runs with --check-bounds=no plus @inbounds, while Rust, Nim and V keep bounds checks. Issue #312 raised this in 2021, and the maintainers kept it, saying 'there is no way we can have the fair comparison here'.",
+    "The Julia version behind the published row is uncertain (README 1.11.6 against Dockerfile 1.12.6). Timing includes matrix generation and allocation on both sides, and JIT compilation is excluded because calc(101) runs before the notify that starts xtime.rb's clock."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to illustrate loop order and @simd/@fastmath effects. For a like-for-like Julia vs C++ comparison, the zyth0s density-gradient entry (same routine, about 9% faster) is cleaner. The LangArena Sort::Self entry is another algorithm-mismatch win from the same author's suites (radix sort against introsort).",
+  "verified_claims_summary": "On an Intel Xeon E-2324G (README UPDATE 2026-07-19, median with MAD), the 1500x1500 Float64 matmul takes 1.113 s (49.41 J) for the Julia (no BLAS) loop against 3.034 s (113.24 J) for C built with gcc 16.1.0 -O3 -march=native -flto=auto -std=c23, and 3.067 s with clang 22.1.8. That is about 2.7x (derived from page data), but the Julia side uses a vectorisable axpy loop with fast-math while C runs a strict-FP scalar dot product.",
+  "status_note": "kostya/benchmarks is active (README update 2026-07-19, 2.9k stars, MIT). The Julia kernel is trivially copyable, but the catalogued 'win' is a benchmark-construction artefact, so it is capped at tier C and is no reason to pick Julia over C for matmul.",
+  "sources_read": [
+    "https://github.com/kostya/benchmarks",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.jl",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.c",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul-native.jl",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.d",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.rs/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/matmul.java",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/matmul/Makefile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/common/commands.mk",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/docker/Dockerfile",
+    "https://raw.githubusercontent.com/kostya/benchmarks/HEAD/xtime.rb",
+    "https://raw.githubusercontent.com/dlang/phobos/master/std/numeric.d",
+    "https://github.com/kostya/benchmarks/commits/master/matmul/matmul.jl",
+    "https://github.com/kostya/benchmarks/commit/16ce136",
+    "https://github.com/kostya/benchmarks/pull/318",
+    "https://github.com/kostya/benchmarks/issues?q=is%3Aissue+matmul",
+    "https://github.com/kostya/benchmarks/issues/312",
+    "https://github.com/kostya/benchmarks/issues/132"
+  ],
+  "confidence": 0.8
+}

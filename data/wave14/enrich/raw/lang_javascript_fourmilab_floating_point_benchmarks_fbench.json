@@ -1,0 +1,57 @@
+{
+  "id": "lang:javascript/fourmilab/floating_point_benchmarks#fbench",
+  "one_liner": "2017 run of John Walker's fbench: Firefox 55 beat GCC 5.4.0 -O3 C by 2.7x through SpiderMonkey's trig memo cache, while the V8 engines lost to C by 1.33-1.50x.",
+  "what_it_does": "fbench is John Walker's 1980 optical ray-tracing benchmark. It traces marginal and paraxial rays through a four-surface lens with heavy use of sin, asin, tan and cos, then checks the computed aberrations against reference strings to 11 decimals. The JavaScript port (src/javascript/fbench.js, written in 2005, given strict-mode declarations in 2017) runs from a browser page (src/javascript/fbench.html, iteration count typed into a form) or from node.js with the iteration count as an argument, and prints microseconds per iteration. It is a line-by-line translation of the C program that keeps its state in module-level variables, not a library; this entry is about the engines that ran it.",
+  "how_it_is_fast": "The speedup comes from memoisation, not code generation. Firefox 55's SpiderMonkey sends Math.sin, cos, tan and asin through a 4096-entry direct-mapped MathCache keyed on the input double, and that includes Ion-compiled calls: CodeGenerator::visitMathFunctionD calls the cached *_impl variant whenever the MIR node carries a cache. A miss calls the same system sin that C uses. Every fbench iteration traces the same three marginal rays through the same lens, so its roughly 71 trig calls per iteration (3 traces x 4 curved surfaces x 5-6 calls, plus 2; derived from fbench.js) repeat identical arguments and hit the cache from the second iteration on. Safari's 0.424 is an estimate rescaled from another machine, and no mechanism was examined for it.",
+  "when_to_use": [
+    "As a cautionary example when reading JIT-versus-C claims on maths-heavy code: check whether the engine memoises transcendental functions and whether the benchmark repeats its arguments.",
+    "As a small, self-validating, trig-heavy test of a JavaScript engine's Math accuracy: fbench.js compares its output with the C reference strings and reports any mismatch.",
+    "To compare JavaScript engines with each other on one machine: on the 2017 laptop the four V8-based engines (Brave, Chrome, Chromium, Node.js) landed within 1.33-1.50x of C."
+  ],
+  "when_not_to_use": [
+    "As evidence that JavaScript JITs beat C on floating-point code: the only same-machine win is Firefox 55's cache hits, and every V8 engine was slower than C.",
+    "For current engines: every number is from October 2017 (Firefox 55.0.2, Chrome 61, Safari 11, Node.js v6.11.3), and the repository has not been touched since 2021.",
+    "For workloads that do not repeat their arguments: a 4096-entry cache keyed on exact doubles does not help real ray tracing over varied rays.",
+    "As a comparison against tuned C: the baseline is 'gcc -Wall -O3 -lm' with no -march, linked against a glibc 2.23-era libm on an unnamed CPU.",
+    "When you need a permissive software license: the code is CC BY-SA 4.0, which is share-alike and not an OSI license."
+  ],
+  "integration": {
+    "form": "source-drop (one JavaScript file plus an HTML runner page)",
+    "dependencies": "none (a browser or node.js)",
+    "min_toolchain": "any ES5 engine that supports 'use strict'; measured on Firefox 55.0.2, Safari 11.0, Brave 0.18.36, Chrome 61.0.3163.91, Chromium 60.0.3112.113 and Node.js v6.11.3",
+    "platforms": "any JavaScript engine; published runs on a Dell laptop under Xubuntu (CPU not named), Safari on a 2008 Mac Pro, plus an iPad Air side test",
+    "thread_safety": "not applicable (single-threaded; state lives in module-level variables, so it is not re-entrant)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the headline: the Firefox 0.372 row measures SpiderMonkey 55's MathCache, not JavaScript speed. Identical sin, asin and tan arguments recur every iteration, so after the first iteration the trig work the C side does is skipped (4096-entry table, SizeLog2 = 12, in FIREFOX_55_0_2_RELEASE js/src/jsmath.h; the Ion path is in jit/CodeGenerator.cpp visitMathFunctionD). The results are still correct, which is why the entry stays at D instead of being rejected under the MQF/wazero cache precedent.",
+    "The Safari 0.424 is not a measurement on the same machine: 1.6865 us per iteration on a 2008 Mac Pro was multiplied by a Perl-derived speed ratio of 0.4487, and macOS libm is not glibc.",
+    "The C baseline looks slow. At 1.7858 us per iteration, at most about 25 ns per trig call including arithmetic (derived from page data). Serial Chapel, which compiles through C, ran 0.528 on the same laptop, and the author blames a slow new libm. GCC 5.4.0 points to Ubuntu 16.04 with glibc 2.23, which has a 2-4x slowdown of sin, cos and other libm functions on Sandy Bridge to Broadwell CPUs from AVX register saves in _dl_runtime_resolve (Launchpad 1663280, fixed in glibc 2.25; search snippet only). fbench.html also labels the C row 'GCC 3.2.3 -O3', while the README run used GCC 5.4.0.",
+    "Port details: both the HTML page (a form .value) and the node.js main (process.argv[2]) pass the iteration count as a string, so 'itercount < niter' compares a number with a string on every outer iteration. This works against JavaScript, by an amount nobody measured. The README calls Firefox's engine Rhino (it is SpiderMonkey) and prints the Firefox mean as 393.863 s, where the listed runs average 303.863 s."
+  ],
+  "pick_this_over_siblings_when": "The Chapel fbench sibling (0.528) uses the same suspect GCC 5.4.0 C run, and its win is also unexplained. For a credible numeric win over C, look at the same-machine, named-compiler entries such as the gfortran plb2 matmul or the Mojo SIMD Mandelbrot. Use this entry only as a historical, memoisation-inflated JavaScript data point.",
+  "verified_claims_summary": "In October 2017, on a Dell laptop under Xubuntu (CPU not named), fbench.js in Firefox 55.0.2 averaged 0.6641 us per iteration (five runs of 457,577,013 iterations, about 304 s each). The C version built with GCC 5.4.0 'gcc -Wall -O3 -lm' averaged 1.7858 us, for a ratio of 0.372 (about 2.7x). Chrome 61, Chromium 60, Brave 0.18.36 and Node.js v6.11.3 (all V8) were 1.33-1.50x slower than C, and Safari 11's 0.424 is a 2008 Mac Pro run rescaled by a Perl speed ratio.",
+  "status_note": "Abandoned reference material: 5 commits, the last on 2021-09-24, 6 stars, one open PR from 2021, JavaScript numbers from 2017 never re-run, CC BY-SA 4.0. The JS file is small and self-validating, so re-running it on current engines is easy, but the published win is a cache artefact.",
+  "sources_read": [
+    "https://github.com/Fourmilab/floating_point_benchmarks",
+    "https://github.com/Fourmilab/floating_point_benchmarks/commits",
+    "https://github.com/Fourmilab/floating_point_benchmarks/pulls",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/Web_pages/fbench.html",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/c/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/c/fbench.c",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/javascript/README",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/javascript/Makefile",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/javascript/fbench.js",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/javascript/fbench.html",
+    "https://raw.githubusercontent.com/Fourmilab/floating_point_benchmarks/HEAD/src/chapel/README",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/FIREFOX_55_0_2_RELEASE/js/src/jsmath.h",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/FIREFOX_55_0_2_RELEASE/js/src/jsmath.cpp",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/FIREFOX_55_0_2_RELEASE/js/src/jit/CodeGenerator.cpp",
+    "https://raw.githubusercontent.com/mozilla-firefox/firefox/FIREFOX_55_0_2_RELEASE/js/src/jit/MCallOptimize.cpp (HTTP 429 twice; relied on the verifier's reading)",
+    "https://bugs.launchpad.net/ubuntu/+source/glibc/+bug/1663280 (DNS failure; WebSearch snippets of edge.launchpad.net/bugs/1663280 and the Red Hat bug 1421121 listing only)"
+  ],
+  "confidence": 0.8
+}

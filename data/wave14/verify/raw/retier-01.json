@@ -2343,5 +2343,71 @@
     "urls_opened": [
       "enricher record data/wave14/enrich/raw/lang_java_kostya_langarena_etc_words.json"
     ]
+  },
+  {
+    "id": "lang:julia/kostya/benchmarks#matmul-no-blas",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the Julia row uses a different loop order with fastmath while C runs a strict serial add chain, and the D/gdc row shows the same accumulator effect from an AOT compiler.",
+    "corrections": {
+      "caveats": "PR #318 (2021, from LoopVectorization.jl's looptests) dropped Julia's transpose plus dot product for an axpy loop order with @fastmath and @simd ivdep, while C is a strict-FP serial add chain built with -std=c23 (no FMA); D/gdc's 1.505 s is exactly half of C/gcc's 3.034 s from Phobos' two-accumulator dotProduct, an AOT row showing the same effect, and Rust, Zig, Go and Java with one chain all sit at about 3.05 s. Julia with single-threaded BLAS takes 0.170 s. The Julia version is unclear (README 1.11.6, Dockerfile 1.12.6)."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_julia_kostya_benchmarks_matmul_no_blas.json"
+    ]
+  },
+  {
+    "id": "lang:julia/kostya/langarena#sort-self",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands (radix sort against introsort confirmed); the generator's short LCG period repeats the array 2.86x on both sides, and Rust's built-in sort is 2.4x faster than std::sort too.",
+    "corrections": {
+      "caveats": "sort.jl v1.13.1 picks the stable LSD RadixSort for this input (range too wide for counting sort). The Benchmarks Game LCG in cpp/src/helper.hpp has period 139,968, so the 400k 'random' array is one sequence repeated 2.86x with each value present 2-3 times (affects both sides equally). Rust's built-in t.sort() at 0.410 s is 2.4x faster than std::sort, so std::sort is a weak reference. One run per configuration."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_julia_kostya_langarena_sort_self.json"
+    ]
+  },
+  {
+    "id": "lang:javascript/alya-lang/benchmarks#binary-trees",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: across 14 README snapshots with identical toolchains the C/Bun ratio runs 0.84-1.31 and C wins 4 of them, so the outcome is runner noise rather than a measured win; no stable measurement: C to D (the other C wins span 2.5x-9.2x).",
+    "corrections": {
+      "caveats": "The win flips between CI runs: across 14 README snapshots (all Bun 1.4.2, gcc 13.3.0 -O2, Ubuntu x64) the C/Bun ratio runs 0.84-1.31 and C wins 4 (5ff783f 60.0 vs 64.6 ms, 37e3b6c 70.2 vs 83.3, 3ee8a72 70.5 vs 82.4, e382f6c 106.0 vs 113.4), so the outcome depends on the unrecorded runner CPU. C does about 6.35M free calls plus an extra traversal while JS frees nothing; timing is whole-process spawnSync. The other 13 C wins span 2.5x-9.2x."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_javascript_alya_lang_benchmarks_binary_trees.json"
+    ]
+  },
+  {
+    "id": "lang:javascript/fourmilab/floating_point_benchmarks#fbench",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: D stands; the Firefox row is a SpiderMonkey MathCache artefact confirmed in source, and the C baseline on that laptop is suspect.",
+    "corrections": {
+      "caveats": "SpiderMonkey 55's MathCache (jsmath.h, 4096 entries; CodeGenerator visitMathFunctionD) hits about 71 identical trig arguments per iteration, confirmed in source; the Safari row is a cross-machine estimate. The C baseline is suspect (Chapel's 0.528 on the same laptop; a glibc 2.23 slowdown, Launchpad 1663280, snippet only). The iteration count is passed as a string, so a number-versus-string compare runs each loop."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_javascript_fourmilab_floating_point_benchmarks_fbench.json"
+    ]
+  },
+  {
+    "id": "lang:julia/aaronang/stl-benchmark#parsestl",
+    "evidence_tier_final": "C",
+    "tier_reason": "Enricher: C stands; the gap is per-call I/O overhead and statistic mismatch (mean CPU against minimum), with the untuned C++ side never rewritten while Julia was.",
+    "corrections": {
+      "caveats": "nist.stl has 7,392 triangles (C++ 55 ns against Julia 29 ns per triangle), so the gap is I/O per-call overhead, not codegen. Statistic mismatch: Google Benchmark's mean CPU time against @btime's minimum. The C++ side was never tuned while Julia was rewritten by SimonDanisch in PR #2; the Julia 1.3+ IOStream lock gives 689.599 us (PR #3). The unmerged PR #4 fork has C++ fread at 236.744 us against Julia lock = false at 110.646 us, so the lock asymmetry moved to the C side. No DoNotOptimize, an aliasing cast, assert compiled out."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_julia_aaronang_stl_benchmark_parsestl.json"
+    ]
+  },
+  {
+    "id": "lang:julia/anicusan/acceleratedkernels-benchmark#ljg-kernel",
+    "evidence_tier_final": "D",
+    "tier_reason": "Enricher: the checked-in aarch64 assembly shows clang if-converted the cutoff branch and runs two powf plus one expf for every pair while only about 8% are inside the cutoff, so the M3 C baseline does roughly 12x the libm work the source implies, and the x86 build does not; a crippled baseline behind the 5.7x headline with no like-for-like row: C to D.",
+    "corrections": {
+      "caveats": "In the checked-in arithmetic_kernel.aarch64.s clang vectorised ljg_cpu and if-converted the cutoff branch, so two powf plus one expf run for every element and are then masked; only about 7.9% of pairs are inside the cutoff (Monte Carlo estimate), so the C side does roughly 12x more libm calls than the source implies (ljg_cpu2 likewise calls expf for every element). The scalar x86 build branches around the calls (C 470.61 ms on the Xeon against 1253.0 ms on the M3); the Intel rows run at about 8.3 GB/s from one core, likely partly memory-bound. The Julia version and the Linux C compiler are not recorded."
+    },
+    "urls_opened": [
+      "enricher record data/wave14/enrich/raw/lang_julia_anicusan_acceleratedkernels_benchmark_ljg_kernel.json"
+    ]
   }
 ]

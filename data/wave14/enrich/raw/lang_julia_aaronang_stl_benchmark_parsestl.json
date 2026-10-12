@@ -1,0 +1,59 @@
+{
+  "id": "lang:julia/aaronang/stl-benchmark#parsestl",
+  "one_liner": "2018 three-language binary-STL parser where Julia 1.0 reads 7,392 triangles in 212 us against 409 us for clang C++ iostreams.",
+  "what_it_does": "A small benchmark repo (MIT, 2018) that parses one binary STL mesh, nist.stl (369,684 bytes, 7,392 triangles), into a vector of 48-byte triangle structs in C++ (cpp/main.cpp, Google Benchmark), Julia (julia/stl.jl, BenchmarkTools) and Python 3.7 (python/benchmark.py, timeit). Each iteration opens the file, skips the 80-byte header, reads the uint32 count and then reads every 50-byte record. It is a demonstration, not a library; the only reusable parts are the 30-line parsers.",
+  "how_it_is_fast": "The measured gap is the per-call cost of the I/O library, not code generation. C++ makes two std::ifstream::read calls per triangle (48 bytes, then a 2-byte dummy), about 14,800 formatted-stream calls per parse; Julia 1.0 makes one read!(io, Ref{Triangle}) plus a skip(io, 2) per triangle on an IOStream that took no lock in 1.0. Derived from page data: about 55 ns per triangle for C++ (409.210 us CPU time / 7,392) against 29 ns for Julia (211.641 us / 7,392), i.e. 0.9 GB/s against 1.75 GB/s for a file that sits in the page cache. SimonDanisch's merged PR #2 (commit 40c7a16) replaced twelve read(stl, Float32) calls per triangle with the single 48-byte read!, which the blog credits with a 4x Julia speedup; the C++ side never received the equivalent tuning.",
+  "when_to_use": [
+    "As a cautionary example that small-record reads through a stream library are dominated by per-call overhead (sentry and virtual-buffer calls in iostreams, locks in Julia 1.3+ IOStream or stdio), whatever the language.",
+    "As a starting harness for a fair re-run: same machine, same statistic, current Julia with open(path; lock = false) against C++ reading the whole file once (one read or mmap) and copying 50-byte records.",
+    "When someone cites 'Julia is 2x faster than C++ at parsing files': this repo is the likely source, and its caveats below are the answer."
+  ],
+  "when_not_to_use": [
+    "As evidence that Julia beats C++ today: on Julia 1.3 and later the unchanged parser ran 689.599 us because IOStream reads now take a lock (ChrisRackauckas, open PR #3, August 2020), 1.7x slower than the README's C++ time, and only 243.900 us with locking disabled.",
+    "As a parser to vendor: no error handling (C++ ignores stream failures and its end-of-file assert is compiled out by -DNDEBUG in Release), host-endian reads with no byte swapping, binary STL only (no ASCII STL), and no handling of truncated files.",
+    "As a language comparison: neither side uses the fast approach (one bulk read or mmap of the 361 KiB file), so both numbers mostly measure library call overhead plus a file open and close per iteration.",
+    "For any claim about hardware: the Julia run's machine is not stated, and the C++ run only prints '8 X 2300 MHz' with four 32K L1 data caches, four 262K L2 caches and a 6291K L3."
+  ],
+  "integration": {
+    "form": "source-drop (three short parsers in one repo; not a package)",
+    "dependencies": "C++: Google Benchmark as a git submodule (commit 9ffb8df) and CMake 3.12+; Julia: BenchmarkTools 0.4.1 (Manifest.toml); Python: standard library only (struct, dataclasses, timeit)",
+    "min_toolchain": "C++11 (CMake CXX_STANDARD 11) with clang as in the README; Julia 1.0; Python 3.7 for dataclasses. The pddshk fork notes the old benchmark submodule needs '#include <limits>' added to benchmark_register.h to build with newer compilers.",
+    "platforms": "any little-endian host (both parsers reinterpret the file bytes in host byte order); the published C++ run is probably macOS with Apple clang (inferred from /usr/bin/clang and the cache layout), the Julia run's platform is not stated",
+    "thread_safety": "not applicable (single-threaded benchmark); the Julia 1.0 IOStream had no locking, which is what the PR #3 regression on 1.3+ is about",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Different statistics: the C++ figure is Google Benchmark's mean CPU time over 1,729 iterations (409.210 us; wall time 429.234 us), the Julia figure is BenchmarkTools @btime, which prints the minimum wall time, and Python takes the minimum of 500 timeit runs. A minimum-against-mean comparison flatters Julia by an unknown amount, and the two runs may not even share a machine.",
+    "Unequal tuning, then and later: Julia was rewritten by a Julia core contributor (PR #2) while the C++ kept two istream::read calls per record; the unmerged PR #4 (pddshk, 2021) rewrote both sides and still reports C++ 236.744 us CPU against Julia 110.646 us on a '12 X 4500 MHz' machine, but its C++ calls stdio fread twice per triangle, and POSIX stdio locks the stream on every call, while its Julia opens the file with lock = false and unsafe_reads into a preallocated vector, so the locking asymmetry of PR #3 simply moved to the other side.",
+    "The C++ harness discards the returned vector without benchmark::DoNotOptimize, reads the triangle count through an (unsigned int *) cast of a char array (a strict-aliasing violation that works in practice), relies on transitive includes for <vector> and assert, and compiles its EOF assert out under Release, while Julia's @assert eof(stl) runs on every call; none of these explains the 2x, but they show the C++ side was not reviewed.",
+    "The explanatory blog post (aaronang.github.io) is unreachable here (DNS failure) and the author's site repo has been replaced by a 2025 Vite site, so the post's reasoning could not be read; the README itself says 'I am neither a C++ nor Julia expert'."
+  ],
+  "pick_this_over_siblings_when": "Prefer the LangArena, kostya/benchmarks and benchLANG Julia, Java and C# rows, which use current GCC 16 and Clang 22 baselines and many C/C++ configurations, for any current claim; this repo is only worth citing as the I/O-bound case in the category, where the result hinges on stream-library locking and per-call overhead rather than on JIT code generation.",
+  "verified_claims_summary": "Parsing nist.stl (7,392 triangles) took 409.210 us mean CPU time in C++ (std::ifstream reads, clang, CMake Release, C++11, on a machine Google Benchmark reports as 8 x 2300 MHz with a 6291K L3, probably 4 cores with SMT) and 211.641 us minimum in Julia 1.0 run with julia -O3 (hardware not stated), about 1.93x by the README's own numbers (derived from page data); Python 3.7 took 25,150.9 us. Julia 1.3+ ran the same code at 689.599 us in PR #3 because of IOStream locking.",
+  "status_note": "Abandoned since 8 October 2018 (two open PRs from 2020 and 2021 never merged), MIT-licensed and trivial to vendor, but the 1.93x figure is tied to Julia 1.0's unlocked IOStream and mismatched statistics, so treat it as a historical anecdote rather than evidence.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/main.cpp",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/cpp/nist.stl (369,684 bytes; header count 7,392 triangles)",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/stl.jl",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Project.toml",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/julia/Manifest.toml",
+    "https://raw.githubusercontent.com/aaronang/stl-benchmark/master/python/benchmark.py",
+    "https://github.com/aaronang/stl-benchmark/tree/master/cpp",
+    "https://github.com/aaronang/stl-benchmark/issues?q=is%3Aissue",
+    "https://github.com/aaronang/stl-benchmark/pull/2",
+    "https://github.com/aaronang/stl-benchmark/commit/40c7a16",
+    "https://github.com/aaronang/stl-benchmark/pull/3",
+    "https://github.com/aaronang/stl-benchmark/pull/4",
+    "https://raw.githubusercontent.com/pddshk/stl-benchmark/master/README.md",
+    "https://raw.githubusercontent.com/pddshk/stl-benchmark/master/cpp/main.cpp",
+    "https://raw.githubusercontent.com/pddshk/stl-benchmark/master/cpp/CMakeLists.txt",
+    "https://raw.githubusercontent.com/pddshk/stl-benchmark/master/julia/stl.jl",
+    "https://github.com/aaronang/aaronang.github.io",
+    "https://github.com/aaronang/aaronang.github.io/branches/all",
+    "https://aaronang.github.io/2018/stl-benchmark-comparison-cpp-vs-julia/ (ENOTFOUND)",
+    "WebSearch: '\"STL Benchmark Comparison: C++ vs. Julia\" aaronang' (no copy of the post found)"
+  ],
+  "confidence": 0.6
+}

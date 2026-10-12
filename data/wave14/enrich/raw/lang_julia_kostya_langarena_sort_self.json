@@ -1,0 +1,59 @@
+{
+  "id": "lang:julia/kostya/langarena#sort-self",
+  "one_liner": "Julia's default sort! on Int32 radix-sorts a 400k-element array 8.5x faster than C++ std::sort in LangArena Sort::Self.",
+  "what_it_does": "LangArena's Sort::Self test copies a 400,000-element array of pseudo-random integers in 0..999,992 and sorts it with each language's built-in sort, 50 times. The Julia program is a plain sort!(copy(data)) on a Vector{Int32}, and C++ calls std::sort on a std::vector<int32_t>. The catalogued 'implementation' is Julia's standard-library sort dispatch (base/sort.jl), not a separate library: in Julia it is a drop-in default, and from C++ there is nothing to call.",
+  "how_it_is_fast": "Julia's default sort for vectors runs a decision tree (_DEFAULT_ALGORITHMS_FOR_VECTORS: InitialOptimizations, IsUIntMappable, Small{40}, CheckSorted, ComputeExtrema, ConsiderCountingSort, ConsiderRadixSort). Here the range 999,992 is not below div(399,999, 2), so counting sort is skipped. 20 bits + 70 < 22 ln(399,999), which is about 284, so it commits to an LSD radix sort over the 20-bit offset from the minimum (base/sort.jl v1.13.1). That is linear-time radix sorting against libstdc++'s comparison-based introsort. The win is algorithm choice in the standard library, not JIT code quality; the suite's own docs/ai_critic.js says 'You're comparing algorithms, not languages.'",
+  "when_to_use": [
+    "In Julia, sorting large Vector{Int32}, Vector{Int64}, Float or other UInt-mappable element types with the default ordering: plain sort! already picks counting or radix sort, so no package is needed.",
+    "As a reminder to C++ developers that the speedup is available in C++ too: for integer keys, swap std::sort for a radix or SIMD sort such as Boost.Sort spreadsort, ska_sort, Highway vqsort or x86-simd-sort (all catalogued).",
+    "When arrays are in the hundreds of thousands of elements and the key range is narrow relative to n, where Julia's heuristic chooses counting or radix sort."
+  ],
+  "when_not_to_use": [
+    "As evidence that a JIT beats AOT C++: in the same suite's same-algorithm tests Julia loses (Sort::Quick Julia/Default 1.307 s vs C/Gcc 1.15 s; Sort::Merge 1.602 s vs C/Clang 1.09 s).",
+    "With a custom lt/by ordering or a non-UInt-mappable element type: the IsUIntMappable branch falls back to ScratchQuickSort, so the radix path and this speedup do not apply.",
+    "For small arrays (insertion sort below 40 elements) or wide key ranges with few elements, where bits + 70 >= 22 ln(n) sends Julia to a comparison sort.",
+    "Under memory pressure: radix sort allocates an n-element scratch buffer per call, and the Julia process peaks at about 405 MB against 8.6 MB for C++ in this test.",
+    "When you need the fastest comparison sort: even Rust's built-in t.sort() takes 0.410 s here, 2.4x faster than std::sort, so std::sort is a weak reference point (derived from page data)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Julia Base.Sort); the LangArena harness itself uses JSON3 and Printf",
+    "min_toolchain": "Julia with the ComputeExtrema/ConsiderRadixSort default pipeline (present in base/sort.jl v1.13.1; a code comment there dates the radix path to the v1.9 development cycle); measured on Julia 1.13.1",
+    "platforms": "any Julia platform; measured on x86-64 (AMD Ryzen 7 3800X, Linux)",
+    "thread_safety": "sort! mutates its argument in place, single-threaded; concurrent sorts of distinct vectors are independent (no shared state documented)",
+    "drop_in_for_baseline": "partial — sort! is Julia's default, so Julia code gets it automatically; it is not callable as a std::sort replacement from C++"
+  },
+  "gotchas": [
+    "Harness quirk: the 'random' input comes from the Benchmarks Game LCG (IM = 139968, IA = 3877, IC = 29573 in cpp/src/helper.hpp), whose full period is 139,968. The 400,000-element array is therefore the same 139,968-value sequence repeated about 2.86 times, with every value occurring 2 or 3 times (checked by re-running the generator). This affects both sides equally and does not invalidate the comparison, but the input is not 400k independent random keys.",
+    "Not the same algorithm: the 8.5x is radix sort against introsort. The verifier capped the entry at C for this reason, and a C++ radix sort would be the fair comparison.",
+    "One measurement per test and configuration, no variance; the headline C++ row is the -O2 'prod' build, but -O3 -march=native ('Fast', 0.998 s) and PGO (0.999 s) do not help std::sort. The Julia harness forces GC.gc() before the timed loop, and both sides run untimed warm-up iterations (20% of the timed count) before timing.",
+    "The results file notes say the host switched from Ubuntu to Arch Linux, yet the reported gcc is an Ubuntu-packaged trunk snapshot (16.0.1 20260322, experimental), so the exact toolchain provenance is unclear."
+  ],
+  "pick_this_over_siblings_when": "Pick this only to show that a managed language's standard library can choose a better algorithm by default. Among the LangArena siblings, the OpenJDK Binarytrees::Obj and Calculator::Ast rows compare like-for-like algorithms and say more about the runtime itself. The Julia (no BLAS) matmul entry is a similar algorithm and loop-structure mismatch.",
+  "verified_claims_summary": "On an AMD Ryzen 7 3800X (LangArena results 2026-10-05, one run per configuration), 50 sorts of a copied 400,000-element Int32 array take 0.116 s with Julia 1.13.1's default sort! against 0.982 s with g++ 16.0.1 -O2 std::sort, the best of the 16 C/C++ configurations: about 8.5x (derived from page data). C's qsort-with-callback rows take 1.96-2.03 s (instrumented PGO builds excluded).",
+  "status_note": "LangArena is active (monthly result files, MIT, 41 stars) and calls itself a subjective benchmark. The Julia behaviour is the standard-library default and needs no integration, but the comparison is an algorithm win capped at tier C.",
+  "sources_read": [
+    "https://github.com/kostya/LangArena",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/README.md",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/LICENSE",
+    "https://raw.githubusercontent.com/kostya/LangArena/HEAD/results/2026-10-05-kostya-ms7c37.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/run.js",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/Makefile",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/sort.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/sort.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/helper.cpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/cpp/src/helper.hpp",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/c/src/sort.c",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/julia/benchmark.jl",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/julia/src/BenchmarkFramework.jl",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/julia/src/benchmarks/Sort.jl",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/main.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/rust/src/benchmarks/sort_self.rs",
+    "https://raw.githubusercontent.com/kostya/LangArena/master/docs/ai_critic.js",
+    "https://raw.githubusercontent.com/JuliaLang/julia/v1.13.1/base/sort.jl",
+    "https://github.com/kostya/LangArena/tree/master/rust/src",
+    "https://github.com/kostya/LangArena/issues?q=is%3Aissue+sort"
+  ],
+  "confidence": 0.8
+}

@@ -27496,7 +27496,8 @@
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
       "The work differs: Julia uses an axpy loop order with @fastmath and @simd ivdep while the C side (gcc -std=c23) does a strict-FP dot-product reduction without -ffast-math; Julia runs on one thread; README says Julia 1.11.6 while the Dockerfile pins 1.12.6.",
-      "The JSON3.jl enricher found that kostya/benchmarks' 2026-07-19 update re-measured only the Primes table and the environment table: the Json table rows kept their 2025-08-17 values (gcc 14.2.0, clang 19.1.7), so the compiler versions recorded here (gcc 16.1.0, clang 22.1.8) describe the current environment table and may not be the toolchain behind this table's rows; whether this table was re-run on 2026-07-19 was not checked."
+      "The JSON3.jl enricher found that kostya/benchmarks' 2026-07-19 update re-measured only the Primes table and the environment table: the Json table rows kept their 2025-08-17 values (gcc 14.2.0, clang 19.1.7), so the compiler versions recorded here (gcc 16.1.0, clang 22.1.8) describe the current environment table and may not be the toolchain behind this table's rows; whether this table was re-run on 2026-07-19 was not checked.",
+      "Harness flaw: different loop structure, not a JIT win. PR #318 (2021, from LoopVectorization.jl's looptests) dropped Julia's transpose plus dot product for an axpy loop order with @fastmath and @simd ivdep, while C is a strict-FP serial add chain built with -std=c23 (no FMA). D/gdc's 1.505 s is exactly half of C/gcc's 3.034 s because Phobos dotProduct uses two accumulators, an AOT row showing the same effect; Rust, Zig, Go and Java with one chain all sit at about 3.05 s. Julia with single-threaded BLAS takes 0.170 s. Issue #132 (C restrict) has been open since 2017. The Julia version is unclear (README 1.11.6, Dockerfile 1.12.6)."
     ],
     "measurements": [
       "verifier batch-07 (wave 14)",
@@ -28341,10 +28342,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Julia sort! picks LSD radix sort (base/sort.jl) while std::sort is introsort, so an algorithm win rather than a language win; the Java row is probably the JDK x86-simd-sort intrinsic; -flto inert; single run."
+      "Julia sort! picks LSD radix sort (base/sort.jl) while std::sort is introsort, so an algorithm win rather than a language win; the Java row is probably the JDK x86-simd-sort intrinsic; -flto inert; single run.",
+      "Confirmed radix sort against introsort (sort.jl v1.13.1: the range 999,992 is too wide for counting sort; 20+70 < 284 so RadixSort). Harness quirk: the Benchmarks Game LCG in cpp/src/helper.hpp has period 139,968, so the 400k 'random' array is one sequence repeated 2.86x with each value present 2-3 times (checked by re-running the generator); it affects both sides equally and is not invalidating. Rust's built-in t.sort() at 0.410 s is 2.4x faster than std::sort, so std::sort is a weak reference. One run per configuration; gcc is an Ubuntu trunk snapshot while the results notes say the host moved to Arch."
     ],
     "measurements": [
-      "verifier batch-24 (wave 14)"
+      "verifier batch-24 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -28732,10 +28735,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Win comes from flags, not the language: the C side is built -O2 without -ffast-math and calls libm powf/expf per element (checked .s files) while the Julia kernel uses @fastmath; Julia loses on the RBF kernel. arXiv 2507.16710 unreachable, paper claim from a snippet only."
+      "Win comes from flags, not the language: the C side is built -O2 without -ffast-math and calls libm powf/expf per element (checked .s files) while the Julia kernel uses @fastmath; Julia loses on the RBF kernel. arXiv 2507.16710 unreachable, paper claim from a snippet only.",
+      "Harness flaw behind the 5.7x M3 headline, found in the checked-in arithmetic_kernel.aarch64.s: clang vectorised ljg_cpu and if-converted the cutoff branch, so two powf plus one expf run for every element and are then masked; only about 7.9% of pairs are inside the cutoff (Monte Carlo estimate), so the C side does roughly 12x more libm calls than the source implies, and ljg_cpu2 likewise calls expf for every element. The scalar x86 build branches around the calls, hence C 470.61 ms on the Xeon against 1253.0 ms on the M3; the Intel rows run at about 8.3 GB/s from one core (derived), likely partly memory-bound. Julia's @fastmath lowering (powi, exp_fast) is confirmed in base/fastmath.jl and base/special/exp.jl. The Julia version and the Linux C compiler are not recorded."
     ],
     "measurements": [
-      "verifier batch-39 (wave 14)"
+      "verifier batch-39 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -28912,10 +28917,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "C row built -O2 not -O3; no CPU model (GitHub Actions shared runner); timing is whole-process wall clock; the C program does malloc/free per node plus a timed recursive free pass while JavaScript leaves it to the GC, so the win is allocator/GC, not codegen; Bun wins 1 of 14 rows."
+      "C row built -O2 not -O3; no CPU model (GitHub Actions shared runner); timing is whole-process wall clock; the C program does malloc/free per node plus a timed recursive free pass while JavaScript leaves it to the GC, so the win is allocator/GC, not codegen; Bun wins 1 of 14 rows.",
+      "Harness flaw: the win flips between CI runs. Across 14 README snapshots (all Bun 1.4.2, gcc 13.3.0 -O2, Ubuntu x64) the C/Bun ratio runs 0.84-1.31 and C wins 4 of them (5ff783f 60.0 vs 64.6 ms, 37e3b6c 70.2 vs 83.3, 3ee8a72 70.5 vs 82.4, e382f6c 106.0 vs 113.4), so the outcome depends on the unrecorded runner CPU. C does about 6.35M free calls plus an extra traversal while JS frees nothing; timing is whole-process spawnSync. Correction: the other 13 C wins span 2.5x-9.2x, not 1.9x-9x."
     ],
     "measurements": [
-      "verifier batch-57 (wave 14)"
+      "verifier batch-57 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -29973,10 +29980,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "Same algorithm at -O3 on both sides, but the win comes from the I/O library layer (ifstream vs IOStream); the Julia side was tuned by SimonDanisch; on Julia 1.3+ PR #3 shows 689.599 us, slower than the C++ 409.210 us; statistics mixed (mean CPU time vs @btime minimum)."
+      "Same algorithm at -O3 on both sides, but the win comes from the I/O library layer (ifstream vs IOStream); the Julia side was tuned by SimonDanisch; on Julia 1.3+ PR #3 shows 689.599 us, slower than the C++ 409.210 us; statistics mixed (mean CPU time vs @btime minimum).",
+      "The gap is I/O per-call overhead, not codegen: nist.stl has 7,392 triangles, C++ 55 ns against Julia 29 ns per triangle. Statistic mismatch: Google Benchmark's mean CPU time against @btime's minimum. The C++ side was never tuned while Julia was rewritten by SimonDanisch in PR #2 (commit 40c7a16); the Julia 1.3+ IOStream lock gives 689.599 us (PR #3). The unmerged PR #4 fork (pddshk/stl-benchmark) has C++ fread at 236.744 us against Julia lock = false at 110.646 us, so the lock asymmetry just moved to the C side (locked fread against unlocked Julia). Minor C++ harness sloppiness: no DoNotOptimize, an aliasing cast, assert compiled out. The blog post is unreachable."
     ],
     "measurements": [
-      "verifier batch-74 (wave 14)"
+      "verifier batch-74 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
@@ -30218,10 +30227,12 @@
     "decision": "keep",
     "reason": "user decision 2026-09-25: keep flagged entries and document shortcomings",
     "shortcomings": [
-      "The Firefox 2.7x comes from SpiderMonkey 55's MathCache memoising repeated trig arguments (jsmath.h, MCallOptimize.cpp, CodeGenerator.cpp at FIREFOX_55_0_2_RELEASE), a cache hit rather than computation (wazero precedent, kept as D); the Safari 2.4x is a cross-machine estimate scaled by a Perl run; V8 engines are 1.33-1.50x slower than C. CC-BY-SA-4.0, reference usability."
+      "The Firefox 2.7x comes from SpiderMonkey 55's MathCache memoising repeated trig arguments (jsmath.h, MCallOptimize.cpp, CodeGenerator.cpp at FIREFOX_55_0_2_RELEASE), a cache hit rather than computation (wazero precedent, kept as D); the Safari 2.4x is a cross-machine estimate scaled by a Perl run; V8 engines are 1.33-1.50x slower than C. CC-BY-SA-4.0, reference usability.",
+      "The Firefox 0.372 is SpiderMonkey 55's MathCache (jsmath.h, 4096 entries; CodeGenerator visitMathFunctionD) hitting about 71 identical trig arguments per iteration, confirmed in source; the Safari row is a cross-machine estimate. The C baseline is suspect: Chapel's 0.528 on the same laptop and a glibc 2.23 slowdown (Launchpad 1663280, snippet only). The iteration count is passed as a string, so a number-versus-string compare runs each loop (hurts JS). README typos: Rhino, 393.863."
     ],
     "measurements": [
-      "verifier batch-80 (wave 14)"
+      "verifier batch-80 (wave 14)",
+      "enricher (wave 14 pass, 2026-10-12)"
     ]
   },
   {
