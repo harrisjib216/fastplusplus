@@ -212,6 +212,11 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   idiom differences (SwissTable against std::unordered_map, borrowed keys, stable against unstable sort) stay at
   their tier with the mechanism documented.
 
+- Seed passes into closed waves (2026-10-13): never bump a wave's `today` in assignments.json; `verify.py apply`
+  stamps every applied verdict with it, so a bump restamped all 235 wave 6 verification dates. Keep each wave's
+  original `today` (render the seed prompts with it too); the new verdicts carry the old date, which matches earlier
+  backfill rounds.
+
 ## Status (2026-10-13)
 
 - Waves 13 and 14 closed and the single enrichment pass (wave 1 stdlib seeds, wave 13, wave 14) finished on
