@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/idealvin/coost#small-buffer-and-strings",
+  "one_liner": "coost v3's fastream (append-only text buffer) and fastring (heap string), claimed 10-30x faster than snprintf with no published harness.",
+  "what_it_does": "fastream is a move-only byte buffer with operator<< and a variadic cat() for building text, meant to replace std::ostringstream and snprintf-based concatenation; fastring is a std::string-like class on the same {capacity, size, pointer} buffer with find/rfind/trim/replace/split helpers and operator<<. Both live in coost v3 (headers co/fastream.h and co/fastring.h, last released in v3.0.2, 2023-11-23); coost v4.0.0 removed them and folded the design into co::string in co/string.h. Neither is a drop-in: fastring has no iterators, insert or erase, and fastream has no manipulators or format strings.",
+  "how_it_is_fast": "There is no locale, no virtual streambuf and no format-string parsing: operator<< appends straight into a contiguous buffer that grows by 1.5x through co::realloc, which can extend a block in place inside coost's thread-local slab allocator (blocks up to 2048 bytes in 16-byte units, sized free). Integers go through a 10,000-entry table of pre-rendered 4-digit ASCII groups whose first byte also encodes the digit count, so a 64-bit value needs at most four divide-by-10000 steps and five table loads; pointers and hex use a 256-entry byte-to-two-hex-digits table; doubles use Milo Yip's Grisu2 dtoa (the RapidJSON one). fastring::find uses memchr for the first byte and then Eric Blake's Two-Way substring search.",
+  "when_to_use": [
+    "Maintaining code already on coost v3 (its log, json and flag modules use fastream/fastring internally) where switching to std::ostringstream would add overhead.",
+    "Hot paths that concatenate integers, pointers, booleans and short strings into a reusable buffer (log lines, keys, protocol text) and can tolerate shortest-or-truncated float output.",
+    "Builds limited to C++11 (gcc 4.8+, clang 3.3+, VS2015+) that still want allocation-light string building without pulling in {fmt}.",
+    "Single-threaded or thread-local buffers that are cleared and reused, so the 1.5x growth and in-place realloc amortise to near-zero allocations."
+  ],
+  "when_not_to_use": [
+    "New code: fastring.h and fastream.h no longer exist after coost v4.0.0 (2026-09-15); use co::string from v4, or {fmt}/std::to_chars outside coost.",
+    "Many small, short-lived strings: fastring has no small-string optimization (issue #282, closed in May 2025 without SSO; v4 co::string keeps the same three-field layout), so every non-empty string is a heap allocation where std::string would use its inline buffer.",
+    "Output that must match printf or iostream formatting: fastream << double prints at most 6 decimal places by truncation, not rounding (issue #333: dp::_n(3.14159265, 4) prints 3.1415; maintainer: rounding is not considered), and there is no width, padding, precision or hex manipulator.",
+    "Generic code that expects a std::string-shaped type: no begin()/end() iterators, no insert/erase/at, no allocator template parameter, char only.",
+    "Projects that want a standalone header: both classes need coost's compiled fast.cc, fastring.cc and mem.cc and its global allocator."
+  ],
+  "integration": {
+    "form": "static lib (libco from coost v3.0.2; xmake or CMake, also vcpkg and conan); v4 replaces it with co::string",
+    "dependencies": "coost core: fast.h/fast.cc (integer and hex tables, Grisu2 dtoa), mem.h/mem.cc (co::alloc thread-local allocator), god.h, murmur hash for std::hash<fastring>, fastring.cc (memmem, trim, replace)",
+    "min_toolchain": "C++11 (README: gcc 4.8+, clang 3.3+, Visual Studio 2015+); default xmake builds use -O2 (\"faster\"), benchmark targets -O3",
+    "platforms": "Linux, macOS, Windows (CI badges for all three in v3.0.2); 32- and 64-bit",
+    "thread_safety": "Same as std::string: no shared state between copies (reference counting was removed in July 2020 after issue #59); concurrent mutation of one object needs external locking.",
+    "drop_in_for_baseline": "partial — fastream covers ostringstream's operator<< for built-in types but is move-only and has no manipulators or locale; fastring mirrors much of std::string's search and compare API but lacks iterators, insert/erase, SSO and allocator customization"
+  },
+  "gotchas": [
+    "Harness flaw: no code backs the '10~30 times faster than snprintf' sentence. The only snprintf comparison in the repo (v3.0.2 test/fast.cc) times the bare u64toa/u64toh/dtoa primitives, not fastream; its default range 1000..9999 keeps every integer at four digits, so u64toa only ever takes its single-table-lookup branch, and dtoa (shortest round-trip, Grisu2) is timed against snprintf(\"%.7g\") on the single value 3.14159, i.e. different output contracts. No results are published.",
+    "Harness flaw in the fastring-vs-std::string code (v3.0.2 test/str.cc): the 'ss = ss.c_str() + 1' case starts from an 8,191-character string, but co's benchmark macro runs one warm-up call and then 100,000 iterations for any body under 1 microsecond, so after 8,191 iterations both strings are empty and over 90% of the timed iterations assign an empty string; the harness also times a single batch with no repetition and BM_use is an empty out-of-line call placed after the timed loop. master benchmark/string.cc (co::string) has the same shape and also publishes nothing.",
+    "append(uint16), append(uint32) and append(uint64) on fastream/fastring append the raw binary bytes, not decimal text; use operator<< or cat() for text.",
+    "fast::i32toa/i64toa negate the value before converting, which is signed-overflow undefined behaviour for INT32_MIN/INT64_MIN (works on common two's-complement builds, but not guaranteed under optimisation)."
+  ],
+  "pick_this_over_siblings_when": "Only when you are already inside coost v3; for formatting numbers into fixed buffers to_static_string (std::to_chars-based, with published numbers) or MengRao/str are cleaner standalone choices, and for a faster std::string replacement EASTL string or FastString publish actual measurements against std::string while fastring publishes none and lacks SSO.",
+  "verified_claims_summary": "The only number is a first-party docs sentence (coost v3 docs, archived at coostdocs commit deb7584; the Chinese page says it was measured) that fastream is about 10-30x faster than snprintf across platforms and that std::ostringstream is several times slower than snprintf; no workload, compiler, flags, CPU or table accompanies it and no harness in any branch times fastream itself. fastring against std::string has benchmark code (v3.0.2 test/str.cc, master benchmark/string.cc) with no published results, and the code has the degenerate-input flaw noted above.",
+  "status_note": "coost is actively maintained (MIT, last commit 2026-09-28, tag v4.0.1), but fastream and fastring themselves are retired: they exist only up to tag v3.0.2 and their successor co::string has no performance claim, so treat this entry as historical and vendorable only together with coost's allocator and number-conversion code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/fastring.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/fastream.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/fast.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/def.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/mem.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/god.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/str.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/benchmark.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/include/co/__/dtoa_milo.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/fast.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/fastring.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/two_way.h",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/str.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/mem.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/src/benchmark.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/test/fast.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/test/str.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/xmake.lua",
+    "https://raw.githubusercontent.com/idealvin/coost/v3.0.2/readme.md",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/include/co/string.h",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/benchmark/string.cc",
+    "https://raw.githubusercontent.com/idealvin/coost/HEAD/include/co/fast.h",
+    "https://raw.githubusercontent.com/coostdocs/coostdocs.github.io/deb7584c3a15d214821ce8eac64eb5e48b38f5f4/en/co/other/fastream/index.html",
+    "https://raw.githubusercontent.com/coostdocs/coostdocs.github.io/deb7584c3a15d214821ce8eac64eb5e48b38f5f4/cn/co/other/fastream/index.html",
+    "https://raw.githubusercontent.com/coostdocs/coostdocs.github.io/deb7584c3a15d214821ce8eac64eb5e48b38f5f4/en/co/other/fastring/index.html",
+    "https://raw.githubusercontent.com/coostdocs/coostdocs.github.io/deb7584c3a15d214821ce8eac64eb5e48b38f5f4/en/co/benchmark/index.html",
+    "https://raw.githubusercontent.com/coostdocs/coostdocs.github.io/main/en/co/string/index.html",
+    "https://github.com/idealvin/coost/issues/282",
+    "https://github.com/idealvin/coost/issues?q=is%3Aissue+fastring",
+    "https://github.com/idealvin/coost/issues/333",
+    "https://github.com/idealvin/coost/issues/329",
+    "https://github.com/idealvin/coost/issues/59"
+  ],
+  "confidence": 0.75
+}

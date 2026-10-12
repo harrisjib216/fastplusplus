@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/fusionstrings/swisseph-wasm",
+  "one_liner": "Swiss Ephemeris 2.10.03 C compiled to WASM through a Rust wasm-bindgen shim; beats astronomy-engine on Moon positions only (1.44x).",
+  "what_it_does": "Exposes a small subset of the Swiss Ephemeris C API (swe_calc_ut, swe_julday, swe_revjul, swe_fixstar_ut, swe_pheno_ut, swe_set_topo, swe_set_sid_mode, swe_get_ayanamsa_ut, swe_get_planet_name, swe_sidtime) to Deno, Node, Bun and browsers from one WASM module, published on JSR, npm and crates.io. swe_calc_ut returns a JS object {longitude, latitude, distance, speed_long, speed_lat, speed_dist, rc_flags} in ecliptic-of-date coordinates. The API is Swiss Ephemeris's, not astronomy-engine's, so switching means rewriting call sites.",
+  "how_it_is_fast": "There is no algorithmic trick: the C library is compiled with clang for wasm32-unknown-unknown (build.rs sets warnings and the target but no -O flag; the libc is replaced by Rust shims over libm and a header-tagged malloc), and calls go through wasm-bindgen. The Moon win comes from running compiled C for the lunar series instead of JIT-compiled JavaScript. On cheap calls the binding cost dominates: each swe_calc_ut builds its result with Object::new plus seven Reflect::set imports across the WASM/JS boundary, which is why the Sun rows lose to pure JS.",
+  "when_to_use": [
+    "You already use Swiss Ephemeris conventions (swe_* calls, SE_/SEFLG_ constants, sidereal modes, ayanamsa) and need them in a browser or Deno/Node without a native addon.",
+    "Moon-heavy batch work (e.g. lunar tables) where the README's Deno bench shows about 182,000 vs 126,000 iter/s over astronomy-engine.",
+    "Astrology-style output (apparent ecliptic longitude/latitude with daily speeds) where Moshier-level precision is enough; swemmoon.c quotes at most 7 arcsec longitude error for the Moshier Moon over -3000 to +3000.",
+    "AGPL-3.0-compatible projects, or projects holding a Swiss Ephemeris Professional License."
+  ],
+  "when_not_to_use": [
+    "Sun and other cheap per-call positions: the README itself shows astronomy-engine faster (about 577,000 vs 319,000 ops/s in Chrome, 434,000 vs 178,000 in Deno).",
+    "When you need the SE1 file ephemerides or JPL files: fopen, fread and stat are stubbed (src/lib.rs) and swe_set_ephe_path is not exported, so every SEFLG_SWIEPH call silently falls back to Moshier.",
+    "Fixed stars: swe_fixstar_ut needs sefstars.txt, which can never be opened in this build (per source reading, not run).",
+    "Closed-source or permissively licensed products: the MIT label covers only the wrapper; the bundled Swiss Ephemeris is AGPL-3.0 or commercial.",
+    "Production use needing maturity: 4 stars, 26 commits all from 2026-01-06 to 2026-01-12, tests that only range-check the Sun longitude (275-285 degrees) and Moon latitude."
+  ],
+  "integration": {
+    "form": "module (JSR @fusionstrings/swisseph-wasm 0.1.5, npm, crates.io crate; browser build with the WASM inlined)",
+    "dependencies": "none at runtime (WASM plus wasm-bindgen glue); build needs Rust with wasm32-unknown-unknown, clang/LLVM with a wasm32 target, Deno and @deno/wasmbuild ^0.21.0",
+    "min_toolchain": "Rust edition 2024 (1.85+), wasm-bindgen 0.2.106, Deno 2.x for build and tests; runtime: any WebAssembly host (Deno, Node, Bun, browsers)",
+    "platforms": "any WebAssembly runtime with JS glue",
+    "thread_safety": "not documented; Swiss Ephemeris keeps global state (the swed struct with per-planet save areas, topo and sidereal settings), so treat each instance as single-threaded and one per worker",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw behind the numbers (per source reading of src/lib.rs and vendored sweph.c 2.10.03, not run): the benchmarks request SEFLG_SWIEPH, but fopen returns NULL, so each call first tries the file path, falls back to Moshier, and then swe_calc_ut sees the returned ephemeris flag differ from the requested one and recomputes with a new delta T. The save-area cache never hits because the saved flags (MOSEPH) never equal the requested ones (SWIEPH). Every measured iteration therefore does two Moshier computations; requesting SEFLG_MOSEPH would likely be faster, and the README's 'more accurate' claim describes Moshier, not the SE1 files.",
+    "The fallback is silent: the C stubs make sprintf write an empty string and printf/fprintf no-ops, so Swiss Ephemeris warnings and error texts (including 'not found in PATH ... using Moshier') come back blank. Check rc_flags & 4 (SEFLG_MOSEPH) yourself. qsort is a no-op, bsearch returns NULL and atof/atoi/sscanf return 0, so any code path that parses or sorts data is broken.",
+    "build.rs defines NO_MOSHIER with the comment 'Use JPL ephemeris only', but neither the vendored sweph.c nor sweph.h references that macro, so it does nothing: Moshier is the only ephemeris that can run.",
+    "The workloads differ: Swiss Ephemeris returns apparent ecliptic-of-date coordinates with speeds, while astronomy-engine GeoVector returns a J2000 equatorial vector without velocity. comparison.ts also parses a Date string inside every astronomy-engine iteration, deno_throughput.ts warms up only astronomy-engine, every row uses one fixed date (2000-01-01 12:00 UT), and no CPU, Deno, Chrome or compiler flags are stated."
+  ],
+  "pick_this_over_siblings_when": "No astronomy siblings are catalogued; the closest pattern is hash-wasm (C compiled to WASM behind a JS API). Unlike hash-wasm, this one wins only on its heavier call (Moon) and loses on light calls, so use it for Swiss Ephemeris API parity rather than speed.",
+  "verified_claims_summary": "The first-party README tables (no hardware or versions) show swe_calc_ut for the Moon at about 182,000 iter/s vs astronomy-engine 2.1.19 GeoVector at about 126,000 iter/s in deno bench (1.44x). For the Sun it loses: about 319,000 vs 577,000 ops/s in Chrome and 178,000 vs 434,000 in Deno, with 100,000 iterations timed by performance.now(). All rows are one fixed date, and the WASM side runs the Moshier fallback twice per call.",
+  "status_note": "A one-week project (26 commits, 2026-01-06 to 2026-01-12) with no activity since and a single open self-PR, so it is dormant rather than active. Usability is mixed: the wrapper is MIT, but shipping the WASM binary carries Swiss Ephemeris AGPL-3.0 or commercial terms.",
+  "sources_read": [
+    "https://github.com/fusionstrings/swisseph-wasm",
+    "https://github.com/fusionstrings/swisseph-wasm/commits/creation",
+    "https://github.com/fusionstrings/swisseph-wasm/tree/creation/tests",
+    "https://github.com/fusionstrings/swisseph-wasm/tree/creation/vendor",
+    "https://github.com/fusionstrings/swisseph-wasm/pulls",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/README.md",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/benches/comparison.ts",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/benches/deno_throughput.ts",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/benches/deno_direct_wasm.ts",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/benches/browser_bench.html",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/deno.json",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/build.rs",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/src/wrapper/stub.c",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/mod.ts",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/tests/integration_test.ts",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/tests/node_verification.js",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/vendor/swisseph/sweph.c",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/vendor/swisseph/sweph.h",
+    "https://raw.githubusercontent.com/fusionstrings/swisseph-wasm/HEAD/vendor/swisseph/swephexp.h",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/sweph.c",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/swephexp.h",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/swemmoon.c",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/sweodef.h",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/swephlib.c",
+    "https://raw.githubusercontent.com/aloistr/swisseph/HEAD/swedate.c",
+    "https://github.com/cosinekitty/astronomy"
+  ],
+  "confidence": 0.65
+}

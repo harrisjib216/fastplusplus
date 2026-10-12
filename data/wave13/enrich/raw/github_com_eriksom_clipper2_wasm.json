@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/eriksom/clipper2-wasm",
+  "one_liner": "Emscripten/Embind build of Angus Johnson's Clipper2 2.0.1; boolean ops 1.15-1.69x faster than Clipper1 WASM (js-angusj-clipper).",
+  "what_it_does": "Compiles the C++ Clipper2 library (git submodule at 642390d, rebuilt with Clipper2 2.0.1 on 2026-05-18) to WebAssembly with Embind and exposes Clipper2's own C++ API almost one to one: Paths64/PathsD containers, Clipper64/ClipperD objects, BooleanOp/Intersect/Union/Difference/Xor, InflatePaths offsetting, RectClip, Minkowski sum and difference, simplification and constrained Delaunay triangulation, with a separate clipper2z-utils module for SVG reading. It is not a JavaScript-idiomatic or drop-in API: paths are native objects built from flat coordinate arrays with MakePath64/MakePathD, results are read back through get()/view(), and every object must be freed with delete().",
+  "how_it_is_fast": "The gain is Clipper2's own: its boolean, offsetting and triangulation engine is the author's rewrite of Clipper1 (which js-angusj-clipper wraps), compiled at -O3 by Emscripten; nothing wasm-specific is added (no SIMD, threads or LTO flags in compile-wasm.sh or README.dev.md). The API lets callers keep geometry resident in wasm memory as Paths64 across many operations and reuse an output container, so repeated clips skip the per-call copy of JavaScript {x,y} objects into the heap and back that js-angusj-clipper's clipToPaths performs. Path construction and readback use typed-array views (one BigInt64Array or Float64Array set per path) rather than per-point binding calls.",
+  "when_to_use": [
+    "Browser, worker or Node code that runs many 2D polygon boolean operations (intersection, union, difference, xor) on the same or slowly changing geometry, where inputs can stay in Paths64 between calls.",
+    "Projects on js-angusj-clipper or a pure-JS Clipper port that want Clipper2 features: PolyTree output with isHole, RectClip, Minkowski, SimplifyPaths, constrained Delaunay triangulation, Z values carried on points.",
+    "Polygon offsetting (InflatePaths) and rectangle clipping of large path sets for CAD, CNC, mapping or game tooling in JavaScript.",
+    "Apps that need exact integer (Paths64) or decimal-precision (PathsD) geometry from the reference Clipper2 implementation rather than a reimplementation."
+  ],
+  "when_not_to_use": [
+    "One-off clips of small polygons coming from JavaScript objects: every call then pays MakePath64 (a BigInt per coordinate) and readback through view(), which the benchmark does not time; issue #3 'MakePath64 very slow' was closed as not planned.",
+    "Code that cannot manage manual lifetimes: every Path64/Paths64/Clipper64 and every get(i) result needs delete(); a wasm memory leak in the bindings (issue #11) was only fixed in May 2026 (PR #13), and wasm memory grows (ALLOW_MEMORY_GROWTH) without shrinking.",
+    "Code that expects catchable errors: the production build sets DISABLE_EXCEPTION_CATCHING=1, so a C++ exception (for example Path64.assign with a bad length) cannot be caught from JavaScript.",
+    "Bundle-size-sensitive pages: clipper2z.wasm is 213,643 bytes plus a 54 KB glue file, and the utils module adds another 237 KB wasm.",
+    "Teams wanting a measured speedup over native Clipper2 or a pure-JS library: neither is benchmarked; the only number is a single browser run against Clipper1 wasm."
+  ],
+  "integration": {
+    "form": "module (npm clipper2-wasm: Emscripten ES6 and UMD builds with .wasm files)",
+    "dependencies": "none at runtime (@types/emscripten is listed for typings); building needs Emscripten, CMake and the Clipper2 submodule",
+    "min_toolchain": "JavaScript runtime with WebAssembly and BigInt64Array (WASM_BIGINT build); source build: Emscripten em++ (version not documented) with C++17 Clipper2 2.0.1",
+    "platforms": "browsers, webviews, web workers and Node (ENVIRONMENT='web,webview,worker,node'); any CPU",
+    "thread_safety": "not documented; single-threaded Emscripten build without pthreads, one module instance per realm or worker",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Harness flaw (clipper1-vs-clipper2.html, testPolyOperation.js): the Clipper1 loop calls clipToPaths with JavaScript {x,y} arrays, which mallocs a Float64 heap buffer, writes 10,000 points, converts them to native paths and converts the result back to JS objects on every one of the 5,000 ops, while the Clipper2 inputs are built once with MakePath64 outside the timer and its output stays in a reused native Paths64 that is never read. The timed gap (about 160 us per op for intersection, derived from page data) therefore includes an unknown share of marshalling; the harness also never checks that the two libraries return the same polygons, runs each clip type once with no warm-up, and always runs Clipper1 first.",
+    "The Clipper2 build is USINGZ-only (Point64 and PointD carry a z value, 24 bytes per point), and the view()/assign() helpers assume that layout; MakePath64 expects flat [x0, y0, x1, y1, ...] arrays and MakePathZ64 [x, y, z, ...].",
+    "package.json 'types' points to dist/es/clipper2z.d.ts, which is not in the published 0.4.0 tarball; the declarations are at dist/clipper2z.d.ts, so import types from 'clipper2-wasm/dist/clipper2z' as the README example does. The README's 'Download lib' and 'Usage' links point to a CPP/clipper2-wasm path that returns 404.",
+    "CreateClipper64(preserveCollinear) takes the flag that Clipper2 normally sets via a property; the benchmark passes false, matching js-angusj-clipper's default."
+  ],
+  "pick_this_over_siblings_when": "No other 2D polygon-clipping library is catalogued in this category: brepkit does 3D B-rep booleans against OpenCASCADE wasm and contour-wasm computes isobands, so pick Clipper2-WASM whenever the job is 2D boolean operations, offsetting or triangulation in JavaScript.",
+  "verified_claims_summary": "A single run of the repo's browser page (5,000 ops on two 5,000-point integer circles, EvenOdd fill) on an Apple M2 Pro, browser and Emscripten version unstated, measured Clipper2-WASM against js-angusj-clipper 1.3.1 (Clipper1 compiled to wasm, loaded from jsDelivr): intersection 1962.1 vs 1163.3 ms, union 2434.2 vs 1817.4, difference 2122.5 vs 1472.8 and xor 2609.0 vs 2278.4 ms, i.e. 1.69x, 1.34x, 1.44x and 1.15x (derived from page data), with Clipper1's per-call JS-to-wasm conversion inside its timer and Clipper2's outside.",
+  "status_note": "Maintained in bursts (last commit and npm 0.4.0 on 2026-05-18 after a 2024-2026 gap; 112 stars, 15 forks, five closed issues) and BSL-1.0 licensed, so it is copyable and the reference way to run Clipper2 in JavaScript, but treat the speedup as first-party and measure your own marshalling cost.",
+  "sources_read": [
+    "https://github.com/ErikSom/Clipper2-WASM",
+    "https://github.com/ErikSom/Clipper2-WASM/commits/main",
+    "https://github.com/ErikSom/Clipper2-WASM/issues?q=is%3Aissue",
+    "https://github.com/ErikSom/Clipper2-WASM/issues/3",
+    "https://github.com/ErikSom/Clipper2-WASM/issues/11",
+    "https://github.com/ErikSom/Clipper2-WASM/tree/main/clipper2-wasm/dist",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/README.md",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/README.dev.md",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/.gitmodules",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/LICENSE",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/compile-wasm.sh",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/package.json",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/clipper.bindings.cpp",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/glue-stub-z.js",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/examples/benchmark/clipper1-vs-clipper2.html",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/examples/benchmark/testPolyOperation.js",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/examples/benchmark/circlePath.js",
+    "https://raw.githubusercontent.com/ErikSom/Clipper2-WASM/main/clipper2-wasm/dist/es/clipper2z.wasm",
+    "https://registry.npmjs.org/clipper2-wasm",
+    "https://registry.npmjs.org/clipper2-wasm/-/clipper2-wasm-0.4.0.tgz",
+    "https://raw.githubusercontent.com/xaviergonz/js-angusj-clipper/master/README.md",
+    "https://raw.githubusercontent.com/xaviergonz/js-angusj-clipper/master/src/clipFunctions.ts",
+    "https://raw.githubusercontent.com/xaviergonz/js-angusj-clipper/master/src/native/PathToNativePath.ts",
+    "https://raw.githubusercontent.com/AngusJohnson/Clipper2/main/README.md"
+  ],
+  "confidence": 0.7
+}

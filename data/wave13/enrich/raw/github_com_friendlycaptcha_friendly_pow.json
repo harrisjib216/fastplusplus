@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/friendlycaptcha/friendly-pow",
+  "one_liner": "Friendly Captcha's BLAKE2b proof-of-work solver in AssemblyScript WASM, claimed an order of magnitude faster than its own JS fallback.",
+  "what_it_does": "Solves Friendly Captcha v1 puzzles: a 32-64 byte puzzle buffer is zero-padded to one 128-byte block and the solver increments a 32-bit counter in bytes 124-127 until the first 4 bytes of BLAKE2b-256 (little-endian u32) fall below a difficulty threshold; n such solutions are concatenated. It ships two builds with the same call shape, getWasmSolver(module) and getJSSolver(), each returning solve(puzzleBuffer, threshold, n) -> [solution, hash]; the friendly-challenge widget picks WASM and falls back to JS when WebAssembly fails to initialise. It is a component of that widget, not a general hashing library.",
+  "how_it_is_fast": "The WASM path (src/blake2b/blake2b64.ts) runs BLAKE2b on native i64 adds and rotr with the 16 working words held in locals, the G function unrolled for all 8 column/diagonal mixes, SIGMA read from a static memory segment, unchecked loads and --noAssert -O3. Per attempt it only resets the 8-word chain value and compresses a single final block read straight from the caller's buffer as 16 u64 loads, with no allocation. The JS fallback (src/blake2b/blake2b.ts, adapted from dcposch's CC0 blake2b.js) must emulate every 64-bit add and rotate with pairs of 32-bit words in Uint32Arrays and re-reads the 128-byte block byte by byte each attempt, which is where the WASM build's advantage comes from.",
+  "when_to_use": [
+    "You are integrating or auditing Friendly Captcha v1 (friendly-challenge) and need to know which solver a client ran (diagnostics byte 0: 1 = JS fallback, 2 = WASM).",
+    "You want a compact reference for a single-block BLAKE2b PoW inner loop in AssemblyScript, using native i64 and locals instead of 32-bit word-pair emulation.",
+    "Browser or web-worker PoW where the input is exactly one 128-byte block and only a 4-byte counter changes per attempt.",
+    "Studying how much a 64-bit-arithmetic hash gains from WASM over JS: the repo holds both implementations plus a 32/64-bit equivalence test (test/blake2b64.astest.ts)."
+  ],
+  "when_not_to_use": [
+    "As a general BLAKE2b library: the solver path assumes an unkeyed, single 128-byte block and skips buffer resets ('Danger: ... only possible because our input is exactly 128 bytes').",
+    "When you need an OSI licence: the README states 'Friendly Captcha License; source-available only' and there is no LICENSE file at the root.",
+    "When you need maintained tooling: last commit 2022-12-01, pinned to AssemblyScript ^0.16.1 with a hand-pruned loader, and the README warns an upgrade needs loader changes.",
+    "Browsers or hardened modes without WebAssembly or with the JIT off: the JS fallback is the path that runs there, and it is the slow one (maintainer's slowest JS figure: 170k hashes/s).",
+    "When you need published, reproducible speed numbers: the WASM vs JS ratio has never been measured on one machine in the repo."
+  ],
+  "integration": {
+    "form": "module (npm package friendly-pow 0.2.2; WASM embedded as base64 through wasmwrap)",
+    "dependencies": "none at runtime; build needs assemblyscript ^0.16.1, wasmwrap, TypeScript 3.x, as-pect and jest",
+    "min_toolchain": "Browser or Node with WebAssembly MVP (i64, no SIMD or threads) for the WASM path; any ES5-era engine with typed arrays and DataView for the JS fallback",
+    "platforms": "any JS engine; WASM path needs WebAssembly",
+    "thread_safety": "not documented; each WASM instance keeps one shared 128-byte input array, so one solver per worker (friendly-challenge runs one per Web Worker)",
+    "drop_in_for_baseline": "partial — the WASM and JS solvers share one interface and are interchangeable, but the JS solver mutates the caller's buffer while the WASM solver returns views into its own linear memory"
+  },
+  "gotchas": [
+    "WASM loop bound wraps: solverWasm.ts computes end = start + n in u32, so with the API default n = 4294967295 any nonzero starting counter in bytes 124-127 makes end < start and the call returns an empty 'no solution' array after zero attempts. friendly-challenge is unaffected because the wrapper copies the caller's untouched buffer (counter 0) into WASM memory each call; direct callers resuming from a nonzero counter are not.",
+    "Built with --runtime stub, so nothing is ever freed: every solve call allocates a fresh Context (including an unused 128-byte b buffer) and a result array, and __release is a no-op, so memory grows with each call in a long-lived instance. The returned solution and hash are views into WASM memory and are overwritten by the next call; copy them first.",
+    "The JS solver checks a global ASC_TARGET (friendly-challenge sets self.ASC_TARGET = 0 before use); without it, reaching a solution throws a ReferenceError. It also writes the nonce through new DataView(input.buffer) at offset 124, ignoring byteOffset, so a subarray input gets the wrong bytes overwritten.",
+    "The only speed evidence in the repo is test assertions: WASM must exceed 1,250,000 hashes/s ('I hit 2.3M/s on Ryzen 3900X', test/solver.astest.ts) and JS must exceed 50,000 hashes/s (test/solver.test.ts, no machine). These are pass thresholds, not measurements, and their 25x ratio is not a speedup. The 'Can solve over and over' test is degenerate: after the first call the input keeps the found nonce, so 999 of 1,000 calls succeed on their first attempt."
+  ],
+  "pick_this_over_siblings_when": "Pick it over long.js (also a WASM fast path behind its own JS fallback with a no-numbers 'twice as fast' claim) only if your workload is BLAKE2b proof-of-work. superfasthash and galois carry actual measured WASM-vs-JS tables (1.21x and about 9x on additions), so they are better evidence of what AssemblyScript buys; friendly-pow is the production-deployed example with no measured ratio.",
+  "verified_claims_summary": "The README's 'order of magnitude faster in most browsers' has no numbers. First-party figures exist only in issues and tests, never on one machine: issue #1 (2020) gives about 3M hashes/s for WASM on a powerful desktop vs 170k hashes/s as the slowest JS fallback seen and says WASM could cut solve time 5-10x on an old phone; PR #2 (Node 12.13.1) took the WASM solver from about 2.25M to 4.0M hashes/s after MaxGraey's unrolling; a test comment records 2.3M/s on a Ryzen 3900X.",
+  "status_note": "Abandoned since 2022-12-01 (two dependabot PRs left open) and source-available under the Friendly Captcha License, so reference only. The evidence stays directional because no same-hardware JS-vs-WASM hash rate was ever published, though issue #1 and PR #2 give first-party absolute WASM hash rates.",
+  "sources_read": [
+    "https://github.com/FriendlyCaptcha/friendly-pow",
+    "https://github.com/FriendlyCaptcha/friendly-pow/commits/master",
+    "https://github.com/FriendlyCaptcha/friendly-pow/tree/master/src",
+    "https://github.com/FriendlyCaptcha/friendly-pow/tree/master/src/blake2b",
+    "https://github.com/FriendlyCaptcha/friendly-pow/tree/master/src/api",
+    "https://github.com/FriendlyCaptcha/friendly-pow/tree/master/test",
+    "https://github.com/FriendlyCaptcha/friendly-pow/issues?q=is%3Aissue",
+    "https://github.com/FriendlyCaptcha/friendly-pow/issues/1",
+    "https://github.com/FriendlyCaptcha/friendly-pow/pulls?q=is%3Apr",
+    "https://github.com/FriendlyCaptcha/friendly-pow/pull/2",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/README.md",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/package.json",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/entryWasm.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/solver.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/solverWasm.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/loader.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/puzzle.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/constants.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/diagnostics.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/blake2b/blake2b.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/blake2b/blake2b64.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/api/js.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/src/api/wasm.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/test/solver.astest.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/test/solver.test.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/test/blake2b64.astest.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-pow/HEAD/test/blake2b.test.ts",
+    "https://raw.githubusercontent.com/FriendlyCaptcha/friendly-challenge/HEAD/src/worker.ts",
+    "https://github.com/FriendlyCaptcha/friendly-challenge"
+  ],
+  "confidence": 0.6
+}

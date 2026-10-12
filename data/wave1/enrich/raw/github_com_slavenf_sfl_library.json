@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/slavenf/sfl-library",
+  "one_liner": "Header-only C++11 small_vector, static_vector and small_flat_map that avoid heap allocation for up to N elements; no benchmark numbers.",
+  "what_it_does": "sfl::small_vector<T, N, Allocator> follows the std::vector interface but keeps up to N elements in an inline array and switches to the allocator only beyond N; sfl::static_vector<T, N> never allocates and has a hard capacity of N; sfl::small_flat_map<Key, T, N> is a sorted-vector map stored in a small_vector. They are part of a larger family (vector, devector, segmented vectors, rb-tree, hash and flat maps and sets in plain, small_ and static_ variants) that meets the standard Container/AllocatorAwareContainer requirements, so code written against std::vector or std::map mostly compiles unchanged once the capacity parameter is added.",
+  "how_it_is_fast": "The speed argument is allocation avoidance, not a new algorithm: small_vector holds three pointers (first, last, end of storage) plus a union of N elements, and the begin pointer always points at the live buffer, so element access and push_back are the same pointer arithmetic as std::vector with no inline-or-heap branch; growth is 1.5x and never drops below N. static_vector removes the allocator entirely (capacity is a compile-time constant and push_back only asserts it is not full). small_flat_map does a binary search (O(log n) lookup, O(n) insert/erase) over contiguous pairs, which is cache-friendly for small maps compared with node-based std::map.",
+  "when_to_use": [
+    "Many short-lived vectors whose size is usually below a known bound (e.g. per-node child lists, argument lists, small result sets) where std::vector's first allocation dominates.",
+    "Bare-metal or allocation-free code paths that need a std::vector-shaped container with a fixed compile-time capacity (static_vector, also usable in C++20 constant expressions).",
+    "Small sorted maps (tens of keys) where a contiguous sorted array beats std::map's node allocations, and you want the inline-buffer variant of flat_map.",
+    "Codebases stuck on old toolchains: the library is tested down to GCC 4.8.5 and Clang 3.4.2 in C++11 mode, and supports stateful allocators and fancy pointers.",
+    "Teams that want one consistent family of small/static/flat containers from a single header-only, zlib-licensed project rather than mixing Boost, Abseil and LLVM types."
+  ],
+  "when_not_to_use": [
+    "When you need evidence that it is faster: the project publishes no numbers for small_vector, static_vector or small_flat_map, and nothing compares it with boost::container::small_vector, absl::InlinedVector or llvm::SmallVector.",
+    "Memory-tight objects: the header layout gives 24 bytes of pointer overhead on 64-bit targets on top of N*sizeof(T) (derived from the header layout), where ankerl::svector and absl::InlinedVector document 8 bytes.",
+    "Large or frequently moved inline contents: moving or swapping a small_vector whose elements are inline moves element by element (documented as linear in N in the worst case), unlike std::vector's constant-time pointer swap.",
+    "Release builds that rely on capacity checks: static_vector overflow is only an assert (SFL_ASSERT is plain assert), so with NDEBUG an extra push_back writes past the inline array.",
+    "Constant-evaluated code using the small_* containers: the README says only non-small_* containers work in C++20 constant expressions."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only); benchmarks additionally need Boost",
+    "min_toolchain": "C++11; tested GCC 4.8.5, Clang 3.4.2, GCC 7.3.1, Clang 5.0.1, GCC 15.2.1, Clang 22.1.1, MSVC 19.44 (C++14 and later); CMake 3.15+ for the INTERFACE target",
+    "platforms": "any with a conforming compiler (tested on CentOS 7 and Arch Linux x86-64 and MSVC; a 32-bit build problem, issue #29, was fixed in October 2025)",
+    "thread_safety": "not documented; no internal synchronization in the headers, so the usual std container rules apply by convention",
+    "drop_in_for_baseline": "partial — std::vector-compatible member set (plus nth/index_of) with an extra capacity template parameter; moved-from objects are not guaranteed empty, static_vector has no allocator and UB on overflow, and small_flat_map's value_type is std::pair<Key, T> rather than std::pair<const Key, T>"
+  },
+  "gotchas": [
+    "A moved-from small_vector may still hold its elements (documented 'valid but unspecified'); issue #3 (Dec 2023) was a user test asserting v1.size() == 0 after a move, closed by the maintainer as intended behavior. That reporter also said sfl::small_vector crashed in their program and switched to absl::InlinedVector, with no reproducer posted.",
+    "small_flat_map exposes std::pair<Key, T> with a non-const key through its iterators; modifying a key in place silently breaks the sort order the binary search relies on.",
+    "The record's 'many are constexpr in C++20' does not cover these entries' small_* types: the README states small_* containers are not usable in constant expressions; static_vector is, but on GCC you cannot declare a constexpr static_vector object and data() is not constexpr.",
+    "Benchmark harness (for other containers, not these three): benchmark/src/small_unordered_map.cpp and segmented_devector.cpp call std::mt19937 inside the timed loop for every element, and with 2-16 elements each sample is a single steady_clock interval; no results are checked in, so there is nothing to verify for small_vector, static_vector or small_flat_map."
+  ],
+  "pick_this_over_siblings_when": "Pick sfl when you want a standards-conforming, allocator-aware family (small_vector plus static, flat and linear-map variants) that builds on C++11 compilers and fancy pointers; pick ankerl::svector when you need published speedups and minimal 8-byte overhead, and ETL when you need a whole embedded, allocation-free container suite rather than just these types.",
+  "verified_claims_summary": "Nothing was measured: the README and doc pages only call these containers 'compact and cache-friendly' and say small_vector avoids dynamic allocation for up to N elements; the repo's benchmark folder (g++ -std=c++20 -O3 -DNDEBUG makefile) times segmented_devector against std::deque and boost::container::deque and the hash maps against std::unordered_map, publishes no results, and has no harness for small_vector, static_vector or small_flat_map.",
+  "status_note": "Actively maintained by a single author (886 commits, last on 2026-03-16 after a benchmark rework on 2026-03-10), zlib-licensed and header-only, so it is easy to vendor; tests are run under Valgrind, but treat its performance as unmeasured.",
+  "sources_read": [
+    "https://github.com/slavenf/sfl-library",
+    "https://github.com/slavenf/sfl-library/commits/master",
+    "https://github.com/slavenf/sfl-library/issues?q=is%3Aissue",
+    "https://github.com/slavenf/sfl-library/issues/1",
+    "https://github.com/slavenf/sfl-library/issues/3",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/README.md",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/doc/small_vector.md",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/doc/static_vector.md",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/doc/small_flat_map.md",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/include/sfl/small_vector.hpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/include/sfl/static_vector.hpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/include/sfl/small_flat_map.hpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/include/sfl/detail/cpp.hpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/include/sfl/private.hpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/benchmark/makefile",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/benchmark/src/small_unordered_map.cpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/benchmark/src/segmented_devector.cpp",
+    "https://raw.githubusercontent.com/slavenf/sfl-library/HEAD/benchmark/src/unordered_map.cpp"
+  ],
+  "confidence": 0.75
+}
