@@ -10,3 +10,4 @@ Seeded as w7-seed-leads (bobjen/spookyhash, pauldreik/lemac).
 - From w7-mine-e (2026-10-11): BoringSSL VAES AES-GCM commit with Zen 5 tables, briansmith/crypto-bench, aws-lc issue 2283 (cross-library AEAD numbers); sha1collisiondetection is slower than block-sha1 (1.75x) and OpenSSL (2.7x), no record.
 - Nettle (w7-mine-d, 2026-10-11): snippet-only 2022 POWER9 Poly1305 patch at 0.972 vs OpenSSL 1.453 cycles/byte on lists.lysator.liu.se (blocked); unverified lead.
 - BoringSSL: HAProxy 'State of SSL Stacks' (haproxy.com blocked) is the best lead for independent BoringSSL vs OpenSSL numbers; centminmod page also unreachable.
+- Seed-pass verifier lead (2026-10-13): kbench9000 (Donenfeld) shows fiat-crypto's fiat64 about 1.12x faster than donna64 (snippet only; moderncrypto.org and lists.zx2c4.com blocked).
