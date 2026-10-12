@@ -1,0 +1,106 @@
+# Perforator
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Runtime and systems](../README.md) › [Profilers and instrumentation](README.md)</sub>
+
+**Tier D** (directional, no numbers) · Study only · `Go` · `Apache-2.0 (eBPF unwinder and JVM parts GPL-2.0)` · 🟢 active
+
+> Yandex's eBPF continuous CPU profiler that unwinds frame-pointer-less native stacks in-kernel; a perf record alternative, no measured win.
+
+| | |
+|---|---|
+| **Beats** | perf record (sampling profiler) |
+| **Claimed result** | No speedup claim. The README states the agent needs 512Mb of RAM and &lt;1% of host CPUs and collects production profiles 'without affecting its performance'; it gives no comparison against perf. |
+| **Workload** | Fleet-wide eBPF CPU profiling of C++, C, Go and Rust services, unwinding without frame pointers or host debug symbols. |
+| **Metric** | other |
+| **Adoption** | 3.4k stars; deployed on tens of thousands of Yandex servers |
+| **Last commit** | 2026-10-06 |
+| **Links** | [repository](https://github.com/yandex/perforator) · [benchmark](https://github.com/yandex/perforator) |
+
+## Verdict
+
+There is no benchmark: the README states the agent uses 512Mb of RAM (more on large hosts) and under 1% of host CPUs and profiles 'without affecting' performance, and a maintainer discussion argues lower overhead than on-agent symbolizers without numbers, so no ratio against perf exists.
+
+## Use it when
+
+- Always-on CPU profiling across a Kubernetes fleet of C++, C, Go or Rust services where binaries are built without -fno-omit-frame-pointer.
+- You need central storage and query over months of profiles, merged across many pods, with diffing in a UI.
+- Feeding sPGO/AutoFDO (and LBR-based) profiles from production back into PGO builds.
+- Ad-hoc local profiling of a command or PID on x86-64 Linux 5.4+ via `perforator record` when perf's DWARF mode produces too much data.
+
+## Skip it when
+
+- aarch64 or non-Linux hosts: the docs say x86-64 is the only supported architecture.
+- You need hardware counter breakdowns, tracepoints, perf script/annotate workflows or anything beyond CPU stack sampling; perf does far more event types (kprobe support is an open issue).
+- Environments that cannot grant CAP_SYS_ADMIN (CAP_BPF-only operation is an open request) or kernels without BTF.
+- You want evidence of lower overhead than perf: the only figures are system requirements (512Mb RAM, &lt;1% of host CPUs), not a measured comparison.
+- Small teams that do not want to run ClickHouse, PostgreSQL and S3 just for profiling; use the CLI or perf instead.
+
+## How it is fast
+
+The agent precompiles each binary's .eh_frame into unwind rules stored in BPF maps as a 3-level page table (4136-byte pages, 256 rules per leaf), so the eBPF program can unwind code built without frame pointers inside the kernel instead of copying raw stack to userspace as `perf --call-graph dwarf` does. Symbolization is moved off the hosts: binaries are uploaded once per build-id and symbolized centrally (GSYM), so each node does not repeat the expensive DWARF work. No measurement of the resulting overhead against perf is published.
+
+## Compared with alternatives
+
+Pick it over magic-trace when you want low-rate sampling of a whole fleet with central storage rather than a few-millisecond Intel PT trace of one process; pick bpftime or funtrace only for instrumentation, which Perforator does not do.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | Go/C binaries (agent, CLI, microservices) plus Helm chart; not a library |
+| **Dependencies** | eBPF-capable kernel with BTF; full deployment needs ClickHouse, PostgreSQL and S3-compatible storage; build uses yatool (Python 3.12+) and compiles LLVM internals (\~10 GiB disk) |
+| **Minimum toolchain** | Linux 5.4+ (5.7+ and Intel CPU for LBR profiles); build via ./ya make or Docker |
+| **Platforms** | x86-64 Linux only |
+| **Thread safety** | not applicable (out-of-process profiler) |
+| **Drop-in for the baseline** | partial — `perforator record` covers perf record's CPU flamegraph use case with different flags and pprof/HTML output, not perf.data |
+
+## Gotchas
+
+- Needs debug symbols (in the binary or via debuginfod) and an .eh_frame section; builds with -fno-asynchronous-unwind-tables cannot be unwound, and .debug_frame support is an open issue.
+- Newest non-LTS kernels may break the eBPF program because it reads evolving kernel structures; the docs say they test LTS kernels after 5.4. An open issue reports a kernel panic.
+- The DWARF unwinder stops at 128 frames, and an open issue reports detached frames for a C++ ECS dispatch despite complete .eh_frame and frame pointers.
+- The agent uploads every executable it finds on profiled nodes to central storage; the eBPF unwinder and JVM code are GPL-2.0 while the rest is Apache-2.0.
+
+## Known shortcomings
+
+- No benchmark against perf, so tier D stands. It unwinds .eh_frame inside eBPF (a 3-level page table of unwind rules) and symbolizes offline. x86-64 only, Linux 5.4+, needs CAP_SYS_ADMIN; 34 open issues, one of them a kernel panic.
+
+## Caveats and trade-offs
+
+No comparison against perf or any other baseline; the overhead figure is a first-party system requirement, not a measurement. The baseline is inferred. The Medium and Habr posts are blocked. The eBPF unwinder and OpenJDK profiling parts are GPL-2.0. The latest commits are automated (robot-erm).
+
+x86-64 Linux, needs a cluster-style deployment for full use; mostly Go with C eBPF code.
+
+## Maintenance
+
+Actively maintained by Yandex (recent commits are automated syncs, 34 open issues) and deployed on tens of thousands of servers, but it is a multi-service system to operate, not code to copy.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-01): downgrade; tier before verification C, tier now D.
+- **Tier reason:** The README gives only resource requirements (512Mb RAM, &lt;1% of host CPUs) and says profiling happens 'without affecting its performance'. It has no measured comparison against perf or any other profiler, so the record has no speedup numbers: D. Kept because the project is notable (3.4k stars, deployed at Yandex scale).
+- **Verifier notes:** D but notable (3.4k stars), so not rejected under the not-notable rule. Per the keep-and-document rule, record the shortcoming 'no baseline comparison'.
+- **Fields the verifier corrected:** `last_commit`, `claimed_speedup`, `caveats`
+- **Shortcomings recorded by:** code reading by enricher
+- **Pages the verifier opened:**
+  - <https://github.com/yandex/perforator>
+  - <https://github.com/yandex/perforator/commits/main>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/README.md>
+- **Sources the enricher read:**
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/README.md>
+  - <https://github.com/yandex/perforator/tree/main/docs/en>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/toc.yaml>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/explanation/architecture/overview.md>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/reference/system-requirements.md>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/tutorials/native-profiling.md>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/guides/cli/record.md>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/reference/language-support/overview.md>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/docs/en/guides/build.md>
+  - <https://github.com/yandex/perforator/issues>
+  - <https://github.com/yandex/perforator/discussions/14>
+  - <https://github.com/yandex/perforator/tree/main/perforator/agent/collector/progs/unwinder>
+  - <https://raw.githubusercontent.com/yandex/perforator/HEAD/perforator/agent/collector/progs/unwinder/dwarf.h>
+- **Raw records:** [data/wave11/verified.json](../../../data/wave11/verified.json) (id `https://github.com/yandex/perforator`) · [data/wave11/enrich/raw/github_com_yandex_perforator.json](../../../data/wave11/enrich/raw/github_com_yandex_perforator.json) (enrichment confidence 0.75)
+
+</details>

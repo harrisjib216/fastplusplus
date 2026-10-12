@@ -1,0 +1,140 @@
+# zimg
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Media and graphics](../README.md) › [Color conversion and resampling](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C++` · `WTFPL` · 🟢 active
+
+> C++ library for scaling, colourspace and bit-depth conversion of video frames; its 2018 README shows about 2x FFmpeg 4.0.2's filters.
+
+| | |
+|---|---|
+| **Beats** | FFmpeg 4.0.2 filters (README column label 'swscale 4.0.2'): the swscale scale filter for the Lanczos resize and the libavfilter colorspace filter for the BT.709 to BT.2020 conversion |
+| **Claimed result** | Lanczos FHD-&gt;UHD resize: 7.7 ms vs 15.2 ms (Core i7-8565U), 10.8 ms vs 22.2 ms (Xeon Platinum 8176). BT.709 -&gt; BT.2020 conversion: 8.3 ms vs 17.5 ms (i7-8565U), 11.5 ms vs 25.6 ms (Xeon 8176). About 2x on each row (derived from page data). |
+| **Workload** | Time in ms to resize an FHD frame to UHD with the Lanczos filter (FFmpeg side: scale=3840:2160:sws_flags=lanczos+accurate_rnd:sws_dither=none), and to convert an FHD frame from BT.709 YUV to BT.2020 (FFmpeg side: the colorspace filter, colorspace=all=bt2020:iall=bt709:format=yuv420p10, which is libavfilter's vf_colorspace rather than swscale). |
+| **Metric** | latency |
+| **Hardware** | Intel Core i7-8565U and Intel Xeon Platinum 8176 |
+| **Adoption** | 472 stars |
+| **Last commit** | 2026-09-04 |
+| **Links** | [repository](https://github.com/sekrit-twc/zimg) · [benchmark](https://github.com/sekrit-twc/zimg) |
+
+## Verdict
+
+The README table (added 22 Sep 2018, z.lib 2.8) times an FHD-to-UHD Lanczos resize at 7.7 against 15.2 ms (i7-8565U) and 10.8 against 22.2 ms (Xeon Platinum 8176) against FFmpeg 4.0.2's scale filter, and a BT.709-to-BT.2020 conversion at 8.3 against 17.5 and 11.5 against 25.6 ms against libavfilter's colorspace filter, about 2x, with no compiler, flags, pixel formats, thread counts or zimg command given. The repo's timing tools cannot reproduce the FFmpeg side's formats as given: resizeapp handles only greyscale or 4:4:4 (float by default), colorspaceapp only 4:4:4 float, and graphapp times zero-filled frames, against the FFmpeg commands' yuv420p and yuv420p10 (derived from code).
+
+## Use it when
+
+- Video and frameserver pipelines that need standards-exact conversion: chroma siting, limited and full range, BT.709, BT.2020 (including constant luminance), PQ or HLG transfer functions, and interlaced fields.
+- High-bit-depth or float workflows (16-bit, half, float) that need good dithering (ordered, blue-noise random, error diffusion) when going back to 8 or 10 bits.
+- Batch conversion of many frames with the same formats: build one graph and process frames in parallel, one temp buffer per thread, as the repo's graphapp benchmark does.
+- Lanczos or spline resizing of planar YUV on AVX2 or AVX-512 x86, where it is at least on par with current swscale.
+
+## Skip it when
+
+- Expecting the README's 2x over current FFmpeg: issue #238 (Jul 2026; FFmpeg 6.1.1 built from source, zimg 3.0.5 via zscale, i5-12400F, 9000 raw yuv420p FHD frames) measured upscaling to UHD at 184 against 169 fps (48.6 s against 52.8 s user time, about 1.09x) and a downscale to 1796x1010 at 462 against 466 fps, so parity.
+- Packed RGB or RGBA photo resizing or ICC colour management: buffers are planar (packed needs callbacks), and the README warns it is not a colour management system and should not be used for drastic gamut or contrast reduction such as BT.2020 to BT.709.
+- x86 CPUs without AVX2: the current resize dispatcher (resize_impl_x86.cpp) only has AVX2 and AVX-512 kernels, so older CPUs fall back to plain C++.
+- Builds that need CMake or Meson: GNU autotools is the only supported build system, the README calls the Visual Studio projects unstable, and the Meson request (#228) is open.
+- Shipping only tagged releases: 3.0.6 (Aug 2025) lacks the Jul 2026 master fixes for integer weight rounding compensation, an out-of-bounds load in the AVX2 u16 permute resizer and an out-of-bounds read in SIMD error diffusion; the new-release request (#239) is open.
+
+## How it is fast
+
+Resizing is separable. Filter rows are precomputed per output pixel as float and as Q14 int16 coefficients, with the rounding error diffused so each row sums to exactly 1&lt;&lt;14, and they run in runtime-dispatched SIMD kernels: AVX2, AVX-512 and AVX-512 VNNI on x86, NEON on ARM since 3.0. The graphengine scheduler runs the whole conversion chain in tiles whose width comes from the detected per-thread cache size (CPUID leaf 4 on Intel), so intermediate scanlines stay in cache and no full-frame intermediates are built. Colourspace conversion plans a minimal chain of matrix, transfer and primaries steps and has SSE2/AVX2 lookup-table and AVX-512 paths for common transfer functions.
+
+## Compared with alternatives
+
+Pick it over FFmpeg's libswscale when you need standards-exact video conversion (siting, HDR transfer functions, float and half formats, quality dithering) from a small library at equal or slightly better speed. Pick libyuv or xxYUV for the fastest 8-bit packed YUV-to-RGB conversion, and fast_image_resize (Rust) or libvips for packed 8-bit RGB(A) photo resizing.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib or shared lib (autotools build; graphengine is a git submodule compiled in) |
+| **Dependencies** | none at runtime; graphengine submodule (WTFPL) at build time |
+| **Minimum toolchain** | C++17 compiler (configure.ac fails without -std=c++17); byte-addressable machine with two's-complement integers and a word of 32 bits or more |
+| **Platforms** | Windows and POSIX; x86 SIMD (AVX2, AVX-512, AVX-512 VNNI for resize; SSE2/AVX2 elsewhere) and ARM NEON since 3.0; scalar C++ on other CPUs |
+| **Thread safety** | Designed for thread safety (README). zimg_filter_graph_process takes the graph as a const pointer and a caller-provided temp buffer, the repo's graphapp shares one graph across threads, and error state is per-thread. No internal threading is documented: FFmpeg's zscale slices frames across threads outside the library. |
+| **Drop-in for the baseline** | partial: it does not replace the libswscale API, but in FFmpeg the zscale filter can replace the scale and colorspace filters inside a filter graph |
+
+## Gotchas
+
+- AVX-512 kernels run only when cpu_type is ZIMG_CPU_AUTO_64B (added in 2.6). The default ZIMG_CPU_AUTO stays on AVX2 even on AVX-512 CPUs, so the README does not say whether the Xeon Platinum 8176 rows used AVX-512.
+- C API defaults: luma bicubic (Catmull-Rom since 2.9, Mitchell-Netravali before), chroma bilinear, no dithering, and exact transfer functions (allow_approximate_gamma off). A like-for-like comparison with swscale's lanczos flag must set resample_filter_uv too, as FFmpeg's zscale does; the README does not say what its zimg run used.
+- The SIMD paths have a long fix history. The ChangeLog includes an AVX-512 sRGB/709 negative-input bug introduced in 2.8 (the benchmarked version) and fixed in 3.0.6, and a resize pixel-coordinate rounding fix in 3.0. Issues report a colourspace segfault on AVX-without-AVX2 CPUs (#226) and Lanczos 5- and 7-tap float artifacts on the SIMD path of git builds on an Apple M2 Pro (#223), both closed.
+- Colour defaults changed recently: master disabled chromatic adaptation by default in Aug 2026, so output can differ between 3.0.6 and master when white points change.
+
+## Known shortcomings
+
+- README numbers date from 2018 (z.lib 2.8 vs FFmpeg 4.0.2); the second row's baseline is FFmpeg's colorspace filter, not swscale; the testapp timing tools exist but no compiler, flags or command lines are published. The swscale comparison exists only in a forum.doom9.org search snippet (blocked here). WTFPL licence, treated as public-domain-equivalent (copyable).
+- The in-repo timing apps cannot reproduce the FFmpeg-side formats: resizeapp runs grey or 4:4:4 float by default, colorspaceapp 4:4:4 float and graphapp times zero-filled frames, while the FFmpeg side is yuv420p and yuv420p10; AVX-512 engages only with ZIMG_CPU_AUTO_64B and the chroma filter defaults to bilinear. Independent evidence from issue #238 (July 2026; FFmpeg 6.1.1 with zimg 3.0.5 zscale, i5-12400F) shows upscale 184 against 169 fps (about 1.09x) and downscale 462 against 466 fps (parity), so the README's 2x is stale. The benchmarked 2.8 introduced an AVX-512 sRGB/709 negative-input bug fixed in 3.0.6; resize coordinate rounding was fixed in 3.0; July 2026 master fixes are unreleased (last release 3.0.6, August 2025).
+
+## Caveats and trade-offs
+
+README numbers only, added in commit 'Add performance information to README.md' on 22 Sep 2018 with z.lib 2.8 and FFmpeg 4.0.2, so they are about eight years old and swscale has been reworked since. zimg ships its own timing tools (src/testapp resizeapp.cpp and colorspaceapp.cpp take a --times benchmark-cycles option), but the README gives no command lines, compiler, flags, thread count or frame content for either side. The second row's baseline is FFmpeg's colorspace filter, not swscale. A Doom9 forum thread (blocked here; search snippet only, poster and date unknown) reports mixed results: zimg faster for Lanczos upscaling, swscale faster for YUV420P8 to RGB24. Licence is WTFPL v2 (graphengine submodule also WTFPL): permissive and public-domain-equivalent but not OSI-approved; no patent grant.
+
+C++17 library covering scaling, colorspace conversion (Rec.709, Rec.2020, SMPTE-C, BT.2020 constant luminance) and depth conversion with dithering; designed to be thread-safe with allocation and I/O separated from processing. The README says it is optimized for Intel architecture. Not a colour management system (no drastic gamut reduction). Autotools is the supported build system.
+
+## Maintenance
+
+Maintained by one author with commits on master through 4 Sep 2026, but the last release is 3.0.6 (Aug 2025) and later fixes are unreleased; WTFPL v2 (a public-domain-equivalent grant, not OSI-approved, no patent clause), so it can be vendored freely.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-01): confirm; tier before verification C, tier now C.
+- **Tier reason:** First-party README tables (added 22 Sep 2018, z.lib 2.8) against FFmpeg 4.0.2 filters on two named Intel CPUs; the FFmpeg filter strings are given, but no compiler, flags, thread count, frame content or the zimg command line, so not A, and no independent measurement, so not B.
+- **Verifier notes:** README numbers match the record exactly (7.7 vs 15.2, 10.8 vs 22.2, 8.3 vs 17.5, 11.5 vs 25.6 ms). I kept usability copyable on the reading that WTFPL is a public-domain-equivalent grant like CC0; under a strict OSI-only reading it would be reference, so the orchestrator may want to rule on WTFPL once. Metadata checked: 472 stars, not archived, last commit 2026-09-04.
+- **Fields the verifier corrected:** `baseline`, `workload`, `caveats`
+- **Shortcomings recorded by:** Independent run in zimg issue #238 (July 2026; FFmpeg 6.1.1 with zimg 3.0.5 zscale against libswscale, i5-12400F): upscale 184 versus 169 fps (about 1.09x, derived from page data), downscale 462 versus 466 fps (parity).
+- **Pages the verifier opened:**
+  - <https://github.com/sekrit-twc/zimg>
+  - <https://github.com/sekrit-twc/zimg/commits>
+  - <https://github.com/sekrit-twc/zimg/blame/master/README.md>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/testapp>
+  - <https://github.com/sekrit-twc/zimg/issues/138>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/README.md>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/resizeapp.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/colorspaceapp.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/utils.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/COPYING>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/.gitmodules>
+  - <https://raw.githubusercontent.com/sekrit-twc/graphengine/HEAD/COPYING>
+- **Sources the enricher read:**
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/README.md>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/ChangeLog>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/configure.ac>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/Makefile.am>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/api/zimg.h>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/api/zimg++.hpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/resize/x86/resize_impl_x86.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/resize/resize_impl.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/resize/filter.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/resize/filter.h>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/colorspace/operation_impl.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/colorspace/gamma.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/graph/filtergraph.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/zimg/common/x86/cpuinfo_x86.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/resizeapp.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/colorspaceapp.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/graphapp.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/frame.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/utils.cpp>
+  - <https://raw.githubusercontent.com/sekrit-twc/zimg/HEAD/src/testapp/utils.h>
+  - <https://raw.githubusercontent.com/sekrit-twc/graphengine/HEAD/README.md>
+  - <https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/libavfilter/vf_zscale.c>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/zimg>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/zimg/resize>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/zimg/resize/x86>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/zimg/colorspace>
+  - <https://github.com/sekrit-twc/zimg/tree/master/src/testapp>
+  - <https://github.com/sekrit-twc/zimg/issues?q=is%3Aissue>
+  - <https://github.com/sekrit-twc/zimg/issues/238>
+  - <https://github.com/sekrit-twc/zimg/issues/239>
+  - <https://github.com/sekrit-twc/zimg/issues/223>
+  - <https://github.com/sekrit-twc/zimg/issues/213>
+  - <https://github.com/sekrit-twc/zimg/issues/209>
+  - <https://github.com/sekrit-twc/zimg/commits/master>
+  - <https://github.com/sekrit-twc/zimg/releases>
+  - <https://github.com/sekrit-twc/zimg/commit/HEAD~20>
+- **Raw records:** [data/wave10/verified.json](../../../data/wave10/verified.json) (id `https://github.com/sekrit-twc/zimg`) · [data/wave10/enrich/raw/github_com_sekrit_twc_zimg.json](../../../data/wave10/enrich/raw/github_com_sekrit_twc_zimg.json) (enrichment confidence 0.8)
+
+</details>

@@ -1,0 +1,141 @@
+# BtrBlocks
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md) › [Columnar analytics](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++` · `MIT` · 🟡 stale
+
+> C++ columnar compression library: sampled cascades of lightweight encodings; authors measured 2.6-3.8x faster decompression than Parquet.
+
+| | |
+|---|---|
+| **Beats** | Apache Parquet (generated/read via the Apache Arrow C++ library) and Apache ORC |
+| **Claimed result** | Public BI in-memory decompression: 2.6x, 3.6x and 3.8x faster than Parquet, Parquet+Snappy and Parquet+Zstd on average. TPC-H in-memory: 2.6x, 3.9x and 4.2x faster. S3 column scans on Public BI are 9x cheaper than compressed Parquet variants and 20x cheaper than uncompressed Parquet on average. Over all 22 TPC-H queries, Parquet, Parquet+Snappy and Parquet+Zstd cost 5.5x, 3.6x and 2.8x more than BtrBlocks. |
+| **Workload** | In-memory decompression throughput and S3 cold-column-scan dollar-cost, measured on the 5 largest Public BI Benchmark datasets (\~2451 columns) and all 22 TPC-H queries. |
+| **Metric** | throughput |
+| **Hardware** | AWS c5n.18xlarge: Intel Xeon Platinum 8000 series (Skylake-SP), 36 x 3.5 GHz cores (72 threads, hyperthreading disabled for benchmarks), AVX2/AVX512, 192 GiB RAM, 100 Gbit networking |
+| **Compiler and flags** | GCC 10.3.1 on Amazon Linux 2, kernel 5.10 (paper). The paper states no optimization flags; the repo CMakeLists adds -march=native -g on top of the CMake build-type defaults. |
+| **Adoption** | 289 stars |
+| **Last commit** | 2025-04-07 |
+| **Links** | [repository](https://github.com/maxi-k/btrblocks) · [benchmark](https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/papers/btrblocks.pdf) |
+
+## Verdict
+
+The authors' SIGMOD'23 runs used a c5n.18xlarge (Skylake-SP, 36 cores, GCC 10.3.1, no optimization flags stated). Multi-threaded in-memory decompression of a 43-table, 2,451-column Public BI subset was 2.6x, 3.6x and 3.8x faster than uncompressed, Snappy and Zstd Parquet (written by pyarrow 9.0.0, read with the low-level Arrow C++ Parquet API), and 2.6x, 3.9x and 4.2x faster on TPC-H, although the Zstd variants compressed better. The Parquet/ORC harness is not public. The competing FastLanes paper (i4i.4xlarge Ice Lake, DuckDB 1.2 Parquet) broadly corroborates faster decoding: 115 ms total versus 713 ms (Snappy) and 731 ms (Zstd). It also found BtrBlocks' encoding much slower.
+
+## Use it when
+
+- Scan-heavy analytics that decompress whole columns or blocks, where decode CPU rather than stored bytes sets the cost. An example is pulling data from S3 over 100 Gbit links, where the paper found no Parquet variant could keep up with the network.
+- Real-world, denormalized BI-style tables with low-cardinality or prefix-heavy strings, long runs and decimal-like doubles (Public BI-style data), where dictionary/RLE/FSST cascades pay off.
+- Building your own C++ engine or storage format on x86-64 Linux, when you want a compression layer with explicit caller-owned block buffers and a configurable scheme pool (enable or disable schemes, cascade depth, block and sample size).
+- Research and benchmarking, as the reference implementation of sampling-based cascaded scheme selection to compare against, extend or fork.
+
+## Skip it when
+
+- You need interoperability. Nothing else reads BtrBlocks blocks, and there is no Arrow, Spark, DuckDB or Trino integration and no file-level metadata or statistics.
+- Point lookups or row-level random access. A whole 64K-value block must be decoded, and the FastLanes paper found first-row retrieval about 800x slower than FastLanes because BtrBlocks has no API for decoding a single value.
+- Ingest-bound or write-heavy pipelines. In the FastLanes paper's Table 4, BtrBlocks' total encoding time was 111 s, against 5.9 s for DuckDB's Parquet+Snappy and 6.9 s for Parquet+Zstd.
+- Minimizing storage bytes. Parquet+Zstd compresses better in the authors' own Figure 8. FastLanes' Table 3 puts BtrBlocks 18% larger than FastLanes on Public BI, against 2% larger for Parquet+Zstd.
+- Column types other than int32, double and string. int64, float32, small ints, decimals, dates/timestamps and nested types are marked out of scope in Units.hpp. Also avoid it for Windows builds, which CMake rejects, and for production macOS builds.
+
+## How it is fast
+
+It drops Parquet's general-purpose codec layer (Snappy/Zstd) and uses only lightweight encodings: RLE, One Value, dictionary, frequency, SIMD-FastPFOR/FastBP128 bit-packing, FSST for strings, the new Pseudodecimal encoding for doubles, and Roaring bitmaps for NULLs. It applies these recursively (cascading compression, default max depth 3). At each level of each block it picks the scheme by collecting min/max/unique/run-length stats, pruning schemes that cannot help, and trial-compressing a sample of 10 runs x 64 values (about 1%) with every remaining scheme. The paper says this selection takes about 1.2% of compression time. The decompression kernels are AVX2-vectorized: RLE writes past the buffer end instead of branching, dictionary decoding uses gathers, RLE and dictionary decoding are fused, and string dictionaries decode to (offset, length) pairs instead of copying strings. In the authors' ablation, scalar kernels were only 17% slower and still 2.3x faster than the fastest Parquet variant, so most of the win comes from avoiding the heavyweight codecs.
+
+## Compared with alternatives
+
+For new C++ work, FastLanes is usually the better pick: its authors measured about 7x faster decoding than BtrBlocks, better compression, zero dependencies and real random access. If Rust fits, pick Vortex: the BtrBlocks maintainer points users there, and it adopts the same sampled cascading selection with FastLanes, ALP and FSST. Choose BtrBlocks when you want the original, compact C++ reference of the SIGMOD'23 sampling-plus-cascade design to study, benchmark against or fork, or specifically its Pseudodecimal double encoding, for which ALP is the newer alternative.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib (CMake; shared with -DBUILD_SHARED_LIBRARY=ON) |
+| **Dependencies** | Core library: FastPFor, FSST, CRoaring and Boost.dynamic_bitset, all fetched by CMake at pinned commits; SIMDe on ARM; spdlog only with WITH_LOGGING. The tools, tests and benchmarks also pull oneTBB, gflags, yaml-cpp, csv-parser, the AWS SDK, googletest, Google Benchmark and lz4. |
+| **Minimum toolchain** | C++17, CMake 3.12+. The paper used GCC 10.3.1. GCC 14 build breakage in the vendored TBB was addressed by the 2025 dependency bump. An Apple clang 16 build failure is still open (issue #11). |
+| **Platforms** | Linux x86-64 with AVX2. The FastLanes paper could not run it in an SSE-only build. aarch64 is supported through SIMDe since May 2024, and the README claims Linux/macOS ARM were tested, but a 2025 macOS arm64 build report is unresolved. CMake refuses non-UNIX platforms. |
+| **Thread safety** | Separate blocks can be compressed or decompressed on separate threads; the paper and tools parallelize this with TBB. The global BtrBlocksConfig/SchemePool must be set through configure() at startup. The header documents that changing it while compression runs on another thread is not safe. |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Output buffers are not bounds-checked. The shipped example warns that an undersized compression buffer causes a crash or undefined behavior. The SIMD kernels also deliberately write up to 128 bytes (SIMD_EXTRA_BYTES) past logical ends, so allocate slack.
+- The top-level CMakeLists adds -march=native and -g to every build. Binaries are tied to the build machine's ISA unless you override the flags.
+- The headline 9x/20x cheaper S3 column scans come mostly from metadata layout, and the paper says so itself: Parquet needs three dependent S3 requests per column, while BtrBlocks stores one file per column. When whole datasets were loaded, BtrBlocks was 1.8x cheaper than Parquet+Snappy/Zstd and 2.6x cheaper than uncompressed Parquet.
+- The authors' S3-hosted benchmark datasets were deleted (issue #13, open), and the regression benchmark segfaults on user-supplied data (issue #14, open). btrblocks.com is a separate TUM cloud-storage spin-off (BtrBlocks GmbH), not documentation for this library.
+
+## Known shortcomings
+
+- The Parquet/ORC comparison harness is not in the repo; no flags, CPU family only (c5n.18xlarge). The FastLanes paper measures BtrBlocks encoding 1.37x (not 7x) and its ratio well below Parquet+Zstd.
+- A compression layer, not a file format: no Parquet interop, metadata or statistics; int32/double/string only. Encoding is slow (FastLanes paper: 111 s vs 5.9 s Snappy / 6.9 s Zstd for DuckDB Parquet) though decoding is \~6x faster; no row-level random access (whole 64K blocks decode); Parquet+Zstd compresses smaller. The 9x/20x S3 win is mostly metadata layout (the paper admits); full-dataset loads are 1.8x cheaper.
+- Fragile build: -march=native forced, AVX2 the main target, ARM via SIMDe, macOS clang 16 build failure open (#11). Output buffers are unchecked and SIMD writes up to 128 B past the end. Stale since 2025-04; benchmark data deleted (#13), benchmark segfault (#14); the maintainer points to Vortex.
+
+## Caveats and trade-offs
+
+These are the SIGMOD 2023 authors' own measurements. The Parquet/ORC comparison harness and exact build flags are not published; the repo's engine-comparison directory says it was removed because of DeWitt clauses. A later VLDB 2025 paper by competing FastLanes authors (not independent) re-ran BtrBlocks on an AWS i4i.4xlarge. It found BtrBlocks decoded about 7x slower than FastLanes (encoding was 1.37x slower, derived from that paper's Table 4). BtrBlocks gained nothing from AVX512 and could not do single-value random access without an API reimplementation. On compression ratio BtrBlocks was +18% larger than FastLanes on Public BI, versus +2% for Parquet+Zstd.
+
+README states it 'currently requires an x86 platform' and is only built/tested on Linux and macOS; test suite described as 'rudimentary'; no true random-access-by-row API (would require reimplementation, per a later independent evaluation).
+
+## Maintenance
+
+Stale research code: the last commit (2025-04-07) was a dependency bump, 3 issues and 4 PRs are still open, the maintainer calls the build setup "terrible" and points Rust users to Vortex. It is MIT-licensed and small enough to vendor, but expect to fix the build and add your own metadata layer.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): downgrade; tier before verification A, tier now B.
+- **Tier reason:** This is a peer-reviewed SIGMOD 2023 paper whose text states the claimed 2.6x/3.6x/3.8x decompression gains and the 9x/20x and 5.5x/3.6x/2.8x S3 cost figures against Parquet. It is not A for three reasons: the Parquet/ORC benchmark harness is not in the public repo (only BtrBlocks-side tools/conversion/decompression-speed\*.cpp; the engine-comparison code was removed), the paper gives no compiler flags, and the CPU is named only as the 'Xeon Platinum 8000 series (Skylake-SP)' family.
+- **Verifier notes:** The numbers are verbatim in the paper. I downgraded A to B because the baseline-side benchmark code, flags and exact CPU model are missing. I also fixed the record's FastLanes-paper caveat: '7x slower encoding' and 'close to Parquet+Zstd compression ratio' are not what that paper shows. Metadata is confirmed: MIT, 289 stars, last commit 2025-04-07 (stale).
+- **Fields the verifier corrected:** `hardware`, `compiler_and_flags`, `claimed_speedup`, `caveats`
+- **Pages the verifier opened:**
+  - <https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/papers/btrblocks.pdf>
+  - <https://github.com/maxi-k/btrblocks>
+  - <https://github.com/maxi-k/btrblocks/blob/master/CMakeLists.txt>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/environment.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/tools/engine-comparison/README.md>
+  - <https://github.com/maxi-k/btrblocks/blob/master/bench/benchmarks.cpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/tools/conversion/decompression-speed.cpp>
+  - <https://www.vldb.org/pvldb/vol18/p4629-afroozeh.pdf>
+- **Sources the enricher read:**
+  - <https://github.com/maxi-k/btrblocks>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/btrblocks.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/btrblocks.cpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/CMakeLists.txt>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/environment.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/local.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/simde.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/fastpfor.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/fsst.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/tbb.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/croaring.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/cmake/dynamic_bitset.cmake>
+  - <https://github.com/maxi-k/btrblocks/blob/master/tools/examples/compression.cpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/tools/engine-comparison/README.md>
+  - <https://github.com/maxi-k/btrblocks/blob/master/.github/workflows/test.yml>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/compression/Datablock.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/compression/BtrReader.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/compression/Compressor.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/common/SIMD.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/common/Units.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/common/Exceptions.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/scheme/SchemeType.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/scheme/SchemeConfig.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/storage/Column.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/storage/Relation.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/storage/Chunk.hpp>
+  - <https://github.com/maxi-k/btrblocks/blob/master/btrblocks/cache/ThreadCache.hpp>
+  - <https://github.com/maxi-k/btrblocks/commits/master>
+  - <https://github.com/maxi-k/btrblocks/issues/2>
+  - <https://github.com/maxi-k/btrblocks/issues/8>
+  - <https://github.com/maxi-k/btrblocks/issues/11>
+  - <https://github.com/maxi-k/btrblocks/issues/12>
+  - <https://github.com/maxi-k/btrblocks/issues/13>
+  - <https://github.com/maxi-k/btrblocks/issues/14>
+  - <https://github.com/maxi-k/btrblocks/pull/10>
+  - <https://www.cs.cit.tum.de/fileadmin/w00cfj/dis/papers/btrblocks.pdf>
+  - <https://www.vldb.org/pvldb/vol18/p4629-afroozeh.pdf>
+  - <https://hn.algolia.com/api/v1/search?query=btrblocks>
+  - <https://btrblocks.com/>
+  - <https://spiraldb.com/post/cascading-compression-with-btrblocks>
+- **Raw records:** [data/wave6/verified.json](../../../data/wave6/verified.json) (id `https://github.com/maxi-k/btrblocks`) · [data/wave6/enrich/raw/github_com_maxi_k_btrblocks.json](../../../data/wave6/enrich/raw/github_com_maxi_k_btrblocks.json) (enrichment confidence 0.85)
+
+</details>

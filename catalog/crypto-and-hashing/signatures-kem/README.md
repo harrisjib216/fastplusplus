@@ -1,0 +1,34 @@
+# Signatures and key exchange
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Crypto and hashing](../README.md)</sub>
+
+**What these beat:** OpenSSL, libsodium, BoringSSL, liboqs  
+**23 entries:** 7 tier A · 6 tier B · 10 tier C · 0 tier D · 17 copyable, 6 study only
+
+| # | Project | What it is | Tier | Language | License | Status |
+|--:|---|---|:-:|---|---|---|
+| 1 | [**libsecp256k1 (bitcoin-core/secp256k1)**](bitcoin-core-secp256k1.md) | Bitcoin Core's secp256k1-only C signature library; ECDSA verification 2.5-5.5x faster than the 2015-era OpenSSL it replaced. | **A** | C | MIT | 🟢 active |
+| 2 | [**curve25519-voi**](oasisprotocol-curve25519-voi.md) | Go Ed25519/X25519/sr25519 library ported from curve25519-dalek; \~1.9x faster signing, \~1.7x faster verification than Go 1.17 crypto/ed25519. | **A** | Go | BSD-3-Clause | 🟢 active |
+| 3 | [**VecFalcon (Vectorized Falcon-Sign)**](ji-peng-vecfalcon.md) | Falcon/FN-DSA signing with a batched SIMD Gaussian BaseSampler and RISC-V FFT; sign_core runs 1.13-1.59x faster than C-FN-DSA. | **A** | C | MIT (root LICENSE). The… | 🟢 active |
+| 4 | [**sntrup (Streamlined NTRU Prime, pure Rust)**](mikelodder7-sntrup.md) | Pure-Rust Streamlined NTRU Prime KEM: ties liboqs AVX2 on Zen 5 and beats liboqs portable C on Apple M2 1.2-2.7x. | **A** | Rust | Apache-2.0 OR MIT | 🟢 active |
+| 5 | [**ENG25519 (Curve25519_AVX512IFMA)**](ji-peng-eng25519-artifact.md) | AVX-512IFMA X25519/Ed25519 code plus an OpenSSL 1.1.1 ENGINE; beats OpenSSL's x86-64 Curve25519 code 3.3-12x on throughput. | **A** | C | LGPL-3.0 | 🟡 stale |
+| 6 | [**Code Generation of Faster Formally Verified NTT with…**](paper-code-generation-of-faster-formally-verified-ntt-with-plantard-reduction.md) | Python generator emitting lazily-reduced Plantard NTTs (C/Jasmin) for ML-KEM/ML-DSA/FN-DSA; 1.5-2.5x faster than pq-crystals reference NTT. | **A** | C | Apache-2.0 | ⚪ unknown |
+| 7 | [**fasthqc/hqc (vectorized sparse-dense multiplication +…**](fasthqc-hqc.md) | AVX2 patch to the HQC Round-2 KEM's sparse-dense multiply and BCH syndrome step; 34-46% fewer cycles than the optimized reference. | **A** | C | no license (study only) | 🔴 abandoned |
+| 8 | [**fiat-crypto (generated Curve25519 field arithmetic in…**](mit-plv-fiat-crypto.md) | Coq-proved generator of finite-field arithmetic in C, Rust, Go and Zig; matches hand-written Curve25519 field code in BoringSSL, not faster. | **B** | Coq | MIT OR Apache-2.0 OR… | 🟢 active |
+| 9 | [**Falcon-Mitaka GPU (High Throughput Lattice-based Signatures…**](benlwk-falcon-mitaka.md) | Batched CUDA Falcon-512/Mitaka-512 sign and verify; the paper reports 8.8-18.5x sign and 105-149x verify throughput over CPU AVX2 Falcon. | **B** | CUDA | GPL-3.0 | 🟡 stale |
+| 10 | [**FourQlib (SchnorrQ / FourQ curve arithmetic)**](microsoft-fourqlib.md) | Microsoft Research C library for FourQ ECDH and SchnorrQ signatures; up to 5.6x faster scalar multiplication than fast P-256 code. | **B** | C | MIT | 🔴 abandoned |
+| 11 | [**Ed25519 (original amd64-64-24k SUPERCOP/eBATS submission)**](ed25519-cr-yp-to-software-html.md) | The original 2011 public-domain Ed25519 amd64 assembly in SUPERCOP. On Westmere it signs about 20x and verifies about 7.6x faster than OpenSSL-based P-256 ECDSA. | **B** | C | Public Domain | 🔴 abandoned |
+| 12 | [**Optimizing Dilithium Implementation with AVX2/AVX-512 (PSPM)**](xurq5953-optimizing-dilithium-implementation-with-avx2-512.md) | Research AVX2/AVX-512 Round 3 Dilithium code using PSPM-TEE sparse c·s multiplication; paper reports 1.6-2.9x fewer cycles than pq-crystals AVX2. | **B** | C | no license (study only) | 🟡 stale |
+| 13 | [**ML-KEM AVX-512 optimization for TLS 1.3 (Zheng et al…**](paper-ml-kem-avx-512-optimization-for-tls-1-3-zheng-et-al-fudan-university.md) | Unreleased AVX-512 ML-KEM (ESORICS 2024) reporting 1.30-1.64x fewer cycles than pq-crystals AVX2 Kyber, but only 0.4-5.6% more TLS handshakes. | **B** | C | no license (study only) | ⚪ unknown |
+| 14 | [**BoringSSL**](google-boringssl.md) | Google's OpenSSL fork, the TLS and crypto library of Chrome and Android; only weak, mixed evidence that it beats OpenSSL on RSA/ECDSA. | **C** | C++ | Apache-2.0 | 🟢 active |
+| 15 | [**FN-DSA (Rust, Falcon-based post-quantum signatures)**](pornin-rust-fn-dsa.md) | Pure-Rust, no_std FN-DSA (Falcon) post-quantum signatures whose author reports faster signing and keygen than OpenSSL RSA-2048. | **C** | Rust | Unlicense | 🟢 active |
+| 16 | [**UltrafastSecp256k1**](shrec-ultrafastsecp256k1.md) | C++20 secp256k1 ECDSA/Schnorr engine: about 1.5x faster CT signing and 1.1x faster verify than libsecp256k1, and 11-22x faster than OpenSSL. | **C** | C++ | MIT | 🟢 active |
+| 17 | [**ocaml-curve448**](thevilledev-ocaml-curve448.md) | OCaml X448/Ed448 library whose optional fiat-crypto C backend roughly matches OpenSSL 3.6.4 on X448 and Ed448 signing; verification is slower. | **C** | OCaml | ISC | 🟢 active |
+| 18 | [**watsign**](mitschabaude-watsign.md) | WebAssembly port of TweetNaCl Ed25519 sign/verify for browsers, Node and Deno; \~4-6x faster than tweetnacl-js warmed up. | **C** | WebAssembly | MIT | 🟡 stale |
+| 19 | [**Snowshoe (catid/snowshoe)**](catid-snowshoe.md) | Constant-time EC scalar multiplication on a custom 2^127-1 GLS curve, claimed 4-8x faster than OpenSSL 1.0.1e P-256. | **C** | C++ | BSD-3-Clause | 🔴 abandoned |
+| 20 | [**BeeCrypt**](beecrypt-sourceforge-net.md) | Portable LGPL C crypto library with per-CPU assembler bignum code; 2003-era tables show 2-4.6x faster modexp than Java BigInteger. | **C** | C | LGPL-2.1-or-later | 🔴 abandoned |
+| 21 | [**moduletto (NEON i16 ML-KEM-512)**](crabnebula-dev-moduletto.md) | Rust modular-arithmetic/NTT crate whose NEON ML-KEM-512 example edges out liboqs 0.16.0 on Apple M5 (\~1.18x). | **C** | Rust | PolyForm-Noncommercial-1.0.0 (study only) | 🟢 active |
+| 22 | [**GOLF: GPU-accelerated Optimization for Lattice-based FALCON**](paper-golf-gpu-accelerated-optimization-for-lattice-based-falcon.md) | CUDA batch port of Falcon-512 signing and verification, one signature per GPU thread; 70x/369x the reference's published CPU throughput. | **C** | CUDA | no license (study only) | ⚪ unknown |
+| 23 | [**GRASP: GPU-based paRallel Accelerated SPHINCS+**](paper-grasp-gpu-based-parallel-accelerated-sphincs.md) | Single-kernel CUDA SPHINCS+-SHA256-f-simple batch signer/verifier; 1.37-3.45x over Kim et al.'s GPU code, 1,820-3,659x the single-core reference. | **C** | CUDA | no license (study only) | ⚪ unknown |
+
+<sub>Tiers: **A** reproducible public benchmark (code, compiler, flags and CPU stated) · **B** independent or peer-reviewed measurement · **C** first-party claim · **D** directional, no numbers. Status: 🟢 active · 🔵 finished · 🟡 slow or stale · 🔴 abandoned · ⚪ unknown. *Study only* means no usable open-source license: read the idea, don't copy the code.</sub>

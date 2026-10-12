@@ -1,0 +1,101 @@
+# simd-lexing
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Parsing and text](../README.md) › [Lexers and tokenizers](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C` · `Zlib` · 🔴 abandoned
+
+> Single-header AVX2 C99 lexer with no tables, \~3-6x faster than flex on tokenizing GCC source.
+
+| | |
+|---|---|
+| **Beats** | flex (lexer generator) |
+| **Claimed result** | flex 231ms, flex --fast 102ms, flex --full 106ms, simd-lex 34ms =&gt; roughly 6.8x faster than plain flex and \~3x faster than flex --fast/--full (derived from page data) |
+| **Workload** | Lexing a single concatenated file of all GCC source code (identifiers/strings/comments; does not parse numeric literals) on a Skylake 2.40GHz i5 laptop |
+| **Metric** | latency |
+| **Hardware** | Skylake 2.40GHz Intel Core i5 laptop |
+| **Compiler and flags** | simd-lex: gcc --std=gnu99 -O3 -march=native -fstrict-aliasing -DRELEASE=1 -DBENCH=1 (etc/Makefile 'release' target, run via 'make bench' -&gt; etc/run.sh); flex reference lexers' spec and build flags not included in the repo |
+| **Adoption** | 19 stars |
+| **Last commit** | 2021-09-24 |
+| **Links** | [repository](https://github.com/Mateuszd6/simd-lexing) · [benchmark](https://github.com/Mateuszd6/simd-lexing#readme) |
+
+## Verdict
+
+On a single concatenated file of GCC source (identifiers/strings/comments only, no numeric literals) on a Skylake 2.40GHz i5 laptop, the README's gcc --std=gnu99 -O3 -march=native build of simd-lex ran in 34ms versus flex at 231ms (default), 102ms (--fast) and 106ms (--full) -- roughly 6.8x and \~3x faster respectively; timings come from single shell `time` runs (including process startup/I/O) and the flex reference binaries plus their build flags are not included in the repo.
+
+## Use it when
+
+- Tokenizing large volumes of C-like source (identifiers, string/char literals, // and /\* \*/ comments, common short operators) where flex's DFA walk is the bottleneck
+- x86-64 build targets with AVX2 available and a willingness to compile with -march=native or explicit AVX2 flags
+- Prototyping a custom lexer where hand-writing token-class macros is acceptable instead of authoring a flex grammar
+- Workloads that don't need numeric-literal lexing, or where you're willing to add that yourself
+- Small, embeddable single-header C99 codebases that want to avoid a flex/bison toolchain dependency
+
+## Skip it when
+
+- Need numeric literal (int/float) tokenization out of the box -- not implemented
+- Targeting non-x86 or pre-AVX2 hardware -- no scalar or NEON fallback path in the header
+- Need an actively maintained project -- last commit 2021-09-24, author describes it as a 'proof-of-concept', 19 stars
+- Want flex-style declarative grammar files or code generation rather than macro-configured C source
+- Need the published 34ms/231ms benchmark to be independently reproducible -- the flex reference binaries and their build flags live outside this repo
+
+## How it is fast
+
+Uses AVX2 vector compares to classify characters and find token/line boundaries across chunks in parallel, instead of driving a DFA table one byte at a time like flex. It is table-free: token-class rules are baked in via preprocessor macros and inlined with the callback into a single translation unit, avoiding flex's table lookups and per-transition function-call overhead. The fixed, narrow token set (idents, strings, comments, a small set of 1-3 char operators; no numeric literals) is what makes the branch-light SIMD scan tractable.
+
+## Compared with alternatives
+
+Pick simd-lexing only when you want a tiny, dependency-free single-header C lexer to vendor and hand-tune via macros for a narrow token set; Accelerated-Zig-Parser and Gigatoken report larger speedups with more reproducible harnesses, and CrossDB's hand-written lexer/parser is actively maintained, so any of those is a better default if you need a supported project rather than an abandoned proof-of-concept.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only |
+| **Dependencies** | none beyond libc (string.h, stddef.h, stdint.h); immintrin.h when __AVX2__ is defined |
+| **Minimum toolchain** | C99 (Makefile uses --std=gnu99); GCC/Clang path exercised, MSVC intrinsics branches present but build recipe targets gcc; needs -march=native or equivalent AVX2 flag |
+| **Platforms** | x86-64 with AVX2 required; no aarch64/NEON port documented |
+| **Thread safety** | not documented |
+| **Drop-in for the baseline** | partial — replaces flex's role as a lexer but requires hand-integrating macros and a callback before including the header, not a .l-file-equivalent drop-in |
+
+## Gotchas
+
+- Must define ALLOWED_TOK2/ALLOWED_TOK3, comment start/end tokens, and ON_TOKEN_CB before #include "slex.h" -- the header ships no default token set
+- ON_TOKEN_CB must be a static inline function defined in the same translation unit; the header's own comments say a function-pointer callback is slower
+- Does not lex numeric literals -- README lists this as 'on the way' but it's not in the shipped code as of the last commit
+- Requires AVX2 (__AVX2__); nothing in the header falls back to a scalar path if it's unavailable
+
+## Caveats and trade-offs
+
+First-party README numbers from single shell `time` runs (etc/run.sh), which include process startup and file I/O; the flex reference lexers (../flex/c.default, c.fast, c.full) and their compile flags are not in the repo, so the baseline side cannot be reproduced; CPU given only as 'Skylake 2.40GHz i5'; requires AVX2; proof of concept that does not lex numeric literals; the README headline says '3-5 times faster than corresponding flex lexer' on average
+
+Single-header, table-free AVX2 lexer customized via macros; author describes it as 'more of a proof-of-concept'; limited to a fixed set of token classes, no code generation from a grammar
+
+## Maintenance
+
+Abandoned since its last commit on 2021-09-24 -- the author calls it a proof-of-concept -- but it's Zlib-licensed and small enough (one header) to vendor and maintain yourself.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-25): confirm; tier before verification C, tier now C.
+- **Tier reason:** The README table shows flex 231ms, flex --fast 102ms, flex --full 106ms and simd-lex 34ms on concatenated GCC source. The simd-lex harness and flags are public (etc/main.c, etc/Makefile release target, etc/run.sh), but the flex lexers and their build flags are not in the repo and the CPU is only 'Skylake 2.40GHz i5', so this is first-party C.
+- **Verifier notes:** The numbers match the README, and the derived ratios (6.8x vs plain flex, \~3x vs --fast/--full) are correct. Zlib license confirmed from the LICENSE file. Last commit 2021-09-24, so abandoned. 19 stars.
+- **Fields the verifier corrected:** `compiler_and_flags`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/Mateuszd6/simd-lexing#readme>
+  - <https://github.com/Mateuszd6/simd-lexing>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/LICENSE>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/etc/Makefile>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/etc/run.sh>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/etc/main.c>
+- **Sources the enricher read:**
+  - <https://github.com/Mateuszd6/simd-lexing#readme>
+  - <https://github.com/Mateuszd6/simd-lexing>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/slex.h>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/example.c>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/etc/Makefile>
+  - <https://github.com/Mateuszd6/simd-lexing/blob/master/etc/run.sh>
+  - <https://github.com/Mateuszd6/simd-lexing/issues>
+- **Raw records:** [data/wave3/verified.json](../../../data/wave3/verified.json) (id `https://github.com/mateuszd6/simd-lexing`) · [data/wave3/enrich/raw/github_com_mateuszd6_simd_lexing.json](../../../data/wave3/enrich/raw/github_com_mateuszd6_simd_lexing.json) (enrichment confidence 0.55)
+
+</details>

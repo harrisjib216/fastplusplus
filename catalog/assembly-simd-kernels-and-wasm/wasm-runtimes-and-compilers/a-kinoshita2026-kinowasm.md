@@ -1,0 +1,133 @@
+# KinoWASM (KinoRuntime)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Assembly, SIMD and WebAssembly](../README.md) › [WebAssembly runtimes and compilers](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C` · `MIT` · 🟢 active
+
+> Embeddable C WebAssembly interpreter (tail-call threaded, register-TOS); first-party CoreMark 2.5x WAMR fast-interp, 1.2x wasm3 on Windows.
+
+| | |
+|---|---|
+| **Beats** | WAMR iwasm fast interpreter (also compared against wasm3) |
+| **Claimed result** | CoreMark Iterations/Sec: KinoRuntime 4385.746651, wasm3 3555.555556, iwasm (WAMR fast interpreter) 1734.417344; page states approximately 1.23x wasm3 and 2.53x iwasm. fibonacci(40): KinoRuntime 1838.94 ms, wasm3 2601.12 ms, iwasm 4298.94 ms; page states approximately 1.41x wasm3 and 2.34x iwasm. |
+| **Workload** | CoreMark 1.0 compiled to a WASI wasm module (Clang 11.0.0, -O3) and a recursive fibonacci(40) module, each run through the runtime's own CLI; interpreter versus interpreter. |
+| **Metric** | throughput |
+| **Hardware** | Intel Core i7-13700F, Windows 11 (user-reported) |
+| **Compiler and flags** | Guest CoreMark module: Clang 11.0.0 (LLVM 176249bd6732), -O3. The fibtest.wasm guest is built locally with Emscripten emcc (WASMData/README.md; binary not in Git). Runtime executables: KinoRuntime 'standard Clang build' with compiler version and preset not recorded; wasm3 and iwasm build configurations not recorded. CMakePresets.json also offers MSVC PGO presets (x64-Release-pgo-gen/use) trained on CoreMark, described as lifting CoreMark by about 6.7%; which preset built the measured binary is unrecorded. The public build needs MSVC 14.50+ or clang-cl (guaranteed tail calls via musttail) with AVX2 enabled. |
+| **Adoption** | 0 stars, 0 forks, 6 commits; the README says it is used in several production console titles (console integrations are private, so this cannot be checked) |
+| **Last commit** | 2026-10-09 |
+| **Links** | [repository](https://github.com/A-Kinoshita2026/KinoWASM) · [benchmark](https://github.com/A-Kinoshita2026/KinoWASM/blob/main/docs/benchmark.md) |
+
+## Verdict
+
+On one Intel Core i7-13700F under Windows 11, user-supplied logs show a CoreMark 1.0 WASI module (Clang 11.0.0 -O3, size 666) scoring 4,385.7 iterations/s in KinoRuntime against 3,555.6 for wasm3 and 1,734.4 for iwasm in WAMR fast-interpreter mode (about 1.23x and 2.53x), and an emcc -O2 recursive fibonacci(40) taking 1,838.9 ms against 2,601.1 and 4,298.9 ms, timed in-guest through each runtime's WASI clock. Runtime versions, the compilers and flags used to build the runtimes, and module hashes are not recorded, and CoreMark is not bundled.
+
+## Use it when
+
+- Embedding Wasm in a game or engine where JIT is not allowed (the README cites Switch, Switch 2, PS5 and Xbox builds, which are private) and an interpreter is required.
+- You need cooperative execution: a host import suspends the guest and the main thread resumes it later (Unity Update or Unreal Tick), without Asyncify or worker threads.
+- A Windows x64 host whose interpreter throughput on scalar integer code is the bottleneck: first-party CoreMark 4,386 iterations/s against 3,556 for wasm3 and 1,734 for the WAMR fast interpreter on an i7-13700F.
+- You need broad core-spec coverage in an interpreter: tail calls, multi-value, multiple memories, exception handling and wide arithmetic, with a self-reported snapshot of 45,037 passed and 0 failed on the pinned spec suite (2026-09-30).
+
+## Skip it when
+
+- Linux, macOS or ARM hosts: the public build targets only Windows x64 with AVX2 and BMI, and the console ports are not public.
+- Modules that need SIMD or relaxed SIMD, threads or atomics, GC or typed function references (call_ref), or full WASI: none of these execute.
+- Peak throughput: any JIT or AOT engine (wasmtime, WAMR AOT, DTVM) will be much faster than this interpreter.
+- Untrusted or multi-tenant code: the project claims no security audit, runtime state such as g_rt and the host-import registry are process-global and single-thread by design, and the docs tell you to synchronize use of global state yourself.
+- Risk-averse production dependencies: first commit 2026-09-30, 6 commits, one author, 0 stars, and correctness fixes on 2026-10-08/09.
+
+## How it is fast
+
+At load time each function is translated from the Wasm stack machine into direct-threaded bytecode in which handler function pointers are embedded inline. The translator simulates the operand stack, so local.get and constants are emitted lazily and binary operations come in slot/slot, slot/register and slot/immediate variants. The top of stack lives in a register (r0), and pc, sp, memory base and r0 are passed as the four Win64 register arguments. Every handler ends in a guaranteed tail call ([[msvc::musttail]] or clang musttail), so there is no central dispatch loop. Superinstructions fuse compare+br_if, binop+local.set and the hot i32 load+local.set pairs, and branch targets are resolved to absolute bytecode addresses, so no label stack exists at run time.
+
+## Compared with alternatives
+
+Pick it over wasman (Go, beats the wazero interpreter) or the WasmKit register interpreter (Swift) when the host is C/C++ on Windows or consoles and you need host-driven suspend/resume; pick DTVM or another JIT instead whenever native code generation is allowed and throughput matters more than embedding constraints.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib (KinoWASM.lib, C) plus the KinoRuntime CLI; reference host layer in host/ to adapt |
+| **Dependencies** | none for the core library; the host must supply a system arena and a linear-memory backend (Windows reference in host/kw_core_mem_backend_win.h and host/systemmemory.c); wabt and Git only for generating tests |
+| **Minimum toolchain** | C11 (/std:c11 for clang-cl, /std:clatest for MSVC); MSVC 14.50+ or clang-cl for guaranteed tail calls (configure fails otherwise); CMake 4.2+ and Ninja |
+| **Platforms** | Windows x64 with AVX2 (and BMI for clang-cl) in the public repository; console builds exist privately according to the README |
+| **Thread safety** | Not thread-safe: the execution engine keeps runtime state in globals (g_rt, suspension state) on the assumption of a single thread, and the import registry is global; Public-API.md says to synchronize use of global state instead of assuming separate stores are isolated. |
+| **Drop-in for the baseline** | partial — it runs the same .wasm/WASI command-line modules as iwasm and wasm3 through its CLI, but the embedding API is its own (kinowasm_init, kinowasm_load_module, kinowasm_invoke, kinowasm_resume) and needs a host memory backend |
+
+## Gotchas
+
+- The CoreMark iteration mismatch is not a harness flaw: CoreMark's auto-calibration (core_main.c multiplies by 10 until a run exceeds 1 s, then by 1 + 10 / seconds) gives 30,000 iterations for iwasm (10,000 took about 5.8 s) and 60,000 for wasm3 and KinoRuntime (about 2.8 s and 2.3 s), which also explains the differing final CRCs. The standard performance-run CRCs (crclist 0xe714, crcmatrix 0x1fd7, crcstate 0x8e3a) appear in all logs.
+- The baselines are probably handicapped Windows builds of unknown configuration. WAMR's core/config.h enables labels-as-values dispatch only under __GNUC__, so an MSVC or clang-cl iwasm falls back to switch dispatch. wasm3's own docs/Performance.md (2019-2020 figures) shows fib(40) at 5.35 s on Windows 10 against 3.83 s on Linux on the same i5-8250U, a 1.4x gap about the size of KinoRuntime's 1.41x fib lead over wasm3.
+- The runtimes used different clocks. The iwasm and wasm3 CoreMark times are exact multiples of 1/64 s (1107/64 and 1080/64 s, the 15.6 ms Windows tick), while KinoRuntime reads QueryPerformanceCounter and maps the process and thread CPU-time clocks to that monotonic wall clock. On 13-17 s runs this changes scores by under 0.2%, so it is not a material bias.
+- The numbers arrived with the first commit (2026-09-30), before the 2026-10-08/09 fixes (live registers below wide-arithmetic operands, integer overflow in buffer-read bounds checks, stale resume state after traps), so the measured binary is not HEAD; Clang 11 CoreMark and the emcc -O2 fib module emit no wide-arithmetic ops. The CoreMark-trained PGO presets are MSVC-only (CMake skips PGO for Clang), so the reported 'standard Clang build' was not PGO-trained, but source comments show code alignment and inlining were tuned against CoreMark.
+
+## Known shortcomings
+
+- docs/benchmark.md numbers match but are user-supplied with runtime builds, versions and date unrecorded; CoreMark not bundled; the CRC mismatch comes from iteration counts (30000 vs 60000); iwasm likely ran switch dispatch on Windows (WAMR enables labels-as-values only under __GNUC__); CoreMark-trained PGO presets in the repo; 0 stars, console production claim unverifiable.
+- Enricher: likely handicapped baselines: WAMR's labels-as-values dispatch is enabled only under __GNUC__, and wasm3's own Performance.md shows fib(40) at 5.35 s on Windows 10 vs 3.83 s on Linux on the same CPU, about equal to Kino's 1.41x fib lead; iwasm and wasm3 times are exact 1/64 s multiples while Kino uses QPC (under 0.2% effect); the PGO presets are MSVC-only, so the measured Clang build had no CoreMark PGO; the 30,000 vs 60,000 iwasm iterations are CoreMark auto-calibration, not a flaw; numbers predate the 2026-10-08/09 fixes.
+
+## Caveats and trade-offs
+
+benchmark.md calls the numbers 'user-supplied measurements' and a 'preliminary snapshot'. There is one machine (Windows 11), and the runtime versions, runtime compiler flags, KinoRuntime preset/PGO settings, measurement date, workload hashes and per-run spread are all unrecorded. CoreMark is not bundled, and iwasm ran 30,000 iterations while the other two ran 60,000. The final CRC differs between iwasm (0x5275) and wasm3/KinoRuntime (0xbd59). That is consistent with the different iteration counts, since CoreMark's final CRC accumulates over iterations, and all three logs report validation passed. Fibonacci timing uses the in-guest clock through each runtime's WASI clock, and the repeat count is unrecorded. The baselines were Windows builds of unknown configuration. WAMR's core/config.h enables labels-as-values (computed-goto) dispatch only under __GNUC__, so an MSVC or clang-cl build of iwasm falls back to switch dispatch, which may explain much of the 2.5x gap to iwasm. wasm3 on Windows may be similarly disadvantaged. The repo carries CoreMark-trained PGO presets, which is a tuning risk if one built the measured binary. The project is very new (first commit 2026-09-30, 6 commits, single author), and correctness fixes landed 2026-10-08/09 (live register tracking below wide-arithmetic operands; integer overflow in buffer-read bounds checks), possibly after the undated measurements.
+
+Interpreter (register-TOS, direct-threaded, tail calls), so far slower than JIT/AOT engines such as wasmtime or wasmer. Public repo builds only for Windows x64 and needs a compiler with guaranteed tail calls. No SIMD execution, no threads/atomics, no GC; WASI only partial; memory64 and exception handling partial. Host-controlled suspend/resume of guest execution is a feature. Embedding needs a host-provided linear-memory backend.
+
+## Maintenance
+
+Active but brand new (first commit 2026-09-30, last 2026-10-09, single author, 0 stars); MIT-licensed C that you can vendor, though the public build covers only Windows x64 and the claimed console production use cannot be checked.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): confirm; tier before verification C, tier now C.
+- **Tier reason:** docs/benchmark.md shows exactly the numbers in the record (CoreMark 4385.746651 / 3555.555556 / 1734.417344 it/s; fib(40) 1838.94 / 2601.12 / 4298.94 ms), but it describes them as user-supplied, first-party logs. Runtime versions, the compilers and flags used to build the runtimes, KinoRuntime's preset and the measurement date are all unrecorded, and the CoreMark binary is not bundled, so the result cannot be reproduced. Only the CPU (i7-13700F) and the guest flags (Clang 11.0.0 -O3) are stated.
+- **Verifier notes:** The record is accurate and the numbers match docs/benchmark.md; tier C stands, since these are first-party, user-supplied numbers with unrecorded runtime builds. Shortcomings to record: not reproducible (no runtime versions or flags, CoreMark not bundled, a single Windows machine), a possibly handicapped iwasm baseline (no computed-goto dispatch on non-GNU Windows builds), CoreMark-trained PGO presets, 0 stars, and unverifiable console production claims.
+- **Fields the verifier corrected:** `compiler_and_flags`, `stars_or_usage`, `caveats`
+- **Shortcomings recorded by:** verifier batch-17 (wave 13); enricher (wave 13 pass, 2026-10-12)
+- **Pages the verifier opened:**
+  - <https://github.com/A-Kinoshita2026/KinoWASM/blob/main/docs/benchmark.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/benchmark.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/README.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/LICENSE>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/WASMData/README.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/CMakePresets.json>
+  - <https://github.com/A-Kinoshita2026/KinoWASM>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/commits/main>
+  - <https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/core/config.h>
+- **Sources the enricher read:**
+  - <https://github.com/A-Kinoshita2026/KinoWASM>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/commits/main>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/commits/main/docs/benchmark.md>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/tree/main/KinoWASM>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/tree/main/KinoWASM/core>
+  - <https://github.com/A-Kinoshita2026/KinoWASM/tree/main/host>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/README.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/benchmark.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/Testing.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/Build-and-Test.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/Host-Functions.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/docs/Public-API.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/CMakePresets.json>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/LICENSE>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/WASMData/README.md>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/WASMData/fibtest.c>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/WASMData/build_fibtest.bat>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/kinowasm.h>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/features.h>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/core/kw_core.h>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/core/kw_core_ops.h>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/core/kw_core_exec.c>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/core/kw_core_compile.c>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/KinoWASM/core/kw_core_wasi.c>
+  - <https://raw.githubusercontent.com/A-Kinoshita2026/KinoWASM/HEAD/host/extrafunction.c>
+  - <https://raw.githubusercontent.com/bytecodealliance/wasm-micro-runtime/HEAD/core/config.h>
+  - <https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Performance.md>
+  - <https://raw.githubusercontent.com/wasm3/wasm3/HEAD/docs/Development.md>
+  - <https://raw.githubusercontent.com/eembc/coremark/main/core_main.c>
+- **Raw records:** [data/wave13/verified.json](../../../data/wave13/verified.json) (id `https://github.com/a-kinoshita2026/kinowasm`) · [data/wave13/enrich/raw/github_com_a_kinoshita2026_kinowasm.json](../../../data/wave13/enrich/raw/github_com_a_kinoshita2026_kinowasm.json) (enrichment confidence 0.76)
+
+</details>

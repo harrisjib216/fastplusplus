@@ -1,0 +1,116 @@
+# gDel3D
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Numerics and science](../README.md) › [Geometry and spatial](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++ (CUDA)` · `BSD-3-Clause` · 🔴 abandoned
+
+> CUDA GPU+CPU 3D Delaunay triangulator from NUS (I3D 2014), 6-9x faster than single-threaded CGAL 4.2 on scanned models.
+
+| | |
+|---|---|
+| **Beats** | CGAL 3D Delaunay triangulation (CGAL 4.2, sequential) |
+| **Claimed result** | Synthetic distributions: speedup over CGAL starts at 4-6x and rises to 8-10x as input grows; real-world models: 6-9x over CGAL 4.2 (paper, Fig. 6) |
+| **Workload** | 3D Delaunay triangulation of real-world models and synthetic point sets on GPU+CPU hybrid |
+| **Metric** | throughput |
+| **Hardware** | Intel i7 2600K, NVIDIA GTX 580 |
+| **Adoption** | 185 stars |
+| **Last commit** | 2018-03-26 |
+| **Links** | [repository](https://github.com/ashwin/gDel3D) · [benchmark](https://github.com/ashwin/gDel3D/blob/master/gdel3d_paper.pdf) |
+
+## Verdict
+
+The peer-reviewed I3D 2014 paper (shipped in the repo) times gDel3D on an NVIDIA GTX 580 with an Intel i7-2600K (3.4 GHz, 16 GB) against sequential CGAL 4.2 on the same PC; the only build detail given is 'compiled with optimization enabled'. On uniform, Gaussian, thin-sphere, grid and cospherical sets up to 1.5M points the speedup starts at 4-6x and rises to 8-10x; on seven scanned models (173K-3.6M points) it is 6.1-9.2x, for example 3.61M-point Asian Dragon in 5.4 s. This compares one GPU against one CPU core, with a CGAL release that is now more than ten years old.
+
+## Use it when
+
+- One-shot Delaunay tetrahedralization of 10^5 to a few 10^6 points on a machine with an NVIDIA GPU, where the paper reports 6.1-9.2x over sequential CGAL 4.2 on 173K-3.6M point scanned models
+- Point sets in general position, or ones you can jitter: on two raw 100K-point photogrammetry clouds a 1e-6 jitter cut gDel3D's A100 time from 0.47 s and 1.08 s to about 0.09 s (5-12x, derived from DelaunayBench page data) and removed all flat tetrahedra
+- Research or offline meshing pipelines where you can vendor and patch CUDA code and run the bundled DelaunayChecker on every output
+- Python workflows through the third-party pyGDel3D binding (half-potato/pyGDel3D), which DelaunayBench built with CUDA 12.8 on an A100
+
+## Skip it when
+
+- Small inputs (up to a few hundred points) on unpatched upstream code: DelaunayBench found that it silently returns the unflipped insertion result (8-12 points), hangs (32 points) or aborts on an assertion (48 and 200 points); counts matched CGAL from 505 points up
+- No NVIDIA GPU, or a current GPU without editing the build: CMakeLists.txt hard-codes sm_30/sm_35 and issue #11 reports 'no kernel image is available for execution on the device' on an RTX 2060
+- Very large clouds on modest VRAM: the code preallocates arrays for 8.5 tetrahedra per input point, and issue #6 reports an illegal memory access at 10M points on an 8 GB GPU
+- Strongly degenerate input (coplanar LiDAR/photogrammetry, grids) where downstream code cannot tolerate zero-volume tetrahedra: DelaunayBench counted 14,980 and 48,889 extra flat tetrahedra over CGAL on two raw 100K-point clouds
+- Production code that needs maintenance or a multi-core CPU baseline: last commit 2018-03-26, open issues unanswered, and the published speedups are against one CPU core
+
+## How it is fast
+
+Phase 1 runs on the GPU and alternates massively parallel point insertion (each tetrahedron inserts the uninserted point nearest its circumcenter) with parallel bilateral 2-3/3-2 flipping, which leaves fewer than 0.05% of facets locally non-Delaunay. Phase 2 repairs those few on the CPU with an adaptive version of Shewchuk's star splaying that rebuilds only the stars of failed vertices. Robustness comes from Shewchuk's adaptive exact orientation/insphere predicates ported to CUDA plus simulation of simplicity; fast and exact checks run in separate kernels with shared-memory compaction so that the rare exact cases do not cause warp divergence. Points are Hilbert-curve sorted for coalesced access, and a flip-history DAG is used to relocate uninserted points after flipping.
+
+## Compared with alternatives
+
+Use HXT (in Gmsh) when you only have CPUs, need more than a few million points or want maintained code: it is about 3x sequential CGAL on one core and scales across cores (10M points in 4.48 s vs CGAL's 20.15 s on a 64-core Xeon Phi). Pick gDel3D only when an NVIDIA GPU is available, the point set fits in VRAM, the input is reasonably non-degenerate, and you can patch an unmaintained CUDA codebase. The other geometry siblings (TG, nanoflann, rtree.c, mesh-boolean libraries) solve different problems.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | source-drop |
+| **Dependencies** | NVIDIA CUDA toolkit with Thrust; Shewchuk's predicates are bundled (CPU/predicates.cpp). CMake 2.8+ (FindCUDA) on Linux or the Visual Studio 2012 project on Windows |
+| **Minimum toolchain** | CUDA 7.5 (commit 'Compiles with CUDA 7.5 now'), CUDA 9.1 fixed in 2018; newer Thrust needs #include &lt;thrust/device_malloc.h&gt; added (issue #10, user workaround) |
+| **Platforms** | NVIDIA GPUs only (README: compute capability 1.1+, best on Fermi or later; tested on GTX 450-580 under Windows and GTX Titan under Linux). Default build targets only sm_30/sm_35, so newer architectures need the gencode lines changed |
+| **Thread safety** | not documented (each GpuDel object owns its device buffers; the demo calls cudaSetDevice and cudaDeviceReset itself) |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Small-input correctness bug in upstream GpuDelaunay.cu: active sets under 64 tetrahedra are deferred to a 'last round' of flipping that only runs once an insertion round inserts fewer than 10% of the points. DelaunayBench's patch_pygdel3d_final_flip.py runs that round unconditionally, and upstream issue #14 (2023, unanswered) shows the same 5-tetrahedra cube
+- The output contains an extra 'kernel' vertex appended at index N (the input size; coordinates in output.ptInfty), and tetVec contains dead slots. Discard tetrahedra that reference it and check the alive flag in tetInfoVec before using the mesh
+- Degenerate input is handled by symbolic perturbation, so coplanar or cospherical points yield valid but zero-volume tetrahedra and much slower runs (the exact-arithmetic and star-splaying share grows; the paper's sphere distribution is dominated by splaying)
+- Double precision is the default; defining REAL_TYPE_FP32 switches all coordinates to float
+
+## Known shortcomings
+
+- Paper gives no compiler or flags ('compiled with optimization enabled'); GPU vs sequential CPU CGAL 4.2; no commits since 2018.
+- Correctness bug (third-party DelaunayBench, omarbesbes/Delaunay via the pyGDel3D binding; same 5-tet cube on upstream issue #14): small inputs silently return an unflipped (non-Delaunay) result at 8-12 points, hang at 32 and abort at 48 and 200; cause is the last-round rule at GpuDelaunay.cu line 834; 505+ points match CGAL.
+- Degenerate input: raw 100K photogrammetry clouds give +14,980 / +48,889 flat tets over CGAL and run 5-12x slower than jittered input (derived from page data); build rot (CMake hard-codes sm_30/35, newer Thrust needs an extra include); baseline is single-core CGAL 4.2 vs a GTX 580.
+
+## Caveats and trade-offs
+
+I3D 2014 paper, CGAL 4.2 is very old; compiler and flags not stated ('compiled with optimization enabled'); GPU (CUDA) vs sequential CPU CGAL, so the comparison is hardware-asymmetric; repo inactive since 2018.
+
+Requires an NVIDIA GPU (CUDA); hybrid GPU insertion/flipping then CPU star splaying; repo is a mirror of NUS code.
+
+## Maintenance
+
+Abandoned (6 commits, last 2018-03-26, maintainer silent on issues since 2019) but BSD-3-Clause and small enough to vendor; expect to patch the CUDA arch flags, a Thrust include and the small-input flipping bug before use on a current toolkit.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification B, tier now B.
+- **Tier reason:** Peer-reviewed I3D 2014 paper (copy in the repo) compares against CGAL 4.2 on i7 2600K + GTX 580; compiler/flags only 'compiled with optimization enabled', so not A.
+- **Verifier notes:** Paper PDF ships in the repo, so benchmark_url moved off the third-party codeyarns copy. BSD-3-Clause confirmed from README license text; 185 stars; last commit 2018-03-26 (abandoned).
+- **Fields the verifier corrected:** `benchmark_url`, `claimed_speedup`, `caveats`
+- **Pages the verifier opened:**
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/README.md>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/gdel3d_paper.pdf>
+  - <https://github.com/ashwin/gDel3D>
+  - <https://github.com/ashwin/gDel3D/commits>
+- **Sources the enricher read:**
+  - <https://github.com/ashwin/gDel3D>
+  - <https://github.com/ashwin/gDel3D/commits/master>
+  - <https://github.com/ashwin/gDel3D/issues?q=is%3Aissue>
+  - <https://github.com/ashwin/gDel3D/issues/6>
+  - <https://github.com/ashwin/gDel3D/issues/10>
+  - <https://github.com/ashwin/gDel3D/issues/11>
+  - <https://github.com/ashwin/gDel3D/issues/14>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/README.md>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/gdel3d_paper.pdf>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/gDel3D/GpuDelaunay.h>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/gDel3D/GpuDelaunay.cu>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/gDel3D/CommonTypes.h>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/Demo.cpp>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/DelaunayChecker.h>
+  - <https://raw.githubusercontent.com/ashwin/gDel3D/master/GDelFlipping/src/gDel3D/GPU/ThrustWrapper.cu>
+  - <https://raw.githubusercontent.com/omarbesbes/Delaunay/HEAD/README.md>
+  - <https://raw.githubusercontent.com/omarbesbes/Delaunay/HEAD/script/readme.md>
+  - <https://raw.githubusercontent.com/omarbesbes/Delaunay/HEAD/script/patch_pygdel3d_final_flip.py>
+  - <https://raw.githubusercontent.com/omarbesbes/Delaunay/HEAD/script/first_install.sh>
+- **Raw records:** [data/wave8/verified.json](../../../data/wave8/verified.json) (id `https://github.com/ashwin/gdel3d`) · [data/wave8/enrich/raw/github_com_ashwin_gdel3d.json](../../../data/wave8/enrich/raw/github_com_ashwin_gdel3d.json) (enrichment confidence 0.8)
+
+</details>

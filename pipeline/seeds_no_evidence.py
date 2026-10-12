@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Compile data/seeds/no_evidence/*.json (projects a backfill agent found no numeric baseline
-comparison for) into SEEDS_NO_EVIDENCE.md at the repo root (docs/QUEUE.md section F, rule 4)."""
+comparison for) into catalog/seeds-no-evidence.md (docs/QUEUE.md section F, rule 4)."""
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "data" / "seeds" / "no_evidence"
-OUT = ROOT / "SEEDS_NO_EVIDENCE.md"
+OUT = ROOT / "catalog" / "seeds-no-evidence.md"
 
 
 def main():
@@ -23,6 +23,8 @@ def main():
             it["assignment"] = f.stem
             rows.setdefault(key, it)
     lines = ["# Seeds without evidence",
+             "",
+             "<sub>[fastpp](../README.md) › [Catalog](README.md)</sub>",
              "",
              "Projects mined from curated lists (see `data/seeds/seeds.json`) for which a backfill seed-record agent",
              "found no numeric comparison against any recognisable baseline. They are not catalogued; they are kept",

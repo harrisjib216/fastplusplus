@@ -1,0 +1,113 @@
+# io_uring hybrid storage I/O architecture (Oracle Database)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Networking and servers](../README.md) › [Event loops and async I/O](README.md)</sub>
+
+**Tier C** (first-party claim) · Study only · `C` · `no license` · 🟢 active
+
+> Design paper: Oracle Database swaps libaio for io_uring on batched async paths; 29% less CPU per write, sync reads unchanged.
+
+| | |
+|---|---|
+| **Beats** | libaio (Linux AIO) |
+| **Claimed result** | Abstract and Table 9 (Oracle Database 26ai, 96 vCPUs, io_uring vs libaio baseline). Update IOPS (isolated DBWR write path): 1.067M to 1.428M write IOPS (+34%), CPU per physical write 58 to 41 us (-29%). Scan (150 GB, direct-path reads): CPU per read -19% at unchanged throughput. TPC-C: tpmC unchanged (2.275M vs 2.279M); server CPU 45.0% to 43.8% (-1.2 pp) only after cutting DBWR processes from 32 to 23; with the same 32 DBWR it was 45.7%. TPC-H: CPU per query -8.5% geometric mean, elapsed time within noise. Async I/O submit wait is about 75x lower. Synchronous single-block reads stay on pread (io_uring shows no gain there, and CPU/IO is about 2x higher at 512 KB-1 MB). Microbenchmark (Fig 3): geometric mean -39% CPU per I/O vs batched libaio, up to +15% IOPS in CPU-bound regimes. |
+| **Workload** | Oracle Database 26ai (internal development build): a synthetic Update IOPS test (DBWR write-flush path), a 150 GB parallel direct-path Scan, TPC-C (5K warehouses, 210 users) and the 22-query TPC-H (1.1 TB, uncalibrated/unaudited), plus Sec 3 microbenchmarks (libaio vs six io_uring configurations on a single NVMe, block-size x device-count sweep). io_uring replaces libaio on the async batched paths; synchronous reads stay on pread. |
+| **Metric** | throughput |
+| **Hardware** | End-to-end: OCI BM.DenseIO.E4 bare metal, AMD EPYC 7J13 (128 cores, 96 vCPUs given to the DB), 2 TB RAM, 8 local NVMe SSDs in software RAID-0, Oracle Linux with UEK R8. Microbenchmarks: a single NVMe device; the CPU is not stated separately. |
+| **Compiler and flags** | Microbenchmark artifact only: gcc -O2 -Wall -Wextra -pthread (Makefile, compiler version not stated). Build flags for the Oracle Database 26ai internal build are not stated. |
+| **Links** | [benchmark](https://arxiv.org/abs/2609.22781v1) |
+
+## Verdict
+
+The end-to-end runs used an OCI bare-metal AMD EPYC 7J13 (96 vCPUs given to the database, 8 NVMe SSDs in RAID-0, Oracle Linux UEK R8), an internal Oracle Database 26ai build and a libaio baseline, each reported as the vendor's unaudited mean of 3 runs. Switching to io_uring raised DBWR-isolated write IOPS from 1.07M to 1.43M with 29% less CPU per write, cut CPU per direct-path read by 19% at equal throughput and TPC-H CPU per query by 8.5% (geomean), and left TPC-C tpmC unchanged. The database's compiler and flags are not stated; the separate single-NVMe microbenchmarks (gcc -O2, CPU not stated) show -39% CPU per I/O for batched io_uring against batched libaio, as a geomean over 24 block-size x device-count cells.
+
+## Use it when
+
+- You maintain a multi-process or multi-threaded storage engine on Linux NVMe whose background writers or scan workers already submit deep libaio batches (32+ I/Os) and poll for completions. That is the path where the paper measured -29% CPU per write and -19% CPU per scan read.
+- Your write-flush path is CPU-bound per process. In the DBWR-isolated test, write IOPS rose from 1.07M to 1.43M, and 23 io_uring DBWR processes delivered 1.24M write IOPS against 1.07M from 32 libaio ones.
+- You want to free CPU at the same throughput, not cut latency. TPC-H CPU per query fell 8.5% (geomean), and scan-heavy queries gained most (Q6 -14.6%, Q1 -12.7%).
+- You are deciding which I/O paths to port first. Section 3 and Table 7 work as a checklist: batched async paths first, buffer registration before ring-fd or file-fd registration, and no polling modes.
+
+## Skip it when
+
+- Synchronous single-block reads, the most common OLTP I/O. pread and io_uring submit-and-wait matched from 4 KB to 256 KB, and at 512 KB and 1 MB io_uring used about twice the CPU per I/O (16.18 vs 7.33 us, and 27.00 vs 13.44 us) because of io-wq offload.
+- Small-batch, immediate-reap paths such as redo/WAL writes. With batches of 1-8, libaio and io_uring were indistinguishable (13.32 vs 13.47 us CPU per I/O, same 110 us p99).
+- When the goal is lower latency or more OLTP throughput. TPC-C tpmC was unchanged, TPC-H elapsed times were within noise, and direct-path read latency was 9.8 vs 9.9 ms.
+- When you need reusable or reproducible code. The Oracle layer is proprietary, and the Update IOPS, Scan, TPC-C and TPC-H results cannot be rerun outside Oracle.
+- When you need to share buffers across separate processes on current kernels. Mainline IORING_REGISTER_CLONE_BUFFERS returns -EINVAL when the two rings were created under different mm (Linux 6.14, commit 19d340a, tagged for stable). Since September 2025 it also returns -EEXIST when the source ring is SINGLE_ISSUER and owned by another task. The paper does not explain how its separate Oracle processes get past these checks; threads within one process are not affected.
+
+## How it is fast
+
+Syscall amortization: one io_uring_enter submits a batch of 32-4096 I/Os, and completions are reaped by peeking the shared completion queue in user space, where libaio needs io_submit plus io_getevents. Registered (pre-pinned) buffers remove the per-I/O get_user_pages cost, and Table 7 credits them with almost all of the CPU saving (3.66 to 2.58 us per I/O, -29.5%); ring-fd and file-fd registration add only about 1.4%. Each process owns a private ring with IORING_SETUP_SINGLE_ISSUER and io-wq capped at one worker, because a mutex-shared ring collapsed to 23K IOPS at 128 threads. IOPOLL and SQPOLL were rejected: IOPOLL cost 385 us of CPU per I/O at 128 threads, and SQPOLL threads sit outside the database's cgroup CPU accounting.
+
+## Compared with alternatives
+
+All the siblings (Condy, uring_exec, Asio's io_uring backend, monoio, PhotonLibOS, Seastar) are reusable event loops benchmarked on network servers or echo/ping-pong, and none reports database write-flush or scan numbers. Read this paper when deciding which storage paths in a multi-process engine should move from libaio to io_uring; for code, use liburing or a sibling library, and for a reproducible database study use Jasny et al. (github.com/mjasny/vldb26-iouring), which the paper cites.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | not applicable: design guidance inside closed-source Oracle Database; the public artifact is a source-drop of three standalone C microbenchmarks built with make |
+| **Dependencies** | Oracle layer: raw io_uring syscalls (no liburing), with libaio as the fallback. Artifact: libaio, pthreads, libm, plus Python pandas and matplotlib for the plots |
+| **Minimum toolchain** | Artifact: gcc -O2 -Wall -Wextra -pthread (compiler version not stated). Kernel: &gt;= 5.11 per the README, &gt;= 6.0 for SINGLE_ISSUER, &gt;= 6.12 for IORING_REGISTER_CLONE_BUFFERS; the exact kernel used for the end-to-end runs is not stated |
+| **Platforms** | Linux only, NVMe with O_DIRECT; end-to-end runs on x86-64 (AMD EPYC 7J13); other architectures not documented |
+| **Thread safety** | By design, each process or thread owns a private single-issuer ring and shares no ring state. The paper measured a mutex-shared ring as an anti-pattern (22 ms p99 at 128 threads) |
+| **Drop-in for the baseline** | partial — inside Oracle it is a transparent libaio replacement (upper layers cannot tell which interface is in use, and libaio remains the fallback), but nothing reusable ships, so you would reimplement the design in your own engine |
+
+## Gotchas
+
+- The artifact's 'shared' registration mode never calls IORING_REGISTER_CLONE_BUFFERS. It issues register opcode 27 (IORING_REGISTER_NAPI in mainline; the code calls it IORING_REGISTER_BUFFERS_SHARE, after the unmerged SHARE_BUF/ATTACH_BUF patches) and ignores the result. So Table 6's shared column (7.5 ms for 200 processes, behind the '270x' claim) measures only ring creation.
+- Figure 2's libaio baseline runs at depth 1, while the io_uring configurations batch 32-128 I/Os. Its CPU per I/O (CLOCK_PROCESS_CPUTIME_ID) also includes busy-spin think time, which batching spreads over more I/Os. The like-for-like batched libaio vs batched io_uring comparison is Figure 3 (sensitivity_bench, geomean -39%).
+- Every artifact benchmark is a random read on a raw NVMe device. The write path behind the headline +34% write IOPS, the sync pread comparison (Table 3) and the redo test (Table 8) have no public code.
+- io_uring_bench.c and sensitivity_bench.c include &lt;linux/io_uring.h&gt; and then redeclare IORING_REGISTER_IOWQ_MAX_WORKERS, IORING_REGISTER_RING_FDS and struct io_uring_rsrc_update. Newer uapi headers already define these, so expect a compile error and a small patch before running (not built here).
+
+## Known shortcomings
+
+- Closed-source Oracle Database 26ai with a custom io_uring layer (bypasses liburing); only a microbenchmark artifact is public. First-party preprint, not peer-reviewed; TPC runs unaudited. Gains are CPU efficiency only (TPC-H elapsed time unchanged) and the TPC-C saving needs background writers cut from 32 to 23. Best read as evidence for io_uring over libaio.
+- Cross-process buffer cloning as described likely fails on current kernels: since Linux 6.14 io_clone_buffers requires the same mm (-EINVAL), and since 2025-09 a SINGLE_ISSUER source owned by another task gives -EEXIST; the paper does not explain how its separate processes pass these checks. The '270x' shared-registration result is not measured: the artifact calls register opcode 27 (IORING_REGISTER_NAPI in mainline), ignores the return value, and times ring creation only. Figure 2 compares depth-1 libaio against batched io_uring; Figure 3 (-39%) is the fair comparison. No public code for the write path, Table 3 or Table 8; artifact sources may not compile against recent headers; no LICENSE file. Nothing reusable ships: best treated as evidence for io_uring/liburing.
+
+## Caveats and trade-offs
+
+First-party benchmark by Oracle engineers of their own closed-source product; arXiv preprint submitted to PVLDB, not yet peer-reviewed. The TPC-C/TPC-H runs are unaudited and 'for internal comparison only'. Gains are almost entirely CPU efficiency, not latency or elapsed time: the TPC-C 1.2 pp CPU saving needs DBWR cut from 32 to 23, and TPC-H elapsed times are unchanged. The mechanism is the Linux io_uring interface through a custom thin layer that does not use liburing, so this is effectively io_uring-vs-libaio evidence rather than a reusable library. Artifact: github.com/rch0wdhury/iouring-rdbms-vldb-artifact (Zenodo 10.5281/zenodo.20099105, CC-BY-4.0 on Zenodo, no LICENSE file on GitHub, 1 star) holds only the microbenchmarks. The shared buffer registration work led to IORING_REGISTER_CLONE_BUFFERS in Linux 6.12.
+
+Findings are architecture/design guidance embedded in a proprietary closed-source RDBMS, not a reusable open library; benefit is workload-dependent and regresses for very large synchronous reads.
+
+## Maintenance
+
+The work is active (arXiv v1 in September 2026, artifact v1.1 on Zenodo in May 2026, 'submitted to PVLDB') but is reference-only: the Oracle implementation is closed, and the 1-star artifact repo has no LICENSE file, while Zenodo lists CC-BY-4.0 and the README says it is 'provided for academic evaluation'.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification C, tier now C.
+- **Tier reason:** First-party arXiv preprint (Oracle engineers, 'submitted to PVLDB', not yet peer-reviewed) comparing io_uring against the libaio path inside closed-source Oracle Database 26ai. The end-to-end numbers (Table 9-12) cannot be reproduced. The public artifact (github.com/rch0wdhury/iouring-rdbms-vldb-artifact; gcc -O2 Makefile) covers only the Sec 3 microbenchmarks and gives no CPU model for them, so neither A nor B applies.
+- **Verifier notes:** All record numbers match the abstract and Tables 9-12. The 'synchronous reads' regression is against pread, not libaio. The orchestrator may prefer to file this as is_evidence_for_known for io_uring (https://github.com/axboe/liburing is in known_seed) rather than as a standalone entry, since the Oracle code is proprietary; I kept has_code=false because the only public code is the microbenchmark artifact.
+- **Fields the verifier corrected:** `claimed_speedup`, `hardware`, `compiler_and_flags`, `workload`, `caveats`
+- **Pages the verifier opened:**
+  - <https://arxiv.org/abs/2609.22781v1>
+  - <https://arxiv.org/pdf/2609.22781v1>
+  - <https://zenodo.org/api/records/20099105>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/README.md>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/Makefile>
+- **Sources the enricher read:**
+  - <https://arxiv.org/abs/2609.22781v1>
+  - <https://arxiv.org/pdf/2609.22781v1>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/README.md>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/Makefile>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/bufreg_bench.c>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/io_uring_bench.c>
+  - <https://github.com/rch0wdhury/iouring-rdbms-vldb-artifact/blob/main/sensitivity_bench.c>
+  - <https://zenodo.org/api/records/20099105>
+  - <https://man7.org/linux/man-pages/man3/io_uring_clone_buffers.3.html>
+  - <https://github.com/axboe/liburing/blob/master/man/io_uring_clone_buffers.3>
+  - <https://github.com/axboe/liburing/blob/master/src/include/liburing/io_uring.h>
+  - <https://github.com/torvalds/linux/blob/master/io_uring/rsrc.c>
+  - <https://github.com/torvalds/linux/blob/master/io_uring/io_uring.c>
+  - <https://github.com/torvalds/linux/commit/19d340a2988d4f3e673cded9dde405d727d7e248>
+  - <https://github.com/torvalds/linux/commit/2f076a453f75de691a081c89bce31b530153d53b>
+  - <https://github.com/mjasny/vldb26-iouring>
+- **Raw records:** [data/wave5/verified.json](../../../data/wave5/verified.json) (id `paper:io-uring-hybrid-storage-i-o-architecture-oracle-database`) · [data/wave5/enrich/raw/paper_io_uring_hybrid_storage_i_o_architecture_oracle_database.json](../../../data/wave5/enrich/raw/paper_io_uring_hybrid_storage_i_o_architecture_oracle_database.json) (enrichment confidence 0.75)
+
+</details>

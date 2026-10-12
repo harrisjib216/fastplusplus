@@ -1,0 +1,142 @@
+# libleptris
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Serialization and formats](../README.md) › [YAML, TOML and XML](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C` · `BSD-2-Clause` · 🟢 active
+
+> C11 XML library (DOM, SAX, XPath 1.0, DTD, XSLT, C14N) that beats libxml2 on small-document parse and XPath latency.
+
+| | |
+|---|---|
+| **Beats** | libxml2 |
+| **Claimed result** | vs libxml2 (README, Apple Silicon): SAX 2.5x (\~1 KB) and 3.6x (\~5 KB), DOM parse 1.4x (\~5 KB), attribute lookup 1.9x, text extraction 2.6x, indexed child access 9% faster, XPath 1.3-4.0x on all 10 listed queries (several libxml2 cells are approximate, '\~1 us'/'\~3 us'). vs pugixml: attribute-set \~25x (measured against an approximate '\~8-14 ms find+set' pugixml figure), serialize attr-heavy 2 MB 1.6x faster, but 1.3x slower on 10k-child append and 1.1x slower on text-heavy serialize. |
+| **Workload** | SAX/DOM parse, attribute lookup, text extraction, and 10 XPath queries on \~1-5KB XML fixtures vs libxml2; separately, DOM write/serialize (attribute set, 10k-child append, 2MB serialize) vs pugixml. |
+| **Metric** | throughput |
+| **Hardware** | "Apple Silicon" (exact CPU model not stated; the README does not say whether the tables came from a dev machine or the macOS CI runner) |
+| **Compiler and flags** | clang -O3 -flto=thin for leptris (no clang version stated; LTO is the default for Release/RelWithDebInfo). libxml2 and pugixml are prebuilt system/Homebrew packages (CI: brew install pugixml libxml2 / apt libpugixml-dev libxml2-dev); versions and flags not stated. |
+| **Adoption** | 1 star |
+| **Last commit** | 2026-09-25 |
+| **Links** | [repository](https://github.com/leptris/leptris) · [benchmark](https://github.com/leptris/leptris/blob/main/README.adoc) |
+
+## Verdict
+
+The first-party README tables were measured on Apple Silicon (model not stated) with clang -O3 -flto=thin against an unversioned Homebrew libxml2. They show SAX 2.5x on \~1 KB and 3.6x on \~5 KB, DOM parse 1.4x on \~5 KB, and XPath 1.3-4.0x in CPU time on 10 queries over a \~5 KB catalog, where the libxml2 harness recompiles each expression on every call. The project's macos-latest CI run 36132268169 (v1.9.243) shows smaller SAX margins (\~2.0x small, \~1.3x medium, \~1.2x on the large file), DOM parse+root \~2.7x on \~10 KB, and XPath axes \~1.5-2x in CPU time with descendant::\* at wall-time parity. No harness produces the \~25x attribute-set claim against pugixml.
+
+## Use it when
+
+- A C or C++ service that runs many XPath 1.0 queries over KB-to-low-MB documents. Per-query cost is sub-microsecond on a \~5 KB fixture (README: 1.3-4.0x vs libxml2), and leptris_xpath_compile removes the cache probe for hot expressions.
+- Streaming SAX over small messages (\~1 KB), where libxml2 SAX2's fixed per-parse cost dominates. CI shows \~2x there; expect only \~1.1-1.3x on larger files.
+- You need libxml2's breadth (DTD validation, XInclude, C14N for XML signatures, XSLT 1.0) in one permissively licensed C library with no required runtime dependencies.
+- Documents too big for RAM: pull (leptris_pull_new_file) and iterparse keep memory bounded by the input slice or by the largest top-level subtree.
+- Ruby, Python or Rust apps that now reach libxml2 through Nokogiri or lxml and want a faster engine behind a plain C ABI.
+
+## Skip it when
+
+- Raw DOM parse throughput from C++. In the serialbench harness pugixml 1.16 parses 1.3-5.9x faster across 12 CI platforms (issue #1222, open) and leads parse+serialize and parse+XPath 2.2-4.4x (#1238). CI also has libxml2 ahead on full tree traversal (1.26 vs 1.57 us).
+- XSD validation: it is not implemented (tracking issue #1075 is open), while libxml2 has XSD 1.0. There is no XML Schema 1.1. XQuery is only a new 1.0-core layer (xquery.h), and the README still lists it as unsupported.
+- HTML throughput: the WHATWG parser trailed libxml2 htmlReadMemory 3.4-7x on x86 CI legs (#1218, open). The html4 (Nokogiri-compatible) mode is the faster path.
+- Risk-averse production. The repo has 1 star, was created in Nov 2025 and is at v1.9.244, with five releases on 2026-09-25 alone and empty-template CHANGELOG entries. It also has a record of fixed memory-safety regressions: heap corruption (#1038), a UAF (#1207), SAX attribute-buffer corruption (#625) and an XPath-variable thread race (#1079).
+- Long-lived documents with heavy mutation churn: there is no per-node free, so replaced or removed nodes stay in the pool until leptris_document_free.
+
+## How it is fast
+
+The DOM parser is a single-pass scanner modeled on pugixml. One fused SIMD pass copies the input and counts markup to size a single bulk arena block. Names and values are then NUL-terminated in place, text nodes are borrowed views with no per-node copy, and the scan uses byte-class lookup tables, NEON or runtime-dispatched AVX2 byte search, and 32-bit offset tree edges. XPath expressions compile to bytecode for a stack VM and live in a process-wide 16-slot cache. The VM has specialized axis opcodes and fused axis+predicate opcodes for [@attr], [@attr='lit'] and [N], plus a lazily built per-document element index (a preorder array with per-name and per-attribute buckets) that answers //name-style queries by bulk copy. SAX runs on one explicit streaming state machine, and a recorder batches events so FFI hosts pay one call per chunk instead of one per event.
+
+## Compared with alternatives
+
+Pick libleptris over RapidXml or SpeedyXml when you need a C ABI plus XPath, DTD, XInclude, C14N or XSLT, not just parse speed. Both are C++ parsers catalogued as beating libxml2 on raw parse (SpeedyXml 0.34 s vs 1.53 s on a 235 MiB document). For bulk XPath over GB-scale files, simdxml (2.6x pugixml on 5.1 GB DBLP) is the better pick.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib (default); shared lib via LEPTRIS_BUILD_SHARED / BUILD_SHARED_LIBS; CMake package (find_package(leptris)) and pkg-config |
+| **Dependencies** | None required. utf8proc (Unicode) and iconv (encoding conversion) are optional but default ON; turn both off for zero dependencies. Building needs CMake &gt;= 3.20. Tests use Google Test and benchmarks use libxml2 and pugixml. |
+| **Minimum toolchain** | C11 (CMake enforces CMAKE_C_STANDARD 11 although the README says C99). CMake 3.20+. GCC, Clang, AppleClang, MinGW, or MSVC from VS2019 16.8. LTO is on by default for Release. |
+| **Platforms** | CI covers Linux x86-64 and aarch64, macOS arm64 and x86-64, Windows MSVC, 32-bit x86 (-m32) and s390x big-endian (qemu). NEON is used on aarch64 and AVX2 is dispatched at runtime on x86, with a scalar fallback. |
+| **Thread safety** | One document per thread. Read-only sharing of a parsed document across threads is documented as safe (the concurrency test is ThreadSanitizer-clean), but never mutate one document from two threads. Compiled XPath handles are immutable and shareable, and the process-wide XPath cache is mutex-guarded. Strict mode and max depth are thread-local; allocator hooks are global. Worker threads should call leptris_thread_cleanup() before they exit. |
+| **Drop-in for the baseline** | false. It has its own leptris_\* C API with opaque handles and pool ownership, so moving from libxml2's xmlDoc, xmlXPath or SAX2 APIs means rewriting call sites. The Ruby binding and the html4 mode aim at Nokogiri/libxml2 output parity, not API compatibility. |
+
+## Gotchas
+
+- leptris_parse_string copies the whole input, and the document keeps that copy until it is freed. leptris_parse_string_inplace skips the copy but writes NULs into your buffer, which must then outlive the document.
+- Whitespace-only text nodes are kept by default (libxml2 semantics). Pass LEPTRIS_PARSE_DROP_WS_TEXT to leptris_parse_string_flags to get pugixml's default or XML_PARSE_NOBLANKS behavior. Keeping those nodes alone costs 1.1-1.4x in parse time on pretty-printed input.
+- The XPath AST/bytecode cache is process-global and mutex-guarded with only 16 slots, so workloads with many distinct expressions miss it; compile hot expressions with leptris_xpath_compile. Nesting deeper than 256 levels is rejected by default (leptris_set_max_depth).
+- The docs disagree with the build. LICENSE.md is Ribose BSD-2-Clause, but README.adoc and vcpkg.json say MIT. The README lists distro packages (apt, brew, apk, MSYS2) as pending.
+
+## Caveats and trade-offs
+
+First-party README numbers; not independently reproduced. No CPU model or compiler version, and libxml2 and pugixml are unversioned system/Homebrew builds. The libxml2 XPath harnesses call xmlXPathEvalExpression, which re-parses the expression on every call, while leptris evaluates through its internally cached compiled expressions, so the XPath ratios include libxml2's per-call compile. No published benchmark produces the pugixml '\~8-14 ms (find+set)' figure behind the \~25x attribute-set claim: benchmarks/matrix/bench_matrix.cpp, the harness the README cites, times pugixml append_attribute with no find. The project's latest macOS CI artifact (Benchmark run 36132268169, v1.9.243, macos-latest) shows smaller margins than the README (derived): SAX small \~2.1x, SAX medium \~1.3x (README 3.6x), XPath attribute::id \~1.7x CPU time (README 4.0x), descendant::\* \~1.6x CPU time and parity on wall time. License conflict: LICENSE.md is a Ribose BSD-2-Clause text, while the README, the Ruby gemspec, the Rust Cargo.toml and vcpkg.json say MIT (both are OSI-approved). Repo created Nov 2025, 1 star, very active (v1.9.243); same org as teptris and yeptris.
+
+C99 API with FFI-based Ruby and cffi-based Python bindings; pool-based memory model (single leptris_document_free call); keeps whitespace-only text nodes by default to match libxml2 fidelity (costs \~1.1-1.4x vs pugixml's default unless LEPTRIS_PARSE_DROP_WS_TEXT is set); no XML Schema 1.1 or XQuery support; loses to pugixml on bulk child-append and text-heavy serialize.
+
+## Maintenance
+
+Very active: v1.9.244 shipped on 2026-09-25, with \~2,000 commits since the repo was created in Nov 2025. It builds with plain CMake under a permissive license. It is still a 1-star project with daily releases, so pin a version and benchmark your own corpus first.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-25): downgrade; tier before verification B, tier now C.
+- **Tier reason:** The README tables are first-party numbers from the project's own harness (benchmarks/sax/bench_leptris.c vs bench_libxml2.c, benchmarks/xpath/bench_diagnostic.c with bench_axes_libxml2.c, benchmarks/matrix/bench_matrix.cpp). The page gives only 'Apple Silicon, clang -O3 -flto=thin': no CPU model, no compiler version, and the competitors are unversioned system builds. It is neither peer-reviewed nor an independent suite, so it is C, not B.
+- **Verifier notes:** Downgraded B to C: benchmarks in the project's own repo are C under the rubric, since B needs a paper or an independent suite. The numbers match the README. But no harness produces the pugixml figure behind the \~25x claim, and the project's current CI shows smaller libxml2 margins than the README. GitHub reports the license as NOASSERTION; LICENSE.md is BSD-2-Clause, so I kept that and recorded the MIT conflict in caveats.
+- **Fields the verifier corrected:** `hardware`, `compiler_and_flags`, `claimed_speedup`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/leptris/leptris>
+  - <https://github.com/leptris/leptris/blob/main/README.adoc>
+  - <https://github.com/leptris/leptris/blob/main/LICENSE.md>
+  - <https://github.com/leptris/leptris/blob/main/CMakeLists.txt>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/CMakeLists.txt>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/README.md>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/common/benchmark.c>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/sax/bench_leptris.c>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/sax/bench_libxml2.c>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/xpath/bench_diagnostic.c>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/xpath/bench_axes_libxml2.c>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/matrix/bench_matrix.cpp>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/matrix/README.md>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/comprehensive/benchmark_write.cpp>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/twins/mutation_pugixml.cpp>
+  - <https://github.com/leptris/leptris/blob/main/.github/workflows/benchmark.yml>
+  - <https://github.com/leptris/leptris/blob/main/bindings/ruby/leptris.gemspec>
+  - <https://github.com/leptris/leptris/blob/main/bindings/rust/Cargo.toml>
+  - <https://github.com/leptris/leptris/blob/main/vcpkg.json>
+  - <https://github.com/leptris/leptris/actions/runs/36132268169>
+- **Sources the enricher read:**
+  - <https://github.com/leptris/leptris>
+  - <https://github.com/leptris/leptris/blob/main/README.adoc>
+  - <https://github.com/leptris/leptris/blob/main/CMakeLists.txt>
+  - <https://github.com/leptris/leptris/blob/main/LICENSE.md>
+  - <https://github.com/leptris/leptris/blob/main/vcpkg.json>
+  - <https://github.com/leptris/leptris/blob/main/CHANGELOG.md>
+  - <https://github.com/leptris/leptris/blob/main/VALIDATION.md>
+  - <https://github.com/leptris/leptris/blob/main/CONTEXT.md>
+  - <https://github.com/leptris/leptris/blob/main/docs/ARCHITECTURE_REVIEW.md>
+  - <https://github.com/leptris/leptris/blob/main/benchmarks/README.md>
+  - <https://github.com/leptris/leptris/blob/main/src/include/leptris.h>
+  - <https://github.com/leptris/leptris/blob/main/src/include/leptris/types.h>
+  - <https://github.com/leptris/leptris/blob/main/src/include/leptris/xquery/xquery.h>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/common/simd_text.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/common/simd_text_neon.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/common/simd_text_avx2.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/common/cpu.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/flat/direct_parse.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/flat/il_scan.h>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/dom/compact.h>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/dom/element_index.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/xpath/vm.c>
+  - <https://github.com/leptris/leptris/blob/main/src/leptris/xpath/xpath_ast_cache.c>
+  - <https://github.com/leptris/leptris/blob/main/.github/workflows/benchmark.yml>
+  - <https://github.com/leptris/leptris/blob/main/.github/workflows/test.yml>
+  - <https://github.com/leptris/leptris/blob/main/.github/workflows/build.yml>
+  - <https://github.com/leptris/leptris/actions/runs/36132268169>
+  - <https://github.com/leptris/leptris/issues>
+  - <https://github.com/leptris/leptris/issues/1222>
+  - <https://github.com/leptris/leptris/issues/1238>
+  - <https://github.com/leptris/leptris/issues/1218>
+  - <https://github.com/leptris/leptris/issues?q=crash>
+  - <https://github.com/leptris/leptris/issues?q=quadratic>
+  - <https://github.com/leptris/leptris/releases>
+- **Raw records:** [data/wave4/verified.json](../../../data/wave4/verified.json) (id `https://github.com/leptris/leptris`) · [data/wave4/enrich/raw/github_com_leptris_leptris.json](../../../data/wave4/enrich/raw/github_com_leptris_leptris.json) (enrichment confidence 0.8)
+
+</details>

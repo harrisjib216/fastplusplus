@@ -1,0 +1,140 @@
+# ARM NEON Compositor
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Assembly, SIMD and WebAssembly](../README.md) › [SIMD intrinsics libraries](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C++` · `GPL-3.0` · 🔴 abandoned
+
+> Hand-written NEON straight-alpha BGRA overlay for Raspberry Pi; 3.5x its own scalar fallback on cache-resident images, 1.4-1.6x when memory-bound.
+
+| | |
+|---|---|
+| **Beats** | the same alpha-overlay routine without NEON intrinsics, compiled with GCC -O3 |
+| **Claimed result** | README text: up to 3.5x faster than the same routine without NEON intrinsics for small images, and around 1.4x for very large images. From the committed CSVs (examples/perf_test/output, derived from page data): for square images of 1-200 px per side, 0.93x at 1 px (NEON slower), 1.40x at 33 px, 2.53x at 97 px and 3.47x at 200 px, with a maximum of 3.58x at 186 px; for 50-5000 px, 1.37-1.40x from 450 to 1650 px, rising to 1.54-1.59x from 2450 to 5000 px. |
+| **Workload** | overlay_alpha_stride (div255_round) on random square BGRA images, sides 1-200 px in steps of 1 (small) and 50-5000 px in 100 steps (large), called through Python ctypes by examples/perf_test/perf_test.py. Time per call is averaged over max_size\*10/size iterations, one run per size. The NEON build is compared with the same library built with DISABLE_NEON (scalar fallback with GCC unroll/ivdep pragmas, left to GCC -O3 auto-vectorization). |
+| **Metric** | throughput |
+| **Hardware** | Raspberry Pi 3B+, Ubuntu 20.04 64-bit |
+| **Compiler and flags** | GCC 9.2.0 (crosstool-NG, from the .comment section of the committed aarch64 .so files) at -O3 with OpenMP ('#pragma omp parallel for' in both paths, both binaries link libgomp and call GOMP_parallel; thread count not recorded); the no-simd build's Div255_Round stride kernel contains no vector instructions (ldrb/strb/mul/madd only), so GCC did not auto-vectorize the fallback. |
+| **Adoption** | 23 stars |
+| **Last commit** | 2020-07-26 |
+| **Links** | [repository](https://github.com/tttapa/ARM-NEON-Compositor) · [benchmark](https://github.com/tttapa/ARM-NEON-Compositor) |
+
+## Verdict
+
+On a Raspberry Pi 3B+ (Ubuntu 20.04 64-bit), overlay_alpha_stride_div255_round in the NEON build was compared with the same library built with DISABLE_NEON (GCC 9.2.0, -O3 per the README, OpenMP on in both, the baseline left fully scalar by the compiler), timed through Python ctypes on random square images. It ran 3.4-3.6x faster at 128-200 px squares, 0.93x at 1 px, and 1.33-1.65x from 300 to 5000 px, where both are limited by memory bandwidth (derived from page data).
+
+## Use it when
+
+- Compositing an RGBA/BGRA overlay (HUD, watermark, sprite) onto camera or video frames on a Raspberry Pi or other AArch64/ARMv7 board with NEON.
+- Small to medium overlays whose three buffers fit in L2 (up to about 200x200 px on a Pi 3B+ with 512 KB L2), where the measured gain is 3.4-3.6x.
+- Frame-rate pipelines that can live with a 1.4-1.6x gain once images are memory-bound (300-5000 px squares in the published runs).
+- Code that already uses straight alpha with an opaque background and BGRA byte order (OpenCV CV_8UC4 BGRA mats work directly).
+
+## Skip it when
+
+- Tiny overlays (under about 32x32 px): a fixed per-call cost of about 20 us dominates and NEON was 0.93-1.1x there in the published runs.
+- Backgrounds that are not opaque or need true Porter-Duff 'over' semantics: background alpha is copied, not composited (open issue #1: a transparent background gives a transparent result).
+- Premultiplied-alpha pipelines, other channel orders, 16-bit or float images: only 8-bit BGRA straight alpha is implemented.
+- Proprietary code that cannot take GPL-3.0, or projects that need a maintained library: no commits since 2020-07-26, no releases.
+- x86 production use: the x86-64 path only translates the NEON intrinsics to SSE4 through Intel's NEON_2_SSE header and was never benchmarked.
+
+## How it is fast
+
+It processes 8 pixels per step: vld4_u8 de-interleaves B, G, R and A into four 8-lane registers, vmull_u8 widens fg\*alpha and bg\*(255-alpha) to 16 bits, and the result goes back through vst4_u8. The divide by 255 is a multiply-high by a reciprocal constant (0x8080 after adding 128 for exact rounding, 0x8081 for floor) with vuzp2q/vshrn narrowing. Optional cheaper modes divide by 256 with a single shift. Rows are split across cores with '#pragma omp parallel for'.
+
+## Compared with alternatives
+
+None of the catalogued SIMD siblings does alpha compositing: qAverageColor and bilinear_filter_simd are x86 pixel kernels for other operations, and EVE or the Vector Class Library are general SIMD toolkits on which you would write this kernel yourself. Pick this when you want a ready, readable NEON BGRA overlay for Pi-class ARM and GPL-3.0 is acceptable.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | shared lib |
+| **Dependencies** | none at runtime beyond OpenMP (libgomp) when found; the top-level CMakeLists.txt does find_package(GTest REQUIRED), and OpenCV is optional (examples). x86 builds need Intel's ARM_NEON_2_x86_SSE header. |
+| **Minimum toolchain** | CMake 3.11; C++ standard not set (compiler default); the published binaries were built with GCC 9.2.0 (crosstool-NG cross toolchain); the scalar fallback's '#pragma GCC unroll' needs GCC 8+ |
+| **Platforms** | aarch64 NEON (A64 path with vmull_high/vuzp2), ARMv7/A32 NEON (vuzpq path), x86-64 via NEON_2_SSE with -msse4; DISABLE_NEON gives a portable scalar fallback |
+| **Thread safety** | Stateless functions with no globals; each call opens its own OpenMP parallel region over rows. Concurrent calls are not documented. |
+| **Drop-in for the baseline** | partial: the baseline is the same library built with -DDISABLE_NEON=ON, so the API is identical, but there is no drop-in for OpenCV addWeighted or other blend APIs |
+
+## Gotchas
+
+- Harness note (read from the committed binaries): both aarch64 .so files used for the CSVs (byte-identical at the results commit a6c7d04 and HEAD) link libgomp and call GOMP_parallel, so OpenMP was on in both builds and the thread count was not recorded; the .comment section names GCC 9.2.0 (crosstool-NG). The no-simd build's Div255_Round stride kernel has zero vector instructions (llvm-objdump: ldrb/strb/mul/madd only), so GCC 9.2 did not auto-vectorize the fallback despite its ivdep/unroll pragmas; the README's 'GCC -O3 vs NEON' is in practice NEON vs plain scalar code.
+- The 3.5x headline holds only while bg, fg and out fit in the Pi 3B+'s 512 KB L2: NEON goes from 2.8 ns/px at 200 px to 5.8 ns/px at 250 px and about 7.4 ns/px beyond 300 px, while scalar stays at 10-12 ns/px, so the ratio falls to 1.33-1.65x (derived from page data).
+- Timing is from Python ctypes with one run per size and no warm-up; the 200 px point of the small sweep is just 10 calls (about 1.3 ms total). perf_test.py uses np.int, removed in NumPy 1.24, so it fails on current NumPy without a one-line edit.
+- Div255_Round_Approx differs by build: the NEON version is one too large for 127 of 65536 inputs, while the scalar fallback maps it to the exact div255_round. The tail path for widths not a multiple of 8 runs the 8-pixel kernel on partly uninitialised stack buffers (only valid lanes are copied out). The library also needs GTest installed to configure, and every target builds with -Werror -pedantic-errors.
+
+## Known shortcomings
+
+- Baseline is its own DISABLE_NEON scalar fallback; GCC version unstated; ctypes/OpenMP call overhead about 20 us; one run per size; committed CSVs give at most 3.58x on small and 1.37-1.59x on large sizes (derived).
+- From the committed aarch64 .so files (byte-identical at the results commit a6c7d04 and HEAD): both link libgomp and call GOMP_parallel, so OpenMP was on in both builds and the thread count was never recorded; built with GCC 9.2.0 (crosstool-NG). The no-simd Div255_Round kernel has zero vector instructions, so the baseline is plain scalar code, not GCC auto-vectorization. The 3.5x holds only while all three images fit the 512 KB L2 (up to 200 px); it is 1.33-1.65x from 300 px. perf_test.py breaks on NumPy 1.24+ (np.int); issue #1 is open (background alpha copied, not composited).
+
+## Caveats and trade-offs
+
+The baseline is the library's own non-NEON fallback (overlay_alpha_1 looped 8x under '#pragma GCC unroll 8' and 'ivdep'), not an external incumbent such as OpenCV. GCC version unstated, and the gain depends on how well that version auto-vectorizes the fallback. Timing runs from Python via ctypes, and both paths use '#pragma omp parallel for', so a fixed per-call overhead of about 20 us deflates the ratios below about 30 px (NEON is 0.93x at 1 px). It is not documented whether the committed .so files were built with OpenMP. Each size was run once with no variance reported. Raw data is public in examples/perf_test/output, and the prebuilt aarch64 and x86_64 .so files are committed. [retier] The baseline is the library's own non-NEON fallback (overlay_alpha_1 looped 8x under '#pragma GCC unroll 8' and 'ivdep'), not an external incumbent such as OpenCV, and by the committed binaries it is plain scalar code (no auto-vectorization). Both the NEON and the no-simd builds used for the CSVs (byte-identical at results commit a6c7d04 and HEAD) run with OpenMP on, with the thread count unrecorded, and timing runs from Python via ctypes with one run per size and no warm-up (the 200 px point is just 10 calls), so a fixed per-call overhead of about 20 us deflates the ratios below about 30 px (NEON is 0.93x at 1 px). The 3.5x headline holds only while bg, fg and out fit in the Pi 3B+'s 512 KB L2: NEON goes from 2.8 ns/px at 200 px to 5.8 ns/px at 250 px and about 7.4 ns/px beyond 300 px while scalar stays at 10-12 ns/px, so the ratio falls to 1.33-1.65x (derived from page data). perf_test.py uses np.int (removed in NumPy 1.24). Div255_Round_Approx differs by build (the NEON version is one too large for 127 of 65536 inputs); the tail path for widths not a multiple of 8 runs the 8-pixel kernel on partly uninitialised stack buffers; issue #1 (background alpha copied, not composited) is open; the library needs GTest to configure and builds with -Werror -pedantic-errors.
+
+ARM NEON only (AArch64 Raspberry Pi class); GPL-3.0 licence. Narrow function (alpha overlay), not a general SIMD library.
+
+## Maintenance
+
+Abandoned since 2020-07-26 (25 commits, no releases, one open issue unanswered since 2022). The core is a single 200-line .cpp plus two headers and easy to vendor, but GPL-3.0 limits copying into proprietary code.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): confirm; tier before verification C, tier now C.
+- **Tier reason:** First-party README claim backed by a public harness (examples/perf_test/perf_test.py), the raw CSVs and plotting script (examples/perf_test/output/\*.csv, compare.py) and a named board (Raspberry Pi 3B+, Ubuntu 20.04 64-bit). It falls short of A because only 'GCC -O3' is given: no compiler version, and the build command for the committed libalpha-lib-aarch64\*.so binaries, including whether OpenMP was on, is not documented.
+- **Verifier notes:** README claim matches the committed CSVs: 3.58x max on small images, and 1.4x at mid sizes rising to about 1.55-1.59x at the largest sizes, so 'around 1.4x' slightly understates the largest images. Metadata checked: GPL-3.0, 23 stars, not a fork, last commit 2020-07-26 (abandoned). Shortcomings: self-baseline (own scalar fallback), GCC version unstated, ctypes/OpenMP call overhead in the timing, single run per size.
+- **Fields the verifier corrected:** `claimed_speedup`, `workload`, `caveats`, `compiler_and_flags`
+- **Shortcomings recorded by:** verifier batch-25 (wave 13); enricher (wave 13 pass, 2026-10-12)
+- **Pages the verifier opened:**
+  - <https://github.com/tttapa/ARM-NEON-Compositor>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/commits>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/tree/master/examples/perf_test>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/tree/master/examples/perf_test/output>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/README.md>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/doxygen/images/perf-small.svg>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/doxygen/images/perf-large.svg>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/perf_test.py>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/compare.py>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:12:30%202020%20no-simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:13:39%202020%20simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:45:17%202020%20no-simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:50:07%202020%20simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/src/overlay_alpha.cpp>
+- **Sources the enricher read:**
+  - <https://github.com/tttapa/ARM-NEON-Compositor>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/commits>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/commits/master/examples/perf_test>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/commit/4190c176bff978af7c8b4c880cf243bfce45728b>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/tree/master/examples/perf_test>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/tree/master/src/alpha-lib/test>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/issues?q=is%3Aissue>
+  - <https://github.com/tttapa/ARM-NEON-Compositor/issues/1>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/README.md>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/src/overlay_alpha.cpp>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/src/rescale.hpp>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/src/SIMD.h>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/include/alpha-lib/overlay_alpha.h>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/include/alpha-lib/overlay_alpha.hpp>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/include/alpha-lib/rescale_type.hpp>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/src/alpha-lib/test/test-overlay_alpha.cpp>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/perf_test.py>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/a6c7d042c9cebff8874de37b290bc8226b976cd0/examples/perf_test/perf_test.py>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/compare.py>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:12:30%202020%20no-simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:13:39%202020%20simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:45:17%202020%20no-simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/output/Wed%20Jul%20%208%2015:50:07%202020%20simd.csv>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/libalpha-lib-aarch64.so>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/libalpha-lib-aarch64-no-simd.so>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/libalpha-lib-x86_64.so>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/HEAD/examples/perf_test/libalpha-lib-x86_64-no-simd.so>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/a6c7d042c9cebff8874de37b290bc8226b976cd0/examples/perf_test/libalpha-lib-aarch64.so>
+  - <https://raw.githubusercontent.com/tttapa/ARM-NEON-Compositor/a6c7d042c9cebff8874de37b290bc8226b976cd0/examples/perf_test/libalpha-lib-aarch64-no-simd.so>
+- **Raw records:** [data/wave13/verified.json](../../../data/wave13/verified.json) (id `https://github.com/tttapa/arm-neon-compositor`) · [data/wave13/enrich/raw/github_com_tttapa_arm_neon_compositor.json](../../../data/wave13/enrich/raw/github_com_tttapa_arm_neon_compositor.json) (enrichment confidence 0.85)
+
+</details>

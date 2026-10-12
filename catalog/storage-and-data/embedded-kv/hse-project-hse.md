@@ -1,0 +1,154 @@
+# HSE (Heterogeneous-memory Storage Engine)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md) › [Embedded key-value stores](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C` · `Apache-2.0 OR MIT` · 🔴 abandoned
+
+> Micron's embedded C key-value engine for NVMe SSDs; its own YCSB run shows about 8x RocksDB's load throughput.
+
+| | |
+|---|---|
+| **Beats** | RocksDB |
+| **Claimed result** | Load phase: more than 8x RocksDB's insert throughput (986,009 vs 122,899 inserts/sec), 88% shorter load (34 vs 271 minutes), and 99.9th-percentile insert latency of 1.6 ms vs 19.5 ms. Run phase: 'up to nearly 6x' more throughput across workloads A-D (shown only in a chart). Tail latency is down up to 91% for writes and 42% for reads. Bytes written are down up to 85% and bytes read up to 64%. |
+| **Workload** | YCSB 0.17.0 workloads A-D (load and run phases) on a 2TB dataset of 2 billion 1,000-byte records, with 96 client threads and 2 billion operations per workload. HSE 1.7.0 used its shipped native_ycsb_abcdf load/run config files; the baseline was RocksDB 6.6.4. |
+| **Metric** | throughput |
+| **Hardware** | 2-socket Intel Xeon E5-2690 v4, 256GB DRAM, 4x Micron 9300 NVMe SSDs (3.2TB each, LVM striped), RHEL 8.1 |
+| **Adoption** | 669 stars; integrated as a MongoDB storage engine (hse-mongo) and benchmarked via a public hse-ycsb fork |
+| **Last commit** | 2023-08-17 |
+| **Links** | [repository](https://github.com/hse-project/hse) · [benchmark](https://github.com/hse-project/hse-project.github.io/blob/master/v1/docs/apps/ycsb.md) |
+
+## Verdict
+
+In Micron's own v1 docs (YCSB 0.17.0, 2 billion 1,000-byte records, 96 client threads, a 2-socket Xeon E5-2690 v4 with 256 GB DRAM, four Micron 9300 NVMe drives striped with LVM, RHEL 8.1), HSE 1.7.0 from the mpool kernel-module era loaded at 986K inserts/s against 123K for RocksDB 6.6.4 (about 8x, 34 vs 271 minutes, p99.9 of 1.6 vs 19.5 ms), and run-phase gains of 'up to nearly 6x' on workloads A-D appear only as charts. RocksDB tuning, compiler and flags are not stated, the current 3.x storage layout was never re-measured, and no independent reproduction was found.
+
+## Use it when
+
+- Insert- or update-heavy ingest of billions of roughly 1 KB records onto local NVMe when the dataset is several times DRAM (the benchmark put 2 TB on a 256 GB host) and load time or SSD write volume is the bottleneck.
+- Data with natural key prefixes, such as per-tenant, per-device or time-epoch keys. A KVS created with a matching prefix.length gives you prefix-filtered cursors and single-call prefix deletes for bulk expiry.
+- Tiered SSD setups: set mclass.policy=staging_max_capacity to keep keys and the journal on TLC or pmem and move values to QLC, cutting writes to the low-endurance drives.
+- Embedded C or C++ services on x86-64 (or s390x) Linux that need atomic, snapshot-isolated transactions across several KVSs and can accept an asynchronous durability window.
+
+## Skip it when
+
+- You need RocksDB's API or feature set. There is no compatibility layer, the public API has no merge operator, WriteBatch, MultiGet, arbitrary range delete or backup engine, and the issue asking for backup/restore options (#4) is still open.
+- You need an engine someone maintains. The last master commit was 2023-08-17 and the last release was 3.0.0 in November 2022. Reported bugs (#630, #631) sit unfixed, and each major version (1 to 2 to 3) changed the storage format, so data had to be dumped and reloaded.
+- Non-Linux targets, HDDs or small machines. The docs support only Linux on x86_64 or s390x, SSD volumes only, a filesystem with O_DIRECT and fallocate punch-hole support, and recommend 32 GB of RAM or more.
+- One process needs several databases, or items exceed the hard limits: only one KVDB can be open per process, values are capped at 1 MiB and keys at about 1.3 KB.
+- You need each write to be durable when it returns. Commits are asynchronous, and by default the journal is flushed every 100 ms (durability.interval_ms) unless you call hse_kvdb_sync().
+
+## How it is fast
+
+Writes go into c0, an in-memory layer of RCU-protected Bonsai trees split into up to 32 hash-sharded c0_kvsets, and ingest then moves them into a shallow cN tree whose root node spills into key-range leaf nodes. Each on-media kvset keeps keys (kblocks with a 'wants to be a B-tree' index and Bloom filters) apart from values (vblocks), so k-compaction rewrites only keys and node split and join change only metadata; that key-value separation is the likely source of the up-to-85% fewer bytes written than RocksDB's leveled compaction. A scheduler driven by space amplification (sp3) uses HyperLogLog garbage estimates to decide when to spill or compact, and ingest throttling keeps tail latency down. Media-class policies can also pin keys to fast storage while values tier down to cheaper SSDs.
+
+## Compared with alternatives
+
+Over SplinterDB, which makes a similar NVMe insert claim (6-10x RocksDB), pick HSE when you want its cross-KVS snapshot-isolation transactions, prefix deletes and multi-tier media placement. If you need the RocksDB API itself, or active upkeep, Speedb or ToplingDB is the drop-in route.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | shared lib (libhse-3, built from source with Meson; Meson can also build it static) |
+| **Dependencies** | userspace-rcu, libbsd, libevent, lz4 and cJSON (lz4 and cJSON are built in as Meson subprojects by default), xxHash; libcurl for the CLI and tools only; libpmem (optional, for pmem on x86) |
+| **Minimum toolchain** | C (gnu11), Meson &gt;= 0.63.0; minimum compiler versions not documented |
+| **Platforms** | 64-bit Linux on x86-64 or s390x (other architectures compile through generic fallbacks but are not listed as supported); tested on RHEL 8/9, Ubuntu 18.04 to 22.04 and Fedora 35/36; storage must be SSD or pmem on XFS/ext4 (DAX for pmem) |
+| **Thread safety** | Data-path calls (put, get, delete, prefix delete, sync, cursor create) are thread-safe. Setup and teardown calls (hse_init, KVDB and KVS close, mclass reconfigure) are not. Each cursor, and each transaction, may be used by only one thread at a time. Only one KVDB can be open per process. |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Puts are throttled when the engine starts and self-tune over roughly 200 seconds (issue #9), which badly skews short benchmarks. Profile the storage with `hse storage profile` and set throttling.init_policy. Under load, the put path adds short sleeps unless you pass HSE_KVS_PUT_PRIO.
+- A KVS opened with transactions.enabled=true rejects non-transactional updates, and a KVS opened with it false rejects transactions. Prefix deletes need a filter exactly equal to the prefix.length fixed at KVS creation.
+- Deletes and updates do not free space right away. k-compaction leaves values that are no longer referenced inside vblocks, and garbage from prefix tombstones is not counted in the space-amplification estimate (docs/space-amp.md).
+- By default each process starts a REST server on a UNIX socket (rest.enabled=true), and error codes are hse_err_t, not errno. Use hse_strerror() or hse_err_to_errno(), because strerror() gives meaningless results.
+
+## Known shortcomings
+
+- Numbers come from the v1 docs; the project is abandoned.
+- Speed numbers are Micron's own, for HSE 1.7 (2020, which needed the mpool kernel module; 2.0+ runs in userspace on XFS/ext4) vs RocksDB 6.6.4 with unstated tuning; 3.x was never re-measured and no independent reproduction exists. Archived: last commit 2023-08, last release 3.0.0 (2022-11), open bugs #630/#631; the storage format broke at 1 to 2 to 3 (dump and reload each time).
+- Linux x86-64/s390x only, SSD only, one KVDB per process, values &lt;=1 MiB, keys \~1.3 KB; own API, not a RocksDB drop-in (no merge operator/WriteBatch/MultiGet/backup). A \~200 s startup put throttle skews benchmarks (#9); commits are async with a 100 ms journal flush; the REST socket is on by default.
+
+## Caveats and trade-offs
+
+First-party vendor benchmark from the HSE/Micron v1 docs (HSE 1.7.0 vs RocksDB 6.6.4, about 2020), not independently reproduced. No compiler or build flags are stated, and run-phase per-workload numbers appear only in chart images. GitHub's license API returns null, but the README and source SPDX headers declare Apache-2.0 OR MIT (bundled subprojects are under Zlib, BSD-2-Clause and MIT). The repo is not archived, but the last commit on master was 2023-08-17.
+
+Requires a dedicated 'mpool' storage-management layer and Micron-tuned NVMe configuration, adding operational complexity versus dropping in RocksDB; project (originated at Micron) has had no commits since August 2023
+
+## Maintenance
+
+Abandoned since its last commit on 2023-08-17 (last release 3.0.0, Nov 2022); the Apache-2.0 OR MIT license makes it forkable, but it is a large Linux-only C engine rather than something to vendor lightly, and the benchmarked 1.x line depended on the mpool kernel module, whose repo (mpool-kmod) is now archived.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification C, tier now C.
+- **Tier reason:** The project's own docs page reports HSE 1.7.0 vs RocksDB 6.6.4 on YCSB, with the CPU (Xeon E5-2690 v4), YCSB version and HSE config files stated. The YCSB harness is public as the hse-ycsb fork, but no compiler or flags are given, so these are first-party numbers short of A.
+- **Verifier notes:** Every number in the record matches the page; 'up to \~6x' is the page's 'up to nearly 6x'. I fixed the license to the dual Apache-2.0 OR MIT declared in the SPDX headers and .reuse/dep5. Stars (669), non-fork status and 'abandoned' (over 3 years since the last commit) are all correct.
+- **Fields the verifier corrected:** `license`, `claimed_speedup`, `workload`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/hse-project/hse-project.github.io/blob/master/v1/docs/apps/ycsb.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v1/docs/apps/ycsb.md>
+  - <https://github.com/hse-project/hse>
+  - <https://github.com/hse-project/hse/blob/master/README.md>
+  - <https://github.com/hse-project/hse/blob/master/.reuse/dep5>
+  - <https://github.com/hse-project/hse/blob/master/include/hse/hse.h>
+  - <https://github.com/hse-project/hse-mongo>
+  - <https://github.com/hse-project/hse-ycsb>
+- **Sources the enricher read:**
+  - <https://github.com/hse-project/hse>
+  - <https://github.com/hse-project/hse/blob/master/README.md>
+  - <https://github.com/hse-project/hse/blob/master/INSTALL.md>
+  - <https://github.com/hse-project/hse/blob/master/meson.build>
+  - <https://github.com/hse-project/hse/blob/master/lib/meson.build>
+  - <https://github.com/hse-project/hse/blob/master/VERSION>
+  - <https://github.com/hse-project/hse/blob/master/include/hse/hse.h>
+  - <https://github.com/hse-project/hse/blob/master/include/hse/limits.h>
+  - <https://github.com/hse-project/hse/blob/master/include/hse/flags.h>
+  - <https://github.com/hse-project/hse/blob/master/include/hse/experimental.h>
+  - <https://github.com/hse-project/hse/blob/master/docs/hse-data-path.md>
+  - <https://github.com/hse-project/hse/blob/master/docs/hse-objects.md>
+  - <https://github.com/hse-project/hse/blob/master/docs/space-amp.md>
+  - <https://github.com/hse-project/hse/blob/master/docs/compaction-merge-loops.md>
+  - <https://github.com/hse-project/hse/blob/master/lib/cn/csched_sp3.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/cn/cn_tree.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/cn/route.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/cn/wbt_builder.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/cn/kvset_split.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/util/lib/bonsai_tree.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/util/lib/arch.c>
+  - <https://github.com/hse-project/hse/blob/master/lib/util/include/hse/util/arch.h>
+  - <https://github.com/hse-project/hse/releases>
+  - <https://github.com/hse-project/hse/releases/tag/r2.0.0>
+  - <https://github.com/hse-project/hse/releases/tag/r3.0.0>
+  - <https://github.com/hse-project/hse/discussions/50>
+  - <https://github.com/hse-project/hse/discussions/559>
+  - <https://github.com/hse-project/hse/issues>
+  - <https://github.com/hse-project/hse/issues/3>
+  - <https://github.com/hse-project/hse/issues/5>
+  - <https://github.com/hse-project/hse/issues/9>
+  - <https://github.com/hse-project/hse/issues/471>
+  - <https://github.com/hse-project/hse/issues/631>
+  - <https://github.com/hse-project/hse-project.github.io/blob/master/v1/docs/apps/ycsb.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v1/docs/apps/ycsb.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v1/docs/gs/sys-requirements.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v1/docs/gs/config-storage.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/gs/about.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/gs/sysreqs.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/gs/storage.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/gs/params.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/dev/concepts.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/dev/limits.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/dev/bp.md>
+  - <https://raw.githubusercontent.com/hse-project/hse-project.github.io/master/v3/docs/res/benchmarking.md>
+  - <https://github.com/hse-project/hse-ycsb>
+  - <https://github.com/hse-project/hse-mongo>
+  - <https://github.com/hse-project/hse-python>
+  - <https://github.com/hse-project/hse-java>
+  - <https://github.com/hse-project/mpool-kmod>
+  - <https://hn.algolia.com/api/v1/search?query=Heterogeneous-memory%20Storage%20Engine&tags=story>
+  - <https://news.ycombinator.com/item?id=22999738>
+  - <http://export.arxiv.org/api/query?search_query=all:%22Heterogeneous-Memory%20Storage%20Engine%22>
+  - <https://api.crossref.org/works?query.bibliographic=Micron+HSE+heterogeneous-memory+storage+engine+RocksDB>
+- **Raw records:** [data/wave6/verified.json](../../../data/wave6/verified.json) (id `https://github.com/hse-project/hse`) · [data/wave6/enrich/raw/github_com_hse_project_hse.json](../../../data/wave6/enrich/raw/github_com_hse_project_hse.json) (enrichment confidence 0.72)
+
+</details>

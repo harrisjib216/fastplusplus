@@ -1,0 +1,115 @@
+# Sputnik (sparse GPU kernels for deep learning: SpMM and SDDMM)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Numerics and science](../README.md) › [Sparse matrices and solvers](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++ (CUDA)` · `Apache-2.0` · 🔴 abandoned
+
+> CUDA SpMM and SDDMM kernels tuned for the moderate sparsity of pruned neural networks; several times faster than cuSPARSE SpMM.
+
+| | |
+|---|---|
+| **Beats** | cuSPARSE SpMM |
+| **Claimed result** | Torch-Sputnik README (A100, third-party PyTorch binding; the tables give no time unit, values consistent with ms): M=N=K=4096 Sputnik 2.52 vs cuSPARSE 10.97 at density 0.05 (about 4.4x, derived from page data), 4.02 vs 21.68 at 0.1 (5.4x), 13.05 vs 107.38 at 0.5 (8.2x); M=N=K=64 Sputnik 0.0045 to 0.0075 vs cuSPARSE 0.086 to 0.147. SC'20 paper (per search snippet, not opened): 3.58x geometric-mean SpMM speedup over cuSPARSE on V100 across the Deep Learning Matrix Collection. |
+| **Workload** | Sparse-times-dense matrix multiply (SpMM) at M=N=K=64 and M=N=K=4096, densities 0.05 to 0.5, on an A100, timed by the third-party Torch-Sputnik wrapper. |
+| **Metric** | latency |
+| **Hardware** | NVIDIA A100 (host CPU, CUDA and compiler versions not stated) |
+| **Adoption** | 289 stars; repository archived 2026-04-19 |
+| **Last commit** | 2020-11-04 |
+| **Links** | [repository](https://github.com/google-research/sputnik) · [benchmark](https://github.com/mabdullahsoyturk/Torch-Sputnik) |
+
+## Verdict
+
+A third-party PyTorch binding (Torch-Sputnik) times fp32 SpMM on an A100 at M=N=K=4096: Sputnik 2.52 vs cuSPARSE 10.97 at density 0.05 (about 4.4x) up to 13.05 vs 107.38 at density 0.5 (8.2x), with no time unit, CUDA version or timing method stated; at 64^3 Sputnik is about 0.005 vs 0.09. The peer-reviewed SC'20 paper is the primary evidence (3.58x geometric mean over cuSPARSE on a V100 per a search snippet; this session's search snippet adds 27% of single-precision peak and 1.2-2.1x end-to-end speedups on sparse Transformer and MobileNet), but its PDF was not opened.
+
+## Use it when
+
+- Pruned DNN layers (weights 50-95% zero, i.e. density 0.05-0.5) on NVIDIA Volta or newer, where cuSPARSE SpMM is far slower than the dense GEMM
+- Sparse fully connected or 1x1 conv layers in inference where the fused SpMM + bias + ReLU kernel saves a pass over the output
+- Sparse attention or masked products that need SDDMM in fp32 with the same CSR topology as the SpMM
+- fp16 SpMM with fp32 accumulation when n and every row's nonzero count are even
+- Research baselines: Sputnik is the standard reference kernel cited by later DNN SpMM papers
+
+## Skip it when
+
+- Density above about 0.2 at large sizes: in the Torch-Sputnik A100 table Sputnik (13.05 at density 0.5, 7.87 at 0.25) is slower than dense cuBLAS (7.29), so use dense GEMM there
+- AMD, Intel or pre-Volta NVIDIA GPUs (README requires SM70+ and CUDA 10.1+), and any CPU target
+- Scientific SpMV or highly irregular graph matrices: the kernels and heuristics are tuned on DNN weight matrices, not SuiteSparse or power-law graphs
+- fp16 SDDMM, fp64, or tensor-core sparse formats such as 2:4 structured sparsity: none are provided
+- Projects that need a maintained dependency: archived on 2026-04-19, last commit 2020-11-04, open build issue with no answer
+
+## How it is fast
+
+The SpMM kernel uses a 1-D tiling scheme where a configurable number of threads (subwarp tiling) cooperate on an output tile, and it loads the sparse values, column indices and dense rows with vector instructions (float4/float2, half8/half4). To make vector loads legal on unaligned CSR rows, memory_aligner.h rounds each row's start offset down to the vector width and masks the extra leading values. Rows are processed in the caller-supplied row_indices order so that rows of similar length are scheduled together across warps and SMs, and a small heuristic (plus a lookup table of hand-picked configs for exact MobileNetV1 layer shapes) chooses tile sizes by n; the code comment says the heuristic reaches about 96% of an oracle on its synthetic RNN data.
+
+## Compared with alternatives
+
+Pick Sputnik over HP-SpMM-SDDMM when the sparse operand is a pruned DNN weight matrix at moderate density and you want fp16 or the fused bias+ReLU epilogue; pick HP-SpMM-SDDMM for very sparse power-law GNN graphs on recent GPUs (it is measured against cuSPARSE 12.2 on an H800). For SpMV on scientific matrices, ISpMV or the cache-aware SpMV entry fit better.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib (CMake, CUDA sources) |
+| **Dependencies** | CUDA toolkit 10.1+, glog; the library CMake also links cudart, cuBLAS, cuBLASLt and cuSPARSE static libs (a TODO says these should be test-only); tests and benchmarks add abseil, googletest and google/benchmark submodules |
+| **Minimum toolchain** | C++11, CUDA 10.1+, CMake 3.13+ |
+| **Platforms** | NVIDIA GPUs SM70+ (Volta, Turing, Ampere and later), Linux; a Dockerfile is provided |
+| **Thread safety** | not documented; kernels are stateless launches on a caller-given stream, and the kernel lookup table is a function-local static |
+| **Drop-in for the baseline** | partial: same CSR input layout as cuSPARSE, but a different C API (raw pointers, no alpha/beta or descriptors), fp32/fp16 only, row-major dense operands, and an extra row_indices permutation the caller must build |
+
+## Gotchas
+
+- CMake must be given -DCUDA_ARCHS (e.g. "70;80"): create_cuda_gencode_flags is called with that list, and the open issue #15 reports a CMake error at that exact line
+- Half-precision SpMM uses half2 values and short2 column indices, so n and the nonzero count of every row must be divisible by 2, and column indices must fit in 16 bits
+- Kernel choice is keyed on n (n % 4, n % 2, n == 8/16/32, n % 64) plus a table of exact (m,k,n) shapes from MobileNetV1 widths 1.3-1.8; other shapes fall back to a simple heuristic the authors flag as not general
+- There is no user API to build a sparse matrix from a dense float\* (issue #13) and no SDDMM-to-dense conversion (issue #12); format conversion and the row permutation are the caller's job
+
+## Known shortcomings
+
+- SC'20 3.58x geomean SpMM over cuSPARSE (V100) seen only in a search snippet (paper blocked); Torch-Sputnik tables give no time unit; slower than dense cuBLAS at density 0.25 or more; archived.
+- Archived; last commit 2020. Open #15: CMake errors unless -DCUDA_ARCHS is set. fp16 path uses 16-bit (short2) column indices. Hand-tuned kernel table covers MobileNetV1 shapes only. SC'20 paper not opened here.
+
+## Caveats and trade-offs
+
+The A100 numbers come from a 4-star third-party PyTorch binding repo whose tables state no time unit, CUDA version, host CPU or timing method; Sputnik's own README has no numbers. The SC'20 paper (peer reviewed) is the primary evidence but could not be opened here (arxiv.org and the Berkeley PDF host are egress-blocked); its 3.58x V100 geometric mean is from a search snippet. The Torch-Sputnik table shows dense cuBLAS at 7.29 for 4096^3, so Sputnik is slower than dense at density 0.5 (13.05) and 0.25 (7.87) and wins only at density 0.2 and below. Repository archived 2026-04-19; last commit 2020-11-04 (19 commits).
+
+NVIDIA only (SM70+), CUDA 10.1+, glog dependency, built with CMake; aimed at the sparse matrices of deep neural networks.
+
+## Maintenance
+
+Archived 2026-04-19 with no commits since 2020-11-04, but Apache-2.0, small and self-contained enough to vendor; expect to fix the CMake setup yourself for current CUDA and CMake versions.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification C, tier now B.
+- **Tier reason:** Upgraded from C: Sputnik's own evidence is the peer-reviewed SC'20 paper (Gale, Zaharia, Young, Elsen, 'Sparse GPU Kernels for Deep Learning', arXiv 2006.10901, cited by the repo and by google-research/sgk), which a search-result snippet reports as a 3.58x geometric-mean SpMM speedup over cuSPARSE on a V100 (paper host egress-blocked here, not opened). The third-party Torch-Sputnik A100 table alone would be C (no CUDA version, flags, units or method).
+- **Verifier notes:** Torch-Sputnik numbers match the record, but the record's '(page states ms)' is wrong: the tables give no unit (the cuBLAS 4096^3 figure is plausible as ms on an A100). Metadata confirmed: Apache-2.0, 289 stars, archived 2026-04-19, last commit 2020-11-04, so abandoned.
+- **Fields the verifier corrected:** `claimed_speedup`, `caveats`
+- **Shortcomings recorded by:** enrichment
+- **Pages the verifier opened:**
+  - <https://raw.githubusercontent.com/mabdullahsoyturk/Torch-Sputnik/HEAD/README.md>
+  - <https://github.com/mabdullahsoyturk/Torch-Sputnik>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/README.md>
+  - <https://github.com/google-research/sputnik>
+  - <https://github.com/google-research/sputnik/commits>
+  - <https://raw.githubusercontent.com/google-research/google-research/master/sgk/README.md>
+- **Sources the enricher read:**
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/README.md>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/cmake/Dependencies.cmake>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/cmake/Cuda.cmake>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/sputnik.h>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/spmm/cuda_spmm.h>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/spmm/cuda_spmm.cu.cc>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/sddmm/cuda_sddmm.h>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/sddmm/cuda_sddmm.cu.cc>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/memory_aligner.h>
+  - <https://raw.githubusercontent.com/google-research/sputnik/HEAD/sputnik/utils/index_format.h>
+  - <https://github.com/google-research/sputnik/tree/master/sputnik>
+  - <https://github.com/google-research/sputnik/issues?q=is%3Aissue>
+  - <https://github.com/google-research/sputnik/issues/15>
+  - <https://raw.githubusercontent.com/mabdullahsoyturk/Torch-Sputnik/HEAD/README.md>
+  - WebSearch snippet: https://sc20.supercomputing.org/proceedings/tech_paper/tech_paper_pages/pap302.html and https://www.semanticscholar.org/paper/Sparse-GPU-Kernels-for-Deep-Learning-Gale-Zaharia/70e9a09de05aa7ed8a74d56cf2d13ea9e38a6328 (not opened)
+- **Raw records:** [data/wave8/verified.json](../../../data/wave8/verified.json) (id `https://github.com/google-research/sputnik`) · [data/wave8/enrich/raw/github_com_google_research_sputnik.json](../../../data/wave8/enrich/raw/github_com_google_research_sputnik.json) (enrichment confidence 0.7)
+
+</details>

@@ -1,0 +1,127 @@
+# CHT (Compact Hist-Tree)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md) › [Indexes](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++` · `MIT` · 🔴 abandoned
+
+> Header-only C++ compact Hist-Tree: a flattened radix-histogram table over sorted integer keys, beating RMI/PGM/RadixSpline lookup latency.
+
+| | |
+|---|---|
+| **Beats** | RMI, PGM-index, RadixSpline (learned index baselines) |
+| **Claimed result** | CHT beats RMI by 1.1-1.8x, PGM-index by 1.7-2.5x, and RadixSpline by 1.2-2.7x in lookup latency; the compact (read-only) layout is 2-3x faster than the updatable Hist-Tree (HT) variant; also 3.7x-19x faster build times than RMI on face/wiki datasets |
+| **Workload** | SOSD benchmark equality lookups over 200M-key real-world datasets (amzn, face, osm, wiki), average lookup latency over 1M uniformly-random queries |
+| **Metric** | latency |
+| **Hardware** | AWS c5.4xlarge EC2 instance, Intel Xeon Platinum 8124M CPU @ 3.0GHz, 26MB LLC |
+| **Compiler and flags** | gcc/g++ 9.3.0 (optimization flags not stated) |
+| **Adoption** | 9 stars; this C++ implementation is the CHT component of PLEX (Stoian et al., 'Towards Practical Learned Indexing', AIDB 2021) |
+| **Last commit** | 2021-07-17 |
+| **Links** | [repository](https://github.com/stoianmihail/CHT) · [benchmark](https://cs.brown.edu/people/acrotty/pubs/cidr2021_paper20.pdf) |
+
+## Verdict
+
+The 1.1-1.8x (RMI), 1.7-2.5x (PGM-index) and 1.2-2.7x (RadixSpline) lookup-latency wins come from Crotty's CIDR 2021 paper. They compare each index's fastest configuration on SOSD's 200M-key amzn/face/osm/wiki sets, compiled with gcc/g++ 9.3.0 (flags unstated) on an AWS c5.4xlarge (Xeon Platinum 8124M), using Crotty's own C implementation rather than this repo. Separately, Maltry & Dittrich (PVLDB 15(5), 2022) benchmarked this exact repo with clang 12.0.1 -O2 on a single thread of a Xeon E5-2620 v4 and found it the fastest index on books, fb and osmc once its index reaches about 100 MiB (graph-only; wiki excluded because of duplicates).
+
+## Use it when
+
+- Read-only, sorted, duplicate-free 32- or 64-bit unsigned integer keys (SOSD-style books, fb or osm distributions) where lowest lookup latency matters and you can rebuild when the data changes.
+- You can afford a large index. In an independent evaluation it was the fastest index on books, fb and osmc at 200M keys, but only from about 100 MiB of index upward.
+- Skewed or clustered key distributions where RadixSpline's single radix table degenerates. The PLEX authors' auto-tuner picked CHT over a radix table on the face dataset for exactly this outlier problem.
+- You want a tiny, dependency-free header drop with two knobs. SOSD's tuned fastest configurations are a starting point: 1024 bins with error 16 on books and osm, and 256 bins with error 32 on fb.
+- You need a secondary radix layer over a small sorted key set, such as spline knots, which is how PLEX uses it.
+
+## Skip it when
+
+- Keys with duplicates. Open issue #4 reports wrong search ranges on SOSD's wiki dataset, and the returned bound can silently miss the key. Both the PLEX and Maltry/Dittrich papers had to exclude wiki.
+- Any inserts or deletes. The compact layout is build-once. The paper's updatable Hist-Tree is 2-3x slower and is not in this repo.
+- Tight memory budgets. At smaller index sizes, RMI, PGM-index and RadixSpline beat it in Maltry & Dittrich's evaluation. The table costs nodes x num_bins x 4 bytes, and a small max_error multiplies the node count.
+- Strings, floats or signed keys. Only uint32_t and uint64_t are tested, and binning relies on unsigned subtraction and shifts.
+- MSVC/Windows, or when you need a maintained dependency. It uses __builtin_clz/__builtin_clzl, has no releases, has 9 stars and has had no commits since July 2021.
+
+## How it is fast
+
+Each node is an equal-width histogram over a power-of-two key range, so picking a bin is one right shift of (key - min) instead of a comparison or a model evaluation. Bins holding more than max_error keys get a child node, and the rest are terminal. The compact layout flattens all nodes into one array of 32-bit cells. A terminal bin stores the prefix-sum position, flagged in bit 31, and an inner bin stores its child's row, so each level of a lookup is a shift, a load and a flag test. The configurations that tune best use high bin counts, which keeps the tree to a few levels. An optional cache-oblivious (van Emde Boas-style recursive) node order is provided for deep trees, meaning small bin counts or small errors.
+
+## Compared with alternatives
+
+Pick it over RadixSpline, RMI and PGM-index when the data is static and duplicate-free and you can spend a 100 MiB-class index for the lowest probe latency, with builds far cheaper than RMI's optimizer. Pick PLEX instead when you want one hyperparameter, a small index or duplicate keys: it embeds this CHT under a spline and auto-tunes it. For updates, use PGM-index, ALEX or LIPP.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only |
+| **Dependencies** | none (STL only; CMake fetches GoogleTest 1.10.0 only to build the tests) |
+| **Minimum toolchain** | C++17 (structured bindings, std::optional); GCC or Clang builtins required. Known to build with gcc 9.3 (paper) and clang 12.0.1 (Maltry & Dittrich). |
+| **Platforms** | LP64 targets with GCC/Clang (Linux; macOS/AppleClang since the May 2021 ambiguity fix). The headers have no ISA-specific code, though the repo's CMake adds -march=native. MSVC is not supported. |
+| **Thread safety** | Not documented. GetSearchBound is a const read of an immutable table, so concurrent lookups after Finalize only read. The Builder is single-threaded. |
+| **Drop-in for the baseline** | partial — It has the same Builder(min, max, ...)/AddKey/Finalize/GetSearchBound -&gt; SearchBound{begin, end} shape as RadixSpline, so it swaps into RS- or SOSD-style code. It needs its own num_bins/max_error tuning and unique keys, has no serialization, and offers no RMI- or PGM-compatible API. |
+
+## Gotchas
+
+- Input validation is assert-only. Release builds do not catch unsorted keys, min/max that don't equal the first/last key, a num_bins that is not a power of two, or a key range smaller than num_bins, and any of these yields wrong bounds.
+- Positions and node ids are 31-bit, because bit 31 of each unsigned cell is the leaf flag. That caps the index at about 2.1 billion keys or nodes. A fork (jakubpawlewicz/CHT) adds Builder::CheckFeasible() because some parameter/data combinations make the tree too large.
+- builder.h uses std::cerr and std::function but includes neither &lt;iostream&gt; nor &lt;functional&gt;. Include both before it or it may fail to compile.
+- The default two-pass Builder copies every key into its own vector and also keeps per-node bin vectors, so peak build memory is well above the final index size. single_pass=true avoids the key copy, but it is ignored, with only a stderr warning, when use_cache (the cache-oblivious layout) is set.
+
+## Known shortcomings
+
+- The paper's numbers are for Crotty's C implementation; this repo is Stoian's C++ port (from PLEX) with no public paper benchmark code or flags, and it does not support duplicate keys.
+- An independent check of this exact repo (Maltry & Dittrich, PVLDB 15(5) 2022, clang 12 -O2) finds it fastest on books/fb/osmc only when the index is \~100 MiB or larger (graph only). Duplicate keys give wrong bounds (#4 open); read-only; assert-only input checks; 31-bit positions/node ids cap it at \~2.1B keys; GCC/Clang builtins (no MSVC); builder.h is missing includes; abandoned since 2021-07.
+
+## Caveats and trade-offs
+
+The numbers come from the CIDR 2021 paper (Andrew Crotty, 'Hist-Tree: Those Who Ignore It Are Doomed to Learn'). That paper benchmarks Crotty's own C implementation with a C++ suite borrowed from SOSD and publishes neither. This repo is a separate C++ reimplementation of the compact Hist-Tree by Mihail Stoian (MIT, 2021). The paper's speedups were therefore not measured on this code, and the paper states no optimization flags. The PLEX paper notes this implementation does not support duplicate keys, so it could not run SOSD's wiki dataset. The repo's bench.cc is only a parameter grid search on synthetic data with no baseline. There is no README benchmark section, and there have been no commits since 2021-07-17.
+
+Compact layout is build-once/read-only (no updates); the updatable HT variant exists but is 2-3x slower on lookups; author credited as Andrew Crotty (Brown University), repo implementation by Mihail Stoian
+
+## Maintenance
+
+Abandoned since July 2021 with the duplicate-key bug (#4) still open, but it is MIT-licensed, under 18 KB of headers and still pinned as a SOSD competitor submodule, so vendoring and patching it is realistic.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): downgrade; tier before verification A, tier now B.
+- **Tier reason:** The peer-reviewed CIDR 2021 paper states the ratios verbatim along with gcc/g++ 9.3.0 and a Xeon Platinum 8124M CPU. However, it gives no optimization flags and publishes no benchmark-suite code (it only says it borrowed from SOSD), and it measured the author's own C implementation, not this repo. So it is B, not A.
+- **Verifier notes:** All claimed ratios appear verbatim in the paper: RMI 1.1-1.8x, PGM 1.7-2.5x, RS 1.2-2.7x, CHT 2-3x over HT, build time more than 3.7x/19x faster than RMI on face/wiki. It is downgraded from A to B because the paper has no public benchmark code or flags and measured a different implementation. Metadata checks out: MIT, 9 stars, last commit 2021-07-17, abandoned.
+- **Fields the verifier corrected:** `compiler_and_flags`, `stars_or_usage`, `caveats`
+- **Pages the verifier opened:**
+  - <https://cs.brown.edu/people/acrotty/pubs/cidr2021_paper20.pdf>
+  - <https://github.com/stoianmihail/CHT>
+  - <https://github.com/stoianmihail/CHT/blob/main/bench.cc>
+  - <https://arxiv.org/pdf/2108.05117v2>
+- **Sources the enricher read:**
+  - <https://github.com/stoianmihail/CHT>
+  - <https://github.com/stoianmihail/CHT/blob/main/README.md>
+  - <https://github.com/stoianmihail/CHT/blob/main/include/cht/builder.h>
+  - <https://github.com/stoianmihail/CHT/blob/main/include/cht/cht.h>
+  - <https://github.com/stoianmihail/CHT/blob/main/include/cht/common.h>
+  - <https://github.com/stoianmihail/CHT/blob/main/CMakeLists.txt>
+  - <https://github.com/stoianmihail/CHT/blob/main/test/cht_test.cc>
+  - <https://github.com/stoianmihail/CHT/blob/main/bench.cc>
+  - <https://github.com/stoianmihail/CHT/blob/main/bench_end_to_end.cc>
+  - <https://github.com/stoianmihail/CHT/blob/main/example.cc>
+  - <https://github.com/stoianmihail/CHT/blob/main/grid_search.sh>
+  - <https://github.com/stoianmihail/CHT/issues?q=is%3Aissue>
+  - <https://github.com/stoianmihail/CHT/issues/2>
+  - <https://github.com/stoianmihail/CHT/issues/3>
+  - <https://github.com/stoianmihail/CHT/issues/4>
+  - <https://github.com/stoianmihail/CHT/pull/5>
+  - <https://github.com/stoianmihail/CHT/commits/main>
+  - <https://github.com/stoianmihail/CHT/forks>
+  - <https://github.com/jakubpawlewicz/CHT/compare/main...jakubpawlewicz:CHT:main>
+  - <https://cs.brown.edu/people/acrotty/pubs/cidr2021_paper20.pdf>
+  - <https://arxiv.org/pdf/2108.05117v2>
+  - <https://arxiv.org/pdf/2106.16166v2>
+  - <https://export.arxiv.org/api/query?search_query=ti:%22Critical%20Analysis%20of%20Recursive%20Model%20Indexes%22>
+  - <https://api.crossref.org/works?query.title=A%20Critical%20Analysis%20of%20Recursive%20Model%20Indexes>
+  - <https://github.com/learnedsystems/SOSD/blob/master/competitors/cht.h>
+  - <https://github.com/learnedsystems/SOSD/blob/master/benchmarks/benchmark_cht.cc>
+  - <https://github.com/learnedsystems/SOSD/blob/master/.gitmodules>
+  - <https://github.com/learnedsystems/SOSD/tree/master/competitors>
+  - <https://github.com/stoianmihail/PLEX/tree/main/include/ts/ts_cht>
+  - <https://github.com/learnedsystems/RadixSpline/blob/master/README.md>
+- **Raw records:** [data/wave6/verified.json](../../../data/wave6/verified.json) (id `https://github.com/stoianmihail/cht`) · [data/wave6/enrich/raw/github_com_stoianmihail_cht.json](../../../data/wave6/enrich/raw/github_com_stoianmihail_cht.json) (enrichment confidence 0.86)
+
+</details>

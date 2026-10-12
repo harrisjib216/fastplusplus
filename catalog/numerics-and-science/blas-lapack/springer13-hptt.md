@@ -1,0 +1,127 @@
+# HPTT (High-Performance Tensor Transposition)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Numerics and science](../README.md) › [BLAS and LAPACK](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++` · `BSD-3-Clause` · 🔴 abandoned
+
+> Multi-threaded, AVX-vectorized out-of-place tensor transposition (B = alpha\*perm(A) + beta\*B); paper reports large wins over Eigen's tensor shuffle.
+
+| | |
+|---|---|
+| **Beats** | numpy.transpose (np.transpose(A, perm).copy(order=order) in pythonAPI/benchmark/benchmark.py) is the only baseline seen with numbers. The ARRAY 2017 paper reportedly compares against Eigen's tensor transposition (Eigen::Tensor shuffle), but that is known only from its abstract as quoted by search results; the paper was not opened. |
+| **Claimed result** | Seen on opened pages only. README figure misc/hptt_vs_numpy.png (bar chart, values read by eye): 57 test cases, HPTT on 24 threads of 2x Xeon E5-2680 v3 against numpy.transpose(A, perm).copy(), about 5.1x (case 46) to about 19.7x (case 42), most cases between 7x and 13x. benchmark/bw.png (the paper's Fig. 6): HPTT bandwidth over 57 cases with and without autotuning is at or near the system SAXPY and STREAM lines on Ivy Bridge (about 23-39 GiB/s against SAXPY about 35 GiB/s), KNL, IBM Power7, AMD and ARM. No library baseline appears in that figure. |
+| **Workload** | Out-of-place tensor transposition. Paper: HPTT vs Eigen tensor shuffle over the TTC benchmark permutations (details not seen). README figure: 57 permutation/size cases, HPTT tensorTransposeAndUpdate with 24 threads vs numpy.transpose(...).copy(); the current pythonAPI/benchmark/benchmark.py allocates A and B as np.float64 regardless of its --floatType option, times with time.time() taking the minimum of 5 runs, and 'trashes' cache by updating a 2500x2500 float array between runs. |
+| **Metric** | throughput |
+| **Hardware** | 2x Intel Haswell-EP E5-2680 v3 (24 threads) |
+| **Compiler and flags** | Benchmark Makefile: -O3 -std=c++11, plus -fopenmp -march=native (g++) or -qopenmp -xhost (icpc); the compiler and version used for the plotted numpy comparison are not stated (README only lists tested compilers: icpc 15/16/17, g++ 5.4-6.3, clang++ 3.8/3.9). |
+| **Adoption** | 205 stars, 52 forks; the transposition engine under TCL (springer13/tcl) and a dependency of TCCG |
+| **Last commit** | 2022-02-15 |
+| **Links** | [repository](https://github.com/springer13/hptt) · [benchmark](https://arxiv.org/abs/1704.04374) |
+
+## Verdict
+
+The headline is from the peer-reviewed ARRAY 2017 paper, seen only through search-result abstracts: bandwidth comparable to SAXPY across Ivy Bridge, ARMv7 and Power7, 'remarkable speedups' over Eigen's tensor transposition (up to 27.4x per the verifier's search quote; the snippet seen here gave no number), and up to 3.1x faster CTF contractions; the CPU, compiler and thread counts behind the Eigen figure were not visible. The repo's own figure compares HPTT with 24 threads on 2x Xeon E5-2680 v3 against numpy.transpose(...).copy() (thread count and compiler not stated; numpy's copy is normally single-threaded) over 57 cases, about 5.1x to 19.7x read by eye, so much of that gap is parallel bandwidth; the C++ benchmark harness compares only with a naive reference and the original TTC.
+
+## Use it when
+
+- You need a materialized permuted copy of a rank-3 to rank-6 dense tensor (for example before a GEMM in a TTGT tensor contraction, or for layout conversion between libraries) and the copy is memory-bandwidth-bound
+- Repeated transpositions of the same shape and permutation: build the plan once (optionally autotuned with MEASURE) and reuse it with setInputPtr/setOutputPtr
+- Multi-core x86 machines with AVX, where the paper reports bandwidth close to SAXPY and the README figure shows 5x to 20x over numpy.transpose(...).copy() with 24 threads
+- Fused scale-and-accumulate transposes (B = alpha\*perm(A) + beta\*B), including complex conjugation through setConjA, which Eigen's shuffle() and numpy need extra passes for
+- Python code that copies large non-contiguous numpy views (np.ascontiguousarray after a transpose) and can tolerate a ctypes wrapper that needs HPTT_ROOT and psutil
+
+## Skip it when
+
+- In-place transposition, or plain 2-D matrix transposes where an in-place or BLAS-extension routine (mkl_simatcopy, the transpose-scale sibling) avoids the second buffer: HPTT is out-of-place only
+- AArch64 or Apple Silicon: the NEON kernel's partial specialization in src/transpose.cpp (around line 247) names micro_kernel&lt;float, betaIsZero&gt; without the conjA argument, and the build files pass the ARMv7-only -mfpu=neon; open PR #35 fixes both, and also turns off GCC auto-vectorization of transpose_int on Apple Silicon. The paper's ARM results are ARMv7
+- MSVC or strict ISO C++ builds: the code uses variable-length arrays, __restrict__, GCC attributes and float _Complex in C++ (open issue #26; Clang 13 also rejects the _Complex casts in src/hptt.cpp, issue #21)
+- Libraries that must not terminate the host process: invalid sizes, permutations or outer sizes print to stderr and call exit(-1), not throw (issue #17, open since 2019)
+- Sub-tensor transposes with outerSize &gt; size where an innermost dimension is 1: open PR #33 reports that transpose_int then picks the wrong innermost index; check results for that shape class or apply the PR
+
+## How it is fast
+
+Size-1 indices are dropped and indices that stay adjacent under the permutation are fused, which lowers the effective rank. The remaining loop nest is cut into blocks that a register-level micro-kernel transposes in-register (8x8 for float and 4x4 for double with AVX unpack/shuffle, 4x4 float on NEON), with software prefetch of the next A and B blocks and non-temporal streaming stores (_mm256_stream_ps/pd) when beta is 0 and B is 32-byte aligned, which avoids write-allocate traffic. A cost model picks a loop order and an OpenMP parallelization strategy (prime-factor split of the loops for load balance); hptt::MEASURE, PATIENT and CRAZY instead time candidate plans for up to 10 s, 60 s or 1 h, FFTW-style.
+
+## Compared with alternatives
+
+Pick HPTT when you need the permuted tensor itself (any rank, out-of-place, with alpha/beta); transpose-scale (hpit) covers in-place 2-D transpose with scaling against mkl_simatcopy, and TBLIS avoids explicit transposition altogether when the end goal is a contraction. TCCG builds on HPTT for its TTGT path, so HPTT is the piece to take if you only need the transposition.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | static lib |
+| **Dependencies** | OpenMP (optional in the code, but the build files add -fopenmp/-qopenmp only for compilers they recognize); Python interface needs numpy and psutil |
+| **Minimum toolchain** | C++11 with GNU extensions (VLAs, __restrict__, float _Complex); README says tested with icpc 15-17, g++ 5.4-6.3 and clang++ 3.8/3.9; CMake 3.7+. Makefile also builds libhptt.so |
+| **Platforms** | x86-64 with AVX (make avx / -DENABLE_AVX=ON; no AVX2 or AVX-512 kernels), ARMv7 NEON (AArch64 needs PR #35), scalar fallback elsewhere; IBM POWER kernel is commented out |
+| **Thread safety** | not documented for concurrent execute() on one plan (a plan holds mutable A/B pointers, alpha and beta); addThreadId() is lock-protected, and execute_expert&lt;..., spawnThreads=false, ...&gt;() is meant to be called from inside an existing OpenMP parallel region with explicit thread ids |
+| **Drop-in for the baseline** | partial: the Python module offers hptt.transpose/ascontiguousarray/asfortranarray as numpy-like calls, but hptt.transpose returns a materialized copy rather than a view, and issue #30 reports ascontiguousarray raising 'repeated axis in transpose' where numpy does not; there is no Eigen-compatible API |
+
+## Gotchas
+
+- Autotuning (MEASURE/PATIENT/CRAZY) runs candidate plans on your real A and B during create_plan; the header says the data is restored afterwards unless A holds NaN or inf
+- execute() always requests streaming stores; they are used when beta is 0 and B is suitably aligned, which pushes B out of cache. If you read B right away (small tensors, packing for GEMM), call execute_expert&lt;false, ...&gt;() as the header advises
+- CMake attaches -fopenmp -march=native -mtune=native as PUBLIC compile options, so they propagate to targets that link hptt and make the binary host-specific; the Makefile adds OpenMP only when CXX is exactly icpc, g++ or clang++, so CXX=/usr/bin/g++ or g++-13 silently builds a single-threaded library (issue #36)
+- verifyParameter writes found[perm[i]] before checking that perm[i] is in range, and the row-major conversion runs before it, so an out-of-range permutation entry is an out-of-bounds access rather than a clean error; per-dimension sizes are int
+
+## Known shortcomings
+
+- Up to 27.4x vs Eigen tensor shuffle known from the ARRAY 2017 paper snippet only; the numpy comparison script uses float64, not float32 as the record said.
+- AArch64 build broken: src/transpose.cpp:247 NEON specialization drops the conjA template argument and the flags use ARMv7-only -mfpu=neon (fix in open PR #35). Open PR #33 reports a wrong innermost index for sub-tensors (outerSize &gt; size, leading dim 1). verifyParameter writes found[perm[i]] before range-checking it, so a bad permutation is an out-of-bounds write; invalid input calls exit(-1) (#17). Makefile silently builds single-threaded when CXX is a full path (#36); CMake leaks PUBLIC -march=native into consumers. 7 PRs open without maintainer replies. The 27.4x vs Eigen figure was not seen by the enricher (snippet gave no number), so the B tier rests on the peer-reviewed ARRAY 2017 paper as reported by the verifier.
+
+## Caveats and trade-offs
+
+The Eigen numbers (up to 27.4x) come from the peer-reviewed ARRAY 2017 paper, which could not be opened (arXiv, sigplan.org and ACM blocked); only the abstract was seen via search results, so the CPU, compiler, thread counts and per-case figures behind 27.4x are unverified, and the repo has no Eigen harness. The README's numpy comparison is HPTT on 24 threads against a numpy copy whose thread count is not stated (numpy's copy is normally single-threaded), so the 5-20x range mostly shows multi-threaded bandwidth use; HPTT also applies alpha/beta while the numpy side only copies; figure values are read by eye. The repo's C++ benchmark (benchmark/benchmark.cpp) compares only against an in-repo naive OpenMP reference transposition and optionally the original TTC. benchmark/bw.png (paper Fig. 6) shows HPTT bandwidth with and without autotuning against the system SAXPY and STREAM lines on Ivy Bridge, KNL, IBM Power7, AMD and ARM machines, not against a named library. Repository unmaintained since 2022. A transposition library is BLAS-adjacent rather than a BLAS/LAPACK routine, so the category is a loose fit. [retier] The paper's headline claims come from its abstract as reproduced by search-result summaries (seen in the 2026-09-26 and 2026-10-02 passes): up to 27.4x faster than Eigen's tensor transposition, bandwidth comparable to SAXPY across Ivy Bridge, ARMv7 and IBM Power7, and up to 3.1x faster tensor contractions once HPTT is integrated into CTF. The paper itself (arXiv 1704.04374, DOI 10.1145/3091966.3091968) could not be opened, so the Eigen ratio, its CPU, compiler, thread count and per-case spread are unverified. The repo has no Eigen harness: benchmark/benchmark.cpp compares only with an in-repo naive OpenMP reference transposition and optionally the original TTC. The README's numpy comparison runs HPTT on 24 threads against a numpy copy whose thread count is not stated (numpy's copy is normally single-threaded), so the 5-20x range mostly reflects multi-threaded bandwidth use. HPTT also applies alpha/beta while the numpy side only copies, and the figure values are read by eye. The current Python benchmark allocates float64 arrays whatever --floatType says. The repository has been unmaintained since 2022. A transposition library is BLAS-adjacent rather than a BLAS/LAPACK routine, so the category is a loose fit.
+
+Out-of-place only. Explicit AVX and ARM micro-kernels plus a scalar fallback (no explicit AVX-512 or IBM POWER kernels, listed as TODO; complex types not explicitly vectorized). Optional FFTW-style auto-tuning (hptt::MEASURE/PATIENT) costs plan-creation time; the default hptt::ESTIMATE uses a performance model. Supports float, double, complex and double complex, row- and column-major. C++11 library with C and Python interfaces (the Python benchmark script is Python 2 era).
+
+## Maintenance
+
+Unmaintained: last commit 2022-02-15, with 15 open issues and 7 open PRs (including the AArch64 fix #35 and the sub-tensor correctness fix #33) and no maintainer replies; BSD-3-Clause and only four source files, so it is easy to vendor with those patches applied.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification C, tier now B.
+- **Tier reason:** Upgraded from C: HPTT's peer-reviewed ARRAY 2017 paper (Springer, Su, Bientinesi; arXiv 1704.04374, linked from the README) reports, per a search-result quote of its abstract, up to 27.4x over Eigen's tensor transposition (Eigen is a listed baseline) and up to 3.1x faster CTF contractions after integrating HPTT. The paper is blocked here and the repo has no Eigen harness (benchmark/benchmark.cpp compares only with a naive reference), so not A. The README's own numpy figure is first-party.
+- **Verifier notes:** README page (original benchmark_url) compares only with numpy, and its figure values match the record (5.1x to 19.7x); the corrected benchmark_url (arXiv paper, Eigen comparison) could not be opened. The record's 'float32' was wrong for the current script (arrays are float64). Metadata confirmed: BSD-3-Clause, 205 stars, 52 forks, last commit 2022-02-15 'removed lGPLv3 from remaining files' (abandoned). A retier to A would need the paper's Eigen harness and setup.
+- **Fields the verifier corrected:** `benchmark_url`, `baseline`, `baseline_in_list`, `claimed_speedup`, `workload`, `caveats`
+- **Shortcomings recorded by:** verifier; enrichment
+- **Pages the verifier opened:**
+  - <https://github.com/springer13/hptt>
+  - <https://github.com/springer13/hptt/commits/master>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/README.md>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/pythonAPI/benchmark/benchmark.py>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/misc/hptt_vs_numpy.png>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/benchmark/bw.png>
+- **Sources the enricher read:**
+  - <https://github.com/springer13/hptt>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/README.md>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/hptt.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/transpose.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/hptt_types.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/macros.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/plan.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/compute_node.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/include/utils.h>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/src/transpose.cpp>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/src/hptt.cpp>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/src/plan.cpp>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/src/utils.cpp>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/Makefile>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/CMakeLists.txt>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/benchmark/Makefile>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/benchmark/benchmark.cpp>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/pythonAPI/hptt/hptt.py>
+  - <https://raw.githubusercontent.com/springer13/hptt/master/pythonAPI/setup.py>
+  - <https://github.com/springer13/hptt/issues?q=is%3Aissue>
+  - <https://github.com/springer13/hptt/issues/21>
+  - <https://github.com/springer13/hptt/issues/36>
+  - <https://github.com/springer13/hptt/pulls>
+  - <https://github.com/springer13/hptt/pull/33>
+  - <https://github.com/springer13/hptt/pull/35>
+  - <https://github.com/tongsucn/hptt>
+  - WebSearch: 'HPTT tensor transposition 27.4x Eigen ARRAY 2017' (abstract snippets from researchgate, semanticscholar, ADS; arxiv.org/abs/1704.04374 not opened)
+- **Raw records:** [data/wave8/verified.json](../../../data/wave8/verified.json) (id `https://github.com/springer13/hptt`) · [data/wave8/enrich/raw/github_com_springer13_hptt.json](../../../data/wave8/enrich/raw/github_com_springer13_hptt.json) (enrichment confidence 0.75)
+
+</details>

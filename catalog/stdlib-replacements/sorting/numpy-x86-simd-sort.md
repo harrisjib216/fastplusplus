@@ -1,0 +1,100 @@
+# x86-simd-sort (numpy/x86-simd-sort)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md) › [Sorting](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C++` · `BSD-3-Clause` · 🟢 active
+
+> AVX-512/AVX2 SIMD quicksort/select library beating std::sort on primitive arrays and key-derived struct sorts (object_qsort).
+
+| | |
+|---|---|
+| **Beats** | std::sort |
+| **Claimed result** | object_qsort up to 5x faster for 32-bit key type and about 4x for 64-bit key type when sorting by one struct member; up to 10x faster when sorting by Euclidean distance |
+| **Workload** | Sorting an array of custom C++ Point structs (3D float/double coordinates) via object_qsort vs std::sort, sorted by one coordinate, Manhattan distance, Euclidean distance, or Chebyshev distance, measured with Google Benchmark on an AVX-512 capable processor. |
+| **Metric** | latency |
+| **Hardware** | unspecified x86 processor with AVX-512 support |
+| **Adoption** | 1.0k stars; used as a submodule by NumPy (np.sort/argsort/partition) and PyTorch (torch.sort), integrated into OpenJDK, used by Alibaba GRAPE and OceanBase |
+| **Last commit** | 2026-06-25 |
+| **Links** | [repository](https://github.com/numpy/x86-simd-sort) · [benchmark](https://github.com/numpy/x86-simd-sort/blob/main/README.md) |
+
+## Verdict
+
+Numbers come from x86-simd-sort's own README benchmark (benchmarks/bench-objsort.hpp, Google Benchmark, run with --benchmark_filter=\*obj\*), comparing object_qsort against std::sort on arrays of 3D Point structs (float or double x/y/z) sorted by one coordinate or by Manhattan, Euclidean, or Chebyshev distance from the origin, on an unspecified x86 processor with AVX-512 and no disclosed compiler or flags: up to \~5x faster for float (32-bit) keys and \~4x for double (64-bit) keys sorting by one coordinate, up to \~10x faster sorting by Euclidean distance.
+
+## Use it when
+
+- Sorting arrays of built-in 16/32/64-bit ints, floats, or doubles (or key-value pairs) on x86-64 hardware with AVX2 or AVX-512, where std::sort's per-element comparator overhead dominates
+- Sorting an array of structs by one scalar key -- a single member or a computed metric like Euclidean/Manhattan/Chebyshev distance -- via object_qsort's key-extraction lambda
+- Need argsort/argselect/partial_qsort with built-in NaN placement control (nans_last) instead of hand-rolling NaN partitioning around std::sort/std::nth_element
+- Batch or offline sorts where allocating O(N) extra memory for keys and an index array is acceptable
+- Comfortable depending on code already proven at NumPy/PyTorch/OpenJDK vendoring scale rather than a smaller, newer project
+
+## Skip it when
+
+- Target hardware lacks AVX2/AVX-512, or is not x86-64 (no aarch64/ARM support)
+- Sort key isn't reducible to one scalar of 32 or 64 bits -- object_qsort's key_func must return exactly float/double/(u)int32/64, not a multi-field comparator
+- Memory-constrained settings: object_qsort needs O(N) extra space (a key array plus a uint32/64 index array) on top of the object array itself
+- Need numbers independently verified on disclosed hardware/compiler: the object_qsort chart names only 'a processor with AVX-512', no CPU model, compiler, or flags, and the numbers are first-party
+- Care about scaling on adversarial input distributions: an independent 2023 analysis (Voultapher sort-research-rs) found worse-than-O(N log N) scaling for the primitive AVX-512 qsort on a random_p5 pattern
+
+## How it is fast
+
+Built-in-type routines vectorize quicksort partitioning using AVX-512 compressstore instructions (with an AVX2 fallback), based on two cited SIMD-partitioning papers, and drop to bitonic sorting networks on AVX-512/AVX registers for arrays below a size threshold (64-512 elements). object_qsort does not vectorize struct comparisons directly: it extracts each object's key into a separate array, sorts the resulting (key, index) pairs with the SIMD keyvalue_qsort, then permutes the original object array into place with a scalar cycle-following swap loop. Its speedup therefore comes from the primitive keyvalue sort plus, for expensive keys like Euclidean distance, auto-vectorized key computation, not from vectorizing the object comparisons themselves.
+
+## Compared with alternatives
+
+A maintainer directly asked how this compares to vxsort-cpp (issue #12) and no comparison was ever produced, so there's no first-party head-to-head with that sibling. Pick x86-simd-sort over the other primitive-array sorters in this catalog (BlockQuicksort, Boost.Sort spreadsort, IPS4o, LearnedSort, fluxsort, quadsort, radix_sort) specifically when the workload is 'sort a struct by one field or a derived distance metric' via object_qsort, not a flat array of ints -- none of the other siblings' benchmarks target that struct/key-sort shape.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only (src/x86simdsort-static-incl.h, compile-time AVX2/AVX-512 selection) or static/shared lib (Meson build under lib/, runtime CPUID dispatch) |
+| **Dependencies** | none for the core routines; googletest and Google Benchmark (&gt;=1.9.2) only if building the optional test/benchmark suite; OpenMP optional for parallelizing qsort/argsort/keyvalue_qsort |
+| **Minimum toolchain** | C++17; GCC 8+ (GCC 12+ required for _Float16/AVX-512FP16), Clang 8.0+, MSVC 2019 16.8+, or Intel icx |
+| **Platforms** | x86-64 with AVX2 or AVX-512 (exact subset varies: skylake-avx512 for 32/64-bit, icelake-client for 16-bit, sapphirerapids for _Float16); no aarch64/ARM |
+| **Thread safety** | not documented for concurrent calls on separate arrays; optional OpenMP-based internal parallelism for qsort/argsort/keyvalue_qsort on large arrays, off by default, capped at 16 threads via OMP_NUM_THREADS |
+| **Drop-in for the baseline** | partial — explain: built-in-type routines are behaviorally equivalent to std::sort/nth_element/partial_sort/argsort but use a different (non-iterator) call signature; object_qsort, the API this record's benchmark actually measures, takes a key-extraction lambda instead of a comparator and is not a drop-in replacement for std::sort(begin, end, comparator) |
+
+## Gotchas
+
+- object_qsort's gain shrinks as sizeof(T) grows or the key gets cheap to compute relative to swap cost, since the final struct permutation is a scalar cycle-following swap loop, not SIMD
+- object_qsort's key_func return type must be exactly 32 or 64 bits (float/double/int32/int64/uint32/uint64) or the call fails a static_assert at compile time
+- For built-in-type routines, hasnan defaults to false; if the array actually contains NaNs and hasnan isn't set true, behavior is undefined
+- GCC 16.0.1 with LTO enabled reportedly failed to build (issue #224, closed without a posted fix) when vendored into NumPy, due to an 'inlining failed: target specific option mismatch' error on an always_inline comparator
+
+## Caveats and trade-offs
+
+The README does not state the CPU model, compiler or flags for the object_qsort chart, only 'a processor with AVX-512'. Benchmark code is in benchmarks/bench-objsort.hpp (run with --benchmark_filter=\*obj\*). Numbers are first-party and not from an independent third party. object_qsort needs O(N) extra space for keys and indexes. An independent 2023 analysis (Voultapher sort-research-rs, intel_avx512 writeup) reported worse-than-O(N log N) scaling of the AVX-512 qsort on a random_p5 pattern; this may be fixed in later releases.
+
+Requires AVX-512 or AVX2; object_qsort needs O(N) extra memory for key/index arrays; speedup is highly dependent on the struct/key definition, README itself recommends benchmarking per use case rather than assuming the headline numbers.
+
+## Maintenance
+
+Actively maintained (last commit 2026-06-25); BSD-3-Clause. 'Copyable' fits since the src/ headers can be vendored standalone at compile time -- as NumPy, PyTorch, and OpenJDK already do -- while the runtime-dispatching library form requires a Meson build.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): downgrade; tier before verification A, tier now C.
+- **Tier reason:** The README gives object_qsort vs std::sort numbers, and in-repo benchmark code (benchmarks/bench-objsort.hpp) exists. The README states only 'a processor with AVX-512', with no CPU model, compiler or flags, so tier A fails. The numbers are first-party and not peer-reviewed, so tier B also fails.
+- **Verifier notes:** claimed_speedup matches the README text exactly (up to 5x for 32-bit, \~4x for 64-bit, up to 10x for Euclidean distance). Metadata verified: BSD-3-Clause, 1,027 stars, not a fork, last commit 2026-06-25 (active). A third-party benchmark of the primitive qsort vs std::sort exists at sort-research-rs, but its std::sort numbers were not extracted here.
+- **Fields the verifier corrected:** `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/numpy/x86-simd-sort>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/README.md>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/benchmarks/bench-objsort.hpp>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/meson.build>
+  - <https://github.com/Voultapher/sort-research-rs/blob/main/writeup/intel_avx512/text.md>
+- **Sources the enricher read:**
+  - <https://github.com/numpy/x86-simd-sort>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/README.md>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/benchmarks/bench-objsort.hpp>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/lib/x86simdsort.h>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/src/README.md>
+  - <https://github.com/numpy/x86-simd-sort/blob/main/meson_options.txt>
+  - <https://github.com/numpy/x86-simd-sort/issues/12>
+  - <https://github.com/numpy/x86-simd-sort/issues/224>
+- **Raw records:** [data/wave1/verified.json](../../../data/wave1/verified.json) (id `https://github.com/numpy/x86-simd-sort`) · [data/wave1/enrich/raw/github_com_numpy_x86_simd_sort.json](../../../data/wave1/enrich/raw/github_com_numpy_x86_simd_sort.json) (enrichment confidence 0.7)
+
+</details>

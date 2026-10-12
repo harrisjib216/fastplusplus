@@ -1,0 +1,142 @@
+# JUring
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Networking and servers](../README.md) › [Event loops and async I/O](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `Java` · `Unlicense` · 🟢 active
+
+> Java FFM bindings to Linux io_uring (via liburing) for batched file reads/writes; beats FileChannel on small random reads.
+
+| | |
+|---|---|
+| **Beats** | java.nio.channels.FileChannel (Java NIO) |
+| **Claimed result** | Reads, 25 threads, registered files vs pre-opened FileChannel: +55% at 512B (29,023 vs 18,769 ops/ms), +489% at 4KB (13,393 vs 2,275), +23% at 16KB, +16% at 64KB; open/read/close +13% to +48%; blocking + virtual threads +14% to +138%. Writes, single thread: +123% to +246% (4KB 860 vs 260 ops/ms, +231%); 8 threads +33% to +77% but -3% at 64KB; 20 threads 0% (512B), -2% (4KB), -16% (16KB), -33% (64KB), so FileChannel wins high-concurrency writes. |
+| **Workload** | Random-offset file reads/writes with 512B-64KB buffers at 1/8/20/25 concurrent threads, queue depth 256, measured with JMH |
+| **Metric** | throughput |
+| **Adoption** | 201 stars |
+| **Last commit** | 2026-05-07 |
+| **Links** | [repository](https://github.com/davidtos/JUring) · [benchmark](https://github.com/davidtos/JUring) |
+
+## Verdict
+
+These are first-party JMH results on an unnamed Linux machine; CPU, storage, kernel, JDK and JVM flags are not stated. For reads, 25 threads do buffered (not O_DIRECT) random reads over 2,211 files of 5 MiB each. JUring uses registered files with up to 256 in flight per thread; the FileChannel baseline does one synchronous read at a time into a new heap ByteBuffer. Results: +55% at 512B, +489% at 4KB, +23%/+16% at 16KB/64KB. The 4KB point implies about 55 GB/s, about 4x JUring's byte rate at other sizes, so it looks like a page-cache outlier. Writes (O_DIRECT in the current bench code) gain +123% to +246% single-threaded but lose up to 33% at 20 threads.
+
+## Use it when
+
+- JVM service on Linux issuing many small random reads (512B-4KB) against a fixed set of files that can be opened once and registered with the ring (README: +55% at 512B, +489% at 4KB at 25 threads).
+- Code that can batch: tens to hundreds of operations in flight per thread, one submit per batch, completions reaped in bulk.
+- Single-threaded or lightly threaded writers (README: +123% to +246% at 1 thread, +33% to +77% at 8 threads below 64KB).
+- Workloads that open, read and close many files, where io_uring openat/close can be queued too (README: +13% to +48% vs FileChannel open/read/close).
+- Blocking-style code on virtual threads that wants io_uring reads behind a Future (README: +14% to +138% vs FileChannel on virtual threads).
+
+## Skip it when
+
+- Many concurrent writers or large writes: at 20 threads JUring ties at 512B and loses 2%, 16% and 33% at 4KB, 16KB and 64KB, and at 8 threads it loses 3% at 64KB.
+- One synchronous operation at a time: the gain comes from batching. In issue #34 a fork's 'JUring sync' took 0.68 ms vs 0.26 ms for standard O_DIRECT FileChannel on a 10-page write.
+- Portability: Linux only, needs liburing &gt;= 2.4 installed (liburing-ffi.so), and pom.xml targets JDK 25.
+- You need a drop-in NIO API (FileChannel, AsynchronousFileChannel, ByteBuffer) or a supported artifact: it is 0.1-SNAPSHOT, has no releases, is not on Maven Central, has no CI config in the repo, and the README lists 'Simplicity (Working on this!)'.
+- Code that cannot manage native memory by hand: read/recv buffers are malloc'd and leak unless freeBuffer()/close() is called.
+
+## How it is fast
+
+Batching: the benchmark loop keeps up to 256 reads in flight per thread, submits every 64 SQEs with one io_uring_submit, and reaps completions in bulk with io_uring_peek_batch_cqe + io_uring_cq_advance. FileChannel does one pread-style syscall per call. Registered files (io_uring_register_files + IOSQE_FIXED_FILE) and optional registered buffers (read_fixed/write_fixed) cut per-op fd and buffer setup. Calls go through Java FFM downcalls into liburing-ffi.so, with hot functions (get_sqe, set_flags, submit, cqe_seen, cq_advance) marked Linker.Option.critical. Per-op user_data structs come from a malloc-backed pool ('ZeroGc' classes) and buffers are native, so the hot path avoids GC allocation.
+
+## Compared with alternatives
+
+Pick JUring only when you must stay on the JVM and your bottleneck is file I/O through FileChannel. The catalogued siblings (Condy, the Asio io_uring backend, monoio, uring_exec) are more mature native C++/Rust io_uring runtimes built mainly for network event loops, so in native code use them instead.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | source-drop (Maven project with JPMS module 'JUring', 0.1-SNAPSHOT; build the jar yourself, no published artifact) |
+| **Dependencies** | liburing &gt;= 2.4 on the host (loads liburing-ffi.so; FFI support arrived in liburing 2.4) and libc; no runtime Java dependencies (JMH, JUnit, AssertJ are test-scope) |
+| **Minimum toolchain** | JDK 25 per pom.xml (README says Java 22+); run with --enable-native-access; Linux kernel 5.1+ per README, 5.19+ for multishot accept, 6.0/6.1+ for the SINGLE_ISSUER/DEFER_TASKRUN flags the benchmarks use |
+| **Platforms** | Linux only; pure Java over FFM, so any arch with liburing-ffi (the devcontainer is arm64 Ubuntu 25.04); the benchmark machine is undocumented |
+| **Thread safety** | Not documented. From source: a JUring instance is single-threaded (unsynchronized user_data pool and buffer stack), and the benchmarks use one ring per thread. In JUringBlocking the caller thread checks slots out of the same unsynchronized pool that its poller thread checks them back into, so concurrent use looks racy (inferred, not tested). |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Errors are not thrown. Each Result carries the raw CQE result, so check for a negative errno yourself. Issue #17: a write on a read-only fd 'passes silently'; the maintainer closed it and left the check to callers. The benchmarks also count completions without checking results.
+- Ring capacity is not guarded: getSqe checks for Java null, but an FFM downcall returns MemorySegment.NULL. Queuing more than queueDepth operations before submit() likely hands liburing a NULL SQE and crashes the JVM (inferred from source).
+- JUringBlocking starts a platform poller thread per instance. With the default timeout it spins on Thread.yield(), which burns a core; the benchmark sets a 1 ms sleep instead.
+- The Java code hardcodes liburing's struct io_uring layout (LibUringDispatcher), so a liburing build with a different struct layout could break it; the tested liburing versions are not documented.
+
+## Known shortcomings
+
+- Unequal read baseline: JUring keeps up to 256 reads in flight per thread in batches while FileChannel does one synchronous read at a time into a new heap buffer, so the table measures batching vs one syscall per read. The 489% headline implies \~55 GB/s at 4 KB (buffered reads over \~11.6 GB, cache state unstated), far above its other sizes (9.8-14.9 GB/s): likely a page-cache outlier. README write tables can't be reproduced from the current code (FileChannel write benchmarks commented out, JUring writes all at offset 0, 15 in flight not 256, buffer pinned to 4096, O_DIRECT unstated). CQE results are never checked, so failed operations count as throughput, and the library doesn't throw on errors (#17). '16KB' is 16,386 bytes; no CPU, storage, kernel, JDK or flags. No JNI (pure Java FFM over liburing-ffi.so). Needs JDK 25 (README says 22+), liburing 2.4+, kernel 6.0/6.1 for the benchmark ring flags; hardcodes liburing's struct io_uring layout. 0.1-SNAPSHOT, not on Maven Central, no CI. Code reading: not thread-safe, racy pool in JUringBlocking, full-queue null check can't work under FFM (likely JVM crash), poller spins a core with Thread.yield().
+
+## Caveats and trade-offs
+
+First-party README benchmark; no CPU model, JDK version or JVM flags stated (only 'a Linux machine', JMH, 2,211 ops/invocation, QD 256, random offsets). The headline 489% uses io_uring registered files vs pre-opened FileChannels at 25 threads. Writes lose to FileChannel at 20 threads by up to 33% (64KB). Unlicense is a public-domain dedication: no patent grant.
+
+Java bindings over Linux io_uring via JNI/FFI; advantage diminishes/reverses at high thread counts (20+); early-stage per author's own admission
+
+## Maintenance
+
+Active (socket support and readv merged May 2026, last commit 2026-05-07) but pre-release: 0.1-SNAPSHOT with no tags, no Maven Central artifact and no CI. The Unlicense public-domain dedication (no patent grant) makes its 80 main-source Java files easy to vendor.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): downgrade; tier before verification C, tier now C.
+- **Tier reason:** First-party README JMH tables against Java FileChannel, with public bench code at src/test/java/bench/random (read/ and write/). Hardware is only 'a Linux machine', and the JDK version and JVM flags are unstated, so it is C.
+- **Verifier notes:** The headline numbers (489%, 231%, 860 vs 260) are exact, but the record's 'reverses slightly (-2%) at 20+ threads' understates the write regression: the README shows -16% at 16KB and -33% at 64KB at 20 threads. So claimed_speedup was corrected and the verdict is downgrade, with the tier still C. baseline_in_list=false is correct: FileChannel is not among the event-loops-io baselines.
+- **Fields the verifier corrected:** `claimed_speedup`, `compared_against_cpp_std_directly`, `last_commit`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/davidtos/JUring>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/README.md>
+  - <https://github.com/davidtos/JUring/tree/master/src/test/java/bench/random>
+- **Sources the enricher read:**
+  - <https://github.com/davidtos/JUring>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/README.md>
+  - <https://github.com/davidtos/JUring/tree/master/src/test/java/bench/random>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/pom.xml>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/.devcontainer/Dockerfile>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/CONTRIBUTING.md>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/LICENSE>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/module-info.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/JUring.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/LibUringDispatcher.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/LibCDispatcher.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/NativeDispatcher.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/UserDataPool.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/ReadBufferPool.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/ZeroGcCqe.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/ReadResult.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/LinuxOpenOptions.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/Result.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/main/java/com/davidvlijmincx/lio/api/Main.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/read/RandomReadBenchMark.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/read/ExecutionPlanRegisteredFiles.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/read/ExecutionPlanPreOpenedFileChannels.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/read/TaskCreator.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/read/VectoredReadBenchmark.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/write/RandomWriteBenchmark.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/write/ExecutionPlanWriteRegisteredFiles.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/write/ExecutionPlanPreOpenedWriteFileChannels.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/BmDataSetup.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/random/BenchRunner.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/ExecutionPlanBlocking.java>
+  - <https://raw.githubusercontent.com/davidtos/JUring/master/src/test/java/bench/ExecutionPlanJUring.java>
+  - <https://github.com/davidtos/JUring/issues/34>
+  - <https://github.com/davidtos/JUring/issues/31>
+  - <https://github.com/davidtos/JUring/issues/19>
+  - <https://github.com/davidtos/JUring/issues/17>
+  - <https://github.com/davidtos/JUring/issues/8>
+  - <https://github.com/davidtos/JUring/issues/3>
+  - <https://github.com/davidtos/JUring/pull/32>
+  - <https://raw.githubusercontent.com/axboe/liburing/master/CHANGELOG>
+  - <https://raw.githubusercontent.com/axboe/liburing/master/man/io_uring_setup.2>
+  - <https://raw.githubusercontent.com/axboe/liburing/master/man/io_uring_prep_accept.3>
+  - <https://raw.githubusercontent.com/axboe/liburing/master/man/io_uring_prep_openat.3>
+  - <https://search.maven.org/solrsearch/select?q=g:com.davidvlijmincx*&rows=20&wt=json>
+  - <https://hn.algolia.com/api/v1/items/42681866>
+  - <https://hn.algolia.com/api/v1/items/42699451>
+- **Raw records:** [data/wave5/verified.json](../../../data/wave5/verified.json) (id `https://github.com/davidtos/juring`) · [data/wave5/enrich/raw/github_com_davidtos_juring.json](../../../data/wave5/enrich/raw/github_com_davidtos_juring.json) (enrichment confidence 0.7)
+
+</details>

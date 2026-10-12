@@ -1,0 +1,115 @@
+# Blink
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Interpreters and VMs](../README.md) › [JIT compilers](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C` · `ISC` · 🟢 active
+
+> 221 kB user-mode x86-64-linux emulator with a splicing JIT; claims up to 2x over qemu-x86_64 on some workloads.
+
+| | |
+|---|---|
+| **Beats** | qemu-x86_64 (user-mode x86-64-linux emulation) |
+| **Claimed result** | README: 'Blink goes 2x faster than qemu-x86_64 on some benchmarks, such as SSE integer / floating point math. Blink is also much faster at running ephemeral programs such as compilers.' Blink 1.0 release notes (2023-06-04, https://github.com/jart/blink/releases/tag/1.0.0): 'Blink has a snappy JIT that in some cases goes 2x faster than Qemu for use-cases like ephemeral programs' and, from a screenshot of GCC's cc1, 'Blink is able to compile Hello World at least 2x faster'. README also says Blink 'usually uses 40% less peak resident memory than Qemu' and that disabling the JIT makes it '10x slower'. |
+| **Workload** | Running x86-64 Linux programs: SSE integer and floating point math benchmarks, and ephemeral programs such as compilers; Blink with its optional JIT versus qemu-x86_64. |
+| **Metric** | throughput |
+| **Adoption** | 7.6k stars |
+| **Last commit** | 2025-12-10 |
+| **Links** | [repository](https://github.com/jart/blink) · [benchmark](https://github.com/jart/blink) |
+
+## Verdict
+
+Only first-party claims exist: the README says Blink is 2x faster than qemu-x86_64 on 'some benchmarks, such as SSE integer / floating point math', and the 1.0 notes (2023-06-04) say it compiles Hello World with GCC cc1 'at least 2x faster', shown in one screenshot. No QEMU version, host CPU, compiler flags or benchmark code are published, and no independent measurement was found.
+
+## Use it when
+
+- Running short-lived x86-64 Linux command-line tools, such as compilers or build steps, on an ARM64 or x86-64 host, where translation start-up dominates; the 2x claim comes from GCC cc1 compiling Hello World.
+- Running x86-64 Linux binaries on macOS, FreeBSD, OpenBSD or Cygwin, where qemu-x86_64 user mode is not available.
+- Shipping a tiny emulator: 221 kB, about 120 kB with optional features disabled, with libc as the only dependency.
+- Cosmopolitan Libc, musl or Alpine-built binaries, which the README names as the best-supported guests.
+- Debugging or teaching x86 execution with the blinkenlights TUI, which offers reverse stepping and memory panels.
+
+## Skip it when
+
+- Binaries that need SSE4.1, SSE4.2, AES-NI or AVX/AVX2. blink/cpuid.c leaves those bits clear, so glibc builds that require x86-64-v2 abort with 'CPU does not support x86-64-v2' (open issue #172), and code that dispatches on CPUID falls back to SSE2/SSSE3 paths.
+- Programs that need 80-bit x87 long double precision: Blink computes x87 in 64-bit double.
+- Programs that depend on uncommon Linux syscalls (membarrier, timerfd_create (#155), FUTEX_REQUEUE (#183), ptrace, SysV message queues) or on whole-system state (ps, shared mount namespaces).
+- Long-running, compute-heavy guests where throughput matters more than start-up: no measured suite shows Blink ahead of QEMU in general. Hosts other than x86-64 and aarch64 get only the interpreter, which the README says is about 10x slower than the JIT.
+- Production use that needs exact emulation: there are open correctness bugs, such as FDIV and FDIVR executed swapped (#196) and data corruption running a Go 1.25 program (#213).
+
+## How it is fast
+
+The JIT builds 'paths' of about 5 guest instructions (about 13 once chained) ending at branches. It does not run a full code generator: generated functions call micro-op functions that the C compiler already built, and Blink copies those function bodies inline after finding their length by scanning for RET, much like selective-inlining or call-threaded JITs. Paths tail-call one another so execution stays out of the interpreter loop, and tight backward branches may loop natively. Guest memory is identity-mapped at a fixed host offset, so each access costs one add instead of a 4-level page walk with a 16-entry TLB (`-m` restores the walk at about 4x slower). Compiled paths are looked up in a lockless hash table read with acquire loads; the README credits this table for using about 40% less peak RSS than QEMU. The JIT also skips computing EFLAGS when it predicts nothing reads them.
+
+## Compared with alternatives
+
+Pick Blink over Box64 DynaRec, Instrew or oxtra when the host is not Linux (macOS, BSD, Cygwin), when the guests are short-lived processes such as compiler runs, or when binary size matters. Pick Box64 for broad application compatibility on ARM64 or RISC-V Linux, and Instrew (LLVM-based translation, measured on SPEC CPU2017) for long-running compute workloads where peak throughput matters.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | standalone executable (blink, blinkenlights) built from C11 source with ./configure && make; no embeddable library API is documented |
+| **Dependencies** | libc (POSIX.1-2017 with XSI extensions); modern GNU Make to build |
+| **Minimum toolchain** | C11 compiler with atomics (README: e.g. GCC 4.9.4+); the source also compiles as C++ |
+| **Platforms** | Hosts: Linux (x86, ARM, RISC-V, MIPS, PowerPC, s390x), macOS (x86, ARM), FreeBSD, OpenBSD, Cygwin. The JIT runs only on x86-64 and aarch64 hosts. Guests: x86-64-linux user mode, plus i8086 real mode in blinkenlights. |
+| **Thread safety** | Multithreaded guests are supported (clone, fork). The JIT hook table is lockless with acquire-ordered reads. set_robust_list is not implemented, so robust mutexes are not released when a thread or process crashes. |
+| **Drop-in for the baseline** | partial: it takes the same `emulator PROGRAM ARGS` command shape as qemu-x86_64, but supports a smaller ISA (no SSE4.x, AVX or AES-NI) and a subset of syscalls (150+ per the README, 180 per the 1.0 notes), and the README warns it 'can be picky about which Linux binaries it'll execute' |
+
+## Gotchas
+
+- The JIT assumes flags do not flow across CALL and RET (only REP RET carries them), so code that returns a status in EFLAGS computed by arithmetic, such as SUB, can see the wrong flags. Faults raised by PUSH or POP report an imprecise RIP.
+- With the linear-memory optimization on hosts whose pages exceed 4 KiB (Apple M1 16 KiB, Cygwin 64 KiB), misaligned read-only guest pages can become writable and JIT hooks may not be invalidated on misaligned RWX pages. Unaligned ELF segments fail with 'p_vaddr p_offset skew unequal' unless you pass -m (slower) or relink with max-page-size=65536.
+- SIGSYS is reserved for Blink's internal signal delivery, so guests cannot receive it from other processes. Running out of the 22 MB JIT arena flushes all compiled code.
+- Benchmark evidence: the repo has no benchmark harness (test/ holds only asm, blink, flat, func, metal and metalrom), and neither the README nor the 1.0 notes name a QEMU version, CPU or flags. The comparison guests' CPUID also differs (Blink hides SSE4/AVX), so glibc and other dispatching code may run different code paths under each emulator.
+
+## Known shortcomings
+
+- README '2x on some benchmarks' and the 1.0 release note (cc1 Hello World at least 2x faster than QEMU) with no suite, QEMU version, CPU or benchmark directory. Off-baseline (QEMU); x86-64 emulator rather than a language JIT.
+- Enricher: no benchmark harness in the repo, no QEMU version, CPU or flags, no independent numbers; blink/cpuid.c hides SSE4.1/4.2, AVX and AES-NI so x86-64-v2 glibc binaries abort (#172), FDIV/FDIVR are swapped (#196), Go data corruption (#213), and the JIT drops flags across CALL/RET. Maintenance sparse (last commit 2025-12-10).
+
+## Caveats and trade-offs
+
+First-party claims only: '2x on some benchmarks' with no named benchmark suite, QEMU version, compiler flags or CPU; the release-notes comparison is a screenshot of one cc1 Hello World compile. No benchmark directory in the repo (top level: blink/, build/, test/, third_party/, tool/). Wins are stated only for some workloads, so Blink is not claimed faster than QEMU in general. Baseline is not one of PyPy, LuaJIT, V8, HotSpot.
+
+User-mode x86-64-linux emulator, about 221 kB; JIT is optional and only on some host architectures (an interpreter is used on non-JIT hosts).
+
+## Maintenance
+
+ISC-licensed, 7.6k stars, but maintained only occasionally: the last commits were on 2025-12-10 (Fil-C support, TUI fixes), after a handful of commits in 2024-2025. 43 issues are open, including open correctness bugs (#196 FDIV/FDIVR swap, #213 Go data corruption). It is usable as a tool, but the speed claim is unmeasured.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-06): confirm; tier before verification C, tier now C.
+- **Tier reason:** README and the Blink 1.0 release notes give first-party '2x faster than qemu-x86_64' claims (SSE math, GCC cc1 compiling Hello World) with no named suite, QEMU version, CPU, compiler or flags and no benchmark directory in the repo; numbers without methodology are C.
+- **Verifier notes:** Claim confirmed in README; the release notes add the cc1 Hello World 2x comparison (still first-party, no methodology). Metadata checked on github.com: ISC, 7.6k stars, last commit 2025-12-10 (active).
+- **Fields the verifier corrected:** `claimed_speedup`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/jart/blink>
+  - <https://github.com/jart/blink/commits>
+  - <https://github.com/jart/blink/releases>
+  - <https://github.com/jart/blink/releases/tag/1.0.0>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/README.md>
+- **Sources the enricher read:**
+  - <https://github.com/jart/blink>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/README.md>
+  - <https://github.com/jart/blink/releases>
+  - <https://github.com/jart/blink/releases/tag/1.0.0>
+  - <https://github.com/jart/blink/commits>
+  - <https://github.com/jart/blink/issues>
+  - <https://github.com/jart/blink/issues?q=is%3Aissue+slow+OR+performance+OR+qemu>
+  - <https://github.com/jart/blink/issues/196>
+  - <https://github.com/jart/blink/issues/172>
+  - <https://github.com/jart/blink/issues/153>
+  - <https://github.com/jart/blink/issues/213>
+  - <https://github.com/jart/blink/tree/master/test>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/blink/cpuid.c>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/blink/jit.c>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/blink/jit.h>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/configure>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/Makefile>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/build/config.mk>
+  - <https://raw.githubusercontent.com/jart/blink/HEAD/third_party/qemu/qemu.mk>
+- **Raw records:** [data/wave12/verified.json](../../../data/wave12/verified.json) (id `https://github.com/jart/blink`) · [data/wave12/enrich/raw/github_com_jart_blink.json](../../../data/wave12/enrich/raw/github_com_jart_blink.json) (enrichment confidence 0.6)
+
+</details>

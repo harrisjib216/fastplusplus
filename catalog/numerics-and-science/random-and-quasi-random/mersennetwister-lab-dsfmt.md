@@ -1,0 +1,125 @@
+# dSFMT (MersenneTwister-Lab)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Numerics and science](../README.md) › [Random and quasi-random numbers](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C` · `BSD-3-Clause` · 🟡 stale
+
+> Double-precision SIMD Mersenne Twister in C that emits IEEE 754 doubles directly; about 1.6x MT19937 for bulk uniform doubles.
+
+| | |
+|---|---|
+| **Beats** | MT19937 (NumPy's reference-derived mt19937 implementation, as exposed by randomgen) |
+| **Claimed result** | Uniform doubles: DSFMT 2.5 ns per value against MT19937 4.0 ns per value, about 1.6x faster (derived from page data); against NumPy's legacy RandomState (5.2 ns) about 2.1x (derived from page data). Other rows of the same table: Uint32 2.8 vs 2.5 ns (slower), Uint64 4.2 vs 4.2 ns (equal), Expon 6.3 vs 6.1 ns (slower), Normal 10.1 vs 10.5 ns (about 1.04x faster, within noise; derived from page data), Gamma 25.1 vs 20.8 ns (slower). The SFMT row also shows Uniform 2.5 ns, so no gain over SFMT on this table. |
+| **Workload** | randomgen's doc/source/performance.py: Generator.random(size=25000) producing uniform doubles in [0,1) from the DSFMT and MT19937 bit generators, timeit.repeat with number=100 and repeat=10, minimum taken, reported as ns per value, driven through randomgen's Cython wrappers and NumPy's Generator around vendored copies of the C code. |
+| **Metric** | throughput |
+| **Hardware** | Intel Cascade Lake (Family 6, Model 85, Stepping 7) at 3.1 GHz, Linux |
+| **Adoption** | 43 stars |
+| **Last commit** | 2025-05-19 |
+| **Links** | [repository](https://github.com/MersenneTwister-Lab/dSFMT) · [benchmark](https://github.com/bashtage/randomgen/blob/main/doc/source/performance.rst) |
+
+## Verdict
+
+randomgen's performance table (Python timeit through NumPy's Generator, 25,000 values per call, best of 10x100, Intel Cascade Lake at 3.1 GHz, Linux) gives DSFMT 2.5 ns per uniform double against randomgen's MT19937 4.0 ns (about 1.6x, derived from page data) and NumPy RandomState 5.2 ns, with integer, exponential and gamma rows equal or slower; it measures randomgen's vendored dSFMT.c built with -DHAVE_SSE2, not this repository, and the compiler, version and flags behind the table (last edited 2020-2023) are not stated.
+
+## Use it when
+
+- Monte Carlo code that consumes large blocks of uniform doubles and can call dsfmt_fill_array_close_open on an aligned buffer of at least 382 elements (MEXP 19937).
+- Reproducing results of software that used dSFMT, such as Julia's MersenneTwister (the default RNG before Julia 1.7) or randomgen's DSFMT bit generator.
+- Projects that want an MT-family generator with a very long period (2^19937-1 by default, up to 2^216091-1 via DSFMT_MEXP) and jump-ahead (the repo's jump/ directory) but faster double output than MT19937.
+- Plain C99 code bases on x86-64 or POWER that prefer a small BSD-3-Clause source drop (dSFMT.c plus headers) over a library dependency.
+
+## Skip it when
+
+- Integer streams: randomgen's own table shows DSFMT slower than MT19937 for Uint32 (2.8 vs 2.5 ns) and equal for Uint64 (4.2 vs 4.2 ns, each uint64 consumes two dSFMT outputs); the header itself says dsfmt_genrand_uint32 'is slower than SFMT, only for convenience usage'.
+- New designs with no compatibility need: randomgen's performance page recommends against every Mersenne Twister variant, and SFC64, Xoshiro256 and PCG64DXSM are as fast or faster for doubles there with tiny state.
+- Many parallel streams or per-task generators: the state is 192 128-bit words (about 3 KB) at MEXP 19937, the large-state cost Julia's 1.7 release notes cite for moving its default to per-task Xoshiro256++.
+- ARM64 or other non-SSE2, non-AltiVec targets on the master branch: the portable C path is used there; AVX2, AVX-512 and NEON code exists only on the unreleased 'experimental' branch (ver. 2.2.99, 2025-07-15), whose PR notes AVX-512 'still doesn't run correctly'.
+- Anything security related: it is a linear generator and not cryptographically secure.
+
+## How it is fast
+
+The state is an array of 128-bit words updated with a single SSE2 (or AltiVec) recursion of shifts, a 32-bit shuffle, XORs and a mask (do_recursion in dSFMT-common.h), producing two doubles per step with no tempering. Because the exponent bits are fixed by the recursion, no integer-to-float conversion is needed; MT19937 by contrast spends two tempered 32-bit outputs per 53-bit double (randomgen's mt19937_next_double), which is where most of the measured uniform-double gain comes from. fill_array_\* writes a whole block straight into the caller's 16-byte-aligned array, the authors' recommended fast path.
+
+## Compared with alternatives
+
+Pick dSFMT over SFMT when the output you need is doubles (SFMT is the better MT variant for 32/64-bit integers and ties dSFMT on randomgen's uniform row at 2.5 ns); pick it over randomgen's SFC64 or Xoshiro256 only when you need the dSFMT stream itself or MT-family period guarantees, since those match or beat it on the same table with a tiny state, and prefer VMT19937 when the standard MT19937 stream must be reproduced with AVX2 or AVX-512.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | source-drop |
+| **Dependencies** | none (C standard library; emmintrin.h when HAVE_SSE2 is defined) |
+| **Minimum toolchain** | C99 (Makefile uses -std=c99 -O3); GCC, Clang, MSVC and Borland code paths present |
+| **Platforms** | any IEEE 754 platform; SIMD path only for x86 SSE2 (-msse2 -DHAVE_SSE2) and PowerPC AltiVec (-DHAVE_ALTIVEC); big-endian non-GCC needs DSFMT_BIG_ENDIAN |
+| **Thread safety** | one dsfmt_t per thread is safe; the dsfmt_gv_\* functions share the global dsfmt_global_data and are not thread safe (CHANGE-LOG 2.1.1 fixed SSE2 constant initialisation that broke under OpenMP) |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- fill_array preconditions (size even, size &gt;= dsfmt_get_min_array_size(), array 16-byte aligned on the SIMD build) are enforced only by assert(), and the shipped Makefile compiles with -DNDEBUG, so a short, odd-sized or misaligned buffer is silently undefined behaviour rather than an error.
+- fill_array_\* and genrand_\* calls must not be mixed on one state without re-initialising, per the dSFMT.c documentation.
+- DSFMT_MEXP must be identical for dSFMT.c and every caller; a mismatch makes dsfmt_init_gen_rand print 'DSFMT_MEXP doesn't match with dSFMT.c' and call exit(1) from inside the library. Leaving it undefined triggers a #warning and defaults to 19937.
+- SIMD is opt-in: without -DHAVE_SSE2 the code compiles the scalar path with no warning, and doubles have 52-bit resolution (multiples of 2^-52), one bit less than MT19937's 53-bit doubles in NumPy and randomgen.
+
+## Known shortcomings
+
+- Third-party randomgen numbers (Cascade Lake 3.1 GHz) with no compiler or flags, timed through Python wrappers on randomgen's vendored copy; only uniform doubles are clearly faster (2.5 vs MT19937 4.0 ns), Normal is 10.1 vs 10.5 ns, Uint32, Expon and Gamma are slower, and there is no gain over SFMT. Stale (last commit 2025-05-19).
+- Enricher: the 1.6x uniform-double win is structural (randomgen's MT19937 builds each 53-bit double from two 32-bit outputs while dSFMT makes one 52-bit double per output), and dSFMT is slower on Uint32 (2.8 vs 2.5 ns); the randomgen table was last edited 2020-2023, so its build flags remain unknown (current meson.build uses -DHAVE_SSE2 -mavx2). fill_array's size and 16-byte alignment are checked only by assert() while the Makefile sets -DNDEBUG; a MEXP mismatch calls exit(1).
+
+## Caveats and trade-offs
+
+Third-party numbers come from randomgen's Cython wrapper through NumPy's Generator (benchmark script doc/source/performance.py in bashtage/randomgen), so the win is for bulk uniform doubles only and includes Python call overhead; it measures randomgen's vendored copy of dSFMT, not a build of this repository. Compiler, compiler version and flags are not stated, which caps the tier at B. The MT19937 baseline is NumPy's implementation, not std::mt19937 or a fresh build of mt19937ar. randomgen's own page recommends against all Mersenne Twister variants (MT19937, MT64, SFMT, DSFMT) and shows SFC64, Xoshiro256 and PCG64DXSM faster still. The authors' own speed table and paper (Saito and Matsumoto, MCQMC 2008, claims dSFMT is fastest against MT, SFMT and WELL on 10^8 doubles) sit on math.sci.hiroshima-u.ac.jp, which was unreachable, so that claim is known only from a search snippet and is not recorded as evidence. The dSFMT repo README, CHANGE-LOG and html/index.html contain no timing numbers; test.c only times dSFMT against itself (clock() around fill_array calls). The 313.5% vs 72.5% 'speed-up relative to NumPy' rows in the archived randomstate README give a similar picture but no hardware.
+
+Generates IEEE 754 doubles in [1,2) and subtracts 1, so output is 52-bit mantissa only and the integer API is secondary (dsfmt_genrand_uint32 exists but there is no fill_array for integers). Period is a Mersenne exponent chosen at compile time (DSFMT_MEXP from 521 to 216091), and MEXP must match between dSFMT.c and the caller. Needs SSE2 or AltiVec for the SIMD path (the Makefile sets the flags) and an IEEE 754 platform. Not cryptographically secure, and the randomgen documentation recommends against any Mersenne Twister variant for new code.
+
+## Maintenance
+
+Stale but stable: master last changed 2025-05-19 (PR #7), the code base is ver. 2.2.x from 2011-2020 with no tagged releases, one open issue (#9, seeding from another RNG), and a 2025 AVX2/AVX-512/NEON contribution parked on an experimental branch; BSD-3-Clause and small enough to vendor.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification B, tier now B.
+- **Tier reason:** randomgen's performance page (an independent third-party suite by the NumPy random maintainer, not the dSFMT authors) lists DSFMT Uniform 2.5 ns against MT19937 4.0 ns on a stated Cascade Lake 3.1 GHz CPU, and its generator script doc/source/performance.py is public (SIZE=25000, NUMBER=100, REPEAT=10, min taken). Compiler, compiler version and flags are not stated anywhere on the page or in the script, so it falls short of A.
+- **Verifier notes:** Numbers verified on randomgen's performance.rst (DSFMT and MT19937 rows) and the methodology on its doc/source/performance.py; only the Normal row needed a small correction (DSFMT is marginally faster there, not slower). Metadata checked: BSD-3-Clause (LICENSE.txt, Hiroshima University), 43 stars, not a fork, last commit 2025-05-19 (merge of PR #7), so stale is right. Not a duplicate; related listed entries are mersennetwister-lab/sfmt (B) and bashtage/randomgen (C).
+- **Fields the verifier corrected:** `claimed_speedup`, `workload`, `caveats`
+- **Shortcomings recorded by:** verifier batch-181 (wave 8 seed pass, 2026-10-13); enricher (seed pass, 2026-10-13)
+- **Pages the verifier opened:**
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/performance.rst>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/HEAD/doc/source/performance.py>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/HEAD/benchmark.py>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/HEAD/meson.options>
+  - <https://github.com/bashtage/randomgen>
+  - <https://github.com/bashtage/randomgen/tree/main/tools>
+  - <https://github.com/MersenneTwister-Lab/dSFMT>
+  - <https://github.com/MersenneTwister-Lab/dSFMT/commits>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/LICENSE.txt>
+- **Sources the enricher read:**
+  - <https://github.com/MersenneTwister-Lab/dSFMT>
+  - <https://github.com/MersenneTwister-Lab/dSFMT/issues?q=is%3Aissue>
+  - <https://github.com/MersenneTwister-Lab/dSFMT/pulls?q=is%3Apr>
+  - <https://github.com/MersenneTwister-Lab/dSFMT/pull/11>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/README.txt>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/CHANGE-LOG.txt>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/Makefile>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/dSFMT.h>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/dSFMT.c>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/dSFMT-common.h>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/dSFMT-params.h>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/dSFMT-params19937.h>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/HEAD/test.c>
+  - <https://raw.githubusercontent.com/MersenneTwister-Lab/dSFMT/experimental/README.txt>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/performance.rst>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/performance.py>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/dsfmt/dsfmt.h>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/dsfmt/dsfmt.c>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/dsfmt.pyx>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/mt19937/mt19937.h>
+  - <https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/meson.build>
+  - <https://github.com/bashtage/randomgen/commits/main/doc/source/performance.rst>
+  - https://julialang.org/blog/2021/11/julia-1.7-highlights/ (search snippet only)
+  - https://docs.julialang.org/en/v1/stdlib/Random (search snippet only)
+- **Raw records:** [data/wave8/verified.json](../../../data/wave8/verified.json) (id `https://github.com/mersennetwister-lab/dsfmt`) · [data/wave8/enrich/raw/github_com_mersennetwister_lab_dsfmt.json](../../../data/wave8/enrich/raw/github_com_mersennetwister_lab_dsfmt.json) (enrichment confidence 0.8)
+
+</details>

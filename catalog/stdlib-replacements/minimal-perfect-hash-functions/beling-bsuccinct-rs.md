@@ -1,0 +1,135 @@
+# PHast / PHast+ (bsuccinct-rs "ph" crate)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md) › [Minimal perfect hash functions](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `Rust` · `MIT OR Apache-2.0` · 🟢 active
+
+> Rust minimal perfect hash (PHast/PHast+) giving \~10 ns queries at under 2 bits/key; about 5x faster queries than PTHash.
+
+| | |
+|---|---|
+| **Beats** | PTHash |
+| **Claimed result** | At 5\*10^7 keys: PHast (S=8, lambda=4.3, EF) reaches 1.94 bit/key, 10 ns/key query, 606 ns/key single-thread construction (69 ns/key at 12 threads), vs PTHash (lambda=5.0, EF) at 2.11 bit/key, 54 ns/key query, 577 ns/key construction (231 ns/key at 12 threads); PHast+ cuts single-thread construction to 61-140 ns/key (an order of magnitude faster than PHast) for 10-15 ns/key query (derived from page data, Table 5.2 of arXiv:2504.17918) |
+| **Workload** | MPHF-Experiments framework: MPHF construction (1 and 12 threads) and queries on 5\*10^7 and 5\*10^8 random string keys, each of uniformly random length 10-50 bytes (Tables 5.2/5.3 of arXiv:2504.17918). Uniformly random 64-bit integer keys were used only for parameter tuning (Sec. 5.1) and the ablation study (Sec. 5.4). Measures bits/key, query ns/query, and construction ns/key. |
+| **Metric** | throughput |
+| **Hardware** | AMD Ryzen 5600G @ 3.9 GHz, 6 cores / 12 threads, 384KB/3MB/16MB L1/L2/L3 cache |
+| **Compiler and flags** | rustc 1.84.1 and gcc 12.2.0, both with third-level (-O3-equivalent) and CPU-native optimizations enabled |
+| **Adoption** | 173 stars |
+| **Last commit** | 2026-09-25 |
+| **Links** | [repository](https://github.com/beling/bsuccinct-rs) · [benchmark](https://arxiv.org/abs/2504.17918) |
+
+## Verdict
+
+The authors' ALENEX26 paper ran the MPHF-Experiments harness on 50M random 10-50-byte string keys (AMD Ryzen 5600G, 6C/12T; rustc 1.84.1 and gcc 12.2.0 at third-level optimization with native CPU flags; GxHash for the Rust methods). PHast (S=8, lambda=4.3, Elias-Fano) used 1.94 bits/key with 10 ns queries vs PTHash (lambda=5, EF) at 2.11 bits/key and 54 ns. Its single-thread build was about 5% slower (606 vs 577 ns/key) but 3.3x faster on 12 threads (69 vs 231 ns/key). At 500M keys the query gap vs PTHash grows (25 vs 135 ns), and PHast+ builds in 61-140 ns/key at 50M keys; there is no comparison against std or CMPH.
+
+## Use it when
+
+- Static key sets from millions to hundreds of millions of keys where query latency dominates: at 50M random 10-50-byte string keys PHast answers in 9-12 ns vs 40-54 ns for PTHash and 33-66 ns for PHOBIC.
+- You need about 1.9-2.1 bits/key and fast (re)builds: PHast+ builds at 61-140 ns/key on one thread and 15-26 ns/key on 12 threads at 50M keys.
+- Multi-core construction of the smallest fast variant: regular PHast (S=8, lambda=4.3) goes from 606 to 69 ns/key on 12 threads, and parallel construction adds no query-time partitioning step.
+- Rust code that replaces a read-only HashMap with MPHF + value array (e.g. k-mer or ID indexes). In an informal third-party test (issue #12, u64 keys) PHast + array lookups took 12/20/36 ns at 1M/10M/100M keys, vs 54/80/87 ns for std HashMap and 19/28/30 ns for a GxHash HashMap.
+
+## Skip it when
+
+- The key set changes, or you must reject foreign keys: there is no insert/delete, and `get` has no membership check. A key outside the build set returns an arbitrary index or can panic (open issue #18, no `try_get` yet). Store keys or fingerprints yourself.
+- C++ projects without a Rust toolchain: the API is Rust-only with no C/C++ bindings. The MPHF-Experiments harness had to write its own `extern "C"` shim to call it.
+- Key sets that do not fit in RAM: construction takes a Vec or slice and allocates a 64-bit hash per key. Iterator-based construction is only planned (issue #19), and the external-memory algorithm in the paper is not implemented.
+- Space below about 1.8 bits/key: recursive-splitting methods go lower. PHast needs S=12 and 5,322 ns/key single-thread construction to reach 1.82 bits/key.
+- Hard worst-case query bounds: bumped keys (about 1%) walk extra levels plus an Elias-Fano lookup, and the default configuration has no constant-level guarantee.
+
+## How it is fast
+
+PHast is a simplified bucket-placement scheme (the CHD/PTHash family). A 64-bit key hash picks a bucket through a plain linear map, and each bucket stores one fixed-width seed, usually one byte. The value is a linear offset floor(alpha\*h) plus p(seed, h) inside a small slice of L values (e.g. 1024), so a query is one hash, one byte load, a multiply and a mask, with no nonlinear bucket function, variable-length seed decoding or rank. Buckets with no feasible seed are 'bumped' (seed 0, about 1% of keys) to further levels whose outputs are remapped through an Elias-Fano array. Construction sorts hashes, seeds buckets from a 256-bucket sliding window with a cyclic used/free bitmap, picks the seed that minimizes the values it occupies, and runs in parallel over chunks separated by small gaps. PHast+ switches to additive placement p = (c + s) mod L, so 64 candidate seeds are tested at once by OR-ing bitmap words; this makes construction about an order of magnitude faster.
+
+## Compared with alternatives
+
+Pick PHast over PTHash or PHOBIC when query time matters: at 50M keys it answers in \~10 ns vs 33-66 ns at equal or smaller size (1.94 vs 2.11 bits/key for PTHash with EF). Against PtrHash (the closest rival, also Rust), PHast+ at 50M keys is smaller and at least as fast (2.07 bits/key, 12 ns query, 80 ns/key build vs PtrHash 2.12 bits/key, 14 ns, 192 ns/key cubic), but at 500M keys PtrHash matches its queries; choose SIMDRecSplit, ShockHash or ConsensusRecSplit only when space under \~1.8 bits/key matters more than 100+ ns queries.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | crate |
+| **Dependencies** | bitm, binout, dyn_size_of, seedable_hash (all from the same repo), rayon, voracious_radix_sort, arrayvec; default features add sux, epserde and mem_dbg (aligned-vec on 32-bit targets); optional hash backends: gxhash, wyhash, rapidhash, xxhash-rust, fnv, sip13 (nightly) |
+| **Minimum toolchain** | Rust edition 2021. `ph` declares no rust-version, but the default `sux` feature pulls sux/epserde releases that require Rust 1.85; `sip13` needs nightly |
+| **Platforms** | Optimized for 64-bit CPUs; CI builds only on x86-64 Linux with target-cpu=native. The README says it also compiles on 32-bit targets such as wasm32, but slower. The recommended gxhash backend needs x86 AES-NI+SSE2 or ARM AES+NEON and has no fallback |
+| **Thread safety** | A built function is immutable, and `get(&self)` is read-only; docs.rs lists Send/Sync auto-impls when the hasher and components are Send/Sync, so concurrent queries are fine. Construction is parallel internally (rayon) through the `*_mt` / `threads_num` constructors. No other concurrency guarantees are documented. |
+| **Drop-in for the baseline** | partial — it fills the same role as PTHash (static MPHF, get(key) -&gt; [0,n)), but it is a Rust API rather than C++ templates, uses a different serialization format, and has no C++ bindings |
+
+## Gotchas
+
+- The default hasher is slow unless you pick one. `ph` depends on seedable_hash with default-features off, so without a hash feature `BuildDefaultSeededHasher` is std's SipHash `DefaultHasher`. A user reported PHast as 'strangely slow' in issue #12 because of this. The paper's numbers use the `gxhash` feature, which needs RUSTFLAGS such as `-C target-cpu=native`.
+- `write`/`read` serialization requires the same hasher at load time. std's DefaultHasher algorithm is explicitly unspecified across Rust releases, and gxhash output is stable only within a major version, so pin the hasher before persisting functions.
+- Keys must be distinct (every constructor says so), and construction runs no dedup check. The author warned in issue #2 that duplicate keys make ph (FMPH) construction never finish, so dedupe first.
+- The API is still 0.x and the released crate lags git. crates.io 0.11.0 (Feb 2026) uses `Params` and `with_slice_p_threads_hash_sc`, while git HEAD uses `Conf` and `with_slice_conf_threads_sc`. PHast docs have no examples. Issue #20 reported that 0.11.0's dependency tree would break on a future rustc.
+
+## Caveats and trade-offs
+
+First-party paper by the PHast authors (Beling, Sanders); the ph crate author is the first author. At 5\*10^7 keys, single-thread PHast construction (606 ns/key for S=8, lambda=4.3, EF) is slightly slower than PTHash (577 ns/key). PHast wins on query time (10 vs 54 ns), space (1.94 vs 2.11 bits/key), and 12-thread construction (69 vs 231 ns/key). PtrHash is close on queries, and at 5\*10^8 keys it catches up with and may overtake PHast+ (3.2). The comparison is only against other MPHFs (PTHash, PTHash-HEM, PHOBIC, PtrHash, SIMDRecSplit, SicHash, FMPH, FMPHGO, FiPS, Bipartite ShockHash). It does not compare against std::unordered_map or CMPH. The paper left BBHash out of its tests because FMPH is its improved counterpart. GitHub's license detector reports only Apache-2.0, but the README and ph/Cargo.toml state the dual license 'MIT OR Apache-2.0'.
+
+PHast/PHast+ trade small space overhead (\~1.8-2.3 bits/key) for very simple, fast bucket-placement queries; PHast+ construction is 5-9x faster than PHast single-threaded and parallelizes near-linearly; PtrHash overtakes PHast on very large key sets once evaluation becomes memory-bandwidth bound. The same crate also ships FMPH/FMPHGO, fingerprinting-based MPHFs designed as a faster/smaller alternative to BBHash.
+
+## Maintenance
+
+Very active: the author commits almost daily as of 2026-09-25, and PHast research (k-perfect, a new paper) is ongoing. It is MIT OR Apache-2.0 and on crates.io (ph 0.11.0, \~878k downloads), but the released crate trails git and the API is still changing.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-25): confirm; tier before verification A, tier now A.
+- **Tier reason:** The paper (accepted at ALENEX26) benchmarks PHast/PHast+ against PTHash in Tables 5.2/5.3. It states the CPU (AMD Ryzen 5600G), the compilers (rust 1.84.1, gcc 12.2.0) and the flags (third-level plus CPU-native optimizations). The benchmark code is public: ByteHamster/MPHF-Experiments src/tablePHast.cpp with rust/src/phast_contender.rs, and the exact paper fork is on figshare (10.6084/m9.figshare.30272380.v6, GPL-3.0+).
+- **Verifier notes:** Numbers in claimed_speedup match Table 5.2 exactly (PHast S=8 lambda=4.3 EF 1.94/10/606/69; PTHash lambda=5.0 EF 2.11/54/577/231; PHast+ 61-140 ns/key single-thread construction and 10-15 ns queries). One fix: the comparison tables use random 10-50-byte strings, not 64-bit integers. Metadata verified: 173 stars, not a fork, not archived, last commit 2026-09-25.
+- **Fields the verifier corrected:** `last_commit`, `workload`, `caveats`
+- **Pages the verifier opened:**
+  - <https://arxiv.org/abs/2504.17918>
+  - <https://arxiv.org/pdf/2504.17918>
+  - <https://github.com/beling/bsuccinct-rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/Cargo.toml>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/README.md>
+  - <https://github.com/ByteHamster/MPHF-Experiments>
+  - <https://github.com/ByteHamster/MPHF-Experiments/blob/main/src/tablePHast.cpp>
+  - <https://api.figshare.com/v2/articles/30272380>
+- **Sources the enricher read:**
+  - <https://github.com/beling/bsuccinct-rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/README.md>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/Cargo.toml>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/README.md>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/Cargo.toml>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/src/lib.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/src/phast/mod.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/src/phast/function.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/src/phast/function2.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/ph/src/phast/conf.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/seedable_hash/Cargo.toml>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/seedable_hash/src/lib.rs>
+  - <https://github.com/beling/bsuccinct-rs/blob/main/.github/workflows/rust.yml>
+  - <https://github.com/beling/bsuccinct-rs/commits/main/ph>
+  - <https://github.com/beling/bsuccinct-rs/issues>
+  - <https://github.com/beling/bsuccinct-rs/issues/2>
+  - <https://github.com/beling/bsuccinct-rs/issues/6>
+  - <https://github.com/beling/bsuccinct-rs/issues/10>
+  - <https://github.com/beling/bsuccinct-rs/issues/11>
+  - <https://github.com/beling/bsuccinct-rs/issues/12>
+  - <https://github.com/beling/bsuccinct-rs/issues/16>
+  - <https://github.com/beling/bsuccinct-rs/issues/17>
+  - <https://github.com/beling/bsuccinct-rs/issues/18>
+  - <https://github.com/beling/bsuccinct-rs/issues/19>
+  - <https://github.com/beling/bsuccinct-rs/issues/20>
+  - <https://github.com/beling/bsuccinct-rs/issues/22>
+  - <https://arxiv.org/abs/2504.17918>
+  - <https://arxiv.org/pdf/2504.17918>
+  - <https://docs.rs/ph/latest/ph/phast/struct.Function2.html>
+  - <https://crates.io/api/v1/crates/ph>
+  - <https://crates.io/api/v1/crates/ph/0.11.0/dependencies>
+  - <https://crates.io/api/v1/crates/sux>
+  - <https://crates.io/api/v1/crates/epserde>
+  - <https://crates.io/api/v1/crates/gxhash>
+  - <https://crates.io/api/v1/crates/voracious_radix_sort>
+  - <https://github.com/ogxd/gxhash>
+  - <https://doc.rust-lang.org/std/hash/struct.DefaultHasher.html>
+  - <https://github.com/ByteHamster/MPHF-Experiments>
+  - <https://github.com/ByteHamster/MPHF-Experiments/blob/main/rust/src/phast_contender.rs>
+  - <https://github.com/ByteHamster/MPHF-Experiments/blob/main/rust/Cargo.toml>
+- **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `https://github.com/beling/bsuccinct-rs`) · [data/wave1-phf/enrich/raw/github_com_beling_bsuccinct_rs.json](../../../data/wave1-phf/enrich/raw/github_com_beling_bsuccinct_rs.json) (enrichment confidence 0.82)
+
+</details>

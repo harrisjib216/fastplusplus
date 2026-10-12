@@ -1,0 +1,136 @@
+# PebblesDB
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Storage and data](../README.md) › [Embedded key-value stores](README.md)</sub>
+
+**Tier B** (independent or peer-reviewed measurement) · Copyable · `C++` · `BSD-3-Clause` · 🔴 abandoned
+
+> LevelDB-API embedded KV store on a Fragmented LSM tree; several times RocksDB's random-write throughput with less write IO.
+
+| | |
+|---|---|
+| **Beats** | RocksDB |
+| **Claimed result** | SOSP'17 paper: on db_bench micro-benchmarks PebblesDB gets 6.7x RocksDB's write throughput (single-threaded random writes, 50M keys, 1KB values) and 27% higher read throughput, with 2.4-3x less write IO. With 4 writer threads it gets 3.3x RocksDB's write throughput (RocksDB default config). Inserting 50M values: 56.18 vs 14.12 KOps/s (\~4.0x, derived from page data). README rounds this to '6x the write throughput of RocksDB ... 50% lesser IO'. Sequential writes are \~3x slower and seek-only range queries \~30% slower than HyperLevelDB on a fully compacted store. |
+| **Workload** | db_bench-style single- and multi-threaded micro-benchmarks (50M KV pairs, 1KB values) plus a YCSB run (50M KV pairs, 1KB values, \~52GB user data) comparing PebblesDB, LevelDB, HyperLevelDB and RocksDB. |
+| **Metric** | throughput |
+| **Hardware** | Dell Precision Tower 7810, Intel Xeon 2.8 GHz (model not named), 16GB RAM, Ubuntu 16.04 / Linux 4.4, ext4 on software RAID0 over two Intel 750 1.2TB SSDs |
+| **Compiler and flags** | Project states it 'was built, compiled, and tested with g++-4.7, g++-4.9, and g++-5' as a general build requirement; not confirmed as the exact compiler used for the cited benchmark run |
+| **Adoption** | 521 stars |
+| **Last commit** | 2019-08-03 |
+| **Links** | [repository](https://github.com/utsaslab/pebblesdb) · [benchmark](https://www.cs.utexas.edu/~vijay/papers/sosp17-pebblesdb.pdf) |
+
+## Verdict
+
+In the SOSP'17 paper's db_bench runs (Dell Precision 7810 with an unnamed Xeon 2.8 GHz, 16 GB RAM, Linux 4.4, ext4 on RAID0 of two Intel 750 SSDs, compression off, datasets 3x RAM; RocksDB version, compiler and flags not stated), single-threaded random inserts of 50M pairs (16 B keys, 1 KB values) reached 6.7x RocksDB's throughput with 2.4-3x less write IO, and the paper's insert table shows 56.18 vs 14.12 KOps/s (about 4x). Those runs used HyperLevelDB's default parameters (4 MB memtable) unless noted; with RocksDB's own defaults and 4 threads the lead shrinks to 3.3x, and on YCSB loads to 1.5-2x.
+
+## Use it when
+
+- Write-heavy ingest of random (hashed or UUID-like) keys into an on-SSD store much larger than RAM, where compaction write IO or SSD wear is the bottleneck. The paper measured 2.4-3x less write IO than RocksDB and 2.5x lower write amplification at 500M keys.
+- Update-heavy workloads: in the paper, PebblesDB kept 75% of its initial insert throughput across two full update rounds, while the other stores fell to about 50%. Its update throughput was 2.15x HyperLevelDB's.
+- Existing LevelDB or HyperLevelDB code that needs more random-write throughput with no API changes. Point-read throughput stayed equal or slightly higher in the paper's runs.
+- Mixed YCSB-like workloads whose range scans do many next() calls after each seek, or that interleave writes. The paper measured only 6% overhead on YCSB workload E.
+- Research or reproduction of FLSM ideas: the repo ships db_bench and YCSB bindings, and there are companion JNI and MongoDB (mongo-pebbles) layers.
+
+## Skip it when
+
+- Sequential or append-ordered key inserts: 3x lower throughput than HyperLevelDB, because guards force sstables to be split and rewritten where LSM stores just move files. The paper itself recommends RocksDB for this case.
+- Short seek-heavy range queries on a fully compacted store: 30% slower than HyperLevelDB, 40% on an aged file system or with scarce RAM, and 47% on seeks for fully cached small datasets.
+- Large values or tiny KV pairs: only 1 KB values were tested. Open issue #29 reports crashes with values over a few tens of KB, and issue #24 documents a memory leak with many small key-value pairs.
+- Durability-critical deployments: open issue #28 shows torn log writes after a simulated power failure leaving partially persisted values after RepairDB. LevelDB fixed the same bug in 1.23.
+- When you need RocksDB features or a maintained engine: there are no column families, transactions or compression other than Snappy. Median CPU was 171% vs 98-110% for the others, memory was about 300 MB above HyperLevelDB at 100M keys, and the code has been untouched since 2019.
+
+## How it is fast
+
+It uses a Fragmented Log-Structured Merge tree (FLSM): each level is split into skip-list-style 'guards', chosen by hashing each inserted key with MurmurHash3 and checking for runs of trailing set bits, with more guards at deeper levels and overlapping sstables allowed inside a guard. Compacting a guard merge-sorts its sstables and appends the resulting fragments to the child guards in the next level without rewriting sstables already there, so most data is written once per level (the last two levels are the exception). Less write IO means compaction finishes faster and foreground writes stall less. Reads get back to LSM speed through per-sstable bloom filters (about one sstable read per level), seek-triggered forced compaction, optional parallel seeks within a guard, and larger sstables that miss the table cache less often.
+
+## Compared with alternatives
+
+Pick PebblesDB only if you already code against the LevelDB/HyperLevelDB API and want a no-code-change boost in random-write throughput with less write IO. For new designs that start from RocksDB, SplinterDB (maintained, 6-10x RocksDB inserts while matching it on small range queries) or Titan (a RocksDB plugin for large values) are safer, and KVell reports beating PebblesDB itself on both read- and write-dominated workloads.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | shared lib (autotools/libtool builds libpebblesdb shared and static; a CMake target is also provided) |
+| **Dependencies** | Snappy (optional, auto-detected) and pthreads; autotools with libtool, or CMake 3.9+, to build |
+| **Minimum toolchain** | C++11 (-std=c++11). The README says it was tested with g++-4.7, 4.9 and 5 and 'may not work' with other compilers. A 2019 commit fixed a g++-7 build error, and PR #18 for a g++-6 test build error was never merged. |
+| **Platforms** | POSIX only (LEVELDB_PLATFORM_POSIX). The old Travis CI built on Linux and macOS. atomic_pointer.h has x86, ARM-Linux and PPC paths and falls back to &lt;atomic&gt; elsewhere. No Windows port. |
+| **Thread safety** | The header keeps LevelDB's promise that a DB is safe for concurrent use without external locking. However, open issue #19 (2019) reports unsynchronized std::map access in the sstable bloom-filter bookkeeping (RemoveFileLevelBloomFilterInfo), which crashes DBTest.MultiThreaded and multi-threaded YCSB-C runs, and it is unfixed. |
+| **Drop-in for the baseline** | partial — it is API-compatible with LevelDB and HyperLevelDB, not RocksDB. The README says it can replace RocksDB only when RocksDB-specific features such as column families are unused, which still means rewriting call sites to the LevelDB API. On-disk compatibility with existing LevelDB databases is not documented (issue #27 is unanswered). |
+
+## Gotchas
+
+- Almost all tuning happens at compile time, not through Options. kMaxFilesPerGuardSentinel (default 2) is in db/dbformat.h, and the FILE_LEVEL_FILTER, SEEK_PARALLEL and DISABLE_SEEK_BASED_COMPACTION macros are in db/version_set.h. The guard-density constants top_level_bits=27 and bit_decrement=2 are hard-coded in db/write_batch.cc, and the paper says to raise top_level_bits above about 100M keys or guards become skewed.
+- The per-sstable bloom filters live only in memory (a std::map). DB::Open rebuilds them by scanning every sstable: the paper measured about 1.2 s per GB, or 62 s for 52 GB. They are built only if Options.filter_policy is set, and it defaults to NULL, so without NewBloomFilterPolicy the main read optimization is off.
+- Guard deletion is not implemented, so deleted key ranges leave empty guards behind. The paper saw no read slowdown with 9,000 empty guards, but they are never reclaimed.
+- Everything is declared in namespace leveldb with LevelDB's class names, so linking it into one binary with LevelDB would likely clash (not documented). It is also unrelated to CockroachDB's Go 'Pebble' despite the similar name.
+
+## Known shortcomings
+
+- The 6.7x headline ran RocksDB on HyperLevelDB defaults (4 MB memtable); with RocksDB defaults and 4 threads it is 3.3x, and YCSB load 1.5-2x; RocksDB version unstated. Sequential inserts 3x slower; short seeks after compaction 30-47% slower. Open unfixed bugs: bloom-map thread race crashes (#19), torn-write power-loss corruption (#28), crashes on values over tens of KB (#29), small-KV memory leak (#24). Bloom filters are memory-only and rebuilt at open (\~1.2 s/GB), and off unless filter_policy is set. Tuning is compile-time only; POSIX only; g++ 4.7-5 era. Abandoned since 2019; LevelDB API, only a partial RocksDB drop-in.
+
+## Caveats and trade-offs
+
+benchmark.md shows only relative-throughput graphs (normalized to HyperLevelDB) with no '6x' text. The 6x/50%-IO line is in the README, and exact numbers and hardware are in the SOSP'17 paper. CPU model not named; compiler and flags for the benchmark runs not stated. Weaker on sequential inserts (\~3x slower) and on seek-heavy range queries on a compacted store. Derived from HyperLevelDB, but not a GitHub fork. The last commit on every branch is 2019-08-03 (the 2024-04-16 date was a pushed_at timestamp, not a commit).
+
+Write-optimized FLSM design trades away small-range-query performance on fully compacted stores; sequential-write throughput is lower than competitors.
+
+## Maintenance
+
+Abandoned since the last commit on 2019-08-03, with 13 issues and PRs open (including crash-consistency and thread-safety bugs) and a CockroachDB Pebble author calling it 'a research project and ... dead' on HN in 2020; it is BSD-3-Clause and about 9.1k changed lines on top of HyperLevelDB, so it can be vendored, but you own the fixes.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification B, tier now B.
+- **Tier reason:** Peer-reviewed SOSP'17 paper reports PebblesDB at 6.7x RocksDB's write throughput on db_bench, and the db_bench code ships in the repo. Not A: the paper gives the CPU only as 'Intel Xeon 2.8 GHz' with no model and states no compiler or flags; the README's g++ versions are a build requirement, not the benchmark build.
+- **Verifier notes:** benchmark.md compares against RocksDB only in graphs; its Random-Writes bars (\~2.75 vs \~0.41 relative to HyperLevelDB) agree with the paper's 6.7x. I repointed benchmark_url to the paper, which states the numbers. I corrected last_commit (2024-04-16 was pushed_at; the real last commit is 2019-08-03) and maintenance to abandoned. BSD-3-Clause and 521 stars check out. I left is_fork_of as HyperLevelDB, because the README says PebblesDB was built by modifying it.
+- **Fields the verifier corrected:** `benchmark_url`, `claimed_speedup`, `hardware`, `last_commit`, `maintenance_status`, `caveats`
+- **Pages the verifier opened:**
+  - <https://raw.githubusercontent.com/utsaslab/pebblesdb/master/benchmark.md>
+  - <https://raw.githubusercontent.com/utsaslab/pebblesdb/master/src/graphs/micro-all.png>
+  - <https://github.com/utsaslab/pebblesdb>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/README.md>
+  - <https://www.cs.utexas.edu/~vijay/papers/sosp17-pebblesdb.pdf>
+- **Sources the enricher read:**
+  - <https://github.com/utsaslab/pebblesdb>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/README.md>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/benchmark.md>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/include/pebblesdb/db.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/include/pebblesdb/options.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/dbformat.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/version_set.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/version_set.cc>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/write_batch.cc>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/db_impl.cc>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/db_bench.cc>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/db/memtable.cc>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/design-sentinels.txt>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/port/port.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/port/port_posix.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/port/atomic_pointer.h>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/CMakeLists.txt>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/configure.ac>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/src/Makefile.am>
+  - <https://github.com/utsaslab/pebblesdb/blob/master/.travis.yml>
+  - <https://github.com/utsaslab/pebblesdb/commits/master>
+  - <https://github.com/utsaslab/pebblesdb/issues?q=is%3Aissue>
+  - <https://github.com/utsaslab/pebblesdb/pulls?q=is%3Apr>
+  - <https://github.com/utsaslab/pebblesdb/issues/29>
+  - <https://github.com/utsaslab/pebblesdb/issues/28>
+  - <https://github.com/utsaslab/pebblesdb/issues/27>
+  - <https://github.com/utsaslab/pebblesdb/issues/24>
+  - <https://github.com/utsaslab/pebblesdb/issues/19>
+  - <https://github.com/utsaslab/pebblesdb/issues/16>
+  - <https://github.com/utsaslab/pebblesdb/pull/18>
+  - <https://github.com/utsaslab/pebblesdb/pull/20>
+  - <https://github.com/utsaslab/pebblesdb/pull/30>
+  - <https://github.com/utsaslab/pebblesdb/pull/31>
+  - <https://github.com/utsaslab/mongo-pebbles>
+  - <https://github.com/utsaslab/leveldbjni>
+  - <https://www.cs.utexas.edu/~vijay/papers/sosp17-pebblesdb.pdf>
+  - <https://hn.algolia.com/api/v1/search?query=pebblesdb&tags=story>
+  - <https://hn.algolia.com/api/v1/search?query=pebblesdb&tags=comment&hitsPerPage=15>
+  - <https://news.ycombinator.com/item?id=24487855>
+- **Raw records:** [data/wave6/verified.json](../../../data/wave6/verified.json) (id `https://github.com/utsaslab/pebblesdb`) · [data/wave6/enrich/raw/github_com_utsaslab_pebblesdb.json](../../../data/wave6/enrich/raw/github_com_utsaslab_pebblesdb.json) (enrichment confidence 0.8)
+
+</details>

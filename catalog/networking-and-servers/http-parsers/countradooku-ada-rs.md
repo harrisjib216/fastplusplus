@@ -1,0 +1,122 @@
+# ada-rs
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Networking and servers](../README.md) › [HTTP parsers](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `Rust` · `MIT OR Apache-2.0` · 🟢 active
+
+> Memory-safe Rust port of the Ada WHATWG URL parser; 7.4% faster than C++ Ada on a 9-URL corpus.
+
+| | |
+|---|---|
+| **Beats** | ada-url (C++ Ada) |
+| **Claimed result** | 7.4% faster than C++ Ada over the whole 9-URL corpus (1.041us vs 1.124us), 21.7% faster on the normalized-URL subset, tied at timer resolution on the complex subset; on the full WPT fixture: 0.6% faster overall, 3.2% faster on valid cases, 26.2% faster on invalid/error-path cases, 0.6% faster with a base URL, 0.4% slower without a base URL; also 37.5% faster than Servo's url crate on the 9-URL corpus |
+| **Workload** | Rust port of the ada-url WHATWG URL parser benchmarked with black_box against the official C++ Ada 4.0.0 (via its Rust wrapper) and Servo's url crate, over a focused 9-URL corpus and the full \~891-case pinned WPT URL-parsing fixture |
+| **Metric** | latency |
+| **Hardware** | Apple M5 Pro, macOS 26.5, arm64 |
+| **Compiler and flags** | Rust 1.97.1, LLVM 22.1.8, opt-level=3, one codegen unit, fat LTO; C++ Ada via its official ada-url Rust wrapper v4.0.0 |
+| **Adoption** | 0 stars |
+| **Last commit** | 2026-07-28 |
+| **Links** | [repository](https://github.com/countradooku/ada-rs) · [benchmark](https://github.com/countradooku/ada-rs/blob/main/docs/BENCHMARKS.md) |
+
+## Verdict
+
+Divan medians for parse plus href on an Apple M5 Pro (macOS 26.5, arm64), Rust 1.97.1 / LLVM 22.1.8 with fat LTO: 1.041 µs vs 1.124 µs for C++ Ada 4.0.0 (called through the ada-url Rust wrapper) over 9 URLs, 244 ns vs 312 ns on the 5 normalized ones, a tie on the 4 complex ones, and 1.666 µs for Servo url. On all 891 WPT cases it is 0.6% faster overall (26.2% faster on invalid inputs, 0.4% slower with no base); the C++ compiler used to build Ada is not named.
+
+## Use it when
+
+- Pure-Rust services or tools that parse many URLs which are already normalized http(s) (logs, crawlers, proxies, analytics). This is the subset where it measured 21.7% faster than C++ Ada.
+- Codebases whose memory-safety policy rules out linking C++ Ada through FFI, but where Servo `url` is too slow (37.5% slower than ada-rs on the same 9-URL corpus).
+- Rust code that needs serialization matching Node.js/Ada. It passes the pinned WPT, Ada-extra, IDNA and setter fixtures, and differential tests compare 10,000 generated URLs and 5,000 SearchParams mutation sequences against C++ Ada.
+- Read-heavy use: parse once, then read components many times. Getters are checked slices of one buffer and do not allocate.
+
+## Skip it when
+
+- Setter-heavy workloads. Nine setters (protocol, username, password, host, hostname, port, pathname, search, hash) re-parse the whole href with Servo `url` and then rebuild the `Url`. No setter benchmarks are published.
+- Workloads full of unusual, relative or non-normalized inputs. On the full WPT fixture it is at parity with C++ Ada (0.6% faster overall, 0.4% slower with no base), and inputs that miss the fast paths run at roughly Servo `url` speed plus a copy.
+- C or C++ projects: there is no C ABI, so use Ada directly.
+- Production dependencies that need maturity: v0.1.0, two commits on one day (2026-07-28), one author, 0 stars, and not published on crates.io (git dependency only).
+- Small dependency trees: it wraps Servo `url` rather than replacing it, and also pulls in `idna`, `percent-encoding` and `memchr`, plus `urlpattern` if you enable URLPattern.
+
+## How it is fast
+
+Conservative validate-and-copy fast paths. For http(s) URLs that are already normalized, it finds delimiters with `memchr`/`memchr2`/`memchr3` (runtime-dispatched SIMD) and checks host bytes against a 256-entry const lookup table. It then copies the input into one `String` with a single allocation and records the offsets, lowercasing the host or inserting a missing `/` only when needed. More hand-written paths cover normalized file URLs, common authority URLs (credentials, ports, IPv4/IPv6, IDNA hosts via the `idna` crate), opaque URLs and simple relative references. Every other input goes to Servo's `url` crate, and ada-rs patches the result to match Ada's output, so the speedup only applies to inputs that hit a fast path.
+
+## Compared with alternatives
+
+Pick ada-rs over Ada (C++) when you work in Rust and want Ada-compatible output with no C++ toolchain or FFI; stay with Ada for C/C++ code, for production maturity, or for setter-heavy code. Compared with sorug (Rust, benchmarked only against Servo url) and lucid-url (mixed results against Ada), ada-rs is the one with a head-to-head benchmark and differential tests against C++ Ada, but its measured wins are small and mostly on normalized URLs.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | crate (v0.1.0; not on crates.io, use a git dependency) |
+| **Dependencies** | memchr 2.8, idna 1.1, percent-encoding 2.3, url 2.5.8 (Servo; default features off; used as the fallback parser and for form_urlencoded); optional: serde, urlpattern 0.6 (`url-pattern` feature), ada-url 4.0.0 (`bench-ada` feature, builds C++ Ada for tests and benches only) |
+| **Minimum toolchain** | Rust edition 2024. Cargo.toml declares rust-version 1.85, but the library uses let-chains, which became stable in Rust 1.88, so 1.88+ in practice. |
+| **Platforms** | Any Rust target with std. CI runs tests on Ubuntu, macOS and Windows (stable) plus Miri. memchr's SIMD dispatch covers x86-64, AArch64 and WebAssembly. Benchmarks were run only on an Apple M5 Pro (arm64). |
+| **Thread safety** | Not documented. `Url` is plain owned data (a `String`, integer offsets and small enums; it implements `Clone`) with no interior mutability. The length limit is a process-wide `AtomicU32`, so `set_max_input_length` affects all threads. |
+| **Drop-in for the baseline** | partial — Rust only. Method names follow the ada-url wrapper (href, hostname, set_\*, can_parse, UrlSearchParams), but `Url::parse` takes an `Option<&Url>` base instead of `Option<&str>` and the error types differ. There is no C/C++ API, so it cannot replace C++ Ada itself. |
+
+## Gotchas
+
+- It is a hybrid, not a full native port. ARCHITECTURE.md calls the Servo `url` fallback a 'correctness bridge' for states not yet handled natively. After the fallback, ada-rs fixes drive letters, file localhost, trailing spaces in opaque paths and `^` in paths so the output matches Ada.
+- The WPT benchmark treats the two parsers differently. benches/wpt.rs gives ada-rs an already-parsed `&Url` base, but gives C++ Ada the base as a string, and `ada_parse_with_base` parses that base again inside the C API. Each C++ Ada call also goes through the C ABI and heap-allocates an `ada::result` wrapper. Both effects favor ada-rs in the with-base, all-cases and invalid-case numbers.
+- `url.search_params()` returns a detached copy. Call `url.set_search_params(&params)` to apply changes; unlike JavaScript's `URL.searchParams`, the two are not kept in sync.
+- `set_max_input_length` is global and uses a Relaxed atomic. The default is u32::MAX (no limit).
+
+## Known shortcomings
+
+- Small margins (7.4% overall vs C++ Ada; WPT margins small) and the C++ compiler used to build Ada is not named. A Rust port; for C++ use, Ada itself is the incumbent.
+- Unfair WPT benchmark: ada-rs gets a pre-parsed base URL while C++ Ada re-parses the base string, and C++ Ada is called through a C-ABI wrapper with a heap-allocated result, so the 7.4%/21.7% margins are likely overstated. Only common URL shapes have a native fast path; everything else and all setters go through Servo's url crate. Declared MSRV 1.85 is wrong (let-chains need 1.88). Not on crates.io; two commits.
+
+## Caveats and trade-offs
+
+README itself calls these "local measurements, not universal performance claims" and says results should be remeasured per target CPU/toolchain; BENCHMARKS.md calls the 9-URL corpus "a focused regression gate, not a universal performance claim"; single run on one Apple M5 Pro machine, medians only; the C++ compiler used to build Ada through the ada-url crate is not named (only the Rust/LLVM toolchain is); margins on the full WPT fixture are small (0.6% overall, 0.4% slower without a base URL); baseline (ada-url) is not one of the category's three named baselines (llhttp/http-parser/picohttpparser) but is the widely-used incumbent URL parser referenced in the orchestrator's own notes for this run
+
+forbids unsafe code (memory-safety goal) while claiming to match/beat a hand-optimized C++ SIMD parser; wins are modest (single-digit to \~20%) and one subset (no-base-URL WPT cases) is slightly slower; extremely new project, 0 stars, single author, not yet adopted anywhere
+
+## Maintenance
+
+New rather than proven: two commits on 2026-07-28 with green CI (Linux, macOS, Windows, Miri), v0.1.0, not on crates.io, 0 stars. It is dual MIT/Apache-2.0 and about 4,000 lines of safe Rust, so it is small enough to vendor, but treat it as an experiment.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-26): confirm; tier before verification A, tier now A.
+- **Tier reason:** docs/BENCHMARKS.md benchmarks ada-rs directly against C++ Ada (official ada-url Rust wrapper 4.0.0) with public divan code in benches/parse.rs (9-URL corpus) and benches/wpt.rs (WPT urltestdata.json fixture), and states the CPU (Apple M5 Pro), OS, compiler (Rust 1.97.1 / LLVM 22.1.8) and flags (opt-level=3, codegen-units=1, fat LTO; matches [profile.bench] in Cargo.toml). Every number in claimed_speedup appears verbatim in BENCHMARKS.md or the README (the 37.5%-vs-Servo figure is in the README).
+- **Verifier notes:** Numbers, hardware, toolchain and wrapper version all check out; license corrected from Apache-2.0 to the dual MIT OR Apache-2.0 stated in Cargo.toml and the README (repo ships LICENSE-MIT and LICENSE-APACHE; GitHub's spdx_id shows only Apache-2.0). 0 stars, 2 commits total (both 2026-07-28), not a fork, not archived.
+- **Fields the verifier corrected:** `license`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/countradooku/ada-rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/docs/BENCHMARKS.md>
+  - <https://github.com/countradooku/ada-rs/blob/main/README.md>
+  - <https://github.com/countradooku/ada-rs/blob/main/Cargo.toml>
+  - <https://github.com/countradooku/ada-rs/blob/main/benches/parse.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/benches/wpt.rs>
+- **Sources the enricher read:**
+  - <https://github.com/countradooku/ada-rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/README.md>
+  - <https://github.com/countradooku/ada-rs/blob/main/docs/BENCHMARKS.md>
+  - <https://github.com/countradooku/ada-rs/blob/main/docs/ARCHITECTURE.md>
+  - <https://github.com/countradooku/ada-rs/blob/main/Cargo.toml>
+  - <https://github.com/countradooku/ada-rs/blob/main/.github/workflows/ci.yml>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/lib.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/url.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/fast_path.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/idna.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/components.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/search_params.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/src/url_pattern.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/benches/parse.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/benches/wpt.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/tests/differential.rs>
+  - <https://github.com/countradooku/ada-rs/blob/main/tests/public_api.rs>
+  - <https://github.com/countradooku/ada-rs/commits/main>
+  - <https://github.com/countradooku/ada-rs/actions>
+  - <https://github.com/countradooku/ada-rs/issues>
+  - <https://crates.io/api/v1/crates/ada-rs>
+  - <https://github.com/ada-url/rust/blob/main/src/lib.rs>
+  - <https://github.com/ada-url/ada/blob/main/src/ada_c.cpp>
+  - <https://blog.rust-lang.org/2025/06/26/Rust-1.88.0/>
+- **Raw records:** [data/wave5/verified.json](../../../data/wave5/verified.json) (id `https://github.com/countradooku/ada-rs`) · [data/wave5/enrich/raw/github_com_countradooku_ada_rs.json](../../../data/wave5/enrich/raw/github_com_countradooku_ada_rs.json) (enrichment confidence 0.5)
+
+</details>

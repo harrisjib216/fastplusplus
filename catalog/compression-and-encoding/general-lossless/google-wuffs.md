@@ -1,0 +1,117 @@
+# Wuffs deflate/zlib/gzip decoder
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Compression and encoding](../README.md) › [General-purpose lossless compression](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `Wuffs (transpiles to C)` · `MIT OR Apache-2.0` · 🟢 active
+
+> Memory-safe deflate, gzip and zlib decoder shipped as single-file C; 1.2x-1.9x faster than zlib 1.2.11 inflate on 10-100 KB inputs.
+
+| | |
+|---|---|
+| **Beats** | zlib |
+| **Claimed result** | doc/benchmarks.md (Sept 2022, commit 315b2e52 v0.3.0-rc.1, i5-10210U), vs zlib 1.2.11: deflate decode 100k just_one_read 521 MB/s (clang11) / 522 MB/s (gcc10) vs 352 MB/s (1.48x); 100k many_big_reads 330 vs 277 MB/s (1.19x); 10k full_init 409 vs 289 MB/s (1.41x); 1k full_init 195 vs 241 MB/s (0.81x, slower). gzip decode 100k 527 MB/s clang11 (1.81x) / 550 MB/s gcc10 (1.89x); zlib-format decode 100k 505 MB/s clang11 (1.56x) / 548 MB/s gcc10 (1.70x). README: 'up to 1.4x faster than zlib-the-library (C)'. |
+| **Workload** | Deflate, gzip and zlib decode of 1k, 10k and 100k inputs vs zlib via 'mimic' wrapper. |
+| **Metric** | throughput |
+| **Hardware** | Intel Core i5-10210U @ 1.60 GHz |
+| **Compiler and flags** | clang/llvm 11.0.1 and gcc 10.2.1 (Debian Bullseye), -O3 per doc/benchmarks.md 'Reproducing' and the header of test/c/std/deflate.c; mimic benchmarks add -DWUFFS_MIMIC -ldeflate -lz |
+| **Adoption** | 4.8k stars; GIF decoder ships in Chrome |
+| **Last commit** | 2026-09-29 |
+| **Links** | [repository](https://github.com/google/wuffs) · [benchmark](https://github.com/google/wuffs/blob/main/doc/benchmarks.md) |
+
+## Verdict
+
+doc/benchmarks.md (Sept 2022, Wuffs commit 315b2e52, v0.3.0-rc.1, Intel Core i5-10210U, Debian Bullseye, clang 11.0.1 and gcc 10.2.1 at -O3) measures decode against Debian's zlib 1.2.11 on the same inputs: raw deflate 100 KB 521-522 vs 352 MB/s (1.48x), 10 KB 402-418 vs 289 MB/s, 1 KB 183-226 vs 241 MB/s (slower); gzip 100 KB 527-550 vs 291 MB/s (1.81x-1.89x); zlib-format 100 KB 505-548 vs 323 MB/s (1.56x-1.70x).
+
+## Use it when
+
+- Decompressing untrusted gzip, zlib or raw deflate (HTTP bodies, PNG IDAT, uploaded archives) where you want a decoder whose bounds and overflow safety is proven at compile time, without giving up speed versus zlib.
+- Whole-buffer decodes of roughly 10 KB and up on 64-bit x86: 1.4x-1.5x zlib 1.2.11 for raw deflate, 1.7x-1.9x for gzip, 1.5x-1.7x for zlib-format at 100 KB on an i5-10210U.
+- Sandboxed or allocation-free code: the decoder makes no syscalls and allocates nothing, so it runs under SECCOMP_MODE_STRICT and in fixed-memory environments.
+- Projects that want one vendored C file with no build system, no dependencies and a dual MIT/Apache-2.0 license, usable from C or C++.
+
+## Skip it when
+
+- You need to compress: Wuffs has no deflate encoder (issue #2, 'want to add encoding as well?', open since 2017).
+- Small inputs: at about 1 KB it was slower than zlib 1.2.11 (0.76x-0.93x depending on compiler and init mode); libdeflate 1.7.1 on the same page was faster at 1 KB (326 MB/s) and 10 KB (503 MB/s).
+- 32-bit ARM: the historical v0.2 (2019) numbers on an ARMv7 Exynos 5 were 0.60x-0.90x zlib; no newer ARM numbers are published.
+- Drop-in replacement of zlib or zlib-ng in an existing code base: the API differs, preset-dictionary and history APIs are ad hoc per decoder (issue #73, open), and zlib-ng (catalogued) is likely the faster baseline today but was not measured on this page.
+- Needing long-term API stability: v0.x releases make no compatibility promises and have no long-term support; struct sizes are not part of the ABI.
+
+## How it is fast
+
+The hot loop (decode_huffman_fast64) checks once per iteration that 8 input bytes and 266 output bytes are available, then decodes with no further bounds checks: it refills a 64-bit bit buffer with an unaligned 8-byte load ('Variant 4' from Fabian Giesen's 'Reading bits in far too many ways'), looks up packed Huffman table entries that carry literal, length base and redirect bits, and does over-long multiple-of-8-byte back-reference copies. On x86-64 a BMI2 variant is picked at runtime (choose decode_huffman_fast64 = [decode_huffman_bmi2]); 32-bit targets use a fast32 path. Wuffs proves bounds and overflow safety at compile time, so the generated C carries no runtime checks in that loop, and the gzip/zlib wrappers use much faster CRC-32 and Adler-32 code (9x-15x and 6x-7.5x zlib 1.2.11's checksum throughput on the same page), which is why gzip and zlib-format gains exceed raw-deflate gains.
+
+## Compared with alternatives
+
+Pick Wuffs over libdeflate when memory safety of the decoder matters more than the last 10-40% on small buffers (libdeflate was faster at 1 KB and 10 KB and roughly tied at 100 KB) or when you need streaming with suspensions rather than whole-buffer decode; pick zlib-ng instead if you need compression or a zlib-compatible API.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | source-drop (single-file C library, stb style; can also be built as libwuffs.a/.so via wuffs genlib) |
+| **Dependencies** | none (the Go-based Wuffs toolchain is needed only to modify the .wuffs sources) |
+| **Minimum toolchain** | C99 compiler; benchmarks used clang 11.0.1 and gcc 10.2.1 at -O3; MSVC needs WUFFS_CONFIG__ENABLE_MSVC_CPU_ARCH__X86_64_V2/V3 to enable the SIMD paths |
+| **Platforms** | any C99 target; 64-bit fast path with runtime BMI2 dispatch on x86-64, separate 32-bit fast path; published modern numbers are x86-64 only |
+| **Thread safety** | not documented; decoders are caller-allocated structs with no global state, no allocation and no syscalls, so use one decoder object per stream |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Every decoder must be initialized with wuffs_X__decoder__initialize(ptr, sizeof__wuffs_X__decoder(), WUFFS_VERSION, flags); the struct size is a function, not sizeof, and can change between point releases.
+- Default initialization zeroes the whole struct, including the 32 KiB history ring buffer; passing WUFFS_INITIALIZE__LEAVE_INTERNAL_BUFFERS_UNINITIALIZED is what lifts 1 KB decode from 0.81x to 0.93x of zlib.
+- Pick release/c/wuffs-v0.3.c (README: latest stable) rather than wuffs-unsupported-snapshot.c; a wuffs-v0.4.c also sits in that directory, and the changelog's work-in-progress section lists API changes (set_quirk_enabled became set_quirk, constants renamed), so code written for v0.3 may need edits.
+- The gzip and zlib decoders can be told to skip checksum verification via a quirk; leave it off for untrusted data. A valid-PNG rejection (single one-bit distance code, issue #66) was fixed and closed in January 2022, before the measured v0.3.0-rc.1.
+
+## Known shortcomings
+
+- Upgraded C to A on doc/benchmarks.md (zlib 1.2.11 baseline, clang 11.0.1 and gcc 10.2.1 at -O3, i5-10210U, reproducing section): gzip 100k 1.81x clang / 1.89x gcc, zlib 100k 1.56x / 1.70x, many_big_reads 1.19x; libdeflate is slower than Wuffs at 100k but small inputs are slower than zlib. Numbers date from 2022.
+- Decode only (the encoder issue #2 has been open since 2017); slower than zlib at 1 KB (0.76x-0.93x) and the historical ARMv7 numbers (v0.2, 2019) were 0.60x-0.90x zlib. The API is not zlib-compatible and the dictionary/history API is ad hoc (issue #73 open); no zlib-ng comparison.
+
+## Caveats and trade-offs
+
+Numbers are from Sept 2022 (zlib 1.2.11, v0.3.0-rc.1) and first-party, though reproducible. Slower than zlib on 1 KB inputs (0.76x-0.93x). The same page lists libdeflate 1.7.1: faster than Wuffs at 1k (326 MB/s) and 10k (503 MB/s), slightly slower at 100k just_one_read (507 vs 521 MB/s). Baseline is zlib, not zlib-ng. Language is Wuffs, consumed as generated single-file C.
+
+Memory-safe language; generated C is distributed as a single file usable from C and C++; decode only for deflate (no compression).
+
+## Maintenance
+
+Actively developed (last commit 2026-09-29) with v0.3.5 released 2026-07-11, but still a 0.x API without long-term support; its GIF decoder has shipped in Chrome since M93, and the single MIT/Apache-2.0 C file is easy to vendor.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-01): confirm; tier before verification C, tier now A.
+- **Tier reason:** Upgraded C to A: doc/benchmarks.md compares against zlib 1.2.11 (Debian) via the mimic harness, names clang 11.0.1 / gcc 10.2.1, the CPU (Intel Core i5-10210U @ 1.60GHz) and the flags (-O3, per the Reproducing section and the header comment of the public benchmark code test/c/std/deflate.c, with mimic cflags -DWUFFS_MIMIC -ldeflate -lz). Code, compiler, flags and CPU are all public.
+- **Verifier notes:** All claimed numbers found on doc/benchmarks.md under this project's rows. License MIT OR Apache-2.0 confirmed in LICENSE; 4.8k stars; last commit 2026-09-29 (commits page). Flags are taken from the documented reproduction command; the page does not state that every table row was produced with exactly those flags via 'wuffs bench'.
+- **Fields the verifier corrected:** `compiler_and_flags`, `claimed_speedup`, `caveats`
+- **Shortcomings recorded by:** verifier; enricher
+- **Pages the verifier opened:**
+  - <https://github.com/google/wuffs/blob/main/doc/benchmarks.md>
+  - <https://github.com/google/wuffs>
+  - <https://github.com/google/wuffs/commits/main>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/benchmarks.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/README.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/LICENSE>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/test/c/std/deflate.c>
+- **Sources the enricher read:**
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/README.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/benchmarks.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/getting-started.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/wuffs-the-library.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/note/initialization.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/note/memory-safety.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/related-work.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/doc/changelog.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/std/deflate/README.md>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/std/deflate/decode_deflate.wuffs>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/std/deflate/decode_huffman_fast64.wuffs>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/std/deflate/decode_huffman_slow.wuffs>
+  - <https://raw.githubusercontent.com/google/wuffs/HEAD/release/c/README.md>
+  - <https://github.com/google/wuffs/tree/main/release/c>
+  - <https://github.com/google/wuffs/issues?q=is%3Aissue+deflate>
+  - <https://github.com/google/wuffs/issues/66>
+  - <https://github.com/google/wuffs/issues/73>
+- **Raw records:** [data/wave9/verified.json](../../../data/wave9/verified.json) (id `https://github.com/google/wuffs`) · [data/wave9/enrich/raw/github_com_google_wuffs.json](../../../data/wave9/enrich/raw/github_com_google_wuffs.json) (enrichment confidence 0.85)
+
+</details>

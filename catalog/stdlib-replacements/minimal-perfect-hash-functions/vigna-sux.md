@@ -1,0 +1,146 @@
+# RecSplit (Sux C++ library)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md) › [Minimal perfect hash functions](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `C++` · `GPL-3.0-or-later WITH GCC-exception-3.1` · 🟡 stale
+
+> Header-only RecSplit MPHF: 1.8 bits/key, smaller than CMPH's CHD and about 2x faster to build and query on 1e9 keys.
+
+| | |
+|---|---|
+| **Beats** | CMPH |
+| **Claimed result** | On 1 billion random 64-bit keys, RecSplit (l=8, b=100) builds in 936 s at 1.80 bits/key with 204 ns/key lookup. CMPH's CHD takes 1972 s (lambda=4, 2.17 bits/key, 419 ns), 5964 s (lambda=5, 2.07 bits/key, 417 ns) and 23746 s (lambda=6, 2.01 bits/key, 416 ns). That makes CHD about 2.1-25x slower to build and about 2x slower to query, while using more space (derived from page data). RecSplit (l=5, b=5) builds in 233 s at 2.95 bits/key, about 8.5x faster than CHD lambda=4 (derived from page data). BBHash builds faster (100-253 s) but needs 3.06-6.87 bits/key. |
+| **Workload** | Construction and lookup of MPHFs over 1 billion random 64-bit keys, single machine, comparing RecSplit against CMPH's CHD algorithm (table reproducing Table 5 of the PTHash SIGIR'21 paper). |
+| **Metric** | build-time |
+| **Hardware** | Intel i9-9900K @3.60GHz, 64GB DDR3 RAM @2.66GHz, Linux 5 (64-bit) |
+| **Compiler and flags** | gcc 9.2.1, -O3, -march=native (mphf_benchmark harness, same environment as the PTHash paper) |
+| **Adoption** | 97 stars |
+| **Last commit** | 2024-10-07 |
+| **Links** | [repository](https://github.com/vigna/sux) · [benchmark](https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md) |
+
+## Verdict
+
+In the PTHash authors' mphf_benchmark (Table 5 of the SIGIR'21 paper): 1e9 uniformly random 64-bit keys, one core of an i9-9900K, gcc 9.2.1 -O3 -march=native. RecSplit l=8,b=100 built in 936 s at 1.80 bits/key with 204 ns lookups; CMPH's CHD took 1972-23746 s (lambda 4-6) for 2.01-2.17 bits/key with \~417 ns lookups. At 1e8 keys the same table shows a smaller build gap (92 s vs 121 s for CHD lambda=4; lookups 124 vs 204 ns). The harness pins a May 2020 sux commit (before the BMI2-detection fix that PR #16 says speeds queries by 10-20%) and builds CMPH through its own autotools configure.
+
+## Use it when
+
+- Static key sets of millions to billions of keys (URLs, k-mers, dictionary terms) that are built once and queried many times, where the MPHF must be small: about 1.8 bits/key at LEAF_SIZE=8, b=100, down to 1.56 bits/key at LEAF_SIZE=16, b=2000.
+- Replacing CMPH's CHD in C++ code: on 1e9 random 64-bit keys RecSplit l=8,b=100 is smaller (1.80 vs 2.01-2.17 bits/key), builds 2.1-25x faster and answers lookups in about half the time (204 vs \~417 ns).
+- When you want to tune space against build time: LEAF_SIZE (a template parameter) and bucket size cover the range from 233 s at 2.95 bits/key (l=5, b=5) to 936 s at 1.80 bits/key (l=8, b=100) on 1e9 keys.
+- Read-heavy services that query one built instance from many threads: operator() is const and has been thread-safe since 1.0.1.
+- Linux servers with large key sets, where AllocType::TRANSHUGEPAGE or FORCEHUGEPAGE puts the structure on huge pages; switching takes one template argument.
+
+## Skip it when
+
+- Latency-bound lookups: about 200 ns/key at 1e9 keys in the PTHash paper's Table 5, against 37-64 ns for PTHash at 3-4 bits/key.
+- When the build must be fast or parallel at very low space: this construction is single-threaded, and the GpuRecSplit README measures it at about 1.2 ms/key for l=16, b=2000 (1.56 bits/key), against 138 us/key for single-threaded SimdRecSplit.
+- Dynamic sets or membership tests: the structure is immutable (any change means a full rebuild), and keys outside the set map to arbitrary valid indices (issue #21), so you must store your own fingerprints to reject them.
+- Key sets that don't fit in RAM: this implementation holds all 128-bit hashes in memory (16 bytes/key, about 16 GB for 1e9 keys) and sorts them. The paper's external-memory construction is not implemented here.
+- Windows/MSVC builds: the headers need POSIX sys/mman.h, GCC/Clang builtins and attributes, and variable-length arrays, and CI builds only on Ubuntu x86-64.
+
+## How it is fast
+
+Keys are hashed once to 128 bits with SpookyHash and bucketed, b keys per bucket on average (5 to 2000). Each bucket is split recursively: fanout 2 at the top, then fixed-size groups, down to leaves of at most LEAF_SIZE keys. At every node a brute-force search finds a seed that splits the keys exactly (at leaves, one that maps them bijectively). Only the seeds are stored, as Golomb-Rice codes whose parameters are tables computed at compile time, and a double Elias-Fano list gives each bucket's key offset and bit position. A lookup is therefore one Elias-Fano access plus a short walk down one bucket's tree, using multiply-shift range reduction and broadword select (BMI2 pdep/tzcnt when compiled for it). The RecSplit paper (ALENEX 2020) reports 1.56 bits/key this way, 8.3% above the 1.44 bits/key lower bound.
+
+## Compared with alternatives
+
+Pick it when you want the authors' small, dependency-free reference RecSplit that you can copy into an include path at about 1.8 bits/key. Take SimdRecSplit/GpuRecSplit for the same structure with 8-50x faster (and multi-threaded) construction, ShockHash or ConsensusRecSplit below about 1.6 bits/key, PTHash for 3-5.5x faster lookups at 3-4 bits/key, and emphf when 2.61 bits/key with a 374 s build at 1e9 keys fits better than RecSplit's 1.80 bits/936 s or 2.95 bits/233 s.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only |
+| **Dependencies** | none (SpookyV2.hpp is bundled; googletest only for the test suite) |
+| **Minimum toolchain** | C++20 (std::span, since PR #23 in Oct 2024); GCC or Clang; __int128 support for more than 2^32 keys |
+| **Platforms** | POSIX. x86-64 has BMI/BMI2 fast paths with portable fallbacks, and an aarch64 build fix was merged in 2022 (PR #15). CI covers only Ubuntu 24.04. The PTHash mphf_benchmark harness disables RecSplit on __APPLE__. |
+| **Thread safety** | Concurrent lookups on a built instance are safe (NEWS 1.0.1; const operator() since PR #22). Construction runs on a single thread. |
+| **Drop-in for the baseline** | no |
+
+## Gotchas
+
+- Duplicate keys make the constructor loop forever (documented in the header, and issue #20 was closed as won't-fix), so deduplicate first.
+- The hash128_t constructor assumes uniformly random 128-bit hashes and sorts your span in place. Structured values such as hash128_t(0, i) overflow the fixed 3000-key bucket limit and segfault (issue #7). Hash integer keys first, e.g. with first_hash(&key, sizeof key) as mphf_benchmark does.
+- Compile with -DNDEBUG: the code is 'heavily asserted', and without it the Elias-Fano constructor re-checks every bucket. Errors come as assert/abort, never exceptions: loading a file saved with another LEAF_SIZE calls abort(). The serialized format is raw host-endian binary with no version field.
+- Header hygiene: 'using namespace std' inside sux::function, global macros (likely, unlikely, first_hash, skip_bits, ALLOW_UNALIGNED_READS) and a global SpookyHash class can collide with other code in a large codebase.
+
+## Caveats and trade-offs
+
+Numbers come from a third-party benchmark repo (roberto-trani/mphf_benchmark, by the PTHash authors, last touched 2022-12) that reproduces Table 5 of the PTHash SIGIR'21 paper. vigna/sux's own README publishes no CMPH comparison, only benchmark make targets. The harness compiles CMPH's C sources separately through autotools (configure.sh), so CHD probably got autoconf default CFLAGS rather than -O3 -march=native. That cannot explain a 2-25x gap, which is algorithmic. Single-core runs.
+
+Recursive-splitting construction has higher constant factors than fingerprinting approaches (BBHash) at very low target space; single-header C++ template library requires manual integration; licensed GPL-3.0 + GCC Runtime Library Exception.
+
+## Maintenance
+
+Stale: the master branch is unchanged since October 2024 and the last release is 1.0.4 (June 2023). A May 2026 'bench' branch commit touches only Elias-Fano/select, not RecSplit. There are no open issues, and this is the algorithm authors' own header-only code under GPLv3 plus the GCC Runtime Library Exception ('use it everywhere, exactly like libstdc++'), though RecSplit.hpp still carries a leftover LGPLv3 paragraph, which is why GitHub reports NOASSERTION.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-09-25): confirm; tier before verification A, tier now A.
+- **Tier reason:** The mphf_benchmark README table (1e9 random 64-bit keys) puts RecSplit (vigna/sux) next to CHD from CMPH (bonitao/cmph submodule). The harness is public (src/mphf_benchmark.cpp, include/recsplit_wrapper.hpp, include/chd_wrapper.hpp), CMakeLists.txt sets -O3 -march=native, the README names the CPU (i9-9900K), and the PTHash paper (arXiv 2104.10402, whose Table 5 this reproduces) names gcc 9.2.1 -O3 -march=native.
+- **Verifier notes:** The numbers match both the README and Table 5 of PTHash arXiv 2104.10402. GitHub reports license NOASSERTION; the README says 'licensed exactly like libstdc++ (GPLv3 + GCC Runtime Library Exception)' and the RecSplit.hpp header says GPLv3-or-later plus the GCC RLE 3.1, so copyable stands. last_commit was taken from pushed_at: the default branch master was last committed 2024-10-07, but a non-default 'bench' branch has a 2026-05-05 commit. The orchestrator may prefer 'active' if non-default-branch work counts.
+- **Fields the verifier corrected:** `claimed_speedup`, `license`, `last_commit`, `maintenance_status`, `caveats`
+- **Pages the verifier opened:**
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md>
+  - <https://github.com/roberto-trani/mphf_benchmark>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/CMakeLists.txt>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/configure.sh>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/include/recsplit_wrapper.hpp>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/include/chd_wrapper.hpp>
+  - <https://github.com/bonitao/cmph/blob/a250982ade093f4eed0552bbdd22dd7b0432007f/configure.ac>
+  - <https://arxiv.org/pdf/2104.10402>
+  - <https://github.com/vigna/sux>
+  - <https://github.com/vigna/sux/blob/master/README.md>
+  - <https://github.com/vigna/sux/blob/master/sux/function/RecSplit.hpp>
+- **Sources the enricher read:**
+  - <https://github.com/vigna/sux>
+  - <https://github.com/vigna/sux/blob/master/README.md>
+  - <https://github.com/vigna/sux/blob/master/sux/function/RecSplit.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/function/RiceBitVector.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/function/DoubleEF.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/support/common.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/support/SpookyV2.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/util/Vector.hpp>
+  - <https://github.com/vigna/sux/blob/master/sux/mainpage.md>
+  - <https://github.com/vigna/sux/blob/master/Makefile>
+  - <https://github.com/vigna/sux/blob/master/.github/workflows/build.yml>
+  - <https://github.com/vigna/sux/blob/master/CHANGES>
+  - <https://github.com/vigna/sux/blob/master/NEWS>
+  - <https://github.com/vigna/sux/blob/master/test/function/recsplit.hpp>
+  - <https://github.com/vigna/sux/blob/master/benchmark/function/recsplit_dump128.cpp>
+  - <https://github.com/vigna/sux/issues?q=is%3Aissue>
+  - <https://github.com/vigna/sux/issues/2>
+  - <https://github.com/vigna/sux/issues/3>
+  - <https://github.com/vigna/sux/issues/4>
+  - <https://github.com/vigna/sux/issues/5>
+  - <https://github.com/vigna/sux/issues/7>
+  - <https://github.com/vigna/sux/issues/20>
+  - <https://github.com/vigna/sux/issues/21>
+  - <https://github.com/vigna/sux/pull/15>
+  - <https://github.com/vigna/sux/pull/16>
+  - <https://github.com/vigna/sux/pull/18>
+  - <https://github.com/vigna/sux/pull/22>
+  - <https://github.com/vigna/sux/pull/23>
+  - <https://github.com/vigna/sux/pull/24>
+  - <https://github.com/vigna/sux/branches>
+  - <https://github.com/vigna/sux/commits/master>
+  - <https://github.com/vigna/sux/commits/bench>
+  - <https://github.com/vigna/sux/compare/master...bench>
+  - <https://github.com/vigna/sux/tags>
+  - <https://github.com/vigna/sux/commit/d9bd610dfef23f124e108506d5a17b7ace4729a6>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/include/recsplit_wrapper.hpp>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/include/chd_wrapper.hpp>
+  - <https://github.com/roberto-trani/mphf_benchmark/blob/main/src/mphf_benchmark.cpp>
+  - <https://github.com/roberto-trani/mphf_benchmark/tree/main/external>
+  - <https://arxiv.org/abs/1910.06416>
+  - <https://arxiv.org/abs/2104.10402>
+  - <https://arxiv.org/pdf/2104.10402>
+  - <https://github.com/ByteHamster/GpuRecSplit/blob/main/README.md>
+  - <https://github.com/ByteHamster/ShockHash/blob/main/README.md>
+  - <https://github.com/bonitao/cmph>
+  - <https://cmph.sourceforge.net/>
+- **Raw records:** [data/wave1-phf/verified.json](../../../data/wave1-phf/verified.json) (id `https://github.com/vigna/sux`) · [data/wave1-phf/enrich/raw/github_com_vigna_sux.json](../../../data/wave1-phf/enrich/raw/github_com_vigna_sux.json) (enrichment confidence 0.85)
+
+</details>

@@ -1,0 +1,100 @@
+# Verstable
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md) › [Hash maps and sets](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `C` · `MIT` · 🟡 stale
+
+> Single-header C hash table beating std::unordered_map on lookups, erasures, and iteration; insertion only average.
+
+| | |
+|---|---|
+| **Beats** | std::unordered_map |
+| **Claimed result** | No numeric multiplier in the text (results are interactive charts). The page's analysis says std::unordered_map is 'far slower than most of the open-addressing tables in most of the benchmarks, except in the case of looking up existing keys, wherein its performance is comparable to that of the slowest open-addressing tables', with iteration 'at least an order of magnitude slower'. Verstable has fast lookups (among the fastest for integer keys with large buckets), 'extremely fast' lookups and erasures of nonexisting keys, and iteration beaten only by boost::unordered_flat_map, emilib2 and contiguous-storage tables, but insertion speed that is 'only average'. |
+| **Workload** | Insertion, deletion, replacement, lookup, and iteration across three configurations: 32-bit int keys/values, 64-bit int keys with large values, and string keys. |
+| **Metric** | latency |
+| **Hardware** | AMD Ryzen 7 5800H, 90% locked frequency |
+| **Compiler and flags** | GCC 13.2.0, -O3 -DNDEBUG |
+| **Adoption** | 208 stars |
+| **Last commit** | 2025-05-06 |
+| **Links** | [repository](https://github.com/JacksonAllan/Verstable) · [benchmark](https://jacksonallan.github.io/c_cpp_hash_tables_benchmark/) |
+
+## Verdict
+
+On the author's own interactive benchmark (GCC 13.2.0 via MinGW-w64, -O3 -DNDEBUG, AMD Ryzen 7 5800H at 90% locked frequency, libstdc++'s std::unordered_map as baseline, across 32-bit int, 64-bit-int/large-value, and string-key workloads), the page states std::unordered_map is far slower than most open-addressing tables except at looking up existing keys, and at least an order of magnitude slower at iteration; Verstable is described as having extremely fast lookups and erasures of nonexisting keys, iteration beaten only by boost::unordered_flat_map, emilib2, and contiguous-storage tables (and faster than absl::flat_hash_map on iteration), but 'only average' insertion speed. Results are shown as interactive charts rather than a numeric table.
+
+## Use it when
+
+- C code that needs a generic, type-safe hash map/set without hand-rolling one, or C++ code that can call a C API via extern "C"
+- Lookup- and iteration-heavy workloads, including lookups of nonexisting keys, where std::unordered_map's node-based layout causes cache misses
+- Large keys/values or expensive hash/compare functions, since insert/delete move at most one existing key instead of shifting many (unlike Robin Hood schemes)
+- High load factors, since the design is described as largely impervious to load factor for lookup speed
+- Willing to vendor a single header and accept a non-STL API in exchange for speed
+
+## Skip it when
+
+- Need a true drop-in std::unordered_map replacement with C++ container semantics, allocator/exception conventions, or STL iterator guarantees
+- Insertion throughput is the dominant cost: the benchmark author calls Verstable's insertion 'only average', and it sits behind absl/boost on raw speed generally
+- Keys with a weak, low-entropy, or attacker-influenced hash function: a bucket's collision chain is capped at \~2,048 keys, and hitting that repeatedly makes the table grow until it exhausts memory instead of degrading to a linear scan
+- Targeting an FPU-less embedded platform: the default max-load-factor check uses floating point (open issue #23 asks for an integer-only option)
+- Need active upstream maintenance guarantees: last commit 2025-05-06, tagged 'stale' by the catalog
+
+## How it is fast
+
+It's open addressing with quadratic probing, but colliding keys that hash to the same 'home bucket' are linked into a chain via an 11-bit displacement value; a 1-bit flag keeps each chain rooted at its home bucket by evicting non-belonging occupants on insert. This chain metadata, plus a 4-bit hash-code fragment per bucket, lives in a separate uint16_t array instead of alongside the key/value, so lookups can skip most non-matching keys without touching the buckets array or calling the comparison function, and iteration walks a compact metadata array rather than sparse, cache-missing buckets. Deletion and insertion move at most one existing key and require no tombstones. The author describes it as a hybrid of open addressing and separate chaining, related to Malte Skarupke's Bytell table and classic coalesced hashing.
+
+## Compared with alternatives
+
+Pick Verstable when the code is C (or C++ that can bind to a C ABI) and you want a single-header, type-safe table with tombstone-free deletion and strong lookup/iteration speed; the sibling C++-only tables (ska::flat_hash_map/bytell_hash_map, tsl::robin_map, tsl::hopscotch_map) use similar open-addressing ideas but require a C++ compiler, and emhash/emilib2/google::dense_hash_map generally edge it out on raw insertion or peak throughput if a C-only API isn't a requirement.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only |
+| **Dependencies** | none (C standard library only; malloc/free by default, both overridable) |
+| **Minimum toolchain** | C99 (with explicit HASH_FN/CMPR_FN); full vt_\*-generic macro API requires C11 _Generic; tested under GCC, Clang, MinGW, and MSVC; usable from C++ via extern "C" |
+| **Platforms** | not documented as architecture-restricted (portable C, no SIMD intrinsics in the header); an open issue notes the floating-point load-factor check is awkward on FPU-less embedded hardware |
+| **Thread safety** | not documented (no locking or concurrency support mentioned; treat as single-writer/no built-in synchronization) |
+| **Drop-in for the baseline** | partial — different API shape (vt_insert/vt_get/vt_erase or NAME_-prefixed functions, iterator struct accessed as itr.data-&gt;key/-&gt;val), no operator[], manual NAME_cleanup required instead of RAII/destructor-driven free |
+
+## Gotchas
+
+- Insert, get_or_insert, erase, erase_itr, reserve, and shrink invalidate all existing iterators; use erase_itr's return value to keep iterating while deleting
+- No RAII: forgetting to call NAME_cleanup leaks the table's memory (a reported 'stuck insert' bug turned out to be missing cleanup across repeated runs, per issue #22)
+- A degenerate hash function (near-constant output) can make a bucket chain exceed its \~2,048-key limit, causing the table to keep doubling until allocation fails rather than falling back to a slow linear scan
+- Custom allocators need CTX_TY plus matching MALLOC_FN/FREE_FN signatures that take a size and context pointer, not a drop-in std::allocator interface
+
+## Caveats and trade-offs
+
+Benchmark author is also Verstable's author (self-published, though methodology, compiler, and hardware are fully disclosed and the benchmark suite covers 15 tables including known independents like absl and boost).
+
+C library (usable from C++ but not a drop-in std::unordered_map API); hybrid open-addressing/separate-chaining design with 4-bit hash fragments and tombstone-free deletion; behind absl/boost on raw speed.
+
+## Maintenance
+
+Maintenance status is 'stale' (last commit 2025-05-06), but it's MIT-licensed and a single vendorable header, so freezing at the current commit carries little risk; the bigger adoption cost is its non-STL API rather than staleness.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): confirm; tier before verification A, tier now A.
+- **Tier reason:** The Verstable README links the results page, and the page links the benchmark code repo JacksonAllan/c_cpp_hash_tables_benchmark (main.cpp, shims/verstable, shims/std_unordered_map). The page states the compiler (GCC 13.2.0 via MinGW-w64), flags (-O3 -DNDEBUG), and hardware (Ryzen 7 5800H at 90% locked frequency).
+- **Verifier notes:** The original claim that Verstable 'falls behind SIMD tables such as absl and boost' overgeneralizes: the page says Verstable iterates faster than absl::flat_hash_map. The 'numbers' are charts, not text. Metadata checks out: MIT, 208 stars, last commit 2025-05-06, stale.
+- **Fields the verifier corrected:** `claimed_speedup`
+- **Pages the verifier opened:**
+  - <https://jacksonallan.github.io/c_cpp_hash_tables_benchmark/>
+  - <https://github.com/JacksonAllan/Verstable>
+  - <https://github.com/JacksonAllan/Verstable/blob/main/README.md>
+  - <https://github.com/JacksonAllan/c_cpp_hash_tables_benchmark>
+  - <https://github.com/JacksonAllan/c_cpp_hash_tables_benchmark/tree/main/shims>
+- **Sources the enricher read:**
+  - <https://github.com/JacksonAllan/Verstable>
+  - <https://github.com/JacksonAllan/Verstable/blob/main/README.md>
+  - <https://github.com/JacksonAllan/Verstable/blob/main/api_reference.md>
+  - <https://github.com/JacksonAllan/Verstable/issues/22>
+  - <https://github.com/JacksonAllan/Verstable/issues/8>
+  - <https://github.com/JacksonAllan/Verstable/issues/23>
+  - <https://jacksonallan.github.io/c_cpp_hash_tables_benchmark/>
+- **Raw records:** [data/wave1/verified.json](../../../data/wave1/verified.json) (id `https://github.com/jacksonallan/verstable`) · [data/wave1/enrich/raw/github_com_jacksonallan_verstable.json](../../../data/wave1/enrich/raw/github_com_jacksonallan_verstable.json) (enrichment confidence 0.82)
+
+</details>

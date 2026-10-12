@@ -1,0 +1,122 @@
+# TensorFlow.js WebAssembly backend (tfjs-backend-wasm)
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [Assembly, SIMD and WebAssembly](../README.md) › [WebAssembly libraries and apps](README.md)</sub>
+
+**Tier C** (first-party claim) · Copyable · `C++ compiled to WebAssembly (XNNPACK) + TypeScript` · `Apache-2.0` · 🟡 stale
+
+> TensorFlow.js backend that runs XNNPACK C++ kernels compiled to WebAssembly; 3-20x faster than the plain-JS CPU backend for CNN inference.
+
+| | |
+|---|---|
+| **Beats** | TensorFlow.js plain JavaScript CPU backend in V8 (Chrome); also compared with the WebGL backend |
+| **Claimed result** | README prose: WASM is \~3X-11.5X faster than the plain-JS CPU backend on MobileNet V2 and \~8.2-19.8X faster on Face Detector. Table rows: MobileNet V2 on a ThinkPad X1 Gen6 (Linux) 122.7 ms WASM vs 1489.4 ms plain JS (12.1x, derived from page data, slightly above the prose's 11.5x), WASM + SIMD 34.6 ms and WASM + SIMD + threads 12.4 ms (120x vs plain JS, derived from page data); iPhone XS 140 vs 426.4 ms (3.0x, derived). Face Detector on desktop Linux 12.6 ms vs 249.5 ms (19.8x, derived); iPhone XS 21.4 vs 176.9 ms (8.3x, derived). WebGL is faster than WASM on MobileNet V2 on every device (for example ThinkPad 44.8 ms vs 122.7 ms). |
+| **Workload** | MobileNet V2 (3.48M params, \~300M multiply-adds) and Face Detector (0.1M params, \~20M multiply-adds) inference time in ms, averaged over 200 runs, on the tfjs-benchmarks.web.app local-benchmark page (Chrome 79.0) plus one Node v14 row; backends Plain JS (CPU), WebGL, WASM, WASM + SIMD, WASM + SIMD + threads |
+| **Metric** | latency |
+| **Hardware** | iPhone X, iPhone XS, Pixel 4, ThinkPad X1 Gen6 (Linux), desktop Windows, desktop Linux, MacBook Pro 15 2019, plus a Node v14 on MacBook Pro row; CPU models not stated; Chrome 79.0 |
+| **Compiler and flags** | Not stated in the README beyond: built with the Bazel Emscripten toolchain; wraps the XNNPACK library; separate plain, simd, and threaded-simd binaries |
+| **Adoption** | 19.1k stars (tensorflow/tfjs monorepo) |
+| **Last commit** | 2024-04-12 |
+| **Links** | [repository](https://github.com/tensorflow/tfjs) · [benchmark](https://github.com/tensorflow/tfjs/blob/master/tfjs-backend-wasm/README.md#benchmarks) |
+
+## Verdict
+
+The first-party README tables report average inference time over 200 runs on the TF.js benchmark page. On a ThinkPad X1 Gen6 (Linux), MobileNet V2 takes 122.7 ms with plain WASM, 34.6 ms with SIMD and 12.4 ms with SIMD plus threads, vs 1489.4 ms on the plain-JS CPU backend and 44.8 ms on WebGL. On iPhone XS it is 140 vs 426.4 ms (3.0x). Face Detector on desktop Linux is 12.6 vs 249.5 ms (19.8x). Runs date from December 2019 to August 2020, CPU models are not stated, and the per-column builds and browsers differ.
+
+## Use it when
+
+- CPU inference of small CNNs (about 20-60M multiply-adds, e.g. BlazeFace or face detectors), where the README tables show WASM matching or beating WebGL (MacBook Pro 15 2019 Face Detector: 13.6 ms WASM, 7.9 ms WASM+SIMD, 4.0 ms with threads, vs 22.7 ms WebGL).
+- Devices or browsers where WebGL is missing, blocklisted or numerically unreliable. The FAQ says WASM has better numerical stability and wider device support.
+- Any TF.js app still on the plain-JS CPU backend. MobileNet V2 runs 3.0-12.1x faster on the base WASM build alone (derived from page data), and much more with SIMD and threads.
+- Pages that can send COOP/COEP headers, which unlocks the threaded-SIMD binary (ThinkPad X1 Gen6 MobileNet V2: 12.4 ms vs 34.6 ms SIMD-only).
+
+## Skip it when
+
+- Medium or large models (100-500M multiply-adds) on a working GPU. WebGL is 2.4-7.7x faster than plain WASM for MobileNet V2 on every device in the README. Only the threaded-SIMD build beat WebGL, on the two desktop rows that have it (ThinkPad 12.4 vs 44.8 ms; MacBook 10.3 vs 19.6 ms, a cross-run pair).
+- Node.js servers. Multithreading is disabled under Node (flags_wasm.ts, issue #3830), and the README's Node 14 row is 64.2 ms with SIMD vs 10.3 ms threaded in Chrome on the same MacBook. Use tfjs-node (native TensorFlow) or a native runtime instead.
+- Training. The FAQ says gradient ops are incomplete and the focus is inference, and unsupported ops throw 'not yet implemented'.
+- New long-lived projects that need an actively updated runtime. The backend's last functional change was in September 2023, a May 2023 XNNPACK upgrade was reverted for lack of maintainer bandwidth, and the build still pins XNNPACK commit 5e8033a7.
+- Cross-origin-isolated threading is not possible on your host. Without COOP/COEP the backend falls back to SIMD-only, which is 2.8-2.9x slower for MobileNet V2 on the README's desktop rows (1.3-2.0x for Face Detector).
+
+## How it is fast
+
+Hot ops such as convolutions, depthwise convolutions, matmul, pooling and PReLU run XNNPACK's hand-tuned f32 micro-kernels. They are compiled with Emscripten (emsdk 3.1.28, bazel -c opt, C++17, -fno-rtti, -fno-exceptions, emmalloc), with -msimd128 for the SIMD builds and -pthread plus an 8-worker pthreadpool for the threaded build. Data lives in the wasm heap, and kernels are called through cwrap. The baseline it beats is TensorFlow.js's own tfjs-backend-cpu, which runs scalar JavaScript loops over typed arrays.
+
+## Compared with alternatives
+
+No other neural-network inference runtime is catalogued in this category. Pick it over hand-written wasm numeric libraries such as Ubique (nalgebra) or kmeans-wasm when you already have a TensorFlow.js graph or layers model and want its CPU path sped up without code changes. The siblings are narrower kernels you would call yourself.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | module |
+| **Dependencies** | @tensorflow/tfjs-core (peer) and @tensorflow/tfjs-backend-cpu; bundles XNNPACK, pthreadpool, cpuinfo, FP16 and FXdiv inside the .wasm files |
+| **Minimum toolchain** | Runtime: any browser or Node with WebAssembly (SIMD and threads optional, auto-detected); building from source needs Bazel with the emsdk 3.1.28 toolchain, which the build fetches itself |
+| **Platforms** | browsers (desktop and mobile), Node.js (single-threaded), WeChat miniprogram build; threads need SharedArrayBuffer plus COOP/COEP since Chrome 92 |
+| **Thread safety** | single JS-thread API; intra-op parallelism through XNNPACK's pthreadpool in Web Workers (pool of 8 pre-created workers, default threads = logical cores / 2 capped at 8) |
+| **Drop-in for the baseline** | yes |
+
+## Gotchas
+
+- Benchmark tables are assembled from several runs. The WASM, WebGL and Plain JS columns date from December 2019 (commit 60a91b8 onward). The WASM+SIMD column was added in June 2020 (5db28e7, 4114cad), threads in August 2020 (f580dfc), and the Pixel 4, ThinkPad and Node rows on 2020-08-26 (b35e9f5), each with newer XNNPACK and Emscripten builds. The header still says all runs were Chrome 79, but SIMD then needed chrome://flags or an origin trial (issue #3896). So SIMD-or-threads vs Plain JS ratios on the MacBook, Windows and Face Detector Desktop Linux rows compare different runs. The prose ranges (3X-11.5X faster than JS, 5.3-7.7X slower than WebGL) were computed from the 2019 rows: 11.5X is a Desktop Linux 91.5 vs 1049 ms row that has since been replaced.
+- The README says the default thread count is the number of logical cores, but backend.cc uses emscripten_num_logical_cores()/2, capped at 8 (the pre-created PTHREAD_POOL_SIZE).
+- Self-hosting needs all three .wasm files (and the worker script for threads) served with correct paths and CORS/CORP headers. Bundlers must leave the .wasm assets alone, and terser's 'typeofs' compress option breaks the threaded build with '_scriptDir is not defined'.
+- If the SIMD binary fails to load (wrong setWasmPaths, missing file), the backend silently runs the much slower non-SIMD build. Issue #7739 (2023, closed by a stale bot in 2026) is a user seeing about 10x slower than WebGL and unable to tell which binary or XNNPACK path was active.
+
+## Known shortcomings
+
+- README tables match but the baseline is the project's own plain-JS CPU backend; WebGL beats WASM on MobileNet V2 on every device; no CPU models or flags; the SIMD columns in Chrome 79 are unexplained; the speed comes from XNNPACK (a wave-8 baseline). Backend path stale since 2024-04-12.
+- The README tables are assembled from several runs between December 2019 and August 2020 (the SIMD column added June 2020, threads August 2020, the Pixel 4, ThinkPad and Node rows on 2020-08-26); the header says Chrome 79 for all, but SIMD then needed flags or an origin trial (#3896); the prose 3X-11.5X and 5.3-7.7X were computed from since-replaced 2019 rows. The code's default thread count is logical cores / 2 capped at 8, not logical cores as the README says; no threads in Node; the 2023 XNNPACK upgrade was reverted (#7735), so pin 5e8033a7.
+
+## Caveats and trade-offs
+
+2020-era first-party numbers on Chrome 79; CPU models and build flags are not stated. WebAssembly SIMD was not on by default in Chrome 79 (it shipped by default in Chrome 91), and the README does not say how the SIMD columns were run. The baseline is the project's own plain-JS CPU backend, a reference backend rather than a tuned JS implementation. The WebGL backend beats WASM on MobileNet V2 on every listed device, and the README's 5.3-7.7X 'slower than WebGL' range does not match all rows (Pixel 4 2.4x, ThinkPad 2.7x, derived). The speed comes from XNNPACK kernels compiled with Emscripten; XNNPACK is a wave-8 incumbent baseline. Threads need cross-origin isolation (COOP/COEP) since Chrome 92, or the backend falls back to SIMD-only. The last commit to tfjs-backend-wasm is 2024-04-12; the monorepo's last commit is 2026-04-06 (a CI chore). The benchmark harness is public in e2e/benchmarks/local-benchmark. [retier] 2020-era first-party numbers; CPU models and build flags are not stated. The tables are assembled from several runs: the WASM, WebGL and Plain JS columns date from December 2019 (commit 60a91b8 onward), the WASM+SIMD column was added in June 2020 (5db28e7, 4114cad), threads in August 2020 (f580dfc), and the Pixel 4, ThinkPad and Node rows on 2020-08-26 (b35e9f5), each with newer XNNPACK and Emscripten builds, so the SIMD and threads columns are cross-run against the plain-JS column. The header says all runs were Chrome 79, but WebAssembly SIMD then needed chrome://flags or an origin trial (issue #3896; SIMD shipped by default in Chrome 91), and the README does not say how the SIMD columns were run. The prose 3X-11.5X and 5.3-7.7X ranges were computed from since-replaced 2019 rows and do not match all current rows (Pixel 4 2.4x, ThinkPad 2.7x slower than WebGL, derived from page data). The baseline is the project's own plain-JS CPU backend, a reference backend rather than a tuned JS implementation; the WebGL backend beats WASM on MobileNet V2 on every listed device. The speed comes from XNNPACK kernels compiled with Emscripten; the 2023 XNNPACK upgrade was reverted (#7735), so pin 5e8033a7. The code's default thread count is emscripten_num_logical_cores()/2 capped at 8, not the number of logical cores as the README says; no threads in Node. If the SIMD binary fails to load the backend silently runs the much slower non-SIMD build (issue #7739).
+
+Separate WASM binaries for SIMD and threading need custom hosting and cross-origin isolation for threads. Slower than the WebGL backend on MobileNet V2 (about 5.3X-7.7X slower per README). Float32 CPU-style kernels.
+
+## Maintenance
+
+Stale but not archived: the backend directory's last functional commit was in September 2023 and the last edit (a README typo fix) on 2024-04-12, in a 19.1k-star Apache-2.0 monorepo whose issues are mostly closed by a stale bot. It is still usable and drop-in for existing TF.js apps, but the benchmarks are six years old and the XNNPACK pin was never refreshed.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): confirm; tier before verification C, tier now C.
+- **Tier reason:** The tfjs-backend-wasm README Benchmarks section has first-party MobileNet V2 and Face Detector tables comparing WASM against the same project's plain-JS CPU backend and WebGL (Chrome 79.0, 200-run averages). The harness is public (e2e/benchmarks/local-benchmark), but no CPU models, Emscripten/XNNPACK build flags or SIMD flag settings are stated, so it stays C.
+- **Verifier notes:** Numbers match the README tables exactly; the prose ranges are slightly off (ThinkPad MobileNet ratio is 12.1x, derived, above the stated 11.5x upper bound), and I added the WebGL-is-faster caveat. Metadata confirmed: Apache-2.0, 19.1k stars, not archived, backend path last commit 2024-04-12 (stale), monorepo 2026-04-06. Category fit: a C++ library (XNNPACK) compiled to wasm and compared with the JS equivalent fits wasm-libraries-and-apps better than assemblyscript-and-wasm-langs; consider a category override.
+- **Fields the verifier corrected:** `claimed_speedup`, `hardware`, `workload`, `caveats`
+- **Shortcomings recorded by:** verifier batch-06 (wave 13); enricher (wave 13 pass, 2026-10-12)
+- **Pages the verifier opened:**
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/README.md>
+  - <https://github.com/tensorflow/tfjs>
+  - <https://github.com/tensorflow/tfjs/commits/master/tfjs-backend-wasm>
+  - <https://github.com/tensorflow/tfjs/commits/master>
+  - <https://github.com/tensorflow/tfjs/tree/master/e2e/benchmarks/local-benchmark>
+- **Sources the enricher read:**
+  - <https://github.com/tensorflow/tfjs>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/4d6feb1/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/5d81788/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/5db28e7/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/4114cad/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/f580dfc/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/b35e9f5/tfjs-backend-wasm/README.md>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/98435f4/tfjs-backend-wasm/README.md>
+  - <https://github.com/tensorflow/tfjs/commits/master/tfjs-backend-wasm/README.md>
+  - <https://github.com/tensorflow/tfjs/commits/master/tfjs-backend-wasm>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/package.json>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/src/cc/BUILD.bazel>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/src/BUILD.bazel>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/src/cc/backend.cc>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/src/backend_wasm.ts>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/tfjs-backend-wasm/src/flags_wasm.ts>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/WORKSPACE>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/.bazelrc>
+  - <https://raw.githubusercontent.com/tensorflow/tfjs/HEAD/e2e/benchmarks/local-benchmark/README.md>
+  - <https://github.com/tensorflow/tfjs/pull/7735>
+  - <https://github.com/tensorflow/tfjs/issues?q=is%3Aissue+label%3A%22comp%3Awasm%22+slow>
+  - <https://github.com/tensorflow/tfjs/issues/7739>
+  - <https://github.com/tensorflow/tfjs/issues/3896>
+- **Raw records:** [data/wave13/verified.json](../../../data/wave13/verified.json) (id `https://github.com/tensorflow/tfjs`) · [data/wave13/enrich/raw/github_com_tensorflow_tfjs.json](../../../data/wave13/enrich/raw/github_com_tensorflow_tfjs.json) (enrichment confidence 0.75)
+
+</details>

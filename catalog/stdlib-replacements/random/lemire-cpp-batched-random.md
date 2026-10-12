@@ -1,0 +1,101 @@
+# cpp_batched_random
+
+<sub>[fastpp](../../../README.md) › [Catalog](../../README.md) › [C++ standard library replacements](../README.md) › [Random numbers](README.md)</sub>
+
+**Tier A** (reproducible public benchmark) · Copyable · `C++` · `MIT` · 🟢 active
+
+> Header-only drop-in std::shuffle replacement that batches multiple Fisher-Yates draws from one 64-bit random word.
+
+| | |
+|---|---|
+| **Beats** | std::shuffle |
+| **Claimed result** | vs std::shuffle with std::mt19937_64. Apple M2, Apple/LLVM 15 (libc++): 12.4 vs 2.4 ns/element at 10,000 elements and 12.0 vs 2.5 ns/element at 1,000,000 elements (\~4.8-5.2x, derived from page data; the author says 'four to five times faster'). Linux, Intel CPU (model not stated), GCC 12 (libstdc++): 2.2 vs 1.7 ns/element at 10,000 and 3.5 vs 2.7 ns/element at 1,000,000 (\~1.3x, derived from page data; the author says 'about 30% faster'). |
+| **Workload** | Fisher-Yates shuffle of std::vector&lt;uint64_t&gt; (10,000 and 1,000,000 elements) driven by std::mt19937_64. std::shuffle is compared with batched_random::shuffle_2, which draws two bounded indices from one 64-bit random word using multiplication-based, nearly-divisionless bounded generation. |
+| **Metric** | throughput |
+| **Hardware** | Apple M2 MacBook; Linux machine with an Intel processor whose model is not stated |
+| **Compiler and flags** | Apple/LLVM 15 (M2 run); GCC 12 (Linux run); -std=c++17 -O3 per the linked benchmark Makefile |
+| **Adoption** | 13 stars |
+| **Last commit** | 2026-02-28 |
+| **Links** | [repository](https://github.com/lemire/cpp_batched_random) · [benchmark](https://lemire.me/blog/2024/08/17/faster-random-integer-generation-with-batching/) |
+
+## Verdict
+
+Lemire's 2024-08-17 blog post shuffled std::vector&lt;uint64_t&gt; with std::mt19937_64, comparing std::shuffle to the predecessor batched_random::shuffle_2. On an Apple M2 (Apple/LLVM 15, libc++): 12.4 vs 2.4 ns/element at 10,000 elements and 12.0 vs 2.5 ns/element at 1,000,000 elements (\~4.8-5.2x; author says 'four to five times faster'). On Linux with an unspecified Intel CPU (GCC 12, libstdc++): 2.2 vs 1.7 ns/element at 10,000 and 3.5 vs 2.7 ns/element at 1,000,000 (\~1.3x; author says 'about 30% faster'). I re-fetched the blog page this session and confirmed these numbers match exactly.
+
+## Use it when
+
+- Shuffling std::vector/array of trivially swappable elements with std::mt19937_64 (or any URBG with 64-bit output, min()==0, max()==UINT64_MAX).
+- Running on libc++ (Apple/LLVM, e.g. macOS/iOS) where std::shuffle's bounded distribution is division-heavy -- biggest measured win (\~4.8-5.2x).
+- Throughput-sensitive shuffling (Monte Carlo simulations, dataset shuffling, deck/card simulations) where shuffle time is a measurable share of runtime.
+- Header-only vendoring is acceptable -- single file, C++20 toolchain, no build-system integration beyond adding the header.
+- Array size up to roughly 1 billion elements (technique requires the product of two ranges to fit in 64 bits, per the author).
+
+## Skip it when
+
+- RNG is 32-bit (std::mt19937, std::minstd_rand, etc.) -- fails to compile: static_assert requires result_type==uint64_t.
+- Already on libstdc++/GCC -- measured gain shrinks to \~30%, may not justify the extra header dependency.
+- Need a generic std::shuffle drop-in that works with arbitrary/non-standard URBGs without modification.
+- Project is capped at C++17 or lacks 128-bit multiply support (no __uint128_t on GCC/Clang, no &lt;__msvc_int128.hpp&gt; on MSVC) -- CMakeLists.txt requires C++20.
+- Tiny project (13 stars, zero issues filed) -- no track record of edge-case bug reports; read the \~120-line header yourself before trusting it in production.
+
+## How it is fast
+
+Instead of drawing one bounded random value per swap like std::shuffle, it extracts up to 6 bounded Fisher-Yates indices from a single 64-bit random word using 128-bit multiply-shift (Lemire's nearly-divisionless bounded-integer method, from Brackett-Rozinsky & Lemire, arXiv:2408.06213), amortizing each call to the underlying generator across multiple index draws. Batch size (2 through 6) is chosen based on how many elements remain, with rejection resampling on detected bias to keep the shuffle unbiased.
+
+## Compared with alternatives
+
+Siblings (PCG, Random123, wjakob/pcg32, xoshiro_cpp, biski64, AESRand, nanobench::Rng) replace the RNG itself; cpp_batched_random keeps whatever 64-bit URBG you already use (even std::mt19937_64) and instead speeds up the Fisher-Yates shuffle built on top of it. Pick this when you must keep std::mt19937_64 for reproducibility or statistical-quality reasons but still want faster shuffling, or stack it on top of a sibling 64-bit generator for compounding gains.
+
+## Integration
+
+| | |
+|---|---|
+| **Form** | header-only |
+| **Dependencies** | none (standard library only: &lt;iterator&gt;, &lt;concepts&gt;, &lt;type_traits&gt;, &lt;limits&gt;; MSVC build also pulls &lt;__msvc_int128.hpp&gt;) |
+| **Minimum toolchain** | C++20 (CMakeLists.txt sets CMAKE_CXX_STANDARD 20); needs __uint128_t (GCC/Clang) or MSVC's _Unsigned128 for 128-bit multiply |
+| **Platforms** | x86-64, aarch64 (anywhere __uint128_t or MSVC's __msvc_int128.hpp is available); CI covers Ubuntu and Windows (VS2022), blog benchmarks ran on Apple M2; no 32-bit platform support documented |
+| **Thread safety** | not documented; the function holds no global state beyond the passed-in generator reference, so it matches std::shuffle's usual rule: safe only if each thread uses its own generator instance |
+| **Drop-in for the baseline** | partial -- explain: same call signature (first, last, generator) as std::shuffle, but only compiles when the generator's result_type is uint64_t with min()==0 and max()==UINT64_MAX (e.g. std::mt19937_64); std::mt19937 and other 32-bit URBGs are rejected at compile time |
+
+## Gotchas
+
+- static_assert enforces result_type==uint64_t, min()==0, max()==UINT64_MAX at compile time -- passing std::mt19937 (32-bit) is a compile error, not a runtime one.
+- Requires 128-bit multiplication (__uint128_t on GCC/Clang, std::_Unsigned128 via &lt;__msvc_int128.hpp&gt; on MSVC) -- a compiler/platform requirement beyond just C++20.
+- The blog's headline numbers (4.8-5.2x on libc++, \~1.3x on libstdc++) were measured against batched_random::shuffle_2 in a 2024 prototype header, the direct predecessor of this repo; this repo's current batched_random::shuffle uses the same technique (multi-index batches from one 64-bit word) but was not itself the subject of those published numbers.
+- The repo's own benchmarks/benchmark.cpp runs the identical std::shuffle vs batched_random::shuffle comparison but publishes no results in the repo -- you must build and run it yourself.
+
+## Caveats and trade-offs
+
+The blog numbers were measured with the 2024 prototype header (batched_random::shuffle_2 in lemire/Code-used-on-Daniel-Lemire-s-blog/2024/08/16), the direct predecessor of this repo (created 2025-09). They are not from this repo's current batched_random::shuffle. The gain depends on the standard library: \~4.8-5.2x against libc++ but only \~1.3x against libstdc++, which already uses Lemire's nearly-divisionless bounded method. The peer-reviewed paper (arXiv:2408.06213, SPE 55(1) 2024) reports 1.4-4.7x (Xeon Gold 6338, LLVM 16) and 1.5-3.9x (Apple M2, Apple/LLVM 14). Those paper numbers compare a C implementation against the authors' own unbatched C Fisher-Yates that already uses an efficient bounded-integer method, not against std::shuffle. The header requires a 64-bit URBG and uses static_assert to check it. The repo is dual-licensed MIT and Apache-2.0 WITH LLVM-exception.
+
+Only benefits shuffles driven by a 64-bit-output RNG (e.g. std::mt19937_64); speed advantage shrinks for very large arrays and grows for small/medium ones; adds an extra header dependency vs calling std::shuffle directly.
+
+## Maintenance
+
+Active (last commit 2026-02-28), dual MIT / Apache-2.0-with-LLVM-exception licensed, single \~120-line header with zero open issues and only 13 stars -- small enough to read in full and vendor directly.
+
+<details>
+<summary><b>Audit trail</b></summary>
+
+- **Verification** (2026-10-11): downgrade; tier before verification A, tier now A.
+- **Tier reason:** The cited arXiv paper (SPE 2024) numbers match exactly, but they measure the C implementation (lemire/batched_random) against the authors' own unbatched C Fisher-Yates, not std::shuffle. A still holds through Lemire's 2024-08-17 blog post. That post benchmarks std::shuffle against batched_random::shuffle_2 with std::mt19937_64, using public code at lemire/Code-used-on-Daniel-Lemire-s-blog/2024/08/16/benchmarks/stream.cpp (Makefile: -std=c++17 -O3) on an Apple M2 with Apple/LLVM 15. The repo's own benchmarks/benchmark.cpp repeats the same std::shuffle comparison but publishes no numbers.
+- **Verifier notes:** The original record credited the paper's 1.4-4.7x to 'std::shuffle-equivalent' and said the page compared against the C++ std directly. Neither holds for the paper, and the libstdc++ gain is only \~1.3x, so the claim was overstated. I moved benchmark_url to the blog post, which compares against std::shuffle directly. The metadata checked out: MIT, 13 stars, last commit 2026-02-28, active.
+- **Fields the verifier corrected:** `benchmark_url`, `claimed_speedup`, `workload`, `compiler_and_flags`, `hardware`, `baseline_stdlib`, `caveats`
+- **Pages the verifier opened:**
+  - <https://arxiv.org/pdf/2408.06213>
+  - <https://github.com/lemire/cpp_batched_random>
+  - <https://github.com/lemire/cpp_batched_random/blob/main/benchmarks/benchmark.cpp>
+  - <https://github.com/lemire/batched_random>
+  - <https://lemire.me/blog/2024/08/17/faster-random-integer-generation-with-batching/>
+  - <https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/tree/master/2024/08/16>
+- **Sources the enricher read:**
+  - <https://github.com/lemire/cpp_batched_random>
+  - <https://github.com/lemire/cpp_batched_random/blob/main/README.md>
+  - <https://github.com/lemire/cpp_batched_random/blob/main/include/batched_random.h>
+  - <https://github.com/lemire/cpp_batched_random/blob/main/benchmarks/benchmark.cpp>
+  - <https://github.com/lemire/cpp_batched_random/blob/main/CMakeLists.txt>
+  - <https://github.com/lemire/cpp_batched_random/issues>
+  - <https://lemire.me/blog/2024/08/17/faster-random-integer-generation-with-batching/>
+- **Raw records:** [data/wave1/verified.json](../../../data/wave1/verified.json) (id `https://github.com/lemire/cpp_batched_random`) · [data/wave1/enrich/raw/github_com_lemire_cpp_batched_random.json](../../../data/wave1/enrich/raw/github_com_lemire_cpp_batched_random.json) (enrichment confidence 0.85)
+
+</details>
